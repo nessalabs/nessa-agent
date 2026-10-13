@@ -2241,11 +2241,20 @@ export interface PeerEnrollParams {
   address: string
   /** The one-time code the peer's owner was shown for a gateway invitation, in its grouped display form. */
   code: string
+  /** Where to ask for the peer when its address does not answer: a relay's `host:port`, the host a name or an address (an IPv6 one in brackets), at most 255 UTF-8 bytes (`x-utf8MaxBytes`; `maxLength` counts code points and is only a coarse bound). Looked up at each dial. It carries no trust: the peer must still present its pinned key through it. Enrollment itself always dials the address; the relay is kept for reading the peer afterwards. Absent: none. */
+  relay?: string
 }
 /** Wire input for peer.forget: the peer to forget, named by its key. */
 export interface PeerForgetParams {
   /** The peer's key, as peer.list shows it. */
   peerKey: number[]
+}
+/** Wire input for peer.relay: set or clear the relay kept for a peer. A read of that peer in progress is stopped first, and the next read uses the new relay. */
+export interface PeerRelayParams {
+  /** The peer's key, as peer.list shows it. */
+  peerKey: number[]
+  /** Where to ask for the peer when its address does not answer: a relay's `host:port`, the host a name or an address (an IPv6 one in brackets), at most 255 UTF-8 bytes (`x-utf8MaxBytes`; `maxLength` counts code points and is only a coarse bound). Looked up at each dial. It carries no trust: the peer must still present its pinned key through it. Null clears it, so the peer is read only at its address. */
+  relay: string | null
 }
 /** Where this gateway's enrollment with a peer stands, as this gateway last heard. pending: claimed, waiting on the peer's owner to approve, or not yet confirmed. active: the peer issued this gateway a credential. revoked: the peer ended the enrollment (its owner revoked the credential, or denied, cancelled or let expire the claim), its retained cache is removed and it is no longer read; only peer.forget helps. unreadable: the peer's record is there but this build cannot read it, or it was made with a key that is no longer this gateway's; only peer.forget helps. */
 export const PeerPhase = {
@@ -2255,13 +2264,15 @@ export const PeerPhase = {
   Unreadable: "unreadable",
 } as const
 export type PeerPhase = (typeof PeerPhase)[keyof typeof PeerPhase]
-/** One peer gateway this gateway enrolled into. Result of peer.enroll and peer.forget; peer.list adds sync for a pending or active peer. */
+/** One peer gateway this gateway enrolled into. Result of peer.enroll, peer.relay and peer.forget; peer.list adds sync for a pending or active peer. */
 export interface PeerGateway {
   /** The peer's key: what identifies the peer, whatever address it answers at. Its TLS key is pinned to exactly this. */
   peerKey: number[]
   phase: PeerPhase
   /** The address that last answered as this peer. Absent when the record is unreadable. */
   address?: string
+  /** The relay this gateway asks for the peer at when its address does not answer. Absent when none is set, or the record is unreadable. */
+  relay?: string
   /** The credential the peer issued this gateway, once active. An identifier, not a secret. */
   credentialId?: string
   /** The receiver the peer paired with that credential, once active. */
@@ -2547,7 +2558,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 70,
+  maxReadyMethods: 71,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -2669,6 +2680,7 @@ export const ProductMethod = {
   PeerEnroll: "peer.enroll",
   PeerList: "peer.list",
   PeerForget: "peer.forget",
+  PeerRelay: "peer.relay",
   ConversationWatchRecords: "conversation.watchRecords",
   ConversationWatchCatalogue: "conversation.watchCatalogue",
   ConversationUnwatch: "conversation.unwatch",
@@ -2751,6 +2763,7 @@ export const productReadyMethods = [
   "peer.enroll",
   "peer.list",
   "peer.forget",
+  "peer.relay",
   "conversation.watchRecords",
   "conversation.watchCatalogue",
   "conversation.unwatch",
@@ -2825,6 +2838,7 @@ export const productMethodGrants = {
   "peer.enroll": "credential.manage",
   "peer.list": "credential.manage",
   "peer.forget": "credential.manage",
+  "peer.relay": "credential.manage",
   "conversation.watchRecords": null,
   "conversation.watchCatalogue": null,
   "conversation.unwatch": null,

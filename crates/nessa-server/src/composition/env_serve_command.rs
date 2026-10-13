@@ -7,6 +7,7 @@
 //! <data>/environment/serve.lock ──▶ ServeLock (one serving process)
 //! <data>/environment/leases.jsonl ──▶ FileLedger
 //! <data>/environment/grants.json ──▶ FileGrants (read at every lease)
+//! the checked-in lease policy ──▶ CedarLeasePolicy (validated once, asked at every lease)
 //! <data>/environment/outbox/, a private temporary directory ──▶ FileOutbox
 //! config.json "envServe.artifactsIn" ──▶ <data>/environment/inbox/ ──▶ FileInbox, or none
 //! TokioTimer ──▶ what serving's waits are measured on
@@ -22,13 +23,13 @@ use crate::{
     env::{Environment, LEASE_PROTOCOL, VERSION},
     env_serve::{
         application::{
-            refuse, serve, ArtifactInbox, CommandRunner, HarnessLauncher, Runners, ServeTimings,
-            Serving,
+            refuse, serve, ArtifactInbox, CommandRunner, HarnessLauncher, LeasePolicyEvaluator,
+            Runners, ServeTimings, Serving,
         },
         domain::Peer,
         infrastructure::{
-            ConfiguredLauncher, FileGrants, FileInbox, FileLedger, FileOutbox, LaunchSpec,
-            ServeLock, ServeLockError, ShepherdCommands, COMMAND_VARIABLES,
+            CedarLeasePolicy, ConfiguredLauncher, FileGrants, FileInbox, FileLedger, FileOutbox,
+            LaunchSpec, ServeLock, ServeLockError, ShepherdCommands, COMMAND_VARIABLES,
         },
     },
     timer::{Timer, TokioTimer},
@@ -91,6 +92,8 @@ pub(super) struct Composed {
     ledger: Arc<FileLedger>,
     /// What this host's owner grants each peer.
     grants: Arc<FileGrants>,
+    /// What decides each lease under those grants.
+    policy: Arc<dyn LeasePolicyEvaluator>,
     outbox: Arc<FileOutbox>,
     /// Where fetched files arrive; `None` when this host takes none.
     inbox: Option<Arc<FileInbox>>,
@@ -125,6 +128,7 @@ impl Composed {
             Serving {
                 peer,
                 grants: self.grants.clone(),
+                policy: self.policy.clone(),
             },
             Runners {
                 harnesses: self.launcher.clone(),
@@ -165,6 +169,7 @@ pub(super) async fn compose() -> Result<Composed, (Unavailability, RunError)> {
         .map_err(|error| not_configured(RunError::Agent(error.to_string())))?;
     let config = RuntimeConfig::load(&auth).map_err(not_configured)?;
     let launcher = launcher(&config).map_err(not_configured)?;
+    let policy = CedarLeasePolicy::new().map_err(|error| not_configured(RunError::Agent(error)))?;
     let commands = config.env_serve.commands.then(|| {
         let supervisor = SupervisorBuilder::new().build();
         let environment = COMMAND_VARIABLES
@@ -217,6 +222,7 @@ pub(super) async fn compose() -> Result<Composed, (Unavailability, RunError)> {
         commands,
         ledger: Arc::new(ledger),
         grants: Arc::new(FileGrants::new(&directory)),
+        policy: Arc::new(policy),
         outbox: Arc::new(outbox),
         inbox,
         sockets,

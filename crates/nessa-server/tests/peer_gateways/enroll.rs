@@ -30,6 +30,7 @@ use nessa_auth::{
 use nessa_client_core::pairing::NativeEnrollmentClient;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::pairing::wire::NativePairingStatus;
+use nessa_protocol::relay::RelayAddress;
 use nessa_server::{
     agents::application::{AgentProbe, AgentProbeEvidence},
     app::dependencies::RuntimeDependencies,
@@ -108,6 +109,8 @@ fn kind(record: &PeerAuditRecord) -> &'static str {
         PeerAuditRecord::EnrollFinished { .. } => "peer_enroll_finished",
         PeerAuditRecord::ForgetRequested { .. } => "peer_forget_requested",
         PeerAuditRecord::ForgetFinished { .. } => "peer_forget_finished",
+        PeerAuditRecord::RelayRequested { .. } => "peer_relay_requested",
+        PeerAuditRecord::RelayFinished { .. } => "peer_relay_finished",
         PeerAuditRecord::PollerChanged { .. } => "peer_poller_changed",
     }
 }
@@ -395,6 +398,87 @@ async fn a_gateway_enrolls_into_a_peer_with_its_own_key_and_keeps_only_a_referen
     listener.await.unwrap().unwrap();
 }
 
+/// Issue #266, slice R2b-2: `peer.enroll` keeps the relay it is given
+/// beside the address it dialed, and `peer.relay` sets and clears it, each
+/// audited with the relay before and after. A record without a relay keeps
+/// the shape it had before relays.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_peer_keeps_its_relay_and_peer_relay_changes_it() {
+    let fixture = Fixture::new().await;
+    let (native, stop, listener, _) = fixture.listener().await;
+    let dialing = Dialing::new(&fixture).await;
+    let token = fixture.owner_token.clone();
+    let (code, _) = invite(&fixture, ConsentClass::PeerRead).await;
+    let peer_key = pin_at(native).await;
+    let key = &peer_key[12..];
+    let stored = || {
+        let (_, bytes) = dialing.files().pop().unwrap();
+        serde_json::from_slice::<Value>(&bytes).unwrap()
+    };
+
+    let enrolled = blocking(|| {
+        ProductClient::connect(dialing.product, &token).ok(
+            "peer.enroll",
+            json!({"address": native.to_string(), "code": code, "relay": "relay.example:443"}),
+        )
+    });
+    assert_eq!(enrolled["relay"], "relay.example:443", "{enrolled}");
+    assert_eq!(stored()["relay"], "relay.example:443");
+
+    blocking(|| {
+        let mut owner = ProductClient::connect(dialing.product, &token);
+        let set = owner.ok(
+            "peer.relay",
+            json!({"peerKey": key, "relay": "[2001:db8::1]:47651"}),
+        );
+        assert_eq!(set["relay"], "[2001:db8::1]:47651", "{set}");
+        assert_eq!(set["phase"], "pending");
+        let listed = owner.ok("peer.list", json!({}));
+        assert_eq!(listed["items"][0]["relay"], "[2001:db8::1]:47651");
+        let cleared = owner.ok("peer.relay", json!({"peerKey": key, "relay": null}));
+        assert!(cleared.get("relay").is_none(), "{cleared}");
+    });
+    let record = stored();
+    assert!(
+        record.get("relay").is_none(),
+        "no relay, no field: {record}"
+    );
+    assert_eq!(record["schemaVersion"], 2);
+
+    let records = dialing.audit.records();
+    let requested = records
+        .iter()
+        .find(|record| record["kind"] == "peer_enroll_requested")
+        .unwrap();
+    assert_eq!(requested["target"]["relay"], "relay.example:443");
+    let changes: Vec<_> = records
+        .iter()
+        .filter(|record| record["kind"] == "peer_relay_finished")
+        .collect();
+    assert_eq!(changes.len(), 2);
+    assert_eq!(changes[0]["target"]["relay"], "[2001:db8::1]:47651");
+    assert_eq!(
+        changes[0]["transition"]["before"]["relay"],
+        "relay.example:443"
+    );
+    assert_eq!(
+        changes[0]["transition"]["after"]["relay"],
+        "[2001:db8::1]:47651"
+    );
+    assert_eq!(changes[0]["outcome"]["result"], "succeeded");
+    assert_eq!(changes[1]["target"]["relay"], Value::Null);
+    assert!(changes[1]["transition"]["after"].get("relay").is_none());
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record["kind"] == "peer_relay_requested")
+            .count(),
+        2
+    );
+    stop.send(()).unwrap();
+    listener.await.unwrap().unwrap();
+}
+
 /// Rows P5–P7: a device invitation, a wrong code and an invitation the
 /// owner cancelled each refuse the enrollment before anything is saved; a
 /// peer already kept is refused until forgotten.
@@ -495,6 +579,7 @@ async fn peer_routes_refuse_before_any_effect() {
                 json!({"address": "127.0.0.1:1", "code": "ABCD-2345"}),
             ),
             ("peer.list", json!({})),
+            ("peer.relay", json!({"peerKey": key, "relay": null})),
             ("peer.forget", json!({"peerKey": key})),
         ] {
             assert_eq!(
@@ -510,6 +595,7 @@ async fn peer_routes_refuse_before_any_effect() {
                 json!({"address": "127.0.0.1:1", "code": "ABCD-2345"}),
             ),
             ("peer.list", json!({})),
+            ("peer.relay", json!({"peerKey": key, "relay": null})),
             ("peer.forget", json!({"peerKey": key})),
         ] {
             assert_eq!(client.refused(method, params), "forbidden", "{method}");
@@ -537,6 +623,21 @@ async fn peer_routes_refuse_before_any_effect() {
             ("peer.list", json!({"all": true})),
             ("peer.forget", json!({"peerKey": vec![7; 31]})),
             ("peer.forget", json!({"peerKey": key, "remote": true})),
+            // A relay is host:port.
+            (
+                "peer.enroll",
+                json!({"address": "127.0.0.1:1", "code": "ABCD-2345", "relay": "relay.example"}),
+            ),
+            (
+                "peer.relay",
+                json!({"peerKey": key, "relay": "relay.example:0"}),
+            ),
+            (
+                "peer.relay",
+                json!({"peerKey": key, "relay": "relay example:443"}),
+            ),
+            // Clearing is said, not implied.
+            ("peer.relay", json!({"peerKey": key})),
         ] {
             assert_eq!(
                 owner.refused(method, params.clone()),
@@ -544,6 +645,10 @@ async fn peer_routes_refuse_before_any_effect() {
                 "{method} {params}"
             );
         }
+        assert_eq!(
+            owner.refused("peer.relay", json!({"peerKey": key, "relay": null})),
+            "peer_not_found"
+        );
     });
     assert!(dialing.files().is_empty());
 }
@@ -630,7 +735,8 @@ fn member_token(fixture: &Fixture) -> String {
 /// Rows P9 and P10, at the store: a pending save with any key but the
 /// gateway's own, or for a pin that is the gateway's own key, is refused and
 /// writes nothing. A record this build cannot read lists as `unreadable`,
-/// refuses a new enrollment into that peer, and is forgotten like any other.
+/// refuses a new enrollment into that peer and a relay change, and is
+/// forgotten like any other.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_record_takes_only_the_gateways_key_and_an_unreadable_one_can_be_forgotten() {
     let fixture = Fixture::new().await;
@@ -649,7 +755,7 @@ async fn a_record_takes_only_the_gateways_key_and_an_unreadable_one_can_be_forgo
     let mut pin = other.public_spki();
     pin[43] ^= 1;
 
-    let slot = dialing.records.enrolling(address);
+    let slot = dialing.records.enrolling(address, None);
     assert_eq!(
         slot.save_pending(other.key_material(), &pin, intent, None),
         Err(PrivateStateError::Conflict),
@@ -682,7 +788,7 @@ async fn a_record_takes_only_the_gateways_key_and_an_unreadable_one_can_be_forgo
         dialing.records.list().unwrap(),
         vec![PeerEntry::Unreadable(peer)]
     );
-    let slot = dialing.records.enrolling(address);
+    let slot = dialing.records.enrolling(address, None);
     assert_eq!(
         slot.save_pending(dialing.identity.key_material(), &pin, intent, None),
         Err(PrivateStateError::Conflict)
@@ -707,7 +813,7 @@ async fn a_record_takes_only_the_gateways_key_and_an_unreadable_one_can_be_forgo
     let a = DeviceKey::new(a_pin[12..].try_into().unwrap());
     dialing
         .records
-        .enrolling(native)
+        .enrolling(native, None)
         .save_pending(dialing.identity.key_material(), &a_pin, intent, None)
         .unwrap();
     assert!(matches!(
@@ -750,6 +856,25 @@ async fn a_record_takes_only_the_gateways_key_and_an_unreadable_one_can_be_forgo
     assert_eq!(
         finished["outcome"],
         json!({"result": "refused", "code": "peer_exists"})
+    );
+    // Nor does a relay change touch it.
+    let frame = blocking(|| {
+        ProductClient::connect(dialing.product, &token).call(
+            "peer.relay",
+            json!({"peerKey": &a_pin[12..], "relay": "relay.example:443"}),
+        )
+    });
+    assert_eq!(frame["error"]["code"], "peer_unavailable", "{frame}");
+    assert_eq!(std::fs::read(&path).unwrap(), tampered);
+    let finished = dialing.audit.records().pop().unwrap();
+    assert_eq!(finished["kind"], "peer_relay_finished");
+    assert_eq!(
+        finished["transition"],
+        json!({"before": {"phase": "unreadable"}, "after": {"phase": "unreadable"}})
+    );
+    assert_eq!(
+        finished["outcome"],
+        json!({"result": "refused", "code": "peer_unavailable"})
     );
     stop.send(()).unwrap();
     listener.await.unwrap().unwrap();
@@ -928,6 +1053,7 @@ async fn the_durable_peer_audit_reports_a_record_it_could_not_keep() {
         operation: uuid::Uuid::new_v4(),
         initiator: nessa_auth::domain::PrincipalId::new("owner").unwrap(),
         address: "127.0.0.1:1".parse().unwrap(),
+        relay: None,
     };
     assert_eq!(audit.record(record).await, Err(PeerAuditUnavailable));
 }
@@ -961,6 +1087,13 @@ impl PeerConnector for Never {
             std::future::pending().await
         })
     }
+    fn relay<'a>(
+        &'a self,
+        _: &'a nessa_protocol::relay::RelayAddress,
+        _: nessa_protocol::relay::GatewayKey,
+    ) -> PeerConnectFuture<'a> {
+        Box::pin(async { Err(std::io::ErrorKind::ConnectionRefused.into()) })
+    }
 }
 
 /// Row P13: the connect runs under the injected deadline clock, not an
@@ -993,7 +1126,7 @@ async fn a_connect_that_never_answers_ends_when_the_injected_clock_passes_its_de
         async move {
             let owner = PrincipalId::new("owner").unwrap();
             commands
-                .enroll(address, ManualCode::generate(&mut OsEntropy), &owner)
+                .enroll(address, None, ManualCode::generate(&mut OsEntropy), &owner)
                 .await
         }
     });
@@ -1052,6 +1185,13 @@ impl PeerConnector for Late {
             Ok(stream)
         })
     }
+    fn relay<'a>(
+        &'a self,
+        _: &'a nessa_protocol::relay::RelayAddress,
+        _: nessa_protocol::relay::GatewayKey,
+    ) -> PeerConnectFuture<'a> {
+        Box::pin(async { Err(std::io::ErrorKind::ConnectionRefused.into()) })
+    }
 }
 
 /// Row P13, the other edge: a connect that completes once the clock has
@@ -1085,6 +1225,7 @@ async fn a_connect_completed_after_the_deadline_is_refused_and_closed() {
             commands
                 .enroll(
                     "192.0.2.1:7443".parse().unwrap(),
+                    None,
                     ManualCode::generate(&mut OsEntropy),
                     &owner,
                 )
@@ -1130,7 +1271,7 @@ async fn a_connect_completed_after_the_deadline_is_refused_and_closed() {
 
 /// One audited call's expected evidence.
 struct Expected {
-    /// `peer_enroll` or `peer_forget`.
+    /// `peer_enroll`, `peer_forget` or `peer_relay`.
     command: &'static str,
     /// The wire code, or `None` for success.
     code: Option<&'static str>,
@@ -1183,7 +1324,7 @@ fn assert_pair(records: &[Value], operation: &str, expected: &Expected) {
     }
     let peer = expected.peer.clone().map_or(Value::Null, Value::from);
     assert_eq!(finished["target"]["peerKey"], peer, "{row}");
-    if expected.command == "peer_forget" {
+    if expected.command != "peer_enroll" {
         assert_eq!(requested["target"]["peerKey"], peer, "{row}");
     }
     let outcome = match expected.code {
@@ -1193,7 +1334,7 @@ fn assert_pair(records: &[Value], operation: &str, expected: &Expected) {
     assert_eq!(finished["outcome"], outcome, "{row}");
 }
 
-/// Row P14: every way peer.enroll and peer.forget can answer, success and
+/// Row P14: every way peer.enroll, peer.forget and peer.relay can answer, success and
 /// each typed refusal, keeps exactly one intent and one outcome under one
 /// operation id, naming the initiator, the target and the peer once known.
 /// The table must cover every answer, so a new path that skips the audit,
@@ -1251,7 +1392,7 @@ async fn every_peer_command_answer_keeps_one_intent_and_one_outcome() {
     let (code, id) = invite(&fixture, ConsentClass::DeviceRead).await;
     row!(
         dialing,
-        commands.enroll(native, parse(&code), &owner).await,
+        commands.enroll(native, None, parse(&code), &owner).await,
         enroll("peer_enroll", Some("peer_wrong_invitation"), native, None)
     );
     cancel(&fixture, id).await;
@@ -1263,20 +1404,20 @@ async fn every_peer_command_answer_keeps_one_intent_and_one_outcome() {
     };
     row!(
         dialing,
-        commands.enroll(native, parse(wrong), &owner).await,
+        commands.enroll(native, None, parse(wrong), &owner).await,
         enroll("peer_enroll", Some("peer_invitation_refused"), native, None)
     );
     attempts_ended(&fixture, id).await;
     row!(
         dialing,
-        commands.enroll(native, parse(&code), &owner).await,
+        commands.enroll(native, None, parse(&code), &owner).await,
         enroll("peer_enroll", None, native, Some(&a_hex))
     );
     cancel(&fixture, id).await;
     let (code, id) = invite(&fixture, ConsentClass::PeerRead).await;
     row!(
         dialing,
-        commands.enroll(native, parse(&code), &owner).await,
+        commands.enroll(native, None, parse(&code), &owner).await,
         enroll("peer_enroll", Some("peer_exists"), native, Some(&a_hex))
     );
     cancel(&fixture, id).await;
@@ -1291,7 +1432,7 @@ async fn every_peer_command_answer_keeps_one_intent_and_one_outcome() {
     let (code, id) = invite(&other_fixture, ConsentClass::PeerRead).await;
     row!(
         dialing,
-        commands.enroll(other, parse(&code), &owner).await,
+        commands.enroll(other, None, parse(&code), &owner).await,
         enroll("peer_enroll", Some("peer_capacity"), other, Some(&b_hex))
     );
     cancel(&other_fixture, id).await;
@@ -1311,7 +1452,7 @@ async fn every_peer_command_answer_keeps_one_intent_and_one_outcome() {
     row!(
         itself,
         commands_over(&itself)
-            .enroll(native, parse(&code), &owner)
+            .enroll(native, None, parse(&code), &owner)
             .await,
         enroll(
             "peer_enroll",
@@ -1334,6 +1475,18 @@ async fn every_peer_command_answer_keeps_one_intent_and_one_outcome() {
         commands.forget(nobody, &owner).await,
         forget(Some("peer_not_found"), &"07".repeat(32))
     );
+    let relay = |code, peer: &str| Expected {
+        command: "peer_relay",
+        code,
+        address: None,
+        peer: Some(peer.to_owned()),
+    };
+    let relay_at = || Some(RelayAddress::try_from("relay.example:443".to_owned()).unwrap());
+    row!(
+        dialing,
+        commands.relay(nobody, relay_at(), &owner).await,
+        relay(Some("peer_not_found"), &"07".repeat(32))
+    );
 
     // An enrollment held at a peer that accepts and never speaks: every
     // other call meanwhile is busy, and it ends unreachable once dropped.
@@ -1343,14 +1496,14 @@ async fn every_peer_command_answer_keeps_one_intent_and_one_outcome() {
     let held = tokio::spawn({
         let commands = commands.clone();
         let owner = owner.clone();
-        async move { commands.enroll(held_at, parse_code(), &owner).await }
+        async move { commands.enroll(held_at, None, parse_code(), &owner).await }
     });
     let (socket, _) = blocking(|| silent.accept().unwrap());
     let held_operation = new_operation(&before, &dialing.audit.records());
     row!(
         dialing,
         commands
-            .enroll(native, ManualCode::generate(&mut OsEntropy), &owner)
+            .enroll(native, None, ManualCode::generate(&mut OsEntropy), &owner)
             .await,
         enroll("peer_enroll", Some("peer_busy"), native, None)
     );
@@ -1359,6 +1512,11 @@ async fn every_peer_command_answer_keeps_one_intent_and_one_outcome() {
         dialing,
         commands.forget(a_key, &owner).await,
         forget(Some("peer_busy"), &a_hex)
+    );
+    row!(
+        dialing,
+        commands.relay(a_key, relay_at(), &owner).await,
+        relay(Some("peer_busy"), &a_hex)
     );
     drop(socket);
     let answer = tokio::time::timeout(WAIT, held).await.unwrap().unwrap();
@@ -1369,11 +1527,16 @@ async fn every_peer_command_answer_keeps_one_intent_and_one_outcome() {
 
     row!(
         dialing,
+        commands.relay(a_key, relay_at(), &owner).await,
+        relay(None, &a_hex)
+    );
+    row!(
+        dialing,
         commands.forget(a_key, &owner).await,
         forget(None, &a_hex)
     );
 
-    // Every answer either command gives, but the two that need storage or
+    // Every answer each command gives, but the two that need storage or
     // the audit to fail (rows P12 and the store tests cover those).
     let answers: std::collections::BTreeSet<String> = [
         "peer_enroll/ok",
@@ -1387,6 +1550,9 @@ async fn every_peer_command_answer_keeps_one_intent_and_one_outcome() {
         "peer_forget/ok",
         "peer_forget/peer_busy",
         "peer_forget/peer_not_found",
+        "peer_relay/ok",
+        "peer_relay/peer_busy",
+        "peer_relay/peer_not_found",
     ]
     .into_iter()
     .map(str::to_owned)
@@ -1454,7 +1620,12 @@ async fn an_enrollment_whose_entropy_fails_is_unavailable_and_audited() {
     let (code, id) = invite(&fixture, ConsentClass::PeerRead).await;
     let owner = PrincipalId::new("owner").unwrap();
     let answer = commands
-        .enroll(native, ManualCode::parse(code.as_bytes()).unwrap(), &owner)
+        .enroll(
+            native,
+            None,
+            ManualCode::parse(code.as_bytes()).unwrap(),
+            &owner,
+        )
         .await;
     assert_eq!(answer, Err(PeerError::Unavailable));
     assert!(dialing.files().is_empty(), "nothing is saved");
@@ -1520,6 +1691,7 @@ async fn an_audit_that_never_answers_ends_the_call_at_its_deadline() {
             commands
                 .enroll(
                     "192.0.2.1:7443".parse().unwrap(),
+                    None,
                     ManualCode::generate(&mut OsEntropy),
                     &owner,
                 )
@@ -1557,7 +1729,7 @@ async fn an_audit_that_never_answers_ends_the_call_at_its_deadline() {
     let peer = NativeIdentity::generate(&mut OsEntropy).unwrap();
     dialing
         .records
-        .enrolling("127.0.0.1:7443".parse().unwrap())
+        .enrolling("127.0.0.1:7443".parse().unwrap(), None)
         .save_pending(
             dialing.identity.key_material(),
             &peer.public_spki(),
@@ -1606,7 +1778,7 @@ async fn a_slot_names_the_transition_a_status_began_whatever_storage_did() {
     let peer = NativeIdentity::generate(&mut OsEntropy).unwrap();
     dialing
         .records
-        .enrolling("127.0.0.1:7443".parse().unwrap())
+        .enrolling("127.0.0.1:7443".parse().unwrap(), None)
         .save_pending(
             dialing.identity.key_material(),
             &peer.public_spki(),

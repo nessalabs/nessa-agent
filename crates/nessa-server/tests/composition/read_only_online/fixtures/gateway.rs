@@ -201,7 +201,14 @@ async fn gateway_child() {
     };
     let root = Path::new(&root);
     nessa_local_storage::create_directory(root).unwrap();
-    let auth = Arc::new(LocalCredentialStore::open(root, "credentials.json").unwrap());
+    let auth = Arc::new(
+        LocalCredentialStore::open(
+            root,
+            "credentials.json",
+            std::sync::Arc::new(nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap()),
+        )
+        .unwrap(),
+    );
     // "regrant": the receiver policy revision changes, which moves every
     // active receiver to a new access epoch; the device's next status reports
     // it, and the saved cache scope no longer matches.

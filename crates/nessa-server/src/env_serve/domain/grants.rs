@@ -1,18 +1,23 @@
 //! What this host's owner grants each gateway that leases from it, and the
-//! one decision made from it: whether a lease is admitted, and on what terms.
+//! terms a lease is admitted on once the lease policy allows it.
 //!
 //! ```text
 //! Peer (ssh, or a dialed gateway's pin) ──▶ its PeerGrant, or none
-//!   none ──▶ granted_to: ssh keeps everything, a dialed gateway nothing
-//! GrantOperation::apply(grant)     ──▶ the grant after an owner's change
-//! admit_agent(grant, agent)        ──▶ Ok(the lease's longest, maxLeaseMs), or NotGranted
-//! admit_command(grant, timeout_ms) ──▶ min(asked, maxTimeoutMs), or NotGranted
+//!   none ──▶ unwritten(peer): what it holds, shown as, changed from,
+//!            and decided over by the lease policy
+//! GrantOperation::apply(grant)        ──▶ the grant after an owner's change
+//! lease_ms(grant)                     ──▶ a harness lease's longest, maxLeaseMs
+//! command_timeout(grant, timeout_ms)  ──▶ min(asked, maxTimeoutMs)
 //! ```
 //!
-//! Arrows are what each step reads and answers. A grant only narrows what
-//! the host can do: whether it runs an agent at all, or commands at all, is
-//! its configuration's, decided before a grant is read. A grant never
-//! widens a lease: a command's timeout comes back the one asked or shorter.
+//! Arrows are what each step reads and answers. Whether a peer may lease an
+//! agent, or run a command, at all is not decided here: it is the lease
+//! policy's (`application::LeasePolicyEvaluator`, answered by Cedar), over
+//! the peer and the grant it holds. What is here are what a grant holds,
+//! a missing entry's included, and the terms attached to a yes. A grant only narrows what the host can do: whether it runs an
+//! agent at all, or commands at all, is its configuration's, decided after
+//! the policy. A grant never widens a lease: a command's timeout comes back
+//! the one asked or shorter.
 use nessa_sdk::domain::agent_execution::leases::{AgentWork, CommandWork};
 use std::collections::BTreeSet;
 
@@ -287,45 +292,35 @@ impl GrantOperation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AllAgents;
 
-/// What `peer` is granted, given its entry in the grants, if it has one. A
-/// dialed gateway with none is granted nothing; SSH with none keeps what a
-/// host served over SSH always had, everything its configuration allows.
-pub(crate) fn granted_to(peer: &Peer, entry: Option<PeerGrant>) -> PeerGrant {
-    match (entry, peer) {
-        (Some(entry), _) => entry,
-        (None, Peer::Ssh) => PeerGrant::everything(),
-        (None, Peer::Gateway { .. }) => PeerGrant::nothing(),
+/// What a peer with no entry holds: everything the host allows for SSH,
+/// nothing for a dialed gateway. The one statement of a missing entry's
+/// defaults, as a file's missing fields have theirs: it is what such a peer
+/// is shown as and changed from, the grant the lease policy decides over,
+/// and the terms of its yes. The policy holds no defaults of its own.
+pub(crate) fn unwritten(peer: &Peer) -> PeerGrant {
+    match peer {
+        Peer::Ssh => PeerGrant::everything(),
+        Peer::Gateway { .. } => PeerGrant::nothing(),
     }
 }
 
-/// A lease the peer's grant does not cover.
+/// A lease the peer is not granted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NotGranted;
 
-/// Whether `grant` covers a lease of `agent`'s harness, and if so how long
-/// that lease may last: `None` until it is ended.
-///
-/// # Errors
-/// [`NotGranted`] when it does not.
-pub(crate) fn admit_agent(grant: &PeerGrant, agent: &str) -> Result<Option<u64>, NotGranted> {
-    let covered = match &grant.agents {
-        Agents::All => true,
-        Agents::Named(named) => named.iter().any(|name| name.as_str() == agent),
-    };
-    covered
-        .then(|| grant.max_lease.map(MaxLease::ms))
-        .ok_or(NotGranted)
+/// How long a harness's lease admitted under `grant` may last: `None`
+/// until it is ended.
+pub(crate) fn lease_ms(grant: &PeerGrant) -> Option<u64> {
+    grant.max_lease.map(MaxLease::ms)
 }
 
-/// The timeout a command asking `timeout_ms` is granted under `grant`: the
+/// The timeout a command asking `timeout_ms` runs with under `grant`: the
 /// one asked, or the grant's longest when that is shorter. Never longer
-/// than asked.
-///
-/// # Errors
-/// [`NotGranted`] when the grant holds no commands.
-pub(crate) fn admit_command(grant: &PeerGrant, timeout_ms: u64) -> Result<u64, NotGranted> {
-    let commands = grant.commands.ok_or(NotGranted)?;
-    Ok(timeout_ms.min(commands.max_timeout_ms))
+/// than asked. `None` when the grant holds no command terms to run it on.
+pub(crate) fn command_timeout(grant: &PeerGrant, timeout_ms: u64) -> Option<u64> {
+    grant
+        .commands
+        .map(|commands| timeout_ms.min(commands.max_timeout_ms))
 }
 
 #[cfg(test)]

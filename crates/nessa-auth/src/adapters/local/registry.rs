@@ -29,14 +29,14 @@ use crate::{
         pairing::StageGate,
         ports::{
             AccessError, AccessReader, AccessSnapshot, CredentialEvidence, CredentialVerifier,
-            PortFuture, VerifiedCredential,
+            Decision, GrantPolicyEvaluator, IssuePath, PortFuture, VerifiedCredential,
         },
     },
     domain::{
         pairing::{validate_pairing_collection, InvitationId, PairingError, PEER_PRINCIPAL_PREFIX},
-        Action, AudienceId, Credential, CredentialId, CredentialTransition, DomainError, Initiator,
-        IssuanceCause, Membership, Principal, PrincipalId, PrincipalKind, Supersession,
-        TransitionCause,
+        AudienceId, Credential, CredentialId, CredentialTransition, DomainError, Initiator,
+        IssuanceCause, Membership, MembershipRole, OrganizationId, Principal, PrincipalId,
+        PrincipalKind, Resource, ResourceId, Supersession, TransitionCause,
     },
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -289,6 +289,9 @@ impl Drop for RegistryLock {
 }
 pub struct LocalCredentialStore {
     config: LocalStoreConfig,
+    /// Which grants a credential may carry (`GrantPolicyEvaluator`), asked on
+    /// every issue and every read or write of the registry.
+    grants: Arc<dyn GrantPolicyEvaluator>,
     root: PathBuf,
     path: PathBuf,
     _lock: RegistryLock,
@@ -308,14 +311,21 @@ pub struct LocalCredentialStore {
 impl LocalCredentialStore {
     /// Open `path` beneath the already-private trusted `root` and acquire its
     /// sibling lifetime lock. A missing registry is represented as uninitialized.
-    pub fn open(root: impl AsRef<Path>, path: impl AsRef<Path>) -> Result<Self, LocalStoreError> {
-        Self::open_with_config(root, path, LocalStoreConfig::default())
+    /// `grants` decides which grants a credential may carry; composition
+    /// supplies the Cedar adapter.
+    pub fn open(
+        root: impl AsRef<Path>,
+        path: impl AsRef<Path>,
+        grants: Arc<dyn GrantPolicyEvaluator>,
+    ) -> Result<Self, LocalStoreError> {
+        Self::open_with_config(root, path, LocalStoreConfig::default(), grants)
     }
 
     pub fn open_with_config(
         root: impl AsRef<Path>,
         path: impl AsRef<Path>,
         config: LocalStoreConfig,
+        grants: Arc<dyn GrantPolicyEvaluator>,
     ) -> Result<Self, LocalStoreError> {
         config.validate()?;
         let root = root.as_ref().to_path_buf();
@@ -383,7 +393,7 @@ impl LocalCredentialStore {
                     });
                     invalid_registry(&root, &path, fault)
                 })?;
-                validate_registry(&registry, &config)
+                validate_registry(&registry, &config, grants.as_ref())
                     .map_err(|fault| invalid_registry(&root, &path, fault))?;
                 Some(registry)
             }
@@ -392,6 +402,7 @@ impl LocalCredentialStore {
         };
         Ok(Self {
             config,
+            grants,
             root,
             path,
             _lock: RegistryLock(lock),
@@ -482,11 +493,20 @@ impl LocalCredentialStore {
             grants: request.grants,
         };
         let credential = domain_credential(&metadata)?;
-        validate_grants(
-            &metadata,
-            principal_kind(&request.principal)?,
+        let kind = principal_kind(&request.principal)?;
+        validate_recipient(
+            self.grants.as_ref(),
+            kind,
+            &request.membership,
             &request.gateway_id,
-            true,
+            IssuePath::Bootstrap,
+        )?;
+        validate_grants(
+            self.grants.as_ref(),
+            &metadata,
+            kind,
+            &request.gateway_id,
+            IssuePath::Bootstrap,
         )?;
         let (evidence, verifier) = issue_secret(&metadata.id)?;
         let mut registry = Registry {
@@ -530,14 +550,18 @@ impl LocalCredentialStore {
         &self,
         request: IssueCredentialRequest,
     ) -> Result<IssueCredentialOutcome, LocalStoreError> {
-        self.issue_internal(request, false)
+        self.issue_internal(request, IssuePath::ProductIssue)
     }
 
+    /// Issue over `path`: [`IssuePath::ProductIssue`] or
+    /// [`IssuePath::SurfaceProvision`]. A provisioning is a rotation; a product
+    /// issue only adds.
     fn issue_internal(
         &self,
         request: IssueCredentialRequest,
-        administrative_allowed: bool,
+        path: IssuePath,
     ) -> Result<IssueCredentialOutcome, LocalStoreError> {
+        let provisioning = path == IssuePath::SurfaceProvision;
         let fingerprint = issue_fingerprint(&request)?;
         let mut slot = self.slot()?;
         let current = slot.as_ref().ok_or(LocalStoreError::NotInitialized)?;
@@ -576,7 +600,7 @@ impl LocalCredentialStore {
         {
             return Err(LocalStoreError::Capacity);
         }
-        validate_issue(current, &request, administrative_allowed)?;
+        validate_issue(self.grants.as_ref(), current, &request, path)?;
         let metadata = CredentialMetadataDto {
             id: request.credential_id.clone(),
             principal_id: request.principal.id.clone(),
@@ -589,10 +613,11 @@ impl LocalCredentialStore {
         };
         let credential = domain_credential(&metadata)?;
         validate_grants(
+            self.grants.as_ref(),
             &metadata,
             principal_kind(&request.principal)?,
             &current.gateway_id,
-            administrative_allowed,
+            path,
         )?;
         let initiator = Initiator::Principal(
             PrincipalId::new(request.issuer_principal_id.clone())
@@ -605,8 +630,8 @@ impl LocalCredentialStore {
             .checked_add(1)
             .ok_or(LocalStoreError::Capacity)?;
         let first_transition = next.transitions.len();
-        if administrative_allowed {
-            // An administrative issuance is a rotation: it replaces whatever
+        if provisioning {
+            // A provisioning is a rotation: it replaces whatever
             // credential this principal already holds in the organization being
             // provisioned, whatever that credential's grants were. Credentials
             // the same principal holds in other organizations are not this
@@ -627,7 +652,7 @@ impl LocalCredentialStore {
                 Some(&request.request_id),
             )?;
         }
-        let cause = if administrative_allowed {
+        let cause = if provisioning {
             IssuanceCause::SurfaceProvision
         } else {
             IssuanceCause::AdminIssue
@@ -741,7 +766,7 @@ impl LocalCredentialStore {
                 expires_at,
                 grants,
             },
-            true,
+            IssuePath::SurfaceProvision,
         )
     }
 
@@ -817,7 +842,21 @@ impl LocalCredentialStore {
             .iter()
             .find(|principal| principal.id == membership.principal_id)
             .ok_or(LocalStoreError::Corrupt)?;
-        validate_grants(&metadata, principal_kind(owner)?, &current.gateway_id, true)?;
+        let kind = principal_kind(owner)?;
+        validate_recipient(
+            self.grants.as_ref(),
+            kind,
+            membership,
+            &current.gateway_id,
+            IssuePath::OwnerRecovery,
+        )?;
+        validate_grants(
+            self.grants.as_ref(),
+            &metadata,
+            kind,
+            &current.gateway_id,
+            IssuePath::OwnerRecovery,
+        )?;
         if !credential_identity_available(current, &metadata.id, None)
             .map_err(|_| LocalStoreError::Corrupt)?
         {
@@ -1020,7 +1059,8 @@ impl LocalCredentialStore {
     }
 
     fn persist(&self, registry: &Registry) -> Result<(), LocalStoreError> {
-        validate_registry(registry, &self.config).map_err(|_| LocalStoreError::Corrupt)?;
+        validate_registry(registry, &self.config, self.grants.as_ref())
+            .map_err(|_| LocalStoreError::Corrupt)?;
         let parent = self.path.parent().ok_or(LocalStoreError::Corrupt)?;
         let mut temporary = nessa_local_storage::PrivateTempFile::new_beneath(&self.root, parent)?;
         let bytes = serde_json::to_vec(registry).map_err(|_| LocalStoreError::Corrupt)?;
@@ -1073,7 +1113,8 @@ impl LocalCredentialStore {
         }
         let registry: Registry =
             serde_json::from_slice(&actual).map_err(|_| LocalStoreError::Corrupt)?;
-        validate_registry(&registry, &self.config).map_err(|_| LocalStoreError::Corrupt)?;
+        validate_registry(&registry, &self.config, self.grants.as_ref())
+            .map_err(|_| LocalStoreError::Corrupt)?;
         file.sync_all()?;
         self.sync_registry_directory(parent)
     }
@@ -1515,6 +1556,7 @@ fn validate_transitions(
 fn validate_registry(
     registry: &Registry,
     config: &LocalStoreConfig,
+    grants: &dyn GrantPolicyEvaluator,
 ) -> Result<(), CredentialRegistryFault> {
     if registry.schema_version != SCHEMA_VERSION {
         return Err(CredentialRegistryFault::UnsupportedSchema {
@@ -1689,7 +1731,13 @@ fn validate_registry(
             .ok_or(LocalStoreError::Corrupt)
             .and_then(principal_kind);
         kind.and_then(|kind| {
-            validate_grants(&credential.metadata, kind, &registry.gateway_id, true)
+            validate_grants(
+                grants,
+                &credential.metadata,
+                kind,
+                &registry.gateway_id,
+                IssuePath::StoredOnLoad,
+            )
         })
         .map_err(|_| {
             CredentialRegistryFault::InvalidState(RegistryInvariant::CredentialMetadata)
@@ -1759,7 +1807,7 @@ fn principal_id_matches_kind(principal: &PrincipalInputDto) -> bool {
 /// registry keeps. A gateway principal is a paired peer: its credential is
 /// bound to the key it pinned by pairing (never a bearer secret) and its
 /// membership is a member's. Which grants each kind may hold is
-/// `validate_grants`'s check, through `PrincipalKind::may_hold`. A
+/// `validate_grants`'s check, through `GrantPolicyEvaluator::may_hold`. A
 /// pairing-bound credential names a gateway principal exactly when its
 /// enrollment's class is a peer's; that it holds exactly its class's one
 /// grant is its pairing's own check (`StoredPairing`).
@@ -1841,16 +1889,19 @@ fn credential_identity_available(
     Ok(true)
 }
 
+/// The record checks of an issue over `path`. Who may be issued a credential
+/// on that path is the policy's (`validate_recipient`); a membership being
+/// active is the record's own invariant, so a credential is never born
+/// unusable.
 fn validate_issue(
+    grants: &dyn GrantPolicyEvaluator,
     registry: &Registry,
     request: &IssueCredentialRequest,
-    administrative_allowed: bool,
+    path: IssuePath,
 ) -> Result<(), LocalStoreError> {
-    // A peer gateway is enrolled only by pairing, which binds its credential
-    // to the key it pinned; an issued bearer secret would be a second way in.
-    // Its id prefix is reserved too, whatever kind a request claims.
+    // A peer gateway's id prefix is reserved, whatever kind a request claims:
+    // the kind itself is refused by the policy.
     if request.audience_id != registry.gateway_id
-        || request.principal.kind == PrincipalKindDto::Gateway
         || request.principal.id.starts_with(PEER_PRINCIPAL_PREFIX)
         || request.request_id.trim().is_empty()
         || request.request_id.len() > 200
@@ -1864,7 +1915,6 @@ fn validate_issue(
             .iter()
             .any(|organization| organization.id == request.membership.organization_id)
         || request.membership.principal_id != request.principal.id
-        || (!administrative_allowed && request.membership.role == MembershipRoleDto::Admin)
         || request.membership.state != MembershipStateDto::Active
         || request
             .grants
@@ -1890,7 +1940,7 @@ fn validate_issue(
         .find(|m| m.id == request.membership.id)
     {
         if membership != &request.membership
-            && !(administrative_allowed
+            && !(path == IssuePath::SurfaceProvision
                 && membership.id != registry.owner_membership_id
                 && membership.principal_id == request.membership.principal_id
                 && membership.organization_id == request.membership.organization_id)
@@ -1905,6 +1955,38 @@ fn validate_issue(
     }) {
         return Err(LocalStoreError::Conflict);
     }
+    validate_recipient(
+        grants,
+        principal_kind(&request.principal)?,
+        &request.membership,
+        &registry.gateway_id,
+        path,
+    )
+}
+
+/// Whether `grants` lets a credential be issued by `path` to a principal of
+/// `kind` with `membership` ([`GrantPolicyEvaluator::may_issue`]). A refusal
+/// and an unavailable policy are both `Conflict`: nothing is issued on an
+/// answer that is not Allow.
+fn validate_recipient(
+    grants: &dyn GrantPolicyEvaluator,
+    kind: PrincipalKind,
+    membership: &MembershipInputDto,
+    gateway_id: &str,
+    path: IssuePath,
+) -> Result<(), LocalStoreError> {
+    let role = match membership.role {
+        MembershipRoleDto::Admin => MembershipRole::Admin,
+        MembershipRoleDto::Member => MembershipRole::Member,
+    };
+    let gateway = Resource::new(
+        OrganizationId::new(membership.organization_id.clone())
+            .map_err(|_| LocalStoreError::Conflict)?,
+        ResourceId::new(gateway_id.to_owned()).map_err(|_| LocalStoreError::Conflict)?,
+    );
+    if grants.may_issue(kind, role, &gateway, path) != Ok(Decision::Allow) {
+        return Err(LocalStoreError::Conflict);
+    }
     Ok(())
 }
 
@@ -1916,31 +1998,28 @@ fn principal_kind(principal: &PrincipalInputDto) -> Result<PrincipalKind, LocalS
         .map_err(|_| LocalStoreError::Conflict)
 }
 
-/// The grants a credential may carry: on this gateway, from the known actions,
-/// each one its principal's kind may hold (`PrincipalKind::may_hold`), and
-/// `credential.manage` only where administration is allowed. Every issuing
-/// path and the stored registry ask this one check.
+/// The grants a credential may carry: at least one, each on this gateway, and
+/// each one `grants` lets its principal's kind hold when it comes in by
+/// `path` ([`GrantPolicyEvaluator::may_hold`]). Every issuing path and the
+/// stored registry ask this one check; which actions exist and who may hold
+/// them on which path is the policy's, not this function's.
 fn validate_grants(
+    grants: &dyn GrantPolicyEvaluator,
     metadata: &CredentialMetadataDto,
     kind: PrincipalKind,
     gateway_id: &str,
-    administrative_allowed: bool,
+    path: IssuePath,
 ) -> Result<(), LocalStoreError> {
-    if metadata.grants.is_empty()
-        || metadata.grants.iter().any(|grant| {
-            grant.resource.id != gateway_id
-                || Action::new(grant.action.clone()).map_or(true, |action| !kind.may_hold(&action))
-                || !matches!(
-                    grant.action.as_str(),
-                    "server.read"
-                        | "credential.manage"
-                        | "conversation.read"
-                        | "conversation.write"
-                        | "environment.serve"
-                )
-                || (!administrative_allowed && grant.action == "credential.manage")
-        })
-    {
+    let credential = domain_credential(metadata)?;
+    if credential.grants().is_empty() {
+        return Err(LocalStoreError::Conflict);
+    }
+    // A refusal and an unavailable policy are both a grant this credential
+    // may not carry: nothing is issued or kept on an answer that is not Allow.
+    if credential.grants().iter().any(|grant| {
+        grant.resource().id().as_str() != gateway_id
+            || grants.may_hold(kind, grant, path) != Ok(Decision::Allow)
+    }) {
         return Err(LocalStoreError::Conflict);
     }
     Ok(())
@@ -2066,7 +2145,11 @@ mod tests {
     ) -> Result<LocalCredentialStore, LocalStoreError> {
         let path = path.as_ref();
         let (root, relative) = trusted_root(path);
-        LocalCredentialStore::open(root, relative)
+        LocalCredentialStore::open(
+            root,
+            relative,
+            std::sync::Arc::new(crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap()),
+        )
     }
 
     fn open_store_with_config(
@@ -2075,18 +2158,33 @@ mod tests {
     ) -> Result<LocalCredentialStore, LocalStoreError> {
         let path = path.as_ref();
         let (root, relative) = trusted_root(path);
-        LocalCredentialStore::open_with_config(root, relative, config)
+        LocalCredentialStore::open_with_config(
+            root,
+            relative,
+            config,
+            std::sync::Arc::new(crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap()),
+        )
     }
 
     #[cfg(windows)]
     #[test]
     fn inherited_temp_root_is_rejected_while_a_protected_child_is_accepted() {
         let temporary = tempfile::tempdir().unwrap();
-        assert!(LocalCredentialStore::open(temporary.path(), "credentials.v1.json").is_err());
+        assert!(LocalCredentialStore::open(
+            temporary.path(),
+            "credentials.v1.json",
+            std::sync::Arc::new(crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap())
+        )
+        .is_err());
 
         let trusted = temporary.path().join("trusted");
         nessa_local_storage::create_directory(&trusted).unwrap();
-        assert!(LocalCredentialStore::open(&trusted, "credentials.v1.json").is_ok());
+        assert!(LocalCredentialStore::open(
+            &trusted,
+            "credentials.v1.json",
+            std::sync::Arc::new(crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap())
+        )
+        .is_ok());
     }
 
     pub(super) fn grant(org: &str, action: &str) -> CredentialGrantDto {
@@ -3010,7 +3108,8 @@ mod tests {
         symlink(&redirected, &intermediate).unwrap();
         assert!(LocalCredentialStore::open(
             root.path(),
-            Path::new("nested-link/credentials.v1.json")
+            Path::new("nested-link/credentials.v1.json"),
+            std::sync::Arc::new(crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap()),
         )
         .is_err());
         assert!(!redirected.join("credentials.lock").exists());
@@ -3579,5 +3678,155 @@ mod tests {
         ));
         assert!(!error.to_string().contains("never-report-this"));
         assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+
+    /// Rows of `hold.administration`, `hold.person` and `issue.admin` as the
+    /// registry meets them: an issue over the product protocol is refused,
+    /// with nothing written, for administration, for serving as an
+    /// environment, for an action no policy names, for a grant on another
+    /// gateway, and for an admin membership. The same admin membership is
+    /// issued by bootstrap and by surface provisioning.
+    #[test]
+    fn a_product_issue_refuses_what_only_the_local_operator_may_hand_out() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("auth/credentials.v1.json");
+        let store = open_store(&path).unwrap();
+        store.bootstrap(bootstrap()).unwrap();
+        let before = fs::read(&path).unwrap();
+        let mut refused: Vec<(&str, IssueCredentialRequest)> = Vec::new();
+        for action in ["credential.manage", "environment.serve", "anything.else"] {
+            let mut request = member_issue(action, &format!("credential-{action}"));
+            request.grants = vec![grant("org-1", action)];
+            refused.push((action, request));
+        }
+        let mut foreign = member_issue("foreign", "credential-foreign");
+        foreign.grants[0].resource.id = "another-gateway".into();
+        refused.push(("foreign resource", foreign));
+        let mut admin = member_issue("admin", "credential-admin");
+        admin.membership.role = MembershipRoleDto::Admin;
+        refused.push(("admin membership", admin));
+        for (case, request) in refused {
+            assert!(
+                matches!(store.issue_sync(request), Err(LocalStoreError::Conflict)),
+                "{case}"
+            );
+            assert_eq!(fs::read(&path).unwrap(), before, "{case}");
+        }
+        // The ordinary request those were made from is issued.
+        assert!(matches!(
+            store.issue_sync(member_issue("member", "credential-member")),
+            Ok(IssueCredentialOutcome::Issued { .. })
+        ));
+        // Provisioning hands out administration, with an admin membership.
+        assert!(matches!(
+            store.provision_surface(
+                "panel",
+                "panel".into(),
+                "panel".into(),
+                vec!["credential.manage".into()],
+                130,
+                None
+            ),
+            Ok(IssueCredentialOutcome::Issued { .. })
+        ));
+        let slot = store.registry().unwrap();
+        assert!(slot
+            .as_ref()
+            .unwrap()
+            .memberships
+            .iter()
+            .any(|membership| membership.id == "surface:panel"
+                && membership.role == MembershipRoleDto::Admin));
+    }
+
+    /// A `GrantPolicyEvaluator` that answers like the Cedar bundle until it
+    /// is told to give one fixed answer instead.
+    struct Overridden {
+        cedar: CedarPolicyEvaluator,
+        answer: Mutex<Option<Result<Decision, AccessError>>>,
+    }
+    impl Overridden {
+        fn new() -> std::sync::Arc<Self> {
+            std::sync::Arc::new(Self {
+                cedar: CedarPolicyEvaluator::new().unwrap(),
+                answer: Mutex::new(None),
+            })
+        }
+        fn answer(&self, answer: Result<Decision, AccessError>) {
+            *self.answer.lock().unwrap() = Some(answer);
+        }
+    }
+    impl GrantPolicyEvaluator for Overridden {
+        fn may_hold(
+            &self,
+            kind: PrincipalKind,
+            grant: &crate::domain::Grant,
+            path: IssuePath,
+        ) -> Result<Decision, AccessError> {
+            (*self.answer.lock().unwrap()).unwrap_or_else(|| self.cedar.may_hold(kind, grant, path))
+        }
+        fn may_issue(
+            &self,
+            kind: PrincipalKind,
+            role: MembershipRole,
+            gateway: &Resource,
+            path: IssuePath,
+        ) -> Result<Decision, AccessError> {
+            (*self.answer.lock().unwrap())
+                .unwrap_or_else(|| self.cedar.may_issue(kind, role, gateway, path))
+        }
+    }
+
+    /// Only an Allow lets a credential in: a policy that refuses, and one
+    /// that cannot answer, both refuse an issue as `Conflict` with nothing
+    /// written and refuse to open a registry holding credentials.
+    #[test]
+    fn a_refusing_or_unavailable_grant_policy_lets_no_credential_in() {
+        for answer in [Ok(Decision::Deny), Err(AccessError::Unavailable)] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("auth/credentials.v1.json");
+            let (trusted, relative) = trusted_root(&path);
+            let policy = Overridden::new();
+            let store = LocalCredentialStore::open(trusted, relative, policy.clone()).unwrap();
+            store.bootstrap(bootstrap()).unwrap();
+            let before = fs::read(&path).unwrap();
+            policy.answer(answer);
+            assert!(
+                matches!(
+                    store.issue_sync(member_issue("member", "credential-member")),
+                    Err(LocalStoreError::Conflict)
+                ),
+                "{answer:?}"
+            );
+            assert!(
+                matches!(
+                    store.provision_surface(
+                        "panel",
+                        "panel".into(),
+                        "panel".into(),
+                        vec!["server.read".into()],
+                        130,
+                        None
+                    ),
+                    Err(LocalStoreError::Conflict)
+                ),
+                "{answer:?}"
+            );
+            assert_eq!(fs::read(&path).unwrap(), before, "{answer:?}");
+            drop(store);
+            assert!(
+                LocalCredentialStore::open(trusted, relative, policy.clone()).is_err(),
+                "{answer:?}"
+            );
+            // A fresh registry cannot be bootstrapped under it either.
+            let fresh = root.path().join("fresh/credentials.v1.json");
+            let (trusted, relative) = trusted_root(&fresh);
+            let store = LocalCredentialStore::open(trusted, relative, policy.clone()).unwrap();
+            assert!(
+                matches!(store.bootstrap(bootstrap()), Err(LocalStoreError::Conflict)),
+                "{answer:?}"
+            );
+            assert!(!store.is_initialized(), "{answer:?}");
+        }
     }
 }

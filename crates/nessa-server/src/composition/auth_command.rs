@@ -3,6 +3,7 @@
 use super::credential_registry::{self, RegistryOpenContext};
 use super::local_auth::SystemClock;
 use crate::{core::RunError, env::Environment};
+use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
 use nessa_auth::{
     adapters::local::{BootstrapRequest, LocalCredentialStore},
     application::{
@@ -11,13 +12,15 @@ use nessa_auth::{
             CredentialGrantDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
             OrganizationInputDto, PrincipalInputDto, PrincipalKindDto, ResourceDto,
         },
-        ports::Clock,
+        ports::{Clock, Decision, GrantPolicyEvaluator, IssuePath},
     },
+    domain::{Action, Grant, OrganizationId, PrincipalKind, Resource, ResourceId},
 };
 use std::{
     fs::File,
     io::Write,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 use uuid::Uuid;
 
@@ -46,11 +49,15 @@ pub(super) fn execute_with_context(
     let expires_at = expiry_option(extra)?;
     let chat_grants =
         option_value(&args[args.len().min(4)..], "--chat-grants")?.unwrap_or(OWNER_GRANTS);
-    validate_grants(chat_grants)?;
+    let policy = grant_policy()?;
+    // Before anything is written: `init` commits the owner and only then
+    // provisions the panel, so a grant the panel may not hold must be refused
+    // here, or it would leave an initialized registry with no panel.
+    validate_grants(policy.as_ref(), chat_grants)?;
     let directory = Environment::auth_directory_from_system()?;
     prepare_auth_directory(&directory)?;
     let settings = super::runtime_config::RuntimeConfig::load(&directory)?;
-    let store = credential_registry::open(&directory, settings.registry, registry_context)?;
+    let store = credential_registry::open(&directory, settings.registry, policy, registry_context)?;
     // Reserve a new protected output before changing durable state. Never overwrite.
     let mut file = private_output(&output).map_err(failure)?;
     let now = SystemClock.unix_seconds();
@@ -124,6 +131,13 @@ pub(super) fn execute_with_context(
     Ok(())
 }
 
+/// The Cedar bundle the registry asks which grants a credential may carry.
+fn grant_policy() -> Result<Arc<CedarPolicyEvaluator>, RunError> {
+    CedarPolicyEvaluator::new()
+        .map(Arc::new)
+        .map_err(|_| RunError::Authentication("the embedded policy bundle is invalid".into()))
+}
+
 fn validate_options(args: &[String], allowed: &[&str]) -> Result<(), RunError> {
     let (pairs, rest) = args.as_chunks::<2>();
     let mut seen = std::collections::HashSet::new();
@@ -143,15 +157,32 @@ fn validate_options(args: &[String], allowed: &[&str]) -> Result<(), RunError> {
 /// consent when pairing (design row S17 in `docs/design/auth/device-pairing.md`).
 const OWNER_GRANTS: &str = "server.read,conversation.read,conversation.write,credential.manage";
 
-fn validate_grants(grants: &str) -> Result<(), RunError> {
+/// Each grant named once, and each one a surface may hold. Which actions that
+/// is belongs to the policy bundle (`credential.hold`), asked here for the
+/// surface's kind and path, the same question the registry asks when it
+/// issues. The resource is a stand-in: holding depends on the action alone.
+fn validate_grants(policy: &dyn GrantPolicyEvaluator, grants: &str) -> Result<(), RunError> {
     let mut seen = std::collections::HashSet::new();
-    if !grants.split(',').all(|grant| {
-        matches!(
-            grant,
-            "server.read" | "conversation.read" | "conversation.write" | "credential.manage"
-        ) && seen.insert(grant)
-    }) {
-        return Err(failure("grants must be distinct supported actions"));
+    let resource = Resource::new(
+        OrganizationId::new("local").map_err(failure)?,
+        ResourceId::new("local").map_err(failure)?,
+    );
+    for action in grants.split(',') {
+        if action.is_empty() || !seen.insert(action) {
+            return Err(failure("grants must be distinct actions"));
+        }
+        let grant = Grant::new(
+            Action::new(action).map_err(|_| failure("unsupported grant"))?,
+            resource.clone(),
+        );
+        if policy.may_hold(
+            PrincipalKind::Integration,
+            &grant,
+            IssuePath::SurfaceProvision,
+        ) != Ok(Decision::Allow)
+        {
+            return Err(failure(format!("unsupported grant: {action}")));
+        }
     }
     Ok(())
 }
@@ -208,11 +239,12 @@ fn provision_command(
         "server.read"
     };
     let grants = option_value(args, "--grants")?.unwrap_or(defaults);
-    validate_grants(grants)?;
+    let policy = grant_policy()?;
+    validate_grants(policy.as_ref(), grants)?;
     let directory = Environment::auth_directory_from_system()?;
     prepare_auth_directory(&directory)?;
     let settings = super::runtime_config::RuntimeConfig::load(&directory)?;
-    let store = credential_registry::open(&directory, settings.registry, registry_context)?;
+    let store = credential_registry::open(&directory, settings.registry, policy, registry_context)?;
     provision(
         &store,
         &directory,
@@ -321,7 +353,12 @@ mod tests {
         prepare_auth_directory(&auth).unwrap();
 
         nessa_local_storage::verify_directory(&auth).unwrap();
-        LocalCredentialStore::open(&auth, "credentials.v1.json").unwrap();
+        LocalCredentialStore::open(
+            &auth,
+            "credentials.v1.json",
+            std::sync::Arc::new(nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap()),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -338,5 +375,26 @@ mod tests {
         );
         assert!(parse_args(&["auth", "init", "--owner-token-file", "relative"]).is_err());
         assert!(parse_args(&["auth", "init", "--token", "secret"]).is_err());
+    }
+
+    /// `init` commits the owner before it provisions the panel, so the
+    /// panel's grants are asked of the policy first: a grant it may not hold
+    /// is refused while nothing has been written.
+    #[test]
+    fn a_surface_grant_the_policy_refuses_is_refused_before_anything_is_written() {
+        let policy = grant_policy().unwrap();
+        assert!(validate_grants(policy.as_ref(), OWNER_GRANTS).is_ok());
+        assert!(validate_grants(policy.as_ref(), "server.read").is_ok());
+        for grants in [
+            "server.read,environment.serve",
+            "conversation.reed",
+            "server.read,server.read",
+            "server.read,",
+        ] {
+            assert!(
+                validate_grants(policy.as_ref(), grants).is_err(),
+                "{grants}"
+            );
+        }
     }
 }

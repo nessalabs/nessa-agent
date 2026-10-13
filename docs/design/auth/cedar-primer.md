@@ -76,19 +76,19 @@ Here is a real Nessa example:
 Who?       terminal-client
 Do what?   server.read
 On what?   gateway-1, owned by personal-org
-Extra?     This credential covers that exact action/resource.
-           Its identity matches the verified session.
+Holding?   The grants on the credential it presented.
 ```
 
 | Cedar term | Nessa meaning | Where the facts come from |
 | --- | --- | --- |
-| Principal | The acting human, agent, or integration | Verified session identity and current membership |
+| Principal | The acting human, agent, or integration | Verified session identity, current membership, and the credential's grants |
 | Action | A permission name such as `server.read` | Server mapping from the requested method |
 | Resource | The particular gateway being accessed today | Server-owned gateway and organization identity |
-| Context | Extra inputs such as `credentialAllows` | Computed by Nessa's adapter |
+| Context | Extra facts about the request, such as how a credential is being issued | Supplied by Nessa's adapter |
 
 An **entity** is a named thing with attributes. Our Cedar actor has an organization
-ID, a current role, and an active flag. Our resource has its owning organization ID.
+ID, a current role, an active flag, and the grants its credential holds. Our
+resource has its own ID and its owning organization ID.
 These are small projections of Nessa's domain objects, prepared for this check.
 
 Cedar does not fetch the organization from a database or verify a client's claim
@@ -148,16 +148,22 @@ shows the whole enforcement decision, not a claim that Cedar verifies tokens.
 This policy is taken from our [checked-in policy file](../../../crates/nessa-auth/src/adapters/cedar/policies.cedar):
 
 ```cedar
+@id("credential.manage")
 permit (
     principal is Nessa::Actor,
     action == Nessa::Action::"credential.manage",
     resource is Nessa::Resource
 )
-when { principal.active && principal.role == "admin" };
+when {
+    principal.active &&
+    principal.role == "admin" &&
+    principal.grants.contains({ action: "credential.manage", resourceId: resource.id, organizationId: resource.organizationId })
+};
 ```
 
-Read it as: an active admin can perform the credential-management action on a
-resource of our resource type, subject to the rest of the policy bundle.
+Read it as: an active admin whose credential holds the `credential.manage`
+grant on exactly this resource can perform the credential-management action on
+it, subject to the rest of the policy bundle.
 
 The small pieces are:
 
@@ -166,29 +172,42 @@ The small pieces are:
 - `==`: equal to.
 - `when`: the following condition must be true.
 - `&&`: both conditions must be true.
+- `principal.grants.contains({ ... })`: the credential holds this exact grant.
+- `@id("credential.manage")`: the policy's name. Every policy has one, and
+  the adapter refuses a bundle with a policy that does not, so a refusal can
+  name the policies that decided it.
 - `Nessa::Action::"credential.manage"`: a typed action identifier, not a network call.
 
 A policy's opening section selects the requests it applies to. Its conditions
 then test the supplied attributes. [Official policy syntax](https://docs.cedarpolicy.com/policies/syntax-policy.html).
 
+Nessa gives Cedar the facts and lets the policy draw the conclusion. The
+credential's grants are an attribute of the actor, read from the stored
+credential, and each permit asks for the one grant it needs. Nessa never works
+out "this credential covers the request" in Rust and hands Cedar a `true`: that
+would be the policy written twice, with Cedar only repeating it.
+
 That permit is only part of our rules. We also have this restriction:
 
 ```cedar
+@id("organization.same")
 forbid (
     principal is Nessa::Actor,
     action,
     resource is Nessa::Resource
 )
-unless { context.credentialAllows };
+when { principal.organizationId != resource.organizationId };
 ```
 
-In English: deny the request unless Nessa has established that this credential
-covers the exact action and resource. The bare `action` means this restriction
-is not limited to one named action within its scope.
+In English: deny any request whose actor and resource belong to different
+organizations. The bare `action` means this restriction is not limited to one
+named action within its scope.
 
-Our other forbid rules reject organization mismatches and identity mismatches.
-A client cannot send `credentialAllows: true` to bypass them: the server computes
-that value from the credential's stored grants.
+One check happens before Cedar runs: that the session and the stored state it
+was read from name the same credential, principal, membership, organization
+and audience. That is authentication, not policy, so Nessa's adapter makes it
+in Rust and denies a mismatch without asking Cedar. A client cannot change any
+of these facts: the server reads them from its own stored state.
 
 ## 6. How multiple rules become one answer
 
@@ -232,9 +251,14 @@ Examples of our complete current enforcement flow:
 | Credential revoked after connection | Reject | Current credential state is checked again |
 | Unknown action | Deny | Our adapter accepts only the implemented action vocabulary |
 
-Passing the management check does not authorize arbitrary issuance. The lifecycle
-code also rejects unsupported grants and ordinary issuance of administrative
-credentials. Cedar's action decision and the operation's domain rules both apply.
+Passing the management check does not authorize arbitrary issuance. Two more
+Cedar actions decide what may be issued: `credential.issue` says who a new
+credential may be issued to, and `credential.hold` says which grants it may
+carry. Both read the issuing path as a fact in `context.path`, so an issue over
+the product protocol cannot hand out an admin membership or the
+`credential.manage` grant, while the local operator's bootstrap, surface
+provisioning and owner recovery can. The lifecycle code still checks the request's own shape, such
+as matching organizations and an active membership.
 
 ## 7. A request through the real application
 
@@ -301,13 +325,27 @@ description of the data our policies expect. In our current implementation:
 
 ```text
 Actor                          Resource
-  organizationId: string         organizationId: string
-  role: string
+  organizationId: string         id: string
+  role: string                   organizationId: string
   active: boolean
+  grants: set of Grant           Grant
+                                   action: string
+Holder                             resourceId: string
+  kind: string                     organizationId: string
 
-Actions                        Request context
-  server.read                    credentialAllows: boolean
-  credential.manage              identityMatches: boolean
+Recipient
+  kind: string
+  role: string
+
+Actions on an Actor            Request context
+  server.read                    (none)
+  credential.manage
+  conversation.read
+  conversation.write
+  environment.serve
+
+credential.hold on a Holder      action: string, path: string
+credential.issue on a Recipient  path: string
 ```
 
 We validate the policy bundle against this schema at startup. The adapter also

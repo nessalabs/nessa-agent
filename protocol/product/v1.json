@@ -216,7 +216,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 70,
+          "maxItems": 71,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -5443,6 +5443,13 @@
           "type": "string",
           "maxLength": 9,
           "minLength": 9
+        },
+        "relay": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 255,
+          "x-utf8MaxBytes": 255,
+          "description": "Where to ask for the peer when its address does not answer: a relay's `host:port`, the host a name or an address (an IPv6 one in brackets), at most 255 UTF-8 bytes (`x-utf8MaxBytes`; `maxLength` counts code points and is only a coarse bound). Looked up at each dial. It carries no trust: the peer must still present its pinned key through it. Enrollment itself always dials the address; the relay is kept for reading the peer afterwards. Absent: none."
         }
       },
       "required": ["address", "code"],
@@ -5463,6 +5470,29 @@
       },
       "required": ["peerKey"],
       "description": "Wire input for peer.forget: the peer to forget, named by its key."
+    },
+    "PeerRelayParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "peerKey": {
+          "x-pairing-byte-array": "DeviceKey",
+          "description": "The peer's key, as peer.list shows it.",
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "relay": {
+          "type": ["string", "null"],
+          "minLength": 3,
+          "maxLength": 255,
+          "x-utf8MaxBytes": 255,
+          "description": "Where to ask for the peer when its address does not answer: a relay's `host:port`, the host a name or an address (an IPv6 one in brackets), at most 255 UTF-8 bytes (`x-utf8MaxBytes`; `maxLength` counts code points and is only a coarse bound). Looked up at each dial. It carries no trust: the peer must still present its pinned key through it. Null clears it, so the peer is read only at its address."
+        }
+      },
+      "required": ["peerKey", "relay"],
+      "description": "Wire input for peer.relay: set or clear the relay kept for a peer. A read of that peer in progress is stopped first, and the next read uses the new relay."
     },
     "PeerPhase": {
       "type": "string",
@@ -5488,6 +5518,13 @@
           "maxLength": 64,
           "description": "The address that last answered as this peer. Absent when the record is unreadable."
         },
+        "relay": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 255,
+          "x-utf8MaxBytes": 255,
+          "description": "The relay this gateway asks for the peer at when its address does not answer. Absent when none is set, or the record is unreadable."
+        },
         "credentialId": {
           "type": "string",
           "minLength": 1,
@@ -5506,7 +5543,7 @@
         }
       },
       "required": ["peerKey", "phase"],
-      "description": "One peer gateway this gateway enrolled into. Result of peer.enroll and peer.forget; peer.list adds sync for a pending or active peer."
+      "description": "One peer gateway this gateway enrolled into. Result of peer.enroll, peer.relay and peer.forget; peer.list adds sync for a pending or active peer."
     },
     "PeerSyncState": {
       "type": "string",

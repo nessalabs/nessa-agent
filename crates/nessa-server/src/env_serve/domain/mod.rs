@@ -1,8 +1,8 @@
 //! The rules `nessa env serve` decides by, apart from any I/O:
 //! `grants.rs` is what this host's owner grants each gateway leasing from
-//! it, and whether a lease is admitted under that, and on what terms.
+//! it, and the terms a lease the lease policy allows is admitted on.
 mod grants;
 pub(crate) use grants::{
-    admit_agent, admit_command, granted_to, AgentName, Agents, AllAgents, CommandGrant,
-    GrantOperation, MaxLease, Peer, PeerGrant,
+    command_timeout, lease_ms, unwritten, AgentName, Agents, AllAgents, CommandGrant,
+    GrantOperation, MaxLease, NotGranted, Peer, PeerGrant,
 };

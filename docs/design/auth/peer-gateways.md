@@ -57,20 +57,25 @@ handed a peer's code does not become a gateway principal.
   Publication mints it, and the registry's replay check (`credential_binding_matches`)
   asks the same function, so a stored credential that names anyone else is
   refused on open.
-- **What a principal kind can hold** is `PrincipalKind::may_hold`. A gateway
-  may hold `conversation.read` and, since slice I, `environment.serve`, and
-  nothing else. In particular it can never hold `conversation.write`
-  (admitting commands into a conversation and answering its approvals) or
-  `credential.manage` (holding credentials and pairing, which also admits
-  every grant-management method). Those are the
-  conversation authority's, listed once in `CONVERSATION_AUTHORITY_ACTIONS`,
-  and the gateway that owns a conversation keeps them. Slice I widens the
-  peer's allowlist to `environment.serve` (see Environment peers); the
-  authority's actions stay excluded, and `may_hold` refuses them before it
-  consults the allowlist, so a widening cannot admit one by mistake. No other
-  kind may hold `environment.serve`: a person or an agent never serves.
-  Whatever a peer is later allowed to run for a conversation, it therefore
-  cannot also be that conversation's authority.
+- **What a principal kind can hold** is the Cedar action `credential.hold`
+  in nessa-auth's policy bundle, asked through the `GrantPolicyEvaluator`
+  port. Each policy permits one list of grants for some kinds: `hold.peer`
+  lets a gateway hold `conversation.read` and, since slice I,
+  `environment.serve`, and nothing else; `hold.person` lets a person, agent
+  or integration hold `server.read`, `credential.manage`, `conversation.read`
+  and `conversation.write`, never `environment.serve`. A
+  grant no permit lists is refused, so a gateway can never hold
+  `conversation.write` (admitting commands into a conversation and answering
+  its approvals) or `credential.manage` (holding credentials and pairing,
+  which also admits every grant-management method). Those are the
+  conversation authority's, and the gateway that owns a conversation keeps
+  them. Widening the peer's list means editing `hold.peer` and naming each
+  action it adds, so a widening cannot admit one of the authority's actions
+  by mistake. A person or an agent never serves. Whatever a peer is later
+  allowed to run for a conversation, it therefore cannot also be that
+  conversation's authority. The `hold.administration` forbid adds one rule
+  over the issuing path: `credential.manage` is never handed out by an
+  issue over the product protocol, only by the local operator's paths.
 - **That the registry agrees** is `validate_principal_kind` and
   `validate_grants`, run by `validate_registry` on open and before every
   write. A gateway principal's credential must be pairing-bound and its
@@ -822,11 +827,14 @@ sequenceDiagram
     participant G as Gateway (open_lease, environment_tools)
     participant S as env serve (serve)
     participant F as grants.json (FileGrants)
+    participant P as lease policy (CedarLeasePolicy)
     G->>S: Grant {lease, agent, sandbox} or GrantCommand {lease, argv, cwd, timeoutMs}
     S->>F: this peer's entry, read again now
-    F-->>S: unreadable: logged, and nothing granted
-    F-->>S: the entry, or none (ssh keeps everything, a dialed gateway nothing)
-    S-->>G: not covered: Refused NotGranted, recorded as refused for this peer with what it asked, nothing run
+    F-->>S: unreadable: logged, and nothing granted (the policy is not asked)
+    F-->>S: the entry, or none
+    S->>P: agent.lease or command.run, for Peer {kind, hasEntry, allAgents, agents, commands}
+    P-->>S: Allow or Deny, with the @id of each policy that decided it
+    S-->>G: Deny: Refused NotGranted, recorded as refused for this peer with what it asked, nothing run
     S->>S: the host runs it at all? (config.json agents, envServe.commands, its sandboxes)
     S-->>G: no: Refused AgentUnavailable, CommandsUnavailable or SandboxUnavailable
     S->>S: record Granted for this peer with the sandbox and the timeout granted (min of asked and maxTimeoutMs)
@@ -847,11 +855,22 @@ sequenceDiagram
   already running go on. A file this build cannot read (another schema
   version, larger than 64 KiB, not private, not this shape) grants nothing,
   to `ssh` as well, and is logged: a broken file is not taken as no file.
+- **A policy decides, the file holds facts.** Whether a peer may lease an
+  agent or run a command is decided by Cedar (ADR 803), over the peer and
+  the grant it holds (below): the checked-in bundle in
+  `env_serve/infrastructure/cedar/`, validated strictly when serving starts
+  (a bundle that does not validate refuses to serve). What a yes comes with,
+  the timeout narrowed and the lease's longest, stays with the grant in
+  Rust.
 - **Defaults.** With no file or no entry, `ssh` keeps everything the host
   runs, as before this part; a dialed gateway is granted nothing until the
-  owner grants it. `env grant` and `env ungrant` default `--peer` to the
-  gateway this machine's pairing was approved by, else `ssh`; an entry equal
-  to the peer's defaults is removed rather than kept.
+  owner grants it. Those defaults are data, stated once by
+  `domain::unwritten` as a missing field's default is the file's: the
+  policy is handed the grant a peer holds, its entry or those defaults, and
+  its permits (`grant.*`) decide every peer alike, so a lease and its terms
+  always come from the same grant. `env grant` and `env ungrant` default
+  `--peer` to the gateway this machine's pairing was approved by, else
+  `ssh`; an entry equal to the peer's defaults is removed rather than kept.
 - **The grant first.** The peer's grant is checked before what the host
   runs, so a gateway not granted a lease learns nothing of which agents the
   host runs or whether it runs commands. `CommandsUnavailable` answers only
@@ -1008,16 +1027,16 @@ Each row has at least one test.
 | H1 | The owner creates a peer invitation; a peer claims it; the owner approves its key | Same enrollment and listener; the credential names `gateway:<key hex>`, kind `gateway`, an active member, holding only `conversation.read`, bound to that key; the record and the client's file keep the class | `owner_route_creates_a_peer_gateway_invitation`; `a_peer_enrollment_issues_a_gateway_principal_bound_to_its_key`; `an_enrollment_record_keeps_its_class`; `the_class_decides_which_principal_a_credential_names` |
 | H2 | A client given an invitation for the other kind of party, or a client that relabels the class | Refused `OtherEnrollee` at the first reply, no attempt charged, nothing saved, the invitation still open; a relabelled class does not complete the PAKE; the wire carries the class as sent | `a_client_refuses_an_invitation_for_another_kind_of_party`; `a_relabelled_enrollment_class_does_not_complete_the_pake`; `the_enrollment_class_is_carried_and_never_changes_in_transit` |
 | H3 | A paired peer authenticates and reads before anything is shared with it | `ready` as its own principal; its catalogue head is zero, so it has nothing to page; `conversation.list` is `forbidden` | `a_peer_gateway_pairs_as_its_own_principal_and_reads_nothing_ungranted` |
-| H4 | A gateway principal with `conversation.write` or `credential.manage`, an admin membership, a bearer credential, a credential naming another principal, or a peer record that lost its class | Refused on open and never written | `a_gateway_principal_can_hold_only_the_read_and_serve_grants`; `a_gateway_principal_holds_only_what_pairing_issued_it` |
+| H4 | A gateway principal with `conversation.write` or `credential.manage`, an admin membership, a bearer credential, a credential naming another principal, or a peer record that lost its class | Refused on open and never written | `which_grants_each_kind_may_hold`; `a_gateway_principal_holds_only_what_pairing_issued_it` |
 | H5 | The owner revokes a paired peer's credential | Its next connection is refused at `openProduct` | `a_revoked_peer_gateway_is_refused_its_next_connection` |
-| H6 | `credential.issue` for a principal of kind `gateway` | Refused `Conflict`, nothing written: no second way to make a peer | `a_gateway_principal_holds_only_what_pairing_issued_it` |
+| H6 | `credential.issue` for a principal of kind `gateway` | Refused `Conflict`, nothing written: no second way to make a peer. The registry refuses the reserved `gateway:` id and a kind that does not match its id before it asks; the policy's refusal (`credential.issue` has no permit for a gateway) is tested at the adapter | `a_gateway_principal_holds_only_what_pairing_issued_it`; `who_may_be_issued_a_credential_on_each_path` |
 | H7 | A gateway that pairs no peer | Every device enrollment, registry and client file reads and writes as before | the existing device pairing suites |
 | H8 | The owner shares one of two conversations with a paired peer, then unshares it | The share applies (an access answer about another credential, or one that contradicts itself, is still refused); the peer's record head on the granted one reaches the source and on the other is `wrong_owner`, as are a records watch and a record page on it; resolving the other answers as an id that does not exist; a manifest boundary one past the peer's head is `invalid_request` though the owner's head is past it; its manifest lists the granted one alone; its catalogue watch is `forbidden`, while a device's is admitted; the owner's work on the other conversation does not move the peer's head; the unshare moves the head forward and takes the row away. On the socket, a binding whose owner is not the session principal reads only what it was granted, and its lists are refused | `a_peer_reads_only_what_it_was_granted`; `a_binding_owned_by_another_principal_reads_only_what_it_was_granted` |
 | H9 | A paired reader's catalogue head as the owner works, grants and revokes | An ungranted change and a grant to another receiver leave it; a grant, a change to a granted row and a revoke each move it; a revoke moves it forward, never back to an older granted row | `a_paired_readers_head_moves_only_with_what_it_was_granted` |
 | I1 | The owner creates an environment invitation; a gateway claims it; the owner approves its key | Same enrollment and listener; the credential names the same `gateway:<key hex>` a reading enrollment of that key would, an active member, holding only `environment.serve`, bound to that key; the owner needs `credential.manage` and never holds the grant; the record keeps `class: "environment"`. A registry in which that credential also or instead reads, or a person's credential serves, is refused on open; `credential.issue` of `environment.serve` to anyone is refused `Conflict`, nothing written; a share to its credential is refused `share_target_not_paired`, nothing granted; Cedar allows the action only to an active member holding it | `owner_route_creates_an_environment_invitation`; `owner_route_without_the_consent_grant_is_forbidden`; `owner_route_refuses_a_member_before_disclosure`; `an_environment_enrollment_issues_the_peer_principal_holding_only_serve`; `an_environment_is_paired_but_never_shared_with`; `cedar_allows_serving_only_to_a_member_holding_the_grant`; `each_class_discloses_only_its_own_grant`; `an_enrollment_record_keeps_its_class`; `the_enrollment_class_is_carried_and_never_changes_in_transit` |
 | I2 | A paired environment dials the native listener and asks for `openEnvironment`; the gateway runs a command there; the environment dials again; then its credential is revoked | Admitted only for a key whose credential is allowed `environment.serve` now: a key paired to read is refused before it takes a permit. The command runs on the environment over its own connection and answers its exit, output and cleanup; a second connection takes the place of the first, whose serving ends; once revoked, the next command is refused unreachable, the connection is closed, and the next dial is refused | `a_paired_environment_dials_in_serves_and_stops_at_revocation`; `a_key_paired_to_read_is_refused_at_open_environment` |
 | I3 | A machine pairs with `env enroll`'s pairing and waits as `env dial` does; the owner approves it, or denies it; one host serves what it dials; its first connection is cut, and it is stopped later | It waits while the pairing is pending and gets its key and the gateway's pin once approved; a denied pairing, or a machine never paired, stops waiting with that reason; a cut connection is dialed again and served by the same host; failed dials wait twice as long each time up to the most, a connection served at least that long starts the wait over, and a failure no dial can change stops it (a pin that is not a key is `InvalidInput`, a key that is not the gateway's is dialed again); stop closes the connection being served, which the gateway sees disconnected | `an_enrolled_environment_waits_for_approval_then_stays_dialed_in`; `waiting_for_approval_ends_when_denied_or_never_paired`; `a_pin_that_is_not_a_key_is_invalid_input_and_another_key_is_not`; `failed_dials_wait_twice_as_long_each_time_up_to_the_most`; `each_connection_is_served_and_a_long_one_starts_the_wait_over`; `a_setup_dialing_again_cannot_change_stops_it`; `stop_closes_the_connection_being_served_and_dials_no_more`; `stop_asked_while_waiting_ends_the_wait` |
-| I4 | A gateway asks a lease of an agent, or a command, that the environment's owner did not grant it, or a sandbox the host cannot enforce; the owner changes the grant | A dialed gateway with no entry, or one leaving the agent or commands out, is refused `NotGranted`, recorded as refused, nothing run, before anything about what the host runs is said, and the gateway answers `EnvironmentNotGranted` as the environment's refusal; `ssh` with no file or no entry keeps everything the host runs; grants that cannot be read refuse every lease; a sandbox the host cannot enforce is refused `SandboxUnavailable`, mapped as such; a change applies from the next lease, the running ones go on | `i4_a_dialed_gateway_without_a_grant_is_refused_and_nothing_runs`; `ssh_without_grants_keeps_everything_the_host_runs`; `grants_that_cannot_be_read_refuse_every_lease`; `a_sandbox_the_host_cannot_enforce_is_refused`; `a_sandbox_the_host_cannot_enforce_is_refused_as_such`; `what_the_hosts_owner_did_not_grant_is_refused_and_a_narrowed_timeout_is_answered`; `a_dialed_gateway_runs_only_what_the_environment_granted_it`; `an_agent_is_admitted_only_when_granted`; `a_peer_without_an_entry_has_its_defaults`; `an_ungranted_gateway_learns_nothing_of_what_the_host_runs`; `grants_and_refusals_name_their_peer_and_old_lines_still_read` |
+| I4 | A gateway asks a lease of an agent, or a command, that the environment's owner did not grant it, or a sandbox the host cannot enforce; the owner changes the grant | A dialed gateway with no entry, or one leaving the agent or commands out, is refused `NotGranted`, recorded as refused, nothing run, before anything about what the host runs is said, and the gateway answers `EnvironmentNotGranted` as the environment's refusal; `ssh` with no file or no entry keeps everything the host runs; grants that cannot be read refuse every lease; a sandbox the host cannot enforce is refused `SandboxUnavailable`, mapped as such; a change applies from the next lease, the running ones go on | `i4_a_dialed_gateway_without_a_grant_is_refused_and_nothing_runs`; `ssh_without_grants_keeps_everything_the_host_runs`; `grants_that_cannot_be_read_refuse_every_lease`; `a_sandbox_the_host_cannot_enforce_is_refused`; `a_sandbox_the_host_cannot_enforce_is_refused_as_such`; `what_the_hosts_owner_did_not_grant_is_refused_and_a_narrowed_timeout_is_answered`; `a_dialed_gateway_runs_only_what_the_environment_granted_it`; `an_entry_allows_its_named_agents_only`; `an_entry_allows_commands_only_when_it_grants_them`; `ssh_without_an_entry_is_allowed_every_agent_and_commands`; `a_gateway_without_an_entry_is_not_permitted`; `whether_an_entry_was_written_does_not_decide`; `a_forbid_is_named_in_the_refusal`; `unreadable_grants_refuse_without_asking`; `an_ungranted_gateway_learns_nothing_of_what_the_host_runs`; `grants_and_refusals_name_their_peer_and_old_lines_still_read` |
 | I5 | A gateway asks a command longer than the grant's `maxTimeoutMs`; or an environment answers terms wider than, or other than, asked | The environment records the narrowed timeout and the timeout asked, answers the terms it granted, and runs the command with the narrowed timeout; the gateway records the granted terms and waits for the command that long; a wider or other answer is refused as the environment's `EnvironmentNotGranted` and its hold dropped, nothing run | `i5_a_command_timeout_is_narrowed_recorded_and_run_with`; `a_command_timeout_is_narrowed_and_never_widened`; `i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused`; `l1_an_environment_granting_other_terms_than_asked_is_refused_and_nothing_runs`; `a_grant_names_its_sandbox_and_its_answer_the_granted_terms` |
 | I6 | The owner runs `env grant`, `env ungrant` and `env grants`; the file is another version, too large, not private or not this shape | Each change is written whole and private under a lock and read back as given, an entry equal to the defaults removed; an unreadable file is refused, never taken as no grants, and no change is made over it; a change past the size bound is refused, nothing written; a peer named twice is unreadable in either order; each grant and ungrant appends a private `intended` record of who, when, which peer, the operation and the grant before and after, and then `written` (durable or not) or `not_written`, both under the lock; one whose intent cannot be recorded leaves grants.json unchanged, a sync failure after the rename is `written`, not durable, and fails the command, and an outcome that cannot be recorded fails it as unconfirmed; an ungrant applies to the next lease while the leases running go on | `a_change_is_written_privately_and_read_back`; `every_agent_and_missing_fields_are_read_as_written`; `a_file_this_build_cannot_read_is_refused`; `a_change_past_the_bound_is_refused_and_writes_nothing`; `a_peer_is_spelled_one_way_and_read_back`; `an_absent_file_is_no_entries`; `granting_adds_and_ungranting_takes_away`; `i6_an_ungrant_applies_to_the_next_lease_and_running_leases_stay`; `env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run`; `env_ungrant_takes_one_thing_back_and_env_grants_lists_them`; `a_peer_named_twice_is_refused_in_either_order`; `a_grant_writes_intended_then_written`; `a_rename_failure_writes_intended_then_not_written`; `a_sync_failure_after_the_rename_writes_written_and_is_not_durable`; `an_outcome_that_cannot_be_recorded_leaves_the_change_unconfirmed`; `a_change_that_cannot_be_audited_leaves_the_grants_unchanged` |
 | I7 | The environment's owner grants a peer `maxLeaseMs`; one of its agent leases outlives it, or is ended as the deadline passes, or its expiry cannot be recorded, or its connection is lost first; a command lease under the same grant; a host says it is ending a lease the gateway does not hold | E grants the lease with `leaseMs`, records it, and at the deadline (not a moment before, and however continuously the gateway sends) records `expiring`, stops the harness, records `ended` with cause `expired` and says `Ending`; the silence bound still runs from the gateway's last frame; a Start read after the deadline starts nothing; an answer held up on a full output queue does not hold the expiry back, nor does one lease's `Ending` waiting for room hold another lease's expiry back, due at once or later, nor a lease's own `Granted` waiting for room hold back its expiry; a lease due as the gateway is taken as gone is expired, not lost; a file still in flight is recorded unanswered, never refused as the lease ending; the gateway's End is answered with that cleanup; an End and the deadline at once end the lease once; without a limit nothing expires and the wait is only the silence bound; an expiry that cannot be recorded still stops and answers `uncertain`; after the connection is lost nothing more is recorded; a command is bounded by its own timeout, granted no `leaseMs`; G records the deadline as its clock read before the Grant plus `leaseMs` (the earliest E's can be), and on `Ending` records the lease ending as expired by the system and then ended with the cleanup, or interrupted with none; an `Ending` for a lease not held, or for a command's lease, is dropped and recorded; a command answer carrying `leaseMs` is refused as the environment's `EnvironmentNotGranted`; `--max-lease` writes grants.json as version 2, version 1 still reads, and the audit's operation, before and after carry it | `a_lease_past_its_granted_duration_is_stopped_recorded_expired_and_said`; `an_end_and_a_deadline_at_once_end_the_lease_once`; `a_lease_with_no_max_never_expires`; `an_expiry_that_cannot_be_recorded_still_stops_and_answers_uncertain`; `a_deadline_after_the_connection_is_lost_records_nothing_more`; `a_command_is_bounded_by_its_timeout_not_the_max_lease`; `max_lease_is_written_as_version_2_and_version_1_still_reads`; `a_granted_duration_is_recorded_as_the_deadline`; `an_environment_expiry_is_recorded_ending_then_ended_with_its_cleanup`; `an_expiry_whose_end_goes_unanswered_is_interrupted`; `an_ending_for_a_lease_not_held_is_dropped_with_evidence`; `an_ending_for_a_command_lease_is_dropped_with_evidence`; `a_gateway_sending_without_pause_cannot_put_off_an_expiry`; `a_reply_blocked_on_a_full_output_queue_does_not_hold_back_an_expiry`; `two_leases_due_at_once_both_expire_at_the_deadline`; `staggered_deadlines_each_expire_at_their_own`; `a_lease_granted_while_the_gateway_reads_nothing_expires_at_its_deadline`; `a_lease_due_as_the_gateway_falls_silent_is_expired_not_lost`; `a_granted_duration_is_recorded_on_the_issued_lease`; `a_file_in_flight_when_its_lease_expires_is_left_unanswered`; `i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused`; `a_paired_environment_expires_a_lease_and_both_sides_record_it`; `a_grant_writes_intended_then_written`; `env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run`; `a_grant_names_its_sandbox_and_its_answer_the_granted_terms` |
@@ -1045,7 +1064,7 @@ sequenceDiagram
     participant K as B's gateway key store
     participant A as Gateway A (native listener)
     participant U as B's peer audit
-    O->>B: peer.enroll {address, code} (Cedar: credential.manage)
+    O->>B: peer.enroll {address, code, relay?} (Cedar: credential.manage)
     B->>U: intent {operation, address, owner} (not kept: peer_audit_unavailable, nothing checked or dialed)
     B->>B: take the turn (a poller cycle: stop it and take it, another command: peer_busy, outcome audited)
     B->>A: TCP connect via PeerConnector, bounded by the deadline clock (passed: peer_unreachable)
@@ -1055,13 +1074,13 @@ sequenceDiagram
     A-->>B: Hello (class must be peer read, else peer_wrong_invitation)
     B->>A: OPAQUE with the code (wrong code: peer_invitation_refused)
     A-->>B: KE2, authenticating A's key
-    B->>R: save pending {A's pin, B's key by its public half, address}
+    B->>R: save pending {A's pin, B's key by its public half, address, relay?}
     R->>R: note A's key, then its record as read
     R->>R: refuse another key, B's own key, a kept peer, or one past MAX_PEERS
     B->>A: KE3 (confirm)
     A-->>B: Claimed
     B->>U: outcome {operation, peer, before -> after, answer}, on every path (not kept: peer_audit_unavailable)
-    B-->>O: PeerGateway {peerKey, phase: pending, address}
+    B-->>O: PeerGateway {peerKey, phase: pending, address, relay?}
 ```
 
 - **One key, one principal.** B enrolls with the gateway's own native key,
@@ -1082,6 +1101,14 @@ sequenceDiagram
   approval happens on A. The credential reaches the record when B next reads
   its pinned status, which the poller does ("Reading a peer", below). `peer.list` shows
   every kept peer; `peer.forget` removes B's record only.
+- **A peer can keep a relay.** `peer.enroll` takes an optional `relay`
+  (`host:port`) and `peer.relay {peerKey, relay}` sets or clears it, owner
+  only and audited like the other commands. The enrollment itself always
+  dials the address directly: until A's key is pinned there is nothing to
+  ask a relay for. Once pinned, the poller's status dial and its read race
+  the direct address with the relay, as a phone's reader does
+  ([relay](relay.md), rows RL19 and RL20). A record without a relay keeps
+  its old shape on disk.
 - **It dials what the owner names.** `peer.enroll` connects from this
   gateway's host to whatever IP address and port the owner gives, which is
   why it is owner-only (`credential.manage`) and why every failure that is
@@ -1155,22 +1182,23 @@ sequenceDiagram
 | P5 | A device invitation's code | `peer_wrong_invitation`, before the PAKE; nothing saved | `a_refused_or_wrong_class_invitation_saves_nothing`, `a_composed_gateway_enrolls_into_another_with_its_own_key` |
 | P6 | A wrong code, or a cancelled invitation | `peer_invitation_refused`; nothing saved | `a_refused_or_wrong_class_invitation_saves_nothing` |
 | P7 | Nothing at the address; a peer already kept | `peer_unreachable`; `peer_exists`, the kept record unchanged byte for byte, and audited with that peer's key and its state before and after, both as found | same |
-| P8 | No native pairing; a member; malformed params | `peer_not_configured`; `forbidden`; `invalid_request`, before any effect | `peer_routes_refuse_before_any_effect` |
+| P8 | No native pairing; a member; malformed params, a relay that is not `host:port` among them | `peer_not_configured`; `forbidden`; `invalid_request`, before any effect | `peer_routes_refuse_before_any_effect` |
 | P9 | A pending save with any key but the gateway's own, or for a pin that is the gateway's own key | Refused, nothing written; the second is `peer_own_gateway` | `a_record_takes_only_the_gateways_key_and_an_unreadable_one_can_be_forgotten` |
-| P10 | A record of another shape, or a valid one whose `gatewayKey` is not this gateway's | Listed `unreadable`; its credential does not load (`Corrupt`); enrolling into that peer is `peer_exists`, audited `unreadable` before and after, and leaves it as it was; `peer.forget` removes it | same |
+| P10 | A record of another shape, or a valid one whose `gatewayKey` is not this gateway's | Listed `unreadable`; its credential does not load (`Corrupt`); enrolling into that peer is `peer_exists` and `peer.relay` on it `peer_unavailable`, each audited `unreadable` before and after and leaving it as it was; `peer.forget` removes it | same |
 | P11 | `peer.forget` while an enrollment runs | `peer_busy`; once the enrollment ends, forget runs | `forgetting_waits_for_a_running_enrollment` |
 | P12 | An enroll or forget that succeeds or is refused; its intent, or its outcome, not kept | Intent and outcome kept, naming the operation, peer, address, state before and after, answer, cause and owner; no intent: nothing dialed or removed, `peer_audit_unavailable`; no outcome: the record made or removed stands, `peer_audit_unavailable` | `enrolling_and_forgetting_are_audited_and_answer_only_when_kept`, `the_durable_peer_audit_reports_a_record_it_could_not_keep` |
 | P13 | A connect that never answers; one that completes past the deadline | Held while the injected deadline clock stands still; once it passes the connect deadline, `peer_unreachable`, audited, the attempt dropped and nothing saved; a late connection is closed unused, `peer_unreachable` | `a_connect_that_never_answers_ends_when_the_injected_clock_passes_its_deadline`, `a_connect_completed_after_the_deadline_is_refused_and_closed` |
-| P14 | Every answer of `peer.enroll` (ok, busy, unreachable, refused code, wrong invitation, own gateway, exists, capacity) and of `peer.forget` (ok, busy, not found) | Exactly one intent and one outcome per call under one operation id, naming the owner, the target, and the peer once known; the table must list every answer | `every_peer_command_answer_keeps_one_intent_and_one_outcome` |
+| P14 | Every answer of `peer.enroll` (ok, busy, unreachable, refused code, wrong invitation, own gateway, exists, capacity), of `peer.forget` (ok, busy, not found) and of `peer.relay` (ok, busy, not found) | Exactly one intent and one outcome per call under one operation id, naming the owner, the target, and the peer once known; the table must list every answer | `every_peer_command_answer_keeps_one_intent_and_one_outcome` |
 | P15 | The injected entropy for an enrollment fails | `peer_unavailable`, nothing saved, its intent and outcome kept | `an_enrollment_whose_entropy_fails_is_unavailable_and_audited` |
 | P16 | The audit never acknowledges an intent, or an outcome | Held while the injected clock stands; once it passes `AUDIT_DEADLINE`, `peer_audit_unavailable`: no intent, nothing dialed; no outcome, the effect stands | `an_audit_that_never_answers_ends_the_call_at_its_deadline` |
+| P17 | `peer.enroll` with a relay; `peer.relay` setting it, then clearing it | Listed and stored with the relay; changed, then gone from the record, which no longer names the field; each change audited with the relay before and after | `a_peer_keeps_its_relay_and_peer_relay_changes_it` |
 
 ## Reading a peer
 
 Part 2b-3 reads what each peer granted. One task per gateway,
 `PeerPoller`, started and joined with native pairing, walks the kept peers
 one at a time. Each cycle holds the peer commands' turn, but gives it up to
-the owner: `peer.enroll` and `peer.forget` stop a cycle that holds it and go
+the owner: `peer.enroll`, `peer.forget` and `peer.relay` stop a cycle that holds it and go
 ahead, so a peer, however slow, never keeps the owner waiting.
 
 ```mermaid
@@ -1184,7 +1212,7 @@ sequenceDiagram
     P->>R: list kept peers to schedule (pending or active)
     P->>P: take the turn when free (registered as this cycle's)
     P->>R: read the record again (gone, revoked or unreadable: drop the peer)
-    P->>A: pinned status, through PeerConnector under the deadline clock
+    P->>A: pinned status, through PeerConnector under the deadline clock (a relay kept: raced with it after DIRECT_HEAD_START, or at once on refusal)
     A-->>P: Pending / Claimed / Approved: wait an interval
     A-->>P: Terminal or Unclaimed: the client removes the cache, then marks the record revoked
     A-->>P: Active {receiver, epoch}: the client saves the credential into the record
@@ -1200,7 +1228,7 @@ sequenceDiagram
     C-->>P: ResetRequired or damaged: empty the cache, read once more
     A-->>P: openProduct refused (redacted)
     P->>A: pinned status again, only Terminal ends the enrollment
-    O->>P: peer.forget or peer.enroll while the cycle holds the turn
+    O->>P: peer.forget, peer.enroll or peer.relay while the cycle holds the turn
     P->>P: cycle stopped: read sockets shut, its stop flag asked every 50 ms, waits woken, turn given back
     P-->>O: the command runs, the read carries on at the next cycle
     P->>U: each change as it is made (status, reset, conversations withdrawn): queued, in turn order
@@ -1386,11 +1414,12 @@ sequenceDiagram
 | R19 | A cached conversation over quota, then one the peer stopped granting; then a stop or a lost connection | The second is withdrawn; the read ends `quota`, still `quota` when the walk is then stopped or loses its connection; a storage failure is held back the same way, and only a damaged cache or a lost connection stops the withdrawals | `a_full_cache_still_withdraws_what_the_gateway_no_longer_grants`, `a_full_catalogue_still_withdraws_and_quota_outranks_a_storage_failure`, `a_withdrawal_that_cannot_be_written_does_not_stop_the_others`, `a_full_cache_is_listed_quota_and_a_read_that_saved_nothing_unreachable`, `a_held_quota_outlasts_a_stop_or_a_lost_connection` |
 | R20 | A status step whose write fails after it began, or lands before the status fails; a cycle giving back the turn as an owner command asks; a read whose worker panics after a withdrawal | Named by the transition begun (`peer_ended` after a failed ending, `peer_approved` after a failed save), its outcome the store's (refused when the write failed, succeeded when it landed, whatever the status said); the owner command finds the turn free or a cycle to stop, never `peer_busy`; the withdrawal is still reported and audited | `a_slot_names_the_transition_a_status_began_whatever_storage_did`, `a_status_change_is_named_by_the_transition_its_store_began`, `a_status_change_outcome_is_what_its_store_did`, `a_cycle_gives_back_the_turn_as_it_clears_itself`, `a_read_that_panics_still_reports_what_it_withdrew` |
 | R21 | A walk cut short after its catalogue pass (A unshared Y, the pass reached A's new head, Y not yet asked), then a restart, at A's unchanged head | No walk is noted, so the next read walks every cached conversation and withdraws Y, audited; `synced` only after that, holding nothing; a note that cannot be written fails the read as the cache's failure, backed off | `a_peer_reads_only_what_it_is_granted_and_stops_at_revocation` (the cache put back as the cut walk left it), `a_cache_without_the_walk_marker_is_walked_at_an_unchanged_head`, `a_marker_that_cannot_be_written_fails_the_read`, `a_walk_marker_is_kept_per_catalogue_and_goes_with_a_purge` |
-| R22 | The audit queue is full (the store fell behind) | Answered at once, no wait: `peer.enroll` and `peer.forget` are `peer_audit_unavailable` with nothing dialed or removed; a poller change lands and its record is logged as not kept, never written; each refusal uses up its sequence, so the next kept record follows a gap | `a_full_queue_refuses_the_owner_and_drops_the_poller_record` |
+| R22 | The audit queue is full (the store fell behind) | Answered at once, no wait: `peer.enroll`, `peer.forget` and `peer.relay` are `peer_audit_unavailable` with nothing dialed, removed or changed; a poller change lands and its record is logged as not kept, never written; each refusal uses up its sequence, so the next kept record follows a gap | `a_full_queue_refuses_the_owner_and_drops_the_poller_record` |
 | R23 | Native pairing stops with records queued and the store stalled; or its writer panics | The audit is closed and drained within one `AUDIT_DEADLINE` on the injected clock: records before the stall are written, the rest are logged and not, and the writer ends once the stalled write returns; a writer that panicked ends the drain at once, reported as not drained, its unwritten records logged | `close_drains_within_one_deadline`, `a_writer_that_panics_does_not_hold_the_drain` |
 | R24 | Native pairing stops while an enroll and a forget have handed over their intents; while a command holds the turn; or a command is asked after | The peer commands are closed before the audit. The first two are waited for, find the turn closed, and answer `peer_unavailable` with their outcomes kept, having read, dialed and removed nothing. A command holding the turn is waited for, within `PREEMPT`, and its outcome kept before the audit closes (past `PREEMPT`, see Known limits). One asked after is refused `peer_unavailable` before its intent, leaving no record | `a_command_admitted_before_shutdown_ends_with_its_outcome_and_no_effect`, `close_waits_for_a_command_holding_the_turn_and_keeps_its_outcome`, `a_command_asked_after_close_is_refused_before_its_intent` |
 | R25 | One read finds more conversations withdrawn than `WITHDRAWN_PER_READ` | It withdraws that many and ends incomplete; the next cycle withdraws the rest; one cycle's records stay within about half the audit's queue | `a_read_withdraws_at_most_its_cap_and_ends_incomplete`; the bound on a cycle's records is a compile-time assertion beside `WITHDRAWN_PER_READ` |
 | R26 | A stop wins the status wait after the worker has committed an ending, before the poller has taken the status answer. The poller's own stop, or the cycle an owner command stops | The answer is kept, so the audit names the cause it carried. The cycle does not continue into a read | `a_stop_after_an_ended_transition_commits_keeps_the_status_cause`, `a_stopped_status_records_its_cause_and_does_not_read` |
+| R27 | A peer kept with a relay whose address stops answering | Its status dial and its read race the address with the relay and go through the relay; the grant is read as over a direct connection | `a_peer_whose_address_stops_answering_is_read_through_its_relay`; the race itself in `tests/peer_gateways/connector.rs` |
 | R17 | The wait after each cycle | The interval when settled or pending; an eighth of it when incomplete or stopped; doubling from the interval on each failure in a row; spread 80 to 120 percent; never past the cap; a failing entropy source draws the middle | `failures_double_the_wait_up_to_the_cap`, `jitter_spreads_a_wait_over_80_to_120_percent_and_the_cap_still_holds` and the other tests in `tests/peer_gateways/poller.rs` |
 
 ## What this part does not do

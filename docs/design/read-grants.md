@@ -162,8 +162,9 @@ next turn, J4 enforces the policy.
 - **The tool policy** is `ToolPolicy`: a preset (`read_only_tools`,
   `no_shell`, `ask_everything`, `all`) or allow and deny patterns. It is
   checked for shape and size only: at most 16 patterns in each list, at
-  least one pattern in one of them, each 1 to 48 bytes, plain text. Nothing evaluates it yet. `ShareAccess`
-  holds the two together, so a Drive grant always has a policy and a Read or
+  least one pattern in one of them, each 1 to 48 bytes, plain text. What
+  it allows is decided by Cedar ([below](#what-a-tool-policy-allows));
+  nothing asks it yet. `ShareAccess` holds the two together, so a Drive grant always has a policy and a Read or
   Comment grant never has one (row J3). The store keeps the policy as JSON
   and reads it back through the same constructors.
 - **Changing a grant** is sharing again with another role or policy. It is
@@ -201,6 +202,42 @@ sequenceDiagram
     Socket->>Grants: admit_read (any role)
     Socket-->>Device: records, exactly as for Read
 ```
+
+### What a tool policy allows
+
+Slice J4 of #707 answers "may this turn call this tool?" with Cedar, behind
+the application's `ToolPolicyEvaluator` port
+(`conversation/infrastructure/tool_policy/cedar/`). Part 2 builds that
+evaluator; nothing calls it yet, so a Drive turn's tools still run unchecked
+until the part that registers it on the agent.
+
+Cedar sees facts: who started the turn (the owner, or a grant with its
+preset's name) and the tool's name with who named it (`claude`, `codex`,
+`opencode`, or `gateway` for the gateway's own tools such as `run`). A name
+is read only next to its source: Claude's file reader is `Read`, Codex names
+the kind of action, `read`. Allowed means the call goes on to the
+conversation's approval mode, where a person is still asked; it is never an
+approval. Part 3 admits a Drive turn only in the Ask approval mode, which is
+what makes `ask_everything` ask for every call.
+
+| Policy | Allows | Decided by |
+| --- | --- | --- |
+| The owner's turns | every tool | `tool.owner` |
+| `read_only_tools` | the tools listed as only reading this machine's files, and Claude's `ToolSearch`, which only loads another tool's schema (not Codex's `search`, which is also its web search) | `tool.reads` |
+| `no_shell` | those, and the tools listed as changing files or reaching the network without running a command | `tool.reads`, `tool.edits` |
+| `ask_everything`, `all` | every tool | `tool.preset.ask_everything`, `tool.preset.all` |
+| Allow and deny patterns | a tool an allow pattern matches, or every tool when there is no allow pattern; never one a deny pattern matches | `tool.rules.allow.<i>`, `tool.rules.unlisted`, `tool.rules.deny.<i>` |
+
+The lists are in `tools.cedar`. They name no OpenCode tool: OpenCode runs the tools it allows without asking, so part 3 refuses a Drive turn on OpenCode rather than judge some of its calls. A tool no list names, such as an MCP
+server's, is refused by `read_only_tools` and `no_shell`: it might run a
+command. A pattern's `*` matches any run of characters and every other
+character is itself; patterns become Cedar JSON policies scoped to their
+grant, never policy text. A pattern matches a name from any source, so a
+deny list is not "no shell": `Bash` does not deny Codex's `exec_command` or
+the gateway's `run`; the `no_shell` preset does. A deny wins over an allow. A decision names the
+policies behind it, sorted, and a refusal no policy made names none. A
+bundle or grant rules that do not validate, and any evaluation error, are
+`ToolPolicyUnavailable`, which the caller refuses.
 
 ## Driving a shared conversation
 
