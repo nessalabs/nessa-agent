@@ -496,6 +496,7 @@ impl Fixture {
         let execution_audit = Arc::new(ExecutionRecords::default());
         let service = ConversationService::with_mcp_apps(
             ConversationDependencies {
+                access_policy: crate::conversation_test_support::access_policy(),
                 agents: ConversationAgents::new(
                     HashMap::from([(
                         AgentId::Claude,
@@ -538,6 +539,10 @@ impl Fixture {
                 audit: audit.clone(),
                 tickets: tickets.clone(),
                 dropped: dropped.unwrap_or_else(|| drops.clone()),
+                policy: Arc::new(
+                    crate::conversation::infrastructure::CedarAppCallPolicyEvaluator::new()
+                        .expect("the checked-in bundle validates"),
+                ),
             },
         )
         .unwrap();

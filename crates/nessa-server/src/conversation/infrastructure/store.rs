@@ -5,12 +5,12 @@ use super::catalogue_changes::CatalogueChanges;
 
 use crate::conversation::application::{
     CatalogueChangeWatch, CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage,
-    CataloguePageRequest, CatalogueValue, CatalogueWatchError, ConversationCatalogue,
-    ConversationCreation, ConversationCreationDisposition, ConversationError, ConversationFuture,
-    ConversationListing, ConversationModeApplication, ConversationModeRequest,
-    ConversationModeRequestState, ConversationRepository, ConversationSummaries,
-    ListedConversation, ListedConversations, ObservationCursor, ObservedConversations, Reader,
-    UnfinishedDeletions, WatchCatalogue,
+    CataloguePageRequest, CatalogueValue, CatalogueWatchError, ConversationAccessPolicyEvaluator,
+    ConversationCatalogue, ConversationCreation, ConversationCreationDisposition,
+    ConversationError, ConversationFuture, ConversationListing, ConversationModeApplication,
+    ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
+    ConversationSummaries, ListedConversation, ListedConversations, ObservationCursor,
+    ObservedConversations, Reader, UnfinishedDeletions, WatchCatalogue,
 };
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, DeletionContradiction, ProviderSessionErasure,
@@ -78,9 +78,14 @@ pub(crate) const UNFINISHED: &str =
 /// (`a_row_that_cannot_be_read_is_refused_and_never_read_as_absent`).
 ///
 /// One connection, held one call at a time, off the async runtime.
+///
+/// A share grant change asks the conversation access policy inside the
+/// transaction that writes it ([`Self::with_access_policy`]); a store given
+/// none refuses every change, as one whose policy cannot decide does.
 pub struct LocalConversationStore {
     connection: Arc<Mutex<Connection>>,
     changes: CatalogueChanges,
+    access: Option<Arc<dyn ConversationAccessPolicyEvaluator>>,
 }
 impl LocalConversationStore {
     /// Open the database at `path`, in a composition-selected directory that
@@ -93,7 +98,17 @@ impl LocalConversationStore {
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
             changes: CatalogueChanges::default(),
+            access: None,
         })
+    }
+    /// The access policy a share grant change is admitted by, in its
+    /// transaction. Composition gives the one it injects everywhere else.
+    pub fn with_access_policy(
+        mut self,
+        policy: Arc<dyn ConversationAccessPolicyEvaluator>,
+    ) -> Self {
+        self.access = Some(policy);
+        self
     }
     #[cfg(test)]
     pub(super) fn hold_mutation(&self) -> MutexGuard<'_, Connection> {
@@ -603,6 +618,9 @@ fn checked_descriptor(
     let conversation = stored
         .read()
         .ok_or_else(|| unreadable("conversations", &id))?;
+    // Record integrity, not access: the row was selected by these columns,
+    // so a stored record naming another owner is damage, refused as
+    // unreadable. Who may see the entry is the access policy's.
     if !conversation.allows(organization, owner) {
         return Err(unreadable("conversations", &id));
     }
@@ -1373,11 +1391,12 @@ impl ConversationListing for LocalConversationStore {
                 let Some(value) = value else {
                     continue;
                 };
+                // An index for the owner's list, not its admission: the
+                // service admits each listed conversation by the access
+                // policy, and drops any it refuses.
                 if value.descriptor.deleted
-                    || value
-                        .conversation
-                        .check_access(&organization, &owner)
-                        .is_err()
+                    || value.conversation.deletion().is_some()
+                    || !value.conversation.allows(&organization, &owner)
                 {
                     continue;
                 }
@@ -1558,6 +1577,8 @@ impl ConversationCatalogue for LocalConversationStore {
             };
             let conversation = read(&transaction, &id)?
                 .ok_or_else(|| unreadable("conversations", &id.to_string()))?;
+            // Record integrity, not access: the row was selected by these
+            // columns, so a stored record that disagrees with them is damage.
             if !conversation.allows(&organization, &owner)
                 || conversation.deletion().is_some() != deleted
             {

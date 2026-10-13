@@ -11,6 +11,14 @@
 //! part after its last `/`, so `/usr/bin/rm` is `rm`. A denial wins over an
 //! allowance, and with an allow-list only a bare name is allowed. This is the gateway's tool policy, not a sandbox: an allowed
 //! program can still run any other it is given as an argument.
+//!
+//! The policy is also read as facts by the command policy's Cedar adapter
+//! (`infrastructure::tool_policy::cedar`, ADR 803 step 4): its hosts and
+//! program lists, and [`program_name`]. [`CommandPolicy::admit`] and
+//! [`CommandPolicy::grants`] are the Rust answer `run` and `environments_list`
+//! still ask today; they are deleted once both ask `CommandPolicyEvaluator`
+//! (ADR 803 step 4, after slice J4 part 3), which also limits a Drive grant's
+//! turn to its own hosts.
 use nessa_sdk::domain::agent_execution::leases::CommandRefusal;
 use std::collections::BTreeSet;
 
@@ -38,7 +46,24 @@ impl CommandPolicy {
         }
     }
 
-    /// Whether commands are granted on `host` at all.
+    /// The hosts commands are granted on.
+    pub fn hosts(&self) -> &BTreeSet<String> {
+        &self.hosts
+    }
+
+    /// The programs allowed by file name; `None` when there is no allow-list
+    /// and every program not denied is allowed.
+    pub fn allow(&self) -> Option<&BTreeSet<String>> {
+        self.allow.as_ref()
+    }
+
+    /// The programs denied by file name.
+    pub fn deny(&self) -> &BTreeSet<String> {
+        &self.deny
+    }
+
+    /// Whether commands are granted on `host` at all. Replaced by
+    /// `CommandPolicyEvaluator`'s `Host` question once `run` asks it.
     pub fn grants(&self, host: &str) -> bool {
         self.hosts.contains(host)
     }
@@ -60,6 +85,8 @@ impl CommandPolicy {
     }
 
     /// Whether `program` may run on `host`, or the refusal it meets.
+    /// Replaced by `admit_command` over `CommandPolicyEvaluator` once `run`
+    /// asks it.
     pub fn admit(&self, host: &str, program: &str) -> Result<(), CommandRefusal> {
         if !self.grants(host) {
             return Err(CommandRefusal::EnvironmentNotGranted);
@@ -79,8 +106,9 @@ impl CommandPolicy {
     }
 }
 
-/// A program's file name: what follows its last `/`.
-fn program_name(program: &str) -> &str {
+/// A program's file name: what follows its last `/`, so `/usr/bin/rm` is
+/// `rm`. A fact the command policy is read with, not a decision.
+pub fn program_name(program: &str) -> &str {
     program.rsplit('/').next().unwrap_or(program)
 }
 

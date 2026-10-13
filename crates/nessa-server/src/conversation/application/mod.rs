@@ -135,9 +135,12 @@ pub(crate) mod catalogue_watch;
 pub use catalogue_watch::{
     CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, WatchCatalogue,
 };
+mod access_policy;
+mod app_call_policy;
 mod artifacts;
 mod catalogue_read;
 mod command_environment;
+mod command_policy;
 mod environment;
 mod error;
 mod error_code;
@@ -156,6 +159,10 @@ mod session_key;
 mod share_grants;
 mod tool_policy;
 pub use crate::conversation::domain::ReceiverBinding;
+pub use access_policy::{
+    AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
+    ConversationAccessPolicyEvaluator, OwnerAccess, RequestShape, ShareTarget,
+};
 pub use catalogue::{
     CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage, CataloguePageRequest,
     CatalogueValue, ConversationCatalogue,
@@ -201,6 +208,10 @@ pub use mcp_apps::{
 pub(crate) use passive_read::access_refusal;
 pub use passive_read::{AdmitPassiveRead, PassiveRead, PassiveReadGrants, ReceiverAuthority};
 // Composed only by the Unix gateway (`composition/local_auth.rs`).
+pub use app_call_policy::{admit_app_question, AppCallPolicyEvaluator, AppQuestion};
+pub use command_policy::{
+    admit_command, CommandInitiator, CommandPolicyEvaluator, CommandQuestion,
+};
 #[cfg(any(unix, test))]
 pub(crate) use placement::Environments;
 #[cfg(any(unix, test))]

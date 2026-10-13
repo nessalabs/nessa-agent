@@ -117,8 +117,8 @@ table survives edits.
 | | `conversation/application/share_grants.rs` `ShareConversation::share`; `infrastructure/store/share_grants.rs` `change` | A share target must be the caller's receiver and hold `conversation.read` (grant list scanned by hand); grant and revoke need ownership, inside the transaction |
 | | `conversation/application/passive_read.rs` `binding`; `product/change_watch/registration.rs` `admit_current` | Owner and grant checks after Cedar; a catalogue watch is refused to a peer gateway |
 | | `attachments/application/held_reads.rs` `HeldReads::read` | Artifact bytes only for the conversation's owner |
-| **C. Agent tools** | `conversation/domain/command_policy.rs` `CommandPolicy::admit` | `run` only on configured hosts; programs by allow and deny sets; ignores who started the turn |
-| | `mcp_servers/domain/app_call.rs` `admit_app`, `admit_tool_call` | An MCP App calls only its own server, and only tools visible to it |
+| **C. Agent tools** | `conversation/domain/command_policy.rs` `CommandPolicy::admit` | `run` only on configured hosts; programs by allow and deny sets; ignores who started the turn. Step 4 writes these as `commands.cedar` behind `CommandPolicyEvaluator`, keyed on who started the turn |
+| | `mcp_servers/domain/app_call.rs` `admit_app`, `admit_tool_call` | An MCP App calls only its own server, and only tools visible to it. Step 4 moved both into `apps.cedar` behind `AppCallPolicyEvaluator`; whether it is an app at all, whether the tool was listed, argument size and a destructive tool's review stay in Rust (lookups, capacity, a prompt) |
 | | `nessa-sdk` `infrastructure/mcp/stand_in.rs`, `infrastructure/mcp/wire.rs` `hidden_for_model` | The model may not call a tool hidden from it |
 | | `conversation/domain/value_objects/share_access.rs` `ToolRules`, `ToolPreset` | The Drive tool policy: stored, never evaluated. Slice J4 part 2 built its Cedar evaluator |
 | | `nessa-sdk` `infrastructure/claude_acp/tools/wire.rs` `DISALLOWED_TOOLS`; `infrastructure/opencode_acp/sessions/binding.rs` `SESSION_POLICY` | Fixed tool deny lists sent to the harness at launch |

@@ -1163,6 +1163,7 @@ async fn creation_audit_is_complete_and_failure_prevents_success_and_provider_op
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository.clone(),
@@ -1232,6 +1233,7 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository.clone(),
@@ -1348,6 +1350,7 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository.clone(),
@@ -1471,6 +1474,7 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository.clone(),
@@ -1509,6 +1513,7 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
     // A fresh owner map, so the next create must open the provider again.
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: Arc::new(InMemoryStorage::new()),
             metadata: repository,
@@ -1592,6 +1597,7 @@ async fn caller_loss_does_not_cancel_creation_audit_or_owned_provider_open() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository,
@@ -1945,6 +1951,7 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
 
     let restarted = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository,
@@ -2167,6 +2174,7 @@ async fn transient_storage_open_failure_retires_slot_and_retry_opens_once() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
             metadata: repository,
@@ -2298,6 +2306,7 @@ async fn blocked_metadata_create_does_not_hold_unrelated_live_owner_lock() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage,
             metadata: repository.clone(),
@@ -2385,6 +2394,7 @@ async fn resource_free_provider_failure_waits_for_explicit_close_before_retry() 
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(provider.clone()),
             storage,
             metadata: repository,
@@ -2556,6 +2566,7 @@ async fn a_conversation_waits_for_runtime_preparation_before_opening_a_provider(
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: prepared(Arc::new(Provider::new(provider.clone())), readiness.clone()),
             storage,
             metadata: repository,
@@ -2629,6 +2640,7 @@ async fn close_releases_only_its_waiting_attachment_owner_and_stale_authorizatio
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: prepared(Arc::new(Provider::new(provider.clone())), readiness.clone()),
             storage,
             metadata: repository,
@@ -2735,6 +2747,7 @@ async fn bounded_queue_controls_complete_while_attachment_waits_for_runtime() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: prepared(Arc::new(Provider::new(provider.clone())), readiness.clone()),
             storage,
             metadata: repository,
@@ -2837,6 +2850,7 @@ async fn stopping_agents_supersedes_a_conversation_waiting_for_runtime_preparati
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: prepared(Arc::new(Provider::new(provider.clone())), readiness.clone()),
             storage,
             metadata: repository,
@@ -2924,6 +2938,7 @@ async fn retirement_supersedes_a_conversation_waiting_for_runtime_preparation() 
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: prepared(Arc::new(Provider::new(provider.clone())), readiness.clone()),
             storage,
             metadata: repository,
@@ -3009,6 +3024,7 @@ async fn a_startup_deadline_is_projected_and_explicit_close_allows_retry() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(provider.clone()),
             storage,
             metadata: repository,
@@ -3114,6 +3130,7 @@ async fn a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(provider.clone()),
             storage,
             metadata: repository,
@@ -3172,6 +3189,7 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(provider.clone()),
             storage,
             metadata: repository,
@@ -3288,6 +3306,7 @@ async fn restart_restores_saved_messages_without_replaying_input() {
     tokio::task::yield_now().await;
     let restored = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository,
@@ -3336,6 +3355,7 @@ async fn initialization_panic_is_published_and_does_not_strand_shutdown() {
     let (_, provider, repository, _) = fixture(ConversationLimits::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage: Arc::new(PanickingStorage),
             metadata: repository,
@@ -3389,6 +3409,7 @@ async fn delete_after_a_held_opening(
 ) {
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents,
             storage,
             metadata: repository.clone(),
@@ -3621,6 +3642,7 @@ async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
     let (_, provider, repository, _) = fixture(ConversationLimits::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage: Arc::new(HostileStorage),
             metadata: repository,
@@ -3814,6 +3836,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
     };
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: both(),
             storage: storage.clone(),
             metadata: repository.clone(),
@@ -3865,6 +3888,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
     tokio::task::yield_now().await;
     let restarted = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: both(),
             storage,
             metadata: repository,
@@ -3926,6 +3950,7 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
     };
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: ConversationAgents::new(
                 HashMap::from([
                     agent(AgentId::Claude, &claude),
@@ -3977,6 +4002,7 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
     // Restarted with Codex no longer configured at all.
     let without_codex = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: ConversationAgents::new(
                 HashMap::from([agent(AgentId::Claude, &claude)]),
                 AgentId::Claude,
@@ -4057,6 +4083,7 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
     {
         let service = ConversationService::new(
             ConversationDependencies {
+                access_policy: crate::conversation_test_support::access_policy(),
                 agents: ConversationAgents::new(
                     HashMap::from([
                         agent(AgentId::Claude, &claude),
@@ -4106,6 +4133,7 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
 
     let without_codex = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: ConversationAgents::new(
                 HashMap::from([agent(AgentId::Claude, &claude)]),
                 AgentId::Claude,
@@ -4189,6 +4217,7 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
     {
         let service = ConversationService::new(
             ConversationDependencies {
+                access_policy: crate::conversation_test_support::access_policy(),
                 agents: ConversationAgents::new(
                     HashMap::from([
                         agent(AgentId::Claude, &claude),
@@ -4244,6 +4273,7 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
 
     let without_codex = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: ConversationAgents::new(
                 HashMap::from([agent(AgentId::Claude, &claude)]),
                 AgentId::Claude,
@@ -4420,6 +4450,7 @@ async fn a_caller_context_too_damaged_to_record_is_refused_on_a_reopen_too() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository,
@@ -4628,6 +4659,7 @@ async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: ConversationAgents::new(
                 HashMap::from([
                     (
@@ -4751,6 +4783,7 @@ async fn custom_committed_adapter_cannot_substitute_requested_session_or_destroy
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage: storage.clone(),
             metadata: repository,
@@ -4812,6 +4845,7 @@ async fn committed_reads_recheck_tombstone_after_title_lookup() {
         let mode_audit = Arc::new(RecordingModeAudit::default());
         let service = ConversationService::new(
             ConversationDependencies {
+                access_policy: crate::conversation_test_support::access_policy(),
                 agents: mode_agents(provider, Arc::new(RecordingModeExecutionAudit::default())),
                 storage: Arc::new(InMemoryStorage::new()),
                 metadata: records.clone(),
@@ -4956,6 +4990,7 @@ async fn returned_committed_views_bound_late_titles_and_preserve_pending_selecti
         });
         let service = ConversationService::new(
             ConversationDependencies {
+                access_policy: crate::conversation_test_support::access_policy(),
                 agents: mode_agents(
                     provider.clone(),
                     Arc::new(RecordingModeExecutionAudit::default()),

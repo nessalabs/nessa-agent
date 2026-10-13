@@ -365,7 +365,9 @@ fn harness_working_in(
     .unwrap();
     nessa_local_storage::create_directory(&root.join("conversations")).unwrap();
     let metadata = Arc::new(
-        LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3")).unwrap(),
+        LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3"))
+            .unwrap()
+            .with_access_policy(crate::conversation_test_support::access_policy()),
     );
     let storage = Arc::new(Records {
         inner: RecordStorage::new(root.join("sessions")).unwrap(),
@@ -376,6 +378,7 @@ fn harness_working_in(
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents,
             storage: storage.clone(),
             metadata: metadata.clone(),

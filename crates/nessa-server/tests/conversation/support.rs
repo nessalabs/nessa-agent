@@ -1164,6 +1164,7 @@ pub(crate) fn image_fixture_with_model(
     let summaries = Arc::new(MemorySummaries::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
             metadata: repository.clone(),
@@ -1305,6 +1306,7 @@ pub(crate) fn mode_fixture_with_summaries(
     let mode_audit = Arc::new(RecordingModeAudit::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: mode_agents(provider.clone(), execution_audit.clone()),
             storage,
             metadata: repository.clone(),
@@ -1343,6 +1345,7 @@ pub(crate) fn fixture(
     let summaries = Arc::new(MemorySummaries::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
             metadata: repository.clone(),
@@ -1947,4 +1950,32 @@ fn mode_panic(payload_drop: bool, message: &'static str) -> ! {
         std::panic::panic_any(ModePanicPayload);
     }
     panic!("{message}");
+}
+
+/// The checked-in conversation access policy, as composition builds it:
+/// every service, store and passive read these tests build asks it, so they
+/// exercise the rules the gateway runs. Validated once per test process.
+fn checked_in_access_policy(
+) -> &'static Arc<crate::conversation::infrastructure::CedarConversationAccessPolicy> {
+    static POLICY: std::sync::OnceLock<
+        Arc<crate::conversation::infrastructure::CedarConversationAccessPolicy>,
+    > = std::sync::OnceLock::new();
+    POLICY.get_or_init(|| {
+        Arc::new(
+            crate::conversation::infrastructure::CedarConversationAccessPolicy::new()
+                .expect("the checked-in conversation access policy validates"),
+        )
+    })
+}
+
+/// [`checked_in_access_policy`], as a dependency is injected.
+pub(crate) fn access_policy(
+) -> Arc<dyn crate::conversation::application::ConversationAccessPolicyEvaluator> {
+    checked_in_access_policy().clone()
+}
+
+/// [`checked_in_access_policy`], borrowed for as long as the test runs.
+pub(crate) fn access_policy_ref(
+) -> &'static dyn crate::conversation::application::ConversationAccessPolicyEvaluator {
+    checked_in_access_policy().as_ref()
 }

@@ -17,7 +17,8 @@ async fn failed_worker_start_returns_unavailable_without_scheduler_panic() {
     nessa_local_storage::create_directory(&private).unwrap();
     let store = Arc::new(
         super::super::store::LocalConversationStore::open(&private.join("metadata.sqlite3"))
-            .unwrap(),
+            .unwrap()
+            .with_access_policy(crate::conversation_test_support::access_policy()),
     );
     let head = store
         .head(
@@ -69,7 +70,8 @@ fn source_head_finishes_when_caller_owns_the_only_blocking_slot() {
         nessa_local_storage::create_directory(&private).unwrap();
         let store = Arc::new(
             super::super::store::LocalConversationStore::open(&private.join("metadata.sqlite3"))
-                .unwrap(),
+                .unwrap()
+                .with_access_policy(crate::conversation_test_support::access_policy()),
         );
         let head = store
             .head(
@@ -144,7 +146,8 @@ async fn source_reads_owner_scoped_current_values_and_rejects_wrong_scope() {
     nessa_local_storage::create_directory(&private).unwrap();
     let store = Arc::new(
         super::super::store::LocalConversationStore::open(&private.join("metadata.sqlite3"))
-            .unwrap(),
+            .unwrap()
+            .with_access_policy(crate::conversation_test_support::access_policy()),
     );
     let alice_id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
     let bob_id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
@@ -290,7 +293,8 @@ async fn source_resolves_deletion_after_manifest_and_keeps_newer_revision() {
     nessa_local_storage::create_directory(&private).unwrap();
     let store = Arc::new(
         super::super::store::LocalConversationStore::open(&private.join("metadata.sqlite3"))
-            .unwrap(),
+            .unwrap()
+            .with_access_policy(crate::conversation_test_support::access_policy()),
     );
     let conversation_id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
     store

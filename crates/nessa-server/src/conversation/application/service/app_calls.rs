@@ -2,8 +2,10 @@
 //! `mcp.releaseApp`, through the conversation's own MCP sessions; and its
 //! messages and model context (#390): `mcp.sendMessage`, submitted as the
 //! person's turn written by the app, and `mcp.updateModelContext`, held for
-//! the next message admitted while the conversation is idle. The rules are
-//! `mcp_servers::domain::app_call`'s and the SDK's; this is their flow —
+//! the next message admitted while the conversation is idle. The policy is
+//! Cedar's, asked through `McpAppPorts::policy` (`app_call_policy`); the
+//! other rules are `mcp_servers::domain::app_call`'s and the SDK's; this is
+//! their flow —
 //! every step audited before its effect is reported, a destructive call and
 //! every message held on a review the person answers, and each refusal one
 //! protocol code (`docs/design/mcp-app-calls.md`).
@@ -29,10 +31,10 @@ use super::{
     blank_text, ConversationCaller, ConversationError, ConversationService, LiveConversation,
     Reach, SubmissionMode, SubmitFailure, Writer,
 };
-use crate::conversation::application::error_code;
+use crate::conversation::application::{admit_app_question, error_code, AppQuestion};
 use crate::mcp_servers::domain::{
-    admit_app, admit_tool_call, AppCallAdmission, AppFacts, AppRefusal, ResourceTicketDigest,
-    MAX_APP_RESULT_BYTES,
+    admit_listed_call, known_app, listed_tool, AppCallAdmission, AppFacts, AppRefusal,
+    ResourceTicketDigest, MAX_APP_RESULT_BYTES,
 };
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::projection::{bound_view, bound_view_within, MAX_VIEW_BYTES};
@@ -554,7 +556,11 @@ impl ConversationService {
                 server: message.server.clone(),
             },
         );
-        if let Err(refusal) = admit_app(seen.as_ref().map(|(facts, _)| facts), &message.server) {
+        if let Err(refusal) = reached(
+            &ports,
+            seen.as_ref().map(|(facts, _)| facts),
+            &message.server,
+        ) {
             return Err(step.refuse(refusal.into()).await);
         }
         let Some((_, tool)) = seen else {
@@ -714,7 +720,11 @@ impl ConversationService {
                 server: update.server.clone(),
             },
         );
-        if let Err(refusal) = admit_app(seen.as_ref().map(|(facts, _)| facts), &update.server) {
+        if let Err(refusal) = reached(
+            &ports,
+            seen.as_ref().map(|(facts, _)| facts),
+            &update.server,
+        ) {
             return Err(step.refuse(refusal.into()).await);
         }
         let Some((_, tool)) = seen else {
@@ -798,7 +808,7 @@ impl ConversationService {
                 uri: read.uri.clone(),
             },
         );
-        if let Err(refusal) = admit_app(facts.as_ref(), &read.server) {
+        if let Err(refusal) = reached(&ports, facts.as_ref(), &read.server) {
             return Err(step.refuse(refusal.into()).await);
         }
         let Ok(uri) = UiResourceUri::new(read.uri.as_str()) else {
@@ -1062,17 +1072,39 @@ fn admitted(
     call: &McpAppCall,
     arguments: Option<&str>,
 ) -> Result<AppCallAdmission, McpAppError> {
-    admit_app(facts, &call.server)?;
+    let app = reached(ports, facts, &call.server)?;
     let listed = ports
         .apps
         .listed_tool(session, &call.server, &call.tool)
         .map_err(McpAppError::from)?;
-    Ok(admit_tool_call(
-        facts,
-        &call.server,
-        listed.as_ref(),
-        arguments.map_or(0, str::len),
-    )?)
+    let tool = listed_tool(listed.as_ref())?;
+    admit_app_question(
+        ports.policy.as_ref(),
+        &app.server,
+        AppQuestion::CallTool {
+            server: &call.server,
+            tool: &call.tool,
+            visible_to_app: tool.ui().visibility().app(),
+        },
+    )?;
+    Ok(admit_listed_call(tool, arguments.map_or(0, str::len))?)
+}
+
+/// Whether `app` is an app at all, and the policy lets it reach `server`:
+/// all a resource read, a message or a model context needs, and the first
+/// of what a tool call does.
+fn reached<'a>(
+    ports: &McpAppPorts,
+    app: Option<&'a AppFacts>,
+    server: &str,
+) -> Result<&'a AppFacts, AppRefusal> {
+    let app = known_app(app)?;
+    admit_app_question(
+        ports.policy.as_ref(),
+        &app.server,
+        AppQuestion::Reach { server },
+    )?;
+    Ok(app)
 }
 
 /// A person, by an explicit command of theirs.

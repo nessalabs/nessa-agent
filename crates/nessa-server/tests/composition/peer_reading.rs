@@ -208,8 +208,11 @@ impl Peer {
         )
         .await
         .unwrap();
-        let metadata =
-            Arc::new(LocalConversationStore::open(&root.join("metadata.sqlite3")).unwrap());
+        let metadata = Arc::new(
+            LocalConversationStore::open(&root.join("metadata.sqlite3"))
+                .unwrap()
+                .with_access_policy(crate::conversation_test_support::access_policy()),
+        );
         let storage = Arc::new(RecordStorage::new(root.join("source")).unwrap());
         storage.initialize().await.unwrap();
         let state = ProductRouteState::new(
@@ -225,7 +228,12 @@ impl Peer {
                 agent_probe: Arc::new(NoAgents),
             },
         )
-        .with_passive_read(receivers, metadata.clone(), metadata.clone())
+        .with_passive_read(
+            receivers,
+            metadata.clone(),
+            metadata.clone(),
+            crate::conversation_test_support::access_policy(),
+        )
         .with_record_source(Arc::new(NessaRecordReadSource::new(
             storage.clone(),
             Id::new(&gateway).unwrap(),

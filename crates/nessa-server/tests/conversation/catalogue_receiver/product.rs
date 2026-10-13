@@ -1,19 +1,14 @@
 // Real product sockets connect a gateway process to separately owned receiver
 // processes. Receivers receive only port, credential, and their cache path.
 use super::*;
-use nessa_protocol::agents::AgentId;
 use crate::catalogue_receiver_store::SqliteReceiver;
-use crate::conversation::application::{CatalogueHead, CataloguePage, CataloguePageRequest, CatalogueValue, ConversationCatalogue, ConversationDependencies, ConversationFuture, ConversationLimits, ConversationRepository, ConversationService, ConversationSummaries, ReceiverAuthority, ReceiverBinding};
-use nessa_protocol::conversation::read_scope::ReadRefusal;
-use crate::conversation::domain::{Conversation, ConversationDeletion};
-use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationId, ConversationModelId, ConversationSummary};
-use crate::conversation::infrastructure::{LocalConversationStore, NessaCatalogueReadSource};
-use nessa_protocol::product::catalogue_read;
-use nessa_protocol::product::generated::{
-    CatalogueDescriptor, ConversationCatalogueHeadResult, ConversationCatalogueManifestResult,
-    ConversationCatalogueResolveResult,
+use crate::conversation::application::{
+    CatalogueHead, CataloguePage, CataloguePageRequest, CatalogueValue, ConversationCatalogue,
+    ConversationDependencies, ConversationFuture, ConversationLimits, ConversationRepository,
+    ConversationService, ConversationSummaries, ReceiverAuthority, ReceiverBinding,
 };
-use nessa_protocol::product::passive_read;
+use crate::conversation::domain::{Conversation, ConversationDeletion};
+use crate::conversation::infrastructure::{LocalConversationStore, NessaCatalogueReadSource};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use conversation_support::{
@@ -21,6 +16,17 @@ use conversation_support::{
     RecordingFileLinkAudit, TestClock,
 };
 use nessa_local_database::rusqlite::Connection;
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationId, ConversationModelId, ConversationSummary,
+};
+use nessa_protocol::conversation::read_scope::ReadRefusal;
+use nessa_protocol::product::catalogue_read;
+use nessa_protocol::product::generated::{
+    CatalogueDescriptor, ConversationCatalogueHeadResult, ConversationCatalogueManifestResult,
+    ConversationCatalogueResolveResult,
+};
+use nessa_protocol::product::passive_read;
 use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
 use nessa_sdk::application::agent_execution::providers::{
     ExecutionReport, ProviderExecutionReply, ProviderSessionState,
@@ -250,7 +256,8 @@ impl ConversationCatalogue for CountingCatalogue {
         id: &ConversationId,
     ) -> ConversationFuture<'_, Option<CatalogueValue>> {
         self.counts.resolve.fetch_add(1, Ordering::SeqCst);
-        self.store.resolve(organization, owner, reader, incarnation, id)
+        self.store
+            .resolve(organization, owner, reader, incarnation, id)
     }
 }
 
@@ -261,7 +268,11 @@ async fn gateway_child() {
     };
     let root = Path::new(&root);
     nessa_local_storage::create_directory(root).unwrap();
-    let store = Arc::new(LocalConversationStore::open(&root.join("metadata.sqlite3")).unwrap());
+    let store = Arc::new(
+        LocalConversationStore::open(&root.join("metadata.sqlite3"))
+            .unwrap()
+            .with_access_policy(crate::conversation_test_support::access_policy()),
+    );
     for owner in ["alice", "bob"] {
         for index in 0..std::env::var("NESSA_297_SEED_COUNT")
             .ok()
@@ -304,6 +315,7 @@ async fn gateway_child() {
     *provider.execution_gate.lock().unwrap() = Some(execution_gate);
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: conversation_support::only(Arc::new(Provider::new(provider.clone()))),
             storage: Arc::new(InMemoryStorage::new()),
             metadata: store.clone(),
@@ -336,7 +348,12 @@ async fn gateway_child() {
     state.verifier = owners.clone();
     state.access = owners.clone();
     state = state
-        .with_passive_read(owners.clone(), store.clone(), store.clone())
+        .with_passive_read(
+            owners.clone(),
+            store.clone(),
+            store.clone(),
+            crate::conversation_test_support::access_policy(),
+        )
         .with_catalogue_source(source)
         .with_conversations(Arc::new(service));
     let capacity = state.record_reads.clone();
@@ -1218,11 +1235,8 @@ fn socket_close_stops_active_provider_while_catalogue_workers_are_full_and_a_cal
         .collect::<Vec<_>>();
     // The owner's own surface sends and closes: a paired phone may not close
     // a conversation (issue 707, row J12).
-    let mut owner = ProductSource::connect_owner(
-        gateway.port,
-        "alice",
-        directory.path().join("unused-owner"),
-    );
+    let mut owner =
+        ProductSource::connect_owner(gateway.port, "alice", directory.path().join("unused-owner"));
     let reply=owner.call("conversation.send",json!({"conversationId":cid("alice",1).to_string(),"requestId":Uuid::new_v4().to_string(),"executionId":Uuid::new_v4().to_string(),"text":"held provider work","attachments":[],"files":[]}));
     assert_eq!(reply["ok"], true, "{reply}");
     gateway.command(json!({"action":"wait-execution"}));

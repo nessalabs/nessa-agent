@@ -1,7 +1,10 @@
 use super::*;
-use crate::conversation::application::{CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadSource, RecordHead, RecordReadValue};
-use nessa_protocol::conversation::read_scope::CatalogueReadScope;
+use crate::conversation::application::{
+    CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadSource,
+    RecordHead, RecordReadValue,
+};
 use crate::product::change_watch::{watch_principal, Notice, WatchOwners};
+use nessa_protocol::conversation::read_scope::CatalogueReadScope;
 use nessa_sync::replication::domain::{Id, Scope};
 use serde_json::Value;
 use std::{
@@ -517,7 +520,12 @@ async fn successful_read_during_held_authority(input: HeldAuthorityInput, stalle
     );
     let effects = Arc::new(HealthEffects(AtomicUsize::new(0)));
     let mut state = state
-        .with_passive_read(Arc::new(RecordBinding), repository, Arc::new(crate::conversation_test_support::EveryConversationGranted))
+        .with_passive_read(
+            Arc::new(RecordBinding),
+            repository,
+            Arc::new(crate::conversation_test_support::EveryConversationGranted),
+            crate::conversation_test_support::access_policy(),
+        )
         .with_record_source(source.clone());
     state.access = held.clone();
     state.uptime_clock = effects.clone();
@@ -997,7 +1005,12 @@ async fn held_physical_session() -> (
         joins: Mutex::new(Vec::new()),
     });
     let mut state = state
-        .with_passive_read(Arc::new(RecordBinding), repository, Arc::new(crate::conversation_test_support::EveryConversationGranted))
+        .with_passive_read(
+            Arc::new(RecordBinding),
+            repository,
+            Arc::new(crate::conversation_test_support::EveryConversationGranted),
+            crate::conversation_test_support::access_policy(),
+        )
         .with_record_source(source.clone())
         .with_catalogue_source(source.clone());
     state.settings = SessionSettings::new(
@@ -1380,10 +1393,7 @@ async fn original_pending_watch_deadline_expires_during_another_physical_frame()
     let owners = Arc::new(WatchOwners::new(1, 1));
     let deliveries = Arc::new(WatchDeliveries::new());
     let original = Arc::new(owners.try_acquire(&watch_principal("a")).unwrap());
-    assert!(deliveries.reserve(
-        "watch".into(),
-        original.clone()
-    ));
+    assert!(deliveries.reserve("watch".into(), original.clone()));
     drop(original);
     deliveries.activate("watch");
     assert!(deliveries.notice("watch", Notice::Changed)); // Authority remains pending.
@@ -1558,8 +1568,8 @@ async fn unwatch_before_writer_selection_sends_no_hint_after_the_acknowledgement
         subscriptions.clone(),
     ));
     peer.writing.recv().await.unwrap(); // The ordinary frame is mid-flush.
-    // What `ConnectionWatches::begin` does for an unwatch: retire, then queue
-    // the acknowledgement on the ordinary lane.
+                                        // What `ConnectionWatches::begin` does for an unwatch: retire, then queue
+                                        // the acknowledgement on the ordinary lane.
     deliveries.retire("watch");
     ordinary_send.send(response("unwatch")).await.unwrap();
     release.send(()).unwrap();

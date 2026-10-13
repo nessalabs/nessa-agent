@@ -2417,6 +2417,7 @@ mod tests {
                     Arc::new(RecordBinding),
                     Arc::new(MemoryRepository::default()),
                     Arc::new(crate::conversation_test_support::EveryConversationGranted),
+                    crate::conversation_test_support::access_policy(),
                 )
                 .with_record_source(Arc::new(UnreachableRecordSource))
                 .with_catalogue_source(Arc::new(UnreachableCatalogueSource));
@@ -2840,8 +2841,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().join("conversations");
         nessa_local_storage::create_directory(&private).unwrap();
-        let conversations =
-            Arc::new(LocalConversationStore::open(&private.join("metadata.sqlite3")).unwrap());
+        let conversations = Arc::new(
+            LocalConversationStore::open(&private.join("metadata.sqlite3"))
+                .unwrap()
+                .with_access_policy(crate::conversation_test_support::access_policy()),
+        );
         let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
         conversations
             .create(
@@ -2933,6 +2937,7 @@ mod tests {
                 Arc::new(RecordBinding),
                 conversations,
                 Arc::new(crate::conversation_test_support::EveryConversationGranted),
+                crate::conversation_test_support::access_policy(),
             )
             .with_record_source(source.clone());
         let session = authenticate(&state).await;
@@ -4315,6 +4320,7 @@ mod tests {
                     Arc::new(RecordBinding),
                     repository,
                     Arc::new(crate::conversation_test_support::EveryConversationGranted),
+                    crate::conversation_test_support::access_policy(),
                 )
                 .with_record_source(source.clone());
             state.access = authority;

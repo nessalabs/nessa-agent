@@ -132,6 +132,7 @@ impl From<ConversationRefusal> for ConversationError {
         match refusal {
             ConversationRefusal::NotFound => Self::NotFound,
             ConversationRefusal::Deleted => Self::Deleted,
+            ConversationRefusal::Unavailable => Self::Metadata,
         }
     }
 }

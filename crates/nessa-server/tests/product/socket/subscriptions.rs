@@ -251,11 +251,9 @@ fn view(frame: &Value) -> &Value {
 fn settled(frame: &Value, messages: usize) -> bool {
     frame["event"] == "conversation.view"
         && view(frame)["transcriptState"] == "complete"
-        && view(frame)["messages"]
-            .as_array()
-            .is_some_and(|all| {
-                all.len() == messages && all.iter().all(|message| message["status"] == "completed")
-            })
+        && view(frame)["messages"].as_array().is_some_and(|all| {
+            all.len() == messages && all.iter().all(|message| message["status"] == "completed")
+        })
 }
 
 struct SubscriptionFixture {
@@ -286,6 +284,7 @@ fn conversation_service_with_repository(
 ) -> Arc<ConversationService> {
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             // Agents that can change approval mode (row S20).
             agents: mode_agents(
                 provider.clone(),
@@ -377,8 +376,11 @@ impl SubscriptionFixture {
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().join("conversations");
         nessa_local_storage::create_directory(&private).unwrap();
-        let metadata =
-            Arc::new(LocalConversationStore::open(&private.join("metadata.sqlite3")).unwrap());
+        let metadata = Arc::new(
+            LocalConversationStore::open(&private.join("metadata.sqlite3"))
+                .unwrap()
+                .with_access_policy(crate::conversation_test_support::access_policy()),
+        );
         let storage = Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
         storage.initialize().await.unwrap();
         let provider = Arc::new(ProviderFactory::default());
@@ -419,8 +421,7 @@ impl SubscriptionFixture {
 
     async fn call(&self, method: &str, params: Value) -> Value {
         let frame = RequestFrame::new("call", method, &params).unwrap();
-        let OutgoingMessage::Response(response) =
-            dispatch(&self.state, &self.session, frame).await
+        let OutgoingMessage::Response(response) = dispatch(&self.state, &self.session, frame).await
         else {
             panic!("a response")
         };
@@ -818,7 +819,11 @@ async fn a_cursor_ahead_of_history_is_refused() {
     let mut client = fixture.connect();
     let id = client.subscribe("first", &fixture.id).await;
     let first = client.next().await;
-    client.send("stop", "conversation.unsubscribe", json!({"subscriptionId": id}));
+    client.send(
+        "stop",
+        "conversation.unsubscribe",
+        json!({"subscriptionId": id}),
+    );
     client.reply("stop").await;
     let mut ahead = first["payload"]["cursor"].clone();
     ahead["position"] = json!((position(&first) + 1000).to_string());
@@ -865,7 +870,11 @@ async fn a_long_history_replays_in_bounded_frames_and_never_behind_the_cursor() 
     let frames = client
         .until(&id, |frame| view(frame)["transcriptState"] == "complete")
         .await;
-    assert!(frames.len() > 1, "more than one bounded read: {}", frames.len());
+    assert!(
+        frames.len() > 1,
+        "more than one bounded read: {}",
+        frames.len()
+    );
     for pair in frames.windows(2) {
         assert!(position(&pair[0]) < position(&pair[1]), "only forward");
         assert_eq!(view(&pair[0])["transcriptState"], "stale");
@@ -882,7 +891,10 @@ async fn a_long_history_replays_in_bounded_frames_and_never_behind_the_cursor() 
     );
     let (reply, _) = client.reply("resume").await;
     assert_eq!(reply["ok"], true, "{reply}");
-    let resumed = reply["payload"]["subscriptionId"].as_str().unwrap().to_owned();
+    let resumed = reply["payload"]["subscriptionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let frame = client.next().await;
     assert_eq!(frame["payload"]["subscriptionId"], resumed);
     assert_eq!(position(&frame), position(&last), "nothing behind it");
@@ -900,7 +912,9 @@ async fn a_commit_after_subscribe_is_delivered() {
     let first = client.next().await;
     fixture.turn("turn-1").await;
     let frames = client.until(&id, |frame| settled(frame, 1)).await;
-    assert!(frames.iter().all(|frame| position(frame) >= position(&first)));
+    assert!(frames
+        .iter()
+        .all(|frame| position(frame) >= position(&first)));
     client.close().await;
 }
 
@@ -922,7 +936,9 @@ async fn replay_then_live_misses_no_commit_under_concurrent_writes() {
     let mut clients = Vec::new();
     for round in 0..TURNS {
         let mut client = fixture.connect();
-        let id = client.subscribe(&format!("subscribe-{round}"), &fixture.id).await;
+        let id = client
+            .subscribe(&format!("subscribe-{round}"), &fixture.id)
+            .await;
         clients.push((client, id));
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -979,7 +995,10 @@ async fn a_wake_that_changes_nothing_sends_nothing() {
     let mut client = fixture.connect();
     client.send("list", "conversation.subscribeList", json!({}));
     let (reply, _) = client.reply("list").await;
-    let id = reply["payload"]["subscriptionId"].as_str().unwrap().to_owned();
+    let id = reply["payload"]["subscriptionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     client.next().await;
     fixture.commit(&quiet).await;
     client.quiet(&id).await;
@@ -1004,7 +1023,10 @@ async fn a_frame_not_taken_in_time_ends_the_subscription_as_lagging() {
     let first = client.next().await;
     fixture.stall(&mut client).await;
     fixture.turn("turn-1").await;
-    tokio::time::sleep(Duration::from_millis(SUBSCRIPTION_DELIVERY_TIMEOUT_MS + 1000)).await;
+    tokio::time::sleep(Duration::from_millis(
+        SUBSCRIPTION_DELIVERY_TIMEOUT_MS + 1000,
+    ))
+    .await;
     client.gate.open();
     let (_, before) = client.reply("stall").await;
     assert!(before.is_empty());
@@ -1012,7 +1034,10 @@ async fn a_frame_not_taken_in_time_ends_the_subscription_as_lagging() {
     assert_eq!(ended["event"], "conversation.subscriptionEnded", "{ended}");
     assert_eq!(ended["payload"]["subscriptionId"], id);
     assert_eq!(ended["payload"]["reason"], "lagging");
-    assert_eq!(ended["payload"]["lastDelivered"], first["payload"]["cursor"]);
+    assert_eq!(
+        ended["payload"]["lastDelivered"],
+        first["payload"]["cursor"]
+    );
     // The socket stays: it still answers.
     client.send("health", "server.health", json!({}));
     let (health, _) = client.reply("health").await;
@@ -1030,7 +1055,10 @@ async fn a_lagging_subscriber_resumes_from_its_cursor() {
     client.next().await;
     fixture.stall(&mut client).await;
     fixture.turn("turn-1").await;
-    tokio::time::sleep(Duration::from_millis(SUBSCRIPTION_DELIVERY_TIMEOUT_MS + 1000)).await;
+    tokio::time::sleep(Duration::from_millis(
+        SUBSCRIPTION_DELIVERY_TIMEOUT_MS + 1000,
+    ))
+    .await;
     client.gate.open();
     client.reply("stall").await;
     let ended = client.next().await;
@@ -1043,13 +1071,19 @@ async fn a_lagging_subscriber_resumes_from_its_cursor() {
     );
     let (reply, _) = client.reply("resume").await;
     assert_eq!(reply["ok"], true, "{reply}");
-    let id = reply["payload"]["subscriptionId"].as_str().unwrap().to_owned();
+    let id = reply["payload"]["subscriptionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     fixture.turn("turn-2").await;
     let frames = client.until(&id, |frame| settled(frame, 2)).await;
     let floor: u64 = after["position"].as_str().unwrap().parse().unwrap();
     assert!(frames.iter().all(|frame| position(frame) >= floor));
     let replayed = fixture.replayed().await;
-    assert_eq!(view(frames.last().unwrap())["messages"], replayed["messages"]);
+    assert_eq!(
+        view(frames.last().unwrap())["messages"],
+        replayed["messages"]
+    );
     client.close().await;
 }
 
@@ -1092,7 +1126,14 @@ async fn live_frames_and_a_cold_full_replay_build_the_same_view() {
     let frames = client.until(&id, |frame| settled(frame, 4)).await;
     let live = view(frames.last().unwrap()).clone();
     let replayed = fixture.replayed().await;
-    for field in ["messages", "pending", "tools", "transcriptState", "queueComplete", "truncated"] {
+    for field in [
+        "messages",
+        "pending",
+        "tools",
+        "transcriptState",
+        "queueComplete",
+        "truncated",
+    ] {
         assert_eq!(live[field], replayed[field], "{field}");
     }
     client.close().await;
@@ -1121,7 +1162,9 @@ async fn a_revoked_grant_ends_the_subscription_before_the_next_batch() {
         .await
         .unwrap();
     let frames = client
-        .until(&id, |frame| frame["event"] == "conversation.subscriptionEnded")
+        .until(&id, |frame| {
+            frame["event"] == "conversation.subscriptionEnded"
+        })
         .await;
     assert_eq!(frames.len(), 1, "no frame read after the revocation");
     let ended = &frames[0];
@@ -1169,9 +1212,15 @@ async fn a_grant_revoked_while_a_batch_waits_for_capacity_ends_it_before_the_rea
     grants(&fixture.authority, &["server.read"]);
     drop(held);
     let frames = client
-        .until(&id, |frame| frame["event"] == "conversation.subscriptionEnded")
+        .until(&id, |frame| {
+            frame["event"] == "conversation.subscriptionEnded"
+        })
         .await;
-    assert_eq!(frames.len(), 1, "nothing read under the revoked grant: {frames:?}");
+    assert_eq!(
+        frames.len(),
+        1,
+        "nothing read under the revoked grant: {frames:?}"
+    );
     assert_eq!(frames[0]["payload"]["reason"], "refused");
     assert_eq!(frames[0]["payload"]["code"], "forbidden");
     client.close().await;
@@ -1194,7 +1243,10 @@ async fn a_subscribe_reply_not_written_by_its_deadline_closes_the_socket() {
         Duration::from_secs(1),
     )
     .unwrap();
-    let mut client = connect(fixture.state.clone().with_settings(settings), &fixture.session);
+    let mut client = connect(
+        fixture.state.clone().with_settings(settings),
+        &fixture.session,
+    );
     fixture.stall(&mut client).await;
     client.send(
         "subscribe",
@@ -1219,7 +1271,10 @@ async fn a_subscribe_reply_not_written_by_its_deadline_closes_the_socket() {
         "{closed:?}"
     );
     let logged = limit_text(&captured);
-    assert!(logged.contains("socket.subscription_delivery_deadline"), "{logged}");
+    assert!(
+        logged.contains("socket.subscription_delivery_deadline"),
+        "{logged}"
+    );
     assert!(!logged.contains("socket.write_timeout"), "{logged}");
 }
 
@@ -1238,7 +1293,9 @@ async fn deleting_the_conversation_ends_its_subscription() {
         .await;
     assert_eq!(deleted["ok"], true, "{deleted}");
     let frames = client
-        .until(&id, |frame| frame["event"] == "conversation.subscriptionEnded")
+        .until(&id, |frame| {
+            frame["event"] == "conversation.subscriptionEnded"
+        })
         .await;
     let ended = frames.last().unwrap();
     assert_eq!(ended["payload"]["reason"], "refused");
@@ -1254,14 +1311,22 @@ async fn no_frame_follows_an_unsubscribe_reply() {
     let id = client.subscribe("subscribe", &fixture.id).await;
     client.next().await;
     fixture.turn("turn-1").await;
-    client.send("stop", "conversation.unsubscribe", json!({"subscriptionId": id}));
+    client.send(
+        "stop",
+        "conversation.unsubscribe",
+        json!({"subscriptionId": id}),
+    );
     let (reply, _) = client.reply("stop").await;
     assert_eq!(reply["ok"], true);
     assert_eq!(reply["payload"]["subscriptionId"], id);
     fixture.turn("turn-2").await;
     client.quiet(&id).await;
     // It is gone: a second unsubscribe does not know it.
-    client.send("again", "conversation.unsubscribe", json!({"subscriptionId": id}));
+    client.send(
+        "again",
+        "conversation.unsubscribe",
+        json!({"subscriptionId": id}),
+    );
     let (again, _) = client.reply("again").await;
     assert_eq!(again["error"]["code"], "unknown_subscription");
     client.close().await;
@@ -1561,10 +1626,15 @@ async fn a_list_subscription_follows_the_catalogue() {
     let mut client = fixture.connect();
     client.send("list", "conversation.subscribeList", json!({}));
     let (reply, _) = client.reply("list").await;
-    let id = reply["payload"]["subscriptionId"].as_str().unwrap().to_owned();
+    let id = reply["payload"]["subscriptionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let first = client.next().await;
     assert_eq!(first["event"], "conversation.listed");
-    let rows = first["payload"]["list"]["conversations"].as_array().unwrap();
+    let rows = first["payload"]["list"]["conversations"]
+        .as_array()
+        .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["conversationId"], fixture.id.to_string());
     let archived = fixture
@@ -1593,9 +1663,15 @@ async fn a_turn_without_a_summary_change_updates_the_list() {
     let mut client = fixture.connect();
     client.send("list", "conversation.subscribeList", json!({}));
     let (reply, _) = client.reply("list").await;
-    let id = reply["payload"]["subscriptionId"].as_str().unwrap().to_owned();
+    let id = reply["payload"]["subscriptionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let first = client.next().await;
-    assert_eq!(first["payload"]["list"]["conversations"][0]["running"], false);
+    assert_eq!(
+        first["payload"]["list"]["conversations"][0]["running"],
+        false
+    );
     let (release, gate) = tokio::sync::oneshot::channel();
     *fixture.provider.execution_gate.lock().unwrap() = Some(gate);
     fixture.turn("turn-2").await;
@@ -1624,7 +1700,10 @@ async fn list_frames_come_no_closer_than_the_reread_floor() {
     let mut client = fixture.connect();
     client.send("list", "conversation.subscribeList", json!({}));
     let (reply, _) = client.reply("list").await;
-    let id = reply["payload"]["subscriptionId"].as_str().unwrap().to_owned();
+    let id = reply["payload"]["subscriptionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     client.next().await;
     let (release, gate) = tokio::sync::oneshot::channel();
     *fixture.provider.execution_gate.lock().unwrap() = Some(gate);
@@ -1687,12 +1766,18 @@ async fn a_change_the_incomplete_list_leaves_out_is_still_sent() {
     let mut client = fixture.connect();
     client.send("list", "conversation.subscribeList", json!({}));
     let (reply, _) = client.reply("list").await;
-    let id = reply["payload"]["subscriptionId"].as_str().unwrap().to_owned();
+    let id = reply["payload"]["subscriptionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let first = client.next().await;
     assert_eq!(first["payload"]["list"]["complete"], false);
-    let rows = first["payload"]["list"]["conversations"].as_array().unwrap();
+    let rows = first["payload"]["list"]["conversations"]
+        .as_array()
+        .unwrap();
     assert!(
-        rows.iter().all(|row| row["conversationId"] != oldest.to_string()),
+        rows.iter()
+            .all(|row| row["conversationId"] != oldest.to_string()),
         "the oldest is left out"
     );
     let archived = fixture
@@ -1703,7 +1788,10 @@ async fn a_change_the_incomplete_list_leaves_out_is_still_sent() {
         .await;
     assert_eq!(archived["ok"], true, "{archived}");
     let next = client.until(&id, |_| true).await;
-    assert_eq!(next[0]["payload"]["list"], first["payload"]["list"], "the same rows");
+    assert_eq!(
+        next[0]["payload"]["list"], first["payload"]["list"],
+        "the same rows"
+    );
     client.close().await;
 }
 
@@ -1748,7 +1836,10 @@ async fn measure_commit_to_frame_latency_on_the_largest_realistic_fixture() {
     let commits = Arc::new(Mutex::new(Vec::<Instant>::new()));
     let mut watch = fixture
         .storage
-        .watch_committed(&crate::conversation::application::conversation_session(&fixture.id)).unwrap();
+        .watch_committed(&crate::conversation::application::conversation_session(
+            &fixture.id,
+        ))
+        .unwrap();
     let seen = commits.clone();
     let watching = tokio::spawn(async move {
         while matches!(
@@ -1850,10 +1941,12 @@ impl SubscriptionFixture {
     /// as the grant table, as `composition::local_auth` does.
     fn with_devices(mut self, devices: Arc<Devices>) -> Self {
         let metadata = self.metadata.clone();
-        self.state = self
-            .state
-            .clone()
-            .with_passive_read(devices, metadata.clone(), metadata);
+        self.state = self.state.clone().with_passive_read(
+            devices,
+            metadata.clone(),
+            metadata,
+            crate::conversation_test_support::access_policy(),
+        );
         self
     }
 
@@ -1876,7 +1969,10 @@ impl SubscriptionFixture {
     async fn listed(&self) -> Vec<Value> {
         let listed = self.call("conversation.list", json!({})).await;
         assert_eq!(listed["ok"], true, "{listed}");
-        listed["payload"]["conversations"].as_array().unwrap().clone()
+        listed["payload"]["conversations"]
+            .as_array()
+            .unwrap()
+            .clone()
     }
 
     /// `conversation.list`, `.observe` and `.subscribeList` all answer
@@ -1969,7 +2065,11 @@ async fn a_paired_device_on_the_socket_sees_only_what_it_was_granted() {
     assert_eq!(reply["error"]["code"], "conversation_not_found", "{reply}");
     client.close().await;
     fixture
-        .grant_to(crate::conversation::application::ShareGrantTransition::Grant(crate::conversation::domain::ShareAccess::read()))
+        .grant_to(
+            crate::conversation::application::ShareGrantTransition::Grant(
+                crate::conversation::domain::ShareAccess::read(),
+            ),
+        )
         .await;
     let read = fixture
         .call(
@@ -1994,9 +2094,12 @@ async fn a_paired_device_on_the_socket_sees_only_what_it_was_granted() {
 async fn a_binding_owned_by_another_principal_reads_only_what_it_was_granted() {
     let fixture = SubscriptionFixture::new().await;
     fixture.turn("first").await;
-    let fixture = fixture.with_devices(Devices::new(&[("credential", "receiver", "grantor", true)]));
+    let fixture =
+        fixture.with_devices(Devices::new(&[("credential", "receiver", "grantor", true)]));
     let conversation = json!({"conversationId": fixture.id.to_string()});
-    let read = fixture.call("conversation.read", conversation.clone()).await;
+    let read = fixture
+        .call("conversation.read", conversation.clone())
+        .await;
     assert_eq!(read["error"]["code"], "conversation_not_found", "{read}");
     let mut client = fixture.connect();
     client.send("view", "conversation.subscribe", conversation.clone());
@@ -2004,7 +2107,11 @@ async fn a_binding_owned_by_another_principal_reads_only_what_it_was_granted() {
     assert_eq!(reply["error"]["code"], "conversation_not_found", "{reply}");
     client.close().await;
     fixture
-        .grant_to(crate::conversation::application::ShareGrantTransition::Grant(crate::conversation::domain::ShareAccess::read()))
+        .grant_to(
+            crate::conversation::application::ShareGrantTransition::Grant(
+                crate::conversation::domain::ShareAccess::read(),
+            ),
+        )
         .await;
     let read = fixture.call("conversation.read", conversation).await;
     assert_eq!(read["ok"], true, "{read}");
@@ -2027,7 +2134,12 @@ async fn a_paired_reader_reads_back_a_held_file_only_where_it_was_granted() {
         &fixture.authority,
         &["conversation.read", "conversation.write", "server.read"],
     );
-    held.held.hold("organization", &fixture.id.to_string(), b"a held file", "text/plain");
+    held.held.hold(
+        "organization",
+        &fixture.id.to_string(),
+        b"a held file",
+        "text/plain",
+    );
     held.ownership
         .give(&fixture.id.to_string(), "organization", "principal");
     let read = json!({
@@ -2050,7 +2162,11 @@ async fn a_paired_reader_reads_back_a_held_file_only_where_it_was_granted() {
     let reply = fixture.call("artifact.read", read.clone()).await;
     assert_eq!(reply["error"]["code"], "conversation_not_found", "{reply}");
     fixture
-        .grant_to(crate::conversation::application::ShareGrantTransition::Grant(crate::conversation::domain::ShareAccess::read()))
+        .grant_to(
+            crate::conversation::application::ShareGrantTransition::Grant(
+                crate::conversation::domain::ShareAccess::read(),
+            ),
+        )
         .await;
     let reply = fixture.call("artifact.read", read.clone()).await;
     assert_eq!(reply["ok"], true, "{reply}");
@@ -2065,7 +2181,8 @@ async fn a_paired_reader_reads_back_a_held_file_only_where_it_was_granted() {
     // The fixture's session is the conversation owner's principal, so a
     // binding owned by another principal is the peer's shape only for the
     // grant; the ownership check is what refuses a peer's own principal.
-    held.ownership.give(&peer.id.to_string(), "organization", "grantor");
+    held.ownership
+        .give(&peer.id.to_string(), "organization", "grantor");
     let reply = peer.call("artifact.read", read).await;
     assert_eq!(reply["error"]["code"], "conversation_not_found", "{reply}");
 }
@@ -2077,7 +2194,11 @@ async fn a_revoke_ends_a_device_subscription_before_its_next_batch() {
         .await
         .with_devices(this_device(true));
     fixture
-        .grant_to(crate::conversation::application::ShareGrantTransition::Grant(crate::conversation::domain::ShareAccess::read()))
+        .grant_to(
+            crate::conversation::application::ShareGrantTransition::Grant(
+                crate::conversation::domain::ShareAccess::read(),
+            ),
+        )
         .await;
     let mut client = fixture.connect();
     let id = client.subscribe("subscribe", &fixture.id).await;
@@ -2087,7 +2208,9 @@ async fn a_revoke_ends_a_device_subscription_before_its_next_batch() {
         .await;
     fixture.owner_turn("after-revoke").await;
     let frames = client
-        .until(&id, |frame| frame["event"] == "conversation.subscriptionEnded")
+        .until(&id, |frame| {
+            frame["event"] == "conversation.subscriptionEnded"
+        })
         .await;
     assert_eq!(frames.len(), 1, "no frame read after the revoke");
     assert_eq!(frames[0]["payload"]["reason"], "refused");
@@ -2128,10 +2251,12 @@ async fn an_owner_subscription_outlasts_one_failed_receiver_lookup() {
     let receivers = Arc::new(FlakyReceivers(std::sync::Mutex::new(0)));
     let mut fixture = SubscriptionFixture::new().await;
     let metadata = fixture.metadata.clone();
-    fixture.state = fixture
-        .state
-        .clone()
-        .with_passive_read(receivers.clone(), metadata.clone(), metadata);
+    fixture.state = fixture.state.clone().with_passive_read(
+        receivers.clone(),
+        metadata.clone(),
+        metadata,
+        crate::conversation_test_support::access_policy(),
+    );
     let mut client = fixture.connect();
     let id = client.subscribe("subscribe", &fixture.id).await;
     client.next().await;
@@ -2156,7 +2281,11 @@ async fn an_unpaired_device_reads_nothing_whatever_it_was_granted() {
         .await
         .with_devices(this_device(false));
     fixture
-        .grant_to(crate::conversation::application::ShareGrantTransition::Grant(crate::conversation::domain::ShareAccess::read()))
+        .grant_to(
+            crate::conversation::application::ShareGrantTransition::Grant(
+                crate::conversation::domain::ShareAccess::read(),
+            ),
+        )
         .await;
     for (method, params) in [
         (
@@ -2166,18 +2295,23 @@ async fn an_unpaired_device_reads_nothing_whatever_it_was_granted() {
         ("conversation.list", json!({})),
     ] {
         let answer = fixture.call(method, params).await;
-        assert_eq!(answer["error"]["code"], "unauthorized", "{method}: {answer}");
+        assert_eq!(
+            answer["error"]["code"], "unauthorized",
+            "{method}: {answer}"
+        );
     }
 }
 
 /// Row G8: share refuses what the owner cannot grant, and writes nothing.
 #[tokio::test]
 async fn share_refuses_what_the_owner_cannot_grant() {
-    let fixture = SubscriptionFixture::new().await.with_devices(Devices::new(&[
-        ("phone", "phone", "principal", true),
-        ("stranger", "stranger", "someone-else", true),
-        ("gone", "gone", "principal", false),
-    ]));
+    let fixture = SubscriptionFixture::new()
+        .await
+        .with_devices(Devices::new(&[
+            ("phone", "phone", "principal", true),
+            ("stranger", "stranger", "someone-else", true),
+            ("gone", "gone", "principal", false),
+        ]));
     *fixture.authority.snapshot.lock().unwrap() =
         snapshot(MembershipRole::Admin, MembershipStatus::Active);
     // The fake answers every share target with this snapshot, and a target
@@ -2191,9 +2325,7 @@ async fn share_refuses_what_the_owner_cannot_grant() {
             "credential.manage",
         ],
     );
-    let share = |id: String, credential: &str| {
-        json!({"conversationId": id, "requestId": format!("share-{credential}"), "credentialId": credential, "role": "read"})
-    };
+    let share = |id: String, credential: &str| json!({"conversationId": id, "requestId": format!("share-{credential}"), "credentialId": credential, "role": "read"});
     for credential in ["stranger", "gone", "nobody"] {
         let answer = fixture
             .call(
@@ -2210,7 +2342,10 @@ async fn share_refuses_what_the_owner_cannot_grant() {
     let answer = fixture
         .call("conversation.share", share(missing, "phone"))
         .await;
-    assert_eq!(answer["error"]["code"], "conversation_not_found", "{answer}");
+    assert_eq!(
+        answer["error"]["code"], "conversation_not_found",
+        "{answer}"
+    );
     let shares = fixture
         .call(
             "conversation.shares",
@@ -2287,7 +2422,10 @@ async fn a_comment_or_drive_grant_reads_on_the_socket_as_read_does() {
                 json!({"conversationId": fixture.id.to_string()}),
             )
             .await;
-        assert_eq!(read["error"]["code"], "conversation_not_found", "{access:?}: {read}");
+        assert_eq!(
+            read["error"]["code"], "conversation_not_found",
+            "{access:?}: {read}"
+        );
     }
 }
 
@@ -2353,9 +2491,14 @@ fn drive_params(method: &str, id: &ConversationId, execution: &str) -> Value {
 /// its own refusal, and admission refused nothing.
 fn admitted(answer: &Value) -> bool {
     let code = &answer["error"]["code"];
-    !["forbidden", "conversation_not_found", "unauthorized", "unknown_method"]
-        .iter()
-        .any(|refused| code == refused)
+    ![
+        "forbidden",
+        "conversation_not_found",
+        "unauthorized",
+        "unknown_method",
+    ]
+    .iter()
+    .any(|refused| code == refused)
 }
 
 /// Row J11: a device holding pairing's `conversation.read` and a Drive grant
@@ -2436,7 +2579,11 @@ async fn a_paired_session_writes_only_what_a_drive_grant_admits() {
                 && !own_checks.contains(method)
         })
         .collect();
-    for method in ["conversation.create", "conversation.delete", "conversation.setApprovalMode"] {
+    for method in [
+        "conversation.create",
+        "conversation.delete",
+        "conversation.setApprovalMode",
+    ] {
         assert!(others.contains(&method), "{method} is refused to a driver");
     }
     for method in others {
@@ -2448,17 +2595,23 @@ async fn a_paired_session_writes_only_what_a_drive_grant_admits() {
     use crate::conversation::domain::{ShareAccess, ShareRole};
     for role in [ShareRole::Read, ShareRole::Comment] {
         let access = ShareAccess::new(role, None).unwrap();
-        fixture.grant_to(ShareGrantTransition::Grant(access.clone())).await;
+        fixture
+            .grant_to(ShareGrantTransition::Grant(access.clone()))
+            .await;
         for method in DRIVE_COMMANDS {
             let answer = fixture
                 .call(method, drive_params(method, &fixture.id, "below"))
                 .await;
-            assert_eq!(answer["error"]["code"], "forbidden", "{access:?} {method}: {answer}");
+            assert_eq!(
+                answer["error"]["code"], "forbidden",
+                "{access:?} {method}: {answer}"
+            );
         }
     }
     // A party signed in as a principal other than its grantor, as a peer
     // gateway is, drives nothing here even holding Drive.
-    let fixture = fixture.with_devices(Devices::new(&[("credential", "receiver", "grantor", true)]));
+    let fixture =
+        fixture.with_devices(Devices::new(&[("credential", "receiver", "grantor", true)]));
     fixture
         .grant_to(ShareGrantTransition::Grant(drive_access()))
         .await;
@@ -2466,7 +2619,10 @@ async fn a_paired_session_writes_only_what_a_drive_grant_admits() {
         let answer = fixture
             .call(method, drive_params(method, &fixture.id, "peer"))
             .await;
-        assert_eq!(answer["error"]["code"], "forbidden", "peer {method}: {answer}");
+        assert_eq!(
+            answer["error"]["code"], "forbidden",
+            "peer {method}: {answer}"
+        );
     }
 }
 
@@ -2501,7 +2657,10 @@ async fn a_drive_grant_lowered_revoked_or_unpaired_drives_no_more() {
     assert_eq!(answer["error"]["code"], "forbidden", "{answer}");
     fixture.grant_to(ShareGrantTransition::Revoke).await;
     let answer = fixture.call("conversation.send", send("revoked")).await;
-    assert_eq!(answer["error"]["code"], "conversation_not_found", "{answer}");
+    assert_eq!(
+        answer["error"]["code"], "conversation_not_found",
+        "{answer}"
+    );
     fixture
         .grant_to(ShareGrantTransition::Grant(drive_access()))
         .await;
@@ -2525,13 +2684,19 @@ async fn a_driver_sends_text_and_names_nothing_of_the_owners() {
     grants(&fixture.authority, &["conversation.read", "server.read"]);
     for method in ["conversation.send", "conversation.steer"] {
         for (field, value) in [
-            ("attachments", json!([{"digest": "a".repeat(64), "mimeType": "image/png", "size": 1}])),
+            (
+                "attachments",
+                json!([{"digest": "a".repeat(64), "mimeType": "image/png", "size": 1}]),
+            ),
             ("files", json!([{"path": "/home/owner/.ssh/id_ed25519"}])),
         ] {
             let mut params = drive_params(method, &fixture.id, "named");
             params[field] = value;
             let answer = fixture.call(method, params).await;
-            assert_eq!(answer["error"]["code"], "forbidden", "{method} {field}: {answer}");
+            assert_eq!(
+                answer["error"]["code"], "forbidden",
+                "{method} {field}: {answer}"
+            );
         }
     }
     let mut params = drive_params("conversation.receipt", &fixture.id, "named");
@@ -2597,9 +2762,7 @@ async fn a_turn_is_saved_with_who_started_it() {
         &["conversation.write", "conversation.read", "server.read"],
     );
     fixture.owner_turn("owner").await;
-    let driver = |revision| {
-        Initiation::grant(GrantInitiator::new("receiver", revision).unwrap())
-    };
+    let driver = |revision| Initiation::grant(GrantInitiator::new("receiver", revision).unwrap());
     for (execution, expected) in [
         ("first", Initiation::owner()),
         ("driven", driver(granted)),
@@ -2730,14 +2893,21 @@ async fn a_comment_or_drive_grant_leaves_notes_on_the_conversation_it_names() {
         .await;
     grants(&fixture.authority, &["server.read"]);
     let answer = fixture
-        .call("conversation.message", note_params(&fixture.id, "no-pairing", "x"))
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "no-pairing", "x"),
+        )
         .await;
     assert_eq!(answer["error"]["code"], "forbidden", "{answer}");
     grants(&fixture.authority, &["conversation.read", "server.read"]);
-    let revision = || async { fixture.metadata.grants(&fixture.id).await.unwrap()[0].policy_revision };
+    let revision =
+        || async { fixture.metadata.grants(&fixture.id).await.unwrap()[0].policy_revision };
     let commented = revision().await;
     let answer = fixture
-        .call("conversation.message", note_params(&fixture.id, "comment", "from the phone"))
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "comment", "from the phone"),
+        )
         .await;
     assert_eq!(answer["ok"], true, "{answer}");
     let status = fixture
@@ -2751,24 +2921,36 @@ async fn a_comment_or_drive_grant_leaves_notes_on_the_conversation_it_names() {
         let answer = fixture
             .call(method, comment_params(method, &other, "elsewhere"))
             .await;
-        assert_eq!(answer["error"]["code"], "conversation_not_found", "{method}: {answer}");
+        assert_eq!(
+            answer["error"]["code"], "conversation_not_found",
+            "{method}: {answer}"
+        );
     }
     for method in DRIVE_COMMANDS {
         let answer = fixture
             .call(method, drive_params(method, &fixture.id, "commenter"))
             .await;
-        assert_eq!(answer["error"]["code"], "forbidden", "comment {method}: {answer}");
+        assert_eq!(
+            answer["error"]["code"], "forbidden",
+            "comment {method}: {answer}"
+        );
     }
     fixture
         .grant_to(ShareGrantTransition::Grant(drive_access()))
         .await;
     let driven = revision().await;
     let answer = fixture
-        .call("conversation.message", note_params(&fixture.id, "drive", "from a driver"))
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "drive", "from a driver"),
+        )
         .await;
     assert_eq!(answer["ok"], true, "{answer}");
     let status = fixture
-        .call("conversation.messageStatus", comment_params("status", &fixture.id, "drive"))
+        .call(
+            "conversation.messageStatus",
+            comment_params("status", &fixture.id, "drive"),
+        )
         .await;
     assert_eq!(status["payload"]["found"], true, "{status}");
     fixture
@@ -2780,13 +2962,22 @@ async fn a_comment_or_drive_grant_leaves_notes_on_the_conversation_it_names() {
         let answer = fixture
             .call(method, comment_params(method, &fixture.id, "read"))
             .await;
-        assert_eq!(answer["error"]["code"], "forbidden", "read {method}: {answer}");
+        assert_eq!(
+            answer["error"]["code"], "forbidden",
+            "read {method}: {answer}"
+        );
     }
     fixture.grant_to(ShareGrantTransition::Revoke).await;
     let answer = fixture
-        .call("conversation.message", note_params(&fixture.id, "revoked", "x"))
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "revoked", "x"),
+        )
         .await;
-    assert_eq!(answer["error"]["code"], "conversation_not_found", "{answer}");
+    assert_eq!(
+        answer["error"]["code"], "conversation_not_found",
+        "{answer}"
+    );
     let grant = |revision| Initiator::Grant(GrantInitiator::new("receiver", revision).unwrap());
     let saved: Vec<_> = fixture
         .notes()
@@ -2803,10 +2994,14 @@ async fn a_comment_or_drive_grant_leaves_notes_on_the_conversation_it_names() {
     );
     // A party signed in as a principal other than its grantor, as a peer
     // gateway is, leaves no note here even holding Comment.
-    let fixture = fixture.with_devices(Devices::new(&[("credential", "receiver", "grantor", true)]));
+    let fixture =
+        fixture.with_devices(Devices::new(&[("credential", "receiver", "grantor", true)]));
     fixture.grant_to(ShareGrantTransition::Grant(comment)).await;
     let answer = fixture
-        .call("conversation.message", note_params(&fixture.id, "peer", "x"))
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "peer", "x"),
+        )
         .await;
     assert_eq!(answer["error"]["code"], "forbidden", "{answer}");
 }
@@ -2821,17 +3016,29 @@ async fn a_retried_note_answers_its_first_receipt_and_another_conflicts() {
     let fixture = SubscriptionFixture::new().await;
     fixture.turn("first").await;
     let first = fixture
-        .call("conversation.message", note_params(&fixture.id, "note", "hello"))
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "note", "hello"),
+        )
         .await;
     assert_eq!(first["ok"], true, "{first}");
     let again = fixture
-        .call("conversation.message", note_params(&fixture.id, "note", "hello"))
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "note", "hello"),
+        )
         .await;
     assert_eq!(again["payload"], first["payload"]);
     let changed = fixture
-        .call("conversation.message", note_params(&fixture.id, "note", "changed"))
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "note", "changed"),
+        )
         .await;
-    assert_eq!(changed["error"]["code"], "idempotency_conflict", "{changed}");
+    assert_eq!(
+        changed["error"]["code"], "idempotency_conflict",
+        "{changed}"
+    );
     // The same request from a device: another surface and authority.
     let fixture = fixture.with_devices(this_device(true));
     fixture
@@ -2841,14 +3048,20 @@ async fn a_retried_note_answers_its_first_receipt_and_another_conflicts() {
         .await;
     grants(&fixture.authority, &["conversation.read", "server.read"]);
     let device = fixture
-        .call("conversation.message", note_params(&fixture.id, "note", "hello"))
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "note", "hello"),
+        )
         .await;
     assert_eq!(device["error"]["code"], "idempotency_conflict", "{device}");
     // The device's own note, retried after the owner raised its grant to
     // Drive, answers its first receipt and keeps the revision it was left
     // under.
     let left = fixture
-        .call("conversation.message", note_params(&fixture.id, "device-note", "hi"))
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "device-note", "hi"),
+        )
         .await;
     assert_eq!(left["ok"], true, "{left}");
     let commented = fixture.metadata.grants(&fixture.id).await.unwrap()[0].policy_revision;
@@ -2860,7 +3073,10 @@ async fn a_retried_note_answers_its_first_receipt_and_another_conflicts() {
         commented
     );
     let retried = fixture
-        .call("conversation.message", note_params(&fixture.id, "device-note", "hi"))
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "device-note", "hi"),
+        )
         .await;
     assert_eq!(retried["payload"], left["payload"], "{retried}");
     let notes = fixture.notes().await;
@@ -2896,9 +3112,15 @@ async fn an_author_past_its_note_rate_is_refused_and_another_is_not() {
         assert_eq!(answer["ok"], true, "{index}: {answer}");
     }
     let refused = fixture
-        .call("conversation.message", note_params(&fixture.id, "one-more", "x"))
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "one-more", "x"),
+        )
         .await;
-    assert_eq!(refused["error"]["code"], "message_quota_exceeded", "{refused}");
+    assert_eq!(
+        refused["error"]["code"], "message_quota_exceeded",
+        "{refused}"
+    );
     let status = fixture
         .call(
             "conversation.messageStatus",
@@ -2918,7 +3140,10 @@ async fn an_author_past_its_note_rate_is_refused_and_another_is_not() {
         &["conversation.read", "conversation.write", "server.read"],
     );
     let device = fixture
-        .call("conversation.message", note_params(&fixture.id, "device", "x"))
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "device", "x"),
+        )
         .await;
     assert_eq!(device["ok"], true, "{device}");
     let owner = owner_call(
@@ -2941,9 +3166,8 @@ async fn an_author_past_its_note_rate_is_refused_and_another_is_not() {
 async fn message_status_finds_the_callers_own_note_by_its_request() {
     let fixture = SubscriptionFixture::new().await;
     fixture.turn("first").await;
-    let status = |request: &str| {
-        json!({"conversationId": fixture.id.to_string(), "requestId": request})
-    };
+    let status =
+        |request: &str| json!({"conversationId": fixture.id.to_string(), "requestId": request});
     let unknown = fixture
         .call("conversation.messageStatus", status("never"))
         .await;
@@ -2953,9 +3177,14 @@ async fn message_status_finds_the_callers_own_note_by_its_request() {
         "{unknown}"
     );
     let receipt = fixture
-        .call("conversation.message", note_params(&fixture.id, "note", "hello"))
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "note", "hello"),
+        )
         .await;
-    let found = fixture.call("conversation.messageStatus", status("note")).await;
+    let found = fixture
+        .call("conversation.messageStatus", status("note"))
+        .await;
     assert_eq!(found["payload"]["found"], true, "{found}");
     for key in ["requestId", "messageId", "acceptedAtMs", "deliveryState"] {
         assert_eq!(found["payload"][key], receipt["payload"][key], "{key}");
@@ -2976,9 +3205,15 @@ async fn a_note_outside_its_bounds_or_on_a_deleted_conversation_is_refused() {
     let over = "x".repeat(NoteText::MAX_BYTES + 1);
     for (request, text) in [("empty", ""), ("blank", " \n "), ("over", over.as_str())] {
         let answer = fixture
-            .call("conversation.message", note_params(&fixture.id, request, text))
+            .call(
+                "conversation.message",
+                note_params(&fixture.id, request, text),
+            )
             .await;
-        assert_eq!(answer["error"]["code"], "invalid_request", "{request}: {answer}");
+        assert_eq!(
+            answer["error"]["code"], "invalid_request",
+            "{request}: {answer}"
+        );
     }
     let mut next_turn = note_params(&fixture.id, "next", "x");
     next_turn["delivery"] = json!("next_turn");
@@ -2986,7 +3221,10 @@ async fn a_note_outside_its_bounds_or_on_a_deleted_conversation_is_refused() {
     assert_eq!(answer["error"]["code"], "invalid_request", "{answer}");
     assert!(fixture.notes().await.is_empty());
     let answer = fixture
-        .call("conversation.message", note_params(&fixture.id, "longest", &longest))
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "longest", &longest),
+        )
         .await;
     assert_eq!(answer["ok"], true, "{answer}");
     let deleted = fixture
@@ -2997,9 +3235,15 @@ async fn a_note_outside_its_bounds_or_on_a_deleted_conversation_is_refused() {
         .await;
     assert_eq!(deleted["ok"], true, "{deleted}");
     let message = fixture
-        .call("conversation.message", note_params(&fixture.id, "after", "x"))
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "after", "x"),
+        )
         .await;
-    assert_eq!(message["error"]["code"], "conversation_deleted", "{message}");
+    assert_eq!(
+        message["error"]["code"], "conversation_deleted",
+        "{message}"
+    );
     let status = fixture
         .call(
             "conversation.messageStatus",
@@ -3012,10 +3256,12 @@ async fn a_note_outside_its_bounds_or_on_a_deleted_conversation_is_refused() {
 /// The owner's share fixture: a paired device `phone` and `tablet`, and the
 /// owner's session able to share with them.
 async fn sharing_fixture() -> SubscriptionFixture {
-    let fixture = SubscriptionFixture::new().await.with_devices(Devices::new(&[
-        ("phone", "phone", "principal", true),
-        ("tablet", "tablet", "principal", true),
-    ]));
+    let fixture = SubscriptionFixture::new()
+        .await
+        .with_devices(Devices::new(&[
+            ("phone", "phone", "principal", true),
+            ("tablet", "tablet", "principal", true),
+        ]));
     *fixture.authority.snapshot.lock().unwrap() =
         snapshot(MembershipRole::Admin, MembershipStatus::Active);
     grants(
@@ -3039,7 +3285,9 @@ async fn a_share_whose_role_and_policy_do_not_fit_is_refused_and_writes_nothing(
     let fixture = sharing_fixture().await;
     let longest = "x".repeat(ToolRules::MAX_RULE_BYTES);
     let too_long = format!("{longest}x");
-    let too_many: Vec<String> = (0..=ToolRules::MAX_RULES).map(|n| format!("t{n}")).collect();
+    let too_many: Vec<String> = (0..=ToolRules::MAX_RULES)
+        .map(|n| format!("t{n}"))
+        .collect();
     let refused = [
         json!({"role": "drive"}),
         json!({"role": "read", "policy": {"preset": "no_shell"}}),
@@ -3064,7 +3312,10 @@ async fn a_share_whose_role_and_policy_do_not_fit_is_refused_and_writes_nothing(
             params[key] = value.clone();
         }
         let answer = fixture.call("conversation.share", params).await;
-        assert_eq!(answer["error"]["code"], "invalid_request", "{terms}: {answer}");
+        assert_eq!(
+            answer["error"]["code"], "invalid_request",
+            "{terms}: {answer}"
+        );
     }
     let shares = fixture
         .call(
@@ -3122,7 +3373,11 @@ async fn shares_reports_each_grants_role_policy_and_policy_revision() {
     let rules = json!({"allow": ["Read", "Grep"], "deny": ["Bash(rm -rf:*)"]});
     for params in [
         share("phone", "phone", json!({"role": "read"})),
-        share("tablet", "tablet", json!({"role": "drive", "policy": rules})),
+        share(
+            "tablet",
+            "tablet",
+            json!({"role": "drive", "policy": rules}),
+        ),
     ] {
         let answer = fixture.call("conversation.share", params).await;
         assert_eq!(answer["payload"]["applied"], true, "{answer}");
@@ -3155,7 +3410,11 @@ async fn shares_reports_each_grants_role_policy_and_policy_revision() {
     let again = fixture
         .call(
             "conversation.share",
-            share("tablet-again", "tablet", json!({"role": "drive", "policy": rules})),
+            share(
+                "tablet-again",
+                "tablet",
+                json!({"role": "drive", "policy": rules}),
+            ),
         )
         .await;
     assert_eq!(again["payload"]["applied"], false, "{again}");
@@ -3164,14 +3423,21 @@ async fn shares_reports_each_grants_role_policy_and_policy_revision() {
     let changed = fixture
         .call(
             "conversation.share",
-            share("tablet-preset", "tablet", json!({"role": "drive", "policy": preset})),
+            share(
+                "tablet-preset",
+                "tablet",
+                json!({"role": "drive", "policy": preset}),
+            ),
         )
         .await;
     assert_eq!(changed["payload"]["applied"], true, "{changed}");
     let (phone_after, tablet) = listed().await;
     assert_eq!(tablet["policy"], preset);
     assert!(tablet["policyRevision"].as_u64().unwrap() > first);
-    assert_eq!(phone_after, phone, "another grant's change moves nothing here");
+    assert_eq!(
+        phone_after, phone,
+        "another grant's change moves nothing here"
+    );
 }
 
 /// A retained retirement owner refuses both the wire read and its live follow.
@@ -3312,12 +3578,13 @@ impl CatalogFixture {
         let connected = Arc::new(Mutex::new(Vec::new()));
         let changes = tokio::sync::watch::Sender::new(0);
         let names = connected.clone();
-        inner.state = inner
-            .state
-            .with_connected_environments(crate::product::ConnectedEnvironments {
-                names: Arc::new(move || names.lock().unwrap().clone()),
-                changes: changes.subscribe(),
-            });
+        inner.state =
+            inner
+                .state
+                .with_connected_environments(crate::product::ConnectedEnvironments {
+                    names: Arc::new(move || names.lock().unwrap().clone()),
+                    changes: changes.subscribe(),
+                });
         Self {
             inner,
             connected,
@@ -3427,13 +3694,12 @@ async fn a_gateway_pairing_no_environments_sends_its_catalog_once() {
         .as_str()
         .unwrap()
         .to_owned();
-    assert_eq!(places(&client.until(&id, |_| true).await[0]), ["build.example"]);
-    client.quiet(&id).await;
-    client.send(
-        "stop",
-        "agents.unsubscribe",
-        json!({"subscriptionId": id}),
+    assert_eq!(
+        places(&client.until(&id, |_| true).await[0]),
+        ["build.example"]
     );
+    client.quiet(&id).await;
+    client.send("stop", "agents.unsubscribe", json!({"subscriptionId": id}));
     assert_eq!(client.reply("stop").await.0["ok"], true);
     client.close().await;
 }
@@ -3495,9 +3761,13 @@ async fn paired_environments_coming_and_going_never_move_the_conversation_catalo
     let (agents, _) = fixture.subscribe(&mut client, "agents").await;
     let e = peer("ab");
     fixture.connects(&e);
-    client.until(&agents, |frame| places(frame).contains(&e)).await;
+    client
+        .until(&agents, |frame| places(frame).contains(&e))
+        .await;
     fixture.goes(&e);
-    client.until(&agents, |frame| !places(frame).contains(&e)).await;
+    client
+        .until(&agents, |frame| !places(frame).contains(&e))
+        .await;
     client.quiet(&list).await;
     assert_eq!(head().await, before);
     client.close().await;
@@ -3593,7 +3863,11 @@ async fn each_unsubscribe_stops_only_its_own_kind() {
         json!({"subscriptionId": agents}),
     );
     let (reply, _) = client.reply("stop").await;
-    assert_eq!(reply["payload"]["subscriptionId"], agents.as_str(), "{reply}");
+    assert_eq!(
+        reply["payload"]["subscriptionId"],
+        agents.as_str(),
+        "{reply}"
+    );
     fixture.connects(&peer("ab"));
     client.quiet(&agents).await;
     client.close().await;

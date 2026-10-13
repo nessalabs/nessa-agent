@@ -84,6 +84,7 @@ fn listing(limits: ConversationLimits) -> Listing {
     let summaries = Arc::new(MemorySummaries::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: Arc::new(CountingStorage::default()),
             metadata: repository.clone(),
@@ -133,11 +134,16 @@ fn stored(limits: ConversationLimits) -> Stored {
     let private = directory.path().join("conversations");
     nessa_local_storage::create_directory(&private).unwrap();
     let path = private.join("metadata.sqlite3");
-    let store = Arc::new(LocalConversationStore::open(&path).unwrap());
+    let store = Arc::new(
+        LocalConversationStore::open(&path)
+            .unwrap()
+            .with_access_policy(crate::conversation_test_support::access_policy()),
+    );
     let provider = Arc::new(ProviderFactory::default());
     let storage = Arc::new(CountingStorage::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
             metadata: store.clone(),
@@ -1230,6 +1236,7 @@ async fn a_list_asks_for_one_row_past_its_bound_and_no_more() {
     let asked = Arc::new(AskedLimit::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(
                 Arc::new(ProviderFactory::default()),
             ))),
@@ -1348,6 +1355,7 @@ async fn a_list_shows_only_what_the_domain_lets_the_caller_see() {
     .collect();
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(
                 Arc::new(ProviderFactory::default()),
             ))),

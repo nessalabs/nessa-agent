@@ -13,7 +13,7 @@ mod command_policy;
 mod entities;
 mod receiver;
 mod value_objects;
-pub use command_policy::CommandPolicy;
+pub use command_policy::{program_name, CommandPolicy};
 pub use entities::{Conversation, ConversationRefusal};
 pub use receiver::{
     PairedReceiver, ReceiverBinding, ReceiverInitiator, ReceiverIntent, ReceiverTransition,

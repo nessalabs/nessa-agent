@@ -15,8 +15,8 @@ use super::{
     cells, failed, next_revision, read, stored_time, time, unreadable, LocalConversationStore,
 };
 use crate::conversation::application::{
-    ConversationError, ConversationFuture, HeldGrant, ShareGrant, ShareGrantChange,
-    ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
+    AccessAction, ConversationError, ConversationFuture, HeldGrant, OwnerAccess, ShareGrant,
+    ShareGrantChange, ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
     MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy, ToolPreset, ToolRules};
@@ -185,6 +185,7 @@ impl ShareGrants for LocalConversationStore {
 
     fn change(&self, change: ShareGrantChange) -> ConversationFuture<'_, bool> {
         let changes = self.changes.clone();
+        let access = self.access.clone();
         self.run(move |connection| {
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -193,22 +194,27 @@ impl ShareGrants for LocalConversationStore {
             let conversation =
                 read(&transaction, &change.conversation_id)?.ok_or(ConversationError::NotFound)?;
             // Asked inside the transaction that writes the grant, so a delete
-            // cannot land between the check and the write: a grant needs a
-            // conversation that is the initiator's and not deleted, a revoke
-            // only that it is the initiator's (row G8).
+            // cannot land between the question and the write (row G8). A
+            // grant acts on the conversation: the policy wants it the
+            // initiator's and not deleted. The party it grants to was
+            // admitted before this transaction, by the caller. A revoke is
+            // `conversation.unshare`, which a deleted conversation's owner
+            // may still do.
             let (organization, principal) = (
                 &change.initiator.organization_id,
                 &change.initiator.principal_id,
             );
-            match change.transition {
-                ShareGrantTransition::Grant(_) => {
-                    conversation.check_access(organization, principal)?
-                }
-                ShareGrantTransition::Revoke if !conversation.allows(organization, principal) => {
-                    return Err(ConversationError::NotFound);
-                }
-                ShareGrantTransition::Revoke => {}
-            }
+            let action = match change.transition {
+                ShareGrantTransition::Grant(_) => AccessAction::Act,
+                ShareGrantTransition::Revoke => AccessAction::Unshare,
+            };
+            let Some(access) = access.as_deref() else {
+                tracing::error!(
+                    "the conversation store holds no access policy; the share change is refused"
+                );
+                return Err(ConversationError::Metadata);
+            };
+            OwnerAccess::new(access).admit_to(action, &conversation, organization, principal)?;
             let after = wanted(&change.transition);
             // A retried request answers what it answered the first time, so
             // a share whose reply was lost cannot, retried after a later

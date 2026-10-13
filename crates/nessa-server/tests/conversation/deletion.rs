@@ -145,6 +145,7 @@ fn service_over(
     }
     ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage,
             metadata: repository.clone(),
@@ -753,6 +754,7 @@ fn service_with(
 ) -> ConversationService {
     ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(fixture.provider.clone()))),
             storage,
             metadata,
@@ -1343,6 +1345,7 @@ async fn a_history_that_cannot_be_opened_at_all_is_left_not_carried_on() {
     fixture.service.shutdown().await.unwrap();
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(fixture.provider.clone()))),
             storage: Arc::new(Unopenable),
             metadata: fixture.repository.clone(),
@@ -2001,6 +2004,7 @@ async fn a_create_racing_a_delete_cannot_republish_it() {
     let summaries = Arc::new(MemorySummaries::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
             metadata: repository.clone(),
@@ -2136,10 +2140,15 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
     .unwrap();
     nessa_local_storage::create_directory(&root.join("conversations")).unwrap();
     let database = root.join("conversations").join("metadata.sqlite3");
-    let metadata = Arc::new(LocalConversationStore::open(&database).unwrap());
+    let metadata = Arc::new(
+        LocalConversationStore::open(&database)
+            .unwrap()
+            .with_access_policy(crate::conversation_test_support::access_policy()),
+    );
     let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents,
             storage: storage.clone(),
             metadata: metadata.clone(),
@@ -2835,6 +2844,7 @@ async fn a_history_that_names_another_session_is_refused_and_nothing_is_erased()
     provider_sessions.register(AgentId::Claude, store.clone());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage: Arc::new(Misfiled {
                 exclusion: InMemoryStorage::new(),
@@ -2977,12 +2987,15 @@ async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
     let root = root.path();
     nessa_local_storage::create_directory(&root.join("conversations")).unwrap();
     let repository = Arc::new(
-        LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3")).unwrap(),
+        LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3"))
+            .unwrap()
+            .with_access_policy(crate::conversation_test_support::access_policy()),
     );
     let clock: Arc<dyn Clock> = Arc::new(TestClock);
     let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(
                 Arc::new(ProviderFactory::default()),
             ))),
@@ -3079,12 +3092,15 @@ async fn an_unmarked_chat_cannot_be_read_and_can_be_deleted() {
     let root = root.path();
     nessa_local_storage::create_directory(&root.join("conversations")).unwrap();
     let metadata = Arc::new(
-        LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3")).unwrap(),
+        LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3"))
+            .unwrap()
+            .with_access_policy(crate::conversation_test_support::access_policy()),
     );
     let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
     storage.initialize().await.unwrap();
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(
                 Arc::new(ProviderFactory::default()),
             ))),
@@ -3261,12 +3277,14 @@ async fn a_turn_saved_with_its_grants_role_closes_only_its_own_chat() {
     async fn open(root: &Path) -> (Arc<RecordStorage>, ConversationService) {
         let metadata = Arc::new(
             LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3"))
-                .unwrap(),
+                .unwrap()
+                .with_access_policy(crate::conversation_test_support::access_policy()),
         );
         let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
         storage.initialize().await.unwrap();
         let service = ConversationService::new(
             ConversationDependencies {
+                access_policy: crate::conversation_test_support::access_policy(),
                 agents: only(Arc::new(Provider::new(
                     Arc::new(ProviderFactory::default()),
                 ))),
@@ -3358,13 +3376,16 @@ async fn an_unreadable_chat_stays_until_its_deletion_is_recorded() {
     let root = root.path();
     nessa_local_storage::create_directory(&root.join("conversations")).unwrap();
     let metadata = Arc::new(
-        LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3")).unwrap(),
+        LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3"))
+            .unwrap()
+            .with_access_policy(crate::conversation_test_support::access_policy()),
     );
     let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
     storage.initialize().await.unwrap();
     let audit = Arc::new(RecordingDeletionAudit::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(
                 Arc::new(ProviderFactory::default()),
             ))),
@@ -3771,6 +3792,7 @@ async fn a_reopen_racing_a_delete_is_not_recorded_after_the_deletion() {
     let deletions = Arc::new(RecordingDeletionAudit::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(
                 Arc::new(ProviderFactory::default()),
             ))),
@@ -3921,6 +3943,7 @@ async fn a_delete_spends_the_stop_and_lease_budgets_it_is_given() {
     let fixture = deleting();
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(fixture.provider.clone()))),
             storage: fixture.storage.clone(),
             metadata: fixture.repository.clone(),
@@ -3998,6 +4021,7 @@ fn over_with(
     provider_sessions.register(AgentId::Claude, eraser);
     ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(fixture.provider.clone()))),
             storage: fixture.storage.clone(),
             metadata: fixture.repository.clone(),

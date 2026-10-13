@@ -1,0 +1,381 @@
+{
+  "NessaConversation": {
+    "commonTypes": {
+      "Grant": {
+        "type": "Record",
+        "attributes": {
+          "action": {
+            "type": "String",
+            "required": true
+          },
+          "organization": {
+            "type": "String",
+            "required": true
+          },
+          "resource": {
+            "type": "String",
+            "required": true
+          }
+        },
+        "additionalAttributes": false
+      },
+      "Gateway": {
+        "type": "Record",
+        "attributes": {
+          "organization": {
+            "type": "String",
+            "required": true
+          },
+          "resource": {
+            "type": "String",
+            "required": true
+          }
+        },
+        "additionalAttributes": false
+      },
+      "RequestShape": {
+        "type": "Record",
+        "attributes": {
+          "attachments": {
+            "type": "Boolean",
+            "required": true
+          },
+          "files": {
+            "type": "Boolean",
+            "required": true
+          },
+          "receiptOperation": {
+            "type": "String",
+            "required": false
+          }
+        },
+        "additionalAttributes": false
+      },
+      "ShareTarget": {
+        "type": "Record",
+        "attributes": {
+          "organization": {
+            "type": "String",
+            "required": true
+          },
+          "bindingOwner": {
+            "type": "String",
+            "required": true
+          },
+          "grants": {
+            "type": "Set",
+            "element": {
+              "type": "Grant"
+            },
+            "required": true
+          },
+          "gateway": {
+            "type": "Gateway",
+            "required": true
+          }
+        },
+        "additionalAttributes": false
+      },
+      "Ask": {
+        "type": "Record",
+        "attributes": {
+          "role": {
+            "type": "String",
+            "required": false
+          },
+          "request": {
+            "type": "RequestShape",
+            "required": true
+          },
+          "target": {
+            "type": "ShareTarget",
+            "required": false
+          }
+        },
+        "additionalAttributes": false
+      }
+    },
+    "entityTypes": {
+      "Person": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "organization": {
+              "type": "String",
+              "required": true
+            },
+            "id": {
+              "type": "String",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "Reader": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "organization": {
+              "type": "String",
+              "required": true
+            },
+            "signedInAs": {
+              "type": "String",
+              "required": true
+            },
+            "bindingOwner": {
+              "type": "String",
+              "required": true
+            },
+            "receiver": {
+              "type": "String",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "GrantHolder": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "receiver": {
+              "type": "String",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "Conversation": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "organization": {
+              "type": "String",
+              "required": true
+            },
+            "owner": {
+              "type": "String",
+              "required": true
+            },
+            "deleted": {
+              "type": "Boolean",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "Catalogue": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "organization": {
+              "type": "String",
+              "required": true
+            },
+            "owner": {
+              "type": "String",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      }
+    },
+    "actions": {
+      "conversation.locate": {
+        "appliesTo": {
+          "principalTypes": [
+            "Person",
+            "Reader"
+          ],
+          "resourceTypes": [
+            "Conversation"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "conversation.act": {
+        "appliesTo": {
+          "principalTypes": [
+            "Person",
+            "Reader"
+          ],
+          "resourceTypes": [
+            "Conversation"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "conversation.list": {
+        "appliesTo": {
+          "principalTypes": [
+            "Person",
+            "Reader"
+          ],
+          "resourceTypes": [
+            "Catalogue"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "conversation.read": {
+        "appliesTo": {
+          "principalTypes": [
+            "Person",
+            "Reader"
+          ],
+          "resourceTypes": [
+            "Conversation"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "catalogue.entry": {
+        "appliesTo": {
+          "principalTypes": [
+            "Reader"
+          ],
+          "resourceTypes": [
+            "Conversation"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "conversation.comment": {
+        "appliesTo": {
+          "principalTypes": [
+            "Reader"
+          ],
+          "resourceTypes": [
+            "Conversation"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "conversation.drive": {
+        "appliesTo": {
+          "principalTypes": [
+            "Reader"
+          ],
+          "resourceTypes": [
+            "Conversation"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "conversation.write": {
+        "appliesTo": {
+          "principalTypes": [
+            "Reader"
+          ],
+          "resourceTypes": [
+            "Conversation"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "conversation.share": {
+        "appliesTo": {
+          "principalTypes": [
+            "Person",
+            "Reader"
+          ],
+          "resourceTypes": [
+            "Conversation"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "conversation.unshare": {
+        "appliesTo": {
+          "principalTypes": [
+            "Person",
+            "Reader"
+          ],
+          "resourceTypes": [
+            "Conversation"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "conversation.shares": {
+        "appliesTo": {
+          "principalTypes": [
+            "Person",
+            "Reader"
+          ],
+          "resourceTypes": [
+            "Conversation"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "catalogue.watch": {
+        "appliesTo": {
+          "principalTypes": [
+            "Reader"
+          ],
+          "resourceTypes": [
+            "Catalogue"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "artifact.read": {
+        "appliesTo": {
+          "principalTypes": [
+            "Person",
+            "Reader"
+          ],
+          "resourceTypes": [
+            "Conversation"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "note.deliver": {
+        "appliesTo": {
+          "principalTypes": [
+            "GrantHolder"
+          ],
+          "resourceTypes": [
+            "Conversation"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      }
+    }
+  }
+}

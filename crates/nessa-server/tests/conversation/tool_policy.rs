@@ -1,5 +1,5 @@
 use super::*;
-use crate::conversation::domain::ToolRules;
+use crate::conversation::domain::{ToolPreset, ToolRules};
 
 fn evaluator() -> CedarToolPolicyEvaluator {
     CedarToolPolicyEvaluator::new().expect("the checked-in bundle validates")

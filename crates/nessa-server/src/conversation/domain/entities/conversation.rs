@@ -12,6 +12,9 @@ pub enum ConversationRefusal {
     NotFound,
     /// This caller's, and somebody deleted it. Its identity is not reused.
     Deleted,
+    /// The access policy could not decide; it has logged why. Refused, as
+    /// storage that cannot be read is.
+    Unavailable,
 }
 
 /// Durable ownership of one conversation, shared by the owner's authenticated surfaces.
@@ -207,13 +210,20 @@ impl Conversation {
     }
     /// Both organization and principal must agree; knowing an ID grants no access.
     ///
-    /// Ownership alone, deleted or not. Whether a caller may act on the
-    /// conversation is [`Self::check_access`].
+    /// Ownership alone, deleted or not, as a record-integrity check: a stored
+    /// record against the row columns it was selected by. Whether a caller may
+    /// locate or act on the conversation is the access policy's
+    /// (`ConversationAccessPolicyEvaluator`).
     pub fn allows(&self, organization: &OrganizationId, principal: &PrincipalId) -> bool {
         self.organization == *organization && self.owner == *principal
     }
     /// Whether this caller may act on the conversation: it must be theirs, and
     /// not deleted.
+    ///
+    /// Policy written in Rust, kept only for the callers ADR 803 step 3
+    /// has not moved yet (notes and the share commands); the access policy
+    /// (`ConversationAccessPolicyEvaluator`, `conversation.act`) is the
+    /// authority, and S5 removes this.
     ///
     /// Ownership is asked first, so only the owner learns that a conversation
     /// was deleted; to anybody else a deleted conversation, like one that is not

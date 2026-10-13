@@ -7,10 +7,14 @@ use crate::conversation::application::ToolPolicyUnavailable;
 
 use super::grant_rules::GRANT_RULES;
 
-const SCHEMA: &str = include_str!("schema.json");
+pub(super) const SCHEMA: &str = include_str!("schema.json");
 
 /// Every policy file in the bundle. A new policy set adds its file here.
-const POLICY_FILES: &[&str] = &[include_str!("tools.cedar")];
+pub(super) const POLICY_FILES: &[&str] = &[
+    include_str!("tools.cedar"),
+    include_str!("commands.cedar"),
+    include_str!("apps.cedar"),
+];
 
 /// The id prefixes of policies built at evaluation from stored data, one per
 /// policy set that builds them. No checked-in policy uses one, so a built

@@ -44,7 +44,9 @@ use nessa_server::{
         RecordReadSource, ShareConversation, ShareGrants,
     },
     conversation::domain::{Conversation, ShareRole},
-    conversation::infrastructure::{LocalConversationStore, NessaCatalogueReadSource},
+    conversation::infrastructure::{
+        CedarConversationAccessPolicy, LocalConversationStore, NessaCatalogueReadSource,
+    },
     device_pairing::infrastructure::ProtectedSessions,
     product::{DeviceCredentials, NativeSessions, ProductDependencies, ProductRouteState},
 };
@@ -56,6 +58,11 @@ use std::{
     sync::Arc,
 };
 use uuid::Uuid;
+
+/// The checked-in conversation access policy, as composition builds it.
+fn access_policy() -> Arc<CedarConversationAccessPolicy> {
+    Arc::new(CedarConversationAccessPolicy::new().unwrap())
+}
 
 struct NoAgents;
 impl AgentProbe for NoAgents {
@@ -127,7 +134,11 @@ fn sessions_with(
 /// The fixture's conversation store, which a native session reads.
 fn conversation_store(fixture: &Fixture) -> Arc<LocalConversationStore> {
     let root = private_root(fixture.directory.path(), "conversation-metadata");
-    Arc::new(LocalConversationStore::open(&root.join("metadata.sqlite3")).unwrap())
+    Arc::new(
+        LocalConversationStore::open(&root.join("metadata.sqlite3"))
+            .unwrap()
+            .with_access_policy(access_policy()),
+    )
 }
 /// A record source whose every read answers `history_pruned`: a read that
 /// reaches it was admitted, and one refused by admission never does.
@@ -165,6 +176,7 @@ fn sessions_on(
         fixture.receivers.clone(),
         metadata.clone(),
         metadata.clone(),
+        access_policy(),
     )
     .with_catalogue_source(Arc::new(NessaCatalogueReadSource::new(
         metadata,

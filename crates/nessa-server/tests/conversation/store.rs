@@ -48,7 +48,9 @@ fn opened() -> Opened {
     let private = directory.path().join("conversations");
     nessa_local_storage::create_directory(&private).unwrap();
     let path = private.join("metadata.sqlite3");
-    let store = LocalConversationStore::open(&path).unwrap();
+    let store = LocalConversationStore::open(&path)
+        .unwrap()
+        .with_access_policy(crate::conversation_test_support::access_policy());
     Opened {
         _directory: directory,
         path,
@@ -144,7 +146,9 @@ async fn mode_intent_and_commit_survive_restart_without_reapplying() {
         2
     );
     drop(opened.store);
-    let reopened = LocalConversationStore::open(&opened.path).unwrap();
+    let reopened = LocalConversationStore::open(&opened.path)
+        .unwrap()
+        .with_access_policy(crate::conversation_test_support::access_policy());
     assert_eq!(reopened.pending_mode_change(&id).await.unwrap(), None);
     assert_eq!(
         ConversationRepository::load(&reopened, &id)
@@ -370,7 +374,9 @@ async fn ownership_is_create_once_and_survives_reopening() {
         ConversationCreationDisposition::Existing
     );
     drop(store);
-    let store = LocalConversationStore::open(&path).unwrap();
+    let store = LocalConversationStore::open(&path)
+        .unwrap()
+        .with_access_policy(crate::conversation_test_support::access_policy());
     let loaded = ConversationRepository::load(&store, &id).await.unwrap();
     assert_eq!(loaded, Some(original));
     assert_eq!(loaded.unwrap().agent(), Some(AgentId::Claude));
@@ -494,7 +500,9 @@ async fn a_tombstone_outlives_reopening_and_its_identity_is_never_created_again(
     store.record_deletion(&id, settled.clone()).await.unwrap();
 
     drop(store);
-    let store = LocalConversationStore::open(&path).unwrap();
+    let store = LocalConversationStore::open(&path)
+        .unwrap()
+        .with_access_policy(crate::conversation_test_support::access_policy());
     let loaded = ConversationRepository::load(&store, &id)
         .await
         .unwrap()
@@ -710,7 +718,9 @@ async fn a_summary_is_replaced_whole_archived_and_erased() {
         .await
         .unwrap();
     drop(store);
-    let store = LocalConversationStore::open(&path).unwrap();
+    let store = LocalConversationStore::open(&path)
+        .unwrap()
+        .with_access_policy(crate::conversation_test_support::access_policy());
     assert_eq!(
         ConversationSummaries::load(&store, &id).await.unwrap(),
         Some(archived)
@@ -1107,7 +1117,9 @@ async fn oversized_text_costs_its_list_one_row_and_remains_refused_by_exact_read
             ),
             "{column}"
         );
-        let reopened = LocalConversationStore::open(&opened.path).unwrap();
+        let reopened = LocalConversationStore::open(&opened.path)
+            .unwrap()
+            .with_access_policy(crate::conversation_test_support::access_policy());
         assert_eq!(
             listed(&reopened, &alice(), false, 10).await,
             (vec![kept], 1),
@@ -1391,7 +1403,9 @@ async fn catalogue_revisions_follow_owner_visible_changes_and_survive_restart() 
         4
     );
     drop(opened.store);
-    let reopened = LocalConversationStore::open(&opened.path).unwrap();
+    let reopened = LocalConversationStore::open(&opened.path)
+        .unwrap()
+        .with_access_policy(crate::conversation_test_support::access_policy());
     assert_eq!(
         reopened
             .head(
@@ -1480,7 +1494,9 @@ async fn catalogue_pages_use_creation_keys_and_do_not_cut_off_newer_changes() {
         .await
         .unwrap()
         .revision;
-    let writer = LocalConversationStore::open(&opened.path).unwrap();
+    let writer = LocalConversationStore::open(&opened.path)
+        .unwrap()
+        .with_access_policy(crate::conversation_test_support::access_policy());
     let created_midpass = new_id();
     writer.create(owned(&created_midpass)).await.unwrap();
     let mut after = None;
@@ -3631,4 +3647,73 @@ async fn a_conversation_holds_a_bounded_number_of_drive_grants() {
     assert!(share_as(store, &id, "driver-0", rules(), "driver-0-rules")
         .await
         .unwrap());
+}
+
+/// A share change is admitted by the access policy inside its transaction:
+/// a store given none, or a policy that cannot decide, refuses every change
+/// as storage trouble and writes nothing; a policy that refuses ownership
+/// is told as a conversation not found, and a grant on a deleted one as
+/// deleted, while its owner may still revoke there.
+#[tokio::test]
+async fn a_share_change_is_admitted_by_the_access_policy_in_its_transaction() {
+    use crate::conversation::application::{
+        AccessAsk, AccessDecision, AccessDenial, ConversationAccessPolicyEvaluator,
+        ShareGrantTransition, ShareGrants,
+    };
+    struct Undecided;
+    impl ConversationAccessPolicyEvaluator for Undecided {
+        fn evaluate(&self, _: &AccessAsk<'_>) -> AccessDecision {
+            AccessDecision::Deny(AccessDenial::Unavailable)
+        }
+    }
+    let opened = opened();
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    let change = |transition| {
+        grant_change(
+            transition,
+            &id,
+            Some("phone"),
+            "phone-credential",
+            &uuid::Uuid::new_v4().to_string(),
+        )
+    };
+    for store in [
+        LocalConversationStore::open(&opened.path).unwrap(),
+        LocalConversationStore::open(&opened.path)
+            .unwrap()
+            .with_access_policy(Arc::new(Undecided)),
+    ] {
+        assert!(matches!(
+            store
+                .change(change(ShareGrantTransition::Grant(ShareAccess::read())))
+                .await,
+            Err(ConversationError::Metadata)
+        ));
+        assert!(matches!(
+            store.change(change(ShareGrantTransition::Revoke)).await,
+            Err(ConversationError::Metadata)
+        ));
+    }
+    assert!(!opened.store.is_granted(&id, "phone").await.unwrap());
+    let mut stranger = change(ShareGrantTransition::Grant(ShareAccess::read()));
+    stranger.initiator.principal_id = PrincipalId::new("mallory").unwrap();
+    assert!(matches!(
+        opened.store.change(stranger).await,
+        Err(ConversationError::NotFound)
+    ));
+    assert!(grant(&opened.store, &id, "phone").await);
+    opened
+        .store
+        .record_deletion(&id, deletion("delete-1"))
+        .await
+        .unwrap();
+    assert!(matches!(
+        opened
+            .store
+            .change(change(ShareGrantTransition::Grant(ShareAccess::read())))
+            .await,
+        Err(ConversationError::Deleted)
+    ));
+    assert!(revoke(&opened.store, &id, "phone").await);
 }

@@ -12,15 +12,15 @@ use super::{
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
     ArtifactBudget, ArtifactCollector, ArtifactOffer, AttachmentRelease, AttachmentReleaseCause,
-    ConversationAttachments, ConversationCreationAudit, ConversationDeletionAudit,
-    ConversationDeletionAuditRecord, ConversationDeletionCause, ConversationError,
-    ConversationFileLinkAudit, ConversationFileLinkAuditRecord, ConversationFileLinkCause,
-    ConversationFileLinkState, ConversationListing, ConversationModeApplication,
-    ConversationModeAudit, ConversationModeAuditPhase, ConversationModeRequest,
-    ConversationModeRequestState, ConversationOwnershipState, ConversationRepository,
-    ConversationSummaries, DeletionFailures, FetchRequests, ListedConversation, ObservationCursor,
-    ObservedConversations, PublishRequests, RuntimeReadiness, StopFailure, SubmittedMessage,
-    UnfinishedDeletions,
+    ConversationAccessPolicyEvaluator, ConversationAttachments, ConversationCreationAudit,
+    ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionCause,
+    ConversationError, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
+    ConversationFileLinkCause, ConversationFileLinkState, ConversationListing,
+    ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
+    ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
+    ConversationRepository, ConversationSummaries, DeletionFailures, FetchRequests,
+    ListedConversation, ObservationCursor, ObservedConversations, OwnerAccess, PublishRequests,
+    RuntimeReadiness, StopFailure, SubmittedMessage, UnfinishedDeletions,
 };
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink,
@@ -690,6 +690,8 @@ struct Inner {
     /// Where agents run; every opening is leased from it.
     environment: Environments,
     clock: Arc<dyn Clock>,
+    /// Decides every command's admission to a conversation.
+    access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
     conversations: Mutex<HashMap<ConversationId, Arc<Slot>>>,
     creation: Mutex<()>,
@@ -903,6 +905,9 @@ pub struct ConversationDependencies {
     /// SSH hosts the configuration names.
     pub(crate) environment: Environments,
     pub clock: Arc<dyn Clock>,
+    /// Decides who may locate, act on and read a conversation: every
+    /// command's admission asks it ([`OwnerAccess`]).
+    pub access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
 }
 /// What a host chose for one of the agent's questions.
 ///
@@ -1000,6 +1005,7 @@ impl ConversationService {
             deletion_budgets,
             environment,
             clock,
+            access_policy,
         } = dependencies;
         // The input bound is never larger than what the protocol carries of
         // a message, the person's or an app's (`MAX_MCP_MESSAGE_BYTES`, held
@@ -1032,6 +1038,7 @@ impl ConversationService {
                 deletion_budgets,
                 environment,
                 clock,
+                access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
                 creation: Mutex::new(()),
@@ -1101,7 +1108,7 @@ impl ConversationService {
             // A deleted conversation is not created again under its
             // identity, whoever asks; only its owner is told why
             // (`a_deleted_conversation_refuses_every_command_on_it`).
-            record.check_access(&caller.organization_id, &caller.principal_id)?;
+            service.access().admit(&record, &caller)?;
             drop(creation_guard);
             // Acknowledge the original creation from its stored creator
             // evidence before attributing this reopen to its caller, and
@@ -1116,10 +1123,10 @@ impl ConversationService {
                 // recorded after its deletion
                 // (`a_reopen_racing_a_delete_is_not_recorded_after_the_deletion`).
                 let _creation = service.inner.creation.lock().await;
-                load_conversation(service.inner.metadata.as_ref(), &id)
+                let current = load_conversation(service.inner.metadata.as_ref(), &id)
                     .await?
-                    .ok_or(ConversationError::NotFound)?
-                    .check_access(&caller.organization_id, &caller.principal_id)?;
+                    .ok_or(ConversationError::NotFound)?;
+                service.access().admit(&current, &caller)?;
                 service
                     .inner
                     .creation_audit
@@ -1212,7 +1219,7 @@ impl ConversationService {
         let outcome = service.inner.metadata.create(proposed.clone()).await?;
         let record = &outcome.conversation;
         validate_target(&id, record)?;
-        record.check_access(&caller.organization_id, &caller.principal_id)?;
+        service.access().admit(record, &caller)?;
         // Created acknowledges this exact admitted proposal. Existing alone
         // retains another creator's historical evidence. The regressions are
         // `creation_created_acknowledgement_preserves_the_admitted_origin` and
@@ -1344,8 +1351,8 @@ impl ConversationService {
         let record = load_conversation(self.inner.metadata.as_ref(), id)
             .await?
             .ok_or(ConversationError::NotFound)?;
-        record
-            .check_access(&caller.organization_id, &caller.principal_id)
+        self.access()
+            .admit(&record, caller)
             .map_err(ConversationError::from)?;
         let slot = {
             let mut owners = self.inner.conversations.lock().await;
@@ -1904,7 +1911,7 @@ impl ConversationService {
         let record = load_conversation(self.inner.metadata.as_ref(), id)
             .await?
             .ok_or(ConversationError::NotFound)?;
-        record.check_access(&caller.organization_id, &caller.principal_id)?;
+        self.access().admit(&record, caller)?;
         let Some(request) = self.inner.metadata.pending_mode_change(id).await? else {
             return Ok(());
         };
@@ -1980,7 +1987,7 @@ impl ConversationService {
             let record = load_conversation(service.inner.metadata.as_ref(), &id)
                 .await?
                 .ok_or(ConversationError::NotFound)?;
-            record.check_access(&caller.organization_id, &caller.principal_id)?;
+            service.access().admit(&record, &caller)?;
             let matches_call = |request: &ConversationModeRequest| {
                 request.conversation_id == id
                     && request.request_id == caller.action_id
@@ -2342,7 +2349,7 @@ impl ConversationService {
         let record = load_conversation(self.inner.metadata.as_ref(), id)
             .await?
             .ok_or(ConversationError::NotFound)?;
-        record.check_access(&caller.organization_id, &caller.principal_id)?;
+        self.access().admit(&record, caller)?;
         let (committed, order) = self.committed_with_order(id).await?;
         let projection = self.detached(id, &committed, &order);
         let read = (projection.read(), projection.committed_cursor());
@@ -2418,7 +2425,7 @@ impl ConversationService {
         let record = load_conversation(self.inner.metadata.as_ref(), id)
             .await?
             .ok_or(ConversationError::NotFound)?;
-        record.check_access(&caller.organization_id, &caller.principal_id)?;
+        self.access().admit(&record, caller)?;
         let Some(request) = self.inner.metadata.pending_mode_change(id).await? else {
             return Ok(None);
         };
@@ -2464,10 +2471,10 @@ impl ConversationService {
         id: &ConversationId,
         caller: &ConversationCaller,
     ) -> Result<(), ConversationError> {
-        load_conversation(self.inner.metadata.as_ref(), id)
+        let record = load_conversation(self.inner.metadata.as_ref(), id)
             .await?
-            .ok_or(ConversationError::NotFound)?
-            .check_access(&caller.organization_id, &caller.principal_id)?;
+            .ok_or(ConversationError::NotFound)?;
+        self.access().admit(&record, caller)?;
         Ok(())
     }
     /// The title a list shows for the conversation, which a read shows too:
@@ -3056,18 +3063,13 @@ impl ConversationService {
             .await?;
         let complete =
             listed.unreadable == 0 && listed.conversations.len() <= MAX_LISTED_CONVERSATIONS;
-        // Found by the listing, decided by the domain: a row it returns that
-        // is not this caller's, or is deleted, is not shown whatever listing
-        // is wired here (`a_list_shows_only_what_the_domain_lets_the_caller_see`).
-        let owned: Vec<ListedConversation> = listed
-            .conversations
+        // Found by the listing, decided by the access policy: a row it
+        // returns that is not this caller's, or is deleted, is not shown
+        // whatever listing is wired here
+        // (`a_list_shows_only_what_the_domain_lets_the_caller_see`).
+        let owned: Vec<ListedConversation> = self
+            .admitted(listed.conversations, &caller)?
             .into_iter()
-            .filter(|listed| {
-                listed
-                    .conversation
-                    .check_access(&caller.organization_id, &caller.principal_id)
-                    .is_ok()
-            })
             .take(MAX_LISTED_CONVERSATIONS)
             .collect();
         let running = self.running_ids(&owned).await;
@@ -3117,15 +3119,7 @@ impl ConversationService {
             complete,
             cursor,
         } = observed;
-        let owned: Vec<ListedConversation> = conversations
-            .into_iter()
-            .filter(|listed| {
-                listed
-                    .conversation
-                    .check_access(&caller.organization_id, &caller.principal_id)
-                    .is_ok()
-            })
-            .collect();
+        let owned: Vec<ListedConversation> = self.admitted(conversations, &caller)?;
         let running = self.running_ids(&owned).await;
         Ok(ConversationObservation {
             conversations: list_entries(&owned, &running),
@@ -3137,6 +3131,27 @@ impl ConversationService {
                 id: cursor.id.to_string(),
             }),
         })
+    }
+    /// The access policy, as every command's admission asks it.
+    fn access(&self) -> OwnerAccess<'_> {
+        OwnerAccess::new(self.inner.access_policy.as_ref())
+    }
+    /// The listed conversations `caller` may act on, in order: a listing is
+    /// an index, and each row it found is admitted again here. A policy
+    /// that cannot decide fails the list rather than shortening it.
+    fn admitted(
+        &self,
+        listed: Vec<ListedConversation>,
+        caller: &ConversationCaller,
+    ) -> Result<Vec<ListedConversation>, ConversationError> {
+        let access = self.access();
+        let mut owned = Vec::with_capacity(listed.len());
+        for row in listed {
+            if access.admits(&row.conversation, caller)? {
+                owned.push(row);
+            }
+        }
+        Ok(owned)
     }
     /// Which of `owned` are open here with a turn under way.
     ///
@@ -3445,7 +3460,7 @@ impl ConversationService {
             let record = load_conversation(service.inner.metadata.as_ref(), &id)
                 .await?
                 .ok_or(ConversationError::NotFound)?;
-            record.check_access(&caller.organization_id, &caller.principal_id)?;
+            service.access().admit(&record, &caller)?;
             let pending_mode = service.inner.metadata.pending_mode_change(&id).await?;
             // Its apps' end drops what they still hold, each drop reported
             // to the drop recorder there and then: the close answers its own
@@ -3581,7 +3596,7 @@ impl ConversationService {
             let record = load_conversation(service.inner.metadata.as_ref(), &id)
                 .await?
                 .ok_or(ConversationError::NotFound)?;
-            record.check_access(&caller.organization_id, &caller.principal_id)?;
+            service.access().admit(&record, &caller)?;
             // Nothing said, nothing listed, nothing to archive: no summary is
             // made for it, so it stays out of both lists.
             let Some(previous) = service.inner.summaries.load(&id).await? else {
@@ -3693,8 +3708,15 @@ impl ConversationService {
             .await
             .map_err(RepositoryFailure::from_load)?
             .ok_or(FenceFailure::NotFound)?;
-        if !record.allows(&caller.organization_id, &caller.principal_id) {
-            return Err(FenceFailure::NotFound);
+        // The owner deletes their conversation, deleted already or not: a
+        // second delete answers from the tombstone the first left.
+        match self
+            .access()
+            .locates(&record, &caller.organization_id, &caller.principal_id)
+        {
+            Ok(true) => {}
+            Ok(false) => return Err(FenceFailure::NotFound),
+            Err(_) => return Err(FenceFailure::Repository(RepositoryFailure::Metadata)),
         }
         // Never dated before the conversation it deletes: a clock stepped
         // back since its creation would otherwise propose a tombstone its
