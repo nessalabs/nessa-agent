@@ -42,30 +42,25 @@ describe("applyReviewSnapshot", () => {
 })
 
 describe("browserReviewNotifier", () => {
-  it("does not ask for permission until a pointer or key press", async () => {
+  it("shows a notice when permission is already granted and does not ask", () => {
     const created: { title: string }[] = []
     class FakeNotification {
       static permission: NotificationPermission = "default"
-      static requestPermission(): Promise<NotificationPermission> {
-        FakeNotification.permission = "granted"
-        return Promise.resolve("granted")
-      }
+      static requestPermission = vi.fn()
       onclick: (() => void) | null = null
       constructor(title: string) {
         created.push({ title })
       }
       close() {}
     }
-    const requestPermission = vi.spyOn(FakeNotification, "requestPermission")
     vi.stubGlobal("Notification", FakeNotification)
     const notifier = browserReviewNotifier(() => {})
     const held = review("p1")
     notifier.show(held)
-    expect(requestPermission).not.toHaveBeenCalled()
+    expect(FakeNotification.requestPermission).not.toHaveBeenCalled()
     expect(created).toEqual([])
-    window.dispatchEvent(new Event("pointerdown"))
-    await Promise.resolve()
-    expect(requestPermission).toHaveBeenCalledOnce()
+    FakeNotification.permission = "granted"
+    notifier.show(held)
     expect(created).toEqual([{ title: "Bash needs a decision" }])
     notifier.clear(held)
     vi.unstubAllGlobals()

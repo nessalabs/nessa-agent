@@ -36,6 +36,10 @@
  *   ui/permission-rule-rows.tsx ──▶ adapters/permission-rules-gateway.ts
  *   (Access: remembered rules     (`client.conversation` list and
  *    and revoke)                   revokePermissionRule)
+ *
+ *   ui/review-notice-rows.tsx
+ *   (Access: the button that asks the browser to allow a notification
+ *    while a review waits)
  * ```
  *
  * An arrow points from what reads to what it reads. The window mounts
