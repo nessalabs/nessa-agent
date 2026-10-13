@@ -135,10 +135,10 @@ it.each(["success", "failure"] as const)(
   "LT4: an old send's %s leaves replacement draft/read/error ownership alone",
   async (outcome) => {
     const entered = deferred<void>()
-    const sending = deferred<Awaited<ReturnType<ConversationEffects["send"]>>>()
+    const sending = deferred<Awaited<ReturnType<ConversationEffects["submit"]>>>()
     let executionId = ""
     const { store, follows } = fixture({
-      send: (input) => {
+      submit: (input) => {
         executionId = input.executionId
         entered.resolve()
         return sending.promise
@@ -148,7 +148,8 @@ it.each(["success", "failure"] as const)(
     await entered.promise
     replace(store)
     const before = store.getState().conversation.conversations[0]
-    if (outcome === "success") sending.resolve({ executionId, disposition: "queued" })
+    if (outcome === "success")
+      sending.resolve({ conversationId: A, executionId, disposition: "queued" })
     else sending.reject(new Error("Old A send failed"))
     await pending
     expect(store.getState().conversation.conversations[0]).toEqual(before)

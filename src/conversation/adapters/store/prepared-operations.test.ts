@@ -1,6 +1,7 @@
 import {
   prepareSubmission,
   permissionTargets,
+  questionTargets,
   executionTargets,
   type PreparedSubmission,
 } from "@nessa/client"
@@ -30,6 +31,28 @@ import {
 const first = "00000000-0000-4000-8000-000000000001"
 const second = "00000000-0000-4000-8000-000000000002"
 const sameExecution = "00000000-0000-4000-8000-000000000003"
+function questionTarget() {
+  return questionTargets({
+    conversationId: first,
+    questions: [
+      {
+        executionId: "original",
+        questionId: "question",
+        message: "Choose",
+        questions: [
+          {
+            key: "key",
+            prompt: "Choose",
+            required: false,
+            multiSelect: false,
+            freeText: true,
+            options: [{ value: "original", label: "Original" }],
+          },
+        ],
+      },
+    ],
+  })[0]!
+}
 function gate() {
   let resolve!: () => void
   const promise = new Promise<void>((done) => {
@@ -412,6 +435,8 @@ it.each([
     { create, remove, answer, cancel, setApprovalMode, reorder, answerQuestion, close },
     echo,
   )
+  const question = questionTarget()
+  const choices = [{ key: "key", values: ["original"] }]
   const command: Control =
     kind === "close"
       ? { kind }
@@ -427,13 +452,12 @@ it.each([
                 ? { kind, executionIds: ["original"] }
                 : {
                     kind,
-                    executionId: "original",
-                    questionId: "question",
-                    choices: [{ key: "key", values: ["original"] }],
+                    target: question,
+                    choices,
                   }
   const pending = store.dispatch(controlConversation({ id: "c0", control: command }))
   if (command.kind === "reorder") command.executionIds[0] = "changed"
-  if (command.kind === "answerQuestion") command.choices![0]!.values[0] = "changed"
+  if (command.kind === "answerQuestion") choices[0]!.values[0] = "changed"
   // Replacing the discriminant after route checks must not select a new effect.
   Object.assign(command, {
     kind: kind === "close" ? "remove" : "close",
@@ -458,12 +482,9 @@ it.each([
   if (kind === "reorder")
     expect(reorder).toHaveBeenCalledExactlyOnceWith(first, ["original"])
   if (kind === "answerQuestion")
-    expect(answerQuestion).toHaveBeenCalledExactlyOnceWith(
-      first,
-      "original",
-      "question",
-      [{ key: "key", values: ["original"], ownWords: undefined }],
-    )
+    expect(answerQuestion).toHaveBeenCalledExactlyOnceWith(question, [
+      { key: "key", values: ["original"], ownWords: undefined },
+    ])
 })
 
 it("serializes captured question DTOs without caller hooks after create awaits (PS23)", async () => {
@@ -481,7 +502,7 @@ it("serializes captured question DTOs without caller hooks after create awaits (
   const choices = Object.assign([choice], { toJSON: listHook })
   let serialized: string | undefined
   const answerQuestion = vi.fn<ConversationEffects["answerQuestion"]>(
-    async (_id, _execution, _question, captured) => {
+    async (_target, captured) => {
       serialized = JSON.stringify(captured)
     },
   )
@@ -491,8 +512,7 @@ it("serializes captured question DTOs without caller hooks after create awaits (
       id: "c0",
       control: {
         kind: "answerQuestion",
-        executionId: "original",
-        questionId: "question",
+        target: questionTarget(),
         choices,
       },
     }),
@@ -502,9 +522,9 @@ it("serializes captured question DTOs without caller hooks after create awaits (
   waiting.resolve()
   const result = await pending
   expect(result.meta.requestStatus).toBe("fulfilled")
-  expect(serialized).toBe(
-    JSON.stringify([{ key: "key", values: ["original"], ownWords: "original words" }]),
-  )
+  expect(JSON.parse(serialized ?? "null")).toEqual([
+    { key: "key", values: ["original"], ownWords: "original words" },
+  ])
   expect(valuesHook).not.toHaveBeenCalled()
   expect(recordHook).not.toHaveBeenCalled()
   expect(listHook).not.toHaveBeenCalled()

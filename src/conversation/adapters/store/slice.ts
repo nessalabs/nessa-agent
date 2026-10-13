@@ -9,6 +9,8 @@ import {
   type PreparedSubmission,
   type ExecutionTarget,
   type PermissionTarget,
+  type QuestionTarget,
+  type QuestionChoice,
 } from "@nessa/client"
 import {
   type ApprovalMode,
@@ -525,7 +527,7 @@ export type Control =
       kind: "answerQuestion"
       target: QuestionTarget
       /** Null declines: the agent is told it was answered with nothing. */
-      choices: { key: string; values: string[]; ownWords?: string }[] | null
+      choices: readonly QuestionChoice[] | null
     }
   | { kind: "cancel"; target: PermissionTarget }
   | { kind: "stop"; target: ExecutionTarget }
