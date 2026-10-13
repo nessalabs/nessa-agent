@@ -55,6 +55,22 @@ impl CancellationOrigin {
     }
 }
 
+/// Reject a hook-refusal code that is not the hook's own withdrawal of `review`.
+pub(crate) fn validate_hook_withdrawal(
+    review: &PermissionId,
+    reason: &PermissionCancellationReason,
+    origin: &CancellationOrigin,
+) -> Result<(), AgentError> {
+    if !reason.is_hook_refusal()
+        || matches!(origin, CancellationOrigin::Client(actor) if actor.is_hook_for(review))
+    {
+        return Ok(());
+    }
+    Err(AgentError::InvalidInput(
+        "a hook-refusal withdrawal must name the hook that refused this review".into(),
+    ))
+}
+
 /// A cancelled review with its original input and lifecycle cause retained in request.state().
 /// This records local permission cancellation, not provider acknowledgement or tool termination.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,6 +99,7 @@ impl PermissionCancellation {
             ));
         };
         origin.validate_reason(reason)?;
+        validate_hook_withdrawal(request.id(), reason, &origin)?;
         Ok(Self {
             session_id,
             request: Arc::new(request),

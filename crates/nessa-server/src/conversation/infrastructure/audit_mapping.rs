@@ -135,6 +135,16 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
                 ApprovalBasis::Rule(rule) => {
                     json!({"kind":"rule","ruleId":rule.rule_id(),"revision":rule.revision(),"grantedBy":actor(rule.granted_by())})
                 }
+                ApprovalBasis::Hook(refusal) => json!({
+                    "kind": "hook",
+                    "index": refusal.index(),
+                    "reason": refusal.reason(),
+                    "outcome": match refusal.outcome() {
+                        RefusalOutcome::Continue => "continue",
+                        RefusalOutcome::EndTurn => "end_turn",
+                        RefusalOutcome::CloseSession => "close_session",
+                    },
+                }),
             };
             let delivery = delivery(record.delivery());
             json!({"kind":"permission_answered","sessionId":record.session_id().as_str(),"request":permission(resolution.request()),"input":{"name":resolution.input().name,"argumentsJson":resolution.input().arguments_json},"actor":actor(resolution.attribution().actor()),"basis":basis,"delivery":delivery})

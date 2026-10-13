@@ -323,7 +323,12 @@ pub enum AgentError {
         /// Additional cleanup failure, when teardown could not confirm cleanup.
         cleanup_error: Option<Box<AgentError>>,
     },
-    /// A before callback failed or panicked, preventing provider dispatch.
+    /// A before-invocation hook rejected the attempt before the provider was called.
+    ///
+    /// The index is the registration that rejected the attempt. No provider work
+    /// was dispatched. A permission-review hook does not use this error. Its
+    /// refusal is a tool verdict: the review is kept, and the turn continues
+    /// unless that verdict says otherwise.
     BeforeInvocationHook(HookFailure),
     /// The backend already settled. Do not retry blindly: it may have succeeded.
     AfterInvocationHooks {

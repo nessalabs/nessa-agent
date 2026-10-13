@@ -137,7 +137,15 @@ Every answer requires an immutable application `ApprovalAttribution`:
   validation of strings alone proves no authority. Credentials stay out of it.
 - `ApprovalBasis::Explicit` records a direct answer. `Mode` records the effective
   mode name and immutable configuration revision. `Rule` identifies the exact rule
-  revision and its original granting actor/action. Automatic answers use their own
+  revision and its original granting actor/action. `Hook` records a
+  permission-review hook: registration index when a hook returned (`null` when
+  the runtime refused), reason capped at 1024 bytes, and the outcome that was
+  applied. Its actor is `permission-review-hook`, not the
+  person who submitted the turn. `HookRefusal::new` builds only a continue
+  refusal. End-turn and close-session are the runner's transitions, so only the
+  runner, which applies them, can record them. An
+  end-turn the binding cannot perform is
+  recorded as continue. Automatic answers use their own
   host actor, preserving the human grantor separately. Hosts retain referenced
   configuration/rule revisions; these values do not implement a policy evaluator.
 - `answer_permission` returns `PermissionResolution` after a successful protocol

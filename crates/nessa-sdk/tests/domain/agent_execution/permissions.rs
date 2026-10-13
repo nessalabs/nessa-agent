@@ -2,6 +2,24 @@ use super::support::*;
 use nessa_sdk::domain::agent_execution::sessions::{ExecutionSession, ExecutionSessionId};
 
 #[test]
+fn a_caller_cannot_write_a_hook_refusal_code() {
+    // Only the runner, which carried the refusal out, records one.
+    for code in [
+        "hook-refusal.continue",
+        "hook-refusal.end_turn",
+        "hook-refusal.close_session",
+        CustomPermissionCancellationReason::HOOK_REFUSAL_PREFIX,
+    ] {
+        assert_eq!(
+            CustomPermissionCancellationReason::new(code, "withdrawn"),
+            Err(ExecutionError::ReservedCancellationCode),
+            "{code}"
+        );
+    }
+    assert!(CustomPermissionCancellationReason::new("hook-refusal", "withdrawn").is_ok());
+}
+
+#[test]
 fn custom_cancellation_reasons_validate_byte_bounds_and_preserve_code_and_explanation() {
     let custom = CustomPermissionCancellationReason::new(
         "guard.cost_limit",
@@ -400,4 +418,31 @@ fn cancellation_reason_replacement_preserves_the_prior_custom_evidence() {
     };
     assert_eq!(retained.code(), "guard.budget");
     assert_eq!(retained.explanation(), " Budget reached ");
+}
+
+#[test]
+fn a_capped_option_measurement_stops_once_it_passes_the_limit() {
+    let options: Vec<_> = (0..64)
+        .map(|index| {
+            choice(
+                &format!("option-{index}"),
+                PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request()),
+            )
+        })
+        .collect();
+    let options = PermissionOptions::new(options, &PermissionOfferPolicy::once_only()).unwrap();
+    let full = options.payload_bytes();
+    let capped = options.payload_bytes_up_to(0);
+    assert!(capped > 0 && capped < full, "{capped} of {full}");
+    assert_eq!(options.payload_bytes_up_to(full), full);
+
+    let request = PermissionRequest::new(
+        PermissionId::new("request").unwrap(),
+        ExecutionId::new("execution").unwrap(),
+        ToolCallId::new("tool").unwrap(),
+        options,
+    );
+    let full = request.payload_bytes();
+    assert_eq!(request.payload_bytes_up_to(usize::MAX), full);
+    assert!(request.payload_bytes_up_to(0) < full);
 }
