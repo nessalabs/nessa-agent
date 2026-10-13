@@ -1,16 +1,18 @@
 import { conversationView as panelView } from "../../src/conversation/adapters/gateway/effects"
 /** The production details sheet over published gateway views, one per lease state. */
+import type { ConversationLease, ConversationView } from "@nessa/client"
 import { createRoot } from "react-dom/client"
 import { conversationView as decodeView } from "../../packages/nessa-client/src/protocol/conversation-validate"
+import { conversationView as panelView } from "../../src/conversation/adapters/gateway/effects"
 import { applyView } from "../../src/conversation/application/usecases/apply-view"
 import { conversation, type Conversation } from "../../src/conversation/model"
 import { ConversationDetails } from "../../src/conversation/ui/conversation-details"
 import "../../src/styles.css"
 
-const terms = { revision: 2, environment: "here", sandbox: "harness_default" }
+const terms = { revision: 2, environment: "here", sandbox: "harness_default" } as const
 
 /** Each case is a lease `lease_view` can produce, by its state. */
-const leaseCases: Record<string, Record<string, unknown> | undefined> = {
+const leaseCases: Record<string, ConversationLease | undefined> = {
   none: undefined,
   live: { state: "live", ...terms, droppedEvents: 0 },
   ending: { state: "ending", ...terms, cause: "closed", droppedEvents: 0 },
@@ -81,12 +83,13 @@ const leaseCases: Record<string, Record<string, unknown> | undefined> = {
   },
 }
 
-function withLease(lease: Record<string, unknown> | undefined): Conversation {
+function withLease(lease: ConversationLease | undefined): Conversation {
   const id = "lease-conversation"
   const view = decodeView(
     {
       conversationId: id,
       revision: `lease:${lease?.state ?? "none"}`,
+      serverNowMs: 1_700_000_000_000,
       title: "Leased conversation",
       approvalMode: "ask",
       approvalModes: [
@@ -101,6 +104,7 @@ function withLease(lease: Record<string, unknown> | undefined): Conversation {
       tools: [],
       permissions: [],
       artifacts: [],
+      notes: [],
       capabilities: {
         queue: true,
         steer: true,
@@ -116,14 +120,14 @@ function withLease(lease: Record<string, unknown> | undefined): Conversation {
           permissionDeferral: "unsupported_not_implemented",
           elicitationForwarding: "unknown",
           preToolPolicy: "unsupported_not_implemented",
-          policyEndTurn: "unsupported_not_implemented",
-          policyCloseSession: "unsupported_not_implemented",
-          incomingElicitation: "unknown",
+          policyEndTurn: "unsupported",
+          policyCloseSession: "unsupported",
+          incomingElicitation: "unsupported",
         },
       },
       lifecycle: { phase: "attached" },
       ...(lease ? { lease } : {}),
-    },
+    } satisfies ConversationView,
     id,
   )
   return applyView(conversation(id), panelView(view, 1_700_000_000_000))
@@ -141,7 +145,9 @@ function Fixture() {
       style={{ position: "relative", height: "100vh" }}
     >
       <ConversationDetails
-        conversation={withLease(leaseCases[name])}
+        conversation={withLease(
+          Object.hasOwn(leaseCases, name) ? leaseCases[name] : undefined,
+        )}
         rename={false}
         onClose={() => {}}
         onRename={() => {}}

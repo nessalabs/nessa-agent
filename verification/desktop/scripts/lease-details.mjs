@@ -18,6 +18,8 @@ const granted = (status) => [
 /** The rows each published lease shows, in order; `null` is no section at all. */
 const expected = {
   none: null,
+  ["__proto__"]: null,
+  constructor: null,
   live: granted("Allowed to run"),
   ending: granted("Stopping"),
   ended: granted("Ended when Nessa restarted"),

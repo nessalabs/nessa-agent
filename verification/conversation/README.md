@@ -4,13 +4,16 @@
 published lease, decoded by the actual client validator; `ssh-live`,
 `ssh-lost` and `ssh-refused` are leases on an SSH host, and `peer-live`,
 `peer-lost` and `peer-refused` on a paired machine.
+Its view and lease cases use the SDK's published types, and this folder is
+included in the normal TypeScript check; required fields and enum changes are
+checked before a browser run.
 `run-on-fixture.html?case=none|hosts|paired` mounts the production composer
 tray with no SSH host, two, or one and a connected paired machine. Run `node verification/desktop/scripts/lease-details.mjs`
 for both. These lease/composer fixtures are served by the development server only.
 
 `fixture.html` mounts the production `ConversationControls` and `applyView` with
 current published gateway views. Every case passes the actual client decoder
-before `applyView`; its review has a correlated running message and offered mode. Server projection tests own exact live execution
+and the production gateway-to-panel conversion before `applyView`; its review has a correlated running message and offered mode. Server projection tests own exact live execution
 and command authority. This fixture checks the browser's presentation of their
 published result, including re-enabling controls after an incomplete view.
 

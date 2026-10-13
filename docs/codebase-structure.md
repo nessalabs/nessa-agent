@@ -240,6 +240,9 @@ against a private scripted gateway.
   the exception, so tests do not pull the design system. Host subscriptions
   stay in adapters. See
   [adr/0002-conversation-vertical-and-gateway.md](adr/done/0002-conversation-vertical-and-gateway.md).
+  `adapters/gateway/effects.ts` owns `conversationView`, the published SDK view
+  conversion used by gateway reads and browser fixtures, including note rows
+  and conversion from server deadlines to the panel clock.
 - The desktop window's workspace is its own vertical, nested in the window:
   `src/desktop/workspace/` with `model/` (index, conversations,
   revisions, how the window fits the side columns, failures, retention,
