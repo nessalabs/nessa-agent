@@ -632,6 +632,30 @@ mod tests {
                 "tools": "NotChecked"
             })
         );
+        // A version 3 record copied the grant's role onto the turn; it is
+        // another version, refused before its body is read. Edited as the
+        // encoder's own bytes, so the marker stays where the encoder puts it.
+        let encoded = String::from_utf8(
+            encode_one(&SessionChange::InputAccepted(Box::new(record(
+                Initiation::grant(GrantInitiator::new("grant-1", 4).unwrap()),
+            ))))
+            .unwrap(),
+        )
+        .unwrap();
+        let current = format!("\"schemaVersion\":{}", StorageError::SCHEMA_VERSION);
+        let named = r#"{"grant":"grant-1","policy_revision":4}"#;
+        assert!(encoded.contains(&current) && encoded.contains(named));
+        let version_3 = encoded
+            .replacen(&current, "\"schemaVersion\":3", 1)
+            .replacen(
+                named,
+                r#"{"grant":"grant-1","role":"Drive","policy_revision":4}"#,
+                1,
+            );
+        assert_eq!(
+            decode_batch(version_3.as_bytes(), &ProviderContext::Absent),
+            Err(StorageError::AnotherVersion { found: Some(3) })
+        );
 
         let grant = |grant: serde_json::Value| {
             serde_json::json!({
@@ -1012,7 +1036,7 @@ mod tests {
         );
         let bytes = encode_one(&opened_change()).unwrap();
         let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        for found in [0, 1, 2, StorageError::SCHEMA_VERSION + 1] {
+        for found in [0, 1, 2, 3, StorageError::SCHEMA_VERSION + 1] {
             let mut other = saved.clone();
             other["schemaVersion"] = serde_json::json!(found);
             other["notInThisShape"] = serde_json::json!(true);

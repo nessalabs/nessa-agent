@@ -118,9 +118,9 @@ const ADMITTED_BY_ITS_OWN_CHECK: [&str; 6] = [
 /// unchecked until the grant's policy is enforced (slice J4).
 ///
 /// Admitted, a request is answered with who it is from: a turn it starts is
-/// saved with the Drive grant that admitted it, its role and policy revision
-/// as read for this command, and every other with the owner (row J15). Both
-/// say the turn's tools run unchecked.
+/// saved with the Drive grant that admitted it and the grant's policy
+/// revision as read for this command, never a copy of its role, and every
+/// other with the owner (row J15). Both say the turn's tools run unchecked.
 pub(super) async fn admit_request(
     state: &ProductRouteState,
     session: &AuthenticatedSession,

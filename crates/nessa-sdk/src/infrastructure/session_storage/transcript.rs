@@ -1646,7 +1646,7 @@ mod tests {
         ));
     }
 
-    /// A turn a share grant started keeps its grant, role and policy revision
+    /// A turn a share grant started keeps its grant and policy revision
     /// through a checkpoint and the fold restored from it.
     #[test]
     fn a_grant_initiation_survives_a_checkpoint_and_its_restore() {

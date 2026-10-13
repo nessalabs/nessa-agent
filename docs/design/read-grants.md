@@ -285,7 +285,7 @@ sequenceDiagram
     Socket->>Grants: held_grant(conversation, receiver)
     Grants-->>Socket: drive, policy revision
     Socket->>Socket: no image, no linked file
-    Socket->>Service: submit as the owner, surface = device credential,<br/>initiation = grant (receiver, Drive, revision), tools not checked
+    Socket->>Service: submit as the owner, surface = device credential,<br/>initiation = grant (receiver, revision), tools not checked
     Service->>Service: turn record saved with that initiation
     Service-->>Device: receipt
     Device->>Socket: conversation.delete
