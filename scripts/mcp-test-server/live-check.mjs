@@ -117,7 +117,7 @@ async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))
     })
     const token = gateway.token
     const port = Number(new URL(gateway.url).port)
-    const { NessaClient } = await import("@nessa/client")
+    const { NessaClient, permissionTargets } = await import("@nessa/client")
     client = await NessaClient.connect({
       stage: "ci",
       url: `ws://127.0.0.1:${port}`,
@@ -144,9 +144,7 @@ async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))
         answered.add(key)
         step("allow", `${permission.toolName} → ${option.id}`)
         await client.conversation.answer(
-          id,
-          permission.executionId,
-          permission.permissionId,
+          permissionTargets(view)[view.permissions.indexOf(permission)],
           option.id,
         )
       }

@@ -1570,9 +1570,7 @@ describe("writes", () => {
     follow()
     await source.approve("a", approvalId(asked), "once", "person", "opt-a")
     expect(gateway.calls.find((call) => call.method === "answer")?.args).toEqual([
-      "a",
-      "turn",
-      "p1",
+      { conversationId: "a", executionId: "turn", permissionId: "p1" },
       "opt-a",
     ])
     expect(gateway.count("subscribe")).toBe(1)
@@ -1599,7 +1597,7 @@ describe("writes", () => {
     )
     await source.transcript("a")
     await source.approve("a", approvalId(asked), "once", "person", "second")
-    expect(gateway.calls.find((call) => call.method === "answer")?.args[3]).toBe("second")
+    expect(gateway.calls.find((call) => call.method === "answer")?.args[1]).toBe("second")
   })
 
   it("W3: approving always is not supported, and nothing is answered", async () => {
@@ -1618,7 +1616,7 @@ describe("writes", () => {
       view("a", { revision: "1", messages: [running()], permissions: [asked] }),
     )
     await source.deny("a", approvalId(asked), "person", "opt-b")
-    expect(gateway.calls.find((call) => call.method === "answer")?.args[3]).toBe("opt-b")
+    expect(gateway.calls.find((call) => call.method === "answer")?.args[1]).toBe("opt-b")
     const allowOnly = permission({
       permissionId: "p2",
       options: [{ id: "only", label: "Allow", effect: "allow" }],
@@ -1896,7 +1894,7 @@ describe("writes", () => {
     expect(
       gateway.calls
         .filter((call) => call.method === "answer")
-        .map((call) => call.args[3]),
+        .map((call) => call.args[1]),
     ).toEqual(["opt-b"])
   })
 
@@ -2556,9 +2554,7 @@ describe("an app's review is shown after its turn ended (#436)", () => {
     })
     await source.approve("a", approvalId(appReview), "once", "person", "allow")
     expect(gateway.calls.find((call) => call.method === "answer")?.args).toEqual([
-      "a",
-      "turn",
-      "app-1",
+      { conversationId: "a", executionId: "turn", permissionId: "app-1" },
       "allow",
     ])
     gateway.views.set("a", view("a", { revision: "3", messages: [ended] }))
