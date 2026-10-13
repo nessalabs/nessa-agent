@@ -1,4 +1,4 @@
-import { deadlinePendingLine } from "@nessa/client"
+import { deadlinePendingLine, permissionTargets } from "@nessa/client"
 import type { Conversation } from "../model"
 import { controlConversation } from "../adapters/store/slice"
 import { useConversationDispatch } from "../adapters/store/hooks"
@@ -27,6 +27,13 @@ export function ConversationControls({
 }) {
   const dispatch = useConversationDispatch()
   const remote = conversation.remote
+  const targets =
+    remote && conversation.serverConversationId
+      ? permissionTargets({
+          conversationId: conversation.serverConversationId,
+          permissions: remote.permissions,
+        })
+      : []
   const now = useNow(1000)
   return (
     <div className="flex flex-col gap-3 text-sm">
@@ -41,7 +48,7 @@ export function ConversationControls({
           Conversation history is not confirmed. Recent activity may be missing.
         </p>
       ) : null}
-      {remote?.permissions.map((permission) => (
+      {remote?.permissions.map((permission, index) => (
         <ToolApproval
           key={JSON.stringify([permission.executionId, permission.permissionId])}
           variant="floating"
@@ -73,13 +80,14 @@ export function ConversationControls({
                   !remote.capabilities.permissions
                 }
                 onClick={() => {
+                  const target = targets[index]
+                  if (!target) return
                   void dispatch(
                     controlConversation({
                       id: conversation.id,
                       control: {
                         kind: "answer",
-                        executionId: permission.executionId,
-                        permissionId: permission.permissionId,
+                        target,
                         optionId: option.id,
                       },
                     }),
@@ -93,13 +101,14 @@ export function ConversationControls({
               variant="ghost"
               disabled={!gatewayAvailable || conversation.controlPending}
               onClick={() => {
+                const target = targets[index]
+                if (!target) return
                 void dispatch(
                   controlConversation({
                     id: conversation.id,
                     control: {
                       kind: "cancel",
-                      executionId: permission.executionId,
-                      permissionId: permission.permissionId,
+                      target,
                     },
                   }),
                 )

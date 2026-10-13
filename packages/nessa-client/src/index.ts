@@ -105,6 +105,11 @@ export const ConnectionProfile = { Product: "product" } as const
 
 export type { CommonConnectOptions } from "./application/options.js"
 export type { EventHandler } from "./application/events.js"
+export {
+  permissionTargets,
+  permissionTargetConversation,
+  type PermissionTarget,
+} from "./application/permission-target.js"
 export type { ClientEventMap } from "./protocol/types.js"
 export type { ResolvedConnectRetryOptions } from "./application/connect-retry.js"
 export type {

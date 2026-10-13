@@ -415,6 +415,7 @@ const checks = {
   },
 
   apps: async (page, stack, options) => {
+    const { permissionTargets } = await import("@nessa/client")
     if (options.mode === "prod") throw new CannotRun("not run: dev server only")
     const failures = []
     const conversationId = randomUUID()
@@ -444,9 +445,7 @@ const checks = {
           admitted = allow.call
           answered.add(permissionKey(allow.permission))
           await stack.client.conversation.answer(
-            conversationId,
-            allow.permission.executionId,
-            allow.permission.permissionId,
+            permissionTargets(current)[current.permissions.indexOf(allow.permission)],
             allow.option.id,
           )
         }

@@ -1,3 +1,4 @@
+import { permissionTargets } from "@nessa/client"
 import { describe, expect, it, vi } from "vitest"
 import { makeStore } from "../../../store"
 import { createDependencies } from "../../../composition/dependencies"
@@ -592,8 +593,7 @@ describe("gateway conversation projection", () => {
         id: "c0",
         control: {
           kind: "answer",
-          executionId: "execution",
-          permissionId: "permission",
+          target: reviewTarget(id!),
           optionId: "deny",
         },
       }),
@@ -601,7 +601,7 @@ describe("gateway conversation projection", () => {
     await store.dispatch(
       controlConversation({
         id: "c0",
-        control: { kind: "cancel", executionId: "execution", permissionId: "permission" },
+        control: { kind: "cancel", target: reviewTarget(id!) },
       }),
     )
     await store.dispatch(
@@ -610,8 +610,21 @@ describe("gateway conversation projection", () => {
         control: { kind: "remove", executionId: "queued" },
       }),
     )
-    expect(answer).toHaveBeenCalledWith(id, "execution", "permission", "deny")
-    expect(cancel).toHaveBeenCalledWith(id, "execution", "permission")
+    expect(answer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: id,
+        executionId: "execution",
+        permissionId: "permission",
+      }),
+      "deny",
+    )
+    expect(cancel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: id,
+        executionId: "execution",
+        permissionId: "permission",
+      }),
+    )
     expect(remove).toHaveBeenCalledWith(id, "queued")
   })
 
@@ -686,3 +699,16 @@ it("shows cancelling until close acknowledgement and does not claim cancellation
     )
   }
 })
+
+function reviewTarget(conversationId: string) {
+  return permissionTargets({
+    conversationId,
+    permissions: [
+      {
+        executionId: "execution",
+        permissionId: "permission",
+        options: [{ id: "deny" }],
+      },
+    ],
+  })[0]!
+}
