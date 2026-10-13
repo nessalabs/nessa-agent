@@ -16,6 +16,7 @@ import {
   createSubscriptionGate,
   subscriptionLimits,
   type ConnectionState,
+  type ConversationApi,
   type ConversationListResult,
   type ConversationSummary,
   type ConversationView,
@@ -36,6 +37,26 @@ type Method =
   | "send"
   | "answer"
   | "archive"
+  | "permissionRules"
+  | "revokePermissionRule"
+
+/**
+ * The adapter's client, plus the permission-rule calls Settings makes on the
+ * same conversation. The workspace adapter never calls them. A window fake
+ * still has to answer, because the window's client requires them.
+ */
+type WindowTestClient = GatewayClient & {
+  readonly conversation: Pick<
+    ConversationApi,
+    | "observe"
+    | "create"
+    | "send"
+    | "answer"
+    | "archive"
+    | "permissionRules"
+    | "revokePermissionRule"
+  >
+}
 
 /** How one call is answered instead: given the normal answer, the promise to return. */
 type Behaviour = (normal: () => unknown) => Promise<unknown>
@@ -144,7 +165,7 @@ export function view(
 }
 
 export interface FakeGateway {
-  readonly client: GatewayClient
+  readonly client: WindowTestClient
   /** Every call made, in order. */
   readonly calls: { readonly method: Method; readonly args: readonly unknown[] }[]
   readonly rows: Map<string, ConversationSummary>
@@ -339,7 +360,7 @@ export function fakeGateway(
         live.handlers.ended(end)
       }
   }
-  const client: GatewayClient = {
+  const client: WindowTestClient = {
     conversation: {
       observe: (options) =>
         answer("observe", [options], () => observePage(options)) as never,
@@ -363,6 +384,13 @@ export function fakeGateway(
           rows.delete(args[0])
           return { requestId: "archive", applied: true }
         }) as never,
+      permissionRules: () =>
+        answer("permissionRules", [], () => ({ requestId: "rules", rules: [] })) as never,
+      revokePermissionRule: (...args) =>
+        answer("revokePermissionRule", args, () => ({
+          requestId: "revoke",
+          applied: false,
+        })) as never,
     },
     subscriptions: {
       view: (conversationId, handlers, { signal, ...options } = {}) =>
