@@ -57,15 +57,20 @@ impl RelayDial<DuplexStream> for ToRelay {
     }
 }
 
-/// Hands the test the relay's end of every connection the gateway dials.
+/// Hands the test the relay's end of every connection the gateway dials,
+/// after failing the first `failing` dials with `InvalidInput`, as a host
+/// name that resolves to nothing does.
 struct Scripted {
     opened: mpsc::UnboundedSender<DuplexStream>,
     dials: Arc<AtomicUsize>,
+    failing: usize,
 }
 impl RelayDial<DuplexStream> for Scripted {
     fn dial(&self) -> PortFuture<'_, io::Result<DuplexStream>> {
+        if self.dials.fetch_add(1, Ordering::SeqCst) < self.failing {
+            return Box::pin(async { Err(io::ErrorKind::InvalidInput.into()) });
+        }
         let (gateway, relay) = duplex(64 * 1024);
-        self.dials.fetch_add(1, Ordering::SeqCst);
         let _ = self.opened.send(relay);
         Box::pin(async move { Ok(gateway) })
     }
@@ -114,19 +119,25 @@ fn serve(
     }
 }
 
-fn scripted(
-    key: Key,
-    pool: usize,
-) -> (
+/// What a scripted serving hands the test: the serving, the relay's end of
+/// each dial, and how many dials there were.
+type ScriptedServing = (
     Serving,
     mpsc::UnboundedReceiver<DuplexStream>,
     Arc<AtomicUsize>,
-) {
+);
+
+fn scripted(key: Key, pool: usize) -> ScriptedServing {
+    scripted_failing(key, pool, 0)
+}
+
+fn scripted_failing(key: Key, pool: usize, failing: usize) -> ScriptedServing {
     let (opened, relay) = mpsc::unbounded_channel();
     let dials = Arc::new(AtomicUsize::new(0));
     let dial = Arc::new(Scripted {
         opened,
         dials: dials.clone(),
+        failing,
     });
     (
         serve(dial, key, Arc::new(ManualTimer::default()), pool),
@@ -254,8 +265,8 @@ async fn a_reader_the_relay_announces_reaches_the_listener_on_a_relay_permit() {
         .unwrap();
 }
 
-/// Pings are answered, and an announced reader with no relay permit free is
-/// not dialed for: the registration goes on.
+/// RL16: pings are answered, and an announced reader with no relay permit
+/// free is not dialed for: the registration goes on.
 #[tokio::test]
 async fn pings_are_answered_and_a_reader_past_the_pool_is_not_accepted() {
     let (serving, mut relay, dials) = scripted(key(true), 0);
@@ -332,8 +343,8 @@ async fn an_accept_leg_never_joined_gives_its_permit_back_at_the_deadline() {
         .unwrap();
 }
 
-/// A registration that hears nothing for two ping intervals is dropped and
-/// made again after the first backoff wait.
+/// RL15: a registration that hears nothing for two ping intervals is
+/// dropped and made again after the first backoff wait.
 #[tokio::test]
 async fn a_silent_registration_is_dropped_and_made_again() {
     let (serving, mut relay, dials) = scripted(key(true), 1);
@@ -362,8 +373,8 @@ async fn a_silent_registration_is_dropped_and_made_again() {
         .unwrap();
 }
 
-/// A relay answering the registration with anything but its preamble is
-/// dialed again after a wait that doubles each time.
+/// RL15: a relay answering the registration with anything but its preamble
+/// is dialed again after a wait that doubles each time.
 #[tokio::test]
 async fn a_refused_registration_is_tried_again_after_a_doubling_wait() {
     let (serving, mut relay, _) = scripted(key(true), 1);
@@ -387,8 +398,8 @@ async fn a_refused_registration_is_tried_again_after_a_doubling_wait() {
         .unwrap();
 }
 
-/// A key that cannot make its proof stops serving through the relay at
-/// once: nothing is dialed again.
+/// RL17: a key that cannot make its proof stops serving through the relay
+/// at once: nothing is dialed again.
 #[tokio::test]
 async fn a_key_that_cannot_prove_stops_registering() {
     let (serving, mut relay, dials) = scripted(key(false), 1);
@@ -422,4 +433,74 @@ async fn stop_ends_the_registration_and_its_accept_legs() {
     closed(&mut registration).await;
     closed(&mut leg).await;
     assert_eq!(serving.pool.available_permits(), 1);
+}
+
+/// RL15: a dial that fails with `InvalidInput`, as a host name resolving to
+/// nothing does, is a failure like any other and is tried again; only the
+/// key's own proof stops registering.
+#[tokio::test]
+async fn a_dial_refused_as_invalid_input_is_tried_again() {
+    let (serving, mut relay, dials) = scripted_failing(key(true), 1, 1);
+    let pause = serving
+        .timer
+        .started(|_, wait| wait.limit() == Backoff::default().first)
+        .await;
+    assert_eq!(dials.load(Ordering::SeqCst), 1);
+    serving.timer.advance_to(pause.deadline);
+    let mut registration = opened(&mut relay).await;
+    registered(&mut registration, &identity(1)).await;
+    serving.stop.send_replace(true);
+    tokio::time::timeout(REAL, serving.task)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+/// RL15: registrations dropped at once wait 1 s, then 2 s; one that lasted
+/// the longest wait starts the waits over at 1 s.
+#[tokio::test]
+async fn a_lasting_registration_starts_the_waits_over() {
+    let (serving, mut relay, _) = scripted(key(true), 1);
+    let timer = serving.timer.clone();
+    let first = Backoff::default().first;
+    let most = Backoff::default().most;
+    // Waits begun at `at` for `limit`: the backoff, never a deadline.
+    let pause_from = |at: crate::timer::Moment, limit: Duration| {
+        let timer = timer.clone();
+        async move {
+            timer
+                .started(move |_, wait| wait.started == at && wait.limit() == limit)
+                .await
+        }
+    };
+    for wait in [first, first * 2] {
+        let mut registration = opened(&mut relay).await;
+        registered(&mut registration, &identity(1)).await;
+        let dropped_at = timer.now();
+        drop(registration);
+        let pause = pause_from(dropped_at, wait).await;
+        timer.advance_to(pause.deadline);
+    }
+    let mut registration = opened(&mut relay).await;
+    registered(&mut registration, &identity(1)).await;
+    // A first ping answered: the gateway has taken the registration, so
+    // the time it lasts is counted from here.
+    send(&mut registration, RelayFrame::Ping).await;
+    assert_eq!(receive(&mut registration).await, RelayFrame::Pong);
+    // Kept alive with a ping every interval, until it has lasted `most`.
+    let since = timer.now();
+    while timer.now().since(since) < most {
+        timer.advance_to(timer.now() + PING_INTERVAL);
+        send(&mut registration, RelayFrame::Ping).await;
+        assert_eq!(receive(&mut registration).await, RelayFrame::Pong);
+    }
+    let dropped_at = timer.now();
+    drop(registration);
+    let pause = pause_from(dropped_at, first).await;
+    assert_eq!(pause.limit(), first);
+    serving.stop.send_replace(true);
+    tokio::time::timeout(REAL, serving.task)
+        .await
+        .unwrap()
+        .unwrap();
 }

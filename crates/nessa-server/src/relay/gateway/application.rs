@@ -128,11 +128,13 @@ where
                         wait = backoff.first;
                     }
                 }
-                Err(error) if error.kind() == io::ErrorKind::InvalidInput => {
-                    tracing::error!(%error, "this gateway cannot register with its relay");
+                Err(Unregistered::Unprovable) => {
+                    tracing::error!("the gateway key cannot make its relay proof; not registering");
                     return;
                 }
-                Err(error) => tracing::warn!(%error, ?wait, "registering with the relay failed"),
+                Err(Unregistered::Failed(error)) => {
+                    tracing::warn!(%error, ?wait, "registering with the relay failed")
+                }
             }
             tokio::select! {
                 biased;
@@ -144,30 +146,25 @@ where
     }
 
     /// Dial the relay and prove the key, within one preamble deadline.
-    async fn register(&self) -> io::Result<S> {
+    async fn register(&self) -> Result<S, Unregistered> {
         let deadline = self.timer.now() + PREAMBLE_DEADLINE;
         let key = self.key.key();
         let preamble = async {
             let mut stream = self.dial.dial().await?;
             write_frame(&mut stream, RelayFrame::Serve { key }).await?;
             let RelayFrame::Challenge { nonce } = read_frame(&mut stream).await? else {
-                return Err(unexpected("a challenge"));
+                return Err(unexpected("a challenge").into());
             };
-            let signature = self.key.prove(&nonce).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "the gateway key cannot make its relay proof",
-                )
-            })?;
+            let signature = self.key.prove(&nonce).ok_or(Unregistered::Unprovable)?;
             write_frame(&mut stream, RelayFrame::Proof { signature }).await?;
             match read_frame(&mut stream).await? {
-                RelayFrame::Registered => Ok(stream),
-                _ => Err(unexpected("Registered")),
+                RelayFrame::Registered => Ok::<_, Unregistered>(stream),
+                _ => Err(unexpected("Registered").into()),
             }
         };
         within(&*self.timer, deadline, preamble)
             .await
-            .unwrap_or_else(|_| Err(io::ErrorKind::TimedOut.into()))
+            .unwrap_or_else(|_| Err(io::Error::from(io::ErrorKind::TimedOut).into()))
     }
 
     /// Answer pings and accept readers until the registration ends, falls
@@ -186,7 +183,13 @@ where
                     silent = self.timer.now() + SILENCE;
                     match frame {
                         Ok(RelayFrame::Ping) => {
-                            if !self.send(&mut writer, RelayFrame::Pong).await {
+                            // A relay that stops reading must not hold up stop.
+                            let answered = tokio::select! {
+                                biased;
+                                () = stopped(&mut stop) => return,
+                                answered = self.send(&mut writer, RelayFrame::Pong) => answered,
+                            };
+                            if !answered {
                                 return;
                             }
                         }
@@ -253,10 +256,26 @@ where
     }
 }
 
-/// Resolves once stop is asked; never, once nothing can ask it any more.
+/// Resolves once stop is asked. A dropped sender is a stop too, as for the
+/// listener: nothing can ask for one later, and registering on with no
+/// listener behind it would announce a gateway that is not serving.
 async fn stopped(stop: &mut watch::Receiver<bool>) {
-    if stop.wait_for(|stop| *stop).await.is_err() {
-        std::future::pending::<()>().await;
+    let _ = stop.wait_for(|stop| *stop).await;
+}
+
+/// Why a registration was not made.
+#[derive(Debug)]
+enum Unregistered {
+    /// The gateway key cannot make its relay proof: trying again cannot
+    /// change that.
+    Unprovable,
+    /// Dialing, the relay's answer, or the deadline: worth trying again.
+    Failed(io::Error),
+}
+
+impl From<io::Error> for Unregistered {
+    fn from(error: io::Error) -> Self {
+        Self::Failed(error)
     }
 }
 

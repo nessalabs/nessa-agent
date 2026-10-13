@@ -171,7 +171,7 @@ impl<A: EnrollmentAccept> NativeEnrollmentListener<A> {
     /// workers are still running, before the drain, and the error is returned
     /// (`native_listener_stops_on_a_listening_socket_failure`). A failed peer
     /// does not end service for others. Result handles hold the connection
-    /// permit, so the task set is bounded by connection capacity.
+    /// or relay permit, so the task set is bounded by those two capacities.
     pub async fn run<R, E, S, F>(mut self, entropy: E, stop: S, failed: F) -> IoResult<()>
     where
         R: RngCore + CryptoRng + Send + 'static,

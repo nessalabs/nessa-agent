@@ -42,7 +42,10 @@ const PRODUCT_SESSION_CAPACITY: usize = NATIVE_CONNECTION_CAPACITY;
 const ENVIRONMENT_CAPACITY: usize = NATIVE_CONNECTION_CAPACITY;
 /// Bound on connections a relay joined, and on readers being accepted
 /// through it: a pool of their own, so readers a relay sends, however many,
-/// never take the permits direct readers need (`docs/design/auth/relay.md`).
+/// never take the connection permits direct readers need
+/// (`docs/design/auth/relay.md`). A relayed connection that opens a product
+/// session or an environment moves to that shared pool like a direct one;
+/// only a paired key gets that far.
 pub(crate) const RELAY_CAPACITY: usize = 4;
 
 /// Redacted primary physical/protocol refusal, without peer input diagnostics.
