@@ -529,6 +529,7 @@ cannot be reached.
 ```text
 nessa env enroll ADDRESS CODE   pair as an environment, with an environment invitation's code
 nessa env dial ADDRESS          wait for the owner's approval, then serve, dialing again whenever a connection ends
+                                [--relay HOST:PORT] asked for the gateway when a direct dial does not connect (relay.md, row RL14)
                                 [--drain-deadline 20s] a signal drains every lease before it stops (row K1)
                                 [--enroll-code-file PATH] enroll first when nothing is paired here (row K2)
 ```
@@ -577,7 +578,10 @@ sequenceDiagram
   an upgrade, fails the handshake and is dialed again too. Only a failure
   no dial can change stops it (`InvalidInput`: a pin that is not a key, a
   TLS setup this build cannot make). Each address the name resolves to is
-  tried in turn.
+  tried in turn. With `--relay`, the status asks and each dial go to the
+  relay for the gateway's pinned key when the direct dial has not
+  connected within a short head start, as a phone's read does
+  ([relay.md](relay.md#who-uses-it)); enrolling still needs the address.
 - **Stopping.** SIGINT or SIGTERM closes the connection being served, so its
   leases end as they do when a gateway goes away, and then dialing stops. A
   second signal while that drains exits at once. With `--drain-deadline`,
@@ -1382,10 +1386,13 @@ sequenceDiagram
   `POLL_INTERVAL`, `POLL_BACKOFF_CAP`, `READ_BUDGET` and `PREEMPT` are rows of
   [`limits.md`](../../limits.md).
 - **`peer.list` shows the reading.** Beside each pending or active peer:
-  `sync.state` (`waiting`, `synced`, `syncing`, `unreachable`, `failed`,
-  `quota`), the wall time the last read finished and how many conversations
-  the cache holds. It is what this process saw since it started; nothing
-  persists it.
+  `sync.state` (`waiting`, `synced`, `syncing`, `unreachable`, `away`,
+  `failed`, `quota`), the wall time the last read finished and how many
+  conversations the cache holds. `away` is a peer whose address did not
+  answer and whose relay said it is not registered there; it backs off as
+  `unreachable` does, and only the word differs
+  ([relay.md](relay.md#the-sleeping-gateway)). It is what this process saw
+  since it started; nothing persists it.
 - **Shutdown leaves nothing running.** Stopping native pairing stops the
   poller first: its wait ends, the cycle holding the turn is stopped (a
   status read is not continued, its answer kept for the cause, a read's
@@ -1422,6 +1429,7 @@ sequenceDiagram
 | R25 | One read finds more conversations withdrawn than `WITHDRAWN_PER_READ` | It withdraws that many and ends incomplete; the next cycle withdraws the rest; one cycle's records stay within about half the audit's queue | `a_read_withdraws_at_most_its_cap_and_ends_incomplete`; the bound on a cycle's records is a compile-time assertion beside `WITHDRAWN_PER_READ` |
 | R26 | A stop wins the status wait after the worker has committed an ending, before the poller has taken the status answer. The poller's own stop, or the cycle an owner command stops | The answer is kept, so the audit names the cause it carried. The cycle does not continue into a read | `a_stop_after_an_ended_transition_commits_keeps_the_status_cause`, `a_stopped_status_records_its_cause_and_does_not_read` |
 | R27 | A peer kept with a relay whose address stops answering | Its status dial and its read race the address with the relay and go through the relay; the grant is read as over a direct connection | `a_peer_whose_address_stops_answering_is_read_through_its_relay`; the race itself in `tests/peer_gateways/connector.rs` |
+| R28 | A peer kept with a relay whose address does not answer, and whose relay says it is not registered there; or says `NoAnswer` | `away`, backed off as `unreachable`, the cache kept; a relay's `NoAnswer` (a busy peer) or a timeout stays `unreachable` | `a_peer_whose_relay_says_it_is_offline_is_listed_away`; the relay's answer kept in `both_failing_is_the_relays_refusal` |
 | R17 | The wait after each cycle | The interval when settled or pending; an eighth of it when incomplete or stopped; doubling from the interval on each failure in a row; spread 80 to 120 percent; never past the cap; a failing entropy source draws the middle | `failures_double_the_wait_up_to_the_cap`, `jitter_spreads_a_wait_over_80_to_120_percent_and_the_cap_still_holds` and the other tests in `tests/peer_gateways/poller.rs` |
 
 ## What this part does not do
