@@ -23,3 +23,16 @@ FAIL QT13: a pending answer retains its original target and choices when the cal
 Source-asserted reverts: primitive scalar capture guards
 FAIL QT14: mutable own-words serialization is refused before queued RPC
 FAIL QT14: target capture rejects mutable required representation rather than retaining its reference
+Current-head browser matrix (f0da23bbb, production fixture)
+ok    question-target-identities [chromium 360]
+ok    question-target-identities [chromium 600]
+ok    question-target-identities [chromium 1440]
+ok    question-target-identities [webkit 360]
+ok    question-target-identities [webkit 600]
+ok    question-target-identities [webkit 1440]
+committed-transcript: 121/121 held
+Normal signed-out runner on the same source and Rust baseline9e00
+mcp-apps-gateway: 16/16 held
+gateway-window: 14/14 held
+scripted-scenarios: 9/9 held
+Verdict: pass (Chromium and WebKit)
