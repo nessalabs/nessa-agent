@@ -331,7 +331,8 @@ sequenceDiagram
     Agent->>Gateway: run
     Gateway->>Cedar: evaluate(grant + policy, gateway/run)
     Cedar-->>Gateway: Refuse
-    Gateway-->>Agent: not allowed, nothing recorded
+    Gateway->>Gateway: DriveToolAudit.record(decision)
+    Gateway-->>Agent: not allowed, decision audited, no lease record
 ```
 
 ## Driving a shared conversation
