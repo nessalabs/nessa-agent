@@ -160,6 +160,10 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.IdempotencyConflict:
     case ConversationErrorCode.MessageQuotaExceeded:
       return true
+    // A Drive grant's message its tools could not all be checked for is
+    // refused before anything of it is saved or sent.
+    case ConversationErrorCode.DrivePolicyUnenforceable:
+      return true
     // `temporarily_unavailable` is the one worth naming: a supervising task
     // also reports it when work it had already admitted was lost, so it is not
     // a refusal at all. The rest are either certainly after dispatch, or not

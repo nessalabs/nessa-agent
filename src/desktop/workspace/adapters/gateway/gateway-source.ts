@@ -1513,6 +1513,7 @@ function reasonFor(
     case ConversationErrorCode.ConversationConfigurationChanged:
     case ConversationErrorCode.ShareTargetNotPaired:
     case ConversationErrorCode.IdempotencyConflict:
+    case ConversationErrorCode.DrivePolicyUnenforceable:
       return uncertain ? "unavailable" : "not-supported"
     // Not done now, or not known to be: busy, starting, stopped, storage or
     // audit that did not answer, an outcome the gateway could not settle.
