@@ -391,7 +391,8 @@ export const settingsEntries = [
     id: "review-notices",
     tab: "access",
     label: "Review notifications",
-    detail: "Allow notifications to hear about a review while you are away from this window.",
+    detail:
+      "Allow notifications to hear about a review while you are away from this window.",
     keywords: "notify notification desktop phone permission review waiting",
   },
   {

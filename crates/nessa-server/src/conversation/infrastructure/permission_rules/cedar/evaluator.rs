@@ -256,6 +256,15 @@ fn entity(
     .map_err(|_| PermissionRuleUnavailable)
 }
 
+fn uid(entity_type: &str, id: &str) -> Result<EntityUid, PermissionRuleUnavailable> {
+    let entity_type =
+        EntityTypeName::from_str(entity_type).map_err(|_| PermissionRuleUnavailable)?;
+    Ok(EntityUid::from_type_name_and_id(
+        entity_type,
+        EntityId::new(id),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,17 +337,8 @@ mod tests {
     fn only_the_owner_may_change_rules() {
         let evaluator = CedarPermissionRuleEvaluator;
         for change in [RuleChange::Grant, RuleChange::Revoke, RuleChange::List] {
-            assert_eq!(evaluator.may(RulePrincipal::Owner, change).unwrap(), true);
-            assert_eq!(evaluator.may(RulePrincipal::Grant, change).unwrap(), false);
+            assert!(evaluator.may(RulePrincipal::Owner, change).unwrap());
+            assert!(!evaluator.may(RulePrincipal::Grant, change).unwrap());
         }
     }
-}
-
-fn uid(entity_type: &str, id: &str) -> Result<EntityUid, PermissionRuleUnavailable> {
-    let entity_type =
-        EntityTypeName::from_str(entity_type).map_err(|_| PermissionRuleUnavailable)?;
-    Ok(EntityUid::from_type_name_and_id(
-        entity_type,
-        EntityId::new(id),
-    ))
 }

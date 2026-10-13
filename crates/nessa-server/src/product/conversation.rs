@@ -481,7 +481,7 @@ pub(super) async fn dispatch(
                 let params = params!(ConversationPermissionRulesParams);
                 let rules = match remembered_rules(state, &frame.id, &initiation) {
                     Ok(rules) => rules,
-                    Err(response) => return Ok(response),
+                    Err(response) => return Ok(*response),
                 };
                 match rules.list(RulePrincipal::Owner) {
                     Ok(listed) => Ok(success(
@@ -498,7 +498,7 @@ pub(super) async fn dispatch(
                 let params = params!(ConversationRevokePermissionRuleParams);
                 let rules = match remembered_rules(state, &frame.id, &initiation) {
                     Ok(rules) => rules,
-                    Err(response) => return Ok(response),
+                    Err(response) => return Ok(*response),
                 };
                 match rules.revoke(&params.rule_id, RulePrincipal::Owner) {
                     Ok(applied) => Ok(success(
@@ -548,15 +548,15 @@ fn remembered_rules<'a>(
     state: &'a ProductRouteState,
     request_id: &str,
     initiation: &Initiation,
-) -> Result<&'a crate::conversation::infrastructure::PermissionMemory, OutgoingMessage> {
+) -> Result<&'a crate::conversation::infrastructure::PermissionMemory, Box<OutgoingMessage>> {
     if !matches!(initiation.initiator(), Initiator::Owner) {
-        return Err(failure(request_id, "forbidden"));
+        return Err(Box::new(failure(request_id, "forbidden")));
     }
     state.permission_rules.as_deref().ok_or_else(|| {
-        failure(
+        Box::new(failure(
             request_id,
             ConversationErrorCode::ConversationsNotConfigured.as_str(),
-        )
+        ))
     })
 }
 

@@ -108,7 +108,12 @@ export function PermissionRuleRows() {
   return (
     <Group title={entry.label} note={entry.detail}>
       {resting !== undefined ? (
-        <ItemRow setting="remembered-rules" label={entry.label} detail={resting} unavailable />
+        <ItemRow
+          setting="remembered-rules"
+          label={entry.label}
+          detail={resting}
+          unavailable
+        />
       ) : null}
       {phase.kind === "ready" && phase.rules.length === 0 ? (
         <ItemRow

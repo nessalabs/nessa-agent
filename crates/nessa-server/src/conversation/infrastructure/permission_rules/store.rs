@@ -78,7 +78,7 @@ impl RuleStore {
         let rows = statement.query_map([], read_raw)?;
         let mut rules = Vec::new();
         for row in rows {
-            if let Ok(Some(rule)) = row.map(|raw| validate(raw)) {
+            if let Ok(Some(rule)) = row.map(validate) {
                 rules.push(rule);
             }
         }
