@@ -15,7 +15,8 @@ use crate::conversation::domain::{CommandHosts, ToolRules};
 use crate::conversation::infrastructure::{DISCOVERY_STEPS_PER_READ, MAX_CATALOGUE_CHANGE_WATCHES};
 use crate::mcp_servers::infrastructure::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_BYTES};
 use crate::peer_gateways::infrastructure::{
-    AUDIT_QUEUE, POLL_BACKOFF_CAP, POLL_INTERVAL, PREEMPT, READ_BUDGET, WITHDRAWN_PER_READ,
+    AUDIT_QUEUE, POLL_BACKOFF_CAP, POLL_INTERVAL, PREEMPT, READS_AT_ONCE, READ_BUDGET,
+    WITHDRAWN_PER_READ,
 };
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
 use crate::product::{OperationalLimits, SessionSettings, RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
@@ -413,25 +414,31 @@ fn catalogue() -> &'static [Limit] {
             id: "peer.poll_backoff_cap",
             tier: "fixed",
             owner: "POLL_BACKOFF_CAP in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs",
-            meaning: "the longest wait a peer is scheduled for between reads, jitter included; a peer that keeps failing waits twice as long each time, from the interval up to this; peers are read one at a time, so reads of other peers ahead of it can add to it",
+            meaning: "the longest wait a peer is scheduled for between reads, jitter included; a peer that keeps failing waits twice as long each time, from the interval up to this; a peer that is due while every read slot is taken waits for a slot on top of this",
         },
         Limit {
             id: "peer.read_budget",
             tier: "fixed",
             owner: "READ_BUDGET in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs",
-            meaning: "the longest one read of a peer gateway runs; a read that reaches it having saved something ends incomplete and continues on the next cycle, and one that saved nothing is unreachable and backs off, so a slow peer cannot hold the peer commands, and holds the other peers, read one at a time, at most this long per read",
+            meaning: "the longest one read of one peer gateway runs, on the injected clock; a read that reaches it having saved something ends incomplete and continues on the next cycle, and one that saved nothing is unreachable and backs off. Each peer has this timeout of its own, so a slow or failing peer is reported and the others are read without waiting it out",
         },
         Limit {
             id: "peer.preempt",
             tier: "fixed",
             owner: "PREEMPT in crates/nessa-server/src/peer_gateways/infrastructure/commands.rs",
-            meaning: "the longest peer.enroll, peer.forget or peer.relay waits for a peer read it stopped to give back its turn; at least twice the read's unstoppable connect (the 5 s handshake), and the read only queues its audit records before it gives the turn back, so past it the command answers peer_busy only if local storage stalls",
+            meaning: "the longest peer.forget or peer.relay waits for the read of the peer it names to give back that peer's turn; peer.enroll does not stop a read. At least twice the read's unstoppable connect (the 5 s handshake), and the read only queues its audit records before it gives the turn back, so past it the command answers peer_busy only if local storage stalls",
         },
         Limit {
             id: "peer.audit_queue",
             tier: "fixed",
             owner: "AUDIT_QUEUE in crates/nessa-server/src/peer_gateways/infrastructure/audit.rs",
-            meaning: "the most peer audit records waiting to be written, one at a time in the order they were handed over; one poller cycle queues at most about half of it, so it fills only when the store falls behind; a record past it is refused at once, its sequence left as a gap, so peer.enroll, peer.forget or peer.relay answers peer_audit_unavailable before any effect and a peer read's change stands with its record logged as not kept; an owner command's record waits behind at most this many, well inside its 5 s audit deadline",
+            meaning: "the most peer audit records waiting to be written, one at a time in the order they were handed over; one poller cycle queues at most about half of it, and cycles running side by side share the queue, so it fills when they hand over together or the store falls behind; a record past it is refused at once, its sequence left as a gap, so peer.enroll, peer.forget or peer.relay answers peer_audit_unavailable before any effect and a peer read's change stands with its record logged as not kept; an owner command's record waits behind at most this many, well inside its 5 s audit deadline",
+        },
+        Limit {
+            id: "peer.reads_at_once",
+            tier: "fixed",
+            owner: "READS_AT_ONCE in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs",
+            meaning: "how many peer gateways are read at once; one more stays due until a read finishes and frees a place, and is not failed or skipped. A slow peer holds only its own place, until that cycle ends, and its read is bounded by its own read budget",
         },
         Limit {
             id: "peer.withdrawn_per_read",
@@ -665,6 +672,7 @@ pub(crate) fn effective_json(
     put("peer.poll_interval", millis(POLL_INTERVAL));
     put("peer.poll_backoff_cap", millis(POLL_BACKOFF_CAP));
     put("peer.read_budget", millis(READ_BUDGET));
+    put("peer.reads_at_once", count(READS_AT_ONCE));
     put("peer.preempt", millis(PREEMPT));
     put("peer.audit_queue", count(AUDIT_QUEUE));
     put("peer.withdrawn_per_read", count(WITHDRAWN_PER_READ));

@@ -1202,10 +1202,16 @@ sequenceDiagram
 ## Reading a peer
 
 Part 2b-3 reads what each peer granted. One task per gateway,
-`PeerPoller`, started and joined with native pairing, walks the kept peers
-one at a time. Each cycle holds the peer commands' turn, but gives it up to
-the owner: `peer.enroll`, `peer.forget` and `peer.relay` stop a cycle that holds it and go
-ahead, so a peer, however slow, never keeps the owner waiting.
+`PeerPoller`, started and joined with native pairing, schedules the kept
+peers and reads up to `READS_AT_ONCE` (4) of them side by side. Each cycle
+holds that peer's turn. `peer.forget` and `peer.relay` stop the cycle of the
+peer they name and go ahead; a cycle of any other peer keeps going. A peer,
+however slow, never keeps an owner command waiting except the command that
+names it, and never keeps the other peers' reads waiting past its own place
+in the cap. `peer.enroll` does not stop a read. It shares the record set
+with `peer.forget` and `peer.relay`, one at a time: enroll and forget both
+change how many records are kept and `MAX_PEERS` is checked against that
+set, and a relay that cannot take the set does not stop a read.
 
 ```mermaid
 sequenceDiagram
@@ -1216,7 +1222,7 @@ sequenceDiagram
     participant A as Gateway A (native listener)
     participant C as B's retained cache of A
     P->>R: list kept peers to schedule (pending or active)
-    P->>P: take the turn when free (registered as this cycle's)
+    P->>P: start each due peer, up to READS_AT_ONCE, each on its own turn
     P->>R: read the record again (gone, revoked or unreadable: drop the peer)
     P->>A: pinned status, through PeerConnector under the deadline clock (a relay kept: raced with it after DIRECT_HEAD_START, or at once on refusal)
     A-->>P: Pending / Claimed / Approved: wait an interval
@@ -1234,9 +1240,11 @@ sequenceDiagram
     C-->>P: ResetRequired or damaged: empty the cache, read once more
     A-->>P: openProduct refused (redacted)
     P->>A: pinned status again, only Terminal ends the enrollment
-    O->>P: peer.forget, peer.enroll or peer.relay while the cycle holds the turn
-    P->>P: cycle stopped: read sockets shut, its stop flag asked every 50 ms, waits woken, turn given back
-    P-->>O: the command runs, the read carries on at the next cycle
+    O->>P: peer.forget or peer.relay of this peer, while its cycle holds its turn
+    P->>P: that peer's cycle stopped: its sockets shut, its stop flag asked every 50 ms, waits woken, its turn given back
+    P-->>O: the command runs; another peer's read is not stopped and carries on
+    O->>P: peer.enroll while reads run
+    P-->>O: the record set, if no enroll, forget, or relay holds it; no read is stopped
     P->>U: each change as it is made (status, reset, conversations withdrawn): queued, in turn order
     P->>P: give back the turn
     P->>U: wait for those records, all within one AUDIT_DEADLINE
@@ -1246,10 +1254,12 @@ sequenceDiagram
   status, and nothing is removed without a Terminal one: a refused
   `openProduct` is redacted, so a revoked credential and a full session pool
   look alike until the status is asked, as a device does.
-- **What is read is decided under the turn.** The listing only schedules
-  peers. Once a cycle holds the turn it reads the peer's record again, and a
-  peer forgotten, ended or unreadable since is dropped, its sync with it, so
-  a forget is never followed by a stale `sync` coming back.
+- **What is read is decided under that peer's turn.** The listing only
+  schedules peers. Once a cycle holds the peer's turn it reads the record
+  again, and a peer forgotten, ended or unreadable since is dropped, its
+  sync with it, so a forget is never followed by a stale `sync` coming
+  back. An unreadable record is skipped at the listing; a list that cannot
+  be read waits the interval and does not stop a read already running.
 - **The core is the device's.** `nessa-client-core::retained` is the one
   public entry the gateway calls: open a cache, read into it, count what it
   holds. It composes the same engine, cache and gateway session the device
@@ -1299,13 +1309,18 @@ sequenceDiagram
   the next cycle carries on soon. One that saved nothing made no headway:
   it is `unreachable`, backed off, and its last finished read is not
   refreshed, so a peer that trickles is not read again every few seconds.
-- **The owner comes first.** A cycle registers itself with the turn it holds,
-  and gives the turn back and clears itself under one lock, so an owner
-  command never finds the turn taken with no cycle to stop. An owner command
-  that finds a cycle stops it: the read's sockets are shut and its waits
-  woken, and the command takes the turn once given back, within `PREEMPT`
-  (10 s) on the injected clock. Shutting a socket does not wake a receive
-  blocked in another thread on every system (Windows does not), so a read
+- **The owner comes first, for the peer it names.** A cycle registers itself
+  with that peer's turn, and gives the turn back and clears itself under one
+  lock, so an owner command never finds that turn taken with no cycle to
+  stop. `peer.forget` and `peer.relay` stop that peer's cycle: its sockets
+  are shut and its waits woken, and the command takes the turn once given
+  back, within `PREEMPT` (10 s) on the injected clock. No other peer's cycle
+  is stopped. `peer.enroll`, `peer.forget`, and `peer.relay` take the record
+  set without waiting, and the second is `peer_busy` at once; a forget or
+  relay that cannot take the record set does not stop the peer's read.
+  Shutting a socket does not
+  wake a receive blocked in another thread on every system (Windows does
+  not), so a read
   never waits on its socket longer than 50 ms at a time and asks its stop
   between. What a stop cannot cut short is an operating-system connect, at
   most the 5 s handshake budget; `PREEMPT` is at least twice that, checked
@@ -1379,12 +1394,12 @@ sequenceDiagram
 - **Cadence.** Each peer is read every `POLL_INTERVAL` (30 s), spread 80 to
   120 percent, and after a failure after a backoff that doubles; every wait,
   jitter included, is held to `POLL_BACKOFF_CAP` (15 min). That is the wait
-  a peer is scheduled for; reads of other peers ahead of it can add to it
-  (see Known limits). A read stopped at a bound, or by an owner command,
-  continues sooner. Every wait is on the
+  a peer is scheduled for. A peer that is due while every read slot is taken
+  waits for a slot, and is not failed for it. A read stopped at a bound, or
+  by an owner command, continues sooner. Every wait is on the
   injected monotonic clock and the jitter is drawn from injected entropy.
-  `POLL_INTERVAL`, `POLL_BACKOFF_CAP`, `READ_BUDGET` and `PREEMPT` are rows of
-  [`limits.md`](../../limits.md).
+  `POLL_INTERVAL`, `POLL_BACKOFF_CAP`, `READ_BUDGET`, `READS_AT_ONCE` and
+  `PREEMPT` are rows of [`limits.md`](../../limits.md).
 - **`peer.list` shows the reading.** Beside each pending or active peer:
   `sync.state` (`waiting`, `synced`, `syncing`, `unreachable`, `away`,
   `failed`, `quota`), the wall time the last read finished and how many
@@ -1394,9 +1409,9 @@ sequenceDiagram
   ([relay.md](relay.md#the-sleeping-gateway)). It is what this process saw
   since it started; nothing persists it.
 - **Shutdown leaves nothing running.** Stopping native pairing stops the
-  poller first: its wait ends, the cycle holding the turn is stopped (a
-  status read is not continued, its answer kept for the cause, a read's
-  sockets shut), and `join` returns once its blocking worker has. Then
+  poller first: its wait ends, every cycle is stopped (a status read is not
+  continued, its answer kept for the cause, a read's sockets shut), and
+  `join` returns once every blocking worker has. Then
   the peer commands are closed, and those past their intent are waited
   for, within `PREEMPT`. Then the peer audit is closed and its writer
   waited for, within one `AUDIT_DEADLINE` on the injected clock.
@@ -1431,6 +1446,10 @@ sequenceDiagram
 | R27 | A peer kept with a relay whose address stops answering | Its status dial and its read race the address with the relay and go through the relay; the grant is read as over a direct connection | `a_peer_whose_address_stops_answering_is_read_through_its_relay`; the race itself in `tests/peer_gateways/connector.rs` |
 | R28 | A peer kept with a relay whose address does not answer, and whose relay says it is not registered there; or says `NoAnswer` | `away`, backed off as `unreachable`, the cache kept; a relay's `NoAnswer` (a busy peer) or a timeout stays `unreachable` | `a_peer_whose_relay_says_it_is_offline_is_listed_away`; the relay's answer kept in `both_failing_is_the_relays_refusal` |
 | R17 | The wait after each cycle | The interval when settled or pending; an eighth of it when incomplete or stopped; doubling from the interval on each failure in a row; spread 80 to 120 percent; never past the cap; a failing entropy source draws the middle | `failures_double_the_wait_up_to_the_cap`, `jitter_spreads_a_wait_over_80_to_120_percent_and_the_cap_still_holds` and the other tests in `tests/peer_gateways/poller.rs` |
+| R29 | One peer's connection is accepted and never speaks, and another peer is enrolled while that connection is still held | The second peer is `synced` inside a wait shorter than the handshake deadline. The first peer's held connection is the same one | `a_slow_peer_does_not_hold_up_the_others` |
+| R30 | `peer.forget` of the peer that just synced, while the other peer's read is held; then `peer.enroll` to a peer that accepts and never answers, and `peer.forget` of the peer being read | The first forget removes that peer and does not open a new connection for the held read. The enroll holds the record set, so the second forget is `peer_busy` and does not stop the held read. Dropping the silent socket ends the enroll | same |
+| R31 | Two peers enrolled, then one grantor's listener stopped | The stopped peer is listed `unreachable`. The other is `synced`. The poller joins | `a_failing_peer_is_reported_and_the_other_is_read` |
+| R32 | `reads_at_once` is 1, and both peers' reads would hold | One peer's read is held. The other has accepted nothing, for longer than a poll tick. Once the held read is released, the waiting peer is read | `a_read_past_the_cap_waits_for_a_slot` |
 
 ## What this part does not do
 
@@ -1453,16 +1472,14 @@ the client and gives the head an access path by receiver
 
 ## Known limits
 
-- **Peers are read one at a time.** A read runs up to `READ_BUDGET` (60 s),
-  and every other peer waits for it, so each peer that answers slowly
-  lengthens a pass by up to that much. With several such peers, every peer
-  is read about once per their combined budgets rather than every
-  `POLL_INTERVAL`, and a grant withdrawn or a credential revoked on any peer
-  is seen that much later. A slow peer that saves nothing within its budget
-  backs off, so it costs this once per backoff; one that keeps saving a
-  little continues on the next pass and costs it every pass. The owner's
-  commands are not held: they stop the read and take the turn. Reading
-  peers side by side, each with its own turn, is not built.
+- **At most `READS_AT_ONCE` peers are read at once.** A peer past the cap
+  stays due until a read finishes and frees a place. It is not failed for
+  the wait. A slow peer holds one place until that cycle ends, and its read
+  is bounded by its own `READ_BUDGET`; the peers inside the cap are read on
+  that tick. Cycles running side by side
+  share the audit queue: one cycle still hands over at most about half of
+  it, and two that withdraw their cap together can fill it. A full queue
+  still refuses at once (row R22).
 - **An enrollment that loses its last reply can leave a pending record.** B
   saves its record before it confirms, as a device does, so a connection
   that fails after that save answers `peer_unreachable` or

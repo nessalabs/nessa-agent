@@ -14,15 +14,23 @@
 //! anything, its outcome on every way it ends, and success answered only when
 //! both are kept.
 //!
-//! One turn is held by an enroll, a forget, or one poller cycle. An owner
-//! command that finds a cycle holding it stops that cycle (its read's sockets
-//! shut, its waits woken) and takes the turn once given back; the cycle's
-//! read carries on at the next one. Only another owner command makes it
-//! `Busy`. A cycle holds the turn only for its own peer I/O and local
-//! writes: it hands each change's record to the audit under the turn, which
-//! queues it at once, and waits for it to be kept only after it gives the
-//! turn back, so the evidence is in turn order and a slow audit never holds
-//! the turn.
+//! Each peer has its own turn, held by the cycle reading that peer or by the
+//! owner command that names it (`peer.forget`, `peer.relay`). The command
+//! stops that peer's cycle (its read's sockets shut, its waits woken) and
+//! takes the turn once given back; the read carries on at the next cycle.
+//! A cycle of any other peer is left running. Enroll, forget, and relay
+//! share one separate turn, the record set, and the second is `Busy` at
+//! once: enroll and forget both change how many records are kept, and
+//! `MAX_PEERS` is checked against that set, and a relay that cannot take
+//! the set must not stop a read. A read does not hold the record set. Only
+//! another command already holding the turn being asked for makes it
+//! `Busy`. A cycle holds its peer's turn only for
+//! its own peer I/O and local writes: it hands each change's record to the
+//! audit under the turn, which queues it at once, and waits for it to be
+//! kept only after it gives the turn back, so a change the cycle made is
+//! ahead of the command that stopped it, and a slow audit never holds the
+//! turn. Records from cycles running side by side land in the order they
+//! were handed to the audit's one writer.
 use super::connector::raced;
 use super::records::{
     ForgetFailure, PeerEntry, PeerPhase, PeerRecord, PeerRecords, PeerSlot, SlotFound, SlotRefusal,
@@ -85,8 +93,12 @@ const _: () = assert!(PREEMPT.as_millis() >= 2 * HANDSHAKE.as_millis());
 /// Why a peer command did not do what was asked.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PeerError {
-    /// Another enrollment, or a forget, is running on this gateway. A read
-    /// of a peer never is: it is stopped and carries on later.
+    /// Another enroll, forget, or relay holds the record set, or another
+    /// command holds this peer's turn. The record set is refused before
+    /// this peer's read is stopped
+    /// (`a_slow_peer_does_not_hold_up_the_others`); the turn is refused
+    /// after that read has been stopped, and the read carries on later.
+    /// No other peer's read is stopped.
     Busy,
     /// Nothing answered at the address, the connection failed, or what
     /// answered is not a gateway enrolling peers.
@@ -174,20 +186,51 @@ pub struct PeerCommands {
     audit: Arc<dyn PeerAudit>,
     connector: Arc<dyn PeerConnector>,
     entropy: EnrollmentEntropySource,
-    /// One enroll, forget or poller cycle at a time: an enrollment runs a
-    /// key-stretching function, a forget must not remove the record one is
-    /// saving, and a cycle writes the record and its cache.
-    turn: Arc<Semaphore>,
-    /// The poller cycle holding the turn, if one is. Set and cleared under
-    /// this lock together with taking and giving back the turn, so an owner
-    /// command that cannot take the turn knows whether stopping a cycle frees
-    /// it.
-    cycle: Mutex<Option<Arc<CycleStop>>>,
+    /// Enroll, forget, and relay, one at a time. Enroll and forget both change
+    /// how many records are kept, and saving a new one refuses past
+    /// `MAX_PEERS`, so the check and the removal must not interleave. Relay
+    /// takes it too, so a relay that cannot run does not stop a read. A read
+    /// does not hold it.
+    record_set: Arc<Semaphore>,
+    /// One turn per peer. The cycle reading that peer, or the owner command
+    /// that names it, holds the permit. The cycle is registered under this
+    /// lock together with taking and giving back the permit, so a command
+    /// that cannot take the turn knows whether stopping that peer's cycle
+    /// frees it.
+    peers: Mutex<PeerTurns>,
     /// What the poller last saw of each peer.
     syncs: Mutex<HashMap<DeviceKey, PeerSync>>,
     /// Owner commands between their intent and their outcome: shutdown waits
     /// for them before it closes the audit.
     running: watch::Sender<Admission>,
+}
+
+/// Every peer's turn, and whether shutdown has closed them.
+struct PeerTurns {
+    closed: bool,
+    peers: HashMap<DeviceKey, PeerTurn>,
+}
+
+/// One peer's turn and the cycle holding it, if a cycle is.
+struct PeerTurn {
+    turn: Arc<Semaphore>,
+    cycle: Option<Arc<CycleStop>>,
+}
+impl PeerTurn {
+    fn new() -> Self {
+        Self {
+            turn: Arc::new(Semaphore::new(1)),
+            cycle: None,
+        }
+    }
+}
+
+/// `key`'s slot when commands are still open, creating it on first use.
+fn open_slot(turns: &mut PeerTurns, key: DeviceKey) -> Option<&mut PeerTurn> {
+    if turns.closed {
+        return None;
+    }
+    Some(turns.peers.entry(key).or_insert_with(PeerTurn::new))
 }
 
 /// Ends one poller cycle: its read's sockets are shut, and its waits woken.
@@ -218,30 +261,54 @@ impl CycleStop {
     }
 }
 
-/// The turn as one poller cycle holds it. Dropping it clears the cycle and
-/// gives the turn back, both under the cycle's lock, so an owner command
-/// never finds the turn taken with no cycle to stop.
+/// One peer's turn as its poller cycle holds it. Dropping it clears that
+/// peer's cycle and gives the turn back, both under the peers' lock, so an
+/// owner command never finds the turn taken with no cycle to stop.
 pub(super) struct CycleTurn {
     commands: Arc<PeerCommands>,
+    key: DeviceKey,
     permit: Option<OwnedSemaphorePermit>,
 }
 impl Drop for CycleTurn {
     fn drop(&mut self) {
-        let mut holder = self
+        let mut turns = self
             .commands
-            .cycle
+            .peers
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        *holder = None;
+        if let Some(slot) = turns.peers.get_mut(&self.key) {
+            slot.cycle = None;
+        }
+        // While the lock is still held, so a command cannot observe the
+        // permit gone and the cycle already cleared.
         drop(self.permit.take());
+        take_free_turn(&mut turns, self.key);
+    }
+}
+
+/// Drop `key`'s turn when nothing holds it: the cycle is clear and no
+/// command is waiting on that semaphore. A command that saw the cycle
+/// cloned the semaphore first, so this does not remove the turn it is
+/// about to acquire. A forgotten peer, or a key that was never a peer,
+/// does not keep a turn for the life of the process
+/// (`a_peer_turn_is_dropped_when_nothing_holds_it`).
+fn take_free_turn(turns: &mut PeerTurns, key: DeviceKey) {
+    let free = turns
+        .peers
+        .get(&key)
+        .is_some_and(|slot| slot.cycle.is_none() && Arc::strong_count(&slot.turn) == 1);
+    if free {
+        turns.peers.remove(&key);
     }
 }
 /// What an owner command found when it asked for the turn.
 pub(super) enum OwnerTurn {
     /// It was free.
     Taken(OwnedSemaphorePermit),
-    /// This poller cycle holds it: stop it and wait.
-    Cycle(Arc<CycleStop>),
+    /// This poller cycle holds it: stop it and wait. The semaphore is cloned
+    /// under the peers' lock, so giving the cycle back cannot remove the
+    /// turn before the command acquires it.
+    Cycle(Arc<CycleStop>, Arc<Semaphore>),
     /// Another owner command holds it.
     Busy,
     /// The commands are closed for shutdown.
@@ -284,8 +351,11 @@ impl PeerCommands {
             audit,
             connector,
             entropy,
-            turn: Arc::new(Semaphore::new(1)),
-            cycle: Mutex::new(None),
+            record_set: Arc::new(Semaphore::new(1)),
+            peers: Mutex::new(PeerTurns {
+                closed: false,
+                peers: HashMap::new(),
+            }),
             syncs: Mutex::new(HashMap::new()),
             running: watch::channel(Admission::default()).0,
         }
@@ -294,59 +364,105 @@ impl PeerCommands {
     pub fn records(&self) -> &Arc<PeerRecords> {
         &self.records
     }
-    /// The turn for `cycle`, if no one holds it. The poller asks again later
-    /// rather than queue, so an owner command never waits behind a cycle.
-    pub(super) fn try_cycle_turn(self: &Arc<Self>, cycle: &Arc<CycleStop>) -> Option<CycleTurn> {
-        let mut holder = self.cycle.lock().unwrap_or_else(PoisonError::into_inner);
-        let permit = self.turn.clone().try_acquire_owned().ok()?;
-        *holder = Some(cycle.clone());
+    /// `key`'s turn for `cycle`, if no one holds it. The poller asks again
+    /// later rather than queue, so an owner command never waits behind a
+    /// cycle. `None` once the commands are closed.
+    pub(super) fn try_cycle_turn(
+        self: &Arc<Self>,
+        key: DeviceKey,
+        cycle: &Arc<CycleStop>,
+    ) -> Option<CycleTurn> {
+        let mut turns = self.peers.lock().unwrap_or_else(PoisonError::into_inner);
+        let slot = open_slot(&mut turns, key)?;
+        let permit = slot.turn.clone().try_acquire_owned().ok()?;
+        slot.cycle = Some(cycle.clone());
         Some(CycleTurn {
             commands: self.clone(),
+            key,
             permit: Some(permit),
         })
     }
-    /// Stop the cycle holding the turn, if one is.
-    pub(super) fn stop_cycle(&self) {
-        if let Some(cycle) = &*self.cycle.lock().unwrap_or_else(PoisonError::into_inner) {
-            cycle.stop();
+    /// Stop every cycle that holds a peer's turn. Shutdown asks this so a
+    /// read still running gives its turn back; a command names one peer and
+    /// stops only that peer's cycle.
+    pub(super) fn stop_all_cycles(&self) {
+        let turns = self.peers.lock().unwrap_or_else(PoisonError::into_inner);
+        for slot in turns.peers.values() {
+            if let Some(cycle) = &slot.cycle {
+                cycle.stop();
+            }
         }
     }
-    /// The turn for an owner command: free, or given back by the poller
-    /// cycle that held it once stopped, within [`PREEMPT`]. `Busy` when
-    /// another owner command holds it, or the cycle did not give it back;
-    /// `Unavailable` once the commands are closed for shutdown. Either way
-    /// before the command has any effect.
-    async fn owner_turn(&self) -> Result<OwnedSemaphorePermit, PeerError> {
-        let cycle = match self.try_owner_turn() {
+    /// The record set, if no enrollment or forget holds it. Not waited for:
+    /// the other command is `Busy`.
+    fn try_record_set(&self) -> Result<OwnedSemaphorePermit, PeerError> {
+        match self.record_set.clone().try_acquire_owned() {
+            Ok(permit) => Ok(permit),
+            Err(TryAcquireError::Closed) => Err(PeerError::Unavailable),
+            Err(TryAcquireError::NoPermits) => Err(PeerError::Busy),
+        }
+    }
+    /// `key`'s turn for an owner command: free, or given back by the cycle
+    /// that held it once stopped, within [`PREEMPT`]. `Busy` when another
+    /// command holds it, or the cycle did not give it back; `Unavailable`
+    /// once the commands are closed. Either way before the command has any
+    /// effect. No other peer's cycle is stopped.
+    async fn peer_turn(&self, key: DeviceKey) -> Result<OwnedSemaphorePermit, PeerError> {
+        let (cycle, turn) = match self.try_peer_turn(key) {
             OwnerTurn::Taken(permit) => return Ok(permit),
-            OwnerTurn::Cycle(cycle) => cycle,
+            OwnerTurn::Cycle(cycle, turn) => (cycle, turn),
             OwnerTurn::Busy => return Err(PeerError::Busy),
             OwnerTurn::Closed => return Err(PeerError::Unavailable),
         };
         cycle.stop();
-        match self
-            .within(PREEMPT, || self.turn.clone().acquire_owned())
-            .await
-        {
+        match self.within(PREEMPT, || turn.acquire_owned()).await {
             Some(Ok(permit)) => Ok(permit),
             Some(Err(_)) => Err(PeerError::Unavailable),
             None => Err(PeerError::Busy),
         }
     }
-    /// The turn if free, else who holds it, read under the cycle's lock.
-    pub(super) fn try_owner_turn(&self) -> OwnerTurn {
-        let holder = self.cycle.lock().unwrap_or_else(PoisonError::into_inner);
-        match self.turn.clone().try_acquire_owned() {
+    /// Give `key`'s turn back and drop it when nothing else holds it.
+    fn end_peer_turn(&self, key: DeviceKey, permit: OwnedSemaphorePermit) {
+        let mut turns = self.peers.lock().unwrap_or_else(PoisonError::into_inner);
+        drop(permit);
+        take_free_turn(&mut turns, key);
+    }
+}
+
+/// `key`'s turn held by an owner command. Dropping it gives the turn back
+/// and removes it when nothing else is waiting on it.
+struct EndedTurn<'a> {
+    commands: &'a PeerCommands,
+    key: DeviceKey,
+    permit: Option<OwnedSemaphorePermit>,
+}
+impl Drop for EndedTurn<'_> {
+    fn drop(&mut self) {
+        if let Some(permit) = self.permit.take() {
+            self.commands.end_peer_turn(self.key, permit);
+        }
+    }
+}
+impl PeerCommands {
+    /// `key`'s turn if free, else who holds it, read under the peers' lock.
+    pub(super) fn try_peer_turn(&self, key: DeviceKey) -> OwnerTurn {
+        let mut turns = self.peers.lock().unwrap_or_else(PoisonError::into_inner);
+        if turns.closed {
+            return OwnerTurn::Closed;
+        }
+        let slot = turns.peers.entry(key).or_insert_with(PeerTurn::new);
+        match slot.turn.clone().try_acquire_owned() {
             Ok(permit) => OwnerTurn::Taken(permit),
             Err(TryAcquireError::Closed) => OwnerTurn::Closed,
-            Err(TryAcquireError::NoPermits) => {
-                holder.clone().map_or(OwnerTurn::Busy, OwnerTurn::Cycle)
-            }
+            Err(TryAcquireError::NoPermits) => match &slot.cycle {
+                Some(cycle) => OwnerTurn::Cycle(Arc::clone(cycle), Arc::clone(&slot.turn)),
+                None => OwnerTurn::Busy,
+            },
         }
     }
     /// Close the commands for shutdown, once the poller is joined: a command
     /// asked from now is refused `peer_unavailable` before its intent; one
-    /// already past its intent no longer takes the turn (it answers
+    /// already past its intent no longer takes a turn (it answers
     /// `peer_unavailable`, its outcome kept, before any effect); and every
     /// command already between
     /// its intent and its outcome is waited for, until the injected clock
@@ -355,7 +471,14 @@ impl PeerCommands {
     pub async fn close(&self, limit: Duration) -> bool {
         self.running
             .send_modify(|admission| admission.closed = true);
-        self.turn.close();
+        {
+            let mut turns = self.peers.lock().unwrap_or_else(PoisonError::into_inner);
+            turns.closed = true;
+            self.record_set.close();
+            for slot in turns.peers.values() {
+                slot.turn.close();
+            }
+        }
         let mut running = self.running.subscribe();
         let finished = self
             .within(limit, || async move {
@@ -426,7 +549,7 @@ impl PeerCommands {
         relay: Option<RelayAddress>,
         code: ManualCode,
     ) -> (Result<PeerEntry, PeerError>, Evidence) {
-        let _permit = match self.owner_turn().await {
+        let _set = match self.try_record_set() {
             Ok(permit) => permit,
             Err(refused) => return (Err(refused), Evidence::not_read(None)),
         };
@@ -583,9 +706,10 @@ impl PeerCommands {
     }
     /// Remove the record for `key`, and its cache, and return what it was,
     /// for `initiator`. Local only: the peer's owner revokes the credential on
-    /// the peer. Refused `Busy` while an enrollment runs, which may be saving
-    /// that very record: removing it then would spend the peer's invitation
-    /// for nothing. A poller cycle reading it, or any peer, is stopped first.
+    /// the peer. Refused `Busy` while an enrollment or another forget runs,
+    /// which may be saving or removing a record: the record set is one at a
+    /// time, because of `MAX_PEERS`. A poller cycle reading this peer is
+    /// stopped first. A cycle reading any other peer is not.
     /// Audited like every peer command (see [`Self::audited`]).
     pub async fn forget(
         &self,
@@ -602,12 +726,23 @@ impl PeerCommands {
     /// The forget, and what it found and left of the record.
     async fn forget_turn(&self, key: DeviceKey) -> (Result<PeerEntry, PeerError>, Evidence) {
         let not_read = Evidence::not_read(Some(key));
-        let _permit = match self.owner_turn().await {
+        // The record set first, and without waiting: a forget that cannot
+        // run does not stop this peer's read.
+        let _set = match self.try_record_set() {
             Ok(permit) => permit,
             Err(refused) => return (Err(refused), not_read),
         };
-        // Nothing else writes peer records while the permit is held, so the
-        // record read here is the one the removal finds.
+        let _permit = match self.peer_turn(key).await {
+            Ok(permit) => EndedTurn {
+                commands: self,
+                key,
+                permit: Some(permit),
+            },
+            Err(refused) => return (Err(refused), not_read),
+        };
+        // Nothing else removes records while the record set is held, and
+        // nothing else writes this peer's record while its turn is held, so
+        // the record read here is the one the removal finds.
         let found = match self.blocking(move |records| records.get(&key)).await {
             Ok(Some(found)) => found,
             Ok(None) => {
@@ -658,9 +793,12 @@ impl PeerCommands {
     /// `initiator`, and return the record as left. The relay is where this
     /// gateway asks for the peer when its address does not answer; it
     /// carries no trust, since the peer still has to present its pinned key.
-    /// Takes the owner's turn like an enrollment or a forget, so a read in
-    /// progress is stopped first and the next read uses the new relay.
-    /// Audited like every peer command (see [`Self::audited`]).
+    /// Takes the record set, then this peer's turn, so a read of this peer is
+    /// stopped first and the next read uses the new relay. A read of any
+    /// other peer keeps going. A relay that cannot take the record set is
+    /// `Busy` and does not stop a read, so it stays beside an enrollment or
+    /// a forget the way those stay beside each other. Audited like every
+    /// peer command (see [`Self::audited`]).
     pub async fn relay(
         &self,
         key: DeviceKey,
@@ -684,8 +822,18 @@ impl PeerCommands {
         relay: Option<RelayAddress>,
     ) -> (Result<PeerEntry, PeerError>, Evidence) {
         let not_read = Evidence::not_read(Some(key));
-        let _permit = match self.owner_turn().await {
+        // The record set first, and without waiting: a relay that cannot
+        // run does not stop this peer's read.
+        let _set = match self.try_record_set() {
             Ok(permit) => permit,
+            Err(refused) => return (Err(refused), not_read),
+        };
+        let _permit = match self.peer_turn(key).await {
+            Ok(permit) => EndedTurn {
+                commands: self,
+                key,
+                permit: Some(permit),
+            },
             Err(refused) => return (Err(refused), not_read),
         };
         let records = self.records.clone();

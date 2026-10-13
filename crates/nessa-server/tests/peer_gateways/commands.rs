@@ -91,35 +91,97 @@ fn commands_with(
     ))
 }
 
-/// Cycles take and give back the turn as fast as they can while an owner
-/// command asks for it over and over: each time it finds the turn free or a
-/// cycle to stop, never `Busy`, which would mean the turn was still taken
-/// after its cycle had been cleared.
+/// Cycles of one peer take and give back that peer's turn as fast as they
+/// can while an owner command asks for it over and over: each time it finds
+/// the turn free or a cycle to stop, never `Busy`, which would mean the turn
+/// was still taken after its cycle had been cleared.
 #[test]
 fn a_cycle_gives_back_the_turn_as_it_clears_itself() {
     let directory = tempfile::tempdir().unwrap();
     let commands = commands(&directory.path().join("root"));
+    let key = DeviceKey::new([7; 32]);
     let done = Arc::new(AtomicBool::new(false));
     let cycles = std::thread::spawn({
         let (commands, done) = (commands.clone(), done.clone());
         move || {
             let cycle = CycleStop::new();
             while !done.load(Ordering::SeqCst) {
-                drop(commands.try_cycle_turn(&cycle));
+                drop(commands.try_cycle_turn(key, &cycle));
             }
         }
     });
     let mut busy = 0;
     for _ in 0..200_000 {
-        match commands.try_owner_turn() {
+        match commands.try_peer_turn(key) {
             OwnerTurn::Taken(permit) => drop(permit),
-            OwnerTurn::Cycle(_) => {}
+            OwnerTurn::Cycle(..) => {}
             OwnerTurn::Busy | OwnerTurn::Closed => busy += 1,
         }
     }
     done.store(true, Ordering::SeqCst);
     cycles.join().unwrap();
     assert_eq!(busy, 0, "the turn was found taken with no cycle to stop");
+}
+
+/// Two peers' turns are independent, and the record set is a third: a cycle
+/// of one peer does not take the other's turn or the record set.
+#[test]
+fn each_peer_has_its_own_turn_and_the_record_set_is_separate() {
+    let directory = tempfile::tempdir().unwrap();
+    let commands = commands(&directory.path().join("root"));
+    let (left, right) = (DeviceKey::new([1; 32]), DeviceKey::new([2; 32]));
+    let (cycle_left, cycle_right) = (CycleStop::new(), CycleStop::new());
+    let turn_left = commands.try_cycle_turn(left, &cycle_left).unwrap();
+    let turn_right = commands.try_cycle_turn(right, &cycle_right).unwrap();
+    assert!(
+        matches!(commands.try_peer_turn(left), OwnerTurn::Cycle(..)),
+        "the peer's own cycle holds its turn"
+    );
+    assert!(
+        matches!(commands.try_peer_turn(right), OwnerTurn::Cycle(..)),
+        "the other peer's cycle holds its own turn"
+    );
+    assert!(
+        commands.try_record_set().is_ok(),
+        "a cycle does not hold the record set"
+    );
+    drop(turn_left);
+    assert!(matches!(commands.try_peer_turn(left), OwnerTurn::Taken(_)));
+    assert!(
+        matches!(commands.try_peer_turn(right), OwnerTurn::Cycle(..)),
+        "giving one peer's turn back leaves the other's cycle holding it"
+    );
+    drop(turn_right);
+}
+
+/// A turn nobody holds is removed. A forgotten peer, and a key that was
+/// never a peer, do not keep a semaphore for the life of the process.
+#[test]
+fn a_peer_turn_is_dropped_when_nothing_holds_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let commands = commands(&directory.path().join("root"));
+    let key = DeviceKey::new([9; 32]);
+    let OwnerTurn::Taken(permit) = commands.try_peer_turn(key) else {
+        panic!("the turn was not free");
+    };
+    assert_eq!(peer_turns(&commands), 1);
+    commands.end_peer_turn(key, permit);
+    assert_eq!(peer_turns(&commands), 0, "a free turn was kept");
+
+    let cycle = CycleStop::new();
+    let held = commands.try_cycle_turn(key, &cycle).unwrap();
+    assert_eq!(peer_turns(&commands), 1);
+    drop(held);
+    assert_eq!(peer_turns(&commands), 0, "a cycle left its turn behind");
+}
+
+fn peer_turns(commands: &Arc<PeerCommands>) -> usize {
+    commands
+        .peers
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .peers
+        .len()
 }
 
 /// An audit that keeps every record as it is handed over, and answers an

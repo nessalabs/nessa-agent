@@ -413,7 +413,7 @@ impl RunningNative {
     pub(super) async fn join(mut self) -> Result<(), NativeShutdownFailure> {
         self.signal_stop();
         // The poller's read and status workers end before anything else is
-        // waited on: they hold sockets to peers and the peer turn.
+        // waited on: they hold sockets to peers and those peers' turns.
         self.poller.join().await;
         // Then the owner's peer commands: none takes the turn from now (it
         // is refused, with its outcome, before any effect), and those already

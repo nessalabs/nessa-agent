@@ -1,11 +1,14 @@
-//! Reading what each peer granted this gateway, on a cadence: one task,
-//! one peer at a time, each cycle holding the peer commands' turn so no
-//! enrollment or forget runs beside it. An owner command that wants the turn
-//! stops the cycle instead of waiting for it.
+//! Reading what each peer granted this gateway, on a cadence: one task
+//! schedules, and up to [`READS_AT_ONCE`] cycles run side by side. Each
+//! cycle holds that peer's turn. An owner command that names the peer stops
+//! that cycle instead of waiting for it; a cycle of any other peer keeps
+//! going. A peer that fails, or runs until its own [`READ_BUDGET`], is
+//! reported and rescheduled on its own. It does not fail the pass or hold
+//! the other reads.
 //!
 //! ```text
-//! tick --> PeerRecords::list (schedules) --> each due peer:
-//!   take the turn --> re-read its record; gone or revoked --> drop it
+//! tick --> PeerRecords::list (schedules) --> each due peer, up to READS_AT_ONCE:
+//!   take that peer's turn --> re-read its record; gone or revoked --> drop it
 //!   pinned status (NativeEnrollmentClient over its PeerSlot)
 //!     Active   --> the client saves the credential --> RetainedCache::read
 //!                    Refused                    --> pinned status again
@@ -15,7 +18,7 @@
 //!     otherwise (still pending) --> wait
 //!   every change above, as it is made --> PeerCommands::poller_changed
 //!                                          (queued by the audit at once)
-//!   give back the turn --> PeerCommands::poller_kept (waits for the audit)
+//!   give back the turn, free the read slot --> PeerCommands::poller_kept
 //! ```
 //! Arrows are calls, in order. No read happens without a fresh Active
 //! status, and nothing is removed without a Terminal one: a refused
@@ -34,8 +37,10 @@
 //! (credential saved, enrollment ended), the cache reset, and the
 //! conversations a read withdrew. Each step hands what it found to
 //! `poller_changed` while the cycle still holds the turn, and the audit takes
-//! the record at once, so the evidence is in the order the turn was held:
-//! a change the cycle made comes before the owner command that stopped it.
+//! the record at once, so a change the cycle made comes before the owner
+//! command that stopped that peer. Cycles running side by side hand their
+//! records to the audit's one writer, which keeps the order they were handed
+//! over.
 //! The cycle waits for the audit's answers only once it has given back the
 //! turn, so an audit that is slow or stalled never holds the turn. A stop
 //! during the status wait does not drop the worker's answer: that answer
@@ -68,17 +73,24 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    sync::watch,
-    task::{JoinError, JoinHandle},
+    sync::{watch, OwnedSemaphorePermit, Semaphore},
+    task::{Id, JoinError, JoinHandle, JoinSet},
 };
 
 /// How often each peer is read once it is up to date.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// The longest wait a peer is scheduled for between reads, failing or not,
-/// jitter included. Reads of other peers ahead of it can add to it.
+/// jitter included. A peer that is due while every read slot is taken waits
+/// for a slot on top of this.
 pub const POLL_BACKOFF_CAP: Duration = Duration::from_secs(15 * 60);
-/// The longest one read of a peer runs before it ends incomplete.
+/// The longest one read of a peer runs before it ends incomplete. Each peer
+/// has this timeout of its own.
 pub const READ_BUDGET: Duration = Duration::from_secs(60);
+/// How many peers are read at once. One more stays due until a read finishes
+/// and frees a place; it is not failed, and it is not skipped. A slow peer
+/// holds only its own place, and only until its own [`READ_BUDGET`].
+pub const READS_AT_ONCE: usize = 4;
+const _: () = assert!(READS_AT_ONCE >= 1);
 /// The most conversations one read withdraws: one record per
 /// [`WITHDRAWN_PER_RECORD`], so a cycle's records (two status steps, a
 /// reset, and the two reads around it) fill at most about half of the
@@ -87,7 +99,8 @@ pub const READ_BUDGET: Duration = Duration::from_secs(60);
 /// A read that reaches it ends incomplete and the next cycle, soon,
 /// withdraws the rest.
 pub const WITHDRAWN_PER_READ: usize = AUDIT_QUEUE / 4 * WITHDRAWN_PER_RECORD;
-/// The most records one cycle hands the audit.
+/// The most records one cycle hands the audit. Cycles running side by side
+/// share the queue; a full queue still refuses at once (design row R22).
 const RECORDS_PER_CYCLE: usize = 3 + 2 * WITHDRAWN_PER_READ.div_ceil(WITHDRAWN_PER_RECORD);
 const _: () = assert!(RECORDS_PER_CYCLE <= AUDIT_QUEUE / 2 + 3);
 /// How this gateway names itself to a peer's product session.
@@ -102,6 +115,8 @@ pub struct PollPolicy {
     pub backoff_cap: Duration,
     /// The longest one read runs, by the injected clock.
     pub read_budget: Duration,
+    /// How many reads run at once. At least one.
+    pub reads_at_once: usize,
 }
 impl Default for PollPolicy {
     fn default() -> Self {
@@ -109,6 +124,7 @@ impl Default for PollPolicy {
             interval: POLL_INTERVAL,
             backoff_cap: POLL_BACKOFF_CAP,
             read_budget: READ_BUDGET,
+            reads_at_once: READS_AT_ONCE,
         }
     }
 }
@@ -141,11 +157,20 @@ impl PeerPoller {
     /// Start reading `commands`' peers with `inputs`.
     pub fn start(commands: Arc<PeerCommands>, inputs: PollInputs) -> Self {
         let (stop, stopped) = watch::channel(false);
-        let poller = Poller {
+        // `READS_AT_ONCE` is at least one. A schedule of zero places would
+        // leave every due peer waiting for a slot that cannot exist.
+        let reads = Arc::new(Semaphore::new(inputs.policy.reads_at_once));
+        let shared = Arc::new(Shared {
             commands: commands.clone(),
             inputs,
             stopped,
+        });
+        let poller = Poller {
+            shared,
+            reads,
             due: HashMap::new(),
+            running: JoinSet::new(),
+            running_keys: HashMap::new(),
         };
         Self {
             stop,
@@ -153,86 +178,168 @@ impl PeerPoller {
             task: tokio::spawn(poller.run()),
         }
     }
-    /// Ask the poller to stop: its waits end, and a cycle in progress is
+    /// Ask the poller to stop: its waits end, and every cycle in progress is
     /// stopped, its read's sockets shut at once.
     pub fn signal_stop(&self) {
         self.stop.send_replace(true);
-        self.commands.stop_cycle();
+        self.commands.stop_all_cycles();
     }
     /// Stop, and wait until nothing the poller started is running: its task,
-    /// and the blocking read or status worker it was awaiting.
+    /// and every blocking read or status worker a cycle was awaiting.
     pub async fn join(self) {
         self.signal_stop();
         let _ = self.task.await;
     }
 }
 
-struct Poller {
+/// What every cycle shares. The schedule stays on [`Poller`].
+struct Shared {
     commands: Arc<PeerCommands>,
     inputs: PollInputs,
     stopped: watch::Receiver<bool>,
+}
+
+struct Poller {
+    shared: Arc<Shared>,
+    /// Places for reads running at once. A cycle holds one from the moment
+    /// it starts until it has given back the peer's turn, and frees it
+    /// before waiting on the audit.
+    reads: Arc<Semaphore>,
     due: HashMap<DeviceKey, Due>,
+    running: JoinSet<Option<Pace>>,
+    running_keys: HashMap<Id, DeviceKey>,
 }
 impl Poller {
     fn stopping(&self) -> bool {
-        *self.stopped.borrow()
+        self.shared.stopping()
     }
     fn now(&self) -> u64 {
-        self.commands.clock.elapsed_ms()
+        self.shared.now()
     }
     async fn run(mut self) {
-        while !self.stopping() {
+        loop {
+            if self.stopping() {
+                break;
+            }
             let now = self.now();
             let listed = self.peers().await;
-            for key in listed.iter().flatten().copied() {
-                if self.stopping() {
-                    return;
-                }
-                let due = self.due.entry(key).or_insert(Due {
-                    at: now,
-                    failures: 0,
-                });
-                if due.at > now {
-                    continue;
-                }
-                let Some(pace) = self.cycle(key).await else {
-                    return;
-                };
-                self.reschedule(key, pace);
+            self.start_due(now, listed.as_deref());
+            if !self.wait(listed.is_some()).await {
+                break;
             }
-            let next = next_wake(
-                listed.is_some(),
-                self.due.values().map(|due| due.at),
-                self.now(),
-                self.inputs.policy.interval,
-            );
-            if !self.wait_until(next).await {
+        }
+        self.shared.commands.stop_all_cycles();
+        self.join_running().await;
+    }
+
+    /// Start each due peer that is not already running, up to the free read
+    /// slots. A due peer with no free slot stays due.
+    fn start_due(&mut self, now: u64, listed: Option<&[DeviceKey]>) {
+        let Some(listed) = listed else {
+            return;
+        };
+        for key in listed {
+            if self.stopping() {
                 return;
             }
+            if self.running_keys.values().any(|running| running == key) {
+                continue;
+            }
+            let due = self.due.entry(*key).or_insert(Due {
+                at: now,
+                failures: 0,
+            });
+            if due.at > now {
+                continue;
+            }
+            let Ok(permit) = self.reads.clone().try_acquire_owned() else {
+                continue;
+            };
+            let shared = Arc::clone(&self.shared);
+            let key = *key;
+            let handle = self
+                .running
+                .spawn(async move { shared.cycle(key, permit).await });
+            self.running_keys.insert(handle.id(), key);
         }
     }
 
-    /// Wait until the injected clock reaches `at`, reading it every
-    /// [`WAKE_TICK`]. `false` once the poller is stopped.
-    async fn wait_until(&self, at: u64) -> bool {
-        let mut stopped = self.stopped.clone();
+    /// Wait until the schedule says to look again. `false` once the poller
+    /// is stopped. A read in flight, or a due peer that did not start, is
+    /// looked at again within one [`WAKE_TICK`], so a peer enrolled beside a
+    /// read is listed without waiting out that read, and a full cap does not
+    /// spin ([`look_again_soon`]). Idle, and a list that failed, this waits
+    /// out `next` on the injected clock, one tick at a time, and does not
+    /// list between ticks.
+    async fn wait(&mut self, listed: bool) -> bool {
+        let next = next_wake(
+            listed,
+            self.due.values().map(|due| due.at),
+            self.now(),
+            self.shared.inputs.policy.interval,
+        );
+        let mut stopped = self.shared.stopped.clone();
         loop {
-            let left = at.saturating_sub(self.now());
-            if left == 0 {
-                return true;
-            }
+            let left = next.saturating_sub(self.now());
+            let running = !self.running.is_empty();
+            let soon = look_again_soon(listed, running, left);
+            let pause = if left == 0 {
+                WAKE_TICK
+            } else {
+                Duration::from_millis(left).min(WAKE_TICK)
+            };
             tokio::select! {
-                () = tokio::time::sleep(Duration::from_millis(left).min(WAKE_TICK)) => {}
+                biased;
                 () = until_stopped(&mut stopped) => return false,
+                Some(finished) = self.running.join_next_with_id(), if running => {
+                    self.finish(finished);
+                    if soon {
+                        return true;
+                    }
+                }
+                () = tokio::time::sleep(pause) => {
+                    if soon || next.saturating_sub(self.now()) == 0 {
+                        return true;
+                    }
+                }
             }
         }
     }
 
-    /// The peers to schedule: those whose records read and are not revoked;
-    /// `None` when the records could not be listed. Who is read is decided
-    /// again under the turn.
+    fn finish(&mut self, finished: Result<(Id, Option<Pace>), JoinError>) {
+        let (id, pace) = match finished {
+            Ok((id, pace)) => (id, pace),
+            Err(error) => {
+                // The id is on the error, so the peer is still rescheduled.
+                let id = error.id();
+                tracing::error!(
+                    peer = self.running_keys.get(&id).map(hex).as_deref().unwrap_or("unknown"),
+                    %error,
+                    "peer gateway read ended abruptly; that peer backs off"
+                );
+                (id, Some(Pace::Failed))
+            }
+        };
+        let Some(key) = self.running_keys.remove(&id) else {
+            return;
+        };
+        if let Some(pace) = pace {
+            self.reschedule(key, pace);
+        }
+    }
+
+    async fn join_running(&mut self) {
+        while let Some(finished) = self.running.join_next_with_id().await {
+            self.finish(finished);
+        }
+    }
+
+    /// The peers to schedule: those whose records read and are not revoked.
+    /// An unreadable record is skipped. `None` when the records could not be
+    /// listed, which waits out the interval and does not stop a read already
+    /// running. Who is read is decided again under that peer's turn.
     async fn peers(&mut self) -> Option<Vec<DeviceKey>> {
-        let records = self.commands.records().clone();
+        let records = self.shared.commands.records().clone();
         let listed = tokio::task::spawn_blocking(move || records.list()).await;
         let Ok(Ok(entries)) = listed else {
             tracing::warn!("peer gateway records could not be listed");
@@ -248,7 +355,7 @@ impl Poller {
             })
             .collect();
         self.due.retain(|key, _| live.contains(key));
-        self.commands.keep_syncs(&live);
+        self.shared.commands.keep_syncs(&live);
         Some(live)
     }
 
@@ -257,22 +364,31 @@ impl Poller {
             self.due.remove(&key);
             return;
         }
-        let draw = draw(&self.inputs.entropy);
+        let draw = draw(&self.shared.inputs.entropy);
         let now = self.now();
         let Some(due) = self.due.get_mut(&key) else {
             return;
         };
-        let (wait, failures) = next_wait(&self.inputs.policy, pace, due.failures, draw);
+        let (wait, failures) = next_wait(&self.shared.inputs.policy, pace, due.failures, draw);
         due.failures = failures;
         due.at = now.saturating_add(millis(wait));
     }
+}
 
-    /// The turn for `cycle`, asked for every [`WAKE_TICK`] until free.
+impl Shared {
+    fn stopping(&self) -> bool {
+        *self.stopped.borrow()
+    }
+    fn now(&self) -> u64 {
+        self.commands.clock.elapsed_ms()
+    }
+
+    /// That peer's turn, asked for every [`WAKE_TICK`] until free.
     /// `None` once the poller is stopped.
-    async fn take_turn(&self, cycle: &Arc<CycleStop>) -> Option<CycleTurn> {
+    async fn take_turn(&self, key: DeviceKey, cycle: &Arc<CycleStop>) -> Option<CycleTurn> {
         let mut stopped = self.stopped.clone();
         loop {
-            if let Some(turn) = self.commands.try_cycle_turn(cycle) {
+            if let Some(turn) = self.commands.try_cycle_turn(key, cycle) {
                 // A stop asked before the cycle was registered did not reach it.
                 return (!self.stopping()).then_some(turn);
             }
@@ -283,18 +399,24 @@ impl Poller {
         }
     }
 
-    /// One peer: under the turn, its record read again, the pinned status,
+    /// One peer: under its turn, its record read again, the pinned status,
     /// then a read if it is Active, each change handed to the audit as it is
-    /// made; then, with the turn given back, the audit's answers. `None` when
-    /// the poller stopped.
-    async fn cycle(&self, key: DeviceKey) -> Option<Pace> {
+    /// made. The read slot is freed once the turn is given back, and only
+    /// then are the audit's answers awaited. `None` when the poller stopped.
+    /// A failure is this peer's pace; it is not the pass's.
+    async fn cycle(&self, key: DeviceKey, permit: OwnedSemaphorePermit) -> Option<Pace> {
         let cycle = CycleStop::new();
-        let turn = self.take_turn(&cycle).await?;
+        let turn = match self.take_turn(key, &cycle).await {
+            Some(turn) => turn,
+            None => return None,
+        };
         let mut changes = Vec::new();
         let pace = self.held(key, &cycle, &mut changes).await;
         // Given back before the answers are awaited: an audit, however slow,
-        // never holds the turn. The changes stand either way.
+        // never holds the turn or this peer's read slot. The changes stand
+        // either way.
         drop(turn);
+        drop(permit);
         self.commands.poller_kept(changes).await;
         pace
     }
@@ -910,6 +1032,14 @@ fn draw(entropy: &EnrollmentEntropySource) -> u32 {
         Ok(()) => u32::from_le_bytes(bytes),
         Err(_) => 200,
     }
+}
+
+/// Whether the scheduler lists again within a tick. A read in flight, or a
+/// due peer that did not start (`left` is 0), is looked at again so an
+/// enrollment beside a read is not held until that read ends, and so a full
+/// cap does not spin. Idle, and a list that failed, wait out the schedule.
+fn look_again_soon(listed: bool, running: bool, left: u64) -> bool {
+    listed && (running || left == 0)
 }
 
 /// When the poller next wakes, on the injected clock: the soonest peer due,

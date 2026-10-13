@@ -17,6 +17,7 @@ const POLICY: PollPolicy = PollPolicy {
     interval: Duration::from_secs(30),
     backoff_cap: Duration::from_secs(15 * 60),
     read_budget: Duration::from_secs(60),
+    reads_at_once: 4,
 };
 /// The draws that give the shortest, the middle and the longest spread.
 const LOW: u32 = 0;
@@ -110,6 +111,19 @@ fn records_that_cannot_be_listed_wait_the_interval_not_a_due_already_past() {
         next_wake(false, [500].into_iter(), 1_000, POLICY.interval),
         1_000 + interval
     );
+}
+
+#[test]
+fn a_read_in_flight_is_listed_again_soon_and_an_idle_poller_waits_its_schedule() {
+    assert!(look_again_soon(true, true, 0));
+    assert!(look_again_soon(true, true, 30_000));
+    // Due, and not started: look again, rather than spin on the same listing.
+    assert!(look_again_soon(true, false, 0));
+    // Nothing running, and the next peer is in the future: wait that out.
+    assert!(!look_again_soon(true, false, 30_000));
+    // A list that failed waits the interval, whether or not a read is in flight.
+    assert!(!look_again_soon(false, true, 0));
+    assert!(!look_again_soon(false, false, 30_000));
 }
 
 #[test]
