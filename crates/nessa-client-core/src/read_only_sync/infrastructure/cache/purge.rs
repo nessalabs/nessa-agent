@@ -7,11 +7,11 @@ use crate::read_only_sync::application::{
     device::{CachePurges, PurgeReceipt},
     CacheError,
 };
+use nessa_auth::domain::ResourceId;
 use nessa_local_database::rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
-use nessa_sync::replication::domain::Id;
 
 impl CachePurges for ReadOnlyCache {
-    fn purge_receiver(&mut self, receiver: &Id) -> Result<PurgeReceipt, CacheError> {
+    fn purge_receiver(&mut self, receiver: &ResourceId) -> Result<PurgeReceipt, CacheError> {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -70,7 +70,21 @@ impl CachePurges for ReadOnlyCache {
     }
 }
 
-fn receipt(connection: &Connection, receiver: &Id) -> Result<Option<PurgeReceipt>, CacheError> {
+impl ReadOnlyCache {
+    /// Read original durable purge evidence without requiring an enrollment
+    /// record or contacting the gateway; this does not perform another purge.
+    pub(crate) fn purge_receipt(
+        &mut self,
+        receiver: &ResourceId,
+    ) -> Result<Option<PurgeReceipt>, CacheError> {
+        receipt(&self.connection, receiver)
+    }
+}
+
+fn receipt(
+    connection: &Connection,
+    receiver: &ResourceId,
+) -> Result<Option<PurgeReceipt>, CacheError> {
     connection
         .query_row(
             "SELECT transcripts, records, catalogue_entries, observed_at_ms

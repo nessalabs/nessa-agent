@@ -270,52 +270,70 @@ impl NativeEnrollmentClient {
         stream: TcpStream,
         received: Option<DisclosedConsent>,
     ) -> Result<NativePairingStatus, NativeClientError> {
+        self.status_completed(stream, received, || {}, |result| result)
+            .await?
+    }
+
+    /// Begin and collect composition-owned effects inside the same physical
+    /// admission as the pinned status exchange. Rejected admission invokes
+    /// neither callback. The completion runs before the worker lease releases.
+    pub(crate) async fn status_completed<T: Send + 'static>(
+        &self,
+        stream: TcpStream,
+        received: Option<DisclosedConsent>,
+        begin: impl FnOnce() + Send + 'static,
+        complete: impl FnOnce(Result<NativePairingStatus, NativeClientError>) -> T + Send + 'static,
+    ) -> Result<T, NativeClientError> {
         let endpoint = client_endpoint(&stream)?;
         let (stream, deadline) = DeadlineStream::new(stream, self.clock.clone(), endpoint.clone())
             .map_err(physical_error)?;
         self.dispatch_owned(vec![endpoint], move |pending| {
-            let saved = match pending.load_pending().map_err(NativeClientError::Storage)? {
-                Some(saved) => saved,
-                None => pending
-                    .load_credential()
-                    .map_err(NativeClientError::Storage)?
-                    .ok_or(NativeClientError::NoPending)?
-                    .into_enrollment(),
-            };
-            let (key, pin, public) = saved.into_parts();
-            let identity = NativeIdentity::restore(key).map_err(NativeClientError::Crypto)?;
-            stream.blocking().map_err(physical_error)?;
-            let channel = NativeTransport::connect(stream, &identity, GatewayTrust::Pinned(pin))
-                .map_err(NativeClientError::Handshake)?;
-            let mut channel = EnrollmentChannel::new(channel);
-            begin_enrollment_phase(&deadline).map_err(physical_error)?;
-            send(&mut channel, NativePairingRequest::Status(public))?;
-            let status = receive_status(&mut channel, public, received.as_ref())?;
-            check_deadline(&deadline).map_err(physical_error)?;
-            match &status {
-                NativePairingStatus::Active {
-                    credential,
-                    receiver,
-                    ..
-                } => pending
-                    .save_credential(credential, receiver, public)
-                    .map_err(NativeClientError::Storage)?,
-                // Authenticated end of this enrollment: the record goes, and
-                // the returned status is the trusted end signal (row A14).
-                // This device's attempt is no longer pending (failed or
-                // superseded): it can never claim, so the person enters a code
-                // again and enroll reserves a new attempt (row A16).
-                NativePairingStatus::Terminal { .. } | NativePairingStatus::Unclaimed { .. } => {
-                    pending
-                        .end_enrollment(public)
+            begin();
+            let result = (|| {
+                let saved = match pending.load_pending().map_err(NativeClientError::Storage)? {
+                    Some(saved) => saved,
+                    None => pending
+                        .load_credential()
                         .map_err(NativeClientError::Storage)?
+                        .ok_or(NativeClientError::NoPending)?
+                        .into_enrollment(),
+                };
+                let (key, pin, public) = saved.into_parts();
+                let identity = NativeIdentity::restore(key).map_err(NativeClientError::Crypto)?;
+                stream.blocking().map_err(physical_error)?;
+                let channel =
+                    NativeTransport::connect(stream, &identity, GatewayTrust::Pinned(pin))
+                        .map_err(NativeClientError::Handshake)?;
+                let mut channel = EnrollmentChannel::new(channel);
+                begin_enrollment_phase(&deadline).map_err(physical_error)?;
+                send(&mut channel, NativePairingRequest::Status(public))?;
+                let status = receive_status(&mut channel, public, received.as_ref())?;
+                check_deadline(&deadline).map_err(physical_error)?;
+                match &status {
+                    NativePairingStatus::Active {
+                        credential,
+                        receiver,
+                        ..
+                    } => pending
+                        .save_credential(credential, receiver, public)
+                        .map_err(NativeClientError::Storage)?,
+                    // Authenticated end of this enrollment: the record goes, and
+                    // the returned status is the trusted end signal (row A14).
+                    // This device's attempt is no longer pending (failed or
+                    // superseded): it can never claim, so the person enters a code
+                    // again and enroll reserves a new attempt (row A16).
+                    NativePairingStatus::Terminal { .. }
+                    | NativePairingStatus::Unclaimed { .. } => pending
+                        .end_enrollment(public)
+                        .map_err(NativeClientError::Storage)?,
+                    NativePairingStatus::Pending(_)
+                    | NativePairingStatus::Claimed(_)
+                    | NativePairingStatus::Approved(_)
+                    | NativePairingStatus::Staging(_) => {}
                 }
-                NativePairingStatus::Pending(_)
-                | NativePairingStatus::Claimed(_)
-                | NativePairingStatus::Approved(_)
-                | NativePairingStatus::Staging(_) => {}
-            }
-            Ok(status)
+                Ok(status)
+            })();
+            Ok(complete(result))
         })
         .await
     }
@@ -532,3 +550,7 @@ fn frame_error(error: NativeFrameError) -> NativeClientError {
         NativeFrameError::Wire(error) => NativeClientError::Wire(error),
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/pairing/completion.rs"]
+mod completion_tests;
