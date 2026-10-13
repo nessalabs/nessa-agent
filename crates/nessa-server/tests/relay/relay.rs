@@ -1,3 +1,4 @@
+use super::super::wire::read_frame;
 use super::*;
 use crate::relay::infrastructure::Ed25519Proofs;
 use crate::timer::{manual::ManualTimer, Moment};
@@ -6,7 +7,7 @@ use std::{
     sync::atomic::{AtomicU8, Ordering},
     time::Duration,
 };
-use tokio::io::{duplex, DuplexStream};
+use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt, DuplexStream};
 use zeroize::Zeroizing;
 
 /// Fresh-looking bytes: every fill is a new counter value, so challenges

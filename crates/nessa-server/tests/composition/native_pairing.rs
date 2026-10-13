@@ -139,6 +139,7 @@ fn product(registry: Arc<LocalCredentialStore>) -> ProductRouteState {
 fn loopback() -> NativeConfig {
     NativeConfig {
         listen_address: "127.0.0.1:0".parse().unwrap(),
+        relay: None,
     }
 }
 
@@ -208,6 +209,7 @@ async fn native_bind_failure_preserves_key_and_history() {
     let (prepared, commands, peers) = prepare(
         &NativeConfig {
             listen_address: address,
+            relay: None,
         },
         namespace.inputs(registry.clone()),
     )
@@ -322,6 +324,7 @@ async fn faulted_listener_join_reports_the_fault_without_reconciling() {
         gateway: bound.gateway.clone(),
         stop: None,
         task: tokio::spawn(async { panic!("native listener fault") }),
+        relay: None,
         poller: bound.start_poller(),
         peers: bound.peers.clone(),
         audit: bound.audit.clone(),
@@ -332,4 +335,105 @@ async fn faulted_listener_join_reports_the_fault_without_reconciling() {
             PairingWorkerFault::Panic
         ))
     );
+}
+
+/// Issue #266, slice R2a: a gateway configured with a relay registers with
+/// it at start, and a reader that reaches only the relay completes TLS
+/// pinned to the gateway's key and is answered; stop ends the registration
+/// with the listener.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_gateway_with_a_relay_answers_a_reader_that_reaches_only_the_relay() {
+    use crate::relay::{
+        application::{Relay, RelayLimits},
+        infrastructure::{serve_tcp, Ed25519Proofs, OsRelayEntropy},
+    };
+    use crate::timer::{Timer, TokioTimer};
+    use nessa_auth::{
+        adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport, OsEntropy},
+        domain::pairing::AttemptId,
+    };
+    use nessa_protocol::pairing::{
+        wire::{decode_reply, encode_request, NativePairingReply, NativePairingRequest},
+        EnrollmentChannel,
+    };
+    use nessa_protocol::relay::{read_frame, write_frame, RelayFrame};
+
+    let relay_socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let relay_address = relay_socket.local_addr().unwrap();
+    let timer: Arc<dyn Timer> = Arc::new(TokioTimer::new());
+    let relay = Relay::new(
+        timer.clone(),
+        Arc::new(OsRelayEntropy),
+        Arc::new(Ed25519Proofs),
+        RelayLimits::default(),
+    );
+    let (stop_relay, relay_stopped) = oneshot::channel::<()>();
+    let relay_task = tokio::spawn(serve_tcp(relay_socket, relay, timer, async {
+        relay_stopped.await.ok();
+    }));
+
+    let namespace = Namespace::new();
+    namespace.bootstrap().await;
+    let registry = namespace.registry();
+    let config = NativeConfig {
+        listen_address: "127.0.0.1:0".parse().unwrap(),
+        relay: Some(RelayAddress::try_from(relay_address.to_string()).unwrap()),
+    };
+    let (prepared, _commands, _peers) = prepare(&config, namespace.inputs(registry.clone()))
+        .await
+        .unwrap();
+    let bound = bind(
+        prepared,
+        RuntimeDependencies::default().clock,
+        product(registry),
+    )
+    .await
+    .unwrap();
+    let key = bound.gateway.identity().public_key();
+    let pin = bound.gateway.identity().public_spki();
+    let (failure, failed) = watch::channel(None);
+    let mut running = start(bound, failure);
+
+    let answered = tokio::task::spawn_blocking(move || {
+        // The registration may not have landed yet: ask until joined.
+        let deadline = std::time::Instant::now() + WAIT;
+        let stream = loop {
+            let mut stream = std::net::TcpStream::connect(relay_address).unwrap();
+            stream.set_read_timeout(Some(WAIT)).unwrap();
+            write_frame(&mut stream, &RelayFrame::Connect { key }).unwrap();
+            match read_frame(&mut stream).unwrap() {
+                RelayFrame::Joined => break stream,
+                RelayFrame::Offline if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                other => panic!("the relay answered {other:?}"),
+            }
+        };
+        let identity = NativeIdentity::generate(&mut OsEntropy).unwrap();
+        let transport =
+            NativeTransport::connect(stream, &identity, GatewayTrust::Pinned(pin)).unwrap();
+        let mut channel = EnrollmentChannel::new(transport);
+        let attempt = AttemptId::new([113; AttemptId::LENGTH]);
+        channel
+            .send_envelope(&encode_request(&NativePairingRequest::Hello(attempt)).unwrap())
+            .unwrap();
+        // With no invitation open the gateway refuses the Hello: an answer
+        // decoded over TLS pinned to its key is what this checks.
+        let reply = channel.receive_envelope().map(|bytes| decode_reply(&bytes));
+        matches!(reply, Ok(Ok(NativePairingReply::Refused)))
+    });
+    assert!(
+        tokio::time::timeout(WAIT, answered).await.unwrap().unwrap(),
+        "the gateway answered through the relay"
+    );
+
+    running.signal_stop();
+    let joined = tokio::time::timeout(WAIT, running.join()).await;
+    assert!(
+        matches!(joined, Ok(Ok(()))),
+        "the drain is joined: {joined:?}"
+    );
+    assert!(failed.borrow().is_none());
+    stop_relay.send(()).unwrap();
+    relay_task.await.unwrap();
 }

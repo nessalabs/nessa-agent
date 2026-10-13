@@ -310,3 +310,72 @@ async fn native_listener_stops_on_a_listening_socket_failure() {
     );
     fixture.gateway.shutdown().await;
 }
+
+/// A connection the relay joined is served like a direct one, on a relay
+/// permit of its own pool: four of them held leave direct readers admitted,
+/// and the drain waits for every relay permit, even one not yet in a
+/// connection (issue #266, slice R2a).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_listener_serves_relayed_connections_on_their_own_permits() {
+    let fixture = Fixture::new().await;
+    // An open invitation, so a device's Hello is answered.
+    fixture
+        .gateway
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
+        .await
+        .unwrap();
+    let pin = fixture.gateway.identity().public_spki();
+    let connections = connections(&fixture);
+    let relayed: Vec<_> = (0..4)
+        .map(|_| connections.relay_permit().expect("a relay permit"))
+        .collect();
+    assert!(
+        connections.relay_permit().is_none(),
+        "the relay pool holds four"
+    );
+    let mut relayed = relayed.into_iter();
+    let (relayed_server, relayed_device) = sockets();
+    let relayed_answer = device_says_hello(relayed_device, pin);
+    let (direct_server, direct_device) = sockets();
+    let direct_answer = device_says_hello(direct_device, pin);
+    let (accept, _) = ScriptedAccept::new([
+        Step::Give(Accepted::Relayed(relayed_server, relayed.next().unwrap())),
+        Step::Give(Accepted::Connection(direct_server)),
+    ]);
+    let listener = NativeEnrollmentListener::new(accept, connections.clone());
+    let (stop, stopped) = oneshot::channel::<()>();
+    let running = tokio::spawn(listener.run(
+        OsEntropy::default,
+        async {
+            stopped.await.ok();
+        },
+        |kind| panic!("listener stopped on {kind:?}"),
+    ));
+    assert!(tokio::time::timeout(WAIT, relayed_answer)
+        .await
+        .unwrap()
+        .unwrap());
+    // Every relay permit is held, and a direct reader is still served.
+    assert!(tokio::time::timeout(WAIT, direct_answer)
+        .await
+        .unwrap()
+        .unwrap());
+    stop.send(()).unwrap();
+    // Three relay permits are still held, as by accepts under way: the
+    // drain waits for them.
+    let mut running = running;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut running)
+            .await
+            .is_err(),
+        "the drain waited for the relay permits still held"
+    );
+    assert!(connections.relay_wake_report().is_some());
+    drop(relayed);
+    tokio::time::timeout(WAIT, running)
+        .await
+        .expect("the drain ends once every relay permit is back")
+        .unwrap()
+        .unwrap();
+    fixture.gateway.shutdown().await;
+}

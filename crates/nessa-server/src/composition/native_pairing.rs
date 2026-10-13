@@ -21,19 +21,24 @@
 //! S1–S14 in `docs/design/auth/device-pairing.md` ("Owner routes and mounting")
 //! and S7, S8, D5, D6 ("Activation and credential delivery"), and PR1, PR13
 //! ("Protected reads over the native channel").
-use super::runtime_config::NativeConfig;
+use super::runtime_config::{NativeConfig, RelayAddress};
 use crate::conversation::infrastructure::LocalReceiverAuthority;
 use crate::core::{NativeFailure, NativeShutdownFailure, RunError};
 use crate::device_pairing::infrastructure::{
     restore_gateway_identity, ConversationReceivers, EnvironmentPeers, GatewayPairing,
     InvitationEntropy, NativeEnrollmentConnections, NativeEnrollmentListener, PairingOwnerCommands,
-    PairingRuntimeDependencies, TcpEnrollmentAccept,
+    PairingRuntimeDependencies, RelayPermit, TcpEnrollmentAccept, RELAY_CAPACITY,
 };
 use crate::peer_gateways::infrastructure::{
     DurablePeerAudit, EnrollmentEntropy, PeerCommands, PeerPoller, PeerRecords, PollInputs,
     PollPolicy, TcpPeerConnector, AUDIT_DEADLINE, PREEMPT,
 };
 use crate::product::{DeviceCredentials, NativeSessions, ProductRouteState};
+use crate::relay::gateway::{
+    application::{Backoff, Relayed, ThroughRelay},
+    infrastructure::{IdentityKey, RelayedAccept, TcpRelayDial},
+};
+use crate::timer::TokioTimer;
 use nessa_auth::{
     adapters::{
         local::LocalCredentialStore,
@@ -56,8 +61,8 @@ use std::{
     sync::Arc,
 };
 use tokio::{
-    net::TcpListener,
-    sync::{oneshot, watch},
+    net::{TcpListener, TcpStream},
+    sync::{mpsc, oneshot, watch},
     task::JoinHandle,
 };
 
@@ -101,6 +106,8 @@ pub(super) struct PreparedNative {
     clock: Arc<dyn Clock>,
     /// The paired environments `openEnvironment` reaches; `None` refuses it.
     environments: Option<Arc<dyn EnvironmentPeers>>,
+    /// The relay to serve through as well, if any.
+    relay: Option<RelayAddress>,
 }
 
 impl PreparedNative {
@@ -201,17 +208,25 @@ pub(super) async fn prepare(
             audit,
             clock: wall,
             environments: None,
+            relay: config.relay.clone(),
         },
         commands,
         peers,
     ))
 }
 
+/// The listening socket and the readers a relay joined, as the listener's one
+/// source of connections.
+type NativeAccept = RelayedAccept<TcpEnrollmentAccept>;
+
 /// Native pairing with its socket bound and its one connection owner built.
 pub(super) struct BoundNative {
     gateway: Arc<GatewayPairing>,
-    listener: NativeEnrollmentListener,
+    listener: NativeEnrollmentListener<NativeAccept>,
     address: SocketAddr,
+    /// Serving through the relay, when one is configured: started with the
+    /// listener.
+    relay: Option<ThroughRelay<TcpStream, RelayPermit>>,
     peers: Arc<PeerCommands>,
     audit: Arc<DurablePeerAudit>,
     clock: Arc<dyn Clock>,
@@ -257,6 +272,7 @@ pub(super) async fn bind(
         audit,
         clock: wall,
         environments,
+        relay,
     } = prepared;
     let bind_failed = |source| RunError::Native(NativeFailure::Bind { address, source });
     let socket = TcpEnrollmentAccept::new(TcpListener::bind(address).await.map_err(bind_failed)?);
@@ -268,10 +284,21 @@ pub(super) async fn bind(
         Some(environments) => connections.with_environment_peers(environments),
         None => connections,
     });
+    // With no relay the sender is dropped here, and the listener's relay
+    // source is closed from the start.
+    let (joined, relayed) = mpsc::channel::<Relayed<TcpStream, RelayPermit>>(RELAY_CAPACITY);
+    let relay = relay.map(|relay| ThroughRelay {
+        dial: Arc::new(TcpRelayDial(relay.as_str().to_owned())),
+        key: Arc::new(IdentityKey(gateway.clone())),
+        admission: connections.clone(),
+        timer: Arc::new(TokioTimer::new()),
+        joined,
+    });
     Ok(BoundNative {
         gateway,
-        listener: NativeEnrollmentListener::new(socket, connections),
+        listener: NativeEnrollmentListener::new(RelayedAccept::new(socket, relayed), connections),
         address: bound,
+        relay,
         peers,
         audit,
         clock: wall,
@@ -309,6 +336,8 @@ pub(super) struct RunningNative {
     gateway: Arc<GatewayPairing>,
     stop: Option<oneshot::Sender<()>>,
     task: JoinHandle<IoResult<()>>,
+    /// Serving through the relay, if configured: stopped with the listener.
+    relay: Option<(watch::Sender<bool>, JoinHandle<()>)>,
     /// Reads what each peer granted; stopped and joined with the listener.
     poller: PeerPoller,
     /// The peer commands: closed once the poller is joined.
@@ -331,8 +360,13 @@ pub(super) fn start(
         listener,
         peers,
         audit,
+        relay,
         ..
     } = bound;
+    let relay = relay.map(|relay| {
+        let (stop, stopped) = watch::channel(false);
+        (stop, tokio::spawn(relay.serve(Backoff::default(), stopped)))
+    });
     let (stop, stopped) = oneshot::channel::<()>();
     let task = tokio::spawn(listener.run(
         OsEntropy::default,
@@ -348,6 +382,7 @@ pub(super) fn start(
         gateway,
         stop: Some(stop),
         task,
+        relay,
         poller,
         peers,
         audit,
@@ -360,6 +395,9 @@ impl RunningNative {
     pub(super) fn signal_stop(&mut self) {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
+        }
+        if let Some((stop, _)) = &self.relay {
+            stop.send_replace(true);
         }
         self.poller.signal_stop();
     }
@@ -388,6 +426,13 @@ impl RunningNative {
         // the deadline clock.
         if !self.audit.drained(AUDIT_DEADLINE).await {
             tracing::error!("peer gateway audit not drained before shutdown");
+        }
+        // The relay registration and its accept legs, which hold relay
+        // permits the listener's drain waits for.
+        if let Some((_, relay)) = self.relay.take() {
+            if let Err(error) = relay.await {
+                tracing::error!(?error, "relay registration task fault");
+            }
         }
         let drained = match self.task.await {
             Ok(_) => Ok(()),
