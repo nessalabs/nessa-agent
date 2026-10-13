@@ -65,3 +65,9 @@ are implementation requirements, not current phone guarantees.
 ## Consequences
 
 The phone and existing clients share the actual fold/checkpoint rules. Public APIs, explicit reader selection and native binary distribution require tests and platform maintenance. First-slice library exposure is not phone integration or completion of the wider sync goal; native enrollment, retained projection, revocation, artifact recovery and weak-link/device experiments remain explicit gates.
+
+### Saved metadata recovery classification
+
+| Evidence | Caller outcome | Regression |
+| --- | --- | --- |
+| Persisted non-deleted catalogue entry has malformed metadata | CacheDamaged; saved progress is unchanged and recovery requires purge/resync | public_catalogue_refuses_corrupt_metadata_without_advancing_saved_progress |

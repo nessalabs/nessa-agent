@@ -242,9 +242,10 @@ fn public_catalogue_refuses_corrupt_metadata_without_advancing_saved_progress() 
         .unwrap();
     drop(writer);
     let mut reader = public_reader(&path);
-    assert!(reader
-        .catalogue_page("receiver", "origin", "catalogue", None, 1)
-        .is_err());
+    assert!(matches!(
+        reader.catalogue_page("receiver", "origin", "catalogue", None, 1),
+        Err(crate::retained::ReadFailure::CacheDamaged)
+    ));
     drop(reader);
     assert_eq!(
         CatalogueStore::progress(&mut cache(&path), &catalogue_scope()).unwrap(),

@@ -913,7 +913,9 @@ fn retained_policy() -> Result<CachePolicy, CacheError> {
 /// one is emptied, a full one is reported as such, and anything else may pass.
 fn cache_failure(error: &CacheError) -> ReadFailure {
     match error {
-        CacheError::Corrupt | CacheError::OutdatedSchema => ReadFailure::CacheDamaged,
+        CacheError::Corrupt | CacheError::OutdatedSchema | CacheError::CatalogueMetadata => {
+            ReadFailure::CacheDamaged
+        }
         CacheError::Quota => ReadFailure::Quota,
         CacheError::Scope { .. } => ReadFailure::ResetRequired,
         _ => ReadFailure::Cache,
