@@ -72,7 +72,8 @@ pub enum PublishCallRefusal {
     /// A publish for the same tool call is already under way.
     DuplicateRequest,
     /// The running turn's Drive grant does not allow `artifacts_publish`
-    /// (row J28). Nothing was recorded or published.
+    /// (row J28), or its decision could not be recorded in the Drive tool
+    /// audit. Nothing was published.
     NotAllowed,
     /// Where the agent runs publishes no files: this gateway's own machine.
     PublishUnavailable,
@@ -117,12 +118,16 @@ impl ConversationService {
         if &lease != live.lease.id() || !live.lease.is_live() {
             return refused(PublishCallRefusal::NoTurn);
         }
-        if let Some(reason) = super::environment_tools::drive_refusal(
-            &self.inner.drive,
-            &live,
-            &initiation,
-            "artifacts_publish",
-        ) {
+        let checked = super::environment_tools::GatewayToolCall {
+            conversation: id,
+            turn: &turn,
+            actor: &actor,
+            initiation: &initiation,
+            tool: "artifacts_publish",
+        };
+        if let Some(reason) =
+            super::environment_tools::drive_refusal(&self.inner.drive, &live, checked).await
+        {
             tracing::warn!(conversation_id = %id, %reason, "a Drive grant's tool call was refused");
             return refused(PublishCallRefusal::NotAllowed);
         }

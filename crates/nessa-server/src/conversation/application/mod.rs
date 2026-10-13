@@ -207,8 +207,8 @@ pub(crate) use placement::Environments;
 #[cfg(any(unix, test))]
 pub(crate) use placement::{ConversationPlacements, PlacementError};
 // For the paired environment adapter, which lives with the Unix-only SSH one.
-pub use drive_tools::DriveTools;
 pub(crate) use drive_tools::MAX_ADMITTED_POLICIES;
+pub use drive_tools::{DriveToolAudit, DriveToolAuditRecord, DriveTools};
 #[cfg(unix)]
 pub(crate) use placement::PairedEnvironments;
 pub use placement::{FETCH_CALL_WAIT, PUBLISH_CALL_WAIT};

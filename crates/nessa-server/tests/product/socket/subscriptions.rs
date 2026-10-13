@@ -270,6 +270,18 @@ struct SubscriptionFixture {
     _directory: TempDir,
 }
 
+/// Takes every Drive tool decision.
+struct AcceptingDriveToolAudit;
+
+impl crate::conversation::application::DriveToolAudit for AcceptingDriveToolAudit {
+    fn record(
+        &self,
+        _: crate::conversation::application::DriveToolAuditRecord,
+    ) -> crate::conversation::application::ConversationFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
 fn conversation_service(
     storage: &Arc<RecordStorage>,
     metadata: &Arc<LocalConversationStore>,
@@ -320,6 +332,7 @@ fn conversation_service_with_repository(
         evaluator: Arc::new(
             crate::conversation::infrastructure::CedarToolPolicyEvaluator::new().unwrap(),
         ),
+        audit: Arc::new(AcceptingDriveToolAudit),
     });
     Arc::new(service)
 }

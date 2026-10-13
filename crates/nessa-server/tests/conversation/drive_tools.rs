@@ -67,6 +67,16 @@ impl ShareGrants for NoJournal {
     }
 }
 
+/// The review hook records nothing here: its refusals are saved with the
+/// review.
+struct NoAudit;
+
+impl super::DriveToolAudit for NoAudit {
+    fn record(&self, _: super::DriveToolAuditRecord) -> ConversationFuture<'_, ()> {
+        unreachable!("the review hook's decisions are saved with the review")
+    }
+}
+
 fn bound() -> OnceLock<DriveTools> {
     let drive = OnceLock::new();
     let _ = drive.set(DriveTools {
@@ -74,6 +84,7 @@ fn bound() -> OnceLock<DriveTools> {
         evaluator: Arc::new(Listed {
             refused: &["Write"],
         }),
+        audit: Arc::new(NoAudit),
     });
     drive
 }

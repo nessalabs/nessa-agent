@@ -11,14 +11,17 @@
 //! - a call the agent asks permission for, by [`DriveToolHook`] before a
 //!   person is asked;
 //! - the gateway's own `run`, `artifacts_publish` and `artifacts_fetch`, by
-//!   the gateway before it runs them ([`refusal`]).
+//!   the gateway before it runs them ([`decision`]). Each of these decisions,
+//!   allowed or refused, is committed to [`DriveToolAudit`] first; a decision
+//!   that could not be recorded refuses the call.
 //!
 //! ```text
 //! send ─▶ admit: Claude or Codex, Ask mode, no native hooks, policy_at(rev)
 //!           │                                     └─▶ AdmittedPolicies
 //!           ▼
-//! turn ─▶ review hook ──┐
-//! turn ─▶ run / publish / fetch ──┴─▶ refusal(initiation, call) ─▶ Cedar
+//! turn ─▶ review hook ─────────▶ refusal(initiation, call) ─▶ Cedar
+//! turn ─▶ run / publish / fetch ─▶ decision(initiation, call) ─▶ Cedar
+//!                                        └─▶ DriveToolAudit, then answer
 //! ```
 //!
 //! Only a call the agent asks about is a call this checks. In Ask mode
@@ -32,8 +35,10 @@
 
 use super::share_grants::ShareGrants;
 use super::tool_policy::{ToolDecision, ToolInitiator, ToolPolicyEvaluator};
+use super::ConversationFuture;
 use crate::conversation::domain::{ToolCall, ToolPolicy, ToolSource};
 use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::hooks::{
     HookError, InvocationHook, InvocationObservationWindow, ProposedToolCall, ToolVerdict,
 };
@@ -42,11 +47,56 @@ use nessa_sdk::domain::agent_execution::permissions::RefusalOutcome;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// What checks a Drive grant's tools: the grant journal and the evaluator.
-/// Composition binds it once; a gateway that has not admits no Drive turn.
+/// What checks a Drive grant's tools: the grant journal, the evaluator, and
+/// where the gateway's own tool decisions are recorded. Composition binds it
+/// once; a gateway that has not admits no Drive turn.
 pub struct DriveTools {
     pub grants: Arc<dyn ShareGrants>,
     pub evaluator: Arc<dyn ToolPolicyEvaluator>,
+    pub audit: Arc<dyn DriveToolAudit>,
+}
+
+/// Immutable evidence of one decision on a gateway tool call of a Drive
+/// grant's turn, committed before the call is answered or run.
+///
+/// `allowed` with its `rules` is what the policy said; `reason` is why a
+/// refused call was refused, which names an unavailable policy when there
+/// were no rules to name. The sink assigns the observation time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DriveToolAuditRecord {
+    pub conversation_id: ConversationId,
+    /// The turn the call was made in.
+    pub turn: String,
+    /// The tool call's identity.
+    pub call: String,
+    /// The person who started the turn under the grant, and from where.
+    pub initiator_principal_id: String,
+    pub initiator_surface_id: String,
+    pub grant: String,
+    pub revision: u64,
+    pub tool: String,
+    pub allowed: bool,
+    pub rules: Vec<String>,
+    pub reason: Option<String>,
+}
+
+/// Commits a gateway tool decision of a Drive turn. Records are idempotent by
+/// conversation, call, tool and outcome: the same decision repeated is
+/// acknowledged again, a contradicting one refused. An unavailable sink
+/// refuses the call.
+pub trait DriveToolAudit: Send + Sync {
+    fn record(&self, record: DriveToolAuditRecord) -> ConversationFuture<'_, ()>;
+}
+
+/// What the policy of the Drive grant that started a turn said about one
+/// call: whether it is allowed, the deciding policy ids, and why not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DriveDecision {
+    pub(crate) grant: String,
+    pub(crate) revision: u64,
+    pub(crate) rules: Vec<String>,
+    /// `None` when the call is allowed.
+    pub(crate) refusal: Option<String>,
 }
 
 /// The tool source of a conversation's agent, or `None` for an agent whose
@@ -101,26 +151,37 @@ impl AdmittedPolicies {
     }
 }
 
-/// Why `call` may not run for a turn started as `initiation`, or `None` when
-/// it may. The owner's turns are not checked. A grant's turn is refused when
-/// no Drive tools are bound, its policy was not kept, the policy could not
-/// be evaluated, or the policy refuses the call; the reason names the grant,
-/// its revision, the tool and the deciding policy ids.
-pub(crate) fn refusal(
+/// What the policy of the Drive grant that started `initiation` says about
+/// `call`, or `None` for the owner's turns, which are not checked. A grant's
+/// call is refused when no Drive tools are bound, its policy was not kept,
+/// the policy could not be evaluated, or the policy refuses it; the reason
+/// names the grant, its revision, the tool and the deciding policy ids.
+pub(crate) fn decision(
     drive: &OnceLock<DriveTools>,
     admitted: &AdmittedPolicies,
     initiation: &Initiation,
     call: ToolCall<'_>,
-) -> Option<String> {
+) -> Option<DriveDecision> {
     let Initiator::Grant(grant) = initiation.initiator() else {
         return None;
     };
     let (name, revision) = (grant.grant(), grant.policy_revision());
+    let decided = |rules: Vec<String>, refusal: Option<String>| {
+        Some(DriveDecision {
+            grant: name.to_owned(),
+            revision,
+            rules,
+            refusal,
+        })
+    };
     let unavailable = || {
-        Some(format!(
-            "the tool policy of Drive grant {name:?} at revision {revision} is unavailable, so {:?} is refused",
-            call.name()
-        ))
+        decided(
+            Vec::new(),
+            Some(format!(
+                "the tool policy of Drive grant {name:?} at revision {revision} is unavailable, so {:?} is refused",
+                call.name()
+            )),
+        )
     };
     let Some(drive) = drive.get() else {
         return unavailable();
@@ -133,18 +194,32 @@ pub(crate) fn refusal(
         policy: &policy,
     };
     match drive.evaluator.evaluate(initiator, call) {
-        Ok(ToolDecision::Allow { .. }) => None,
-        Ok(ToolDecision::Refuse { rules }) => Some(format!(
-            "Drive grant {name:?} at revision {revision} does not allow {:?} (rules: {})",
-            call.name(),
-            if rules.is_empty() {
-                "none allows it".to_owned()
-            } else {
-                rules.join(", ")
-            }
-        )),
+        Ok(ToolDecision::Allow { rules }) => decided(rules, None),
+        Ok(ToolDecision::Refuse { rules }) => {
+            let reason = format!(
+                "Drive grant {name:?} at revision {revision} does not allow {:?} (rules: {})",
+                call.name(),
+                if rules.is_empty() {
+                    "none allows it".to_owned()
+                } else {
+                    rules.join(", ")
+                }
+            );
+            decided(rules, Some(reason))
+        }
         Err(_) => unavailable(),
     }
+}
+
+/// Why `call` may not run for a turn started as `initiation`, or `None` when
+/// it may: [`decision`]'s refusal.
+pub(crate) fn refusal(
+    drive: &OnceLock<DriveTools>,
+    admitted: &AdmittedPolicies,
+    initiation: &Initiation,
+    call: ToolCall<'_>,
+) -> Option<String> {
+    decision(drive, admitted, initiation, call).and_then(|decided| decided.refusal)
 }
 
 /// Checks every call a conversation's agent asks permission for against the

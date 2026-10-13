@@ -24,8 +24,8 @@ use crate::{
         },
         infrastructure::{
             DurableConversationCreationAudit, DurableConversationDeletionAudit,
-            DurableConversationFileLinkAudit, DurableConversationModeAudit, DurableMcpAppAudit,
-            LocalConversationStore,
+            DurableConversationFileLinkAudit, DurableConversationModeAudit, DurableDriveToolAudit,
+            DurableMcpAppAudit, LocalConversationStore,
         },
     },
 };
@@ -1214,9 +1214,13 @@ async fn conversations(
     // the grant journal's policy, by the Cedar evaluator (slice J4 of #707).
     let evaluator = CedarToolPolicyEvaluator::new()
         .map_err(|_| RunError::Agent("the tool policy bundle does not validate".into()))?;
+    let drive_audit =
+        DurableDriveToolAudit::new(root.join("audit").join("drive-tools"), clock.clone())
+            .map_err(|error| RunError::Agent(error.to_string()))?;
     service.bind_drive_tools(DriveTools {
         grants: metadata.clone(),
         evaluator: Arc::new(evaluator),
+        audit: Arc::new(drive_audit),
     });
     if let Some(tools) = &environment_tools {
         tools.attach(service.clone());

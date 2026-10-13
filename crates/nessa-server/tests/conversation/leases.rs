@@ -5262,15 +5262,41 @@ impl super::ShareGrants for EveryRevisionHeld {
     }
 }
 
+/// A Drive tool audit that keeps what it is given, or refuses it.
+#[derive(Default)]
+struct RecordedDriveTools {
+    records: Mutex<Vec<super::DriveToolAuditRecord>>,
+    unavailable: std::sync::atomic::AtomicBool,
+}
+
+impl super::DriveToolAudit for RecordedDriveTools {
+    fn record(&self, record: super::DriveToolAuditRecord) -> super::ConversationFuture<'_, ()> {
+        let result = if self.unavailable.load(std::sync::atomic::Ordering::SeqCst) {
+            Err(ConversationError::Audit)
+        } else {
+            self.records.lock().unwrap().push(record);
+            Ok(())
+        };
+        Box::pin(async move { result })
+    }
+}
+
 impl Harness {
-    /// Check Drive turns' tools against `policy`, held by every grant.
-    fn checking_drive_tools(&self, policy: crate::conversation::domain::ToolPolicy) {
+    /// Check Drive turns' tools against `policy`, held by every grant; the
+    /// gateway's decisions go to the audit returned.
+    fn checking_drive_tools(
+        &self,
+        policy: crate::conversation::domain::ToolPolicy,
+    ) -> Arc<RecordedDriveTools> {
+        let audit = Arc::new(RecordedDriveTools::default());
         self.service.bind_drive_tools(super::DriveTools {
             grants: Arc::new(EveryRevisionHeld(policy)),
             evaluator: Arc::new(
                 crate::conversation::infrastructure::CedarToolPolicyEvaluator::new().unwrap(),
             ),
+            audit: audit.clone(),
         });
+        audit
     }
 
     /// Send turn `execution` as Drive grant `grant` at `revision`; `true`
@@ -5321,15 +5347,16 @@ impl Harness {
 
 /// Row J28: a Drive grant's turn runs the gateway's own `run`,
 /// `artifacts_publish` and `artifacts_fetch` only where the grant's policy at
-/// the turn's revision allows them. Refused, each answers why, records
-/// nothing and asks nothing of the host. The owner's turn is not checked.
+/// the turn's revision allows them. Refused, each answers why, has its
+/// decision in the Drive tool audit, writes no lease record and asks nothing
+/// of the host. The owner's turn is not checked.
 #[tokio::test]
 async fn j28_the_gateways_own_tools_are_checked_against_a_drive_grants_policy() {
     use crate::conversation::domain::{ToolPolicy, ToolPreset};
     let root = tempfile::tempdir().unwrap();
     let host = CommandHost::new();
     let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
-    harness.checking_drive_tools(ToolPolicy::Preset(ToolPreset::ReadOnlyTools));
+    let audit = harness.checking_drive_tools(ToolPolicy::Preset(ToolPreset::ReadOnlyTools));
     harness.create().await;
     let go = harness.running_drive_turn("driven", "phone", 3).await;
     let refused = harness
@@ -5379,19 +5406,48 @@ async fn j28_the_gateways_own_tools_are_checked_against_a_drive_grants_policy() 
         super::FetchAnswer::Refused(super::FetchCallRefusal::NotAllowed)
     );
     assert!(harness.saved_commands().is_empty());
+    assert_eq!(host.granted.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(host.timeouts.lock().unwrap().is_empty());
+    let records = audit.records.lock().unwrap().clone();
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| (record.call.as_str(), record.tool.as_str(), record.allowed))
+            .collect::<Vec<_>>(),
+        [
+            ("call-1", "run", false),
+            ("call-2", "artifacts_publish", false),
+            ("call-3", "artifacts_fetch", false),
+        ]
+    );
+    for record in &records {
+        assert_eq!(record.conversation_id, harness.id);
+        assert_eq!(record.turn, "driven");
+        assert_eq!((record.grant.as_str(), record.revision), ("phone", 3));
+        assert_eq!(
+            record.initiator_principal_id,
+            caller("driven").principal_id.as_str()
+        );
+        assert!(record.rules.is_empty());
+        assert!(record
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains(&format!("{:?}", record.tool))));
+    }
     go.send(()).unwrap();
 }
 
 /// Row J28: where its policy allows `run`, a Drive grant's turn runs a
 /// command exactly as the owner's would, on any environment the gateway
-/// grants commands on.
+/// grants commands on, once the decision and the rule that allowed it are
+/// in the Drive tool audit.
 #[tokio::test]
 async fn j28_a_drive_grant_allowed_run_runs_a_command_as_the_owner_would() {
     use crate::conversation::domain::{ToolPolicy, ToolPreset};
     let root = tempfile::tempdir().unwrap();
     let host = CommandHost::new();
     let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
-    harness.checking_drive_tools(ToolPolicy::Preset(ToolPreset::All));
+    let audit = harness.checking_drive_tools(ToolPolicy::Preset(ToolPreset::All));
     harness.create().await;
     let go = harness.running_drive_turn("driven", "phone", 3).await;
     host.finish
@@ -5403,6 +5459,80 @@ async fn j28_a_drive_grant_allowed_run_runs_a_command_as_the_owner_would() {
     assert!(
         matches!(answer, CommandAnswer::Ran { recorded: true, .. }),
         "{answer:?}"
+    );
+    let records = audit.records.lock().unwrap().clone();
+    assert_eq!(records.len(), 1);
+    assert!(records[0].allowed && records[0].reason.is_none());
+    assert_eq!(
+        (records[0].call.as_str(), records[0].tool.as_str()),
+        ("call-1", "run")
+    );
+    assert!(!records[0].rules.is_empty());
+    go.send(()).unwrap();
+}
+
+/// Row J28: a decision the Drive tool audit cannot take refuses the call,
+/// even one the grant's policy allows: nothing runs, is published or is
+/// placed.
+#[tokio::test]
+async fn j28_an_allowed_run_whose_decision_cannot_be_recorded_is_refused() {
+    use crate::conversation::domain::{ToolPolicy, ToolPreset};
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::new();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    let audit = harness.checking_drive_tools(ToolPolicy::Preset(ToolPreset::All));
+    audit
+        .unavailable
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    harness.create().await;
+    let go = harness.running_drive_turn("driven", "phone", 3).await;
+    let refused = harness
+        .run(command("devbox", &["echo", "hi"], "call-1"))
+        .await;
+    assert!(
+        matches!(
+            &refused,
+            Err(CommandCallError::NotAllowed(reason)) if reason.contains("could not be recorded")
+        ),
+        "{refused:?}"
+    );
+    assert!(harness.saved_commands().is_empty());
+    assert_eq!(host.granted.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(host.timeouts.lock().unwrap().is_empty());
+    let (_caller, stop) = tokio::sync::watch::channel(false);
+    assert_eq!(
+        harness
+            .service
+            .publish_artifact(
+                &harness.id,
+                super::PublishCall {
+                    environment: "devbox".into(),
+                    path: "report.pdf".into(),
+                    media_type: None,
+                    call: "call-2".into(),
+                },
+                stop.clone(),
+            )
+            .await,
+        super::PublishAnswer::Refused(super::PublishCallRefusal::NotAllowed)
+    );
+    assert_eq!(
+        harness
+            .service
+            .fetch_artifact(
+                &harness.id,
+                super::FetchCall {
+                    environment: "devbox".into(),
+                    digest: "ab".repeat(32),
+                    media_type: "image/png".into(),
+                    size: 20,
+                    destination: "a.png".into(),
+                    call: "call-3".into(),
+                },
+                stop,
+            )
+            .await,
+        super::FetchAnswer::Refused(super::FetchCallRefusal::NotAllowed)
     );
     go.send(()).unwrap();
 }
@@ -5451,6 +5581,7 @@ async fn j26_a_drive_turn_nothing_can_check_is_refused_and_reaches_no_agent() {
         evaluator: Arc::new(
             crate::conversation::infrastructure::CedarToolPolicyEvaluator::new().unwrap(),
         ),
+        audit: Arc::new(RecordedDriveTools::default()),
     });
     assert!(!harness.send_as_driver("no-entry", "phone", 3).await);
     assert!(harness.provider.executions.lock().unwrap().is_empty());

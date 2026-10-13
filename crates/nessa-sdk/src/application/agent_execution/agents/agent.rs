@@ -41,7 +41,7 @@ use crate::application::agent_execution::sessions::{
     SessionManager, StorageError,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
-use crate::domain::agent_execution::executions::{Initiation, ToolChecking};
+use crate::domain::agent_execution::executions::{Initiation, Initiator, ToolChecking};
 use crate::domain::agent_execution::permissions::{
     CustomPermissionCancellationReason, PermissionAuthorityError, PermissionCancellationReason,
     PermissionEffect, PermissionId, PermissionOptionId, PermissionScope, RefusalOutcome,
@@ -288,16 +288,25 @@ fn hook_attribution(
 }
 
 /// Why a turn started as `initiation` may not be sent to `attached`, if it
-/// may not: a turn saved as [`ToolChecking::Checked`] needs a process that
-/// asks about every call, so in [`ApprovalMode::Ask`] with its own hooks not
-/// allowed to answer first.
+/// may not. The owner's turns always may. A grant's turn must have been saved
+/// as [`ToolChecking::Checked`], since only then were its grant's tools
+/// checked at admission; one saved before that, and restored, is not sent.
+/// A checked turn needs a process that asks about every call, so in
+/// [`ApprovalMode::Ask`] with its own hooks not allowed to answer first.
 fn checked_tools_unsupported(
     initiation: &Initiation,
     approval_mode: Option<ApprovalMode>,
     capabilities: OperationCapabilities,
 ) -> Result<(), AgentError> {
-    if initiation.tools() != ToolChecking::Checked {
+    let checked = initiation.tools() == ToolChecking::Checked;
+    if !checked && !matches!(initiation.initiator(), Initiator::Grant(_)) {
         return Ok(());
+    }
+    if !checked {
+        return Err(AgentError::Unsupported(
+            "a grant's turn needs its tools checked, and this one was not admitted as checked"
+                .into(),
+        ));
     }
     if approval_mode != Some(ApprovalMode::Ask) || capabilities.native_hooks_allowed() {
         return Err(AgentError::Unsupported(
