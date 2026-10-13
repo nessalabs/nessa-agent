@@ -296,7 +296,12 @@ async fn an_answer_too_large_for_a_frame_is_an_error_for_its_id() {
         .send(json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call",
                       "params": { "name": "big", "arguments": { "bytes": MAX_FRAME_BYTES - 200 } } }))
         .await;
-    let answer = harness.next().await.unwrap();
+    // The fixture builds a near-max frame before the stand-in refuses it.
+    // On a loaded runner that allocation takes longer than an ordinary answer.
+    let answer = harness
+        .next_within(std::time::Duration::from_secs(30))
+        .await
+        .unwrap();
     assert_eq!(answer["id"], json!(id));
     assert_eq!(answer["error"]["code"], -32603);
 }
