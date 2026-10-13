@@ -40,10 +40,12 @@ export function shortcutOf<Command extends string>(
 /**
  * Runs the command a window-wide key event is bound to. The listener is bound
  * once and reads the latest `run` through a ref, so a render never rebinds it.
+ * A matched binding owns the key even when its action is unavailable
+ * (`key-bindings.test.ts`); command availability does not release native defaults.
  */
 export function useKeyBindings<Command extends string>(
   bindings: readonly Binding<Command>[],
-  run: (command: Command, event: KeyboardEvent) => boolean | void,
+  run: (command: Command, event: KeyboardEvent) => void,
 ): void {
   const latest = useRef({ bindings, run })
   latest.current = { bindings, run }
@@ -54,9 +56,8 @@ export function useKeyBindings<Command extends string>(
         matchesChord(event, candidate.chord, isMac),
       )
       if (!binding) return
-      // A handler returns false to leave the key to whatever else wants it.
-      if (run(binding.command, event) === false) return
       event.preventDefault()
+      run(binding.command, event)
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
