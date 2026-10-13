@@ -20,6 +20,7 @@ function view() {
     conversationId: "conversation",
     title: null,
     revision: "1",
+    serverNowMs: 1_700_000_000_000,
     approvalMode: "ask",
     approvalModes: [
       {
@@ -465,6 +466,105 @@ describe("conversation view agreement", () => {
       { kind: "app", server: "charts", tool: "delete_rows", extra: true },
     ])
       expect(() => conversationView(withOrigin(origin), "conversation")).toThrow()
+  })
+
+  it("reads a review's deadline and refuses one it cannot show", () => {
+    const withDeadline = (deadline: unknown) => {
+      const value = view()
+      Object.assign(value, {
+        permissions: [
+          {
+            executionId: "running",
+            permissionId: "permission",
+            toolId: "tool",
+            title: "Review",
+            toolName: "Write",
+            argumentsJson: "{}",
+            origin: { kind: "harness" },
+            ask: "tool",
+            options: [{ id: "deny", label: "Deny", effect: "deny" }],
+            deadline,
+          },
+        ],
+      })
+      return value
+    }
+    const reason =
+      "No human answered in time. Continue without this tool or try another approach."
+    const deadline = {
+      waitMs: 30_000,
+      dueAtMs: 1_700_000_030_000,
+      effect: "deny" as const,
+      reason,
+      stopsTurn: false,
+    }
+    const read = conversationView(withDeadline(deadline), "conversation")
+    expect(read.permissions[0]!.deadline).toEqual(deadline)
+    expect(
+      conversationView(withDeadline({ ...deadline, stopsTurn: true }), "conversation")
+        .permissions[0]!.deadline?.stopsTurn,
+    ).toBe(true)
+    const allowed = { ...deadline, effect: "allow" as const, stopsTurn: false }
+    expect(
+      conversationView(withDeadline(allowed), "conversation").permissions[0]!.deadline,
+    ).toEqual(allowed)
+    for (const broken of [
+      { waitMs: 0, dueAtMs: deadline.dueAtMs, effect: "deny", reason, stopsTurn: false },
+      {
+        waitMs: 86_400_001,
+        dueAtMs: deadline.dueAtMs,
+        effect: "deny",
+        reason,
+        stopsTurn: false,
+      },
+      { waitMs: 30_000, dueAtMs: 0, effect: "deny", reason, stopsTurn: false },
+      { waitMs: 30_000, dueAtMs: 1.5, effect: "deny", reason, stopsTurn: false },
+      {
+        waitMs: 30_000,
+        dueAtMs: deadline.dueAtMs,
+        effect: "later",
+        reason,
+        stopsTurn: false,
+      },
+      {
+        waitMs: 30_000,
+        dueAtMs: deadline.dueAtMs,
+        effect: "deny",
+        reason: " ",
+        stopsTurn: false,
+      },
+      {
+        waitMs: 30_000,
+        dueAtMs: deadline.dueAtMs,
+        effect: "deny",
+        reason: "line\nbreak",
+        stopsTurn: false,
+      },
+      { waitMs: 30_000, dueAtMs: deadline.dueAtMs, effect: "deny", stopsTurn: false },
+      { waitMs: 30_000, effect: "deny", reason, stopsTurn: false },
+      {
+        waitMs: 30_000,
+        dueAtMs: deadline.dueAtMs,
+        effect: "deny",
+        reason,
+        stopsTurn: "no",
+      },
+      { ...deadline, effect: "allow", stopsTurn: true },
+      { ...deadline, later: true },
+    ])
+      expect(() => conversationView(withDeadline(broken), "conversation")).toThrow()
+  })
+
+  it("reads the gateway's time the view was sent at, and refuses a view without a usable one", () => {
+    expect(conversationView(view(), "conversation").serverNowMs).toBe(1_700_000_000_000)
+    for (const broken of [undefined, 0, -1, 1.5, "1700000000000", 2 ** 53]) {
+      const value: Record<string, unknown> = view()
+      if (broken === undefined) delete value.serverNowMs
+      else value.serverNowMs = broken
+      expect(() => conversationView(value, "conversation"), String(broken)).toThrow(
+        "Invalid conversation serverNowMs",
+      )
+    }
   })
 
   it("refuses an app's review that names a tool other than the one it reviews", () => {

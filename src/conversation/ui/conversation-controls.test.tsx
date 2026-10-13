@@ -1,0 +1,132 @@
+// @vitest-environment jsdom
+/**
+ * The floating card's countdown reads the injected clock again each second.
+ * A single `Date.now()` at render leaves the sentence where it started.
+ */
+import * as React from "react"
+import { createRoot, type Root } from "react-dom/client"
+import { act } from "react"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+
+import type { AgentFeatures, Conversation } from "../model"
+import { ClockProvider } from "./clock"
+
+const dispatch = vi.fn()
+vi.mock("../adapters/store/hooks", () => ({ useConversationDispatch: () => dispatch }))
+vi.mock("../adapters/store/slice", () => ({
+  controlConversation: (request: unknown) => ({ type: "control", request }),
+}))
+
+const { ConversationControls } = await import("./conversation-controls")
+
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const agentFeatures: AgentFeatures = {
+  permissionDenial: "unknown",
+  nativeHookSuppression: "unknown",
+  compactionReporting: "unsupported_not_implemented",
+  modelSwitchReporting: "unsupported_not_implemented",
+  permissionDeferral: "unsupported_not_implemented",
+  elicitationForwarding: "unknown",
+  preToolPolicy: "unsupported_not_implemented",
+  policyEndTurn: "unsupported",
+  policyCloseSession: "unsupported",
+  incomingElicitation: "unsupported",
+  nativeHooks: "off",
+}
+
+function waiting(dueAtMs: number): Conversation {
+  return {
+    id: "conversation",
+    title: "Countdown",
+    phase: "idle",
+    draft: [],
+    turns: [],
+    remote: {
+      approvalMode: "ask",
+      approvalModes: [{ id: "ask", name: "Ask", description: "Ask first." }],
+      artifacts: [],
+      questions: [],
+      running: true,
+      permissions: [
+        {
+          executionId: "run",
+          permissionId: "permission",
+          toolId: "tool",
+          title: "Run tests",
+          toolName: "Shell",
+          argumentsJson: "{}",
+          options: [{ id: "cancel", label: "Cancel" }],
+          deadline: {
+            waitMs: 30_000,
+            dueAtMs,
+            effect: "deny",
+            reason: "No human answered in time.",
+            stopsTurn: false,
+          },
+        },
+      ],
+      tools: [],
+      pending: [],
+      capabilities: {
+        queue: true,
+        steer: true,
+        resume: true,
+        permissions: true,
+        imageInput: false,
+        agentFeatures,
+      },
+      lifecycle: { phase: "attached" },
+      queueComplete: true,
+      transcriptState: "complete",
+      truncated: false,
+    },
+  }
+}
+
+let host: HTMLDivElement
+let root: Root
+let time = 1_700_000_000_000
+
+beforeEach(() => {
+  vi.useFakeTimers()
+  window.matchMedia = vi.fn().mockReturnValue({
+    matches: false,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  })
+  Element.prototype.animate = vi.fn(() => ({ cancel: vi.fn() })) as never
+  time = 1_700_000_000_000
+  host = document.createElement("div")
+  document.body.append(host)
+  root = createRoot(host)
+})
+
+afterEach(() => {
+  act(() => root.unmount())
+  host.remove()
+  vi.useRealTimers()
+})
+
+describe("the floating card countdown", () => {
+  it("reads the injected clock again each second", async () => {
+    const dueAtMs = time + 30_000
+    await act(async () => {
+      root.render(
+        <ClockProvider now={() => time}>
+          <ConversationControls conversation={waiting(dueAtMs)} gatewayAvailable />
+        </ClockProvider>,
+      )
+    })
+    expect(host.textContent).toContain(
+      "If nobody answers within 30 seconds, this is denied automatically.",
+    )
+    await act(async () => {
+      time += 5_000
+      await vi.advanceTimersByTimeAsync(1_000)
+    })
+    expect(host.textContent).toContain(
+      "If nobody answers within 25 seconds, this is denied automatically.",
+    )
+  })
+})

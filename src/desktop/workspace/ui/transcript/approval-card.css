@@ -99,6 +99,7 @@
 }
 
 .workspace-approval-reason,
+.workspace-approval-deadline,
 .workspace-approval-failure {
   margin: 0;
   color: var(--desktop-muted);

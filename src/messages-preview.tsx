@@ -28,6 +28,7 @@ import { useMessagesTab } from "./panel/ui/use-messages-tab"
 import { MessagesIcon } from "./panel/ui/messages-icon"
 import {
   AGENT_HUES,
+  ClockProvider,
   commandErrorCleared,
   ConversationList,
   Transcript,
@@ -350,7 +351,10 @@ function Icons() {
 createRoot(container).render(
   <React.StrictMode>
     <Provider store={previewStore}>
-      {new URLSearchParams(window.location.search).has("icons") ? <Icons /> : <Panel />}
+      {/* This page is its own composition root, so it chooses the clock. */}
+      <ClockProvider now={() => Date.now()}>
+        {new URLSearchParams(window.location.search).has("icons") ? <Icons /> : <Panel />}
+      </ClockProvider>
     </Provider>
   </React.StrictMode>,
 )

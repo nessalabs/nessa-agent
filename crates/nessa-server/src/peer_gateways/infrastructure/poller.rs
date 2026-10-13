@@ -504,6 +504,7 @@ impl Poller {
                 ReaderAccess {
                     role: ReaderRole::GrantedPeer,
                     address,
+                    relay: None,
                     identity: &identity,
                     pin,
                     credential: &id,

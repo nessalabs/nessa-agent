@@ -6,8 +6,8 @@ use nessa_sdk::application::agent_execution::{
         SteeringAuditCause, SteeringAuditStage,
     },
     permissions::{
-        ActionContext, ApprovalBasis, CancellationOrigin, PermissionAnswerDelivery,
-        QuestionRefusalRecord, ReviewDeclineRecord,
+        ActionContext, ApprovalAttribution, ApprovalBasis, CancellationOrigin,
+        PermissionAnswerDelivery, QuestionRefusalRecord, ReviewDeclineRecord,
     },
 };
 use nessa_sdk::domain::agent_execution::{
@@ -16,8 +16,8 @@ use nessa_sdk::domain::agent_execution::{
     },
     permissions::{
         PermissionCancellationReason, PermissionCancellationReasonView, PermissionDecision,
-        PermissionEffect, PermissionRequest, PermissionScopeView, PermissionStateView,
-        RefusalOutcome, ReviewDeclineReason,
+        PermissionId, PermissionRequest, PermissionReviewDeadline, PermissionScopeView,
+        PermissionStateView, RefusalOutcome, ReviewDeclineReason,
     },
     questions::{
         AgentQuestion, AnswerShape, QuestionCancellation, QuestionRefusalReason, QuestionResponse,
@@ -123,7 +123,7 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
             json!({"kind":"session_closed","sessionId":closure.session_id().as_str(),"executionId":closure.execution_id().map(|id|id.as_str()),"before":"open","after":"closed","reason":reason(closure.reason()),"origin":origin(record.origin())})
         }
         ExecutionAuditRecord::Cancelled(record) => {
-            json!({"kind":"permission_cancelled","sessionId":record.session_id().as_str(),"request":permission(record.request()),"input":{"name":record.input().name,"argumentsJson":record.input().arguments_json},"origin":origin(record.origin())})
+            json!({"kind":"permission_cancelled","sessionId":record.session_id().as_str(),"request":permission(record.request()),"input":{"name":record.input().name,"argumentsJson":record.input().arguments_json},"origin":cancellation_origin(record.request().id(), record.origin())})
         }
         ExecutionAuditRecord::Answered(record) => {
             let resolution = record.resolution();
@@ -135,6 +135,7 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
                 ApprovalBasis::Rule(rule) => {
                     json!({"kind":"rule","ruleId":rule.rule_id(),"revision":rule.revision(),"grantedBy":actor(rule.granted_by())})
                 }
+                ApprovalBasis::Deadline(deadline) => deadline_basis(deadline),
                 ApprovalBasis::Hook(refusal) => json!({
                     "kind": "hook",
                     "index": refusal.index(),
@@ -407,7 +408,33 @@ fn origin(value: &CancellationOrigin) -> Value {
         CancellationOrigin::Client(value) => json!({"kind":"client","actor":actor(value)}),
         CancellationOrigin::Provider => json!({"kind":"provider"}),
         CancellationOrigin::Runtime => json!({"kind":"runtime"}),
+        CancellationOrigin::Deadline(deadline) => {
+            json!({"kind":"deadline","basis":deadline_basis(deadline)})
+        }
     }
+}
+/// A review's cancellation origin. A deadline's names the same actor and basis
+/// a deadline answer does, so the record says the deadline decided.
+fn cancellation_origin(permission: &PermissionId, value: &CancellationOrigin) -> Value {
+    let CancellationOrigin::Deadline(deadline) = value else {
+        return origin(value);
+    };
+    match ApprovalAttribution::deadline(permission, deadline.clone()) {
+        Ok(attribution) => {
+            json!({"kind":"deadline","actor":actor(attribution.actor()),"basis":deadline_basis(deadline)})
+        }
+        Err(_) => origin(value),
+    }
+}
+fn deadline_basis(deadline: &PermissionReviewDeadline) -> Value {
+    json!({
+        "kind": "deadline",
+        "class": deadline.class().as_str(),
+        "waitMs": deadline.wait().as_millis(),
+        "effect": deadline.effect().as_str(),
+        "reason": deadline.reason(),
+        "stopsTurn": deadline.stops_turn(),
+    })
 }
 fn reason(value: &PermissionCancellationReason) -> Value {
     let code = match value.view() {
@@ -439,7 +466,7 @@ fn decision(value: &PermissionDecision) -> Value {
             json!({"kind":"session","applicationId":application_id.as_str(),"sessionId":session_id.as_str()})
         }
     };
-    json!({"effect":match value.effect(){PermissionEffect::Allow=>"allow",PermissionEffect::Deny=>"deny"},"scope":scope})
+    json!({"effect":value.effect().as_str(),"scope":scope})
 }
 fn permission(value: &PermissionRequest) -> Value {
     let state = match value.state() {

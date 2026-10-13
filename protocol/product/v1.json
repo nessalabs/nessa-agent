@@ -725,8 +725,8 @@
     },
     "PermissionDeferralSupport": {
       "type": "string",
-      "description": "Whether Nessa supports an explicit nonterminal defer outcome for a permission review.",
-      "enum": ["unsupported_not_implemented", "supported_with_nonterminal_outcome"]
+      "description": "Whether a review can be deferred for a later answer. unsupported means this provider cannot defer. unsupported_not_implemented means Nessa has not built deferral for a provider that might.",
+      "enum": ["unsupported_not_implemented", "unsupported", "supported_with_nonterminal_outcome"]
     },
     "ElicitationForwardingSupport": {
       "type": "string",
@@ -1247,6 +1247,51 @@
       "description": "Whether a permission option allows or denies the reviewed request. Only options that decide that one request are offered: the gateway offers no review with a choice that reaches further.",
       "enum": ["allow", "deny"]
     },
+    "ConversationPermissionDeadline": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What happens if nobody answers this review, and when. Absent on a review that waits for a person.",
+      "properties": {
+        "waitMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400000,
+          "description": "How many milliseconds the review waits before this outcome is taken, measured when the review was armed."
+        },
+        "dueAtMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "Unix milliseconds on the gateway's clock when the deadline decides. A reloaded client counts down from this rather than starting waitMs again, measured from the view's serverNowMs rather than its own clock."
+        },
+        "effect": {
+          "$ref": "#/$defs/ConversationPermissionOptionEffect",
+          "description": "The outcome taken when the wait ends with no answer."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "x-utf8MaxBytes": 512,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+          "description": "Past-tense reason recorded if the deadline wins: not blank, and free of control characters. A pending review does not show this sentence; it builds a line from the outcome and the wait."
+        },
+        "stopsTurn": {
+          "type": "boolean",
+          "description": "True when the only refusal this agent offered stops the turn; never true for an allow. The pending line and the notice say that, rather than that the turn continues without the tool."
+        }
+      },
+      "required": ["waitMs", "dueAtMs", "effect", "reason", "stopsTurn"],
+      "allOf": [
+        {
+          "if": {
+            "properties": { "effect": { "const": "allow" } },
+            "required": ["effect"]
+          },
+          "then": { "properties": { "stopsTurn": { "const": false } } }
+        }
+      ]
+    },
     "ConversationPermission": {
       "type": "object",
       "additionalProperties": false,
@@ -1306,6 +1351,10 @@
           "maxLength": 32768,
           "x-utf8MaxBytes": 32768,
           "description": "Exact original JSON input reviewed by the user; never truncated."
+        },
+        "deadline": {
+          "$ref": "#/$defs/ConversationPermissionDeadline",
+          "description": "Present when the review answers itself if nobody does. Absent for a review that waits for a person, including an app review."
         }
       },
       "required": [
@@ -1453,6 +1502,12 @@
           "x-utf8MaxBytes": 256,
           "description": "Opaque revision; compare for equality, never numeric ordering."
         },
+        "serverNowMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "The gateway's Unix milliseconds when it made this view. A client measures each deadline's dueAtMs against this, not against its own clock, so a clock on another machine that is ahead or behind does not move the countdown."
+        },
         "messages": {
           "type": "array",
           "items": { "$ref": "#/$defs/ConversationMessage" },
@@ -1557,6 +1612,7 @@
       "required": [
         "conversationId",
         "revision",
+        "serverNowMs",
         "messages",
         "pending",
         "permissions",

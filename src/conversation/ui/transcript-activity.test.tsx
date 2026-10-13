@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { textContent, type AgentFeatures, type Conversation } from "../model"
+import { ClockProvider } from "./clock"
 import { Transcript } from "./transcript"
 
 class TestResizeObserver {
@@ -276,21 +277,25 @@ function queuedConversation(): Conversation {
 
 let container: HTMLDivElement
 let root: Root
+// The injected wall clock every render reads; a test moves it by hand.
+let time = 1_000
 
 async function render(conversation: Conversation) {
   await React.act(async () => {
     root.render(
       <Provider store={store as never}>
-        <Transcript
-          conversation={conversation}
-          ground="paper"
-          animateMount={false}
-          streamText={false}
-          emptyState={false}
-          statusLabel="Ready"
-          gatewayAvailable
-          onOpenPaste={vi.fn()}
-        />
+        <ClockProvider now={() => time}>
+          <Transcript
+            conversation={conversation}
+            ground="paper"
+            animateMount={false}
+            streamText={false}
+            emptyState={false}
+            statusLabel="Ready"
+            gatewayAvailable
+            onOpenPaste={vi.fn()}
+          />
+        </ClockProvider>
       </Provider>,
     )
   })
@@ -326,6 +331,7 @@ beforeEach(() => {
     removeEventListener: vi.fn(),
   })
   Element.prototype.animate = vi.fn(() => ({ cancel: vi.fn() })) as never
+  time = 1_000
   container = document.createElement("div")
   document.body.appendChild(container)
   root = createRoot(container)
@@ -334,6 +340,7 @@ beforeEach(() => {
 afterEach(async () => {
   await React.act(async () => root.unmount())
   container.remove()
+  vi.useRealTimers()
 })
 
 it("shows queued input before an assistant row without inventing activity or duplicating it later", async () => {
@@ -744,5 +751,46 @@ it("keeps an independent error beside authentication recovery", async () => {
   expect(container.querySelector(".provider-sign-in")).not.toBeNull()
   expect(container.textContent).toContain(
     "The turn could not complete all required work.",
+  )
+})
+
+it("counts a permission's deadline down by the clock composition supplies", async () => {
+  vi.useFakeTimers()
+  const waiting = queuedConversation()
+  if (!waiting.remote) throw new Error("fixture has no remote state")
+  await render({
+    ...waiting,
+    remote: {
+      ...waiting.remote,
+      running: true,
+      permissions: [
+        {
+          executionId: "queued-run",
+          permissionId: "permission",
+          toolId: "tool",
+          title: "Run tests",
+          toolName: "Shell",
+          argumentsJson: "{}",
+          options: [{ id: "cancel", label: "Cancel" }],
+          deadline: {
+            waitMs: 30_000,
+            dueAtMs: time + 30_000,
+            effect: "deny",
+            reason: "No human answered in time.",
+            stopsTurn: false,
+          },
+        },
+      ],
+    },
+  })
+  expect(container.textContent).toContain(
+    "Shell. If nobody answers within 30 seconds, this is denied automatically.",
+  )
+  await React.act(async () => {
+    time += 12_000
+    await vi.advanceTimersByTimeAsync(1_000)
+  })
+  expect(container.textContent).toContain(
+    "Shell. If nobody answers within 18 seconds, this is denied automatically.",
   )
 })

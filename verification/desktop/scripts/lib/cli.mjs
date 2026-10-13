@@ -136,6 +136,7 @@ export const devServerOnlyChecks = [
   "published-files",
   // The sandbox proxy is provided by the dev server, not vite preview.
   "mcp-apps",
+  "approval-deadline",
 ]
 
 /**

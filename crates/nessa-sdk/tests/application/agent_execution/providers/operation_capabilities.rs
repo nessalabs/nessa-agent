@@ -165,7 +165,7 @@ fn negotiated_provider_unsupported_is_preserved() {
     );
     assert_eq!(
         capabilities.permission_deferral(),
-        PermissionDeferralCapability::UnsupportedNotImplemented
+        PermissionDeferralCapability::Unsupported
     );
     assert_eq!(
         capabilities.incoming_elicitation(),

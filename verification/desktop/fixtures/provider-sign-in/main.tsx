@@ -13,7 +13,10 @@ import {
 } from "../../../../src/desktop/workspace"
 import { fakeSource, testIndex } from "../../../../src/desktop/workspace/testing"
 import { transcriptFrom } from "../../../../src/desktop/workspace/adapters/gateway/gateway-views"
-import { view } from "../../../../src/desktop/workspace/adapters/gateway/fake-gateway"
+import {
+  GATEWAY_NOW_MS,
+  view,
+} from "../../../../src/desktop/workspace/adapters/gateway/fake-gateway"
 import { emptyTranscript } from "../../../../src/desktop/workspace/model/transcript"
 import { Transcript } from "../../../../src/desktop/workspace/ui/transcript/transcript"
 import "@fontsource-variable/geist"
@@ -72,6 +75,7 @@ source.transcripts.set(
     }),
     1,
     () => 1000,
+    GATEWAY_NOW_MS,
   ),
 )
 
@@ -148,6 +152,7 @@ function publishRetry(phase: "queued" | "running" | "completed") {
       }),
       phase === "queued" ? 2 : phase === "running" ? 3 : 4,
       () => 1000,
+      GATEWAY_NOW_MS,
     ),
   })
 }
@@ -178,6 +183,7 @@ function publishRefusal(executionId: string) {
     }),
     ++causalRevision,
     () => 1000,
+    GATEWAY_NOW_MS,
   )
   source.transcripts.set("b", transcript)
   source.emit({ kind: "transcript", transcript })

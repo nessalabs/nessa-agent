@@ -36,6 +36,7 @@ async fn permission_query_refuses_a_generation_replaced_during_acquisition() {
                 arguments_json: "{}".into(),
             },
             options,
+            None,
         )
         .unwrap();
     let source = controller.permission_authority_source();

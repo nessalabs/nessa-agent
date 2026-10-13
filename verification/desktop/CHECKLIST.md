@@ -667,6 +667,16 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   command broken, no button label wrapped, nothing overflowing.
   _ADR 238 › Decision_ (`ui/`, `approval-request.tsx`).
   _Check:_ `responsive.mjs --only approval-card --shots <dir>`, then look at the shots.
+- [ ] **An armed review counts down, then the card is the automatic notice**
+  (#141): the deadline row says "If nobody answers within N seconds, this is
+  denied automatically.", N goes down while the card is up, and at expiry the
+  card is gone and the transcript says "Denied automatically: …". The
+  fixture's gateway clock runs a minute ahead of the page's, and N starts no
+  higher than the wait: the card counts down from the gateway's `serverNowMs`,
+  not the window's clock (ADR 141 › What a person sees). Chromium
+  and WebKit. The fixture is `fixtures/approval-deadline/`, dev server only.
+  _Check:_ `approval-deadline.mjs`. The card's own widths stay
+  `responsive.mjs --only approval-card` at 280 and 340 px.
 - [ ] **An app's review is drawn, and names the app, not the agent**, in the
   window over a fake gateway (`fixtures/app-review/`, dev server only): at
   rest, a conversation whose turn has ended is not read again; when its app

@@ -246,6 +246,7 @@ export function Transcript({
               conversation={conversation}
               gatewayAvailable={gatewayAvailable}
             />
+            {/* Its countdown reads the clock composition placed above this tree. */}
             <ConversationControls
               conversation={conversation}
               gatewayAvailable={gatewayAvailable}

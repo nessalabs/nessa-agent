@@ -11,7 +11,7 @@ import "@fontsource-variable/geist-mono"
 import "./styles.css"
 
 import { makeStore } from "./store"
-import { Transcript } from "./conversation"
+import { ClockProvider, Transcript } from "./conversation"
 
 /** The barrel is the door; a preview has no more business past it than the app. */
 type Conversation = React.ComponentProps<typeof Transcript>["conversation"]
@@ -230,13 +230,16 @@ if (!container) throw new Error("preview root missing")
 createRoot(container).render(
   <React.StrictMode>
     <Provider store={makeStore()}>
-      <div className="flex flex-wrap gap-8 bg-muted p-8">
-        <Panel label="Finished turn — one line for five tools" conversation={done} />
-        <Panel label="While it runs" conversation={running} />
-        <Panel label="Thinking, before any tool" conversation={thinking} />
-        <Panel label="One tool — the sheet still has a floor" conversation={single} />
-        <Growing label="A tool a second — open the sheet and watch it grow" />
-      </div>
+      {/* This page is its own composition root, so it chooses the clock. */}
+      <ClockProvider now={() => Date.now()}>
+        <div className="flex flex-wrap gap-8 bg-muted p-8">
+          <Panel label="Finished turn — one line for five tools" conversation={done} />
+          <Panel label="While it runs" conversation={running} />
+          <Panel label="Thinking, before any tool" conversation={thinking} />
+          <Panel label="One tool — the sheet still has a floor" conversation={single} />
+          <Growing label="A tool a second — open the sheet and watch it grow" />
+        </div>
+      </ClockProvider>
     </Provider>
   </React.StrictMode>,
 )

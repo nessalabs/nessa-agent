@@ -1241,6 +1241,7 @@ mod tests {
                         arguments_json: "x".repeat(17 * 1024 * 1024),
                     },
                     options,
+                    deadline: None,
                 },
             )
         }

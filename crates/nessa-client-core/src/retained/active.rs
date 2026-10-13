@@ -82,6 +82,7 @@ impl RetainedDeviceReader {
         ReaderAccess {
             role: ReaderRole::DeviceOwner,
             address,
+            relay: None,
             identity: &self.identity,
             pin: self.pin,
             credential: &self.credential,

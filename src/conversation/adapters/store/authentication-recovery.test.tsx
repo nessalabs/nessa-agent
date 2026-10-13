@@ -9,6 +9,7 @@ import { beginSend, failSend, reattemptSend } from "../../application/usecases/s
 import { emptyLocalTabs } from "../../application/local-tabs"
 import type { ConversationView } from "../../application/view"
 import { textContent, type AgentFeatures, type Conversation } from "../../model"
+import { ClockProvider } from "../../ui/clock"
 import { Transcript } from "../../ui/transcript"
 class TestResizeObserver {
   observe() {}
@@ -73,16 +74,18 @@ async function render(conversation: Conversation) {
   await React.act(async () => {
     root.render(
       <Provider store={store as never}>
-        <Transcript
-          conversation={conversation}
-          ground="paper"
-          animateMount={false}
-          streamText={false}
-          emptyState={false}
-          statusLabel="Ready"
-          gatewayAvailable
-          onOpenPaste={vi.fn()}
-        />
+        <ClockProvider now={() => 1_000}>
+          <Transcript
+            conversation={conversation}
+            ground="paper"
+            animateMount={false}
+            streamText={false}
+            emptyState={false}
+            statusLabel="Ready"
+            gatewayAvailable
+            onOpenPaste={vi.fn()}
+          />
+        </ClockProvider>
       </Provider>,
     )
   })

@@ -37,6 +37,8 @@ pub enum ObservationKind {
     PermissionReview,
     /// A permission review that was cancelled.
     PermissionCancelled,
+    /// A permission review its deadline answered because nobody did.
+    DeadlineAnswered,
     /// A review the provider declined before it became a choice.
     ReviewDeclined,
     /// A question the provider asked.
@@ -65,6 +67,7 @@ impl ObservationKind {
             },
             ExecutionUpdate::PermissionRequested { .. } => Self::PermissionReview,
             ExecutionUpdate::PermissionCancelled(_) => Self::PermissionCancelled,
+            ExecutionUpdate::DeadlineAnswered { .. } => Self::DeadlineAnswered,
             ExecutionUpdate::ReviewDeclined(_) => Self::ReviewDeclined,
             ExecutionUpdate::QuestionAsked { .. } => Self::Question,
             ExecutionUpdate::QuestionClosed { .. } => Self::QuestionClosed,
@@ -550,6 +553,7 @@ fn payload_bytes(event: &ExecutionEvent) -> usize {
         ExecutionUpdate::ReviewDeclined(observation) => {
             observation.decline().declared().map_or(0, str::len)
         }
+        ExecutionUpdate::DeadlineAnswered { reason, .. } => reason.as_str().len(),
         ExecutionUpdate::QuestionAsked { question, .. } => question.payload_bytes(),
     }
 }

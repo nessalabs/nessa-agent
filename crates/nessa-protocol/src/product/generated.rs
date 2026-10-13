@@ -372,12 +372,14 @@ impl ModelSwitchReportingSupport {
 #[serde(rename_all = "snake_case")]
 pub enum PermissionDeferralSupport {
     UnsupportedNotImplemented,
+    Unsupported,
     SupportedWithNonterminalOutcome,
 }
 impl PermissionDeferralSupport {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::UnsupportedNotImplemented => "unsupported_not_implemented",
+            Self::Unsupported => "unsupported",
             Self::SupportedWithNonterminalOutcome => "supported_with_nonterminal_outcome",
         }
     }
@@ -602,6 +604,15 @@ impl ConversationPermissionOptionEffect {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPermissionDeadline {
+    pub wait_ms: u64,
+    pub due_at_ms: u64,
+    pub effect: ConversationPermissionOptionEffect,
+    pub reason: String,
+    pub stops_turn: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationPermission {
     pub execution_id: String,
     pub permission_id: String,
@@ -612,6 +623,8 @@ pub struct ConversationPermission {
     pub origin: ConversationPermissionOrigin,
     pub ask: ConversationPermissionAsk,
     pub arguments_json: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<ConversationPermissionDeadline>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -645,6 +658,7 @@ pub struct ConversationMcpTool {
 pub struct ConversationView {
     pub conversation_id: String,
     pub revision: String,
+    pub server_now_ms: u64,
     pub messages: Vec<ConversationMessage>,
     pub pending: Vec<ConversationPending>,
     pub permissions: Vec<ConversationPermission>,

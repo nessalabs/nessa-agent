@@ -47,7 +47,13 @@ it("uses the configured ordinary deadline when an admitted command never answers
     conversation: createConversationApi(wire, () => `id-${next++}`),
   } as unknown as NessaClient
   const store = makeStore(
-    createDependencies({ conversation: gatewayEffects(() => client, unexpectedWait) }),
+    createDependencies({
+      conversation: gatewayEffects(
+        () => client,
+        unexpectedWait,
+        () => 0,
+      ),
+    }),
   )
 
   const sending = store.dispatch(sendDraft({ content: textContent("first message") }))

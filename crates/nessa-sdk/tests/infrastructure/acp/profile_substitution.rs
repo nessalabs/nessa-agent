@@ -653,6 +653,8 @@ pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabil
         permissions: PermissionOfferPolicy::once_only(),
         refusal: crate::application::agent_execution::permissions::ConfiguredRefusal::continue_turn(
         ),
+        permission_deadlines:
+            crate::domain::agent_execution::permissions::PermissionDeadlinePolicy::standard(),
         launch_timeout: Duration::from_secs(10),
         startup_timeout: Duration::from_secs(10),
         execution_timeout: Some(Duration::from_secs(2)),
@@ -663,6 +665,7 @@ pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabil
         max_incoming_frame_bytes: 4096,
         images: None,
         clock: Arc::new(crate::infrastructure::clock::RuntimeClock::new()),
+        workspace_paths: Arc::new(crate::infrastructure::workspace_paths::FilesystemPaths),
     };
     config.validate().unwrap();
     (root, config, capabilities)

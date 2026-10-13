@@ -764,12 +764,14 @@ struct Frame {
 
 /// What a client would see of a view: all of it but its revision, which a
 /// fresh projection numbers anew though nothing in it changed (a
-/// conversation read with no agent, row S26), so an equal view is not sent
+/// conversation read with no agent, row S26), and the gateway's time it was
+/// stamped with, which moves on every read; so an equal view is not sent
 /// again (row S9).
 fn view_key(view: &Value) -> Value {
     let mut key = view.clone();
     if let Some(fields) = key.as_object_mut() {
         fields.remove("revision");
+        fields.remove("serverNowMs");
     }
     key
 }
@@ -1151,14 +1153,17 @@ mod tests {
         assert_eq!(quick.await, Ok(1));
     }
 
-    /// Row S9: two reads that differ only in their revision are the same
-    /// view to the client.
+    /// Row S9: two reads that differ only in their revision, or in the
+    /// gateway's time each was stamped with, are the same view to the client.
     #[test]
     fn views_that_differ_only_in_revision_have_one_key() {
-        let first = serde_json::json!({"revision": "a:1", "messages": [1]});
-        let renumbered = serde_json::json!({"revision": "b:1", "messages": [1]});
-        let changed = serde_json::json!({"revision": "a:1", "messages": [2]});
+        let first = serde_json::json!({"revision": "a:1", "serverNowMs": 1_000, "messages": [1]});
+        let renumbered =
+            serde_json::json!({"revision": "b:1", "serverNowMs": 1_000, "messages": [1]});
+        let later = serde_json::json!({"revision": "a:1", "serverNowMs": 9_000, "messages": [1]});
+        let changed = serde_json::json!({"revision": "a:1", "serverNowMs": 1_000, "messages": [2]});
         assert_eq!(view_key(&first), view_key(&renumbered));
+        assert_eq!(view_key(&first), view_key(&later));
         assert_ne!(view_key(&first), view_key(&changed));
     }
 

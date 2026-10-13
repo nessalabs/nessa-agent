@@ -111,6 +111,24 @@ export interface ApprovalOption {
 export type ApprovalAsk = "tool" | "message"
 
 /**
+ * What happens if nobody answers. `reason` is the past-tense record; the
+ * card builds its line from `dueAtMs`, `effect`, and `stopsTurn`.
+ */
+export interface ApprovalDeadline {
+  readonly waitMs: number
+  /**
+   * Unix milliseconds when the deadline decides, on this window's clock: put
+   * there from the gateway's as the view arrived (`transcriptFrom`). A reload
+   * counts down from this.
+   */
+  readonly dueAtMs: number
+  readonly effect: "allow" | "deny"
+  readonly reason: string
+  /** The only refusal offered stops the turn. */
+  readonly stopsTurn: boolean
+}
+
+/**
  * What the agent, or an MCP App, asks to do, waiting on the person's answer:
  * run a command or a tool, or — an app — send a message as them, `command`
  * then being the app's tool and the message's exact words.
@@ -127,6 +145,8 @@ export interface Approval {
    * holds the view to (`conversation-validate.ts`, D19 on #390).
    */
   readonly ask: ApprovalAsk
+  /** Present when this review answers itself if nobody does. */
+  readonly deadline?: ApprovalDeadline
 }
 
 /** Whether `approval` offers `choice`. A button and an answer both ask this. */
