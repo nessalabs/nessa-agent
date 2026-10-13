@@ -179,6 +179,10 @@ where
             tokio::select! {
                 biased;
                 () = stopped(&mut stop) => return,
+                // Finished legs are reaped before another frame is read, so
+                // a relay that keeps announcing readers cannot pile up
+                // finished tasks behind the four running ones.
+                Some(_) = legs.join_next(), if !legs.is_empty() => {}
                 (reader, frame) = &mut reading => {
                     silent = self.timer.now() + SILENCE;
                     match frame {
@@ -205,7 +209,6 @@ where
                     }
                     reading = Box::pin(next_frame(reader));
                 }
-                Some(_) = legs.join_next(), if !legs.is_empty() => {}
                 () = self.timer.sleep_until(silent) => {
                     tracing::info!("relay registration went silent");
                     return;

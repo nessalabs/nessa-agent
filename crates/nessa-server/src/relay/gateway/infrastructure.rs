@@ -70,11 +70,13 @@ impl<A> RelayedAccept<A> {
 
 impl<A: EnrollmentAccept> EnrollmentAccept for RelayedAccept<A> {
     /// Both waits are cancel-safe: the socket's by its own contract, and a
-    /// channel receive loses nothing when dropped.
+    /// channel receive loses nothing when dropped. Neither is preferred
+    /// (the select picks at random among those ready), so a flood of direct
+    /// connections cannot keep joined relay readers waiting, nor the other
+    /// way round.
     async fn accept(&mut self) -> Accepted {
         loop {
             tokio::select! {
-                biased;
                 accepted = self.socket.accept() => return accepted,
                 relayed = self.joined.recv(), if self.open => match relayed {
                     Some(Relayed { stream, permit }) => {
