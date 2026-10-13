@@ -570,14 +570,19 @@ get an ADR explaining why not.
 
 **Desktop host ↔ gateway runtime.** The prepared runtime tree has one fingerprint.
 Under its service-label lock, the host copies and verifies the bundle into a
-private version directory outside the app before any service mutation. Exclusive
-atomic publication prevents replacing an existing version; launchd arguments name
-only the staged directory, and no search path derives from it — the service runs
-everything in that directory by absolute path, so neither the gateway's `PATH`
-nor the agent's contains it. A host process fully validates a published version
-before first use, then caches only that exact path, fingerprint, and private root
-directory identity; later reconciliation still checks the complete definition and
-live process identity without hashing the whole runtime again. Published versions
+private version directory outside the app. When that generation is already
+published, launchd arguments name only that directory, and this process validates
+it before the service changes. When it is not published yet, this registration
+launches the bundled tree by absolute path so the gateway can bind, and a
+background thread holding the same lock publishes the generation afterwards; the
+next registration points the service at that directory. Exclusive atomic
+publication prevents replacing an existing version, and no search path derives
+from either directory — the service runs `nessa`, `node`, and `nessa-mcp` by
+absolute path, so neither the gateway's `PATH` nor the agent's contains that
+directory. A host process fully validates a published version before first use,
+then caches only that exact path, fingerprint, and private root directory
+identity; later reconciliation still checks the complete definition and live
+process identity without hashing the whole runtime again. Published versions
 are retained and never repaired or garbage-collected automatically.
 The desktop compares it with health's fingerprint, persisted service generation,
 and canonical runtime-instance UUID, requiring the advertised process ID to match

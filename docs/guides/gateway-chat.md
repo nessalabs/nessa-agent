@@ -849,20 +849,24 @@ Applications before launching it. No repository checkout, Cargo, npm, or Homebre
 Node is needed at runtime. Each agent's credentials remain in that agent's own
 local configuration; credentials and chat history are never shipped inside the app.
 
-Before changing any service, the desktop stages its bundled runtime under
+The desktop publishes its bundled runtime under
 `~/Library/Application Support/Nessa/gateway-runtimes/<service-label>/<fingerprint>/`.
 On APFS it copy-on-write clones regular-file data into a private temporary sibling;
 other filesystems use the durable byte-copy fallback. It copies relative internal
 symlinks, preserves bytes and executable bits, removes removable bundle-supplied
 extended attributes, syncs every file after either copy path and then its directories, verifies
 the same full-tree SHA-256 used by packaging, then publishes with an exclusive
-atomic rename. The service's executable and `--desktop-runtime` argument point
-exclusively at that retained version, so replacing `Nessa.app` cannot replace
-files under a running gateway. No search path is derived from it: the gateway
-runs `nessa`, `node`, the ACP entry and `nessa-mcp` by absolute path, so the
-staged directory appears on nobody's `PATH`. Corrupt existing versions cause an error;
-they are never repaired in place. Failed attempts remove only their
-own temporary directory.
+atomic rename. A generation that is already there is verified again before launchd
+changes, and the service's executable and `--desktop-runtime` argument point only
+at that directory, so replacing `Nessa.app` cannot replace files under that
+gateway. A generation that is not there yet does not block the gateway: that
+registration runs the bundled tree by absolute path — the same fingerprint, still
+on nobody's `PATH` — and the publication runs afterwards on a thread that keeps
+the per-label lock until it finishes. The next registration points the service
+at the published directory. Until that registration, replacing the app can still
+change files the running process opens from the bundle. No search path is derived
+from either directory. Corrupt existing versions cause an error; they are never
+repaired in place. Failed attempts remove only their own temporary directory.
 
 Once reconciliation has a gateway up, and while it still holds the per-label
 lock, it collects the versions nothing can be running: everything under the
@@ -992,8 +996,9 @@ under `usr/lib/Nessa/runtime`, and declares WebKitGTK and the tray's
 runtime's executables, so the runtime would no longer match its fingerprint,
 and a Linux `pnpm app:build` builds only the `.deb`.
 
-Staging works as on macOS, with XDG locations in place of `Application Support`:
-the runtime is copied to
+Publication follows the same rules as a macOS generation that is being published —
+private copy, normalised attributes, full-tree digest, exclusive rename — with
+XDG locations in place of `Application Support`: the runtime is copied to
 `$XDG_DATA_HOME/nessa/gateway-runtimes/<unit>/<fingerprint>/` (by default
 `~/.local/share`), so the service never runs from the package's files. The
 gateway is the systemd **user** unit `nessa-gateway-prod.service` in

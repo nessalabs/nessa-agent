@@ -7,8 +7,12 @@
 //! launchctl effects. Its `generation`
 //! module reuses the published generation only for an equal unfenced definition;
 //! changed or retired definitions receive a fresh random installation identity.
-//! `staging` verifies and publishes private immutable runtime versions before any
-//! service mutation. Existing versions remain available across app replacement.
+//! `staging` verifies and publishes private immutable runtime versions. A
+//! generation that is already published is verified again before the service
+//! changes. One that is not does not gate launchd: this registration runs the
+//! bundled tree by absolute path, and publication continues on a thread that
+//! keeps the service-label lock until `stage_runtime` returns. Existing
+//! versions remain available across app replacement.
 //! Its `pruning` module then collects, under the same lock and only once a
 //! gateway is up, the versions neither the new service, the loaded service, nor
 //! an outstanding retirement can still need; it never fails registration.
@@ -20,8 +24,8 @@
 //! bundled windows -> commands authorization -> Gateway startup / endpoint / credential access
 //!                    -> Claude configuration directory -> one re-registration
 //! desktop window  -> commands authorization -> endpoint / credential access, once ready
-//! Gateway -> native manager -> staging -> verified immutable runtime
-//!                    -> control -> launchd / existing gateway
+//! Gateway -> native manager -> published runtime -> control -> launchd
+//!                    -> unpublished runtime -> launchd on the bundle, then staging
 //!                    -> systemd -> typed D-Bus jobs / pidfds
 //!                    -> pruning -> superseded runtime versions
 //!         -> reconciliation audit -> private atomic intent/outcome records

@@ -16,6 +16,7 @@ use std::{
     },
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::Arc,
     thread,
     time::{Duration, Instant},
 };
@@ -868,4 +869,113 @@ fn measure_runtime_staging_phases() {
         "launchctl bootstrap failed: {}",
         String::from_utf8_lossy(&launch.stderr)
     );
+}
+
+/// Releases a deferred publication if the test fails while the thread is paused.
+struct ReleaseOnDrop(Arc<super::super::StagePause>);
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+fn label_lock_is_held(path: &Path) -> bool {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+        return false;
+    }
+    let error = std::io::Error::last_os_error();
+    assert_eq!(
+        error.kind(),
+        std::io::ErrorKind::WouldBlock,
+        "label lock: {error}"
+    );
+    true
+}
+
+#[test]
+fn the_label_lock_is_released_when_nothing_was_deferred() {
+    let fixture = Fixture::new();
+    let locks = fixture.0.join("locks");
+    nessa_local_storage::create_directory(&locks).unwrap();
+    let lock_file = locks.join("gateway-upgrade.lock");
+    {
+        let _held = super::super::HeldRegistration::lock(&locks).unwrap();
+        assert!(label_lock_is_held(&lock_file));
+    }
+    assert!(!label_lock_is_held(&lock_file));
+}
+
+#[test]
+fn deferred_publication_holds_the_label_lock_until_stage_runtime_finishes() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    set_test_attribute(&source.join("nessa"));
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+    let locks = fixture.0.join("locks");
+    nessa_local_storage::create_directory(&locks).unwrap();
+    let lock_file = locks.join("gateway-upgrade.lock");
+    let pause = super::super::StagePause::new();
+    let release = ReleaseOnDrop(pause.clone());
+    {
+        let mut held = super::super::HeldRegistration::lock(&locks).unwrap();
+        held.defer_stage_until(source, versions.clone(), fingerprint.clone(), pause.clone());
+    }
+    pause.wait_until_staging_holds_the_lock();
+    assert!(label_lock_is_held(&lock_file));
+    assert!(!versions.join(&fingerprint).exists());
+    drop(release);
+    pause.wait_until_finished().unwrap();
+    let staged = versions.join(&fingerprint);
+    assert_eq!(
+        fs::metadata(&staged).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(fs::read(staged.join("nessa")).unwrap(), b"gateway\0bytes");
+    assert!(!has_test_attribute(&staged.join("nessa")));
+    assert!(!label_lock_is_held(&lock_file));
+    let leftovers = fs::read_dir(&versions)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| name.starts_with(".staging-"))
+        .collect::<Vec<_>>();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+#[test]
+fn a_failed_deferred_publication_releases_the_lock_and_leaves_no_generation() {
+    let fixture = Fixture::new();
+    let source = fixture.0.join("empty");
+    fs::create_dir(&source).unwrap();
+    let fingerprint = "ab".repeat(32);
+    let versions = fixture.0.join("versions");
+    let locks = fixture.0.join("locks");
+    nessa_local_storage::create_directory(&locks).unwrap();
+    let lock_file = locks.join("gateway-upgrade.lock");
+    let pause = super::super::StagePause::new();
+    let release = ReleaseOnDrop(pause.clone());
+    {
+        let mut held = super::super::HeldRegistration::lock(&locks).unwrap();
+        held.defer_stage_until(source, versions.clone(), fingerprint.clone(), pause.clone());
+    }
+    pause.wait_until_staging_holds_the_lock();
+    assert!(label_lock_is_held(&lock_file));
+    drop(release);
+    assert!(pause.wait_until_finished().is_err());
+    assert!(!versions.join(&fingerprint).exists());
+    if versions.exists() {
+        let leftovers = fs::read_dir(&versions)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.starts_with(".staging-"))
+            .collect::<Vec<_>>();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+    assert!(!label_lock_is_held(&lock_file));
 }
