@@ -514,8 +514,8 @@ fn the_connector_notes_a_relay_offline_and_a_connect_clears_it() {
     assert!(!offline.load(Ordering::SeqCst));
 }
 
-/// `dial_gateway`: an address that is not `host:port` is said as such
-/// before any route is tried, rather than hidden behind the relay's answer;
+/// `dial_gateway`: an address that is not `host:port`, or a pin beside a
+/// relay that is not a key, is said as such before any route is tried, rather than hidden behind the relay's answer;
 /// a refused direct dial goes on to the relay, whose `Offline` it carries;
 /// and without a relay it is the direct dial alone.
 #[test]
@@ -533,6 +533,14 @@ fn dial_gateway_says_a_bad_address_and_carries_the_relays_answer() {
             "{address}"
         );
     }
+
+    let not_a_key = dial_gateway(
+        "127.0.0.1:0",
+        Some((&unused, &[0; 44])),
+        Duration::from_secs(5),
+    )
+    .expect_err("a pin that is not a key");
+    assert_eq!(not_a_key.kind(), std::io::ErrorKind::InvalidInput);
 
     let (relay, serving) = answering_relay(RelayFrame::Offline);
     let offline = dial_gateway("127.0.0.1:0", Some((&relay, &pin)), Duration::from_secs(5))

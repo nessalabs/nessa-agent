@@ -277,8 +277,8 @@ impl Cancellation for Stopping {
 /// gateway with it.
 ///
 /// # Errors
-/// `address` is not `host:port` (`InvalidInput`, whatever the relay would
-/// say), or neither route connected in time: the relay's answer where it was asked
+/// `address` is not `host:port`, or the pin beside a relay is not a key
+/// (`InvalidInput`, whatever the relay would say), or neither route connected in time: the relay's answer where it was asked
 /// ([`RelayRefusal::carried`] tells its refusals apart), else the direct
 /// dial's error.
 pub fn dial_gateway(
@@ -297,15 +297,21 @@ pub fn dial_gateway(
             "the gateway's address is not host:port",
         ));
     }
-    // A pin that is no Ed25519 key fails TLS whatever the route.
-    let route = relay.and_then(|(address, pin)| {
-        Some(RelayRoute {
-            address: address.clone(),
-            key: relay_key(pin)?,
-        })
-    });
-    let Some(route) = route else {
+    let Some((relay, pin)) = relay else {
         return connect_any(address, deadline);
+    };
+    // A pin that is no Ed25519 key fails TLS whatever the route, and
+    // dialing again cannot change it: said now, not left to a direct dial
+    // that may never connect.
+    let key = relay_key(pin).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "the gateway's pin is not a key",
+        )
+    })?;
+    let route = RelayRoute {
+        address: relay.clone(),
+        key,
     };
     let address = address.to_owned();
     race(
