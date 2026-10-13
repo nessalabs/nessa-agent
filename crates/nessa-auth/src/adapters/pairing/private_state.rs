@@ -281,7 +281,12 @@ struct SavedClient {
 }
 impl FilePairingState {
     fn load_client(&self) -> Result<Option<SavedClient>, PrivateStateError> {
-        self.read_bounded(ENROLLMENT_FILE, CREDENTIAL_MAX_BYTES)?
+        let original = self.load_original_record()?;
+        let bytes = self.read_bounded(ENROLLMENT_FILE, CREDENTIAL_MAX_BYTES)?;
+        if original.is_some() && bytes.is_some() {
+            return Err(PrivateStateError::Conflict);
+        }
+        bytes
             .map(|bytes| decode_client(&bytes).map(|record| SavedClient { record, bytes }))
             .transpose()
     }
@@ -354,6 +359,7 @@ impl ClientPendingStore for FilePairingState {
             .operation
             .lock()
             .map_err(|_| PrivateStateError::Unavailable)?;
+        self.exclude_original()?;
         let bytes = encode_pending(key, gateway_pin, intent);
         let replace = match self.load_client()? {
             None if expected.is_none() => false,
@@ -560,6 +566,7 @@ fn storage_error(error: io::Error) -> PrivateStateError {
 mod tests;
 
 mod gateway_audit;
+mod owner_phone;
 
 fn storage_failure(error: &io::Error) -> PrivateStorageFailure {
     if is_unsafe_file(error) {

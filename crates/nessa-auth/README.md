@@ -150,6 +150,17 @@ Later stage/publication checks retain the exact original issuer; another valid
 owner credential cannot substitute. This Auth slice does not implement endpoint
 or product/native phone transport, and does not change legacy per-chat policies.
 
+`value_objects/owner_phone_context.rs` holds validated original source/pin/numeric
+destination before a permanent device key exists. The native original port in
+`application/pairing/owner_phone_private.rs` reserves that exact context before
+entropy; `adapters/pairing/private_state/owner_phone.rs` uses FilePairingState's
+existing directory, operation guard and publisher for Reserved/Prepared records.
+Prepared stores the original seed and its crypto-derived public key, validates
+their correspondence on cold load, and requires actual durability acknowledgement.
+Legacy enrollment and original preparation exclude mixed records under that same
+owner. Actual private fixtures live in `tests/adapters/private_state/owner_phone.rs`.
+Coherent replacement of seed and public key is not authenticated evidence.
+
 Native listener and protected product activation remain subsequent consumers;
 this producer alone establishes no protected connection or resource acceptance.
 
