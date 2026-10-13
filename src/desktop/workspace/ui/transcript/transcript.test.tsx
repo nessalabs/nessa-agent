@@ -561,6 +561,49 @@ describe("a transcript", () => {
     expect(await first).toEqual({ status: "sent" })
   })
 
+  it("removes a question card the window is not showing, without saying it was answered", async () => {
+    const source = fakeSource()
+    const question = {
+      executionId: "e1",
+      questionId: "place",
+      message: "Where should this land?",
+      questions: [
+        {
+          key: "where",
+          prompt: "Pick a place",
+          multiSelect: false,
+          freeText: false,
+          required: false,
+          options: [{ value: "here", label: "Here" }],
+        },
+      ],
+    }
+    const store = testStore(source)
+    await store.dispatch(loadWorkspace())
+    store.dispatch(
+      workspaceActions.transcriptLoaded({
+        transcript: { ...conversation, approval: null, questions: [question] },
+      }),
+    )
+    await act(async () => {
+      root.render(
+        <Provider store={store}>
+          <QuestionCard sessionId="b" question={question} />
+        </Provider>,
+      )
+    })
+    const skip = [...host.querySelectorAll("button")].find(
+      (button) => button.textContent === "Skip",
+    )
+    await act(async () => {
+      skip?.click()
+      await settle()
+    })
+    expect(host.querySelector('[data-question="place"]')).toBeNull()
+    expect(host.textContent).not.toContain("This was already answered.")
+    expect(source.calls.filter((call) => call[0] === "answerQuestion")).toHaveLength(0)
+  })
+
   it("says a question was already answered when the source refuses it", async () => {
     const source = fakeSource()
     source.refuse("answerQuestion", "not-waiting")

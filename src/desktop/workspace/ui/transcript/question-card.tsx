@@ -26,6 +26,8 @@ import { failureCopy } from "../failure-copy"
  *
  * The card's own busy state covers the send. A second card of the same ask
  * joins that send and hears how it settled, so a refusal enables both.
+ * A session this window is no longer showing answers `not-asked`; the card
+ * leaves, which is not the source saying the question was already answered.
  */
 export function QuestionCard({
   sessionId,
@@ -41,6 +43,7 @@ export function QuestionCard({
   )
   const [ownWords, setOwnWords] = useState<ReadonlyMap<string, string>>(() => new Map())
   const [busy, setBusy] = useState(false)
+  const [dismissed, setDismissed] = useState(false)
   const [failure, setFailure] = useState<WorkspaceFailureReason | null>(null)
   const ready = questionAnswerReady(question.questions, chosen, ownWords)
 
@@ -59,11 +62,17 @@ export function QuestionCard({
       }),
     ).then((outcome) => {
       if (outcome.status === "sent") return
+      if (outcome.status === "not-asked") {
+        setDismissed(true)
+        return
+      }
       setBusy(false)
       if (outcome.status === "refused" || outcome.status === "unknown")
         setFailure(outcome.reason)
     })
   }
+
+  if (dismissed) return null
 
   return (
     <Questionnaire
