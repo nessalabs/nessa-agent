@@ -7,13 +7,12 @@ use crate::read_only_sync::infrastructure::cache::ReadOnlyCache;
 use nessa_auth::{
     adapters::pairing::{CryptoRng, ManualCode, RngCore},
     application::{pairing::ClientPendingStore, ports::Clock as WallClock},
-    domain::pairing::DisclosedConsent,
+    domain::{pairing::DisclosedConsent, ResourceId},
 };
 use nessa_protocol::{
     clock::Clock as MonotonicClock,
     pairing::{socket::NativeWakeReport, wire::NativePairingStatus},
 };
-use nessa_sync::replication::domain::Id;
 use std::{net::TcpStream, path::PathBuf, sync::Arc};
 
 /// Original durable receiver purge evidence. Re-reading it does not repeat
@@ -22,7 +21,7 @@ use std::{net::TcpStream, path::PathBuf, sync::Arc};
 pub struct RetainedPurge(PurgeReceipt);
 impl RetainedPurge {
     /// The receiver whose retained rows were removed and fenced.
-    pub fn receiver(&self) -> &Id {
+    pub fn receiver(&self) -> &ResourceId {
         &self.0.receiver
     }
     /// Transcript streams removed by the original purge.
@@ -185,7 +184,7 @@ impl RetainedCache {
     /// purge, even if the enrollment record was already unlinked. This is a
     /// blocking private-cache read; native UI composition runs it off the UI.
     pub fn purge_receipt(&mut self, receiver: &str) -> Result<Option<RetainedPurge>, ReadFailure> {
-        let receiver = Id::new(receiver).map_err(|_| ReadFailure::Protocol)?;
+        let receiver = ResourceId::new(receiver).map_err(|_| ReadFailure::Protocol)?;
         self.cache
             .purge_receipt(&receiver)
             .map(|receipt| receipt.map(RetainedPurge))

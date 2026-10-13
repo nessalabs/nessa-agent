@@ -42,7 +42,7 @@ pub(crate) enum PinnedStatus {
 #[must_use]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PurgeReceipt {
-    pub(crate) receiver: Id,
+    pub(crate) receiver: ResourceId,
     /// Transcript streams, raw records and catalogue entries deleted.
     pub(crate) transcripts: u64,
     pub(crate) records: u64,
@@ -56,7 +56,7 @@ pub(crate) trait CachePurges {
     /// authenticated Terminal enrollment status as cause and initiator, what
     /// was deleted and when. The receipt fences the receiver: later applies
     /// refuse. A repeated purge returns the original receipt.
-    fn purge_receiver(&mut self, receiver: &Id) -> Result<PurgeReceipt, CacheError>;
+    fn purge_receiver(&mut self, receiver: &ResourceId) -> Result<PurgeReceipt, CacheError>;
 }
 
 /// Opens the cache a purge runs on, only when one is needed.
@@ -131,9 +131,7 @@ impl ClientPendingStore for PurgeBeforeEnd {
         if saved.intent() != expected {
             return Err(PrivateStateError::Conflict);
         }
-        let receiver =
-            Id::new(saved.receiver().as_str()).map_err(|_| PrivateStateError::Corrupt)?;
-        let purged = (self.open)().and_then(|mut cache| cache.purge_receiver(&receiver));
+        let purged = (self.open)().and_then(|mut cache| cache.purge_receiver(saved.receiver()));
         let refused = purged.is_err();
         *self.purged.lock().unwrap_or_else(PoisonError::into_inner) = Some(purged);
         if refused {
