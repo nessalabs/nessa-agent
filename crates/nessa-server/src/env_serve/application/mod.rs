@@ -10,8 +10,8 @@
 //! gets, once `approval.rs` has seen its owner approve it through an
 //! [`EnvironmentPairing`], which `enrollment.rs` pairs once through an
 //! [`EnrollingPairing`]; `grants.rs` is where serving reads what this
-//! host's owner grants each gateway, through [`PeerGrants`]; `timer.rs` is
-//! the [`Timer`] all three wait on.
+//! host's owner grants each gateway, through [`PeerGrants`]. All three wait
+//! on a [`crate::timer::Timer`].
 mod approval;
 mod artifacts;
 mod enrollment;
@@ -19,7 +19,6 @@ mod fetches;
 mod grants;
 mod redial;
 mod serve;
-mod timer;
 mod wire;
 pub(crate) use approval::{approval, Answer, EnvironmentPairing, NotApproved, Saved};
 pub(crate) use artifacts::{
@@ -43,7 +42,4 @@ pub(crate) use serve::{
 };
 #[cfg(test)]
 pub(crate) use serve::{Asked, EndCause};
-#[cfg(test)]
-pub(crate) use timer::manual::ManualTimer;
-pub(crate) use timer::{Moment, Sleep, Timer};
 pub(crate) use wire::FrameStream;

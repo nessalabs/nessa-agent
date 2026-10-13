@@ -1,16 +1,20 @@
-//! The timer the environment role waits on (issue #758): every deadline,
-//! interval and wait in `serve.rs`, `redial.rs` and `approval.rs` is
-//! measured on a [`Timer`] they are given, never on the runtime's clock.
+//! The timer waits are measured on (issues #758 and #266): every deadline,
+//! interval and wait in the environment role (`env_serve`'s `serve.rs`,
+//! `redial.rs` and `approval.rs`) and in the relay is measured on a
+//! [`Timer`] it is given, never on the runtime's clock.
 //!
 //! ```text
-//! composition ──▶ TokioTimer (infrastructure) ──▶ serve, redial, approval
-//! a test      ──▶ ManualTimer                 ──▶ the same, moved by the test
+//! composition ──▶ TokioTimer (runtime.rs) ──▶ env_serve, relay
+//! a test      ──▶ ManualTimer             ──▶ the same, moved by the test
 //! ```
 //!
 //! Arrows are what each is given. A test says exactly when a wait ends, so
 //! what a deadline passing means is tested without waiting for one, and a
 //! slow machine cannot cut a wait short. What the host's own ports take as
 //! a budget (a harness's cleanup, a command's timeout) is theirs to measure.
+mod runtime;
+
+pub(crate) use runtime::TokioTimer;
 use std::{future::Future, ops::Add, pin::Pin, time::Duration};
 
 /// A moment on one [`Timer`]'s timeline: how long after that timer's origin.
@@ -28,6 +32,7 @@ impl Moment {
         self.0
     }
     /// How long after `earlier` this moment is; zero when it is not after it.
+    #[cfg(any(unix, test))]
     pub(crate) fn since(self, earlier: Self) -> Duration {
         self.0.saturating_sub(earlier.0)
     }
@@ -45,7 +50,7 @@ impl Add<Duration> for Moment {
 /// Resolves once the timer has reached the moment it was asked to wait for.
 pub(crate) type Sleep = Pin<Box<dyn Future<Output = ()> + Send>>;
 
-/// Where the environment role's waits are measured.
+/// Where the environment role's and the relay's waits are measured.
 pub(crate) trait Timer: Send + Sync {
     /// The current moment. Never earlier than one this timer returned before.
     fn now(&self) -> Moment;
@@ -80,6 +85,7 @@ pub(crate) async fn within<T>(
 }
 
 /// [`within`] a deadline `period` from now, read when this is called.
+#[cfg(unix)]
 pub(crate) fn timeout<'a, T: 'a>(
     timer: &'a dyn Timer,
     period: Duration,
@@ -89,5 +95,5 @@ pub(crate) fn timeout<'a, T: 'a>(
 }
 
 #[cfg(test)]
-#[path = "../../../tests/env_serve/manual_timer.rs"]
+#[path = "../../tests/timer/manual.rs"]
 pub(crate) mod manual;
