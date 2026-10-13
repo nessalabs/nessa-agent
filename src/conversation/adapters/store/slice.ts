@@ -1,4 +1,9 @@
-import { permissionTargetConversation, type PermissionTarget } from "@nessa/client"
+import {
+  permissionTargetConversation,
+  questionTargetConversation,
+  type PermissionTarget,
+  type QuestionTarget,
+} from "@nessa/client"
 import {
   type ApprovalMode,
   contentText,
@@ -448,8 +453,7 @@ export type Control =
   | { kind: "answer"; target: PermissionTarget; optionId: string }
   | {
       kind: "answerQuestion"
-      executionId: string
-      questionId: string
+      target: QuestionTarget
       /** Null declines: the agent is told it was answered with nothing. */
       choices: { key: string; values: string[]; ownWords?: string }[] | null
     }
@@ -470,6 +474,11 @@ export const controlConversation = createAsyncThunk<
   if (
     (control.kind === "answer" || control.kind === "cancel") &&
     permissionTargetConversation(control.target) !== serverId
+  )
+    return
+  if (
+    control.kind === "answerQuestion" &&
+    questionTargetConversation(control.target) !== serverId
   )
     return
   const requestedOrder = control.kind === "reorder" ? [...control.executionIds] : []
@@ -519,12 +528,7 @@ export const controlConversation = createAsyncThunk<
         await extra.conversation.answer(control.target, control.optionId)
         break
       case "answerQuestion":
-        await extra.conversation.answerQuestion(
-          serverId,
-          control.executionId,
-          control.questionId,
-          control.choices,
-        )
+        await extra.conversation.answerQuestion(control.target, control.choices)
         break
       case "cancel":
         await extra.conversation.cancel(control.target)

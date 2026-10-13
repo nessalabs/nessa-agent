@@ -1,3 +1,4 @@
+import { questionTargets, type QuestionTarget } from "@nessa/client"
 import { useState } from "react"
 import type { Conversation } from "../model"
 import { controlConversation } from "../adapters/store/slice"
@@ -17,7 +18,7 @@ import {
 } from "@nessa-ui/react/questionnaire"
 import { Button } from "@nessa-ui/react/button"
 
-type Asked = NonNullable<Conversation["remote"]>["questions"][number]
+type Asked = QuestionTarget
 
 /**
  * What the agent is waiting to hear, asked where the conversation is.
@@ -39,13 +40,19 @@ export function ConversationQuestions({
   conversation: Conversation
   gatewayAvailable: boolean
 }) {
-  const questions = conversation.remote?.questions ?? []
+  const questions =
+    conversation.serverConversationId && conversation.remote
+      ? questionTargets({
+          conversationId: conversation.serverConversationId,
+          questions: conversation.remote.questions,
+        })
+      : []
   if (!questions.length) return null
   return (
     <div className="flex flex-col gap-3">
       {questions.map((ask) => (
         <ConversationQuestion
-          key={JSON.stringify([ask.executionId, ask.questionId])}
+          key={JSON.stringify([ask.conversationId, ask.executionId, ask.questionId])}
           ask={ask}
           conversation={conversation}
           gatewayAvailable={gatewayAvailable}
@@ -91,8 +98,7 @@ function ConversationQuestion({
         id: conversation.id,
         control: {
           kind: "answerQuestion",
-          executionId: ask.executionId,
-          questionId: ask.questionId,
+          target: ask,
           choices,
         },
       }),

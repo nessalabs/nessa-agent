@@ -335,12 +335,12 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
     },
     async remove() {},
     async answer() {},
-    async answerQuestion(id, _executionId, questionId) {
+    async answerQuestion(target) {
       // The scripted gateway has no agent waiting, so answering only closes the
       // question the way a real one would.
-      const view = get(id)
+      const view = get(target.conversationId)
       view.questions = view.questions.filter(
-        (question) => question.questionId !== questionId,
+        (question) => question.questionId !== target.questionId,
       )
     },
     async cancel() {},

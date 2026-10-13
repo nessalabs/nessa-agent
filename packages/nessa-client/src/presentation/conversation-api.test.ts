@@ -1,3 +1,4 @@
+import { questionTargets } from "../application/question-target.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import { expect, it, vi } from "vitest"
 import { permissionTargets } from "../application/permission-target.js"
@@ -642,7 +643,15 @@ it("correlates a question answer acknowledgement with its action", async () => {
     .mockResolvedValue({ requestId: "question-action", applied: true })
   const api = createConversationApi({ request }, () => "question-action")
   await expect(
-    api.answerQuestion(conversationId, "execution", "ask", null),
+    api.answerQuestion(
+      questionTargets({
+        conversationId,
+        questions: [
+          { executionId: "execution", questionId: "ask", message: "Ask", questions: [] },
+        ],
+      })[0]!,
+      null,
+    ),
   ).resolves.toEqual({ requestId: "question-action", applied: true })
   expect(request).toHaveBeenCalledWith("conversation.answerQuestion", {
     conversationId,
@@ -704,9 +713,13 @@ it.each([false, true])(
     const api = createConversationApi({ request }, () => "generated")
     const choices = [{ key: "environment", values: ["staging"] }]
     const error = await api
-      .answerQuestion(conversationId, "execution", "ask", choices, {
-        requestId: "lost-answer",
-      })
+      .answerQuestion(
+        questionTargets({ conversationId, questions: [ask] })[0]!,
+        choices,
+        {
+          requestId: "lost-answer",
+        },
+      )
       .catch((error: unknown) => error)
     expect(error).toBeInstanceOf(NessaConversationControlError)
     expect(error).toMatchObject({
@@ -724,7 +737,7 @@ it.each([false, true])(
       // A fresh read may justify a new deliberate action, not replay of the
       // failed action. The provider remains the owner of ask consumption.
       await expect(
-        api.answerQuestion(conversationId, "execution", "ask", choices, {
+        api.answerQuestion(questionTargets(current)[0]!, choices, {
           requestId: "deliberate-answer",
         }),
       ).resolves.toEqual({ requestId: "deliberate-answer", applied: true })
@@ -741,13 +754,29 @@ it("keeps question refusal and mismatched acknowledgement in the shared control 
     .mockResolvedValueOnce({ requestId: "another-action", applied: true })
   const api = createConversationApi({ request }, () => "question-action")
   const refused = await api
-    .answerQuestion(conversationId, "execution", "ask", null)
+    .answerQuestion(
+      questionTargets({
+        conversationId,
+        questions: [
+          { executionId: "execution", questionId: "ask", message: "Ask", questions: [] },
+        ],
+      })[0]!,
+      null,
+    )
     .catch((error: unknown) => error)
   expect(refused).toBeInstanceOf(NessaConversationControlError)
   expect(refused).toMatchObject({ uncertain: false, requestId: "question-action" })
   expect(refused).not.toHaveProperty("retry")
   const mismatched = await api
-    .answerQuestion(conversationId, "execution", "ask", null)
+    .answerQuestion(
+      questionTargets({
+        conversationId,
+        questions: [
+          { executionId: "execution", questionId: "ask", message: "Ask", questions: [] },
+        ],
+      })[0]!,
+      null,
+    )
     .catch((error: unknown) => error)
   expect(mismatched).toBeInstanceOf(NessaConversationControlError)
   expect(mismatched).toMatchObject({ uncertain: true, requestId: "question-action" })

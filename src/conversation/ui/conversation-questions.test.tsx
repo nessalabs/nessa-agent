@@ -13,6 +13,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { act } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { questionTargetConversation } from "@nessa/client"
 import type { Conversation } from "../model"
 
 const dispatch = vi.fn()
@@ -58,9 +59,13 @@ function question(key: string, required: boolean): Asked {
   }
 }
 
-function show(questions: Asked[]) {
+function show(
+  questions: Asked[],
+  conversationId = "00000000-0000-4000-8000-000000000001",
+) {
   const conversation = {
     id: "conversation",
+    serverConversationId: conversationId,
     controlPending: false,
     remote: {
       questions: [
@@ -110,7 +115,16 @@ function answer() {
 }
 
 function sent() {
-  return dispatch.mock.calls.map(([action]) => action.request.control.choices)
+  return dispatch.mock.calls.map(([action]) => {
+    const control = action.request.control
+    expect(questionTargetConversation(control.target)).toBe(
+      "00000000-0000-4000-8000-000000000001",
+    )
+    expect(control.target).toMatchObject({ executionId: "execution", questionId: "1" })
+    expect(control).not.toHaveProperty("executionId")
+    expect(control).not.toHaveProperty("questionId")
+    return control.choices
+  })
 }
 
 describe("an ask in the conversation", () => {
@@ -162,4 +176,12 @@ describe("an ask in the conversation", () => {
     act(() => skip.click())
     expect(sent()).toEqual([null])
   })
+})
+
+it("QT1: equal turn and ask names in another conversation do not inherit its answer draft", () => {
+  show([question("field", false)])
+  choose("field", "a")
+  expect(answer().disabled).toBe(false)
+  show([question("field", false)], "00000000-0000-4000-8000-000000000002")
+  expect(answer().disabled).toBe(true)
 })

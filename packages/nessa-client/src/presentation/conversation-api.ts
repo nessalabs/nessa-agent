@@ -1,3 +1,4 @@
+import { questionFields, type QuestionTarget } from "../application/question-target.js"
 import {
   NessaConversationMutationError,
   NessaConversationControlError,
@@ -180,9 +181,7 @@ export type ConversationApi = {
    * current question before making a new deliberate answer.
    */
   answerQuestion: (
-    conversationId: string,
-    executionId: string,
-    questionId: string,
+    target: QuestionTarget,
     choices: readonly ConversationQuestionChoice[] | null,
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
@@ -471,7 +470,12 @@ export function createConversationApi(
         false,
       )
     },
-    answerQuestion: (id, executionId, questionId, choices, options = {}) => {
+    answerQuestion: (target, choices, options = {}) => {
+      const {
+        conversationId: id,
+        executionId,
+        questionId,
+      } = questionFields(target, choices)
       validConversationId(id)
       const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
       return mutate(

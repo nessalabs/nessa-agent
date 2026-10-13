@@ -1,4 +1,4 @@
-import { permissionTargets } from "@nessa/client"
+import { permissionTargets, questionTargets } from "@nessa/client"
 import {
   IMAGE_ATTACHMENT_TYPES,
   linkedFileProblem,
@@ -867,6 +867,7 @@ it.each([
             close: refuse,
             remove: refuse,
             answer: refuse,
+            answerQuestion: refuse,
             cancel: refuse,
             reorder: refuse,
           },
@@ -876,6 +877,7 @@ it.each([
       () => effects.close("server"),
       () => effects.remove("server", "execution"),
       () => effects.answer(reviewTarget(), "option"),
+      () => effects.answerQuestion(askTarget(), null),
       () => effects.cancel(reviewTarget()),
       () => effects.reorder("server", ["execution"]),
     ]
@@ -1518,3 +1520,42 @@ function reviewTarget() {
     ],
   })[0]!
 }
+
+function askTarget() {
+  return questionTargets({
+    conversationId: "00000000-0000-4000-8000-000000000001",
+    questions: [
+      {
+        executionId: "turn",
+        questionId: "ask",
+        message: "Choose",
+        questions: [
+          {
+            key: "field",
+            prompt: "Choose",
+            required: false,
+            multiSelect: false,
+            freeText: true,
+            options: [{ value: "value", label: "Value" }],
+          },
+        ],
+      },
+    ],
+  })[0]!
+}
+
+it("passes the captured question target and answers through the gateway adapter", async () => {
+  const answerQuestion = vi.fn(async () => ({ requestId: "action", applied: true }))
+  const effects = effectsOf(
+    () => ({ conversation: { answerQuestion } }) as unknown as NessaClient,
+  )
+  const target = askTarget()
+  await effects.answerQuestion(target, [{ key: "field", values: ["value"] }])
+  await effects.answerQuestion(target, [{ key: "field", values: [], ownWords: "Answer" }])
+  await effects.answerQuestion(target, null)
+  expect(answerQuestion.mock.calls).toEqual([
+    [target, [{ key: "field", values: ["value"], ownWords: null }]],
+    [target, [{ key: "field", values: [], ownWords: "Answer" }]],
+    [target, null],
+  ])
+})

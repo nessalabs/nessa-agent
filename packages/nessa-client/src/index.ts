@@ -110,6 +110,12 @@ export {
   permissionTargetConversation,
   type PermissionTarget,
 } from "./application/permission-target.js"
+
+export {
+  questionTargets,
+  questionTargetConversation,
+  type QuestionTarget,
+} from "./application/question-target.js"
 export type { ClientEventMap } from "./protocol/types.js"
 export type { ResolvedConnectRetryOptions } from "./application/connect-retry.js"
 export type {
