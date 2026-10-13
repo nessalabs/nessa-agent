@@ -99,6 +99,7 @@ export { selectSessionListChosen, selectSessionListing } from "./adapters/store/
 export { WorkspaceSourceError } from "./application/ports"
 export {
   createQuestionFlights,
+  differentFlight,
   type QuestionFlights,
 } from "./application/question-flights"
 export type {

@@ -263,8 +263,9 @@ against a private scripted gateway.
   diagnostic. Questions the view lists, and the
   gateway's `interactionViewError`, are on the transcript; answering a
   question checks it is on screen, then that the view still lists it, then
-  sends `answerQuestion`. A second card of that ask joins the send already
-  on its way. The next frame drops the question. The window has its own store (`src/desktop/store.ts`) and composition
+  sends `answerQuestion`. A second card joins that send when its choices and
+  initiator match. A different answer is not sent and is not reported as
+  delivered. The next frame drops the question. The window has its own store (`src/desktop/store.ts`) and composition
   (`src/desktop/dependencies.ts`). Where its workspace comes from is the
   window's too: the host's gateway, a browser's, a seeded run, or the sample, by
   `src/desktop/model/workspace-backend.ts`, with the desktop app's connection

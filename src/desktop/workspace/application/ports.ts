@@ -299,9 +299,9 @@ export interface WorkspaceDependencies {
    */
   readonly overviewFilter: RememberedFilter
   /**
-   * Asks already on their way, for this composed store. A second card of
-   * the same question joins the send and hears how it settled
-   * (`question-flights.ts`).
+   * Asks already on their way, for this composed store. A second card joins
+   * the send when its choices and initiator match, and hears how it settled.
+   * A different answer does not (`question-flights.ts`).
    */
   readonly questionFlights: QuestionFlights
   /**

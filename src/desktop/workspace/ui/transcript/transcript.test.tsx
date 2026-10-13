@@ -444,6 +444,147 @@ describe("a transcript", () => {
     expect(await second).toEqual({ status: "sent" })
   })
 
+  it("does not report a different answer as sent while one is already on its way", async () => {
+    const source = fakeSource()
+    source.hold("answerQuestion")
+    const { store } = await shown(source, {
+      ...conversation,
+      approval: null,
+      questions: [
+        {
+          executionId: "e1",
+          questionId: "place",
+          message: "Where should this land?",
+          questions: [
+            {
+              key: "where",
+              prompt: "Pick a place",
+              multiSelect: false,
+              freeText: false,
+              required: false,
+              options: [{ value: "here", label: "Here" }],
+            },
+          ],
+        },
+      ],
+    })
+    const skip = {
+      sessionId: "b",
+      executionId: "e1",
+      questionId: "place",
+      choices: null,
+      initiator: "person" as const,
+    }
+    const answer = {
+      ...skip,
+      choices: [{ key: "where", values: ["here"] }],
+    }
+    const first = store.dispatch(answerQuestion(skip))
+    const otherInitiator = store.dispatch(answerQuestion({ ...skip, initiator: "agent" }))
+    const otherChoice = store.dispatch(answerQuestion(answer))
+    const same = store.dispatch(answerQuestion(skip))
+    const settled = { otherInitiator: false, otherChoice: false }
+    void otherInitiator.then(() => {
+      settled.otherInitiator = true
+    })
+    void otherChoice.then(() => {
+      settled.otherChoice = true
+    })
+    await settle()
+    expect(settled).toEqual({ otherInitiator: true, otherChoice: true })
+    expect(await otherInitiator).toEqual({ status: "different" })
+    expect(await otherChoice).toEqual({ status: "different" })
+    expect(source.calls.filter((call) => call[0] === "answerQuestion")).toEqual([
+      ["answerQuestion", "b", "e1", "place", null, "person"],
+    ])
+    source.refuse("answerQuestion", "unavailable")
+    await source.release("answerQuestion")
+    expect(await first).toEqual({ status: "unknown", reason: "unavailable" })
+    expect(await same).toEqual({ status: "unknown", reason: "unavailable" })
+    source.refuse("answerQuestion", undefined)
+    expect(await store.dispatch(answerQuestion(answer))).toEqual({ status: "sent" })
+    expect(source.calls.filter((call) => call[0] === "answerQuestion")).toEqual([
+      ["answerQuestion", "b", "e1", "place", null, "person"],
+      [
+        "answerQuestion",
+        "b",
+        "e1",
+        "place",
+        [{ key: "where", values: ["here"] }],
+        "person",
+      ],
+    ])
+  })
+
+  it("keeps a card whose answer differs from the one already on its way", async () => {
+    const source = fakeSource()
+    source.hold("answerQuestion")
+    const question = {
+      executionId: "e1",
+      questionId: "place",
+      message: "Where should this land?",
+      questions: [
+        {
+          key: "where",
+          prompt: "Pick a place",
+          multiSelect: false,
+          freeText: false,
+          required: false,
+          options: [{ value: "here", label: "Here" }],
+        },
+      ],
+    }
+    const { store } = await shown(source, {
+      ...conversation,
+      approval: null,
+      questions: [question],
+    })
+    await act(async () => {
+      root.render(
+        <StrictMode>
+          <Provider store={store}>
+            <QuestionCard sessionId="b" question={question} />
+            <QuestionCard sessionId="b" question={question} />
+          </Provider>
+        </StrictMode>,
+      )
+    })
+    const cards = () => [...host.querySelectorAll<HTMLElement>('[data-question="place"]')]
+    const button = (card: HTMLElement | undefined, label: string) =>
+      [...(card?.querySelectorAll("button") ?? [])].find(
+        (candidate) => candidate.textContent === label,
+      )
+    const choice = cards()[0]?.querySelector<HTMLInputElement>('input[type="radio"]')
+    if (!choice) throw new Error("the question offers no choice")
+    await act(async () => {
+      choice.click()
+      button(cards()[0], "Answer")?.click()
+      button(cards()[1], "Skip")?.click()
+      await settle()
+    })
+    expect(source.calls.filter((call) => call[0] === "answerQuestion")).toEqual([
+      [
+        "answerQuestion",
+        "b",
+        "e1",
+        "place",
+        [{ key: "where", values: ["here"] }],
+        "person",
+      ],
+    ])
+    const drawn = cards()
+    expect(drawn).toHaveLength(2)
+    expect(drawn[0]?.getAttribute("aria-busy")).toBe("true")
+    expect(button(drawn[0], "Answer")?.disabled).toBe(true)
+    expect(drawn[1]?.getAttribute("aria-busy")).toBe("false")
+    expect(button(drawn[1], "Skip")?.disabled).toBe(false)
+    expect(drawn[1]?.querySelector(".workspace-question-failure")?.textContent).toBe(
+      "A different answer is already on its way.",
+    )
+    expect(drawn[1]?.textContent).not.toContain("This was already answered.")
+    await source.release("answerQuestion")
+  })
+
   it("lets a second card retry after the send already on its way is refused", async () => {
     const source = fakeSource()
     source.hold("answerQuestion")

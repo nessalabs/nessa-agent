@@ -24,11 +24,17 @@ import { failureCopy } from "../failure-copy"
  * field needs one of its options; the shared check (`questionAnswerReady`)
  * is what holds Answer back, on this surface and the panel's.
  *
- * The card's own busy state covers the send. A second card of the same ask
- * joins that send and hears how it settled, so a refusal enables both.
- * A session this window is no longer showing answers `not-asked`; the card
- * leaves, which is not the source saying the question was already answered.
+ * The card's own busy state covers the send. A second card joins that send
+ * when it carries the same choices and initiator, and hears how it settled,
+ * so a refusal enables both. A different answer, including Answer against
+ * Skip, is not sent and is not reported as delivered. A session this window
+ * is no longer showing answers `not-asked`; the card leaves, which is not
+ * the source saying the question was already answered.
  */
+
+/** Shown when this card's answer is not the one already on its way. */
+const differentAnswerCopy = "A different answer is already on its way."
+
 export function QuestionCard({
   sessionId,
   question,
@@ -45,6 +51,7 @@ export function QuestionCard({
   const [busy, setBusy] = useState(false)
   const [dismissed, setDismissed] = useState(false)
   const [failure, setFailure] = useState<WorkspaceFailureReason | null>(null)
+  const [differing, setDiffering] = useState(false)
   const ready = questionAnswerReady(question.questions, chosen, ownWords)
 
   const send = (
@@ -52,6 +59,7 @@ export function QuestionCard({
   ) => {
     setBusy(true)
     setFailure(null)
+    setDiffering(false)
     void dispatch(
       answerQuestion({
         sessionId,
@@ -67,8 +75,11 @@ export function QuestionCard({
         return
       }
       setBusy(false)
-      if (outcome.status === "refused" || outcome.status === "unknown")
-        setFailure(outcome.reason)
+      if (outcome.status === "different") {
+        setDiffering(true)
+        return
+      }
+      setFailure(outcome.reason)
     })
   }
 
@@ -137,6 +148,10 @@ export function QuestionCard({
       {failure ? (
         <p className="workspace-question-failure" role="status">
           {failureCopy(failure)}
+        </p>
+      ) : differing ? (
+        <p className="workspace-question-failure" role="status">
+          {differentAnswerCopy}
         </p>
       ) : null}
       <QuestionnaireActions className="workspace-question-actions">

@@ -19,6 +19,7 @@ import {
   type Zone,
 } from "../../../split-panes/model/pane-layout"
 import { messageText, type Message, type QuestionChoice } from "../../model/transcript"
+import { differentFlight } from "../../application/question-flights"
 import {
   failureReason,
   failureStages,
@@ -590,13 +591,16 @@ export function approve({
  * What became of an answer to a question the agent asked. `sent` once the
  * source has taken it. `not-asked` when this window is not showing that
  * question. `refused` when the source declined it, `unknown` when it is not
- * known to have been taken. A second card of the same ask joins the send
- * already on its way and receives that same outcome. The question leaves
- * when a later read omits it.
+ * known to have been taken. `different` when another answer to this ask is
+ * already on its way: that send is left alone, and this one is not reported
+ * as delivered. A second card joins only when its choices and initiator
+ * match the send already on its way, and then receives that same outcome.
+ * The question leaves when a later read omits it.
  */
 export type QuestionOutcome =
   | { readonly status: "sent" }
   | { readonly status: "not-asked" }
+  | { readonly status: "different" }
   | { readonly status: "refused"; readonly reason: WorkspaceFailureReason }
   | { readonly status: "unknown"; readonly reason: WorkspaceFailureReason }
 
@@ -604,8 +608,9 @@ export type QuestionOutcome =
  * Answers a question the session's agent is waiting on, or declines it
  * (`choices` null). Only a question on screen is answered. The card keeps
  * its own busy state; whether a send is already on its way belongs to this
- * store's `questionFlights`, so a second card hears the refusal and can
- * try again.
+ * store's `questionFlights`. The same choices and initiator join that send,
+ * so a second card hears the refusal and can try again. A different answer
+ * does not.
  */
 export function answerQuestion({
   sessionId,
@@ -628,7 +633,8 @@ export function answerQuestion({
     )
     if (!onScreen(state, sessionId) || !asked) return { status: "not-asked" }
     const flight = JSON.stringify([sessionId, executionId, questionId])
-    return questionFlights.join(flight, async () => {
+    const stamp = JSON.stringify([choices, initiator])
+    const outcome = await questionFlights.join(flight, stamp, async () => {
       try {
         await workspace.answerQuestion(
           sessionId,
@@ -645,6 +651,8 @@ export function answerQuestion({
           : { status: "refused" as const, reason }
       }
     })
+    if (outcome === differentFlight) return { status: "different" }
+    return outcome
   }
 }
 
