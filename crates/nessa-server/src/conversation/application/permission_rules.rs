@@ -9,7 +9,7 @@
 //! stored rows ──▶ PermissionRulePolicyEvaluator ──▶ settle | may
 //! owner turn arm ──▶ PermissionRules::offers_remember
 //! caller ──▶ remember / revoke / list ──▶ Cedar may
-//! revoke ──▶ PermissionRuleRevocationAudit ──▶ then delete
+//! revoke ──▶ request record ──▶ delete ──▶ absent record
 //! ```
 
 use nessa_sdk::application::agent_execution::permissions::{ActionContext, PermissionCaller};
@@ -115,7 +115,9 @@ pub enum RuleCatalogError {
     /// The caller may not list or revoke. Nothing was read or deleted.
     Refused,
     /// The store, the policy, or the revocation record could not be asked.
-    /// A revoke that fails here has not deleted the rule.
+    /// A failure before the row is deleted leaves the rule. A failure of the
+    /// absent record, after the delete, leaves the rule gone; a retry finishes
+    /// that record.
     Unavailable,
 }
 
@@ -147,15 +149,26 @@ pub struct PermissionRuleRevocation {
     pub actor: ActionContext,
 }
 
-/// Immutable evidence that a rule was revoked, written before the row is deleted.
+/// Immutable evidence that a rule was revoked.
 ///
-/// The same rule id and revision recorded again is acknowledged. A record that
-/// contradicts the one stored is refused. A sink that cannot take the record
-/// leaves the rule in place: a revoke is not successful without its evidence.
+/// [`Self::requested`] is written before the row is deleted and does not say
+/// the rule is gone. [`Self::record`] is written after the delete and says the
+/// revision is absent. The same rule id, revision, and principal recorded
+/// again is acknowledged, including when the request id differs. A different
+/// principal is refused. [`Self::finish`] writes the absent record when the
+/// row is already gone and the request was stored.
 pub trait PermissionRuleRevocationAudit: Send + Sync {
-    /// Commit `revocation`. [`RuleCatalogError::Unavailable`] when the sink
-    /// refuses it or cannot be reached.
+    /// The caller asked to revoke this revision. The rule is still present.
+    fn requested(&self, revocation: &PermissionRuleRevocation) -> Result<(), RuleCatalogError>;
+
+    /// The revision is gone. [`RuleCatalogError::Unavailable`] when the sink
+    /// refuses the record or cannot be reached.
     fn record(&self, revocation: &PermissionRuleRevocation) -> Result<(), RuleCatalogError>;
+
+    /// Write the absent record for a request already stored for `id`, when
+    /// that record is missing. `Ok(false)` when `id` has no request, or the
+    /// absent record is already there. A different principal is refused.
+    fn finish(&self, id: &str, actor: &ActionContext) -> Result<bool, RuleCatalogError>;
 }
 
 /// List and revoke. Cedar admits or refuses `principal`; the owner is not assumed.
@@ -163,8 +176,10 @@ pub trait PermissionRuleCatalog: Send + Sync {
     /// The valid rules, in the order they were stored, at most the response bound.
     fn list(&self, principal: RulePrincipal)
         -> Result<Vec<ListedPermissionRule>, RuleCatalogError>;
-    /// Delete `id` after its revocation is recorded. `Ok(false)` when no rule
-    /// has it, which records nothing. A shared user is refused and nothing is deleted.
+    /// Delete `id` after a request record, then record that it is absent.
+    /// `Ok(false)` when no rule has it and nothing was requested. A retry
+    /// finishes a delete whose absent record was lost. A shared user is
+    /// refused and nothing is deleted.
     fn revoke(
         &self,
         id: &str,

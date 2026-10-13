@@ -36,9 +36,9 @@ use crate::application::agent_execution::permissions::{
     admit_configured_outcome, remember_effect, ApprovalAttribution, ApprovalBasis,
     ApprovalRuleReference, CancellationOrigin, ConfiguredRefusal, PermissionAnswer,
     PermissionAnswerDelivery, PermissionAnswerRecord, PermissionCancellation,
-    PermissionCancellationRequest, PermissionResolution, PermissionSelectionState, QuestionAnswer,
-    QuestionAnswerRecord, QuestionRefusalRecord, RefusedAsk, RememberRequest, ReviewDeclineRecord,
-    ReviewNotice, StopKind,
+    PermissionCancellationRequest, PermissionResolution, PermissionRules, PermissionSelectionState,
+    QuestionAnswer, QuestionAnswerRecord, QuestionRefusalRecord, RefusedAsk, RememberRequest,
+    ReviewDeclineRecord, ReviewNotice, StopKind,
 };
 use crate::application::agent_execution::providers::{
     ApprovalMode, CleanupReport, ExecutionReport, ImageInputRefusal, ObservationFailureCause,
@@ -2212,10 +2212,14 @@ impl<P: AcpProfile> Worker<P> {
                 return Ok(());
             }
         };
+        // The rule is stored before the selection audit. If that audit is not
+        // recorded, the revision is withdrawn so it cannot answer a later review.
+        let provisional = unrecorded_rule(&answer);
         let option_id = answer.option_id.clone();
         let resolution = match execution.answer_permission(answer) {
             Ok(resolution) => resolution,
             Err(error) => {
+                withdraw_unrecorded(self.config.permission_rules.as_ref(), provisional.as_ref());
                 let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
                     error,
                     ProviderSessionState::Usable,
@@ -2234,12 +2238,16 @@ impl<P: AcpProfile> Worker<P> {
             )
             .await
         {
+            withdraw_unrecorded(self.config.permission_rules.as_ref(), provisional.as_ref());
             let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
                 error.error().clone(),
                 ProviderSessionState::CleanupRequired,
                 PermissionSelectionState::Consumed,
             )));
             return Err(error);
+        }
+        if let Some(rule) = &provisional {
+            self.config.permission_rules.acknowledge(rule);
         }
         let wire_id = self
             .permissions
@@ -4387,6 +4395,28 @@ fn wait_for_deadline(clock: &dyn Clock, deadline: Option<ClockInstant>) -> Clock
     match deadline {
         Some(deadline) => clock.sleep_until(deadline),
         None => Box::pin(std::future::pending()),
+    }
+}
+
+/// The rule a remember choice stored, when this answer is that choice.
+fn unrecorded_rule(answer: &PermissionAnswer) -> Option<ApprovalRuleReference> {
+    match answer.attribution.basis() {
+        ApprovalBasis::Rule(reference) => Some(reference.clone()),
+        _ => None,
+    }
+}
+
+/// The selection was not recorded. The revision stored for it does not stay.
+fn withdraw_unrecorded(rules: &dyn PermissionRules, rule: Option<&ApprovalRuleReference>) {
+    let Some(rule) = rule else {
+        return;
+    };
+    if rules.withdraw(rule).is_err() {
+        tracing::error!(
+            rule_id = rule.rule_id(),
+            revision = rule.revision(),
+            "remembered permission rule was not withdrawn after its selection was not recorded"
+        );
     }
 }
 

@@ -84,6 +84,11 @@ pub(crate) fn admit(
     for option in options {
         let id = PermissionOptionId::new(identifier(option, "optionId")?)
             .map_err(|error| protocol(&error.to_string()))?;
+        // These ids are Nessa's project choices. A provider that sends them
+        // is not offering that choice, and selecting it must not store a rule.
+        if remember_effect(id.as_str()).is_some() {
+            return Err(protocol("permission option id is reserved"));
+        }
         if !seen.insert(id.clone()) {
             return Err(protocol("duplicate permission option"));
         }
@@ -297,5 +302,20 @@ mod tests {
         assert!(
             once_option(&passed.options, PermissionEffect::Allow, &passed.persistent).is_none()
         );
+    }
+
+    #[test]
+    fn a_provider_option_cannot_use_a_remember_id() {
+        let reserved = json!({"options":[
+            {"optionId":"allow", "kind":"allow_once", "name":"Allow"},
+            {"optionId":"nessa.remember.allow", "kind":"allow_once", "name":"Always allow in this project"}
+        ]});
+        let once = PermissionOfferPolicy::once_only();
+        assert!(admit(&reserved, &once, PersistentKinds::Keep, true).is_err());
+        assert!(admit(&reserved, &once, PersistentKinds::Drop, false).is_err());
+        let deny = json!({"options":[
+            {"optionId":"nessa.remember.deny", "kind":"reject_once", "name":"Always deny"}
+        ]});
+        assert!(admit(&deny, &once, PersistentKinds::Keep, false).is_err());
     }
 }

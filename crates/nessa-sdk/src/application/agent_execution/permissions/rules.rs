@@ -134,7 +134,29 @@ pub trait PermissionRules: Send + Sync {
 
     /// Store a rule for `request.caller`. The review stays pending on error.
     /// Cedar admits or refuses that caller; the owner is not assumed.
+    ///
+    /// The revision stays only after [`Self::acknowledge`]. Until then,
+    /// [`Self::withdraw`] removes a fresh rule or restores the revision a
+    /// replacement wrote over. A host that stores nothing may leave both as
+    /// they are.
     fn remember(&self, request: RememberRequest<'_>) -> Result<SettledRule, RememberError>;
+
+    /// The selection that stored `rule` was recorded. Withdrawing it afterwards
+    /// does not remove that revision or restore what it replaced.
+    fn acknowledge(&self, rule: &ApprovalRuleReference) {
+        let _ = (self, rule);
+    }
+
+    /// The selection that stored `rule` was not recorded. Remove that revision.
+    ///
+    /// A fresh rule is deleted. A replacement returns to the revision it
+    /// replaced. A revision that was already acknowledged, already revoked, or
+    /// replaced by a later remember is left as it is. [`RememberError::Unavailable`]
+    /// means the row is still the unrecorded revision.
+    fn withdraw(&self, rule: &ApprovalRuleReference) -> Result<(), RememberError> {
+        let _ = (self, rule);
+        Ok(())
+    }
 }
 
 /// No rules, and no execution is offered a remember choice.

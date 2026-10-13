@@ -26,6 +26,7 @@ use nessa_protocol::{
     agents::AgentId,
     conversation::domain::{ConversationId, ConversationSummary, ConversationTitle},
 };
+use nessa_sdk::application::agent_execution::permissions::PermissionCaller;
 use nessa_sdk::application::agent_execution::providers::ApprovalMode as ProviderApprovalMode;
 use nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock;
 use nessa_sdk::{
@@ -1685,7 +1686,7 @@ async fn malformed_controls_do_not_open_a_dormant_owned_provider() {
                 "execution".into(),
                 "permission".into(),
                 "".into(),
-                nessa_sdk::application::agent_execution::permissions::PermissionCaller::Owner,
+                PermissionCaller::Owner,
             )
             .await,
         Err(ConversationError::InvalidInput)
@@ -1815,7 +1816,7 @@ async fn permission_consumption_case(
                     "review".into(),
                     "permission".into(),
                     "allow".into(),
-                    nessa_sdk::application::agent_execution::permissions::PermissionCaller::Owner,
+                    PermissionCaller::Owner,
                 )
                 .await
         }

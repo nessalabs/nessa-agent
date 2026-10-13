@@ -1015,3 +1015,112 @@ async fn agent_acp_permission_query_does_not_wait_behind_consumed_answer_audit()
     assert_gone(&root, "pid");
     assert_eq!(queried.unwrap().unwrap(), Ok(false));
 }
+
+/// Rules a test stores, and withdraws when the selection audit fails.
+struct RememberingRules {
+    live: Mutex<Vec<SettledRule>>,
+    withdrawn: Mutex<Vec<ApprovalRuleReference>>,
+}
+
+impl PermissionRules for RememberingRules {
+    fn settle(&self, _: &str, _: &str, _: &str) -> Option<SettledRule> {
+        self.live.lock().unwrap().last().cloned()
+    }
+    fn offers_remember(&self, _: &ExecutionId) -> bool {
+        true
+    }
+    fn arm(&self, _: &ExecutionId, _: bool) {}
+    fn answerer(&self, _: &ExecutionId, _: &str) -> Option<PermissionCaller> {
+        Some(PermissionCaller::Owner)
+    }
+    fn remember(&self, request: RememberRequest<'_>) -> Result<SettledRule, RememberError> {
+        let settled = SettledRule::new(
+            ApprovalRuleReference::new("pr_test", "1", request.granted_by.clone()).unwrap(),
+            request.effect,
+        );
+        self.live.lock().unwrap().push(settled.clone());
+        Ok(settled)
+    }
+    fn acknowledge(&self, rule: &ApprovalRuleReference) {
+        let _ = rule;
+    }
+    fn withdraw(&self, rule: &ApprovalRuleReference) -> Result<(), RememberError> {
+        self.withdrawn.lock().unwrap().push(rule.clone());
+        self.live
+            .lock()
+            .unwrap()
+            .retain(|stored| stored.reference() != rule);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_remembered_rule_is_withdrawn_when_the_selection_audit_fails() {
+    let _slot = process_test_slot().await;
+    let rules = Arc::new(RememberingRules {
+        live: Mutex::new(Vec::new()),
+        withdrawn: Mutex::new(Vec::new()),
+    });
+    let audit = Arc::new(AnswerAudit {
+        reject_call: Some(1),
+        ..Default::default()
+    });
+    let (root, mut config, model) = test_acp_configuration("permission", 16);
+    config.shutdown_grace = Duration::from_secs(2);
+    config.execution_timeout = None;
+    config.permission_rules = rules.clone();
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        audit.clone(),
+    )
+    .unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "write").await;
+    next(&mut opened).await;
+    let ExecutionUpdate::PermissionRequested { id, options, .. } = next(&mut opened).await else {
+        panic!("expected review")
+    };
+    let option_id = options
+        .choices()
+        .iter()
+        .find(|option| option.id().as_str() == "nessa.remember.allow")
+        .expect("owner review offers the project rule")
+        .id()
+        .clone();
+    let failure = opened
+        .session
+        .answer_permission(PermissionAnswer {
+            execution_id: ExecutionId::new("write").unwrap(),
+            id,
+            option_id,
+            attribution: attribution(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error(), &AgentError::AuditFailure);
+    assert!(rules.live.lock().unwrap().is_empty());
+    assert_eq!(rules.withdrawn.lock().unwrap().len(), 1);
+    assert_eq!(rules.withdrawn.lock().unwrap()[0].rule_id(), "pr_test");
+    let records = answers(&audit);
+    assert_eq!(records[0].delivery(), &PermissionAnswerDelivery::Selected);
+    assert!(matches!(
+        records[0].resolution().attribution().basis(),
+        ApprovalBasis::Rule(_)
+    ));
+    assert!(!root.path().join("fixture.txt").exists());
+    assert_eq!(active.await.unwrap(), Err(AgentError::AuditFailure));
+    assert_eq!(
+        opened
+            .session
+            .shutdown(SessionCloseRequest::Explicit(close_action()))
+            .await
+            .into_result(),
+        Err(AgentError::AuditFailure)
+    );
+    assert_gone(&root, "pid");
+}

@@ -185,6 +185,46 @@ impl RuleStore {
             .execute("DELETE FROM permission_rule WHERE id = ?1", params![id])?
             > 0)
     }
+
+    /// Delete this revision only. A newer revision of the same id stays.
+    pub(super) fn delete_revision(
+        &mut self,
+        id: &str,
+        revision: &str,
+    ) -> Result<bool, rusqlite::Error> {
+        Ok(self.connection.execute(
+            "DELETE FROM permission_rule WHERE id = ?1 AND revision = ?2",
+            params![id, revision],
+        )? > 0)
+    }
+
+    /// Put `previous` back where `current_revision` still is.
+    /// `false` when that revision is no longer the row.
+    pub(super) fn restore(
+        &mut self,
+        current_revision: &str,
+        previous: &StoredPermissionRule,
+    ) -> Result<bool, WriteError> {
+        let updated = self
+            .connection
+            .execute(
+                "UPDATE permission_rule
+                 SET revision = ?1, effect = ?2,
+                     granted_principal = ?3, granted_surface = ?4, granted_request = ?5
+                 WHERE id = ?6 AND revision = ?7",
+                params![
+                    previous.revision,
+                    effect_text(previous.effect),
+                    previous.granted_by.principal_id(),
+                    previous.granted_by.surface_id(),
+                    previous.granted_by.request_id(),
+                    previous.id,
+                    current_revision,
+                ],
+            )
+            .map_err(failed)?;
+        Ok(updated == 1)
+    }
 }
 
 fn read_raw(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawRule> {
