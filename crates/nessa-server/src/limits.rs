@@ -8,7 +8,8 @@
 use crate::attachments::application::{AttachmentLimits, HeldReads};
 use crate::conversation::application::{
     ArtifactBudget, ARTIFACT_READ_RESUMES, FETCH_BUSY_BACKOFF, FETCH_CALL_WAIT, FETCH_READS,
-    MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION, PUBLISH_CALL_WAIT,
+    MAX_ADMITTED_POLICIES, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
+    PUBLISH_CALL_WAIT,
 };
 use crate::conversation::domain::ToolRules;
 use crate::conversation::infrastructure::{DISCOVERY_STEPS_PER_READ, MAX_CATALOGUE_CHANGE_WATCHES};
@@ -214,6 +215,12 @@ fn catalogue() -> &'static [Limit] {
             tier: "fixed",
             owner: "MAX_DRIVE_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/share_grants.rs",
             meaning: "the drive grants one conversation holds; one more conversation.share naming drive is refused invalid_request, so a conversation.shares answer with every policy at its largest still fits one frame",
+        },
+        Limit {
+            id: "conversation.drive_policies",
+            tier: "fixed",
+            owner: "MAX_ADMITTED_POLICIES in crates/nessa-server/src/conversation/application/drive_tools.rs",
+            meaning: "the Drive grant policies one open conversation keeps for the turns it admitted, by grant and revision; past this the least recently admitted is let go, and a turn still needing it has its tool calls refused, never allowed",
         },
         Limit {
             id: "conversation.notes",
@@ -567,6 +574,7 @@ pub(crate) fn effective_json(
         "conversation.drive_grants",
         MAX_DRIVE_GRANTS_PER_CONVERSATION.unsigned_abs(),
     );
+    put("conversation.drive_policies", count(MAX_ADMITTED_POLICIES));
     put(
         "conversation.notes",
         count(NoteRecord::MAX_PER_CONVERSATION),

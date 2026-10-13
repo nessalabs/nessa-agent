@@ -19,12 +19,13 @@ use crate::{
     attachments::infrastructure::ModelImageNormalizer,
     conversation::{
         application::{
-            ConversationAgents, ConversationDependencies, ConversationLimits, Environments,
-            McpAppPorts,
+            ConversationAgents, ConversationDependencies, ConversationLimits, DriveTools,
+            Environments, McpAppPorts,
         },
         infrastructure::{
-            DurableConversationCreationAudit, DurableConversationDeletionAudit,
-            DurableConversationFileLinkAudit, DurableConversationModeAudit, DurableMcpAppAudit,
+            CedarToolPolicyEvaluator, DurableConversationCreationAudit,
+            DurableConversationDeletionAudit, DurableConversationFileLinkAudit,
+            DurableConversationModeAudit, DurableDriveToolAudit, DurableMcpAppAudit,
             LocalConversationStore,
         },
     },
@@ -1207,6 +1208,18 @@ async fn conversations(
     // A note's author is checked against the same grant table the socket
     // admits it by (row J23).
     service.bind_note_authors(metadata.clone());
+    // A Drive grant's turn runs only where its tools are checked: against
+    // the grant journal's policy, by the Cedar evaluator (slice J4 of #707).
+    let evaluator = CedarToolPolicyEvaluator::new()
+        .map_err(|_| RunError::Agent("the tool policy bundle does not validate".into()))?;
+    let drive_audit =
+        DurableDriveToolAudit::new(root.join("audit").join("drive-tools"), clock.clone())
+            .map_err(|error| RunError::Agent(error.to_string()))?;
+    service.bind_drive_tools(DriveTools {
+        grants: metadata.clone(),
+        evaluator: Arc::new(evaluator),
+        audit: Arc::new(drive_audit),
+    });
     if let Some(tools) = &environment_tools {
         tools.attach(service.clone());
     }
