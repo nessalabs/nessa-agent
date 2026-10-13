@@ -210,11 +210,12 @@ async fn agent_queue_and_native_steering_share_one_acp_execution_at_a_time() {
 
 /// A turn is steered only by who started it: a grant's input sent while the
 /// owner's turn runs is not injected into it, and runs as a turn of its own
-/// saved with the grant.
+/// saved with the grant, which the grant can then steer.
 #[tokio::test]
 async fn native_steering_from_another_initiator_waits_for_its_own_turn() {
     use crate::domain::agent_execution::executions::{GrantInitiator, Initiation};
     let _slot = process_test_slot().await;
+    // This agent ends a running turn only when it is steered.
     let (root, provider) = test_acp_binding("steering-injected", 32);
     let manager = SessionManager::open(
         Some(SessionId::new("steered-by-another").unwrap()),
@@ -242,15 +243,29 @@ async fn native_steering_from_another_initiator_waits_for_its_own_turn() {
         "first"
     );
     let grant = Initiation::grant(GrantInitiator::new("receiver", 3).unwrap());
-    let driver = Submitter {
+    let driver = || Submitter {
         context: close_action(),
         initiation: grant.clone(),
     };
-    let SteeringDelivery::Queued(steered) = agent.steer(prompt("driver"), driver).await.unwrap()
+    let SteeringDelivery::Queued(steered) = agent.steer(prompt("driver"), driver()).await.unwrap()
     else {
         panic!("another initiator's input is queued, never injected");
     };
+    assert!(matches!(
+        agent.steer(prompt("owner-ends-first"), Submitter::owner(close_action())).await.unwrap(),
+        SteeringDelivery::Injected { target, .. } if target.as_str() == "first"
+    ));
     assert_eq!(first.wait().await.unwrap(), ExecutionOutcome::Completed);
+    loop {
+        let event = events.next().await.unwrap().unwrap();
+        if event.execution_id().as_str() == "driver" {
+            break;
+        }
+    }
+    assert!(matches!(
+        agent.steer(prompt("grant-ends-its-own"), driver()).await.unwrap(),
+        SteeringDelivery::Injected { target, .. } if target.as_str() == "driver"
+    ));
     assert_eq!(steered.wait().await.unwrap(), ExecutionOutcome::Completed);
     let saved = agent.session_manager().snapshot().await.unwrap();
     let record = |id: &str| {
@@ -266,8 +281,7 @@ async fn native_steering_from_another_initiator_waits_for_its_own_turn() {
         .events
         .iter()
         .all(|event| event.execution_id().as_str() == "first"
-            && !matches!(event.update(), ExecutionUpdate::Message(chunk) if chunk.as_str().contains("driver"))));
-    assert!(!root.path().join("steering-observed").exists());
+            && !matches!(event.update(), ExecutionUpdate::Message(chunk) if chunk.as_str().contains("driver") || chunk.as_str().contains("grant"))));
     agent.close(close_action()).await.unwrap();
     assert_gone(&root, "pid");
 }
