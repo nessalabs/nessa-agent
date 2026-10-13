@@ -50,6 +50,18 @@ async fn a_placement_is_read_back_as_written_and_is_private() {
     }
 }
 
+/// A paired environment is placed by its `peer:` name and read back as it.
+#[tokio::test]
+async fn a_placement_on_a_paired_environment_is_read_back_as_written() {
+    let (_root, placements) = store();
+    let peer = format!("peer:{}", "ab".repeat(32));
+    placements
+        .place(&conversation(), Some(&peer))
+        .await
+        .unwrap();
+    assert_eq!(placements.placement(&conversation()).await, Ok(Some(peer)));
+}
+
 #[tokio::test]
 async fn placing_here_removes_what_a_failed_creation_left_and_erasing_twice_is_quiet() {
     let (_root, placements) = store();
@@ -75,6 +87,9 @@ async fn a_placement_this_build_cannot_read_is_refused_never_taken_for_here() {
         "{\"schemaVersion\":2,\"host\":\"devbox\"}".to_owned(),
         "{\"schemaVersion\":1,\"host\":\"devbox\",\"port\":22}".to_owned(),
         "{\"schemaVersion\":1,\"host\":\"-oProxyCommand=x\"}".to_owned(),
+        "{\"schemaVersion\":1,\"host\":\"here\"}".to_owned(),
+        "{\"schemaVersion\":1,\"host\":\"peer:\"}".to_owned(),
+        "{\"schemaVersion\":1,\"host\":\"peer:zz\"}".to_owned(),
         format!("{{\"schemaVersion\":1,\"host\":\"{}\"}}", "a".repeat(2048)),
     ] {
         let (root, placements) = store();

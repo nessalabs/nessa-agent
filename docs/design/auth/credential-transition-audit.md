@@ -237,7 +237,7 @@ sequenceDiagram
     else first revocation
         Cred-->>Store: Ok(Some(transition: ExplicitRevoke))
     end
-    Store->>Store: DTO ← Credential; push receipt; push transition(seq, revision, request_id)
+    Store->>Store: DTO ← Credential, push receipt, push transition(seq, revision, request_id)
     Store->>Val: validate(next)
     Val-->>Store: ok
     Store->>File: atomic write + fsync (state AND evidence together)

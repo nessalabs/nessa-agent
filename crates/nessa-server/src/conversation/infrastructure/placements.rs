@@ -1,4 +1,5 @@
-//! Where each conversation placed on an SSH host runs: one small file per
+//! Where each conversation placed on an SSH host or a paired environment
+//! runs: one small file per
 //! such conversation, `placements/<conversation id>.json` under the
 //! conversations directory, holding `{"schemaVersion":1,"host":"…"}`. A
 //! conversation that runs here has none.
@@ -13,7 +14,7 @@ use nessa_local_storage::{
     create_directory, is_unsafe_file, open, sync_directory, OpenMode, PrivateTempFile,
 };
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_sdk::domain::agent_execution::leases::SshDestination;
+use nessa_sdk::domain::agent_execution::leases::EnvironmentRef;
 use serde::{Deserialize, Serialize};
 use std::{
     io::{self, Read, Write},
@@ -93,7 +94,11 @@ fn read(path: PathBuf) -> Result<Option<String>, PlacementError> {
     }
     let placement: Placement =
         serde_json::from_slice(&bytes).map_err(|_| PlacementError::Unreadable)?;
-    if placement.schema_version != SCHEMA_VERSION || SshDestination::new(&*placement.host).is_err()
+    // An SSH destination or a paired environment's `peer:` name; never
+    // here, which has no placement.
+    let host = EnvironmentRef::named(&placement.host);
+    if placement.schema_version != SCHEMA_VERSION
+        || !matches!(host, Ok(EnvironmentRef::Ssh(_) | EnvironmentRef::Peer(_)))
     {
         return Err(PlacementError::Unreadable);
     }

@@ -261,7 +261,7 @@ sequenceDiagram
         Gateway->>Handler: Execute health operation
         Handler-->>Gateway: Health result
         Gateway-->>Client: Result of the admitted operation
-        Note over Gateway,Auth: Later operations read committed state again; revocation does not cancel admitted work
+        Note over Gateway,Auth: Later operations read committed state again, revocation does not cancel admitted work
     else Denied or invalid
         Auth-->>Gateway: Deny or typed error
         Gateway-->>Client: Reject request or close invalid session
