@@ -35,11 +35,12 @@ use nessa_protocol::pairing::{
     wire::{decode_reply, encode_request, NativePairingReply, NativePairingRequest},
     EnrollmentChannel, NativeFrameError,
 };
-use nessa_protocol::relay::RelayAddress;
+use nessa_protocol::relay::{RelayAddress, DIRECT_HEAD_START};
 use std::{
     io::{Error, ErrorKind, Result as IoResult},
     net::ToSocketAddrs,
-    sync::Arc,
+    sync::{mpsc, Arc},
+    time::Duration,
 };
 
 /// Open one connection to the gateway at `address` (`host:port`, looked up
@@ -68,12 +69,14 @@ pub(crate) async fn dial(
         // its handshake included, as a TCP connect by name tries each: a
         // first address that connects but is not the pinned gateway does
         // not stop the next. The relay finds the gateway by its key, not by
-        // this name, so with one a name that does not resolve here is still
-        // asked for there.
-        let gateways: Vec<String> = match (address.to_socket_addrs(), &relay) {
-            (Ok(found), _) => found.map(|gateway| gateway.to_string()).collect(),
-            (Err(error), None) => return Err(error),
-            (Err(_), Some(_)) => Vec::new(),
+        // this name, so with one a name that does not resolve here, or not
+        // within the direct leg's head start, is still asked for there.
+        let gateways: Vec<String> = match &relay {
+            None => address
+                .to_socket_addrs()?
+                .map(|gateway| gateway.to_string())
+                .collect(),
+            Some(_) => resolved_within(&address, DIRECT_HEAD_START),
         };
         if gateways.is_empty() && relay.is_some() {
             return open_environment(&address, relay.as_ref(), &identity, pin, clock);
@@ -92,6 +95,27 @@ pub(crate) async fn dial(
     .map_err(|_| Error::other("the dialing worker failed"))??;
     // The socket is moved to the runtime here, where there is one.
     TlsStream::open(transport)
+}
+
+/// The addresses `address` resolves to, or none when the lookup fails or
+/// is not done within `wait`. A lookup still running is left to end on its
+/// own thread: the system resolver cannot be stopped.
+fn resolved_within(address: &str, wait: Duration) -> Vec<String> {
+    let (found, lookup) = mpsc::channel();
+    let name = address.to_owned();
+    std::thread::spawn(move || {
+        let addresses = name.to_socket_addrs().map(|resolved| {
+            resolved
+                .map(|gateway| gateway.to_string())
+                .collect::<Vec<_>>()
+        });
+        // The dial may have stopped waiting: nothing then takes the answer.
+        let _ = found.send(addresses);
+    });
+    match lookup.recv_timeout(wait) {
+        Ok(Ok(addresses)) => addresses,
+        Ok(Err(_)) | Err(_) => Vec::new(),
+    }
 }
 
 fn open_environment(
