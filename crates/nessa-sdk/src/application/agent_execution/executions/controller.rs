@@ -1452,9 +1452,11 @@ mod tests {
         use crate::domain::agent_execution::permissions::RefusalOutcome;
         let execution = ExecutionId::new("execution").unwrap();
         let review = PermissionId::new("permission").unwrap();
+        let session = ExecutionSessionId::new("session").unwrap();
         let reason = || {
             PermissionCancellationReason::custom(
                 CustomPermissionCancellationReason::hook_refusal(
+                    &session,
                     &execution,
                     &review,
                     RefusalOutcome::EndTurn,

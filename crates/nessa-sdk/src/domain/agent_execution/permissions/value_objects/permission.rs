@@ -3,7 +3,9 @@
 use super::{
     PermissionApplicationId, PermissionId, PermissionOptionId, PermissionSessionId, RefusalOutcome,
 };
-use crate::domain::agent_execution::{executions::ExecutionId, ExecutionError};
+use crate::domain::agent_execution::{
+    executions::ExecutionId, sessions::ExecutionSessionId, ExecutionError,
+};
 use std::collections::HashSet;
 
 /// Whether the selected action is allowed. Scope is a separate value.
@@ -370,18 +372,21 @@ impl PermissionCancellationReason {
     pub fn custom(reason: CustomPermissionCancellationReason) -> Self {
         Self(PermissionCancellationReasonValue::Custom(reason))
     }
-    /// Whether this reason may withdraw `review` in `execution`: a hook-refusal
-    /// code withdraws only the review, in the turn, the runner issued it for,
-    /// and `None` allows none, so a copy of a recorded one, or a saved one,
-    /// withdraws nothing.
-    pub(crate) fn may_withdraw(&self, review: Option<(&ExecutionId, &PermissionId)>) -> bool {
+    /// Whether this reason may withdraw `review` in `execution` of `session`: a
+    /// hook-refusal code withdraws only the review, in the session and turn,
+    /// the runner issued it for, and `None` allows none, so a copy of a
+    /// recorded one, or a saved one, withdraws nothing.
+    pub(crate) fn may_withdraw(
+        &self,
+        review: Option<(&ExecutionSessionId, &ExecutionId, &PermissionId)>,
+    ) -> bool {
         match &self.0 {
             PermissionCancellationReasonValue::Custom(reason) if reason.is_hook_refusal() => review
                 .is_some_and(|review| {
                     reason
                         .withdraws
                         .as_ref()
-                        .is_some_and(|(execution, id)| (execution, id) == review)
+                        .is_some_and(|(session, execution, id)| (session, execution, id) == review)
                 }),
             _ => true,
         }
@@ -444,8 +449,9 @@ impl PermissionCancellationReason {
 pub struct CustomPermissionCancellationReason {
     code: Box<str>,
     explanation: Box<str>,
-    // The one review, in its turn, a hook-refusal code may withdraw; never saved.
-    withdraws: Option<(ExecutionId, PermissionId)>,
+    // The one review, in its session and turn, a hook-refusal code may
+    // withdraw; never saved.
+    withdraws: Option<(ExecutionSessionId, ExecutionId, PermissionId)>,
 }
 impl PartialEq for CustomPermissionCancellationReason {
     fn eq(&self, other: &Self) -> bool {
@@ -482,8 +488,9 @@ impl CustomPermissionCancellationReason {
         self.code.starts_with(Self::HOOK_REFUSAL_PREFIX)
     }
     /// The withdrawal the runner records for a hook refusal of `review` in
-    /// `execution` with `outcome`. It can withdraw only that review.
+    /// `execution` of `session` with `outcome`. It can withdraw only that review.
     pub(crate) fn hook_refusal(
+        session: &ExecutionSessionId,
         execution: &ExecutionId,
         review: &PermissionId,
         outcome: RefusalOutcome,
@@ -492,7 +499,7 @@ impl CustomPermissionCancellationReason {
         let name = Self::outcome_name(&outcome);
         let mut reason =
             Self::restore(format!("{}{name}", Self::HOOK_REFUSAL_PREFIX), explanation)?;
-        reason.withdraws = Some((execution.clone(), review.clone()));
+        reason.withdraws = Some((session.clone(), execution.clone(), review.clone()));
         Ok(reason)
     }
     /// Rebuild a saved reason, checking its bounds. A code in the reserved
