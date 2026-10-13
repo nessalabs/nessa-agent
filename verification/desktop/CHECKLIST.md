@@ -1572,6 +1572,11 @@ use.
   `clientWidth` + 1. The long note's text runs over more than two lines. The
   columns and the page have no horizontal overflow. The screenshots show both
   transcripts.
+- [ ] **A bounded view that left older history out says so above the messages.**
+  The fixture's view is truncated and complete. The desktop transcript says
+  "Some conversation content is not shown." once, before the first message,
+  and does not say the history is unconfirmed. "Here is the plan." appears
+  once. _Check:_ `transcript-notes.mjs --only history`.
 
 ## Sharing a session (nessa_ui#128, #129)
 

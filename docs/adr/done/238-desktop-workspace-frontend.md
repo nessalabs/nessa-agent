@@ -168,8 +168,21 @@ the eight most recently active of the rest; the newest 256 removals. Anything
 let go is read again when a pane or the overview shows it; a read older than
 256 removals is corrected by the next index read. A conversation's content
 let go keeps its newest revision while its session is listed
-(`conversationRevisions`), so a read answered after the content went, with
-an older conversation, is not taken for new.
+(`conversationRevisions`). A read or update at that same revision, once the
+session is shown again, restores its messages, approval and activity. An
+older one is not taken for new. Content still held at that revision stays as
+it is, including through a resync. A summary at the same revision stays too:
+this exception is the missing conversation body, not summary ordering
+(`supersedes`).
+
+| Held | Arrives | Result |
+| --- | --- | --- |
+| Content at revision N | Same revision | Content, approval and activity stay |
+| Content at revision N | Newer revision | Replaced by that conversation |
+| Revision N, content let go, session shown | Same revision | Messages, approval and activity restored |
+| Revision N, content let go | Older revision | Rejected; N stays; a failure already shown stays |
+| Revision N, content let go | Newer revision | Taken, then kept only while shown or among the recent unshown |
+| Summary at revision N | Summary at N | Unchanged |
 
 **Commands.** Everything a person or an agent does is dispatched from
 `adapters/store/commands.ts`: plain actions where the state alone decides

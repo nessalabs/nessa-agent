@@ -1,5 +1,5 @@
 import { deadlinePendingLine, permissionTargets } from "@nessa/client"
-import type { Conversation } from "../model"
+import { historyExtent, historyNotices, type Conversation } from "../model"
 import { controlConversation } from "../adapters/store/slice"
 import { useConversationDispatch } from "../adapters/store/hooks"
 import { useNow } from "./clock"
@@ -37,17 +37,11 @@ export function ConversationControls({
   const now = useNow(1000)
   return (
     <div className="flex flex-col gap-3 text-sm">
-      {remote?.truncated ? (
-        <p role="status">Some conversation content is not shown.</p>
-      ) : null}
-      {remote?.transcriptState === "stale" ||
-      remote?.transcriptState === "partial" ||
-      remote?.transcriptState === "not_loaded" ||
-      remote?.transcriptState === "unknown" ? (
-        <p role="status">
-          Conversation history is not confirmed. Recent activity may be missing.
+      {historyNotices(historyExtent(remote)).map((notice) => (
+        <p key={notice.kind} role="status">
+          {notice.text}
         </p>
-      ) : null}
+      ))}
       {remote?.permissions.map((permission, index) => (
         <ToolApproval
           key={JSON.stringify([permission.executionId, permission.permissionId])}
