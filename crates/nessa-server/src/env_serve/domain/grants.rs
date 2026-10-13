@@ -3,7 +3,8 @@
 //!
 //! ```text
 //! Peer (ssh, or a dialed gateway's pin) ──▶ its PeerGrant, or none
-//!   none ──▶ unwritten(peer): what it is shown as and changed from
+//!   none ──▶ unwritten(peer): what it holds, shown as, changed from,
+//!            and decided over by the lease policy
 //! GrantOperation::apply(grant)        ──▶ the grant after an owner's change
 //! lease_ms(grant)                     ──▶ a harness lease's longest, maxLeaseMs
 //! command_timeout(grant, timeout_ms)  ──▶ min(asked, maxTimeoutMs)
@@ -12,8 +13,8 @@
 //! Arrows are what each step reads and answers. Whether a peer may lease an
 //! agent, or run a command, at all is not decided here: it is the lease
 //! policy's (`application::LeasePolicyEvaluator`, answered by Cedar), over
-//! the facts of the peer and its entry. What is here are the terms attached
-//! to a yes. A grant only narrows what the host can do: whether it runs an
+//! the peer and the grant it holds. What is here are what a grant holds,
+//! a missing entry's included, and the terms attached to a yes. A grant only narrows what the host can do: whether it runs an
 //! agent at all, or commands at all, is its configuration's, decided after
 //! the policy. A grant never widens a lease: a command's timeout comes back
 //! the one asked or shorter.
@@ -291,11 +292,11 @@ impl GrantOperation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AllAgents;
 
-/// The grant a peer with no entry is shown as, changed from, and given
-/// its terms by: everything the host allows for SSH, nothing for a dialed
-/// gateway. Whether such a peer may lease at all is the lease policy's; its
-/// no-entry rules answer as this grant would, and a test of the policy holds
-/// the two to the same answer.
+/// What a peer with no entry holds: everything the host allows for SSH,
+/// nothing for a dialed gateway. The one statement of a missing entry's
+/// defaults, as a file's missing fields have theirs: it is what such a peer
+/// is shown as and changed from, the grant the lease policy decides over,
+/// and the terms of its yes. The policy holds no defaults of its own.
 pub(crate) fn unwritten(peer: &Peer) -> PeerGrant {
     match peer {
         Peer::Ssh => PeerGrant::everything(),

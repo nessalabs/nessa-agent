@@ -1,8 +1,8 @@
 //! The lease policy bundle, loaded and validated once, and each lease
 //! decided by it.
 use crate::env_serve::{
-    application::{LeaseAsk, LeaseDecision, LeaseFacts, LeasePolicyEvaluator},
-    domain::{Agents, Peer, PeerGrant},
+    application::{Denial, LeaseAsk, LeaseDecision, LeaseFacts, LeasePolicyEvaluator},
+    domain::{Agents, Peer},
 };
 use cedar_policy::{
     Authorizer, Context, Decision, Entities, Entity, EntityId, EntityTypeName, EntityUid,
@@ -23,9 +23,16 @@ pub(crate) struct CedarLeasePolicy {
     authorizer: Authorizer,
 }
 
-/// A step of building a request or its entities that failed: the lease is
-/// denied.
-struct Unavailable;
+/// A step of building a request or its entities, or of evaluating it, that
+/// failed, and how: the lease is denied, and this logged.
+struct Unavailable(String);
+
+impl Unavailable {
+    /// `step` failed with `error`.
+    fn at(step: &str, error: impl std::fmt::Display) -> Self {
+        Self(format!("{step}: {error}"))
+    }
+}
 
 impl CedarLeasePolicy {
     /// Load and strictly validate the checked-in bundle.
@@ -79,14 +86,14 @@ impl CedarLeasePolicy {
                     )]),
                     HashSet::new(),
                 )
-                .map_err(|_| Unavailable)?,
+                .map_err(|error| Unavailable::at("the agent entity", error))?,
             ),
             LeaseAsk::Command => (
                 "command.run",
                 Entity::new_no_attrs(uid("NessaEnv::Command", "command")?, HashSet::new()),
             ),
         };
-        let principal = peer(facts.peer, facts.entry)?;
+        let principal = peer(facts)?;
         let action = uid("NessaEnv::Action", action)?;
         let request = Request::new(
             principal.uid(),
@@ -95,17 +102,16 @@ impl CedarLeasePolicy {
             Context::empty(),
             Some(&self.schema),
         )
-        .map_err(|_| Unavailable)?;
+        .map_err(|error| Unavailable::at("the request", error))?;
         let entities = Entities::from_entities([principal, resource], Some(&self.schema))
-            .map_err(|_| Unavailable)?;
+            .map_err(|error| Unavailable::at("the entities", error))?;
         let response = self
             .authorizer
             .is_authorized(&request, &self.policies, &entities);
         if let Some(error) = response.diagnostics().errors().next() {
-            tracing::error!(%error, "the lease policy could not be evaluated; the lease is refused");
-            return Err(Unavailable);
+            return Err(Unavailable::at("evaluation", error));
         }
-        let policies = response
+        let policies: Vec<String> = response
             .diagnostics()
             .reason()
             .filter_map(|id| self.policies.annotation(id, "id"))
@@ -113,29 +119,35 @@ impl CedarLeasePolicy {
             .collect();
         Ok(match response.decision() {
             Decision::Allow => LeaseDecision::Allow { policies },
-            Decision::Deny => LeaseDecision::Deny { policies },
+            // Cedar denies by a forbid it names, or by no permit at all.
+            Decision::Deny if policies.is_empty() => LeaseDecision::Deny(Denial::NotPermitted),
+            Decision::Deny => LeaseDecision::Deny(Denial::Forbidden { policies }),
         })
     }
 }
 
 impl LeasePolicyEvaluator for CedarLeasePolicy {
     fn evaluate(&self, facts: &LeaseFacts<'_>) -> LeaseDecision {
-        self.decide(facts)
-            .unwrap_or(LeaseDecision::Deny { policies: vec![] })
+        self.decide(facts).unwrap_or_else(|Unavailable(error)| {
+            tracing::error!(%error, ask = ?facts.ask, "the lease policy could not decide; the lease is refused");
+            LeaseDecision::Deny(Denial::Unavailable)
+        })
     }
 }
 
 fn uid(entity_type: &str, id: &str) -> Result<EntityUid, Unavailable> {
-    let entity_type = EntityTypeName::from_str(entity_type).map_err(|_| Unavailable)?;
+    let entity_type = EntityTypeName::from_str(entity_type)
+        .map_err(|error| Unavailable::at("an entity type", error))?;
     Ok(EntityUid::from_type_name_and_id(
         entity_type,
         EntityId::new(id),
     ))
 }
 
-/// The peer as the schema's `Peer`: its kind, and its entry as written.
-fn peer(peer: &Peer, entry: Option<&PeerGrant>) -> Result<Entity, Unavailable> {
-    let (kind, id) = match peer {
+/// The peer as the schema's `Peer`: its kind, whether it has an entry, and
+/// the grant it holds.
+fn peer(facts: &LeaseFacts<'_>) -> Result<Entity, Unavailable> {
+    let (kind, id) = match facts.peer {
         Peer::Ssh => ("ssh", "ssh".to_owned()),
         Peer::Gateway { pin } => (
             "gateway",
@@ -145,22 +157,18 @@ fn peer(peer: &Peer, entry: Option<&PeerGrant>) -> Result<Entity, Unavailable> {
             }),
         ),
     };
-    let (all_agents, agents, commands) = match entry {
-        None => (false, Vec::new(), false),
-        Some(entry) => {
-            let (all, named) = match entry.agents() {
-                Agents::All => (true, Vec::new()),
-                Agents::Named(named) => (
-                    false,
-                    named
-                        .iter()
-                        .map(|name| RestrictedExpression::new_string(name.as_str().to_owned()))
-                        .collect(),
-                ),
-            };
-            (all, named, entry.commands().is_some())
-        }
+    let grant = facts.grant;
+    let (all_agents, agents) = match grant.agents() {
+        Agents::All => (true, Vec::new()),
+        Agents::Named(named) => (
+            false,
+            named
+                .iter()
+                .map(|name| RestrictedExpression::new_string(name.as_str().to_owned()))
+                .collect(),
+        ),
     };
+    let commands = grant.commands().is_some();
     Entity::new(
         uid("NessaEnv::Peer", &id)?,
         HashMap::from([
@@ -170,7 +178,7 @@ fn peer(peer: &Peer, entry: Option<&PeerGrant>) -> Result<Entity, Unavailable> {
             ),
             (
                 "hasEntry".to_owned(),
-                RestrictedExpression::new_bool(entry.is_some()),
+                RestrictedExpression::new_bool(facts.written),
             ),
             (
                 "allAgents".to_owned(),
@@ -184,7 +192,7 @@ fn peer(peer: &Peer, entry: Option<&PeerGrant>) -> Result<Entity, Unavailable> {
         ]),
         HashSet::new(),
     )
-    .map_err(|_| Unavailable)
+    .map_err(|error| Unavailable::at("the peer entity", error))
 }
 
 #[cfg(test)]

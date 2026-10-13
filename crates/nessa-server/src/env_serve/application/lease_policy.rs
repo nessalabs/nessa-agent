@@ -1,17 +1,20 @@
-//! The one question the lease policy answers: may this peer, with what its
-//! entry in this host's grants says, lease this agent or run a command?
+//! The one question the lease policy answers: may this peer, with what this
+//! host grants it, lease this agent or run a command?
 //!
 //! ```text
 //! grants::admit_agent / admit_command
-//!   ──▶ LeasePolicyEvaluator::evaluate(LeaseFacts{peer, entry, ask})
-//!       ──▶ Allow{policies} | Deny{policies}
+//!   ──▶ the peer's grant: its entry, or unwritten(peer) when it has none
+//!   ──▶ LeasePolicyEvaluator::evaluate(LeaseFacts{peer, written, grant, ask})
+//!       ──▶ Allow{policies} | Deny(Forbidden{policies} | NotPermitted | Unavailable)
 //! ```
 //!
 //! Arrows are calls. The facts are what is true: who the peer is, whether
-//! the owner wrote an entry for it, and that entry as written. The answer,
-//! and the defaults for a peer with no entry, are the policy's. Composition
-//! injects the Cedar adapter (`infrastructure::cedar`); an evaluator fails
-//! closed, answering `Deny` on any error of its own.
+//! the owner wrote it an entry, and the grant it holds. What a peer with no
+//! entry holds is the domain's (`domain::unwritten`), as a missing field's
+//! default is a file's: the policy is handed that grant and never states
+//! its own defaults. The answer is the policy's. Composition injects the
+//! Cedar adapter (`infrastructure::cedar`); an evaluator fails closed,
+//! answering `Deny(Unavailable)` on any error of its own.
 use crate::env_serve::domain::{Peer, PeerGrant};
 
 /// What a peer asks to be admitted for.
@@ -28,25 +31,38 @@ pub(crate) enum LeaseAsk<'a> {
 pub(crate) struct LeaseFacts<'a> {
     /// Who is leasing, as composition knows it.
     pub(crate) peer: &'a Peer,
-    /// The peer's entry in this host's grants as written; `None` when it
-    /// has none, or there are no grants at all.
-    pub(crate) entry: Option<&'a PeerGrant>,
+    /// Whether the owner wrote `peer` an entry in this host's grants. For
+    /// the record only: what the peer holds is `grant` either way.
+    pub(crate) written: bool,
+    /// What `peer` is granted: its entry as written, or, with none,
+    /// `domain::unwritten(peer)`.
+    pub(crate) grant: &'a PeerGrant,
     pub(crate) ask: LeaseAsk<'a>,
 }
 
-/// The policy's answer, with the ids of the policies that decided it.
+/// The policy's answer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum LeaseDecision {
     /// Admitted, by these policies.
     Allow { policies: Vec<String> },
-    /// Refused: by these policies, or by none when nothing allowed it or
-    /// the evaluator could not decide.
-    Deny { policies: Vec<String> },
+    /// Refused, and why.
+    Deny(Denial),
+}
+
+/// Why a lease was refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Denial {
+    /// These policies forbid it.
+    Forbidden { policies: Vec<String> },
+    /// No policy allowed it.
+    NotPermitted,
+    /// The evaluator could not decide; it has logged why.
+    Unavailable,
 }
 
 /// Whether a lease is allowed, decided by the lease policy.
 pub(crate) trait LeasePolicyEvaluator: Send + Sync {
     /// The decision for `facts`. Never an error: an evaluator that cannot
-    /// decide answers [`LeaseDecision::Deny`].
+    /// decide logs why and answers [`Denial::Unavailable`].
     fn evaluate(&self, facts: &LeaseFacts<'_>) -> LeaseDecision;
 }

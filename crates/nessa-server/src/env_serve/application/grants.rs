@@ -7,16 +7,20 @@
 //! GrantCommand ──▶ admit_command(peer, timeout) ──┤
 //!   ──▶ PeerGrants::entry(peer)
 //!       unreadable ──▶ logged, NotGranted (the policy is not asked)
-//!   ──▶ LeasePolicyEvaluator::evaluate(peer, entry, ask)
-//!       Deny ──▶ NotGranted
-//!   ──▶ Allow ──▶ the terms: the entry's, or unwritten(peer)'s
+//!   ──▶ grant = the entry, or unwritten(peer) when there is none
+//!   ──▶ LeasePolicyEvaluator::evaluate(peer, written, grant, ask)
+//!       Deny(why) ──▶ logged with why, NotGranted
+//!   ──▶ Allow ──▶ the terms of that same grant
 //!       lease_ms(grant) | command_timeout(grant, timeout)
 //! ```
 //!
 //! Arrows are calls, in order. A grant that cannot be read grants nothing,
 //! to SSH as to a dialed gateway: a file somebody broke is not taken as no
-//! file. Whether a lease is allowed is the policy's alone; the terms of a
-//! yes (how long a lease lasts, how long a command runs) are the domain's.
+//! file. What a peer with no entry holds is `unwritten`'s alone, and the
+//! policy decides over that grant, so a yes and its terms always come from
+//! the one grant. Whether a lease is allowed is the policy's alone; the
+//! terms of a yes (how long a lease lasts, how long a command runs) are the
+//! domain's.
 //!
 //! The owner's changes go through [`change_grant`], which audits each one
 //! twice, both times holding the store:
@@ -35,7 +39,7 @@
 //! records are kept and the grants are durable. An `intended` record with
 //! no outcome after it is a change whose process died between the two: it
 //! may or may not be in force, and the grants themselves say which.
-use super::lease_policy::{LeaseAsk, LeaseDecision, LeaseFacts, LeasePolicyEvaluator};
+use super::lease_policy::{Denial, LeaseAsk, LeaseDecision, LeaseFacts, LeasePolicyEvaluator};
 use crate::env_serve::domain::{
     command_timeout, lease_ms, unwritten, AllAgents, GrantOperation, NotGranted, Peer, PeerGrant,
 };
@@ -91,8 +95,8 @@ pub(crate) fn admit_command(
     })
 }
 
-/// The grant whose terms an allowed lease gets: the peer's entry, or what a
-/// peer with no entry is shown as.
+/// The grant the policy decided over and whose terms an allowed lease
+/// gets: the peer's entry, or [`unwritten`] when it has none.
 fn admitted(
     grants: &dyn PeerGrants,
     policy: &dyn LeasePolicyEvaluator,
@@ -103,17 +107,27 @@ fn admitted(
         tracing::error!(peer = peer_label(peer), %error, "this host's grants could not be read; nothing is granted");
         NotGranted
     })?;
+    let written = entry.is_some();
+    let grant = entry.unwrap_or_else(|| unwritten(peer));
     let facts = LeaseFacts {
         peer,
-        entry: entry.as_ref(),
+        written,
+        grant: &grant,
         ask,
     };
     match policy.evaluate(&facts) {
-        LeaseDecision::Allow { .. } => Ok(entry.unwrap_or_else(|| unwritten(peer))),
-        LeaseDecision::Deny { policies } => {
+        LeaseDecision::Allow { .. } => Ok(grant),
+        LeaseDecision::Deny(denial) => {
+            let (why, policies): (&str, &[String]) = match &denial {
+                Denial::Forbidden { policies } => ("forbidden", policies),
+                Denial::NotPermitted => ("no policy allowed it", &[]),
+                Denial::Unavailable => ("the policy could not decide", &[]),
+            };
             tracing::info!(
                 peer = peer_label(peer),
+                written,
                 ?ask,
+                why,
                 ?policies,
                 "a lease was not granted"
             );
@@ -217,9 +231,9 @@ pub(crate) enum ChangeFailed {
 
 /// Make `operation` to `peer`'s grant for `initiator`, auditing it in
 /// `audit` as intended before it takes effect and as written, or not,
-/// after. A grant equal to what a peer with no entry is shown as
-/// ([`unwritten`]) is kept as no entry, so the lease policy's no-entry
-/// rules go on deciding it.
+/// after. A grant equal to what a peer with no entry holds ([`unwritten`])
+/// is kept as no entry: the two grant the same, as the policy is handed
+/// the one grant either way.
 ///
 /// # Errors
 /// [`ChangeFailed`]; which variant says whether the change is in force.

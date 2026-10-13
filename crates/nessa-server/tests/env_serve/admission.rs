@@ -16,7 +16,7 @@ impl PeerGrants for Grants {
 /// A policy answering `allow`, keeping what it was asked.
 struct Answering {
     allow: bool,
-    asked: Mutex<Vec<(Peer, Option<PeerGrant>, String)>>,
+    asked: Mutex<Vec<(Peer, bool, PeerGrant, String)>>,
 }
 impl Answering {
     fn new(allow: bool) -> Self {
@@ -30,13 +30,14 @@ impl LeasePolicyEvaluator for Answering {
     fn evaluate(&self, facts: &LeaseFacts<'_>) -> LeaseDecision {
         self.asked.lock().unwrap().push((
             *facts.peer,
-            facts.entry.cloned(),
+            facts.written,
+            facts.grant.clone(),
             format!("{:?}", facts.ask),
         ));
         if self.allow {
             LeaseDecision::Allow { policies: vec![] }
         } else {
-            LeaseDecision::Deny { policies: vec![] }
+            LeaseDecision::Deny(Denial::NotPermitted)
         }
     }
 }
@@ -44,7 +45,8 @@ impl LeasePolicyEvaluator for Answering {
 const DIALED: Peer = Peer::Gateway { pin: [3; 44] };
 
 /// The policy is asked with the peer, its entry as written, and what was
-/// asked; its refusal is `NotGranted`.
+/// asked; with no entry, the grant `unwritten` says it holds. Its refusal
+/// is `NotGranted`.
 #[test]
 fn the_policy_decides_over_the_facts_as_read() {
     let entry = PeerGrant::new(Agents::All, None);
@@ -61,14 +63,17 @@ fn the_policy_decides_over_the_facts_as_read() {
     assert_eq!(
         *deny.asked.lock().unwrap(),
         vec![
-            (DIALED, Some(entry.clone()), "Agent(\"claude\")".to_owned()),
-            (DIALED, Some(entry), "Command".to_owned()),
+            (DIALED, true, entry.clone(), "Agent(\"claude\")".to_owned()),
+            (DIALED, true, entry, "Command".to_owned()),
         ]
     );
     let none = Grants(Ok(None));
     let allow = Answering::new(true);
     assert_eq!(admit_agent(&none, &allow, &Peer::Ssh, "codex"), Ok(None));
-    assert_eq!(allow.asked.lock().unwrap()[0].1, None);
+    assert_eq!(admit_agent(&none, &allow, &DIALED, "codex"), Ok(None));
+    let asked = allow.asked.lock().unwrap();
+    assert_eq!((asked[0].1, &asked[0].2), (false, &unwritten(&Peer::Ssh)));
+    assert_eq!((asked[1].1, &asked[1].2), (false, &unwritten(&DIALED)));
 }
 
 /// A yes carries the terms: the entry's lease limit, and a command's

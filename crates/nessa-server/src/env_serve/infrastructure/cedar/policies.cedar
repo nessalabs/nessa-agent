@@ -1,61 +1,36 @@
 // Who may lease what from this host. The principal is the peer leasing:
 // `kind` is "ssh" (whoever runs `nessa env serve` over SSH) or "gateway" (a
-// paired gateway this host dials); `hasEntry` says whether the host's owner
-// wrote it an entry in grants.json, and `allAgents`, `agents` and
-// `commands` are that entry as written (false and empty without one).
-// Nothing is allowed unless a permit below says so.
+// paired gateway this host dials), and `hasEntry` says whether the host's
+// owner wrote it an entry in grants.json; both are kept for the record.
+// `allAgents`, `agents` and `commands` are the grant the peer holds: its
+// entry as written, or, with none, what the server's domain says a peer
+// with no entry holds (`domain::unwritten`: everything for ssh, nothing for
+// a dialed gateway). The defaults live there only; the permits below decide
+// every peer alike. Nothing is allowed unless a permit says so.
 
-// SSH with no entry keeps what a host served over SSH always had: every
-// agent the host runs.
-@id("ssh.unnamed.every_agent")
+// A grant of every agent.
+@id("grant.every_agent")
 permit (
     principal is NessaEnv::Peer,
     action == NessaEnv::Action::"agent.lease",
     resource is NessaEnv::Agent
 )
-when { principal.kind == "ssh" && !principal.hasEntry };
+when { principal.allAgents };
 
-// ... and commands, when the host runs them.
-@id("ssh.unnamed.commands")
+// A grant naming the agent asked.
+@id("grant.named_agent")
+permit (
+    principal is NessaEnv::Peer,
+    action == NessaEnv::Action::"agent.lease",
+    resource is NessaEnv::Agent
+)
+when { principal.agents.contains(resource.name) };
+
+// A grant of commands.
+@id("grant.commands")
 permit (
     principal is NessaEnv::Peer,
     action == NessaEnv::Action::"command.run",
     resource is NessaEnv::Command
 )
-when { principal.kind == "ssh" && !principal.hasEntry };
-
-// Any peer but SSH that the owner never named is granted nothing.
-@id("unnamed.nothing")
-forbid (
-    principal is NessaEnv::Peer,
-    action,
-    resource
-)
-when { principal.kind != "ssh" && !principal.hasEntry };
-
-// An entry granting every agent.
-@id("entry.every_agent")
-permit (
-    principal is NessaEnv::Peer,
-    action == NessaEnv::Action::"agent.lease",
-    resource is NessaEnv::Agent
-)
-when { principal.hasEntry && principal.allAgents };
-
-// An entry naming the agent asked.
-@id("entry.named_agent")
-permit (
-    principal is NessaEnv::Peer,
-    action == NessaEnv::Action::"agent.lease",
-    resource is NessaEnv::Agent
-)
-when { principal.hasEntry && principal.agents.contains(resource.name) };
-
-// An entry granting commands.
-@id("entry.commands")
-permit (
-    principal is NessaEnv::Peer,
-    action == NessaEnv::Action::"command.run",
-    resource is NessaEnv::Command
-)
-when { principal.hasEntry && principal.commands };
+when { principal.commands };

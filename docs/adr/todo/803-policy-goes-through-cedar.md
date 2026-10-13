@@ -122,7 +122,7 @@ table survives edits.
 | | `nessa-sdk` `infrastructure/mcp/stand_in.rs`, `infrastructure/mcp/wire.rs` `hidden_for_model` | The model may not call a tool hidden from it |
 | | `conversation/domain/value_objects/share_access.rs` `ToolRules`, `ToolPreset` | The Drive tool policy: stored, never evaluated. Slice J4 builds its Cedar evaluator |
 | | `nessa-sdk` `infrastructure/claude_acp/tools/wire.rs` `DISALLOWED_TOOLS`; `infrastructure/opencode_acp/sessions/binding.rs` `SESSION_POLICY` | Fixed tool deny lists sent to the harness at launch |
-| **D. Environment host** | `nessa-server` `env_serve/domain/grants.rs` `granted_to`, `admit_agent`, `admit_command`; `env_serve/application/serve.rs` lease grant | Which agents and commands a leasing peer may use; SSH gets all, a dialed gateway nothing; a revoked gateway is refused |
+| **D. Environment host** | `nessa-server` `env_serve/domain/grants.rs` `granted_to`, `admit_agent`, `admit_command`; `env_serve/application/serve.rs` lease grant | Which agents and commands a leasing peer may use; SSH gets all, a dialed gateway nothing; a revoked gateway is refused. Step 5 moved the first into Cedar; what a peer with no entry holds is data, stated once by `domain::unwritten` |
 | **E. Artifacts in the SDK** | `nessa-sdk` `application/agent_execution/sessions/artifacts.rs` `admit`, `asked_by` | An artifact is recorded only by the lease issuer or the person who started the turn. Not policy on a closer look: see step 6 |
 
 Not a migration: placing a conversation on an environment
@@ -160,8 +160,15 @@ request, `Part of #803`, because each pull request costs a full CI run (Saurav,
    host list, and a grant with no host list gets no hosts unless its policy
    says otherwise. The fixed harness deny lists are then generated from the
    same policies rather than written twice.
-5. **D: environment host.** Agent and command grants become a Cedar bundle on
-   the host; the terms (timeout clamp, lease deadlines) stay in Rust.
+5. **D: environment host.** Agent and command admission is a Cedar bundle on
+   the host (`env_serve/infrastructure/cedar/`), asked through
+   `LeasePolicyEvaluator`. Cedar sees the grant the peer holds: its entry, or
+   `domain::unwritten`'s defaults when it has none, the way a file's missing
+   fields have defaults. The bundle states no defaults of its own, so a lease
+   and its terms always come from the same grant. A refusal says whether named
+   policies forbade it, no policy allowed it, or the evaluator could not
+   decide, which is logged and fails closed. The terms (timeout clamp, lease
+   deadlines) stay in Rust.
 6. **E: SDK artifacts. Dropped.** `admit` and `asked_by` check that the actor
    recording an artifact is the one the lease or turn was issued to. That is
    binding an action to the identity that holds it, the same kind of check as
