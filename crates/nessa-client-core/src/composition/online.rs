@@ -13,7 +13,7 @@
 //! output already there is answered before the profile is opened (`fetch`).
 //! Arrows are calls in order (design rows PC1–PC6). No read happens without a
 //! fresh Active status, and nothing is purged without a Terminal one.
-use super::device::{self, client_failure, pinned, status_json, Device};
+use super::device::{self, client_failure, status_json, Device};
 use super::fetch;
 use super::profile::{Profile, ProfileError};
 use crate::composition::clock::{MonotonicClock, SystemClock, ThreadPause};
@@ -177,7 +177,7 @@ pub(super) fn execute(
         }
     };
     let enrollment = status_json(&status);
-    let Some(decision) = pinned(&status) else {
+    let Some(decision) = PinnedStatus::from_native(&status) else {
         return refused(
             operation,
             json!({"enrollment":enrollment,"enrollmentFailure":{"code":"wire"},"purge":purge_json(paired.store.purge())}),

@@ -168,6 +168,40 @@ async fn completion_holds_physical_admission_and_busy_cannot_begin_capture() {
     client.shutdown().await;
 }
 
+#[tokio::test]
+async fn shutdown_signal_refuses_new_physical_dispatch_before_effect_capture() {
+    let client = NativeEnrollmentClient::new(Arc::new(Empty), Arc::new(Time));
+    let begin_count = Arc::new(AtomicUsize::new(0));
+    let complete_count = Arc::new(AtomicUsize::new(0));
+    client.request_shutdown();
+    let original_wake = client.wake_report();
+    assert!(original_wake.is_some());
+    let (stream, _peer) = sockets();
+    let begin = begin_count.clone();
+    let complete = complete_count.clone();
+    let result = client
+        .status_completed(
+            stream,
+            None,
+            move || {
+                begin.fetch_add(1, Ordering::SeqCst);
+            },
+            move |result| {
+                complete.fetch_add(1, Ordering::SeqCst);
+                result
+            },
+        )
+        .await;
+    assert_eq!(result, Err(NativeClientError::Busy));
+    assert_eq!(begin_count.load(Ordering::SeqCst), 0);
+    assert_eq!(complete_count.load(Ordering::SeqCst), 0);
+    timeout(Duration::from_secs(5), client.shutdown())
+        .await
+        .unwrap();
+    client.request_shutdown();
+    assert_eq!(client.wake_report(), original_wake);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn canceled_caller_and_shutdown_waiter_keep_physical_work_and_capture() {
     let entered = Arc::new(Notify::new());

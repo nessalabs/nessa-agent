@@ -1,0 +1,216 @@
+{
+  "published_native_head": "13acd0206406193320e7c7e702e48990fd6b442d",
+  "main": "8468b36bd2a8e58b68f7b6c2d18dcc98313196f0",
+  "verification_merge": "52e2d86abfc1a2e66ef32e73cf767fd272e155d6",
+  "checks": [
+    {
+      "check": "mcp-apps-gateway",
+      "ok": true,
+      "started": "2026-10-13T00:43:02.985Z",
+      "finished": "2026-10-13T00:43:23.321Z",
+      "results": [
+        {
+          "name": "setup",
+          "engine": null,
+          "ok": true
+        },
+        {
+          "name": "renders",
+          "engine": "chromium",
+          "ok": true
+        },
+        {
+          "name": "hidden",
+          "engine": "chromium",
+          "ok": true
+        },
+        {
+          "name": "allow",
+          "engine": "chromium",
+          "ok": true
+        },
+        {
+          "name": "deny",
+          "engine": "chromium",
+          "ok": true
+        },
+        {
+          "name": "release",
+          "engine": "chromium",
+          "ok": true
+        },
+        {
+          "name": "message",
+          "engine": "chromium",
+          "ok": true
+        },
+        {
+          "name": "context",
+          "engine": "chromium",
+          "ok": true
+        },
+        {
+          "name": "console",
+          "engine": "chromium",
+          "ok": true
+        },
+        {
+          "name": "renders",
+          "engine": "webkit",
+          "ok": true
+        },
+        {
+          "name": "hidden",
+          "engine": "webkit",
+          "ok": true
+        },
+        {
+          "name": "allow",
+          "engine": "webkit",
+          "ok": true
+        },
+        {
+          "name": "deny",
+          "engine": "webkit",
+          "ok": true
+        },
+        {
+          "name": "release",
+          "engine": "webkit",
+          "ok": true
+        },
+        {
+          "name": "message",
+          "engine": "webkit",
+          "ok": true
+        },
+        {
+          "name": "context",
+          "engine": "webkit",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "check": "gateway-window",
+      "ok": true,
+      "started": "2026-10-13T00:43:23.635Z",
+      "finished": "2026-10-13T00:43:41.816Z",
+      "results": [
+        {
+          "name": "setup",
+          "engine": null,
+          "ok": true
+        },
+        {
+          "name": "handshake",
+          "engine": "chromium",
+          "ok": true
+        },
+        {
+          "name": "lists",
+          "engine": "chromium",
+          "ok": true
+        },
+        {
+          "name": "opens",
+          "engine": "chromium",
+          "ok": true
+        },
+        {
+          "name": "live",
+          "engine": "chromium",
+          "ok": true
+        },
+        {
+          "name": "apps",
+          "engine": "chromium",
+          "ok": true
+        },
+        {
+          "name": "handshakes",
+          "engine": "chromium",
+          "ok": true
+        },
+        {
+          "name": "handshake",
+          "engine": "webkit",
+          "ok": true
+        },
+        {
+          "name": "lists",
+          "engine": "webkit",
+          "ok": true
+        },
+        {
+          "name": "opens",
+          "engine": "webkit",
+          "ok": true
+        },
+        {
+          "name": "live",
+          "engine": "webkit",
+          "ok": true
+        },
+        {
+          "name": "apps",
+          "engine": "webkit",
+          "ok": true
+        },
+        {
+          "name": "handshakes",
+          "engine": "webkit",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "check": "scripted-scenarios",
+      "ok": true,
+      "started": "2026-10-13T00:43:42.113Z",
+      "finished": "2026-10-13T00:44:01.848Z",
+      "results": [
+        {
+          "name": "permission",
+          "engine": "chromium",
+          "ok": true
+        },
+        {
+          "name": "allow",
+          "engine": "chromium",
+          "ok": true
+        },
+        {
+          "name": "fail",
+          "engine": "chromium",
+          "ok": true
+        },
+        {
+          "name": "cancel",
+          "engine": "chromium",
+          "ok": true
+        },
+        {
+          "name": "permission",
+          "engine": "webkit",
+          "ok": true
+        },
+        {
+          "name": "allow",
+          "engine": "webkit",
+          "ok": true
+        },
+        {
+          "name": "fail",
+          "engine": "webkit",
+          "ok": true
+        },
+        {
+          "name": "cancel",
+          "engine": "webkit",
+          "ok": true
+        }
+      ]
+    }
+  ]
+}

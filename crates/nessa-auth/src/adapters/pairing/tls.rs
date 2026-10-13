@@ -50,6 +50,13 @@ fn parse_spki(bytes: &[u8]) -> Result<[u8; 44], Error> {
     result.copy_from_slice(bytes);
     Ok(result)
 }
+// Callers supply a locally constructed or already authenticated native SPKI.
+// `local_device_key_matches_independent_ed25519_public_bytes` checks the extraction.
+pub(super) fn device_key(spki: &[u8; 44]) -> DeviceKey {
+    let mut key = [0; DeviceKey::LENGTH];
+    key.copy_from_slice(&spki[SPKI_PREFIX.len()..]);
+    DeviceKey::new(key)
+}
 /// Permanent Ed25519 identity; Nessa-owned seed and PKCS8 copies erase on drop.
 /// The signing library does not expose an erasure guarantee for its internal copies.
 pub struct NativeIdentity {
@@ -81,12 +88,14 @@ impl NativeIdentity {
     pub fn public_spki(&self) -> [u8; 44] {
         self.spki
     }
+    /// Local public key in the pairing owner's representation; not possession proof.
+    pub fn device_key(&self) -> DeviceKey {
+        device_key(&self.spki)
+    }
     /// The raw Ed25519 public key: the id a relay registers this identity
     /// under (`docs/design/auth/relay.md`).
     pub fn public_key(&self) -> [u8; 32] {
-        let mut key = [0; 32];
-        key.copy_from_slice(&self.spki[12..]);
-        key
+        *self.device_key().bytes()
     }
     /// Prove this key to a relay: an Ed25519 signature over the relay proof
     /// message for `challenge`, the relay's fresh nonce. The message starts
@@ -340,9 +349,7 @@ impl<S: Read + Write> NativeTransport<S> {
             .export_keying_material([0; 32], b"EXPORTER-Channel-Binding", Some(&[]))
             .map_err(|_| PairingCryptoError::InvalidProof)?;
         let (gateway, device) = if server { (local, peer) } else { (peer, local) };
-        let mut proved_key = [0; 32];
-        proved_key.copy_from_slice(&device[12..]);
-        let device_proof = DeviceConnectionProof::from_tls(DeviceKey::new(proved_key));
+        let device_proof = DeviceConnectionProof::from_tls(device_key(&device));
         Ok(Self {
             device_proof,
             tls: match connection {

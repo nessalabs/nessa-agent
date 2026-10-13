@@ -89,9 +89,7 @@ impl FilePairingState {
         let identity =
             NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new(*key.expose_bytes())))
                 .map_err(|_| PrivateStateError::Unavailable)?;
-        let public_key = identity.public_spki()[12..]
-            .try_into()
-            .map_err(|_| PrivateStateError::Corrupt)?;
+        let public_key = *identity.device_key().bytes();
         if let Some(saved) = self.key_outcome()? {
             if saved.intent != *intent || saved.public_key != public_key {
                 return Err(PrivateStateError::Conflict);
