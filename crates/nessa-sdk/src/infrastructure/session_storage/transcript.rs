@@ -1673,6 +1673,38 @@ mod tests {
         );
     }
 
+    /// Row J16: a note left through a grant survives a checkpoint and its
+    /// restore, with its author and time.
+    #[test]
+    fn a_note_survives_a_checkpoint_and_its_restore() {
+        use crate::application::agent_execution::sessions::{
+            NoteDelivery, NoteId, NoteRecord, NoteText,
+        };
+        use crate::domain::agent_execution::executions::{GrantInitiator, Initiator};
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let note = NoteRecord {
+            id: NoteId::mint(),
+            text: NoteText::new("the parser review is ready").unwrap(),
+            delivery: NoteDelivery::RecordOnly,
+            actor: ActionContext::new("person", "phone", "note").unwrap(),
+            author: Initiator::Grant(GrantInitiator::new("receiver", 7).unwrap()),
+            accepted_at_ms: 1_700_000_000_000,
+        };
+        fold.apply(&records(
+            &scope,
+            3,
+            &save_frames(SessionChange::Note(note.clone()), 2, 1),
+        ))
+        .unwrap();
+        let checkpoint = fold.checkpoint().unwrap();
+        let restored = TranscriptFold::restore(scope, fold.applied(), &checkpoint).unwrap();
+        assert_eq!(restored.snapshot(), fold.snapshot());
+        assert_eq!(restored.snapshot().unwrap().notes, vec![note]);
+    }
+
     #[test]
     fn partial_and_abort_advance_physical_progress_without_semantic_change() {
         let scope = scope();

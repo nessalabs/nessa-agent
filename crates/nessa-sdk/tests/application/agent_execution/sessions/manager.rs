@@ -25,6 +25,12 @@ impl MessageCommitClock for FixedMessageClock {
     fn sleep_until(&self, _: std::time::Duration) -> MessageCommitSleep {
         Box::pin(std::future::pending())
     }
+
+    /// The wall clock reads the same time the monotonic one does, so a test
+    /// that moves one moves both.
+    fn unix_milliseconds(&self) -> u64 {
+        self.now().as_millis() as u64
+    }
 }
 
 struct PauseAfterSave {
@@ -526,6 +532,7 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
         queue_history: Vec::new(),
         lease: None,
         artifacts: Vec::new(),
+        notes: Vec::new(),
         id: id.clone(),
         provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
         provider_context: ProviderContext::Recorded(
@@ -1200,6 +1207,7 @@ fn a_restored_tool_call_that_changes_its_mcp_identity_is_corrupt() {
             queue_history: Vec::new(),
             lease: None,
             artifacts: Vec::new(),
+            notes: Vec::new(),
         }
     };
     for kept in [None, Some(McpTool::new("charts", "show").unwrap())] {
@@ -1675,6 +1683,187 @@ mod artifact_records {
             ArtifactRecordError::NotThisLease,
             ArtifactRecordError::UnknownTurn,
             ArtifactRecordError::Storage(StorageError::Io("y".into())),
+        ];
+        let messages: std::collections::HashSet<String> =
+            errors.iter().map(ToString::to_string).collect();
+        assert_eq!(messages.len(), errors.len());
+    }
+}
+
+mod note_records {
+    use super::*;
+    use crate::application::agent_execution::sessions::{
+        NoteDelivery, NoteRecord, NoteRecordError, NoteRequest, NoteState, NoteText,
+    };
+    use crate::domain::agent_execution::executions::{GrantInitiator, Initiator};
+
+    fn request(request: &str, text: &str) -> NoteRequest {
+        NoteRequest {
+            text: NoteText::new(text).unwrap(),
+            delivery: NoteDelivery::RecordOnly,
+            actor: ActionContext::new("person", "phone", request).unwrap(),
+            author: Initiator::Grant(GrantInitiator::new("receiver", 3).unwrap()),
+        }
+    }
+    /// A loaded conversation whose wall clock reads `at_ms`.
+    async fn at(at_ms: u64) -> (SessionManager, Arc<FaultLease>, Arc<FixedMessageClock>) {
+        let (mut manager, lease, _) = manager(0).await;
+        let clock = Arc::new(FixedMessageClock(std::sync::Mutex::new(
+            std::time::Duration::from_millis(at_ms),
+        )));
+        manager.message_commit_clock = clock.clone();
+        (manager, lease, clock)
+    }
+    async fn observed_notes(manager: &SessionManager) -> Vec<NoteRecord> {
+        manager
+            .evidence
+            .lock()
+            .await
+            .observed
+            .as_ref()
+            .unwrap()
+            .notes
+            .clone()
+    }
+
+    /// Row J16 and J21: a note is saved as its own unit, dated by the
+    /// injected wall clock, and starts no turn.
+    #[tokio::test]
+    async fn a_note_is_saved_as_its_own_unit_and_starts_no_turn() {
+        let (manager, lease, _) = at(5_000).await;
+        let turns = manager.snapshot().await.unwrap().invocations.len();
+        let record = manager.record_note(request("note", "hello")).await.unwrap();
+        assert_eq!(record.accepted_at_ms, 5_000);
+        assert_eq!(record.state(), NoteState::Recorded);
+        assert_eq!(
+            lease.changes.lock().unwrap().last().unwrap(),
+            &vec![SessionChange::Note(record.clone())]
+        );
+        let saved = lease.load().await.unwrap();
+        let saved = saved.snapshot().unwrap();
+        assert_eq!(saved.notes, vec![record.clone()]);
+        assert_eq!(saved.invocations.len(), turns);
+        assert_eq!(saved.note("person", "note"), Some(&record));
+    }
+
+    /// A note that waited for the session lock is dated when it is admitted,
+    /// not when it asked: a note dated earlier could leave the rate window at
+    /// once and let its author past the rate.
+    #[tokio::test]
+    async fn a_note_that_waited_for_the_lock_is_dated_when_it_is_admitted() {
+        let (manager, _, clock) = at(5_000).await;
+        let held = manager.evidence.lock().await;
+        let release = async move {
+            tokio::task::yield_now().await;
+            *clock.0.lock().unwrap() = std::time::Duration::from_millis(70_000);
+            drop(held);
+        };
+        let (record, ()) = tokio::join!(manager.record_note(request("note", "x")), release);
+        assert_eq!(record.unwrap().accepted_at_ms, 70_000);
+    }
+
+    /// Row J18: the same request again is answered by its first record, even
+    /// at a later time, and writes nothing; another under the same request is
+    /// a conflict that retains nothing.
+    #[tokio::test]
+    async fn a_retry_finds_its_first_note_and_a_conflict_retains_nothing() {
+        let (manager, lease, clock) = at(5_000).await;
+        let first = manager.record_note(request("note", "hello")).await.unwrap();
+        let saves = lease.changes.lock().unwrap().len();
+        *clock.0.lock().unwrap() = std::time::Duration::from_millis(9_000);
+        assert_eq!(
+            manager.record_note(request("note", "hello")).await,
+            Ok(first.clone())
+        );
+        assert_eq!(
+            manager.record_note(request("note", "changed")).await,
+            Err(NoteRecordError::Conflict)
+        );
+        assert_eq!(lease.changes.lock().unwrap().len(), saves);
+        assert_eq!(observed_notes(&manager).await, vec![first]);
+    }
+
+    /// A note whose write failed is retained; the same request again writes
+    /// it and answers with the same note, so a retry never makes a second.
+    #[tokio::test]
+    async fn a_note_whose_write_failed_is_written_by_its_retry() {
+        let (manager, lease, _) = at(5_000).await;
+        lease.fail_save.store(true, Ordering::SeqCst);
+        assert!(matches!(
+            manager.record_note(request("note", "hello")).await,
+            Err(NoteRecordError::Storage(StorageError::Io(_)))
+        ));
+        let retained = observed_notes(&manager).await;
+        assert_eq!(retained.len(), 1);
+        lease.fail_save.store(false, Ordering::SeqCst);
+        assert_eq!(
+            manager.record_note(request("note", "hello")).await,
+            Ok(retained[0].clone())
+        );
+        let saved = lease.load().await.unwrap();
+        assert_eq!(saved.snapshot().unwrap().notes, retained);
+    }
+
+    /// Row J19: past the author's rate the next note is refused and retains
+    /// nothing; once the window moves on it is taken.
+    #[tokio::test]
+    async fn past_its_rate_an_author_waits_for_the_window() {
+        let (manager, lease, clock) = at(0).await;
+        for index in 0..NoteRecord::MAX_PER_AUTHOR_IN_WINDOW {
+            manager
+                .record_note(request(&format!("note-{index}"), "x"))
+                .await
+                .unwrap();
+        }
+        let saves = lease.changes.lock().unwrap().len();
+        assert_eq!(
+            manager.record_note(request("late", "x")).await,
+            Err(NoteRecordError::RateLimited)
+        );
+        assert_eq!(lease.changes.lock().unwrap().len(), saves);
+        *clock.0.lock().unwrap() = std::time::Duration::from_millis(NoteRecord::RATE_WINDOW_MS);
+        assert!(manager.record_note(request("late", "x")).await.is_ok());
+    }
+
+    /// Row J19: a full conversation refuses a new note.
+    #[tokio::test]
+    async fn a_full_conversation_refuses_a_new_note() {
+        let (manager, _, clock) = at(0).await;
+        for index in 0..NoteRecord::MAX_PER_CONVERSATION {
+            // A new minute for each batch keeps the rate out of it.
+            let minute = (index / NoteRecord::MAX_PER_AUTHOR_IN_WINDOW) as u64;
+            *clock.0.lock().unwrap() =
+                std::time::Duration::from_millis(minute * NoteRecord::RATE_WINDOW_MS);
+            manager
+                .record_note(request(&format!("note-{index}"), "x"))
+                .await
+                .unwrap();
+        }
+        *clock.0.lock().unwrap() = std::time::Duration::from_millis(u64::MAX / 2);
+        assert_eq!(
+            manager.record_note(request("one-more", "x")).await,
+            Err(NoteRecordError::Full)
+        );
+    }
+
+    #[tokio::test]
+    async fn no_note_is_recorded_before_the_conversation_is_loaded() {
+        let (manager, _, _) = at(0).await;
+        manager.evidence.lock().await.observed = None;
+        assert_eq!(
+            manager.record_note(request("note", "x")).await,
+            Err(NoteRecordError::NotLoaded)
+        );
+    }
+
+    #[test]
+    fn every_note_record_error_explains_itself() {
+        let errors = [
+            NoteRecordError::NotLoaded,
+            NoteRecordError::Conflict,
+            NoteRecordError::Full,
+            NoteRecordError::RateLimited,
+            NoteRecordError::Storage(StorageError::Io("y".into())),
         ];
         let messages: std::collections::HashSet<String> =
             errors.iter().map(ToString::to_string).collect();

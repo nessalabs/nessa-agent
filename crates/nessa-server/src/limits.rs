@@ -28,7 +28,7 @@ use nessa_protocol::product::generated::{
     MAX_RECORD_RESPONSE_BYTES, SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
 };
 use nessa_protocol::protocol::MAX_PAYLOAD_BYTES;
-use nessa_sdk::application::agent_execution::sessions::ArtifactRecord;
+use nessa_sdk::application::agent_execution::sessions::{ArtifactRecord, NoteRecord, NoteText};
 use nessa_sdk::domain::agent_execution::leases::{CommandOutput, CommandWork, Lease};
 use nessa_sdk::infrastructure::session_storage::MAX_RECORD_CHANGE_WATCHES;
 use std::collections::BTreeMap;
@@ -214,6 +214,24 @@ fn catalogue() -> &'static [Limit] {
             tier: "fixed",
             owner: "MAX_DRIVE_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/share_grants.rs",
             meaning: "the drive grants one conversation holds; one more conversation.share naming drive is refused invalid_request, so a conversation.shares answer with every policy at its largest still fits one frame",
+        },
+        Limit {
+            id: "conversation.notes",
+            tier: "fixed",
+            owner: "NoteRecord::MAX_PER_CONVERSATION in crates/nessa-sdk/src/application/agent_execution/sessions/notes.rs",
+            meaning: "the notes one conversation keeps, every author's together; one more conversation.message is refused message_quota_exceeded and nothing is saved",
+        },
+        Limit {
+            id: "conversation.note_rate",
+            tier: "fixed",
+            owner: "NoteRecord::MAX_PER_AUTHOR_IN_WINDOW and RATE_WINDOW_MS in crates/nessa-sdk/src/application/agent_execution/sessions/notes.rs",
+            meaning: "the notes one author, a principal under one authority, leaves in one conversation in any 60 seconds on the gateway's wall clock; one more is refused message_quota_exceeded, and a clock set back makes no room",
+        },
+        Limit {
+            id: "conversation.note_bytes",
+            tier: "fixed",
+            owner: "NoteText::MAX_BYTES in crates/nessa-sdk/src/application/agent_execution/sessions/notes.rs, the schema's ConversationMessageParams",
+            meaning: "the longest note's text, in UTF-8 bytes; a longer or all-blank one is refused invalid_request",
         },
         Limit {
             id: "conversation.tool_policy_rules",
@@ -531,6 +549,15 @@ pub(crate) fn effective_json(
         "conversation.drive_grants",
         MAX_DRIVE_GRANTS_PER_CONVERSATION.unsigned_abs(),
     );
+    put(
+        "conversation.notes",
+        count(NoteRecord::MAX_PER_CONVERSATION),
+    );
+    put(
+        "conversation.note_rate",
+        count(NoteRecord::MAX_PER_AUTHOR_IN_WINDOW),
+    );
+    put("conversation.note_bytes", count(NoteText::MAX_BYTES));
     put(
         "conversation.tool_policy_rules",
         count(ToolRules::MAX_RULES),

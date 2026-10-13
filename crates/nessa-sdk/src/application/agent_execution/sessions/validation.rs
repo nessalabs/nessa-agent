@@ -173,6 +173,7 @@ pub(super) fn continuation(
         return Err(corrupt("retained invocation history exceeds session limit"));
     }
     super::artifacts::validate_saved(snapshot)?;
+    super::notes::validate_saved(snapshot)?;
     let _ = super::queue_validation::replay(snapshot)?;
     snapshot
         .provider_context

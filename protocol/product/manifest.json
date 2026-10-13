@@ -70,6 +70,14 @@
       "params": "ConversationReceiptParams",
       "grant": "conversation.write"
     },
+    "conversation.message": {
+      "params": "ConversationMessageParams",
+      "grant": "conversation.write"
+    },
+    "conversation.messageStatus": {
+      "params": "ConversationMessageStatusParams",
+      "grant": "conversation.write"
+    },
     "conversation.answer": {
       "params": "ConversationAnswerParams",
       "grant": "conversation.write"

@@ -1,8 +1,12 @@
 use super::{
-    app_sources, artifacts::ArtifactRefusal, attachment::AttachmentLease,
-    steering_position::SteeringPosition, ArtifactRecord, CurrentLease, InvocationCancellationEvent,
-    InvocationRecord, InvocationSchedulingEvent, LeaseRecord, MessageCommitClock,
-    MessageCommitSleep, ProviderContext, QueueHistoryRecord, SessionChange, SessionLoadState,
+    app_sources,
+    artifacts::ArtifactRefusal,
+    attachment::AttachmentLease,
+    notes::{NoteAdmission, NoteRefusal},
+    steering_position::SteeringPosition,
+    ArtifactRecord, CurrentLease, InvocationCancellationEvent, InvocationRecord,
+    InvocationSchedulingEvent, LeaseRecord, MessageCommitClock, MessageCommitSleep, NoteRecord,
+    NoteRequest, ProviderContext, QueueHistoryRecord, SessionChange, SessionLoadState,
     SessionSaveGeneration, SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease,
     StorageError, StorageFuture, SubmissionAcknowledgement,
 };
@@ -142,6 +146,41 @@ impl fmt::Display for ArtifactRecordError {
     }
 }
 impl std::error::Error for ArtifactRecordError {}
+
+/// Why [`SessionManager::record_note`] did not record a note, or did not yet
+/// save it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NoteRecordError {
+    /// The manager has not loaded the conversation: no Agent has prepared it.
+    NotLoaded,
+    /// The principal's request already left another note: another text,
+    /// delivery, surface or authority under the same request. Nothing was
+    /// retained.
+    Conflict,
+    /// The conversation already keeps [`NoteRecord::MAX_PER_CONVERSATION`]
+    /// notes. Nothing was retained.
+    Full,
+    /// The author already left [`NoteRecord::MAX_PER_AUTHOR_IN_WINDOW`] notes
+    /// in the last [`NoteRecord::RATE_WINDOW_MS`]. Nothing was retained.
+    RateLimited,
+    /// The note was retained but writing it failed; the next save, or the
+    /// same request again, writes it.
+    Storage(StorageError),
+}
+impl fmt::Display for NoteRecordError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotLoaded => formatter.write_str("the conversation is not loaded"),
+            Self::Conflict => {
+                formatter.write_str("the request already left another note in the conversation")
+            }
+            Self::Full => formatter.write_str("the conversation keeps its most notes"),
+            Self::RateLimited => formatter.write_str("the author left its most notes for now"),
+            Self::Storage(error) => write!(formatter, "note not saved: {error}"),
+        }
+    }
+}
+impl std::error::Error for NoteRecordError {}
 
 /// Owns the local conversation key, its exclusive storage lease, and saved evidence.
 /// Provider-private model/tool state is restored by the selected provider.
@@ -395,6 +434,7 @@ impl SessionManager {
             queue_history: Vec::new(),
             lease: None,
             artifacts: Vec::new(),
+            notes: Vec::new(),
             id: self.id.clone(),
             provider: identity,
             provider_context: ProviderContext::Absent,
@@ -1238,6 +1278,55 @@ impl SessionManager {
         self.save_observed(&mut evidence)
             .await
             .map_err(ArtifactRecordError::Storage)
+    }
+    /// Leave a note in the conversation, under the same lock every other fact
+    /// of it is recorded under. A note starts no turn and steers none.
+    ///
+    /// The same request again (the same principal and request, with the same
+    /// text, delivery, surface and authority) is answered with the note it
+    /// left, unchanged, once that note is saved: a retry after a lost answer
+    /// finds the first acceptance, never a second one. Another note under the
+    /// same principal's request is [`NoteRecordError::Conflict`]. A new note
+    /// takes a fresh id and the injected clock's wall time, and must fit the
+    /// conversation's bound and its author's rate ([`NoteRecord`]).
+    ///
+    /// A retained note is written at once, and a write that fails leaves it
+    /// retained for the next save: [`NoteRecordError::Storage`].
+    ///
+    /// # Errors
+    /// [`NoteRecordError::NotLoaded`] before [`Agent::prepare`] has loaded
+    /// the conversation; [`NoteRecordError::Conflict`],
+    /// [`NoteRecordError::Full`] or [`NoteRecordError::RateLimited`] when
+    /// refused; [`NoteRecordError::Storage`] when retained but not saved.
+    ///
+    /// [`Agent::prepare`]: crate::application::agent_execution::agents::Agent::prepare
+    pub async fn record_note(&self, request: NoteRequest) -> Result<NoteRecord, NoteRecordError> {
+        let mut evidence = self.evidence.lock().await;
+        // Read under the lock: a note that waited for it is accepted when it
+        // is admitted, never dated before, which would let it fall out of the
+        // rate window at once.
+        let now = self.message_commit_clock.unix_milliseconds();
+        let snapshot = evidence
+            .observed
+            .as_mut()
+            .ok_or(NoteRecordError::NotLoaded)?;
+        let record = match super::notes::admit(snapshot, request, now) {
+            Ok(NoteAdmission::Recorded(record)) => record,
+            Ok(NoteAdmission::New(record)) => {
+                snapshot.notes.push(record.clone());
+                evidence.append_unit(vec![SessionChange::Note(record.clone())]);
+                record
+            }
+            Err(NoteRefusal::Conflict) => return Err(NoteRecordError::Conflict),
+            Err(NoteRefusal::Full) => return Err(NoteRecordError::Full),
+            Err(NoteRefusal::RateLimited) => return Err(NoteRecordError::RateLimited),
+        };
+        // A note already retained whose write failed is written now, so the
+        // answer always names a saved note.
+        self.save_observed(&mut evidence)
+            .await
+            .map_err(NoteRecordError::Storage)?;
+        Ok(record)
     }
     /// Write the lease records, and any other evidence, that an earlier
     /// [`Self::record_lease`] retained but could not save
