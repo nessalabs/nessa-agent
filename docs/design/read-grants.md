@@ -151,8 +151,9 @@ and cache, on the follower's side; this gateway only stops serving it.
 Slice J1 of #707 gives a grant a role and, for Drive, a tool policy. A
 Comment or a Drive grant reads exactly as a Read grant does (row J1). Slice
 J2 lets a Drive grant drive the one conversation it names, and J2b saves
-each turn with who started it (below). Later slices build on this: J3 admits
-Comment's notes, J4 enforces the policy.
+each turn with who started it (below). J3a lets a Comment or a Drive grant
+leave notes (below). Later slices build on this: J3b delivers a note to the
+next turn, J4 enforces the policy.
 
 - **The role** is `ShareRole` (`conversation/domain`), Read < Comment <
   Drive, with `at_least` to ask "does this role allow that one". The store's
@@ -292,14 +293,81 @@ sequenceDiagram
     Socket-->>Device: forbidden (not a Drive command)
 ```
 
+## Leaving notes
+
+Slice J3a of #707 adds `conversation.message`: a note left in a
+conversation, saved with who left it, that starts no turn and steers none.
+The owner's surfaces leave notes on the method's Cedar grant,
+`conversation.write`, like any other write. A paired session leaves one
+when it holds a Comment or a Drive grant on the conversation it names
+(`admit_role` with Comment, the same path a Drive command takes with Drive);
+a Read grant is `forbidden` and no grant is `conversation_not_found` (rows
+J17, J12).
+
+- **The conversation's records are the one authority.** A note is a
+  `SessionChange::Note` in the conversation's SDK session records (record
+  schema version 3, no bump: nothing older carries notes), appended as its
+  own unit with no turn. Its author is the same `Initiator` a turn records:
+  the owner, or the grant with the policy revision admission read. Its id
+  and its accepted time, from the injected wall clock
+  (`MessageCommitClock::unix_milliseconds`), are the conversation's, never
+  the caller's (row J16).
+- **A retry is answered from the records.** One note per principal and
+  request: the same request again, with the same text, delivery, surface
+  and author, answers the first receipt and saves nothing; anything else
+  under that request is `idempotency_conflict` (row J18). The author is
+  compared by authority, the owner or which grant, not by revision: a retry
+  admitted after the owner changed the grant's policy answers the first
+  receipt, which keeps the revision it was left under, as a turn's retry
+  does, and the rate counts the grant as one author across revisions.
+  Because the answer is read from the records, a note whose write failed is
+  written by its retry.
+- **The bounds are the SDK's.** At most 1024 notes in a conversation and 20
+  per author (a principal under one authority) in any 60 seconds; past
+  either is `message_quota_exceeded`, and nothing is saved (row J19). A
+  note counts from the time it was accepted, so a clock set back makes no
+  room. The text is 1 to 8192 bytes and not all blank, and the delivery is
+  `record_only` (row J21).
+- **`conversation.messageStatus`** answers whether the caller's request left
+  a note, with the receipt it was answered with, by reading the committed
+  records; it opens no agent and writes nothing (row J20). It looks a note
+  up by principal and request, so a device, signed in as its owner, finds
+  the owner's notes too. `found: false` is not final after a failed
+  `conversation.message`: the note stays with the live session and a later
+  write can still save it, so a client sends the same request again rather
+  than a new one. The ADR called it
+  `message.status`; it is named under `conversation.` so the socket routes
+  and admits it with the conversation's other methods.
+
+```mermaid
+sequenceDiagram
+    participant Device as Paired device
+    participant Socket as admit_request
+    participant Grants as share_grants
+    participant Service as ConversationService
+    participant Session as SessionManager
+    Device->>Socket: conversation.message {conversationId, requestId, text, delivery}
+    Socket->>Socket: owner is the session's principal, pairing's conversation.read
+    Socket->>Grants: admit_role(conversation, receiver, Comment)
+    Grants-->>Socket: held grant and its policy revision
+    Socket->>Service: leave_note as the owner, author = grant (receiver, revision)
+    Service->>Session: record_note(text, delivery, actor, author)
+    Session->>Session: same request saved? answer it. Else bounds and rate at the wall clock
+    Session->>Session: append SessionChange Note as its own unit
+    Session-->>Device: receipt {messageId, acceptedAtMs, deliveryState recorded}
+    Device->>Socket: conversation.messageStatus {conversationId, requestId}
+    Socket->>Service: note_status reads committed records
+    Service-->>Device: found, with the same receipt
+```
+
 ## What this slice does not do
 
 - **Follow rules** are the follower's table (a peer gateway, slice H, or a
   device's cache). Grants and follow rules are separate tables; this slice adds
   only the grant table, and nothing syncs by default.
-- **Admitting Comment and enforcing Drive's policy** (#707, slices J3 and
-  J4). A Drive grant drives its conversation (slice J2) with its tools
-  unchecked.
+- **Delivering notes to the model and enforcing Drive's policy** (#707,
+  slices J3b and J4). A note is `record_only`; a Drive grant drives its
+  conversation (slice J2) with its tools unchecked.
 - **Driving through a peer gateway.** A peer forwards its people's commands
   in a later slice. A peer signs in as its own principal, not its grantor,
   so its own session is refused every Drive command `forbidden` (row J12).
@@ -353,6 +421,13 @@ sequenceDiagram
   principal and request id, and a device signs in as its owner, so a driver
   reusing an id its owner used is refused as a conflict rather than "not
   found". It learns only that the id was used; request ids are random.
+- **Leaving a note opens the conversation's agent.** The note is appended
+  through the conversation's live session manager, so a note on a
+  conversation not open opens it, as a sent message would. Its status
+  opens nothing.
+- **A note's receipt carries no record cursor**, and a note cannot yet name
+  the message it replies to (`replyToMessageId`); the transcript and the
+  desktop show no notes until slice J3c.
 - **A driver cannot attach.** Uploading an image (`attachment.begin`) and
   linking a file are refused to a paired session; a shared upload needs its
   own store scoped to the conversation.
@@ -398,3 +473,9 @@ otherwise.
 | J13 | A Drive grant lowered to Read, then revoked; the device unpaired; or a device without pairing's `conversation.read` | The next command `forbidden`, `conversation_not_found`, `unauthorized`, and `forbidden` before its grant is read | `a_drive_grant_lowered_revoked_or_unpaired_drives_no_more` |
 | J14 | A driver's message, or receipt, naming an image or a linked file; a driver asking the receipt of a create | `forbidden` | `a_driver_sends_text_and_names_nothing_of_the_owners` |
 | J15 | The owner's turn, before and while devices are paired, from the owner's own unbound surface; a driver's sent and steered turns; the driver's retry of the same request, and its next turn, after the owner changed the grant's policy | Saved as the owner's; as the grant with the revision read for it, and no copy of its role; the retry answered from its receipt with the first revision kept, the next turn with the new revision; each with tools not checked. A grant initiation survives a record checkpoint and its restore | `a_turn_is_saved_with_who_started_it`; `a_grant_initiation_survives_a_checkpoint_and_its_restore` (`nessa-sdk` `transcript.rs`) |
+| J16 | The owner, from its own surface, leaves a note | Saved as its own unit with the owner as author, a fresh id and the wall clock's time, `record_only` and recorded; no turn starts | `the_owner_leaves_a_note_saved_with_who_left_it_and_no_turn`; `a_new_note_takes_a_fresh_id_and_the_time_it_was_accepted` (`nessa-sdk` `sessions/notes.rs`); `a_note_is_saved_as_its_own_unit_and_starts_no_turn` (`nessa-sdk` `sessions/manager.rs`) |
+| J17 | A paired session with pairing's `conversation.read` leaves a note, and asks its status, under a Comment and then a Drive grant; naming another of the owner's conversations; under a Read grant; revoked; a party signed in as another principal holding Comment | Saved with the grant and the revision read for it; the other `conversation_not_found`; Read `forbidden`; revoked `conversation_not_found`; the other principal `forbidden`. A Comment grant's Drive command is `forbidden` | `a_comment_or_drive_grant_leaves_notes_on_the_conversation_it_names` |
+| J18 | A note retried with the same request, also after its grant's policy revision moved; the same request with other text, or under another authority | The first receipt, nothing more saved, the first revision kept; `idempotency_conflict`. A retry after a failed write writes it | `a_retried_note_answers_its_first_receipt_and_another_conflicts`; `the_same_request_is_answered_by_its_record_and_another_conflicts` (`nessa-sdk` `sessions/notes.rs`); `a_note_whose_write_failed_is_written_by_its_retry` (`nessa-sdk` `sessions/manager.rs`) |
+| J19 | An author past 20 notes in 60 seconds, a grant counted as one author across revisions; another author; a conversation holding 1024 notes; a clock set back | `message_quota_exceeded`, nothing saved; the other author admitted; full refuses a new note and still answers a retry; a clock set back makes no room | `an_author_past_its_note_rate_is_refused_and_another_is_not`; `an_author_leaves_at_most_its_rate_in_any_window`, `a_full_conversation_refuses_a_new_note_and_still_answers_a_retry` (`nessa-sdk` `sessions/notes.rs`) |
+| J20 | `conversation.messageStatus` for a request that left a note, and one that left none | `found` with the note's receipt, read from committed records; `found: false`; nothing written | `message_status_finds_the_callers_own_note_by_its_request` |
+| J21 | A note's text empty, blank or past 8192 bytes; a delivery other than `record_only`; a note or a status on a deleted conversation; saved notes past their bound or sharing an id or a request | `invalid_request`, nothing saved; `conversation_deleted`; refused as corrupt when read back. A note survives a checkpoint and its restore | `a_note_outside_its_bounds_or_on_a_deleted_conversation_is_refused`; `a_saved_snapshot_keeps_one_note_per_id_and_request_within_its_bound` (`nessa-sdk` `sessions/notes.rs`); `a_note_survives_a_checkpoint_and_its_restore` (`nessa-sdk` `transcript.rs`) |

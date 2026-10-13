@@ -3694,6 +3694,7 @@ async fn changed_configuration_retains_history_and_reports_exact_opening_failure
         invocations: vec![],
         lease: None,
         artifacts: Vec::new(),
+        notes: Vec::new(),
     };
     lease
         .save_changes(

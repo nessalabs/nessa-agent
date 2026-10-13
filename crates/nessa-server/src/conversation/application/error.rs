@@ -37,6 +37,13 @@ pub enum ConversationError {
     /// A share named a credential that is not an active paired device of
     /// the conversation's owner.
     ShareTargetNotPaired,
+    /// A note's request already left another note in the conversation:
+    /// another text, delivery, surface or authority under the same request.
+    /// Nothing was saved; the first note stands.
+    IdempotencyConflict,
+    /// The conversation keeps its most notes, or the note's author left its
+    /// most for now. Nothing was saved.
+    MessageQuotaExceeded,
     /// A delete that happened — the conversation is tombstoned, left out of
     /// every list, and refused — and did not finish. Repeating the delete
     /// finishes it.

@@ -2,7 +2,8 @@
 //! one question every socket read asks before it reads a conversation or a
 //! list, the one admission of every socket request ([`admit_request`]), and
 //! the owner's `conversation.share`, `.unshare` and `.shares` commands.
-//! Every role reads alike; only a Drive command asks a grant's role.
+//! Every role reads alike; a Drive command and a Comment note ask a grant's
+//! role.
 //!
 //! The rule is `conversation::application::share_grants`; this module only
 //! asks it, and maps a share's role and policy between the wire and the
@@ -17,8 +18,8 @@ use super::{
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    admit_drive, admit_read, binding_of, error_code, reader_of, ConversationError, DriveRefusal,
-    Reader, ShareConversation, ShareGrant,
+    admit_read, admit_role, binding_of, error_code, reader_of, ConversationError, Reader,
+    RoleRefusal, ShareConversation, ShareGrant,
 };
 use crate::conversation::domain::{ShareRole, ToolPolicy, ToolPreset, ToolRules};
 use nessa_auth::{application::session::AuthenticatedSession, domain::CredentialId};
@@ -91,6 +92,11 @@ const DRIVE_METHODS: [&str; 7] = [
     "conversation.receipt",
 ];
 
+/// The methods a Comment grant admits on the conversation it names (row
+/// J17): leave a note, and read where the caller's own note stands. A Drive
+/// grant admits them too, as it allows all Comment does.
+const COMMENT_METHODS: [&str; 2] = ["conversation.message", "conversation.messageStatus"];
+
 /// The methods behind Cedar's `conversation.write` that a paired session
 /// reaches only to be admitted again by its grants: the read and the view
 /// subscription ask [`admit_conversation`], the lists ask [`admit_list`],
@@ -110,17 +116,20 @@ const ADMITTED_BY_ITS_OWN_CHECK: [&str; 6] = [
 ///
 /// A paired session holding `conversation.write` would otherwise act as its
 /// owner, so for it every `conversation.write` method is refused unless it
-/// is one its grants admit again ([`ADMITTED_BY_ITS_OWN_CHECK`]) or a Drive
-/// command ([`DRIVE_METHODS`], row J12). A Drive command asks Cedar for the
-/// grant pairing mints, `conversation.read`, and then the share grant on the
-/// one conversation the command names, so a Drive grant is what lets the
-/// device drive that conversation and no other (row J11). Its tools run
-/// unchecked until the grant's policy is enforced (slice J4).
+/// is one its grants admit again ([`ADMITTED_BY_ITS_OWN_CHECK`]), a Drive
+/// command ([`DRIVE_METHODS`], row J12) or a Comment note
+/// ([`COMMENT_METHODS`], row J17). Either asks Cedar for the grant pairing
+/// mints, `conversation.read`, and then the share grant on the one
+/// conversation the command names, so a Drive grant is what lets the device
+/// drive that conversation and no other (row J11), and a Comment or Drive
+/// grant what lets it leave notes there. A Drive turn's tools run unchecked
+/// until the grant's policy is enforced (slice J4).
 ///
-/// Admitted, a request is answered with who it is from: a turn it starts is
-/// saved with the Drive grant that admitted it and the grant's policy
-/// revision as read for this command, never a copy of its role, and every
-/// other with the owner (row J15). Both say the turn's tools run unchecked.
+/// Admitted, a request is answered with who it is from: a turn it starts, or
+/// a note it leaves, is saved with the grant that admitted it and the
+/// grant's policy revision as read for this command, never a copy of its
+/// role, and every other with the owner (rows J15, J17). The initiation
+/// says a turn's tools run unchecked; a note runs no tools.
 pub(super) async fn admit_request(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
@@ -147,22 +156,31 @@ pub(super) async fn admit_request(
     // A device signs in as its owner, so its command is the owner's from
     // the device's surface. A peer gateway signs in as its own principal
     // and forwards its people's commands in a later slice.
-    if !DRIVE_METHODS.contains(&method) || binding.owner_id != *session.context().principal_id() {
+    let role = if DRIVE_METHODS.contains(&method) {
+        ShareRole::Drive
+    } else if COMMENT_METHODS.contains(&method) {
+        ShareRole::Comment
+    } else {
+        return Err("forbidden");
+    };
+    if binding.owner_id != *session.context().principal_id() {
         return Err("forbidden");
     }
     let reader = Reader::of(Some(&binding));
     admit_grant(state, session, PAIRING_GRANT).await?;
     let id = drive_target(frame)?;
-    let held = admit_drive(grants.as_ref(), &reader, &id)
+    let held = admit_role(grants.as_ref(), &reader, &id, role)
         .await
         .map_err(|refusal| match refusal {
-            DriveRefusal::NotGranted => refusal_code(ReadRefusal::WrongOwner),
-            DriveRefusal::BelowDrive => "forbidden",
-            DriveRefusal::Unverifiable => refusal_code(ReadRefusal::Unverifiable),
+            RoleRefusal::NotGranted => refusal_code(ReadRefusal::WrongOwner),
+            RoleRefusal::BelowRole => "forbidden",
+            RoleRefusal::Unverifiable => refusal_code(ReadRefusal::Unverifiable),
         })?
         // Only the owner holds no grant, and this reader is a paired device.
         .ok_or("forbidden")?;
-    drives_only_text(frame)?;
+    if role == ShareRole::Drive {
+        drives_only_text(frame)?;
+    }
     // A receiver id is at most 128 bytes, inside what a record keeps; one of
     // only blanks, which no pairing mints, is refused as unverifiable.
     // The turn names the grant and its revision; what that revision allowed is
@@ -173,12 +191,12 @@ pub(super) async fn admit_request(
 }
 
 /// The grant pairing mints a device (`device_pairing`), which a Drive
-/// command asks Cedar for in place of `conversation.write`.
+/// command or a Comment note asks Cedar for in place of `conversation.write`.
 const PAIRING_GRANT: &str = "conversation.read";
 
-/// The conversation a Drive command names. Its params are checked in full
-/// by the handler; a command naming none, or no valid id, is refused here as
-/// the handler would refuse it.
+/// The conversation a Drive command or a Comment note names. Its params are
+/// checked in full by the handler; a command naming none, or no valid id, is
+/// refused here as the handler would refuse it.
 fn drive_target(frame: &RequestFrame) -> Result<ConversationId, &'static str> {
     frame
         .params

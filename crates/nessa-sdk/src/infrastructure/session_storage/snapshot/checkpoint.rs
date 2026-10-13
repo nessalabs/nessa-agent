@@ -2,6 +2,7 @@
 use super::{
     artifacts::WireArtifact,
     leases::SavedLease,
+    notes::WireNote,
     queue_order::QueueEvent,
     records::{Event, Metadata, Provider},
     scheduling::SchedulingEvent,
@@ -51,6 +52,9 @@ struct SnapshotCodec<I, Q> {
     /// then reads back with none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     artifacts: Vec<WireArtifact>,
+    /// Absent while no note was left, as artifacts are.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    notes: Vec<WireNote>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -78,6 +82,7 @@ impl Serialize for SnapshotRef<'_> {
             queue_history: QueueList(&value.queue_history),
             lease: value.lease.as_ref().map(SavedLease::from),
             artifacts: value.artifacts.iter().map(WireArtifact::from).collect(),
+            notes: value.notes.iter().map(WireNote::from).collect(),
         }
         .serialize(serializer)
     }
@@ -169,6 +174,11 @@ impl Snapshot {
                 .into_iter()
                 .map(WireArtifact::decode)
                 .collect::<Result<_, _>>()?,
+            notes: value
+                .notes
+                .into_iter()
+                .map(WireNote::decode)
+                .collect::<Result<_, _>>()?,
         };
         super::validate(&snapshot)?;
         Ok(snapshot)
@@ -209,5 +219,6 @@ pub(crate) fn history_fixture(count: usize) -> SessionSnapshot {
         queue_history: Vec::new(),
         lease: None,
         artifacts: Vec::new(),
+        notes: Vec::new(),
     }
 }

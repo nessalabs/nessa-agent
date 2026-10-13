@@ -5,10 +5,10 @@
 //!
 //! A grant has a role, Read, Comment or Drive, and a Drive grant a tool
 //! policy ([`ShareAccess`]). Every role reads, and reads exactly as Read
-//! does (row J1). Only a Drive grant drives the conversation it names
-//! ([`admit_drive`], row J11); its tools run unchecked until the policy is
-//! enforced (issue 707, slice J4). A later slice admits Comment's notes by
-//! asking the role from here.
+//! does (row J1). Only a Drive grant drives the conversation it names, and
+//! a Comment or Drive grant leaves notes in it ([`admit_role`], rows J11 and
+//! J17); a Drive grant's tools run unchecked until the policy is enforced
+//! (issue 707, slice J4).
 //!
 //! One authority answers "may this reader read this conversation":
 //! [`admit_read`] for one conversation, and for a paired device's list the
@@ -128,40 +128,44 @@ pub async fn admit_read(
     }
 }
 
-/// Why a paired party may not drive a conversation.
+/// Why a paired party may not do what a role allows in a conversation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DriveRefusal {
+pub enum RoleRefusal {
     /// It holds no grant there: to it, the conversation does not exist, as
     /// for a read (row G1).
     NotGranted,
-    /// It holds a Read or Comment grant there, which may see the
-    /// conversation but not drive it.
-    BelowDrive,
+    /// It holds a grant there below the role asked for: it may see the
+    /// conversation but not do this.
+    BelowRole,
     /// The grant could not be read.
     Unverifiable,
 }
 
-/// Whether `reader` may drive conversation `id`: start and steer turns in it,
-/// stop them, answer and cancel their questions, and look up the receipts of
-/// those commands (row J11). Only a Drive grant does; ownership is the
-/// caller's check, as for [`admit_read`]. A role is read from the grant at
-/// each command, so a role lowered or revoked refuses the next command, and
-/// one already admitted finishes (row J13).
+/// Whether `reader` holds at least `role` on conversation `id`. Drive starts
+/// and steers turns in it, stops them, answers and cancels their questions,
+/// and looks up the receipts of those commands (row J11); Comment leaves
+/// notes and reads where they stand (row J17), and so does Drive, which
+/// allows everything Comment does. Ownership is the caller's check, as for
+/// [`admit_read`]. A role is read from the grant at each command, so a role
+/// lowered or revoked refuses the next command, and one already admitted
+/// finishes (row J13).
 ///
-/// The grant as it admitted the command, which a turn the command starts is
-/// saved with (row J15); `None` for the owner, who needs none.
-pub async fn admit_drive(
+/// The grant as it admitted the command, which a turn the command starts or
+/// a note it leaves is saved with (rows J15, J17); `None` for the owner, who
+/// needs none.
+pub async fn admit_role(
     grants: &dyn ShareGrants,
     reader: &Reader,
     id: &ConversationId,
-) -> Result<Option<HeldGrant>, DriveRefusal> {
+    role: ShareRole,
+) -> Result<Option<HeldGrant>, RoleRefusal> {
     match reader {
         Reader::Owner => Ok(None),
         Reader::PairedDevice { receiver_id } => match grants.held_grant(id, receiver_id).await {
-            Ok(Some(held)) if held.role.at_least(ShareRole::Drive) => Ok(Some(held)),
-            Ok(Some(_)) => Err(DriveRefusal::BelowDrive),
-            Ok(None) => Err(DriveRefusal::NotGranted),
-            Err(_) => Err(DriveRefusal::Unverifiable),
+            Ok(Some(held)) if held.role.at_least(role) => Ok(Some(held)),
+            Ok(Some(_)) => Err(RoleRefusal::BelowRole),
+            Ok(None) => Err(RoleRefusal::NotGranted),
+            Err(_) => Err(RoleRefusal::Unverifiable),
         },
     }
 }

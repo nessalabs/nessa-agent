@@ -329,6 +329,7 @@ async fn snapshot_fixture_keeps_exact_receipt_prefix_and_reset_capability() {
         queue_history: Vec::new(),
         lease: None,
         artifacts: Vec::new(),
+        notes: Vec::new(),
     };
     let first = SessionSaveUnit::new(vec![opened.clone()]).unwrap();
     let receipt = lease
@@ -975,6 +976,7 @@ async fn unfinished_saved_invocations_are_retained_without_automatic_replay() {
         }],
         lease: None,
         artifacts: Vec::new(),
+        notes: Vec::new(),
     });
     let agent = attached_agent(provider.clone(), storage.manager().await)
         .await
@@ -1101,6 +1103,7 @@ async fn restored_unresolved_admission_is_never_redispatched_by_retry() {
             }],
             lease: None,
             artifacts: Vec::new(),
+            notes: Vec::new(),
         });
         let agent = attached_agent(provider.clone(), storage.manager().await)
             .await
