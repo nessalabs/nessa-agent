@@ -86,7 +86,7 @@ sequenceDiagram
     Adapter-->>Core: actual echoed page fields
     Core->>Core: published page validator
     Core->>Cache: atomic admitted-page apply
-    Note over Core,Cache: Records consume core's admission ordering; no extra precommit authorization wrapper
+    Note over Core,Cache: Records consume core's admission ordering, no extra precommit authorization wrapper
     Driver->>Adapter: consume attempt outcome
 ```
 
