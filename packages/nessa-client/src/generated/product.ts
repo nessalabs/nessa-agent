@@ -1732,6 +1732,8 @@ export interface AgentsListResult {
   agents: AgentOption[]
   /** Places a new conversation may run besides this gateway: the SSH destinations config.json names, in the order it names them, then each paired environment connected when the catalog is read, as `peer:` and its key in lowercase hex. At most 16 of the first and 8 of the second. agents.list reads it once; agents.subscribe reads it again each time a paired environment connects, disconnects or is revoked. */
   environments: string[]
+  /** Of environments, the ones a conversation owner's turns may run commands on with run: those the gateway's command policy allows the owner, and only where that environment takes commands, in the order environments lists them; never here. Read with environments, each time it is. These are the hosts a drive grant's ConversationToolPolicy.commandHosts can usefully name: a grant is never given more than the gateway allows, so a host not listed here runs a grant's commands nowhere. Empty when the gateway grants no commands. */
+  commandHosts: string[]
   /** The stored choice the next process start of Claude and Codex reads, whether or not that agent is in this catalog. This is the catalog's only copy of it: agent rows do not repeat it. OpenCode has no entry and stays suppressed. agents.subscribe reads the catalog again each time this choice changes. */
   nativeHooks: AgentsNativeHooks
 }
@@ -2545,6 +2547,12 @@ export const bounds = {
   minNativeHooksRequestIdCharacters: 1,
   maxNativeHooksRequestIdBytes: 256,
   maxConfiguredAgents: 3,
+  maxToolPolicyPatterns: 16,
+  maxToolPatternBytes: 48,
+  maxCommandHosts: 16,
+  maxCommandHostBytes: 96,
+  maxToolPolicyEntries: 32,
+  maxShareGrants: 64,
   maxAgentInstallVersionBytes: 128,
   maxImageBytes: 5242880,
   imageMimeTypes: ["image/png", "image/jpeg", "image/gif", "image/webp"],

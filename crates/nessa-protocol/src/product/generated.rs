@@ -1710,6 +1710,7 @@ pub struct AgentsSetNativeHooksResult {
 pub struct AgentsListResult {
     pub agents: Vec<AgentOption>,
     pub environments: Vec<String>,
+    pub command_hosts: Vec<String>,
     pub native_hooks: AgentsNativeHooks,
 }
 #[derive(Deserialize, Serialize)]

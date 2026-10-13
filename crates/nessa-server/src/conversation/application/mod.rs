@@ -295,4 +295,4 @@ mod local_golden_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/leases.rs"]
-mod lease_tests;
+pub(crate) mod lease_tests;

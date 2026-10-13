@@ -618,6 +618,69 @@ sequenceDiagram
     Agent->>Agent: notes block before the person's words
 ```
 
+## The owner's share dialog
+
+The desktop's Share… item, on a session's menu, opens one dialog for that
+session (nessa_ui#128, #129). It lists the session's grants, each with a
+one-line summary, a Change that starts the form from what the device holds,
+and a Revoke that asks first, and a form that grants a linked device Read,
+Comment or Drive; for Drive, a tool policy (a preset, or allow and deny
+patterns) and the hosts the grant may run commands on.
+
+Every rule stays with the gateway; the dialog only reads what it publishes:
+
+- **Who may be granted.** The linked devices: a credential that is active,
+  not the window's own, and whose only grant is pairing's `conversation.read`
+  (`src/desktop/adapters/linked-device.ts`, the rule Settings › Linked
+  devices reads too). `conversation.share` still decides, and refuses
+  anything else `share_target_not_paired`.
+- **Which hosts are offered.** `agents.list` answers `commandHosts`: the
+  places among `environments` that take commands and that the gateway's
+  command policy (Cedar) lets the owner run commands on, in their order. A
+  Drive grant's `run` goes only to a host its policy names *and* the gateway
+  allows, so a host outside that list could never be used. The list is read
+  by the conversation service (`owner_command_hosts`), the same decision
+  `environments.list` and the owner's own `run` use.
+- **How many.** The bounds come from the schema (`toolPolicyBounds` in the
+  client): at most 16 hosts of at most 96 bytes each, and hosts and patterns
+  together at most 32 (`x-maxEntries` on `ConversationToolPolicy`, tied to
+  `ToolPolicy::MAX_ENTRIES` by a test). The host list's `max` is the room
+  the patterns leave; a host whose name is too long is shown unavailable.
+- **What a policy cannot stop** is said beside the Drive controls: calls the
+  agent does not ask about (Claude reads, Codex in its read-only sandbox);
+  commands only on hosts named and allowed, none meaning nowhere; and Drive
+  needing Ask mode, the agent's own hooks off and an agent other than
+  OpenCode (row J26).
+
+Each refusal is a sentence, never a wire code, by total tables: the
+conversation codes and the session's (`forbidden`, `unauthorized`) map to
+a kind (`sharing-gateway.ts`), and each kind to words for a change and for a
+read (`share-copy.ts`). An answer that never came is said as unknown, and
+the list read again says where things stand.
+
+### Dialog state and order
+
+The transitions are `src/desktop/workspace/application/usecases/sharing.ts`;
+the commands that drive them are `adapters/store/sharing-commands.ts`. Each
+row's tests are named by the row: the transitions in
+`usecases/sharing.test.ts`, the commands over a store in
+`adapters/store/sharing-commands.test.ts`, the dialog as drawn in
+`ui/share/share-dialog.test.tsx`, and the draft's rules in
+`model/sharing.test.ts`.
+
+| Row | State and input | Result | Test |
+|---|---|---|---|
+| D1 | Share… on a session, with a sharing source | One dialog for that session, named by a new opening, reading its grants; nothing shown as read yet. A window with no source offers no Share… and opens nothing | `sharing.test.ts` (*D1: opens for one session…*); `sharing-commands.test.ts` (*D1: a window without sharing…*, *D1, D5: opens, reads, shares…*) |
+| D2 | A read on its way; another read asked (Try Again, or after a change) | Only the newest read is applied; the older answer is let go whenever it lands | `sharing.test.ts` (*D2*); `sharing-commands.test.ts` (*D2*) |
+| D3 | A read or a change answers for an opening that is no longer the dialog's | Let go | `sharing.test.ts` (*D3, D7*) |
+| D4 | The newest read fails | Why, in words, with Try Again; what was read before stays | `sharing.test.ts` (*D4*); `sharing-commands.test.ts` (*D4*); `share-dialog.test.tsx` (*says a failed read with Try Again…*) |
+| D5 | A share or a revoke settles, done or refused | It is no longer on its way, for the window. A dialog open on its session — the one that began it or one opened since — says its outcome in words, never a code, and its grants are read again whatever it was; only that read says what the session holds | `sharing.test.ts` (*D5*, *D6: a dialog opened while…*); `sharing-commands.test.ts` (*D1, D5*, *D5: a refused change…*, *D6: a dialog opened again…*); `share-dialog.test.tsx` (*says a refusal in words…*) |
+| D6 | A change asked while another is on its way — from this opening or any other, for any session — or before anything was read | Not begun; nothing is sent. The change on its way is the window's, not the dialog's; a dialog open on another session says it waits on that change | `sharing.test.ts` (*D6*, three); `sharing-commands.test.ts` (*D6*, three); `share-dialog.test.tsx` (*says why it waits while another conversation's change…*) |
+| D7 | Closed, or opened for another session, while a read or a change is on its way | Closed at once; the change still settles at the gateway and is no longer on its way; nothing on screen changes and no read follows it | `sharing.test.ts` (*D3, D7*, *D7*); `sharing-commands.test.ts` (*D7*) |
+| D8 | Opened again, for the same session or another, while an earlier opening's answers are on their way | A new opening; the earlier answers are let go, and the form starts empty | `sharing.test.ts` (*D8*); `sharing-commands.test.ts` (*D8*); `share-dialog.test.tsx` (*starts a new draft for a new opening*) |
+| D9 | A Drive draft whose patterns leave less room than the hosts checked; a custom policy naming no pattern; a change to a grant holding a host the gateway does not offer now, or a pattern holding a comma; another device chosen after Change | Share disabled with why; the hosts' `max` is the room left; the held host is shown, checked and sent unless unchecked; the grant's patterns are sent exactly while their field is unchanged; a device without a grant starts from an empty form | `model/sharing.test.ts` (*D9*, *carries a preset and every host checked…*, *a grant's patterns*); `share-dialog.test.tsx` (*holds the host list…*, *keeps, and shows, a held host…*, *starts from nothing for a device without a grant…*) |
+| D10 | The form while a change is on its way, and after it settles until a read asked after it answers; a draft whose device's grant changed under it (its policy revision moved, from another window) | The form, Share and Revoke are held; a failed read keeps them held beside Try Again, since what is shown may be from before the change. When that read answers, a change to the draft's own device that was done or went unanswered moves the draft's basis onto what the device holds, keeping what the form showed; a refusal leaves it as it was. A draft changed under it is held as changed, with Start Again, which starts it from what the last read holds | `sharing.test.ts` (*D10*, three); `model/sharing.test.ts` (*builds on what its own device holds…*, *starts again…*); `share-dialog.test.tsx` (*shares Read with a chosen device…*, *holds the form while a change is on its way…*); `share-dialog.mjs` (`held`) |
+
 ## What this slice does not do
 
 - **Follow rules** are the follower's table (a peer gateway, slice H, or a
@@ -626,9 +689,9 @@ sequenceDiagram
 - **Driving through a peer gateway.** A peer forwards its people's commands
   in a later slice. A peer signs in as its own principal, not its grantor,
   so its own session is refused every Drive command `forbidden` (row J12).
-- **The Share control in the conversation header** on the desktop. The
-  methods are on the wire and in the generated client; the desktop UI is a
-  separate change with its browser verification.
+- **Sharing with a peer gateway from the desktop.** The dialog offers
+  linked devices only (above); a peer gateway is shared with through the
+  wire methods.
 - **An in-stream semantic record of each grant.** The issue asks for one; the
   grant journal above is the durable evidence this slice writes, in the same
   transaction as the grant. Writing into a conversation's record stream needs
@@ -662,7 +725,7 @@ sequenceDiagram
   `conversation.*` reads, lists and subscriptions; their tests give the device
   `conversation.write` to reach the grant check behind Cedar.
 - **Existing paired devices see nothing after upgrade** until their owner
-  shares conversations with them, which needs the Share control above.
+  shares conversations with them, from the share dialog above.
 - **The metadata file is version 5.** Adding the role, policy and policy
   revision changed the grant table's shape, so a version 4 file is refused
   at start rather than read, as every alpha change of shape has been
@@ -687,6 +750,11 @@ sequenceDiagram
   busy, or driven only by an app, notes wait until they expire.
 - **The view lists the newest 64 notes.** Older ones stay in the records
   and in `conversation.messageStatus`; the view does not page them.
+- **A share does not name the policy revision it replaces.** The dialog
+  holds a draft whose device's grant changed under it (row D10), but only
+  for changes it has read: two windows sending at once each replace the
+  grant, and the later one wins. Holding that needs the gateway to take an
+  expected policy revision on `conversation.share`.
 - **A driver cannot attach.** Uploading an image (`attachment.begin`) and
   linking a file are refused to a paired session; a shared upload needs its
   own store scoped to the conversation.

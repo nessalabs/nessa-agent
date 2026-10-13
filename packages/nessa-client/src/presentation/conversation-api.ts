@@ -19,6 +19,9 @@ import type {
   ConversationQuestionChoice,
   ConversationReorderResult,
   ConversationSetApprovalModeResult,
+  ConversationShareRole,
+  ConversationSharesResult,
+  ConversationToolPolicy,
   ApprovalMode,
   ImageAttachment,
   LinkedFile,
@@ -40,6 +43,7 @@ import {
   conversationMutation,
   conversationReorder,
   conversationApprovalMode,
+  conversationShares,
 } from "../protocol/conversation-validate.js"
 import { decimal } from "../protocol/passive-read-validate.js"
 import {
@@ -266,6 +270,43 @@ export type ConversationApi = {
     conversationId: string,
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
+  /**
+   * Grant one paired device or peer gateway `role` on one of the caller's
+   * conversations, or change the role and policy it holds there
+   * (`conversation.share`, `credential.manage`). `credentialId` is one
+   * `client.credentials.list()` names. A Drive grant needs `policy`; read and
+   * comment take none, and the gateway refuses either mistake
+   * `invalid_request`, as it does a policy past the schema's bounds (published
+   * in `bounds`: `maxToolPolicyPatterns`, `maxToolPatternBytes`,
+   * `maxCommandHosts`, `maxCommandHostBytes`, `maxToolPolicyEntries`). A grant
+   * that names no `commandHosts` runs commands nowhere. `applied` is false
+   * when the grant already held that role and policy. The same `requestId`
+   * answers what it answered first, so a failure's `retry()` grants at most
+   * once.
+   * @throws TypeError before anything is sent for a malformed conversation ID
+   * or a blank or over-long credential or request ID.
+   */
+  share: (
+    conversationId: string,
+    credentialId: string,
+    role: ConversationShareRole,
+    policy?: ConversationToolPolicy,
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationMutationResult>
+  /**
+   * Revoke one paired party's grant on one of the caller's conversations,
+   * whatever its role (`conversation.unshare`). It needs only ownership, so it
+   * works on a deleted conversation and for a party since unpaired. `applied`
+   * is false when no grant was held. Retried under the same `requestId`, it
+   * answers what it answered first.
+   */
+  unshare: (
+    conversationId: string,
+    credentialId: string,
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationMutationResult>
+  /** The grants on one of the caller's conversations, oldest first (`conversation.shares`). */
+  shares: (conversationId: string) => Promise<ConversationSharesResult>
 }
 
 const utf8 = new TextEncoder()
@@ -297,6 +338,7 @@ export function createConversationApi(
       | readonly ImageAttachment[]
       | readonly LinkedFile[]
       | readonly ConversationQuestionChoice[]
+      | ConversationToolPolicy
       | null
       | undefined
     >,
@@ -580,5 +622,43 @@ export function createConversationApi(
       action(ProductMethod.ConversationDelete, id, {}, options, false, {
         atLeastMs: conversationDeleteTimeoutMs,
       }),
+    share: (id, credentialId, role, policy, options = {}) => {
+      validConversationId(id)
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      boundedText(credentialId, "Credential ID", 256)
+      // Copied, so a caller changing its policy between a failure and its
+      // retry cannot send another grant under the same request ID.
+      const frozen =
+        policy === undefined
+          ? undefined
+          : (JSON.parse(JSON.stringify(policy)) as ConversationToolPolicy)
+      return mutate(
+        ProductMethod.ConversationShare,
+        {
+          conversationId: id,
+          requestId,
+          credentialId,
+          role,
+          ...(frozen === undefined ? {} : { policy: frozen }),
+        },
+        (value) => conversationMutation(value, requestId),
+      )
+    },
+    unshare: (id, credentialId, options = {}) => {
+      validConversationId(id)
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      boundedText(credentialId, "Credential ID", 256)
+      return mutate(
+        ProductMethod.ConversationUnshare,
+        { conversationId: id, requestId, credentialId },
+        (value) => conversationMutation(value, requestId),
+      )
+    },
+    shares: async (id) =>
+      conversationShares(
+        await session.request(ProductMethod.ConversationShares, {
+          conversationId: validConversationId(id),
+        }),
+      ),
   }
 }

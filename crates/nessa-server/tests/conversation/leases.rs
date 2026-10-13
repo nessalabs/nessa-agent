@@ -3055,6 +3055,51 @@ async fn environments_list_says_where_the_agent_runs_and_where_it_may_run_comman
     go.send(()).unwrap();
 }
 
+/// A conversation service on a gateway with two hosts the policy grants
+/// commands on: `devbox`, which takes commands, and `agentbox`, which runs
+/// agents only. What `agents.list`'s `commandHosts` is read from, for the
+/// product socket's test of it.
+pub(crate) fn service_with_command_hosts(root: &Path) -> ConversationService {
+    let mut hosts: BTreeMap<String, Arc<dyn Environment>> = BTreeMap::new();
+    hosts.insert("devbox".into(), CommandHost::new());
+    hosts.insert("agentbox".into(), in_process_environment());
+    let placements =
+        Arc::new(FilePlacements::new(root.join("conversations").join("placements")).unwrap());
+    let provider = Arc::new(ProviderFactory::default());
+    let binding = Arc::new(Provider::new(provider.clone()));
+    let policy = CommandPolicy::new(["devbox".to_owned(), "agentbox".to_owned()], None, vec![]);
+    let environments = Environments::new(in_process_environment(), hosts, placements)
+        .with_commands(commands(&policy));
+    harness_in(root, environments, DELETION_BUDGETS.stop, provider, binding).service
+}
+
+/// `agents.list`'s `commandHosts`: of the places named, those the owner's
+/// turns may run commands on — a host the command policy lets the owner use
+/// that takes commands. Never `here`, never a name the gateway has no host
+/// for, never one the policy does not grant, and none at all without a
+/// command policy.
+#[test]
+fn the_owner_is_offered_only_the_hosts_its_turns_may_run_commands_on() {
+    let root = tempfile::tempdir().unwrap();
+    let service = service_with_command_hosts(root.path());
+    assert_eq!(
+        service.owner_command_hosts(["here", "agentbox", "elsewhere", "devbox"]),
+        ["devbox"]
+    );
+    // The policy decides: one that grants another host leaves devbox out.
+    let root = tempfile::tempdir().unwrap();
+    let harness = with_command_host(
+        root.path(),
+        CommandHost::new(),
+        Some(CommandPolicy::new(["elsewhere".to_owned()], None, vec![])),
+    );
+    assert!(harness.service.owner_command_hosts(["devbox"]).is_empty());
+    // No command policy: no host takes commands.
+    let root = tempfile::tempdir().unwrap();
+    let harness = with_command_host(root.path(), CommandHost::new(), None);
+    assert!(harness.service.owner_command_hosts(["devbox"]).is_empty());
+}
+
 #[tokio::test]
 async fn a_command_whose_caller_is_gone_first_asks_nothing_of_the_host() {
     let root = tempfile::tempdir().unwrap();

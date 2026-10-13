@@ -34,6 +34,7 @@ import type { ModelRef, WorkspaceIndex, SessionSummary } from "../model/workspac
 import type { PaneRoom } from "../../split-panes/model/pane-sizing"
 import type { Transcript } from "../model/transcript"
 import type { AgentsFilter } from "../model/overview/filter"
+import type { ShareRequest, SharingFailure, SharingRead } from "../model/sharing"
 
 /**
  * A message sent to a session, as the source is asked to deliver it. Sent
@@ -195,6 +196,48 @@ export function failureStages(error: unknown): StageMismatch | null {
 }
 
 /**
+ * Who a session is shared with, and sharing it (nessa_ui#128, #129): the
+ * gateway's `conversation.share`, `.unshare` and `.shares`, the linked
+ * devices it could be shared with, and the hosts the owner's turns may run
+ * commands on. `adapters/gateway/sharing-gateway.ts` implements it over the
+ * window's client, `adapters/in-memory/in-memory-sharing.ts` for the sample
+ * and tests. Every call settles: it answers, or rejects with a typed
+ * `SharingError`, `unanswered` when no answer came and it is not known
+ * whether the change was made. A share or revoke is retried under the same
+ * `requestId` only by asking again with it; the window does not, and reads
+ * the grants again after either outcome instead.
+ */
+export interface SharingSource {
+  /** The session's grants, the devices it may be shared with, and the hosts and bounds a Drive grant is held to. */
+  read(sessionId: string): Promise<SharingRead>
+  /** Grant `request.role` to its device, or replace what that device holds. */
+  share(sessionId: string, request: ShareRequest, requestId: string): Promise<void>
+  /** Take away whatever the device holds on the session. */
+  unshare(sessionId: string, credentialId: string, requestId: string): Promise<void>
+}
+
+/** A sharing call's refusal, by kind (`model/sharing.ts`), never a sentence. */
+export class SharingError extends Error {
+  readonly reason: SharingFailure
+
+  constructor(reason: SharingFailure) {
+    super(`Sharing refused: ${reason}`)
+    this.name = "SharingError"
+    this.reason = reason
+  }
+}
+
+/**
+ * Why a sharing call failed, by its type. Anything but the source's own
+ * typed refusal is a fault, logged as one and taken as `unanswered`.
+ */
+export function sharingFailure(error: unknown): SharingFailure {
+  if (error instanceof SharingError) return error.reason
+  console.error("Sharing failed unexpectedly", error)
+  return "unanswered"
+}
+
+/**
  * What the workspace's commands are given, from composition: the source, and
  * the other outside things they need — the time, fresh ids for what the
  * person creates (a new session, a message), and the room the panes have on
@@ -220,6 +263,12 @@ export interface WorkspaceDependencies {
    * (`effects.ts`). The store owns the filter; this only keeps it.
    */
   readonly overviewFilter: RememberedFilter
+  /**
+   * Who a session is shared with, and sharing it. Absent where the window
+   * has nothing to share through — a source composition was handed with no
+   * gateway — and a session's menu then offers no Share.
+   */
+  readonly sharing?: SharingSource
 }
 
 /** A filter kept outside the window's state, between launches. */

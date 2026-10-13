@@ -2369,6 +2369,7 @@
     "ConversationToolPolicy": {
       "type": "object",
       "additionalProperties": false,
+      "x-maxEntries": 32,
       "description": "The tool policy a drive grant's turns run under: either preset alone, or allow and deny together. Allow and deny each hold at most 16 patterns, and at least one of the two holds one (both empty is refused); each pattern is 1 to 48 UTF-8 bytes with no surrounding whitespace and no control character; anything else is refused invalid_request. A pattern's * matches any run of characters and every other character is itself; a pattern matches a tool's name as the agent or the gateway names it (Read, read, run), and a deny wins over an allow. Every tool call a drive turn's agent asks permission for, and the gateway's own run, artifacts_publish and artifacts_fetch, is checked against the policy at the revision the turn was admitted under; a refused call is answered as refused and the turn goes on. An allowed run goes only to a host commandHosts names and the gateway grants commands on, and runs only a program the gateway allows. One thing a policy does not limit: what the agent does in the ask approval mode without asking (Claude reads files; Codex runs commands in its read-only, offline sandbox), so a deny pattern naming a read tool does not stop those reads.",
       "properties": {
         "preset": {
@@ -4205,12 +4206,23 @@
           "maxItems": 24,
           "description": "Places a new conversation may run besides this gateway: the SSH destinations config.json names, in the order it names them, then each paired environment connected when the catalog is read, as `peer:` and its key in lowercase hex. At most 16 of the first and 8 of the second. agents.list reads it once; agents.subscribe reads it again each time a paired environment connects, disconnects or is revoked."
         },
+        "commandHosts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 253,
+            "x-utf8MaxBytes": 253
+          },
+          "maxItems": 24,
+          "description": "Of environments, the ones a conversation owner's turns may run commands on with run: those the gateway's command policy allows the owner, and only where that environment takes commands, in the order environments lists them; never here. Read with environments, each time it is. These are the hosts a drive grant's ConversationToolPolicy.commandHosts can usefully name: a grant is never given more than the gateway allows, so a host not listed here runs a grant's commands nowhere. Empty when the gateway grants no commands."
+        },
         "nativeHooks": {
           "$ref": "#/$defs/AgentsNativeHooks",
           "description": "The stored choice the next process start of Claude and Codex reads, whether or not that agent is in this catalog. This is the catalog's only copy of it: agent rows do not repeat it. OpenCode has no entry and stays suppressed. agents.subscribe reads the catalog again each time this choice changes."
         }
       },
-      "required": ["agents", "environments", "nativeHooks"]
+      "required": ["agents", "environments", "commandHosts", "nativeHooks"]
     },
     "AgentsNativeHooks": {
       "type": "object",

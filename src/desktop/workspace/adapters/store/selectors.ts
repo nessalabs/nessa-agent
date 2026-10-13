@@ -8,6 +8,7 @@
  * No view selects the workspace as a whole; that would render the whole
  * window for every change.
  */
+import { canChange, formHeld, heldElsewhere } from "../../application/usecases/sharing"
 import { createSelector } from "@reduxjs/toolkit"
 import {
   type Channel,
@@ -97,6 +98,19 @@ export const selectOverviewGroup = (state: Root): AgentsGroup | null =>
   state.workspace.overview.group
 /** Whether the workspace has read its index and can list sessions. */
 export const selectReady = (state: Root) => state.workspace.status === "ready"
+/** Whether a session can be shared from this window. */
+export const selectShareable = (state: Root) => state.workspace.shareable
+/** The share dialog, while it is open; its own slice of state, nothing else. */
+export const selectShareDialog = (state: Root) => state.workspace.share
+/** Whether the share dialog's form is held: a change is on its way, or its read (`formHeld`). */
+export const selectShareHeld = (state: Root) => formHeld(state.workspace)
+/** Whether the open share dialog could begin a change now (`canChange`, D6). */
+export const selectShareCanChange = (state: Root) => {
+  const dialog = state.workspace.share
+  return dialog !== null && canChange(state.workspace, dialog.opening)
+}
+/** Whether the share dialog waits on a change to another session's sharing (`heldElsewhere`). */
+export const selectShareHeldElsewhere = (state: Root) => heldElsewhere(state.workspace)
 export const selectPanes = (state: Root) => state.workspace.panes
 export const selectSections = (state: Root) => state.workspace.sections
 export const selectChannels = (state: Root) => state.workspace.channels

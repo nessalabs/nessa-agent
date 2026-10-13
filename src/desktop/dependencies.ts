@@ -75,10 +75,13 @@ import {
   measureWorkspace,
   type InMemorySource,
   rememberedFilter,
+  inMemorySharing,
+  sharingGateway,
   sampleAppSession,
   sampleWidgetSession,
   type GatewayClient,
   type GatewaySource,
+  type SharingClient,
   type WorkspaceDependencies,
   type WorkspaceSource,
 } from "./workspace"
@@ -121,6 +124,11 @@ export function createDesktopDependencies(
     newId?: () => string
     measure?: WorkspaceDependencies["measure"]
     overviewFilter?: WorkspaceDependencies["overviewFilter"]
+    /**
+     * Where a session is shared with linked devices, beside a given
+     * `workspace`; the gateway's own and the sample's are composed here.
+     */
+    sharing?: WorkspaceDependencies["sharing"]
     /** The native widget plugins; two under one id stop composition (`WidgetRegistryError`). */
     widgets?: readonly NativeWidgetPlugin[]
     /**
@@ -175,6 +183,13 @@ export function createDesktopDependencies(
     nativeHooks: source
       ? nativeHooksGateway({ connected: () => source.connected() })
       : undefined,
+    // Shared on the gateway's own client; the sample shares in memory, and a
+    // window with neither offers no Share.
+    sharing: source
+      ? sharingGateway({ connected: () => source.connected() })
+      : samples
+        ? inMemorySharing()
+        : options.sharing,
     now,
     newId,
     // The page's own layout: every command that changes the panes is held to it.
@@ -192,11 +207,12 @@ export function createDesktopDependencies(
   }
 }
 
-/** A gateway client the window can show conversations, draw apps, read held files, manage MCP servers, pair devices, and set native hooks through. */
+/** A gateway client the window can show conversations, draw apps, read held files, manage MCP servers, pair devices, set native hooks and share sessions through. */
 type WindowGatewayClient = GatewayClient &
   McpServersClient &
   LinkedDevicesClient &
-  NativeHooksClient & {
+  NativeHooksClient &
+  SharingClient & {
     readonly mcpApps: McpAppsApi
     readonly attachments: AttachmentApi
   }

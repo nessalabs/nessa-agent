@@ -26,6 +26,12 @@ import { drawn, type SideColumn } from "../../model/side-column"
 import type { SessionView } from "../model/session-groups"
 import { keepShownDrafts, type Draft } from "../model/session-lifecycle"
 import { unconfirmed, type Transcript, type TurnMessage } from "../model/transcript"
+import type {
+  ShareDraft,
+  ShareRequest,
+  SharingFailure,
+  SharingRead,
+} from "../model/sharing"
 
 /** An answer given to one approval: on its way, or refused with the reason. */
 export interface Answer {
@@ -160,7 +166,63 @@ export interface WorkspaceState {
   readonly overview: OverviewState
   readonly chrome: Chrome
   readonly tree: Tree
+  /**
+   * Whether a session can be shared from this window: composition gave it a
+   * sharing source. Read once, into the first state, as the overview's
+   * filter is.
+   */
+  readonly shareable: boolean
+  /** The share dialog, while it is open (`usecases/sharing.ts`). */
+  readonly share: ShareDialog | null
+  /**
+   * The one share or revoke on its way to the gateway, and the session it
+   * changes. It belongs to the window, not to a dialog: closing the dialog
+   * does not stop it, and no other change begins, from any dialog, until it
+   * settles (D6, D7).
+   */
+  readonly shareChange: {
+    readonly sessionId: string
+    readonly change: ShareChange
+  } | null
 }
+
+/**
+ * The share dialog of one session (nessa_ui#128, #129), named by the
+ * opening that made it: a read for any other opening is let go.
+ */
+export interface ShareDialog {
+  readonly sessionId: string
+  readonly opening: string
+  /** What the gateway last said; `null` until the first read answers. */
+  readonly value: SharingRead | null
+  /** The read on its way, by name; only the newest is applied. */
+  readonly reading: string | null
+  /** Why the newest read failed, until another answers. */
+  readonly readFailure: SharingFailure | null
+  /** How the last change to this session settled, until the next begins. */
+  readonly notice: ShareSettled | null
+  /** The grant the person is making or changing. */
+  readonly draft: ShareDraft
+  /**
+   * A change to this session that settled after `value` was read. Until a
+   * read asked after it answers, what is shown may be from before it, so
+   * the form, Share and Revoke are held; a failed read keeps them held,
+   * beside Try Again. That read then moves the draft onto what its device
+   * holds, when this change was to that device and may have been made (D10).
+   */
+  readonly stale: ShareSettled | null
+}
+
+/** A change, and how it settled. */
+export interface ShareSettled {
+  readonly change: ShareChange
+  readonly outcome: "done" | SharingFailure
+}
+
+/** A change to who a session is shared with: a grant to make, or one to take away. */
+export type ShareChange =
+  | { readonly kind: "share"; readonly request: ShareRequest }
+  | { readonly kind: "revoke"; readonly credentialId: string }
 
 /**
  * The content region's view: the chat panes; every agent at a glance, over
@@ -232,6 +294,9 @@ export const initialWorkspace: WorkspaceState = {
     sessionListWidth: 312,
   },
   tree: { collapsedSections: [], expandedChannels: [], showAllChannels: [] },
+  shareable: false,
+  share: null,
+  shareChange: null,
 }
 
 /**
