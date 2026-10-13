@@ -1468,6 +1468,9 @@ impl Clock for CommitBeforeExpiryClock {
     fn now(&self) -> ClockInstant {
         self.now.now()
     }
+    fn unix_ms_at(&self, at: ClockInstant) -> u64 {
+        self.now.unix_ms_at(at)
+    }
     fn sleep_until(&self, _: ClockInstant) -> ClockSleep {
         let trigger = self.trigger.clone();
         let commit = self.commit.clone();

@@ -28,6 +28,10 @@ use nessa_protocol::product::generated::{
     ConversationSendParams, ConversationSetApprovalModeParams, ConversationSetApprovalModeResult,
     ConversationStopParams, ConversationSummary, ConversationView as WireConversationView,
 };
+use nessa_protocol::product::generated::{
+    ConversationMessageDelivery, ConversationMessageParams, ConversationMessageReceipt,
+    ConversationMessageState, ConversationMessageStatusParams, ConversationMessageStatusResult,
+};
 use nessa_protocol::product::passive_read::decimal_u64;
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
@@ -42,6 +46,7 @@ use nessa_sdk::application::agent_execution::{
         MutationOutcome, MutationReceipt, MutationStage,
     },
     permissions::PermissionSelectionState,
+    sessions::{NoteDelivery, NoteState},
 };
 use nessa_sdk::domain::agent_execution::executions::Initiation;
 use serde_json::{json, Value};
@@ -280,6 +285,48 @@ pub(super) async fn dispatch(
                         request_id: params.request_id,
                         stage: result.as_ref().map(|receipt| receipt.stage),
                         outcome: result.and_then(|receipt| receipt.outcome),
+                    },
+                ))
+            }
+            "conversation.message" => {
+                let params = params!(ConversationMessageParams);
+                let note = service
+                    .leave_note(
+                        conversation_id(&params.conversation_id)?,
+                        caller(params.request_id.clone()),
+                        initiation.initiator().clone(),
+                        params.text,
+                        match params.delivery {
+                            ConversationMessageDelivery::RecordOnly => NoteDelivery::RecordOnly,
+                        },
+                    )
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationMessageReceipt {
+                        request_id: params.request_id,
+                        message_id: note.id.as_str().to_owned(),
+                        accepted_at_ms: note.accepted_at_ms,
+                        delivery_state: note_state(note.state()),
+                    },
+                ))
+            }
+            "conversation.messageStatus" => {
+                let params = params!(ConversationMessageStatusParams);
+                let note = service
+                    .note_status(
+                        conversation_id(&params.conversation_id)?,
+                        caller(params.request_id.clone()),
+                    )
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationMessageStatusResult {
+                        found: note.is_some(),
+                        request_id: params.request_id,
+                        message_id: note.as_ref().map(|note| note.id.as_str().to_owned()),
+                        accepted_at_ms: note.as_ref().map(|note| note.accepted_at_ms),
+                        delivery_state: note.as_ref().map(|note| note_state(note.state())),
                     },
                 ))
             }
@@ -606,6 +653,13 @@ fn submitted_message_from_receipt(
             .collect(),
     })
 }
+/// Where a note stands, as the wire names it.
+fn note_state(state: NoteState) -> ConversationMessageState {
+    match state {
+        NoteState::Recorded => ConversationMessageState::Recorded,
+    }
+}
+
 fn command_receipt(request_id: &str, receipt: &MutationReceipt) -> ConversationCommandReceipt {
     ConversationCommandReceipt {
         request_id: request_id.to_owned(),
@@ -673,6 +727,11 @@ pub(super) fn conversation_id(value: &str) -> Result<ConversationId, Conversatio
 
 /// The authenticated catalog owns display facts and preset descriptions. The
 /// application view owns the committed selection; the wire joins them once.
+///
+/// It is stamped with the gateway's own time as `serverNowMs`, read from the
+/// view clock as the view is made: the timeline each deadline's `dueAtMs` was
+/// promised on, so a client measures the deadline against that rather than
+/// its own clock (`a_view_carries_the_gateways_time_from_its_clock`).
 fn wire_view(
     state: &ProductRouteState,
     view: ApplicationConversationView,
@@ -708,6 +767,10 @@ fn wire_view(
     let fields = value
         .as_object_mut()
         .ok_or(ConversationError::Unavailable)?;
+    fields.insert(
+        "serverNowMs".into(),
+        json!(state.view_clock.unix_milliseconds()),
+    );
     fields.insert(
         "approvalMode".into(),
         json!(selection.approval_mode.as_str()),

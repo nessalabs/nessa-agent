@@ -645,6 +645,7 @@ async fn restored_scheduling_from_a_custom_store_is_validated_before_provider_op
         }],
         lease: None,
         artifacts: Vec::new(),
+        notes: Vec::new(),
     });
     assert!(matches!(
         attached_agent(provider.clone(), storage.manager().await).await,
@@ -908,6 +909,400 @@ async fn custom_storage_cannot_restore_a_cancellation_without_its_original_reque
         .await,
         Err(error) if matches!(error, AgentError::Storage(StorageError::Corrupt(_)))
     ));
+}
+
+// A deadline's answer ends its review, so a cancellation of that review
+// saved after the answer contradicts it. Without the answer the same
+// history restores, so the answer is what makes it corrupt.
+#[tokio::test]
+async fn custom_storage_cannot_cancel_a_review_its_deadline_answered() {
+    let deadline = |effect| {
+        PermissionReviewDeadline::new(
+            PermissionToolClass::ReadOnly,
+            Duration::from_secs(8),
+            effect,
+            "allowed because nobody answered",
+        )
+        .unwrap()
+    };
+    // The published deadline, the one option's effect, and whether a
+    // matching notice ended the review. A notice no offered option could
+    // have been selected for answered nothing.
+    let cases = [
+        (
+            Some(deadline(PermissionEffect::Allow)),
+            PermissionEffect::Allow,
+            false,
+            false,
+        ),
+        (
+            Some(deadline(PermissionEffect::Allow)),
+            PermissionEffect::Allow,
+            true,
+            true,
+        ),
+        (None, PermissionEffect::Allow, true, false),
+        (
+            Some(deadline(PermissionEffect::Deny)),
+            PermissionEffect::Allow,
+            true,
+            false,
+        ),
+        (
+            Some(deadline(PermissionEffect::Allow)),
+            PermissionEffect::Deny,
+            true,
+            false,
+        ),
+    ];
+    for (published, offered, noticed, answered) in cases {
+        let (agent, _, storage) = probe(false).await;
+        agent
+            .invoke(input("saved-review"), Submitter::owner(actor()))
+            .await
+            .unwrap();
+        drop(agent);
+        {
+            let mut state = storage.0.lock().unwrap();
+            let saved = state.snapshot.as_mut().unwrap();
+            let decision = PermissionDecision::new(offered, PermissionScope::request());
+            let options = PermissionOptions::new(
+                vec![PermissionOption::new(
+                    PermissionOptionId::new("only").unwrap(),
+                    "Only",
+                    decision.clone(),
+                )
+                .unwrap()],
+                &PermissionOfferPolicy::new(vec![decision]).unwrap(),
+            )
+            .unwrap();
+            let id = PermissionId::new("7").unwrap();
+            let execution = saved.invocations[0].request.execution_id.clone();
+            let tool = ToolCallId::new("tool").unwrap();
+            let input = ToolReviewInput {
+                name: "Read".into(),
+                arguments_json: "{}".into(),
+            };
+            let request = PermissionRequest::new(
+                id.clone(),
+                execution.clone(),
+                tool.clone(),
+                options.clone(),
+            );
+            let mut aggregate =
+                ExecutionSession::new(saved.provider_context.recorded().unwrap().clone());
+            aggregate.begin_execution(execution.clone()).unwrap();
+            aggregate
+                .observe_tool(
+                    &execution,
+                    ToolCallUpdate::new(tool.clone(), None, None, None, None, None),
+                )
+                .unwrap();
+            aggregate.request_permission(request).unwrap();
+            let request = aggregate
+                .finish_execution(&execution, Ok(ExecutionOutcome::Completed))
+                .unwrap()
+                .1
+                .remove(0);
+            let cancellation = PermissionCancellation::from_record(
+                saved.provider_context.recorded().unwrap().clone(),
+                request,
+                input.clone(),
+                CancellationOrigin::Runtime,
+            )
+            .unwrap();
+            let mut events = vec![ExecutionUpdate::PermissionRequested {
+                id: id.clone(),
+                tool_id: tool,
+                observation: ToolObservation::default(),
+                input,
+                options,
+                deadline: published,
+            }];
+            if noticed {
+                events.push(ExecutionUpdate::DeadlineAnswered {
+                    id,
+                    effect: PermissionEffect::Allow,
+                    reason: DeadlineReason::new("allowed because nobody answered").unwrap(),
+                });
+            }
+            events.push(ExecutionUpdate::PermissionCancelled(cancellation));
+            for (at, update) in events.into_iter().enumerate() {
+                saved.invocations[0]
+                    .events
+                    .insert(at, ExecutionEvent::new(execution.clone(), update));
+            }
+        }
+        let (_, backend, _) = probe(false).await;
+        let (_, receiver) = mpsc::unbounded_channel();
+        let restored = attached_agent(
+            Arc::new(ProbeFactory {
+                backend,
+                receiver: Mutex::new(Some(receiver)),
+            }),
+            storage.manager().await,
+        )
+        .await;
+        if answered {
+            assert!(
+                matches!(
+                    &restored,
+                    Err(AgentError::Storage(StorageError::Corrupt(_)))
+                ),
+                "a cancellation after the deadline's answer restored"
+            );
+        } else {
+            assert!(restored.is_ok(), "{:?}", restored.err());
+        }
+    }
+}
+
+#[tokio::test]
+async fn custom_storage_cannot_cancel_a_review_by_a_deadline_it_did_not_publish() {
+    let deadline_as = |seconds, effect| {
+        PermissionReviewDeadline::new(
+            PermissionToolClass::Other,
+            Duration::from_secs(seconds),
+            effect,
+            "denied because nobody answered",
+        )
+        .unwrap()
+    };
+    let deadline = |seconds| deadline_as(seconds, PermissionEffect::Deny);
+    let allowing = deadline_as(30, PermissionEffect::Allow);
+    let stopping = deadline(30).stopping();
+    // The published deadline, the one the cancellation names, whether the
+    // review also offered a denial, and whether that history is corrupt. A
+    // deadline cancels only a review it could not refuse, so only a denial
+    // that continues the turn, with no denial offered, can have cancelled it.
+    let cases = [
+        (Some(deadline(30)), deadline(30), false, false),
+        (Some(deadline(30)), deadline(31), false, true),
+        (None, deadline(30), false, true),
+        (Some(allowing.clone()), allowing, false, true),
+        (Some(stopping.clone()), stopping, false, true),
+        (Some(deadline(30)), deadline(30), true, true),
+    ];
+    for (published, cancelled_by, offers_denial, corrupt) in cases {
+        let (agent, _, storage) = probe(false).await;
+        agent
+            .invoke(input("saved-review"), Submitter::owner(actor()))
+            .await
+            .unwrap();
+        drop(agent);
+        {
+            let mut state = storage.0.lock().unwrap();
+            let saved = state.snapshot.as_mut().unwrap();
+            let decision =
+                PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request());
+            let refusal =
+                PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request());
+            let mut choices = vec![PermissionOption::new(
+                PermissionOptionId::new("allow").unwrap(),
+                "Allow",
+                decision.clone(),
+            )
+            .unwrap()];
+            if offers_denial {
+                choices.push(
+                    PermissionOption::new(
+                        PermissionOptionId::new("deny").unwrap(),
+                        "Deny",
+                        refusal.clone(),
+                    )
+                    .unwrap(),
+                );
+            }
+            let options = PermissionOptions::new(
+                choices,
+                &PermissionOfferPolicy::new(vec![decision, refusal]).unwrap(),
+            )
+            .unwrap();
+            let id = PermissionId::new("7").unwrap();
+            let execution = saved.invocations[0].request.execution_id.clone();
+            let tool = ToolCallId::new("tool").unwrap();
+            let input = ToolReviewInput {
+                name: "Read".into(),
+                arguments_json: "{}".into(),
+            };
+            let request = PermissionRequest::new(
+                id.clone(),
+                execution.clone(),
+                tool.clone(),
+                options.clone(),
+            );
+            let mut aggregate =
+                ExecutionSession::new(saved.provider_context.recorded().unwrap().clone());
+            aggregate.begin_execution(execution.clone()).unwrap();
+            aggregate
+                .observe_tool(
+                    &execution,
+                    ToolCallUpdate::new(tool.clone(), None, None, None, None, None),
+                )
+                .unwrap();
+            aggregate.request_permission(request).unwrap();
+            let request = aggregate
+                .cancel_permission(
+                    &execution,
+                    &id,
+                    PermissionCancellationReason::deadline_exceeded(),
+                )
+                .unwrap()
+                .unwrap();
+            let cancellation = PermissionCancellation::from_record(
+                saved.provider_context.recorded().unwrap().clone(),
+                request,
+                input.clone(),
+                CancellationOrigin::Deadline(cancelled_by),
+            )
+            .unwrap();
+            let mut events = vec![ExecutionUpdate::PermissionRequested {
+                id: id.clone(),
+                tool_id: tool,
+                observation: ToolObservation::default(),
+                input,
+                options,
+                deadline: published,
+            }];
+            events.push(ExecutionUpdate::PermissionCancelled(cancellation));
+            for (at, update) in events.into_iter().enumerate() {
+                saved.invocations[0]
+                    .events
+                    .insert(at, ExecutionEvent::new(execution.clone(), update));
+            }
+        }
+        let (_, backend, _) = probe(false).await;
+        let (_, receiver) = mpsc::unbounded_channel();
+        let restored = attached_agent(
+            Arc::new(ProbeFactory {
+                backend,
+                receiver: Mutex::new(Some(receiver)),
+            }),
+            storage.manager().await,
+        )
+        .await;
+        if corrupt {
+            assert!(
+                matches!(
+                    &restored,
+                    Err(AgentError::Storage(StorageError::Corrupt(_)))
+                ),
+                "a cancellation by another deadline restored"
+            );
+        } else {
+            assert!(restored.is_ok(), "{:?}", restored.err());
+        }
+    }
+}
+
+#[tokio::test]
+async fn custom_storage_cannot_give_a_review_and_a_decline_one_identity() {
+    // The decline's identity, whether it comes before the review, and
+    // whether the review shares it.
+    let cases = [("8", false, false), ("7", false, true), ("7", true, true)];
+    for (decline, before, shared) in cases {
+        let (agent, _, storage) = probe(false).await;
+        agent
+            .invoke(input("saved-review"), Submitter::owner(actor()))
+            .await
+            .unwrap();
+        drop(agent);
+        {
+            let mut state = storage.0.lock().unwrap();
+            let saved = state.snapshot.as_mut().unwrap();
+            let decision =
+                PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request());
+            let options = PermissionOptions::new(
+                vec![PermissionOption::new(
+                    PermissionOptionId::new("allow").unwrap(),
+                    "Allow",
+                    decision.clone(),
+                )
+                .unwrap()],
+                &PermissionOfferPolicy::new(vec![decision]).unwrap(),
+            )
+            .unwrap();
+            let id = PermissionId::new("7").unwrap();
+            let execution = saved.invocations[0].request.execution_id.clone();
+            let tool = ToolCallId::new("tool").unwrap();
+            let input = ToolReviewInput {
+                name: "Read".into(),
+                arguments_json: "{}".into(),
+            };
+            let request = PermissionRequest::new(
+                id.clone(),
+                execution.clone(),
+                tool.clone(),
+                options.clone(),
+            );
+            let mut aggregate =
+                ExecutionSession::new(saved.provider_context.recorded().unwrap().clone());
+            aggregate.begin_execution(execution.clone()).unwrap();
+            aggregate
+                .observe_tool(
+                    &execution,
+                    ToolCallUpdate::new(tool.clone(), None, None, None, None, None),
+                )
+                .unwrap();
+            aggregate.request_permission(request).unwrap();
+            let request = aggregate
+                .finish_execution(&execution, Ok(ExecutionOutcome::Completed))
+                .unwrap()
+                .1
+                .remove(0);
+            let cancellation = PermissionCancellation::from_record(
+                saved.provider_context.recorded().unwrap().clone(),
+                request,
+                input.clone(),
+                CancellationOrigin::Runtime,
+            )
+            .unwrap();
+            let mut events = vec![ExecutionUpdate::PermissionRequested {
+                id: id.clone(),
+                tool_id: tool,
+                observation: ToolObservation::default(),
+                input,
+                options,
+                deadline: None,
+            }];
+            let declined = ExecutionUpdate::ReviewDeclined(ReviewDeclineObservation::selected(
+                ReviewDeclineId::new(decline).unwrap(),
+                ReviewDecline::new(
+                    Some("Write"),
+                    ReviewDeclineReason::ToolNotReviewable,
+                    RefusalOutcome::Continue,
+                ),
+            ));
+            events.insert(if before { 0 } else { 1 }, declined);
+            events.push(ExecutionUpdate::PermissionCancelled(cancellation));
+            for (at, update) in events.into_iter().enumerate() {
+                saved.invocations[0]
+                    .events
+                    .insert(at, ExecutionEvent::new(execution.clone(), update));
+            }
+        }
+        let (_, backend, _) = probe(false).await;
+        let (_, receiver) = mpsc::unbounded_channel();
+        let restored = attached_agent(
+            Arc::new(ProbeFactory {
+                backend,
+                receiver: Mutex::new(Some(receiver)),
+            }),
+            storage.manager().await,
+        )
+        .await;
+        if shared {
+            assert!(
+                matches!(
+                    &restored,
+                    Err(AgentError::Storage(StorageError::Corrupt(_)))
+                ),
+                "a review and a decline restored under one identity"
+            );
+        } else {
+            assert!(restored.is_ok(), "{:?}", restored.err());
+        }
+    }
 }
 
 #[tokio::test]

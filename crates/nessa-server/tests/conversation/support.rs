@@ -1631,6 +1631,7 @@ impl ProviderSessionBackend for Backend {
                             arguments_json: "{}".into(),
                         },
                         options,
+                        None,
                     )
                     .unwrap();
                 let _ = self.sender.lock().unwrap().as_ref().unwrap().send(event);

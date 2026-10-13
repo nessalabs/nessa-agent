@@ -116,6 +116,7 @@ fn admit_reviews(
                 ToolCallUpdate::new(tool_id.clone(), None, None, None, None, None),
                 input.clone(),
                 options.clone(),
+                None,
             )
             .expect("fixture admits the scripted review");
     }
@@ -418,6 +419,7 @@ fn review() -> ExecutionEvent {
                 arguments_json: "{\"command\":\"rm\"}".into(),
             },
             options,
+            deadline: None,
         },
     )
 }
@@ -939,6 +941,7 @@ fn allow_only_review() -> ExecutionEvent {
                 arguments_json: "{\"command\":\"rm\"}".into(),
             },
             options,
+            deadline: None,
         },
     )
 }
@@ -1298,6 +1301,10 @@ impl MessageCommitClock for ManualMessageClock {
                 changes.changed().await.expect("manual clock remains owned");
             }
         })
+    }
+
+    fn unix_milliseconds(&self) -> u64 {
+        self.now().as_millis() as u64
     }
 }
 
@@ -1677,6 +1684,7 @@ fn named_review(id: &str, tool: &str) -> ExecutionEvent {
                 arguments_json: "{\"command\":\"rm\"}".into(),
             },
             options,
+            deadline: None,
         },
     )
 }
@@ -1812,6 +1820,7 @@ async fn a_recorded_hook_withdrawal_cannot_withdraw_the_same_review_in_another_s
                 arguments_json: "{}".into(),
             },
             PermissionOptions::new(vec![deny], &PermissionOfferPolicy::once_only()).unwrap(),
+            None,
         )
         .unwrap();
     let as_the_hook = CancellationOrigin::Client(

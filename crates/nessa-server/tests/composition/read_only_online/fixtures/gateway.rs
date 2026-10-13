@@ -483,6 +483,7 @@ async fn gateway_child() {
                             queue_history: vec![],
                             lease: None,
                             artifacts: Vec::new(),
+                            notes: Vec::new(),
                         },
                         vec![SessionSaveUnit::new(changes).unwrap()],
                     )

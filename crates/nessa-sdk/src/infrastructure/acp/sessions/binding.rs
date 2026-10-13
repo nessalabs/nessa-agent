@@ -47,6 +47,11 @@ use tokio::sync::{mpsc, oneshot, watch, Mutex, MutexGuard, OwnedSemaphorePermit,
 
 use tracing::Instrument;
 
+/// How many commands one session admits before the caller is told the worker
+/// is busy. A due permission takes at most this many already-queued commands
+/// before it settles, so a refill cannot postpone the deadline.
+pub(crate) const COMMAND_QUEUE_CAPACITY: usize = 16;
+
 // Diagnostic correlation only; never used for admission or lifecycle decisions.
 static NEXT_LAUNCH_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -275,7 +280,7 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
             "agent process started");
         self.operation_capabilities
             .send_modify(|published| published.native_hooks_allowed = native_hooks_allowed);
-        let (commands, receiver) = mpsc::channel(16);
+        let (commands, receiver) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
         let (close_requested, close_receiver) = watch::channel(None);
         let (finished, completion) = watch::channel(None);
         let (events, event_receiver) = self.event_budget.channel(self.config.event_capacity);

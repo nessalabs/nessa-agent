@@ -1,5 +1,6 @@
 import {
   asImageAttachment,
+  clientDueAtMs,
   conversationErrorCode,
   IMAGE_ATTACHMENT_TYPES,
   MAX_IMAGE_ATTACHMENT_BYTES,
@@ -27,10 +28,35 @@ import {
 import type { CommandFailure, ConversationSelection, ReadFailure } from "../../model"
 import { heldFileReader } from "./held-files"
 
-function conversationView(value: GatewayConversationView): ConversationView {
+/**
+ * The gateway's view as the panel's own, received at `receivedAtMs` on the
+ * panel's clock. Each deadline's `dueAtMs` is the gateway's clock's; here, and
+ * only here, it becomes the panel's (`clientDueAtMs`), so a countdown read
+ * against the panel's clock does not move with the difference between the two
+ * machines' clocks.
+ */
+function conversationView(
+  { serverNowMs, ...value }: GatewayConversationView,
+  receivedAtMs: number,
+): ConversationView {
   const features = value.capabilities.agentFeatures
   return {
     ...value,
+    permissions: value.permissions.map((permission) =>
+      permission.deadline === undefined
+        ? permission
+        : {
+            ...permission,
+            deadline: {
+              ...permission.deadline,
+              dueAtMs: clientDueAtMs(
+                permission.deadline.dueAtMs,
+                serverNowMs,
+                receivedAtMs,
+              ),
+            },
+          },
+    ),
     // What a person is shown of each, and what reads its bytes back; the
     // lease it was published under is the gateway's record, not the panel's.
     artifacts: value.artifacts.map((artifact) => ({
@@ -207,6 +233,10 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   // Answers only `conversation.share`, which the panel never sends; one that
   // met a command would be a request this panel had no business making.
   share_target_not_paired: "invalid-request",
+  // Answer only `conversation.message`, which the panel does not send yet;
+  // either meeting another command is a request it had no business making.
+  idempotency_conflict: "invalid-request",
+  message_quota_exceeded: "invalid-request",
 }
 
 /**
@@ -289,6 +319,9 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   unknown_method: "unavailable",
   // A share is never a read; a read that met it would be no answer it knows.
   share_target_not_paired: "unavailable",
+  // A note's refusals; no read is ever answered with them.
+  idempotency_conflict: "unavailable",
+  message_quota_exceeded: "unavailable",
   model_unavailable: "unavailable",
   approval_mode_unavailable: "unavailable",
   approval_mode_not_applied: "unavailable",
@@ -436,6 +469,9 @@ export function gatewayEffects(
   client: () => NessaClient | null,
   /** Resolves after `ms`. Composition supplies the real clock; tests resolve it by hand. */
   wait: (ms: number) => Promise<void>,
+  /** The panel's wall clock, the one its countdowns are read against: a
+   * view's deadlines are put on it as the view arrives. */
+  now: () => number,
   /** The agent every conversation this panel creates runs on, as setup recorded
    * it. Asked once and remembered with the creation it was asked for, because
    * the answer comes from the host rather than from the conversation. Resolving
@@ -612,7 +648,7 @@ export function gatewayEffects(
                 view: (frame) => {
                   if (!current()) return
                   cursor = frame.cursor
-                  follower.view(conversationView(frame.view))
+                  follower.view(conversationView(frame.view, now()))
                 },
                 ended: (end) => {
                   if (!current()) return

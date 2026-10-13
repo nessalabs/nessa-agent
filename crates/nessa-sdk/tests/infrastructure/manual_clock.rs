@@ -25,6 +25,9 @@ impl Wait {
 
 pub(crate) struct ManualClock {
     now: watch::Sender<ClockInstant>,
+    /// Unix milliseconds at the origin. A test's `dueAtMs` is this plus
+    /// [`Clock::now`], so it cannot be the process wall clock.
+    unix_origin_ms: u64,
     /// Every wait started, in order.
     waits: Mutex<Vec<Wait>>,
     started: watch::Sender<usize>,
@@ -33,12 +36,20 @@ impl Default for ManualClock {
     fn default() -> Self {
         Self {
             now: watch::channel(ClockInstant::from_origin(Duration::ZERO)).0,
+            unix_origin_ms: 0,
             waits: Mutex::default(),
             started: watch::channel(0).0,
         }
     }
 }
 impl ManualClock {
+    /// A clock whose wall time starts at `unix_origin_ms`.
+    pub fn at_unix_ms(unix_origin_ms: u64) -> Self {
+        Self {
+            unix_origin_ms,
+            ..Self::default()
+        }
+    }
     /// Move the clock `by` forward, ending every wait whose deadline that
     /// reaches.
     pub fn advance(&self, by: Duration) {
@@ -96,6 +107,10 @@ impl ManualClock {
 impl Clock for ManualClock {
     fn now(&self) -> ClockInstant {
         *self.now.borrow()
+    }
+    fn unix_ms_at(&self, at: ClockInstant) -> u64 {
+        let elapsed = u64::try_from(at.since_origin().as_millis()).unwrap_or(u64::MAX);
+        self.unix_origin_ms.saturating_add(elapsed)
     }
     fn sleep_until(&self, deadline: ClockInstant) -> ClockSleep {
         let mut now = self.now.subscribe();

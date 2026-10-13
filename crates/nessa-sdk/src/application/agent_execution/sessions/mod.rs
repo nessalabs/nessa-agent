@@ -66,6 +66,7 @@ mod fetches;
 mod leases;
 mod manager;
 mod message_commit_clock;
+mod notes;
 pub use committed_changes::{ChangeWatchError, ChangeWatchState, CommittedChangeWatch};
 pub(crate) mod records;
 mod retained;
@@ -86,9 +87,14 @@ pub(crate) mod validation;
 pub use artifacts::{ArtifactName, ArtifactRecord, ArtifactValueError, PublishedFile};
 pub use fetches::{EnvironmentFetchRefusal, EnvironmentPath, FetchOutcome, FetchRefusalReason};
 pub use leases::{CurrentLease, CurrentLeaseState, LeaseRecord};
-pub use manager::{ArtifactRecordError, LeaseCommit, LeaseRecordError, SessionManager};
+pub use manager::{
+    ArtifactRecordError, LeaseCommit, LeaseRecordError, NoteRecordError, SessionManager,
+};
 pub(crate) use manager::{AttachedProvider, AttachmentOpenFailureSource};
 pub use message_commit_clock::{MessageCommitClock, MessageCommitSleep};
+pub use notes::{
+    NoteDelivery, NoteId, NoteRecord, NoteRequest, NoteState, NoteText, NoteValueError,
+};
 pub use storage::{
     CommittedSession, InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent,
     ProviderContext, QueueHistoryRecord, SessionChange, SessionLoad, SessionLoadState,

@@ -222,6 +222,48 @@ for line in sys.stdin:
             update({"sessionUpdate": "tool_call_update", "toolCallId": "command-1", "status": "completed",
                     "rawOutput": {"formatted_output": "compiling\n2 passed\n", "exit_code": 0},
                     "_meta": {"terminal_exit": {"exit_code": 0, "signal": None, "terminal_id": "command-1"}}})
+        elif mode in ("deadline-decline", "deadline-cancel-only", "deadline-decline-unasked-cancel",
+                      "deadline-allow-named-cancel"):
+            # A later prompt in the same session, after cancel already ended
+            # the turn. The session is still open.
+            if mode == "deadline-cancel-only" and (root / "permission-outcome").exists():
+                text("turn-2-open")
+                result(pending, {"stopReason": "end_turn"})
+                pending = None
+                continue
+            # Real Codex ACP 1.12.0 shapes. Command decisions offer decline
+            # then cancel, both reject_once. File edits offer only cancel.
+            if mode in ("deadline-decline", "deadline-decline-unasked-cancel"):
+                options = [
+                    {"optionId": "allow_once", "kind": "allow_once", "name": "Yes"},
+                    {"optionId": "cancel", "kind": "reject_once", "name": "No, and tell Codex what to do differently"},
+                    {"optionId": "decline", "kind": "reject_once", "name": "No, continue without running it"},
+                ]
+                call = {"toolCallId": "command-1", "kind": "execute", "status": "pending", "title": "Run tests",
+                        "rawInput": {"command": "cargo test"}}
+            elif mode == "deadline-allow-named-cancel":
+                # Malformed: Codex's stopping id on an allow. Picking it is an
+                # allow, so it does not stop the turn.
+                options = [
+                    {"optionId": "cancel", "kind": "allow_once", "name": "Yes"},
+                    {"optionId": "decline", "kind": "reject_once", "name": "No"},
+                ]
+                call = {"toolCallId": "command-1", "kind": "execute", "status": "pending", "title": "Run tests",
+                        "rawInput": {"command": "cargo test"}}
+            else:
+                options = [
+                    {"optionId": "allow_once", "kind": "allow_once", "name": "Yes, proceed"},
+                    {"optionId": "allow_always", "kind": "allow_always", "name": "Yes, and don't ask again for this session"},
+                    {"optionId": "cancel", "kind": "reject_once", "name": "No, and tell Codex what to do differently"},
+                ]
+                call = {"toolCallId": "file-change-1", "kind": "edit", "status": "pending", "title": "Edit config",
+                        "locations": [{"path": str(root / "config.txt")}]}
+            update({"sessionUpdate": "tool_call", **call})
+            send({"id": "file-review", "method": "session/request_permission", "params": {
+                "sessionId": session, "toolCall": {key: value for key, value in call.items() if key != "title"},
+                "options": options,
+            }})
+            continue
         elif mode in ("file-change-permission", "mcp-sparse-permission"):
             if mode == "mcp-sparse-permission":
                 update({"sessionUpdate": "tool_call", "toolCallId": "file-change-1", "kind": "execute",
@@ -254,8 +296,25 @@ for line in sys.stdin:
             result(pending, {"stopReason": "cancelled"})
             pending = None
     elif msg.get("id") == "file-review":
-        outcome = msg["result"]["outcome"]
-        (root / "permission-outcome").write_text(json.dumps(outcome))
+        if mode in ("deadline-decline", "deadline-cancel-only", "deadline-decline-unasked-cancel",
+                    "deadline-allow-named-cancel"):
+            (root / "permission-outcome").write_text(json.dumps(msg["result"]))
+        else:
+            outcome = msg["result"]["outcome"]
+            (root / "permission-outcome").write_text(json.dumps(outcome))
+        if mode == "deadline-cancel-only":
+            # Real Codex stops the turn when cancel is selected. The edit
+            # does not complete and the prompt does not continue.
+            result(pending, {"stopReason": "cancelled"})
+            pending = None
+            continue
+        if mode in ("deadline-decline-unasked-cancel", "deadline-allow-named-cancel"):
+            # Neither decline nor an allow stops the turn. The prompt then
+            # ends on its own: no session/cancel was sent.
+            assert msg["result"]["outcome"]["optionId"] in ("decline", "cancel")
+            result(pending, {"stopReason": "cancelled"})
+            pending = None
+            continue
         update({"sessionUpdate": "tool_call_update", "toolCallId": "file-change-1", "status": "completed"})
         result(pending, {"stopReason": "end_turn"})
         pending = None

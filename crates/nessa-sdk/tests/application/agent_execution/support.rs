@@ -237,6 +237,7 @@ pub(super) fn pending_controller() -> ExecutionController {
             tool,
             review_input(),
             request.options().clone(),
+            None,
         )
         .unwrap();
     controller

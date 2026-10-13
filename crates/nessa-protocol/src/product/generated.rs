@@ -372,12 +372,14 @@ impl ModelSwitchReportingSupport {
 #[serde(rename_all = "snake_case")]
 pub enum PermissionDeferralSupport {
     UnsupportedNotImplemented,
+    Unsupported,
     SupportedWithNonterminalOutcome,
 }
 impl PermissionDeferralSupport {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::UnsupportedNotImplemented => "unsupported_not_implemented",
+            Self::Unsupported => "unsupported",
             Self::SupportedWithNonterminalOutcome => "supported_with_nonterminal_outcome",
         }
     }
@@ -602,6 +604,15 @@ impl ConversationPermissionOptionEffect {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPermissionDeadline {
+    pub wait_ms: u64,
+    pub due_at_ms: u64,
+    pub effect: ConversationPermissionOptionEffect,
+    pub reason: String,
+    pub stops_turn: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationPermission {
     pub execution_id: String,
     pub permission_id: String,
@@ -612,6 +623,8 @@ pub struct ConversationPermission {
     pub origin: ConversationPermissionOrigin,
     pub ask: ConversationPermissionAsk,
     pub arguments_json: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<ConversationPermissionDeadline>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -645,6 +658,7 @@ pub struct ConversationMcpTool {
 pub struct ConversationView {
     pub conversation_id: String,
     pub revision: String,
+    pub server_now_ms: u64,
     pub messages: Vec<ConversationMessage>,
     pub pending: Vec<ConversationPending>,
     pub permissions: Vec<ConversationPermission>,
@@ -2337,6 +2351,64 @@ impl ConversationSubscriptionErrorCode {
         }
     }
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationMessageDelivery {
+    RecordOnly,
+}
+impl ConversationMessageDelivery {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RecordOnly => "record_only",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationMessageState {
+    Recorded,
+}
+impl ConversationMessageState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Recorded => "recorded",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationMessageParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub text: String,
+    pub delivery: ConversationMessageDelivery,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationMessageReceipt {
+    pub request_id: String,
+    pub message_id: String,
+    pub accepted_at_ms: u64,
+    pub delivery_state: ConversationMessageState,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationMessageStatusParams {
+    pub conversation_id: String,
+    pub request_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationMessageStatusResult {
+    pub found: bool,
+    pub request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_state: Option<ConversationMessageState>,
+}
 pub const MAX_CHANGE_WATCH_ID_BYTES: usize = 57;
 pub const CHANGE_WATCH_ID_PATTERN: &str =
     "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,19}$";
@@ -2403,6 +2475,8 @@ pub mod product_method {
     pub const CONVERSATION_REMOVE: &str = "conversation.remove";
     pub const CONVERSATION_STOP: &str = "conversation.stop";
     pub const CONVERSATION_RECEIPT: &str = "conversation.receipt";
+    pub const CONVERSATION_MESSAGE: &str = "conversation.message";
+    pub const CONVERSATION_MESSAGE_STATUS: &str = "conversation.messageStatus";
     pub const CONVERSATION_ANSWER: &str = "conversation.answer";
     pub const CONVERSATION_ANSWER_QUESTION: &str = "conversation.answerQuestion";
     pub const CONVERSATION_CANCEL: &str = "conversation.cancel";
@@ -2642,7 +2716,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 66
+                items.len() <= 68
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -2683,6 +2757,8 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.remove",
     "conversation.stop",
     "conversation.receipt",
+    "conversation.message",
+    "conversation.messageStatus",
     "conversation.answer",
     "conversation.answerQuestion",
     "conversation.cancel",
@@ -2783,6 +2859,8 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.remove"
         | "conversation.stop"
         | "conversation.receipt"
+        | "conversation.message"
+        | "conversation.messageStatus"
         | "conversation.answer"
         | "conversation.answerQuestion"
         | "conversation.cancel"

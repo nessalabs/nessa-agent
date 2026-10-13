@@ -5,8 +5,8 @@ use crate::application::agent_execution::executions::{
     ExecutionRequest,
 };
 use crate::application::agent_execution::sessions::{
-    ArtifactName, ArtifactRecord, CurrentLease, LeaseRecord as SavedLeaseRecord,
-    QueueHistoryRecord, SessionSnapshot,
+    ArtifactName, ArtifactRecord, CurrentLease, LeaseRecord as SavedLeaseRecord, NoteId,
+    NoteRecord, NoteText, QueueHistoryRecord, SessionSnapshot,
 };
 use crate::domain::agent_execution::{
     executions::{ExecutionId, GrantInitiator, QueueOrderChange},
@@ -65,6 +65,8 @@ pub(super) enum Shape {
     LeaseRecord,
     Artifacts,
     Artifact,
+    Notes,
+    Note,
     Metadata,
     Images,
     Image,
@@ -95,6 +97,8 @@ pub(super) enum Shape {
     Tool,
     McpTool,
     Review,
+    Deadline,
+    DeadlineNotice,
     Decline,
     Ask,
     AskedQuestions,
@@ -167,6 +171,13 @@ impl Shape {
             (Artifact, "name") => Text(ArtifactName::MAX_BYTES),
             (Artifact, "digest") => Text(DIGEST_BYTES),
             (Artifact, "media_type") => Text(MediaType::MAX_BYTES),
+            (Snapshot, "notes") => Notes,
+            (Semantic, "Note") => Note,
+            (Note, "id") => Text(NoteId::MAX_BYTES),
+            (Note, "text") => Text(NoteText::MAX_BYTES),
+            (Note, "delivery") => Text(KEY_BYTES),
+            (Note, "author") => Initiator,
+            (Note, "accepted_at_ms") => Number,
             (Invocation, "metadata") => Metadata,
             (Invocation, "scheduling") => Scheduling,
             (Invocation, "events") => Events,
@@ -239,6 +250,7 @@ impl Shape {
             (Update, "Text" | "Thought") => Text(MAX_MESSAGE_CHUNK_BYTES),
             (Update, "Tool") | (Review, "tool") => Tool,
             (Update, "PermissionRequested" | "PermissionCancelled") => Review,
+            (Update, "DeadlineAnswered") => DeadlineNotice,
             (Update, "ReviewDeclined") => Decline,
             (Update, "QuestionAsked" | "QuestionClosed") => Ask,
             // Plural shapes are the arrays; `element` gives the singular for
@@ -259,6 +271,17 @@ impl Shape {
             (ContentItem, "Structured") => Text(MAX_STRUCTURED_RESULT_BYTES),
             (Tool, "id") | (Review, "id" | "execution_id" | "tool_id" | "session_id") => Text(256),
             (Review, "options") => Options,
+            (Review, "deadline") => Deadline,
+            (Deadline, "class" | "effect") => Text(32),
+            (Deadline, "reason") => {
+                Text(crate::domain::agent_execution::permissions::MAX_DEADLINE_REASON_BYTES)
+            }
+            (Deadline, "wait_ms") => Number,
+            (DeadlineNotice, "id") => Text(256),
+            (DeadlineNotice, "effect") => Text(16),
+            (DeadlineNotice, "reason") => {
+                Text(crate::domain::agent_execution::permissions::MAX_DEADLINE_REASON_BYTES)
+            }
             (Decline, "id") => Text(20),
             (Decline, "tool") => Text(128),
             (Decline, "reason" | "delivery" | "outcome") => Text(32),
@@ -310,6 +333,10 @@ impl Shape {
                 key,
                 "lease" | "turn" | "name" | "digest" | "media_type" | "size" | "actor"
             ),
+            Note => matches!(
+                key,
+                "id" | "text" | "delivery" | "actor" | "author" | "accepted_at_ms"
+            ),
             ProviderError => matches!(key, "code" | "diagnostic"),
             AuthenticationError => key == "diagnostic",
             FailedAcknowledgement => matches!(key, "audit" | "storage"),
@@ -335,6 +362,7 @@ impl Shape {
             Self::SemanticChanges => Self::Semantic,
             Self::LeaseRecords => Self::LeaseRecord,
             Self::Artifacts => Self::Artifact,
+            Self::Notes => Self::Note,
             Self::FinalizedComponents => Self::FinalizedComponent,
             Self::Hooks => Self::Hook,
             Self::QueueEntries => Self::QueueEntry,
@@ -358,6 +386,7 @@ impl Shape {
             Self::Hooks => 128,
             Self::LeaseRecords => CurrentLease::MAX_RECORDS,
             Self::Artifacts => ArtifactRecord::MAX_PER_CONVERSATION,
+            Self::Notes => NoteRecord::MAX_PER_CONVERSATION,
             Self::QueueEntries | Self::QueueIds => QueueOrderChange::MAX_PENDING,
             // The message's own constructor refuses more; refuse them here
             // before the excess references are built.

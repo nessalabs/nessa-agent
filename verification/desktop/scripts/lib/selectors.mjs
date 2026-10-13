@@ -164,6 +164,7 @@ export const css = {
   appApprovalCard: '.workspace-approval[data-origin="app"]', // class: a review an MCP App asked for, not the agent
   agentApproval: '.workspace-approval[data-origin="agent"]', // class: a review the agent asked for, not an app
   approvalReason: ".workspace-approval-reason", // class: why the review is asking
+  approvalDeadline: ".workspace-approval-deadline", // class: the countdown while a deadline is armed
   approvalActions: ".workspace-approval-actions button", // class
   approvalWord: ".workspace-approval-word", // class
   approvalHead: ".workspace-approval-head", // class: who asks, and what
@@ -689,6 +690,22 @@ export const readinessVerification = {
  * are the page's (`__appReview.longestTool`, `.longestMessage`,
  * `.longestWord`), from the client's own bounds.
  */
+/**
+ * An armed review on the approval card (`fixtures/approval-deadline/`).
+ * The deadline is due a few seconds after the page loads. The card counts
+ * down, then the fixture publishes the deadline's notice and the card goes.
+ */
+export const approvalDeadline = {
+  page: "verification/desktop/fixtures/approval-deadline/index.html",
+  session: "Armed review",
+  /** The past-tense sentence the notice names once the deadline wins. */
+  reason:
+    "No human answered in time. Continue without this tool or try another approach.",
+  notice: (reason) => `Denied automatically: ${reason}`,
+  /** The fixture's wait (`waitMs` in its `main.tsx`): the most the countdown may start at. */
+  waitSeconds: 10,
+}
+
 export const appReview = {
   page: "verification/desktop/fixtures/app-review/index.html",
   session: "Clean up the stale rows",

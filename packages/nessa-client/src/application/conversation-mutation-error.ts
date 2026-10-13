@@ -154,6 +154,12 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     // devices is refused before the grant table is written.
     case ConversationErrorCode.ShareTargetNotPaired:
       return true
+    // A note the conversation refused, because its request already left
+    // another or its author or the conversation is at its bound, is refused
+    // before anything is saved.
+    case ConversationErrorCode.IdempotencyConflict:
+    case ConversationErrorCode.MessageQuotaExceeded:
+      return true
     // `temporarily_unavailable` is the one worth naming: a supervising task
     // also reports it when work it had already admitted was lost, so it is not
     // a refusal at all. The rest are either certainly after dispatch, or not

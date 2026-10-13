@@ -68,6 +68,7 @@ async fn worker_projection_after_reload(
         }],
         lease: None,
         artifacts: Vec::new(),
+        notes: Vec::new(),
     };
     let storage = InMemoryStorage::new();
     let lease = storage.open(session_id.clone()).await.unwrap();
@@ -292,6 +293,8 @@ async fn worker_with_ready_frames_boundary(
             permission_authority: PermissionAuthoritySource::default(),
             operation_capabilities,
             permissions: HashMap::new(),
+            armed_permissions: HashMap::new(),
+            path_classification: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
             startup_advisory_session: None,
             questions: HashMap::new(),
             declined: None,
@@ -305,6 +308,7 @@ async fn worker_with_ready_frames_boundary(
             closing: false,
             turn_cancel_requested: None,
             deferred_outcome: None,
+            carried: std::collections::VecDeque::new(),
             provider_result: None,
             settlement_facts: SettlementFacts::new(),
             correlation_sequence: 0,

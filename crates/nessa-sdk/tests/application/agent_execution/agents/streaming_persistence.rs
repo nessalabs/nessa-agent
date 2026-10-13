@@ -33,6 +33,9 @@ impl MessageCommitClock for ManualMessageClock {
             }
         })
     }
+    fn unix_milliseconds(&self) -> u64 {
+        self.now().as_millis() as u64
+    }
 }
 
 type Chunk = (ExecutionEvent, oneshot::Sender<()>);
@@ -390,6 +393,7 @@ async fn tool_and_review_boundaries_persist_preceding_text() {
             &PermissionOfferPolicy::once_only(),
         )
         .unwrap(),
+        deadline: None,
     };
     let review_text = events.next().await.unwrap().unwrap();
     test.send(review).await.unwrap();

@@ -919,6 +919,33 @@ pub struct QuestionChoiceInput {
     pub own_words: Option<String>,
 }
 
+/// Reviews `agent` is still waiting on, as execution id and permission id.
+///
+/// A saved deadline is restored unarmed. The card counts one of these down,
+/// because this process's worker is still holding it.
+/// `a_saved_deadline_counts_down_while_this_process_holds_the_review`.
+fn reviews_this_process_holds(
+    agent: &Agent,
+    snapshot: Option<&SessionSnapshot>,
+) -> HashSet<(String, String)> {
+    let mut holding = HashSet::new();
+    let Some(snapshot) = snapshot else {
+        return holding;
+    };
+    for record in &snapshot.invocations {
+        let execution = &record.request.execution_id;
+        for event in &record.events {
+            let ExecutionUpdate::PermissionRequested { id, .. } = event.update() else {
+                continue;
+            };
+            if agent.pending_permission(execution, id).unwrap_or(false) {
+                holding.insert((execution.as_str().to_owned(), id.as_str().to_owned()));
+            }
+        }
+    }
+    holding
+}
+
 impl ConversationService {
     /// Own every configured agent, and the one a caller gets by default. No
     /// MCP call shows a UI: see [`Self::with_tool_uis`].
@@ -2210,8 +2237,17 @@ impl ConversationService {
             .transpose()?
             .unwrap_or_default();
         let active = live.agent.active_execution_id();
+        // Storage restores a deadline unarmed. A review this process is still
+        // waiting on is that worker's promise, so the card counts down.
+        // `a_saved_deadline_counts_down_while_this_process_holds_the_review`.
+        let holding = reviews_this_process_holds(&live.agent, committed.snapshot());
         let mut projection = live.projection.lock().await;
-        let accepted = projection.replace_committed(&committed, &order, active.as_ref());
+        let accepted = projection.replace_committed_while_holding(
+            &committed,
+            &order,
+            active.as_ref(),
+            &holding,
+        );
         if accepted {
             projection.transcript_state(committed.state().into());
         }
@@ -5467,6 +5503,7 @@ pub use artifact_fetch::{
 mod artifact_publish;
 pub use artifact_publish::{PublishAnswer, PublishCall, PublishCallRefusal};
 mod environment_tools;
+mod notes;
 pub use environment_tools::{
     CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE,
 };

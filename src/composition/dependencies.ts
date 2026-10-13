@@ -10,6 +10,7 @@ import {
 import type { CredentialSource, GatewayEndpointSource, NessaClient } from "@nessa/client"
 import { loadEnvironment, type Environment } from "../env/environment"
 import { scenarioEffects } from "../conversation/adapters/scenario/effects"
+import { monotonicWallClock } from "../conversation/adapters/browser/wall-clock"
 import { createSessionHandle } from "../session/adapters/client/handle"
 import { connectDevSession } from "../session/adapters/client/dev-session"
 import type { ConversationEffects } from "../conversation/application/ports"
@@ -31,6 +32,7 @@ export function createDependencies(
     clientId?: string
     digest?: (bytes: Blob) => Promise<string>
     canChoosePaths?: boolean
+    now?: () => number
   } = {},
 ) {
   const config = options.environment ?? loadEnvironment({})
@@ -87,6 +89,11 @@ export function createDependencies(
     return asking
   }
   const chosenAgent = () => (chosen ??= ask())
+  // The wall clock a permission's countdown is read against, and that a
+  // view's deadlines are put on as it arrives. Constructed here so neither the
+  // conversation UI nor its gateway adapter reads `Date.now()` itself. It is a
+  // steady wall timeline, so a countdown does not jump with an OS clock change.
+  const now = options.now ?? monotonicWallClock()
   return {
     agentInstallations: gatewayAgentInstallations(
       () => session.get()?.agents,
@@ -130,6 +137,7 @@ export function createDependencies(
     // cannot be sent, and is not allowed to ask the host itself — so it is
     // answered once here and injected, like every other outside fact.
     canChoosePaths: options.canChoosePaths ?? hasNativeHost(),
+    now,
     // Setup's one pre-session question. Constructed here so the surface takes
     // it as a dependency rather than importing the transport it happens to use.
     agents: options.agents ?? httpAgentReadiness({ baseUrl: config.gatewayBaseUrl }),
@@ -153,6 +161,7 @@ export function createDependencies(
             () => session.get(),
             // The real clock for backing off a busy upload route; tests pass theirs.
             (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+            now,
             chosenAgent,
           )),
   }

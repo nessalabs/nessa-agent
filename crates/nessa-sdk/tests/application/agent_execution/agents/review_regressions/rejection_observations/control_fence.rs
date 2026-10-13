@@ -103,6 +103,7 @@ async fn rejected_observation_fences_permission_controls_before_its_save_resumes
                         observation: ToolObservation::default(),
                         input: review_input(),
                         options: pending.options().clone(),
+                        deadline: None,
                     }
                 } else {
                     ExecutionUpdate::Tool(ToolCallUpdate::new(

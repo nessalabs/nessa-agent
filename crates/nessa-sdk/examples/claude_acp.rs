@@ -228,6 +228,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             stand_ins: nessa_sdk::infrastructure::acp::sessions::StandInSessions::none(),
             permissions: PermissionOfferPolicy::once_only(),
             refusal: nessa_sdk::application::agent_execution::permissions::ConfiguredRefusal::continue_turn(),
+            permission_deadlines: nessa_sdk::domain::agent_execution::permissions::PermissionDeadlinePolicy::standard(),
             // The launch belongs to the operating system: a runtime written
             // by a fresh install is scanned on its first execution.
             launch_timeout: Duration::from_secs(120),
@@ -240,6 +241,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             max_incoming_frame_bytes: 1024 * 1024,
             images: None,
             clock: Arc::new(RuntimeClock::new()),
+            workspace_paths: Arc::new(nessa_sdk::infrastructure::workspace_paths::FilesystemPaths),
         },
         &model,
         limits,

@@ -1,7 +1,9 @@
 //! Typed session snapshot persistence and exclusive access contracts.
 #![deny(missing_docs)]
 
-use super::{ArtifactRecord, CommittedStatus, CommittedViewState, CurrentLease, LeaseRecord};
+use super::{
+    ArtifactRecord, CommittedStatus, CommittedViewState, CurrentLease, LeaseRecord, NoteRecord,
+};
 use crate::application::agent_execution::agents::{AgentError, DiagnosticTreeLimits};
 use crate::application::agent_execution::executions::{
     ExecutionEvent, ExecutionRequest, SubmissionMode,
@@ -299,6 +301,9 @@ pub struct SessionSnapshot {
     /// Artifacts the conversation holds, oldest first: append-only, at most
     /// [`ArtifactRecord::MAX_PER_CONVERSATION`].
     pub artifacts: Vec<ArtifactRecord>,
+    /// Notes left in the conversation, oldest first: append-only, at most
+    /// [`NoteRecord::MAX_PER_CONVERSATION`].
+    pub notes: Vec<NoteRecord>,
 }
 
 /// One SDK decision retained for an atomic semantic-record save.
@@ -380,6 +385,10 @@ pub enum SessionChange {
     /// conversation. Checked against the latest lease before it is committed
     /// and again when it is read back.
     Artifact(ArtifactRecord),
+    /// A note left in the conversation, which starts and steers no turn.
+    /// Checked against the notes before it is committed and again when it is
+    /// read back.
+    Note(NoteRecord),
 }
 impl SessionSnapshot {
     pub(crate) fn retained_bytes(&self) -> usize {
@@ -398,6 +407,14 @@ impl SessionSnapshot {
             .into_iter()
             .map(|(id, _)| id)
             .collect())
+    }
+
+    /// The note `principal` left under request `request`, if it left one: a
+    /// read of saved evidence, which is how a sender finds its note again.
+    pub fn note(&self, principal: &str, request: &str) -> Option<&NoteRecord> {
+        self.notes
+            .iter()
+            .find(|note| note.answers(principal, request))
     }
 
     /// Maximum durable invocation records retained by one conversation.
@@ -1026,6 +1043,7 @@ mod committed_tests {
             queue_history: Vec::new(),
             lease: None,
             artifacts: Vec::new(),
+            notes: Vec::new(),
         };
         let before = super::super::retained::snapshot(&snapshot);
         snapshot.invocations[0].acknowledgement = SubmissionAcknowledgement::Failed {

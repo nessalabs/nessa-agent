@@ -93,7 +93,13 @@ const never = () => new Promise<void>(() => {})
 function reading(read: () => Promise<ConversationView>) {
   const client = { subscriptions: subscribing(read) } as unknown as NessaClient
   const store = makeStore(
-    createDependencies({ conversation: gatewayEffects(() => client, never) }),
+    createDependencies({
+      conversation: gatewayEffects(
+        () => client,
+        never,
+        () => 0,
+      ),
+    }),
   )
   store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
   return store
@@ -303,7 +309,13 @@ function closedWithFailingRead(readCause: unknown) {
     subscriptions: subscribing(() => Promise.reject(readCause)),
   } as unknown as NessaClient
   const store = makeStore(
-    createDependencies({ conversation: gatewayEffects(() => client, never) }),
+    createDependencies({
+      conversation: gatewayEffects(
+        () => client,
+        never,
+        () => 0,
+      ),
+    }),
   )
   store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
   return store
