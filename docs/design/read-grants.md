@@ -281,7 +281,8 @@ policy (`conversation/application/drive_tools.rs`).
   turn, the service holds that grant's revision
   (`ShareGrants::hold_revision`). The permit is the one
   `(conversation, receiver)` pair, and the map drops it when the last
-  permit drops. A turn or a change of another grant does not take it.
+  permit drops, or when a wait cancelled before it acquired the lock was
+  the last clone of that gate. A turn or a change of another grant does not take it.
   Note candidates are read before the permit, so a verdict does not hold
   it. The save proceeds only while the live grant is still at that
   revision. A revoke or a change of role or policy in between refuses the

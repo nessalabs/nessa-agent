@@ -28,7 +28,10 @@ use nessa_local_database::rusqlite::{params, OptionalExtension, Transaction, Tra
 use nessa_protocol::conversation::domain::ConversationId;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::task::{Context, Poll};
 
 /// One admission mutex, shared by every permit for that grant.
 type GrantGate = Arc<tokio::sync::Mutex<()>>;
@@ -37,11 +40,16 @@ type GrantGate = Arc<tokio::sync::Mutex<()>>;
 type GrantKey = (String, String);
 
 /// Per-grant admission. The map holds one mutex per `(conversation, receiver)`
-/// that a hold or a change is using, and drops the entry when the last permit
-/// drops so a grant that is gone does not stay in the map.
+/// that a hold or a change is using. The entry is removed when the last permit
+/// drops, and when a wait cancelled before it acquired the lock was the last
+/// clone of that gate.
 pub(super) struct GrantGates {
     gates: Mutex<HashMap<GrantKey, GrantGate>>,
 }
+
+/// `lock_owned` for one gate. The future inside holds one `Arc`; drop it
+/// before counting.
+type OwnedWait = Pin<Box<dyn Future<Output = tokio::sync::OwnedMutexGuard<()>> + Send>>;
 
 /// The permit `hold_revision` keeps until the turn's save has been decided.
 struct GrantPermit {
@@ -62,8 +70,9 @@ impl GrantGates {
     /// metadata connection must not call this: the connection is taken only
     /// after the permit, inside `run`.
     ///
-    /// A wait cancelled before the permit is built leaves the map entry. The
-    /// next permit for that key reuses it, and the last permit removes it.
+    /// A wait cancelled before the permit is built removes the map entry when
+    /// it was the last clone of that gate. The lock future is dropped before
+    /// that count, so its `Arc` is not mistaken for another waiter.
     async fn lock(self: &Arc<Self>, conversation: String, receiver: String) -> GrantPermit {
         let key = (conversation, receiver);
         let gate = {
@@ -76,13 +85,70 @@ impl GrantGates {
                 gate
             }
         };
-        let guard = Arc::clone(&gate).lock_owned().await;
-        GrantPermit {
+        LockWait::acquire(Arc::clone(self), key, gate).await
+    }
+}
+
+/// One `lock_owned` that has not returned a permit yet. Dropped while the
+/// wait is still pending, it removes the map entry when this wait is the
+/// last clone of that gate.
+struct LockWait {
+    key: GrantKey,
+    gates: Arc<GrantGates>,
+    /// `None` once the permit has taken the gate. Drop then leaves the map
+    /// to the permit.
+    gate: Option<GrantGate>,
+    waiting: Option<OwnedWait>,
+}
+
+impl LockWait {
+    fn acquire(gates: Arc<GrantGates>, key: GrantKey, gate: GrantGate) -> Self {
+        let waiting: OwnedWait = Box::pin(Arc::clone(&gate).lock_owned());
+        Self {
             key,
-            gates: Arc::clone(self),
-            gate,
-            guard: Some(guard),
+            gates,
+            gate: Some(gate),
+            waiting: Some(waiting),
         }
+    }
+}
+
+impl Future for LockWait {
+    type Output = GrantPermit;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let ready = {
+            let waiting = this
+                .waiting
+                .as_mut()
+                .expect("a finished lock wait is not polled");
+            waiting.as_mut().poll(cx)
+        };
+        match ready {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(guard) => {
+                this.waiting.take();
+                Poll::Ready(GrantPermit {
+                    key: this.key.clone(),
+                    gates: Arc::clone(&this.gates),
+                    gate: this.gate.take().expect("a lock wait keeps its gate"),
+                    guard: Some(guard),
+                })
+            }
+        }
+    }
+}
+
+impl Drop for LockWait {
+    fn drop(&mut self) {
+        // The lock future holds one Arc. Release it before counting, so a
+        // cancelled wait uses the same last-clone rule as a finished permit.
+        self.waiting.take();
+        let Some(gate) = self.gate.as_ref() else {
+            return;
+        };
+        remove_if_last(&self.gates, &self.key, gate);
     }
 }
 
@@ -91,17 +157,19 @@ impl Drop for GrantPermit {
         // Release the waiters before deciding whether this gate is still in
         // use. The map lock makes that decision atomic with a later lookup.
         self.guard.take();
-        let mut gates = self
-            .gates
-            .gates
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let last = gates.get(&self.key).is_some_and(|current| {
-            Arc::ptr_eq(current, &self.gate) && Arc::strong_count(&self.gate) == 2
-        });
-        if last {
-            gates.remove(&self.key);
-        }
+        remove_if_last(&self.gates, &self.key, &self.gate);
+    }
+}
+
+/// Remove `key` when `gate` is still the map's gate and the only other owner
+/// is this call. Two owners: the map, and `gate`.
+fn remove_if_last(gates: &GrantGates, key: &GrantKey, gate: &GrantGate) {
+    let mut map = gates.gates.lock().unwrap_or_else(PoisonError::into_inner);
+    let last = map
+        .get(key)
+        .is_some_and(|current| Arc::ptr_eq(current, gate) && Arc::strong_count(gate) == 2);
+    if last {
+        map.remove(key);
     }
 }
 
@@ -744,3 +812,53 @@ impl LocalConversationStore {
 #[cfg(test)]
 #[path = "../../../../tests/conversation/share_grant_policy_text.rs"]
 mod tests;
+
+#[cfg(test)]
+mod cancelled_wait {
+    use super::*;
+    use std::time::Duration;
+
+    /// A second task blocks inside `lock_owned` while the holder keeps the
+    /// permit. Cancelling that wait, then dropping the holder, leaves no
+    /// map entry.
+    #[tokio::test]
+    async fn a_cancelled_contended_wait_leaves_the_map_empty_once_the_holder_drops() {
+        let gates = GrantGates::new();
+        let key = ("conversation".to_owned(), "phone".to_owned());
+        let holder = gates.lock(key.0.clone(), key.1.clone()).await;
+        let gates_for_wait = Arc::clone(&gates);
+        let conversation = key.0.clone();
+        let receiver = key.1.clone();
+        let waiter = tokio::spawn(async move {
+            let _permit = gates_for_wait.lock(conversation, receiver).await;
+        });
+        let entered = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let count = {
+                    let map = gates.gates.lock().unwrap_or_else(PoisonError::into_inner);
+                    map.get(&key).map(Arc::strong_count).unwrap_or(0)
+                };
+                // The map, the holder's gate, the holder's guard, the waiter's
+                // gate, and the lock future. Five means the wait is inside
+                // `lock_owned`, not still walking up to it.
+                if count >= 5 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(
+            entered.is_ok(),
+            "the contended wait did not reach lock_owned"
+        );
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
+        drop(holder);
+        let map = gates.gates.lock().unwrap_or_else(PoisonError::into_inner);
+        assert!(
+            map.is_empty(),
+            "a cancelled contended wait left a gate in the map"
+        );
+    }
+}
