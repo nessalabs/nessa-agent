@@ -16,7 +16,7 @@
 //!                    ResetRequired, CacheDamaged --> empty the cache, read once more
 //!     Terminal or Unclaimed --> the client removes the cache and marks the
 //!                               record revoked; the peer is not read again
-//!     otherwise (still pending) --> wait
+//!     otherwise (still pending) --> soon the first time, then the interval
 //!   every change above, as it is made --> PeerCommands::poller_changed
 //!                                          (queued by the audit at once)
 //!   give back the turn, still holding the read slot --> PeerCommands::poller_kept
@@ -29,8 +29,9 @@
 //! too). Each read has a budget on the injected clock and ends incomplete
 //! when it runs out having saved something; one that saved nothing is a
 //! failure. Each peer is read again after the interval, with
-//! jitter, sooner when its last read was incomplete or stopped, and after a
-//! failure, after a backoff that doubles up to its cap. Every wait, and the
+//! jitter, sooner when it is first seen pending or its last read was
+//! incomplete or stopped, and after a failure, after a backoff that doubles
+//! up to its cap. Every wait, and the
 //! read budget, is on the peer commands' injected monotonic clock, and the
 //! jitter is drawn from injected entropy.
 //!
@@ -153,6 +154,12 @@ struct Due {
     /// By the injected monotonic clock.
     at: u64,
     failures: u32,
+    /// A status has already come back pending. The first one is read again
+    /// soon: approval happens on the peer and does not change this record,
+    /// and a read in flight wakes often enough to sample the new record
+    /// before that approval. A peer still pending after that waits the
+    /// interval (`a_peer_seen_pending_is_read_again_soon_and_then_waits_the_interval`).
+    pending: bool,
 }
 
 /// The running poller, and how to stop it.
@@ -303,6 +310,7 @@ impl Poller {
             let due = self.due.entry(*key).or_insert(Due {
                 at: now,
                 failures: 0,
+                pending: false,
             });
             if due.at > now {
                 continue;
@@ -426,7 +434,19 @@ impl Poller {
         let Some(due) = self.due.get_mut(&key) else {
             return;
         };
-        let (wait, failures) = next_wait(&self.shared.inputs.policy, pace, due.failures, draw);
+        let seen_pending = due.pending;
+        if pace == Pace::Waiting {
+            due.pending = true;
+        } else if matches!(pace, Pace::Settled | Pace::Continue) {
+            due.pending = false;
+        }
+        let (wait, failures) = next_wait(
+            &self.shared.inputs.policy,
+            pace,
+            due.failures,
+            draw,
+            seen_pending,
+        );
         due.failures = failures;
         due.at = now.saturating_add(millis(wait));
     }
@@ -1054,7 +1074,7 @@ enum Pace {
     Continue,
     /// Stopped by an owner command: soon; failures unchanged.
     Stopped,
-    /// Still pending on the peer: the interval.
+    /// Still pending on the peer: soon the first time, then the interval.
     Waiting,
     /// Failed: a backoff that doubles with each failure in a row.
     Failed,
@@ -1063,11 +1083,20 @@ enum Pace {
 }
 
 /// The wait after `pace`, with `failures` failures in a row before it, and
-/// the failures in a row after it. `draw` spreads it over 80%–120%, so peers
-/// read together drift apart; then it is held to the cap, so the cap is the
-/// longest wait any peer is scheduled for.
-fn next_wait(policy: &PollPolicy, pace: Pace, failures: u32, draw: u32) -> (Duration, u32) {
+/// the failures in a row after it. `seen_pending` is a peer whose status
+/// already came back pending: the first pending wait is an eighth of the
+/// interval, and the next is the interval. `draw` spreads a wait over
+/// 80%–120%, so peers read together drift apart; then it is held to the cap,
+/// so the cap is the longest wait any peer is scheduled for.
+fn next_wait(
+    policy: &PollPolicy,
+    pace: Pace,
+    failures: u32,
+    draw: u32,
+    seen_pending: bool,
+) -> (Duration, u32) {
     let (base, failures) = match pace {
+        Pace::Waiting if !seen_pending => (policy.interval / 8, 0),
         Pace::Settled | Pace::Waiting | Pace::Gone => (policy.interval, 0),
         Pace::Continue => (policy.interval / 8, 0),
         Pace::Stopped => (policy.interval / 8, failures),

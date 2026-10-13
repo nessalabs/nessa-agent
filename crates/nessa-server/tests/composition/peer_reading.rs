@@ -1685,7 +1685,10 @@ async fn a_read_past_the_cap_waits_for_a_slot() {
 }
 
 /// A held read wakes every tick. It scans the peer records when they change,
-/// not on each of those ticks, and an enrollment during the hold is still read.
+/// not on each of those ticks, and an enrollment during the hold is still
+/// read. The new record is saved pending before its owner approves it, and
+/// that approval does not change the record, so the first pending status is
+/// read again soon (`a_peer_seen_pending_is_read_again_soon_and_then_waits_the_interval`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_held_read_lists_when_the_records_change_not_on_every_tick() {
     let directory = tempfile::tempdir().unwrap();

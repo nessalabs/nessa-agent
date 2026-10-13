@@ -34,19 +34,39 @@ const HIGH: u32 = 400;
 
 #[test]
 fn a_settled_or_waiting_peer_waits_the_interval_and_clears_its_failures() {
-    for pace in [Pace::Settled, Pace::Waiting] {
-        assert_eq!(next_wait(&POLICY, pace, 5, MIDDLE), (POLICY.interval, 0));
-    }
+    assert_eq!(
+        next_wait(&POLICY, Pace::Settled, 5, MIDDLE, false),
+        (POLICY.interval, 0)
+    );
+    assert_eq!(
+        next_wait(&POLICY, Pace::Waiting, 5, MIDDLE, true),
+        (POLICY.interval, 0)
+    );
+}
+
+/// A read in flight lists a new peer before its owner has approved it.
+/// That first pending status is read again soon, so the approval is not
+/// stuck behind the interval. A peer that is still pending then waits it.
+#[test]
+fn a_peer_seen_pending_is_read_again_soon_and_then_waits_the_interval() {
+    assert_eq!(
+        next_wait(&POLICY, Pace::Waiting, 5, MIDDLE, false),
+        (POLICY.interval / 8, 0)
+    );
+    assert_eq!(
+        next_wait(&POLICY, Pace::Waiting, 0, MIDDLE, true),
+        (POLICY.interval, 0)
+    );
 }
 
 #[test]
 fn an_incomplete_read_continues_soon_and_a_stopped_one_keeps_its_failures() {
     assert_eq!(
-        next_wait(&POLICY, Pace::Continue, 3, MIDDLE),
+        next_wait(&POLICY, Pace::Continue, 3, MIDDLE, false),
         (POLICY.interval / 8, 0)
     );
     assert_eq!(
-        next_wait(&POLICY, Pace::Stopped, 3, MIDDLE),
+        next_wait(&POLICY, Pace::Stopped, 3, MIDDLE, false),
         (POLICY.interval / 8, 3)
     );
 }
@@ -56,7 +76,7 @@ fn failures_double_the_wait_up_to_the_cap() {
     let mut failures = 0;
     let mut waits = Vec::new();
     for _ in 0..8 {
-        let (wait, after) = next_wait(&POLICY, Pace::Failed, failures, MIDDLE);
+        let (wait, after) = next_wait(&POLICY, Pace::Failed, failures, MIDDLE, false);
         assert_eq!(after, failures + 1);
         failures = after;
         waits.push(wait.as_secs());
@@ -64,32 +84,35 @@ fn failures_double_the_wait_up_to_the_cap() {
     assert_eq!(waits, [60, 120, 240, 480, 900, 900, 900, 900]);
     // Failures saturate rather than overflow the shift.
     assert_eq!(
-        next_wait(&POLICY, Pace::Failed, u32::MAX, MIDDLE),
+        next_wait(&POLICY, Pace::Failed, u32::MAX, MIDDLE, false),
         (POLICY.backoff_cap, u32::MAX)
     );
 }
 
 #[test]
 fn jitter_spreads_a_wait_over_80_to_120_percent_and_the_cap_still_holds() {
-    let low = next_wait(&POLICY, Pace::Settled, 0, LOW).0;
-    let high = next_wait(&POLICY, Pace::Settled, 0, HIGH).0;
+    let low = next_wait(&POLICY, Pace::Settled, 0, LOW, false).0;
+    let high = next_wait(&POLICY, Pace::Settled, 0, HIGH, false).0;
     assert_eq!(low, Duration::from_secs(24));
     assert_eq!(high, Duration::from_secs(36));
     // Draws wrap rather than leave the range.
-    assert_eq!(next_wait(&POLICY, Pace::Settled, 0, HIGH + 401).0, high);
+    assert_eq!(
+        next_wait(&POLICY, Pace::Settled, 0, HIGH + 401, false).0,
+        high
+    );
     for draw in [LOW, MIDDLE, HIGH, u32::MAX] {
         for failures in 0..12 {
-            let (wait, _) = next_wait(&POLICY, Pace::Failed, failures, draw);
+            let (wait, _) = next_wait(&POLICY, Pace::Failed, failures, draw, false);
             assert!(wait <= POLICY.backoff_cap, "{wait:?} after {failures}");
         }
     }
     // At the cap, the longest spread is held to it.
     assert_eq!(
-        next_wait(&POLICY, Pace::Failed, 10, HIGH).0,
+        next_wait(&POLICY, Pace::Failed, 10, HIGH, false).0,
         POLICY.backoff_cap
     );
     assert_eq!(
-        next_wait(&POLICY, Pace::Failed, 10, LOW).0,
+        next_wait(&POLICY, Pace::Failed, 10, LOW, false).0,
         POLICY.backoff_cap.mul_f64(0.8)
     );
 }
