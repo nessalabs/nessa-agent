@@ -1037,3 +1037,43 @@ async fn a_cards_due_time_is_the_moment_the_deadline_answers() {
         .await
         .unwrap();
 }
+
+/// A deadline that cancels a review publishes that cancellation before the
+/// provider is told.
+///
+/// When the cancellation could not be published, it was still written to the
+/// provider, and a later notice saved without it said the deadline answered a
+/// review that nothing in the history settled.
+#[tokio::test]
+async fn an_unpublished_deadline_cancellation_is_not_written_to_the_provider() {
+    let (mut worker, mut execution, events, _recovery, clock) = blocked_worker("", false).await;
+    let allow_only = json!({"sessionId":"context", "toolCall":{"toolCallId":"tool", "title":"Edit", "kind":"edit", "status":"pending", "rawInput":{"target":"/tmp/file"}}, "options":[{"optionId":"allow", "name":"Allow", "kind":"allow_once"}]});
+    worker
+        .permission(&mut execution, RpcId::Number(77), allow_only, None)
+        .await
+        .map_err(WorkerFailure::into_error)
+        .unwrap();
+    let id = worker
+        .armed_permissions
+        .keys()
+        .next()
+        .cloned()
+        .expect("the review is armed");
+    // Nothing can be published any more.
+    drop(events);
+    worker.scope.stdin = None;
+    clock.advance(Duration::from_secs(30));
+    let settled = promptly(worker.settle_due_permissions(&mut execution, clock.now()))
+        .await
+        .map_err(WorkerFailure::into_error);
+    assert!(settled.is_err(), "an unpublished cancellation was settled");
+    assert_ne!(
+        settled,
+        Err(AgentError::Closed),
+        "the cancellation was written to the provider before it was published"
+    );
+    assert!(
+        worker.permissions.contains_key(&id),
+        "the provider's request was let go before its cancellation was published"
+    );
+}

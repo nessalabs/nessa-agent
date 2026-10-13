@@ -4085,20 +4085,34 @@ impl<P: AcpProfile> Worker<P> {
             }
             sent
         } else {
-            let wire_id = self
-                .permissions
-                .remove(&id)
-                .expect("pending wire permission");
             if let Some(record) = execution
                 .cancel_deadline(&execution_id, &id, deadline)
                 .map_err(|error| self.record_failure(OperationEffectPhase::Worker, error))?
             {
-                if let Err(failure) = self.record_cancellations(vec![record]).await {
+                if let Err(failure) = self
+                    .record_audit(
+                        ExecutionAuditRecord::Cancelled(record.clone()),
+                        AuditEffectPhase::Cancellation,
+                    )
+                    .await
+                {
                     // The cancellation is already the local fact. Losing the
                     // audit record does not change that the review was cancelled.
                     let _ = failure;
                 }
+                // The history must carry the cancellation before the provider
+                // acts on it: a later notice without it would say the deadline
+                // answered a review nothing settled.
+                self.emit(ExecutionEvent::new(
+                    record.request().execution_id().clone(),
+                    ExecutionUpdate::PermissionCancelled(record),
+                ))
+                .map_err(|error| self.record_failure(OperationEffectPhase::EventDelivery, error))?;
             }
+            let wire_id = self
+                .permissions
+                .remove(&id)
+                .expect("pending wire permission");
             self.send(permission_wire::permission_cancel(&wire_id))
                 .await
         };
