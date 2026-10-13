@@ -7,7 +7,8 @@ use crate::application::agent_execution::{
 };
 use crate::domain::agent_execution::{
     permissions::{
-        PermissionId, PermissionRequest, PermissionStateView, ReviewDeclineId, ReviewDeclineStage,
+        PermissionEffect, PermissionId, PermissionRequest, PermissionStateView, ReviewDeclineId,
+        ReviewDeclineStage,
     },
     questions::QuestionId,
     tools::ToolCallId,
@@ -96,11 +97,20 @@ impl Observations {
                     unreachable!("review correlation index")
                 };
                 // A cancellation made by a deadline names the deadline the
-                // review published, not another.
+                // review published, not another. A deadline cancels only when
+                // it denies and the review offered no denial to select, so
+                // that denial cannot stop the turn either.
                 if let CancellationOrigin::Deadline(cancelled_by) = cancellation.origin() {
+                    let offers_denial = options
+                        .choices()
+                        .iter()
+                        .any(|option| option.decision().effect() == PermissionEffect::Deny);
                     if !deadline
                         .as_ref()
                         .is_some_and(|published| published.decides_as(cancelled_by))
+                        || cancelled_by.effect() != PermissionEffect::Deny
+                        || cancelled_by.stops_turn()
+                        || offers_denial
                     {
                         return Err(corrupt(
                             "deadline cancellation is not the review's published deadline",

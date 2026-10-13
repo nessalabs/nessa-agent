@@ -999,23 +999,31 @@ async fn custom_storage_cannot_cancel_a_review_its_deadline_answered() {
 
 #[tokio::test]
 async fn custom_storage_cannot_cancel_a_review_by_a_deadline_it_did_not_publish() {
-    let deadline = |seconds| {
+    let deadline_as = |seconds, effect| {
         PermissionReviewDeadline::new(
             PermissionToolClass::Other,
             Duration::from_secs(seconds),
-            PermissionEffect::Deny,
+            effect,
             "denied because nobody answered",
         )
         .unwrap()
     };
-    // The published deadline, the one the cancellation names, and whether
-    // that history is corrupt.
+    let deadline = |seconds| deadline_as(seconds, PermissionEffect::Deny);
+    let allowing = deadline_as(30, PermissionEffect::Allow);
+    let stopping = deadline(30).stopping();
+    // The published deadline, the one the cancellation names, whether the
+    // review also offered a denial, and whether that history is corrupt. A
+    // deadline cancels only a review it could not refuse, so only a denial
+    // that continues the turn, with no denial offered, can have cancelled it.
     let cases = [
-        (Some(deadline(30)), deadline(30), false),
-        (Some(deadline(30)), deadline(31), true),
-        (None, deadline(30), true),
+        (Some(deadline(30)), deadline(30), false, false),
+        (Some(deadline(30)), deadline(31), false, true),
+        (None, deadline(30), false, true),
+        (Some(allowing.clone()), allowing, false, true),
+        (Some(stopping.clone()), stopping, false, true),
+        (Some(deadline(30)), deadline(30), true, true),
     ];
-    for (published, cancelled_by, corrupt) in cases {
+    for (published, cancelled_by, offers_denial, corrupt) in cases {
         let (agent, _, storage) = probe(false).await;
         agent.invoke(input("saved-review"), actor()).await.unwrap();
         drop(agent);
@@ -1024,14 +1032,27 @@ async fn custom_storage_cannot_cancel_a_review_by_a_deadline_it_did_not_publish(
             let saved = state.snapshot.as_mut().unwrap();
             let decision =
                 PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request());
+            let refusal =
+                PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request());
+            let mut choices = vec![PermissionOption::new(
+                PermissionOptionId::new("allow").unwrap(),
+                "Allow",
+                decision.clone(),
+            )
+            .unwrap()];
+            if offers_denial {
+                choices.push(
+                    PermissionOption::new(
+                        PermissionOptionId::new("deny").unwrap(),
+                        "Deny",
+                        refusal.clone(),
+                    )
+                    .unwrap(),
+                );
+            }
             let options = PermissionOptions::new(
-                vec![PermissionOption::new(
-                    PermissionOptionId::new("allow").unwrap(),
-                    "Allow",
-                    decision.clone(),
-                )
-                .unwrap()],
-                &PermissionOfferPolicy::new(vec![decision]).unwrap(),
+                choices,
+                &PermissionOfferPolicy::new(vec![decision, refusal]).unwrap(),
             )
             .unwrap();
             let id = PermissionId::new("7").unwrap();
