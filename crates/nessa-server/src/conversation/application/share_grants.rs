@@ -51,6 +51,8 @@ use nessa_auth::application::ports::{AccessError, AccessReader};
 use nessa_auth::domain::{AuthContext, CredentialId, Resource};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
+use nessa_sdk::application::agent_execution::sessions::{NoteCandidates, NoteRecord};
+use nessa_sdk::domain::agent_execution::executions::Initiator;
 
 /// Who is reading, as far as read grants are concerned.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -168,6 +170,55 @@ pub async fn admit_role(
             Err(_) => Err(RoleRefusal::Unverifiable),
         },
     }
+}
+
+/// The host's verdict on the notes waiting in conversation `id` for its next
+/// turn (ADR 0011 phase B, row J23): each `notes` entry pending delivery is
+/// authorized, revoked, or left out. An owner's note is authorized. A grant's
+/// note is asked of [`admit_role`] at Comment, the role it was left under,
+/// as it stands now: still held at Comment or above, authorized; revoked or
+/// lowered below Comment, revoked, and the turn retires it; a grant that could
+/// not be read, left out, so the note waits for a turn that can check it. A
+/// change of policy that keeps the role changes nothing: the note keeps the
+/// revision it was left under, as its attribution.
+///
+/// Each grant is read once, whatever number of notes it left.
+pub async fn note_candidates(
+    grants: &dyn ShareGrants,
+    id: &ConversationId,
+    notes: &[NoteRecord],
+) -> NoteCandidates {
+    let mut candidates = NoteCandidates::default();
+    let mut verdicts: Vec<(&str, Option<bool>)> = Vec::new();
+    for note in notes {
+        let allowed = match &note.author {
+            Initiator::Owner => Some(true),
+            Initiator::Grant(grant) => match verdicts
+                .iter()
+                .find(|(receiver, _)| *receiver == grant.grant())
+            {
+                Some((_, verdict)) => *verdict,
+                None => {
+                    let reader = Reader::PairedDevice {
+                        receiver_id: grant.grant().to_owned(),
+                    };
+                    let verdict = match admit_role(grants, &reader, id, ShareRole::Comment).await {
+                        Ok(_) => Some(true),
+                        Err(RoleRefusal::NotGranted | RoleRefusal::BelowRole) => Some(false),
+                        Err(RoleRefusal::Unverifiable) => None,
+                    };
+                    verdicts.push((grant.grant(), verdict));
+                    verdict
+                }
+            },
+        };
+        match allowed {
+            Some(true) => candidates.authorized.push(note.id.clone()),
+            Some(false) => candidates.revoked.push(note.id.clone()),
+            None => {}
+        }
+    }
+    candidates
 }
 
 /// The role a party holds on one conversation, and the revision of the
@@ -411,3 +462,7 @@ impl ShareConversation<'_> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/note_candidates.rs"]
+mod note_candidate_tests;

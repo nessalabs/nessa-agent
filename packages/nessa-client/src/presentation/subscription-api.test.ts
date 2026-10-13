@@ -15,6 +15,7 @@ const cursor = { incarnation: "store", position: "7" }
 const view: ConversationView = {
   conversationId,
   artifacts: [],
+  notes: [],
   approvalMode: "ask",
   approvalModes: [{ id: "ask", name: "Provider asks", description: "Asks." }],
   title: null,

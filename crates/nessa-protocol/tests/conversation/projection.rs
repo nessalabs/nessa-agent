@@ -378,6 +378,7 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
             },
             actor: ActionContext::new("person", "panel", "send").unwrap(),
             initiation: Initiation::owner(),
+            notes: Vec::new(),
             acknowledgement: SubmissionAcknowledgement::Acknowledged,
             events,
             scheduling: vec![],
@@ -2629,6 +2630,123 @@ mod artifacts {
         assert!(bound_view_within(bare, full - 1, false)
             .artifacts
             .is_empty());
+    }
+}
+
+mod notes {
+    use super::*;
+    use crate::conversation::projection::MAX_VIEW_NOTES;
+    use nessa_sdk::application::agent_execution::sessions::{
+        NoteDelivery, NoteId, NoteRecord, NoteRetirement, NoteRetirementReason, NoteText,
+    };
+    use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiator};
+
+    fn note(index: usize, delivery: NoteDelivery) -> NoteRecord {
+        NoteRecord {
+            id: NoteId::new(format!("note-{index}")).unwrap(),
+            text: NoteText::new(format!("said {index}")).unwrap(),
+            delivery,
+            actor: ActionContext::new("person", "phone", format!("request-{index}")).unwrap(),
+            author: Initiator::Owner,
+            accepted_at_ms: index as u64,
+            after_execution: None,
+            retired: None,
+        }
+    }
+    fn ids(view: &ConversationView) -> Vec<String> {
+        view.notes
+            .iter()
+            .map(|note| note.message_id.clone())
+            .collect()
+    }
+
+    /// Row J24: each note shows where it stands, the turn that took it or
+    /// why it was retired, the turn it follows, and who left it from where.
+    #[test]
+    fn the_view_shows_each_note_where_it_stands_and_who_left_it() {
+        let mut snapshot = completed_snapshot("execution", Vec::new());
+        let taken = note(1, NoteDelivery::NextTurn);
+        snapshot.invocations[0].notes = vec![taken.id.clone()];
+        let mut retired = note(2, NoteDelivery::NextTurn);
+        retired.author = Initiator::Grant(GrantInitiator::new("commenter", 4).unwrap());
+        retired.after_execution = Some(ExecutionId::new("execution").unwrap());
+        retired.retired = Some(NoteRetirement {
+            reason: NoteRetirementReason::PermissionLost,
+            at_ms: 9,
+        });
+        snapshot.notes = vec![
+            note(0, NoteDelivery::RecordOnly),
+            taken,
+            retired,
+            note(3, NoteDelivery::NextTurn),
+        ];
+        let wire = serde_json::to_value(shown_snapshot(&snapshot)).unwrap();
+        assert_eq!(
+            wire["notes"],
+            serde_json::json!([
+                {
+                    "messageId": "note-0", "text": "said 0", "acceptedAtMs": 0,
+                    "delivery": "record_only", "deliveryState": "recorded",
+                    "author": {"kind": "owner", "surface": "phone"},
+                },
+                {
+                    "messageId": "note-1", "text": "said 1", "acceptedAtMs": 1,
+                    "delivery": "next_turn", "deliveryState": "assigned",
+                    "executionId": "execution",
+                    "author": {"kind": "owner", "surface": "phone"},
+                },
+                {
+                    "messageId": "note-2", "text": "said 2", "acceptedAtMs": 2,
+                    "delivery": "next_turn", "deliveryState": "retired",
+                    "retiredReason": "permission_lost", "afterExecutionId": "execution",
+                    "author": {"kind": "grant", "surface": "phone"},
+                },
+                {
+                    "messageId": "note-3", "text": "said 3", "acceptedAtMs": 3,
+                    "delivery": "next_turn", "deliveryState": "pending",
+                    "author": {"kind": "owner", "surface": "phone"},
+                },
+            ])
+        );
+        // Notes are not messages: the transcript is the turn alone.
+        assert_eq!(wire["messages"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_view_lists_the_newest_notes_and_they_yield_after_the_transcript() {
+        let count = MAX_VIEW_NOTES + 3;
+        let mut snapshot = completed_snapshot("execution", Vec::new());
+        snapshot.notes = (0..count)
+            .map(|i| note(i, NoteDelivery::RecordOnly))
+            .collect();
+        let view = bound_view(shown_snapshot(&snapshot));
+        let expected: Vec<String> = (3..count).map(|i| format!("note-{i}")).collect();
+        assert_eq!(ids(&view), expected);
+        assert!(!view.truncated);
+        // An older message yields before any note does.
+        let full = serde_json::to_vec(&view).unwrap().len();
+        let mut longer = view.clone();
+        let older = longer.messages[0].clone();
+        longer.messages.insert(0, older);
+        assert_eq!(
+            bound_view_within(longer, full, true).notes.len(),
+            MAX_VIEW_NOTES
+        );
+        // With the transcript given up, the oldest note goes before any
+        // artifact.
+        let mut bare = view;
+        bare.messages.clear();
+        let full = serde_json::to_vec(&bare).unwrap().len();
+        let bounded = bound_view_within(bare, full - 1, true);
+        assert!(bounded.truncated);
+        assert_eq!(bounded.notes.len(), MAX_VIEW_NOTES - 1);
+        assert_eq!(bounded.notes[0].message_id, "note-4");
+        // Kept back for its interactions, a bound still gives notes up.
+        snapshot.notes.truncate(1);
+        let mut bare = shown_snapshot(&snapshot);
+        bare.messages.clear();
+        let full = serde_json::to_vec(&bare).unwrap().len();
+        assert!(bound_view_within(bare, full - 1, false).notes.is_empty());
     }
 }
 

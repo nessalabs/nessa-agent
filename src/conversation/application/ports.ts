@@ -1,4 +1,10 @@
-import type { PreparedSubmission, ExecutionTarget, PermissionTarget } from "@nessa/client"
+import type {
+  PreparedSubmission,
+  ExecutionTarget,
+  PermissionTarget,
+  QuestionTarget,
+  QuestionChoice,
+} from "@nessa/client"
 import type { ConversationListing, ConversationView, SubmissionReceipt } from "./view"
 import {
   type ApprovalMode,
@@ -128,10 +134,8 @@ export interface ConversationEffects {
   answer(target: PermissionTarget, optionId: string): Promise<void>
   /** Answer one question the agent asked; null choices decline it. */
   answerQuestion(
-    conversationId: string,
-    executionId: string,
-    questionId: string,
-    choices: readonly { key: string; values: string[]; ownWords?: string }[] | null,
+    target: QuestionTarget,
+    choices: readonly QuestionChoice[] | null,
   ): Promise<void>
   cancel(target: PermissionTarget): Promise<void>
   close(conversationId: string): Promise<void>

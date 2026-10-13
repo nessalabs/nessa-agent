@@ -1,7 +1,8 @@
 # Share grants — issue 704, slice G; roles, issue 707, slice J1
 
 Status: slice G merged in #720. Roles and tool policies (slice J1 of
-[#707](https://github.com/nessalabs/nessa-agent/issues/707)): this branch.
+[#707](https://github.com/nessalabs/nessa-agent/issues/707)) merged; notes
+(J3a) merged in #804; note delivery and display (J3b, J3c): this branch.
 Part of [#252](https://github.com/nessalabs/nessa-agent/issues/252)
 (slice G of [ADR 252](../adr/todo/252-runtime-roles-and-execution-leases.md)).
 The map's rules are in
@@ -152,8 +153,8 @@ Slice J1 of #707 gives a grant a role and, for Drive, a tool policy. A
 Comment or a Drive grant reads exactly as a Read grant does (row J1). Slice
 J2 lets a Drive grant drive the one conversation it names, and J2b saves
 each turn with who started it (below). J3a lets a Comment or a Drive grant
-leave notes (below). Later slices build on this: J3b delivers a note to the
-next turn, J4 enforces the policy.
+leave notes (below), J3b delivers a `next_turn` note to the next turn
+and J3c shows notes in the transcript (below). J4 enforces the policy.
 
 - **The role** is `ShareRole` (`conversation/domain`), Read < Comment <
   Drive, with `at_least` to ask "does this role allow that one". The store's
@@ -162,8 +163,9 @@ next turn, J4 enforces the policy.
 - **The tool policy** is `ToolPolicy`: a preset (`read_only_tools`,
   `no_shell`, `ask_everything`, `all`) or allow and deny patterns. It is
   checked for shape and size only: at most 16 patterns in each list, at
-  least one pattern in one of them, each 1 to 48 bytes, plain text. Nothing evaluates it yet. `ShareAccess`
-  holds the two together, so a Drive grant always has a policy and a Read or
+  least one pattern in one of them, each 1 to 48 bytes, plain text. What
+  it allows is decided by Cedar ([below](#what-a-tool-policy-allows));
+  nothing asks it yet. `ShareAccess` holds the two together, so a Drive grant always has a policy and a Read or
   Comment grant never has one (row J3). The store keeps the policy as JSON
   and reads it back through the same constructors.
 - **Changing a grant** is sharing again with another role or policy. It is
@@ -201,6 +203,42 @@ sequenceDiagram
     Socket->>Grants: admit_read (any role)
     Socket-->>Device: records, exactly as for Read
 ```
+
+### What a tool policy allows
+
+Slice J4 of #707 answers "may this turn call this tool?" with Cedar, behind
+the application's `ToolPolicyEvaluator` port
+(`conversation/infrastructure/tool_policy/cedar/`). Part 2 builds that
+evaluator; nothing calls it yet, so a Drive turn's tools still run unchecked
+until the part that registers it on the agent.
+
+Cedar sees facts: who started the turn (the owner, or a grant with its
+preset's name) and the tool's name with who named it (`claude`, `codex`,
+`opencode`, or `gateway` for the gateway's own tools such as `run`). A name
+is read only next to its source: Claude's file reader is `Read`, Codex names
+the kind of action, `read`. Allowed means the call goes on to the
+conversation's approval mode, where a person is still asked; it is never an
+approval. Part 3 admits a Drive turn only in the Ask approval mode, which is
+what makes `ask_everything` ask for every call.
+
+| Policy | Allows | Decided by |
+| --- | --- | --- |
+| The owner's turns | every tool | `tool.owner` |
+| `read_only_tools` | the tools listed as only reading this machine's files, and Claude's `ToolSearch`, which only loads another tool's schema (not Codex's `search`, which is also its web search) | `tool.reads` |
+| `no_shell` | those, and the tools listed as changing files or reaching the network without running a command | `tool.reads`, `tool.edits` |
+| `ask_everything`, `all` | every tool | `tool.preset.ask_everything`, `tool.preset.all` |
+| Allow and deny patterns | a tool an allow pattern matches, or every tool when there is no allow pattern; never one a deny pattern matches | `tool.rules.allow.<i>`, `tool.rules.unlisted`, `tool.rules.deny.<i>` |
+
+The lists are in `tools.cedar`. They name no OpenCode tool: OpenCode runs the tools it allows without asking, so part 3 refuses a Drive turn on OpenCode rather than judge some of its calls. A tool no list names, such as an MCP
+server's, is refused by `read_only_tools` and `no_shell`: it might run a
+command. A pattern's `*` matches any run of characters and every other
+character is itself; patterns become Cedar JSON policies scoped to their
+grant, never policy text. A pattern matches a name from any source, so a
+deny list is not "no shell": `Bash` does not deny Codex's `exec_command` or
+the gateway's `run`; the `no_shell` preset does. A deny wins over an allow. A decision names the
+policies behind it, sorted, and a refusal no policy made names none. A
+bundle or grant rules that do not validate, and any evaluation error, are
+`ToolPolicyUnavailable`, which the caller refuses.
 
 ## Driving a shared conversation
 
@@ -327,7 +365,7 @@ J17, J12).
   either is `message_quota_exceeded`, and nothing is saved (row J19). A
   note counts from the time it was accepted, so a clock set back makes no
   room. The text is 1 to 8192 bytes and not all blank, and the delivery is
-  `record_only` (row J21).
+  `record_only` or `next_turn` (row J21).
 - **`conversation.messageStatus`** answers whether the caller's request left
   a note, with the receipt it was answered with, by reading the committed
   records; it opens no agent and writes nothing (row J20). It looks a note
@@ -360,13 +398,102 @@ sequenceDiagram
     Service-->>Device: found, with the same receipt
 ```
 
+## Delivering notes
+
+Slice J3b of #707 gives a note to the model. A note left with delivery
+`next_turn` waits until a turn takes it; one left `record_only` is only
+recorded, as in J3a. A waiting note is `pending`; the turn that takes it
+makes it `assigned` to that turn for good; one that can no longer go is
+`retired`, with `expired` or `permission_lost` (row J22).
+
+- **The records still decide.** A turn's saved request lists the ids of the
+  notes it took (`InvocationRecord.notes`), and a retirement is its own
+  `SessionChange::NoteRetired`. Both are written in the same save as the
+  turn's `InputAccepted`, under the session's lock, so a note is taken at
+  most once and a failed save gives it back. Its state is read from those
+  records (`SessionSnapshot::note_state`), never kept beside them. A note
+  also saves the last turn accepted before it (`after_execution`), so a
+  transcript places it after that turn.
+- **Only a turn admitted while the conversation is idle takes notes.** A
+  queued turn started with nothing running and nothing queued takes them;
+  a steer, a turn queued behind another, and an app's message take none
+  (row J23). A note meant for "the next turn" is for the person's next
+  turn, not one squeezed into a turn already running or waiting.
+- **The host decides who may still be heard; the SDK decides what goes.**
+  Before such a turn, the service asks `share_grants::note_candidates` about
+  each pending note: the owner's are allowed, a grant's are allowed while it
+  holds Comment or more, and revoked once it is gone or below Comment. A
+  grant it cannot read leaves its notes pending for a later turn. Each grant
+  is read once, through the same `admit_role` a Drive command and a new
+  note go through, so the Cedar migration moves one check. A change of the
+  grant's policy revision retires nothing: the revision saved with the note
+  stays as its attribution. The verdict is the grant as it stood when the
+  turn was admitted, as for a Drive grant's own turn (row J15): a revoke
+  that lands while a turn is being admitted stops the next turn, not that
+  one.
+- **Admission retires before it takes.** Under its lock, `notes::select`
+  walks the pending notes in the order they were left: one past 24 hours
+  is retired `expired`, one the host revoked `permission_lost`, and up to 8
+  allowed ones are taken. Any turn's admission retires overdue notes, even
+  one that takes none; a revoked note is retired by the next turn the host
+  was asked about. A conversation holds at most 64 notes waiting
+  (an overdue one counts for nothing), and another `next_turn` note is
+  refused `message_quota_exceeded`.
+- **The prompt gets them at dispatch, not in the saved request.** When the
+  turn is dispatched, its saved note ids are read back as `NoteContext`
+  (author kind, surface, text) and joined into the user message
+  (`UserMessage::with_notes`), which is checked against one frame again
+  before it goes. The ACP prompt carries them as one text block after any
+  app context and before the person's words: a preamble saying they were
+  left by the owner or someone the conversation is shared with and are not
+  the sender's words, then a JSON array, so a note cannot close the block or
+  pass for the person. A message that arrives already carrying notes is
+  refused.
+- **The view shows each note where it stands** (J3c). `ConversationView`
+  lists the newest 64 notes with their state, the turn that took them or
+  why they were retired, the turn they follow, and who left them from
+  which surface; under the view's byte budget they yield after the
+  transcript and before artifacts. `conversation.message` and
+  `conversation.messageStatus` answer with the state, the turn and the
+  reason too. The panel and the desktop place notes by one rule
+  (`placeNotes`): a note goes right after the turn it follows, or after
+  that input while it still waits; one left before any turn, or after a
+  turn the view left out (always older than the turns it keeps), goes
+  before the first turn shown. It is drawn as a labelled note, never as
+  the person's message or the agent's reply, and its text as plain text
+  (row J24).
+
+```mermaid
+sequenceDiagram
+    participant Device as Paired device
+    participant Service as ConversationService
+    participant Grants as share_grants
+    participant Queue as AgentScheduler
+    participant Session as SessionManager
+    participant Agent as ACP prompt
+    Device->>Service: conversation.message {delivery next_turn}
+    Service->>Session: record_note, saved pending after the last turn
+    Note over Service: Later, the person sends a message
+    Service->>Service: idle, a person, queued?
+    Service->>Grants: note_candidates(pending notes)
+    Grants-->>Service: allowed, revoked, or unreadable, each grant read once
+    Service->>Queue: enqueue_with_notes(input, candidates)
+    Queue->>Queue: takes notes only if nothing runs or waits
+    Queue->>Session: begin_record under the lock
+    Session->>Session: retire expired and revoked, take up to 8 allowed
+    Session->>Session: one save, NoteRetired then InputAccepted naming the notes
+    Queue->>Session: at dispatch, taken_notes(turn)
+    Session-->>Queue: author, surface and text of each
+    Queue->>Agent: message with notes, checked against one frame
+    Agent->>Agent: notes block before the person's words
+```
+
 ## What this slice does not do
 
 - **Follow rules** are the follower's table (a peer gateway, slice H, or a
   device's cache). Grants and follow rules are separate tables; this slice adds
   only the grant table, and nothing syncs by default.
-- **Delivering notes to the model and enforcing Drive's policy** (#707,
-  slices J3b and J4). A note is `record_only`; a Drive grant drives its
+- **Enforcing Drive's policy** (#707, slice J4). A Drive grant drives its
   conversation (slice J2) with its tools unchecked.
 - **Driving through a peer gateway.** A peer forwards its people's commands
   in a later slice. A peer signs in as its own principal, not its grantor,
@@ -426,8 +553,12 @@ sequenceDiagram
   conversation not open opens it, as a sent message would. Its status
   opens nothing.
 - **A note's receipt carries no record cursor**, and a note cannot yet name
-  the message it replies to (`replyToMessageId`); the transcript and the
-  desktop show no notes until slice J3c.
+  the message it replies to (`replyToMessageId`).
+- **A pending note waits for the person.** Only a person's queued turn on
+  an idle conversation takes notes, so on a conversation that is always
+  busy, or driven only by an app, notes wait until they expire.
+- **The view lists the newest 64 notes.** Older ones stay in the records
+  and in `conversation.messageStatus`; the view does not page them.
 - **A driver cannot attach.** Uploading an image (`attachment.begin`) and
   linking a file are refused to a paired session; a shared upload needs its
   own store scoped to the conversation.
@@ -478,4 +609,7 @@ otherwise.
 | J18 | A note retried with the same request, also after its grant's policy revision moved; the same request with other text, or under another authority | The first receipt, nothing more saved, the first revision kept; `idempotency_conflict`. A retry after a failed write writes it | `a_retried_note_answers_its_first_receipt_and_another_conflicts`; `the_same_request_is_answered_by_its_record_and_another_conflicts` (`nessa-sdk` `sessions/notes.rs`); `a_note_whose_write_failed_is_written_by_its_retry` (`nessa-sdk` `sessions/manager.rs`) |
 | J19 | An author past 20 notes in 60 seconds, a grant counted as one author across revisions; another author; a conversation holding 1024 notes; a clock set back | `message_quota_exceeded`, nothing saved; the other author admitted; full refuses a new note and still answers a retry; a clock set back makes no room | `an_author_past_its_note_rate_is_refused_and_another_is_not`; `an_author_leaves_at_most_its_rate_in_any_window`, `a_full_conversation_refuses_a_new_note_and_still_answers_a_retry` (`nessa-sdk` `sessions/notes.rs`) |
 | J20 | `conversation.messageStatus` for a request that left a note, and one that left none | `found` with the note's receipt, read from committed records; `found: false`; nothing written | `message_status_finds_the_callers_own_note_by_its_request` |
-| J21 | A note's text empty, blank or past 8192 bytes; a delivery other than `record_only`; a note or a status on a deleted conversation; saved notes past their bound or sharing an id or a request | `invalid_request`, nothing saved; `conversation_deleted`; refused as corrupt when read back. A note survives a checkpoint and its restore | `a_note_outside_its_bounds_or_on_a_deleted_conversation_is_refused`; `a_saved_snapshot_keeps_one_note_per_id_and_request_within_its_bound` (`nessa-sdk` `sessions/notes.rs`); `a_note_survives_a_checkpoint_and_its_restore` (`nessa-sdk` `transcript.rs`) |
+| J21 | A note's text empty, blank or past 8192 bytes; a delivery other than `record_only` or `next_turn`; a note or a status on a deleted conversation; saved notes past their bound or sharing an id or a request | `invalid_request`, nothing saved; `conversation_deleted`; refused as corrupt when read back. A note survives a checkpoint and its restore | `a_note_outside_its_bounds_or_on_a_deleted_conversation_is_refused`; `a_saved_snapshot_keeps_one_note_per_id_and_request_within_its_bound` (`nessa-sdk` `sessions/notes.rs`); `a_note_survives_a_checkpoint_and_its_restore` (`nessa-sdk` `transcript.rs`) |
+| J22 | A `next_turn` note before any turn takes it, once one has, and once retired; a `record_only` one; a note left after a turn; a saved note taken twice, retired and taken, or following no saved turn; a turn naming more than 8 notes | `pending`, `assigned` to that turn for good, `retired` with its reason, `recorded`; it follows the last turn accepted before it. Refused as corrupt when read back. A taken or retired note survives a checkpoint and its restore | `a_notes_state_is_read_from_the_turns_and_retirements_saved`, `a_new_note_follows_the_last_turn_accepted_before_it`, `a_saved_note_taken_twice_retired_and_taken_or_following_no_turn_is_corrupt` (`nessa-sdk` `sessions/notes.rs`); `a_delivered_note_round_trips_with_its_turns_and_retirement`, `a_stored_retirement_or_turn_note_list_its_rules_refuse_is_corrupt` (`nessa-sdk` `snapshot/notes.rs`); `the_next_turn_takes_a_pending_note_and_it_stays_assigned_to_that_turn` |
+| J23 | A person's queued turn on an idle conversation; one queued behind another; a steer; a note past 24 hours; a grant's note while it holds Comment, once lowered below it or revoked, and after its policy changed; a grant that cannot be read; more than 8 allowed; a 65th pending note; the turn's save failing; a message submitted already carrying notes | Takes up to 8 allowed notes in the order left, in the same save as the turn; the others take none; overdue retired `expired`, revoked retired `permission_lost`, on any turn's admission; a policy change keeps the note; unreadable stays pending; the rest stay pending; `message_quota_exceeded`; the notes given back; refused `InvalidInput` | `a_note_is_allowed_while_its_author_holds_comment_and_revoked_once_it_does_not` (`tests/conversation/note_candidates.rs`); `a_grants_note_is_taken_while_it_holds_comment_and_retired_once_it_does_not`; `a_steer_takes_no_note`; `a_turn_retires_what_ended_and_takes_at_most_eight_authorized_notes_in_order`, `a_conversation_holds_at_most_sixty_four_notes_waiting_for_a_turn`, `the_fold_retires_and_assigns_only_pending_notes_and_undoes_a_failed_unit` (`nessa-sdk` `sessions/notes.rs`); `a_turn_takes_authorized_notes_and_retires_ended_ones_in_its_own_save`, `a_turn_that_takes_no_notes_still_retires_and_leaves_the_rest_pending`, `a_failed_turn_save_gives_its_notes_back`, `a_submitted_message_carrying_notes_is_refused` (`nessa-sdk` `sessions/manager.rs`); `a_turn_queued_behind_another_takes_no_notes` (`nessa-sdk` `agents.rs`) |
+| J24 | A turn that took notes is dispatched; a note's text trying to close its block; the largest message with 8 notes at their longest; the view of a conversation with notes, past 64, and past its byte budget | The provider gets the notes, with author kind and surface, as one labelled JSON block before the person's words; the text stays inside its entry; it fits one frame. The view lists the newest 64 with state, turn, reason, the turn they follow and author; they yield after the transcript and before artifacts | `an_idle_queued_turn_hands_the_provider_the_notes_it_took` (`nessa-sdk` `agents.rs`); `notes_go_before_the_persons_words_as_one_labelled_block_of_json`, `a_note_cannot_close_its_block_or_pass_for_another`, `notes_are_counted_against_the_frame` (`nessa-sdk` `prompt_content.rs`); `a_saved_note_is_given_to_the_model_with_its_author_and_surface` (`nessa-sdk` `sessions/notes.rs`); `the_view_shows_each_note_where_it_stands_and_who_left_it`, `the_view_lists_the_newest_notes_and_they_yield_after_the_transcript` (`nessa-protocol` `projection.rs`) |

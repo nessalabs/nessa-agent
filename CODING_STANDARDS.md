@@ -703,8 +703,10 @@ Cedar.
   module directory named `cedar`, holds its schema and policies as checked-in
   files, validates them strictly when composition builds it, and fails closed
   on any error or diagnostic. `crates/nessa-auth/src/adapters/cedar/` is the
-  shape to copy for those parts; its context booleans and its policies without
-  `@id` are what ADR 803 removes next, not a pattern. No code under a crate's
+  shape to copy for those parts: its grants are an entity attribute, the
+  issuing path is a context fact, and it refuses a bundle holding a policy
+  without an `@id`. Its ports still answer a bare Allow or Deny, so the
+  policy ids that decided a refusal are logged rather than returned. No code under a crate's
   `src/` outside a `cedar` directory names the `cedar_policy` crate, test
   modules included, and neither the dependency nor a port is renamed, so both
   stay findable by name.

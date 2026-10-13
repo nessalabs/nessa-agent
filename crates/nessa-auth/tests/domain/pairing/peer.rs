@@ -1,48 +1,10 @@
-//! Peer gateways as a principal kind: who a peer enrollment names, and what
-//! that kind can never hold (`docs/design/auth/peer-gateways.md`, rows H1 and H4).
+//! Peer gateways as a principal kind: who a peer enrollment names
+//! (`docs/design/auth/peer-gateways.md`, row H1). What the kind can never hold
+//! (rows H4 and I1) is the Cedar bundle's, tested in its adapter.
 use nessa_auth::domain::{
     pairing::{is_peer_principal, peer_principal, ConsentClass, DeviceKey},
-    Action, PrincipalId, PrincipalKind, CONVERSATION_AUTHORITY_ACTIONS,
+    PrincipalId,
 };
-
-/// Row H4 and I1: a gateway principal can hold the read grant and
-/// `environment.serve`, and none of the conversation authority's actions; the
-/// other kinds may hold anything but `environment.serve`, which only a peer
-/// serves.
-#[test]
-fn a_gateway_principal_can_hold_only_the_read_and_serve_grants() {
-    let action = |name: &str| Action::new(name).unwrap();
-    assert!(PrincipalKind::Gateway.may_hold(&action("conversation.read")));
-    assert!(PrincipalKind::Gateway.may_hold(&action("environment.serve")));
-    for refused in [
-        "conversation.write",
-        "credential.manage",
-        "server.read",
-        "anything.else",
-    ] {
-        assert!(
-            !PrincipalKind::Gateway.may_hold(&action(refused)),
-            "{refused}"
-        );
-    }
-    // Every action of the conversation authority is refused to a peer, by
-    // name from the one list of them.
-    assert!(!CONVERSATION_AUTHORITY_ACTIONS.is_empty());
-    for authority in CONVERSATION_AUTHORITY_ACTIONS {
-        assert!(
-            !PrincipalKind::Gateway.may_hold(&action(authority)),
-            "{authority}"
-        );
-    }
-    for kind in [
-        PrincipalKind::Human,
-        PrincipalKind::Agent,
-        PrincipalKind::Integration,
-    ] {
-        assert!(kind.may_hold(&action("conversation.write")));
-        assert!(!kind.may_hold(&action("environment.serve")), "{kind:?}");
-    }
-}
 
 /// Row H1: a device's credential names the owner; a peer's names the gateway
 /// principal of the key it pinned, the same for the same key and different

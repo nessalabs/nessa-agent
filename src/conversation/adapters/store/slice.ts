@@ -4,6 +4,8 @@ import {
   executionTargets,
   executionTargetConversation,
   permissionTargetConversation,
+  questionTargetConversation,
+  captureQuestionChoices,
   type PreparedSubmission,
   type ExecutionTarget,
   type PermissionTarget,
@@ -521,8 +523,7 @@ export type Control =
   | { kind: "answer"; target: PermissionTarget; optionId: string }
   | {
       kind: "answerQuestion"
-      executionId: string
-      questionId: string
+      target: QuestionTarget
       /** Null declines: the agent is told it was answered with nothing. */
       choices: { key: string; values: string[]; ownWords?: string }[] | null
     }
@@ -538,18 +539,8 @@ function captureControl(source: Control): Control {
       executionIds.push(command.executionIds[index])
     command.executionIds = executionIds
   }
-  if (command.kind === "answerQuestion" && command.choices !== null) {
-    const choices: NonNullable<typeof command.choices> = []
-    for (let index = 0; index < command.choices.length; index++) {
-      const source = command.choices[index]
-      const values: string[] = []
-      for (let value = 0; value < source.values.length; value++)
-        values.push(source.values[value])
-      // Only DTO fields survive capture; caller serialization hooks do not (PS23).
-      choices.push({ key: source.key, values, ownWords: source.ownWords })
-    }
-    command.choices = choices
-  }
+  if (command.kind === "answerQuestion")
+    command.choices = captureQuestionChoices(command.choices)
   return Object.freeze(command)
 }
 
@@ -570,6 +561,11 @@ export const controlConversation = createAsyncThunk<
     if (
       (control.kind === "answer" || control.kind === "cancel") &&
       permissionTargetConversation(control.target) !== serverId
+    )
+      return
+    if (
+      control.kind === "answerQuestion" &&
+      questionTargetConversation(control.target) !== serverId
     )
       return
     if (
@@ -663,12 +659,7 @@ export const controlConversation = createAsyncThunk<
           await extra.conversation.answer(control.target, control.optionId)
           break
         case "answerQuestion":
-          await extra.conversation.answerQuestion(
-            serverId,
-            control.executionId,
-            control.questionId,
-            control.choices,
-          )
+          await extra.conversation.answerQuestion(control.target, control.choices)
           break
         case "cancel":
           await extra.conversation.cancel(control.target)
@@ -776,8 +767,8 @@ const conversationSlice = createSlice({
   name: "conversation",
   initialState: emptyLocalTabs(),
   reducers: {
-    restoreConversations(_state, action: PayloadAction<SavedConversationTabs>) {
-      return restoreConversationTabs(action.payload)
+    restoreConversations(state, action: PayloadAction<SavedConversationTabs>) {
+      return restoreConversationTabs(state, action.payload)
     },
     cancellationChanged(
       state,

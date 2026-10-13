@@ -26,7 +26,8 @@ verification/
   conversation/
     README.md               committed transcript fixture and publication ownership
     fixture.html            real ConversationControls and applyView browser fixture
-    fixture.tsx             typed current gateway view cases
+    fixture.tsx             typed current gateway view cases and question-target controls
+    vite.config.ts         verification-only production build of those components
     lease-fixture.html      the production details sheet over one published lease per page
     lease-fixture.tsx       each lease state the gateway publishes
   desktop/
@@ -45,7 +46,7 @@ verification/
       attachments-races.mjs pending image admission and concurrent URL-drop refusals
       onboarding-readiness.mjs readiness deadline and retry in both browser engines
       run-all.mjs           every check, summarised
-      committed-transcript.mjs history notices, permission controls, re-enable
+      committed-transcript.mjs history notices, permission controls, re-enable and question-target identities
       lease-details.mjs     the details sheet's Where it runs, for every published lease state
       smoke.mjs             loads, sends, splits, Settings, overview; console errors
       icon-buttons.mjs      every icon button: size, shape, name, tooltip, hover, keyboard focus

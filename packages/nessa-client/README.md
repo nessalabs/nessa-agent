@@ -240,6 +240,28 @@ before a control RPC (`application/permission-target.test.ts`). Recreate them
 from a newly read view after restart or an uncertain acknowledgement. A target
 confers no authority: the gateway checks current access and pending review state.
 
+Question answers capture one published ask using `questionTargets(view)`:
+
+```ts
+import { questionTargets } from "@nessa/client"
+
+const [ask] = questionTargets(view)
+if (ask) {
+  // Render ask.questions to collect its offered keys and values.
+  await client.conversation.answerQuestion(ask, null) // decline the complete ask
+}
+```
+
+The frozen target retains its original prompt and offered choices along with
+conversation, execution and question identities. Edited/copied targets and
+answers naming another ask’s fields or options fail before RPC
+(`application/question-target.test.ts`). Required fields, free text, selection
+counts, current pending state and authority remain server-owned semantics.
+When an application waits before dispatching a deliberate answer,
+`captureQuestionChoices(choices)` retains its read-only choice data (or null
+decline) without deciding provider policy. Hold it together with the captured
+question target; the client uses the same primitive before RPC correlation.
+
 The client generates separate execution and action IDs once per message. A
 conversation ID is a canonical lowercase hyphenated UUID. Message text is limited
 to 8 KiB of UTF-8, and execution and action IDs are limited to 256 UTF-8 bytes.

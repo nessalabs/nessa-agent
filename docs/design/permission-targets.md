@@ -33,5 +33,5 @@ verified caller attribution, or audit ownership.
 
 The client and panel regression suites exercise PT1–PT7. PT8 stays with existing
 SDK, gateway and control-error tests; targets confer no current-state authority.
-Question answers, other execution controls and persistence correlation remain
-follow-up slices of [#797](https://github.com/nessalabs/nessa-agent/issues/797).
+Question answers use [question targets](question-targets.md). Other execution
+controls and persistence correlation remain follow-up slices of [#797](https://github.com/nessalabs/nessa-agent/issues/797).

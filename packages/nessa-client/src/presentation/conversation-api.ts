@@ -1,4 +1,10 @@
 import {
+  captureQuestionChoices,
+  questionFields,
+  type QuestionTarget,
+  type QuestionChoice,
+} from "../application/question-target.js"
+import {
   executionFields,
   issueExecutionTarget,
   type ExecutionTarget,
@@ -13,12 +19,14 @@ import { bounds, ProductMethod } from "../generated/product.js"
 import type {
   ConversationCreateResult,
   ConversationListResult,
+  ConversationMessageDelivery,
+  ConversationMessageReceipt,
+  ConversationMessageStatusResult,
   ConversationObserveCursor,
   ConversationObserveResult,
   ConversationView,
   ConversationReceipt,
   ConversationMutationResult,
-  ConversationQuestionChoice,
   ConversationReorderResult,
   ConversationSetApprovalModeResult,
   ApprovalMode,
@@ -33,6 +41,8 @@ import {
   conversationId,
   conversationIdPattern,
   conversationList,
+  conversationMessageReceipt,
+  conversationMessageStatus,
   conversationObserve,
   conversationView,
   conversationReceipt,
@@ -143,6 +153,22 @@ export type ConversationApi = {
   ) => PreparedSubmission
   /** Submit the exact immutable message prepared before any asynchronous effects. */
   submit: (prepared: PreparedSubmission) => Promise<ConversationSubmission>
+  message: (
+    conversationId: string,
+    text: string,
+    delivery: ConversationMessageDelivery,
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationMessageReceipt>
+  /**
+   * Where the caller's own note left under `requestId` stands now: pending,
+   * taken by a turn (`executionId`), or retired (`retiredReason`). `found` is
+   * false while no note is saved under it; send the same request again to
+   * save it at most once. This writes nothing.
+   */
+  messageStatus: (
+    conversationId: string,
+    requestId: string,
+  ) => Promise<ConversationMessageStatusResult>
   /** Remove the captured waiting input before provider dispatch. */
   remove: (
     target: ExecutionTarget,
@@ -170,10 +196,8 @@ export type ConversationApi = {
    * current question before making a new deliberate answer.
    */
   answerQuestion: (
-    conversationId: string,
-    executionId: string,
-    questionId: string,
-    choices: readonly ConversationQuestionChoice[] | null,
+    target: QuestionTarget,
+    choices: readonly QuestionChoice[] | null,
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
   /** Withdraw the identified review with a human-readable reason recorded by the gateway. */
@@ -353,7 +377,7 @@ export function createConversationApi(
       | readonly string[]
       | readonly ImageAttachment[]
       | readonly LinkedFile[]
-      | readonly ConversationQuestionChoice[]
+      | readonly QuestionChoice[]
       | null
       | undefined
     >,
@@ -529,6 +553,26 @@ export function createConversationApi(
           }),
       )
     },
+    message: (id, text, delivery, options = {}) => {
+      validConversationId(id)
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      boundedText(text, "Note", 8192)
+      if (delivery !== "record_only" && delivery !== "next_turn")
+        throw new TypeError("Note delivery must be record_only or next_turn")
+      return mutate(
+        ProductMethod.ConversationMessage,
+        { conversationId: id, requestId, text, delivery },
+        (value) => conversationMessageReceipt(value, requestId),
+      )
+    },
+    messageStatus: async (id, requestId) =>
+      conversationMessageStatus(
+        await session.request(ProductMethod.ConversationMessageStatus, {
+          conversationId: validConversationId(id),
+          requestId: boundedText(requestId, "Request ID", 256),
+        }),
+        requestId,
+      ),
     remove: (target, options) => {
       const { conversationId, executionId } = executionFields(target)
       return action(
@@ -560,7 +604,13 @@ export function createConversationApi(
         false,
       )
     },
-    answerQuestion: (id, executionId, questionId, choices, options = {}) => {
+    answerQuestion: (target, choices, options = {}) => {
+      const capturedChoices = captureQuestionChoices(choices)
+      const {
+        conversationId: id,
+        executionId,
+        questionId,
+      } = questionFields(target, capturedChoices)
       validConversationId(id)
       const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
       return mutate(
@@ -570,7 +620,7 @@ export function createConversationApi(
           requestId,
           executionId,
           questionId,
-          choices: choices === null ? null : choices.map((choice) => ({ ...choice })),
+          choices: capturedChoices,
         },
         (value) => conversationMutation(value, requestId),
         false,

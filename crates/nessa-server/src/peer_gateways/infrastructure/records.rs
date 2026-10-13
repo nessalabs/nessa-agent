@@ -32,6 +32,7 @@ use nessa_auth::{
 };
 use nessa_local_storage::{is_unsafe_file, OpenMode, PrivateDirectory, PrivateFileType};
 use nessa_protocol::product::generated::MAX_PEERS;
+use nessa_protocol::relay::RelayAddress;
 use serde::{Deserialize, Serialize};
 use std::{
     ffi::{OsStr, OsString},
@@ -76,6 +77,8 @@ pub struct PeerRecord {
     key: DeviceKey,
     pin: [u8; 44],
     address: SocketAddr,
+    /// Where to ask for the peer when its address does not answer.
+    relay: Option<RelayAddress>,
     intent: PublicIntent,
     phase: PeerPhase,
 }
@@ -92,17 +95,24 @@ impl PeerRecord {
     pub fn address(&self) -> SocketAddr {
         self.address
     }
+    /// The relay to ask for the peer when its address does not answer.
+    pub fn relay(&self) -> Option<&RelayAddress> {
+        self.relay.as_ref()
+    }
     /// Where the enrollment stands.
     pub fn phase(&self) -> &PeerPhase {
         &self.phase
     }
 }
 
+/// A relay change: the record as found, and as left or why its write failed.
+pub type RelaySet = (PeerRecord, Result<PeerRecord, PrivateStateError>);
+
 /// A peer as a listing finds it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PeerEntry {
     /// Its record reads.
-    Readable(PeerRecord),
+    Readable(Box<PeerRecord>),
     /// Its record is there but cannot be read: another shape, damaged, or made
     /// with a key that is no longer this gateway's. Only forgetting it helps.
     Unreadable(DeviceKey),
@@ -216,11 +226,16 @@ impl PeerRecords {
             operation: Mutex::new(()),
         })
     }
-    /// A slot for a new enrollment dialed at `address`.
-    pub fn enrolling(self: &Arc<Self>, address: SocketAddr) -> PeerSlot {
+    /// A slot for a new enrollment dialed at `address`, its record to keep
+    /// `relay`.
+    pub fn enrolling(
+        self: &Arc<Self>,
+        address: SocketAddr,
+        relay: Option<RelayAddress>,
+    ) -> PeerSlot {
         PeerSlot {
             records: self.clone(),
-            address: Some(address),
+            address: Some((address, relay)),
             peer: Mutex::new(None),
             refusal: Mutex::new(None),
             found: Mutex::new(None),
@@ -297,6 +312,32 @@ impl PeerRecords {
         Ok(Some(entry))
     }
 
+    /// Set or clear the relay kept for `key`. `None` when no record is kept
+    /// for it; otherwise the record as found, and the record as left or why
+    /// the write failed. An unreadable record is `Corrupt`: only forgetting
+    /// it helps.
+    pub fn set_relay(
+        &self,
+        key: &DeviceKey,
+        relay: Option<RelayAddress>,
+    ) -> Result<Option<RelaySet>, PrivateStateError> {
+        let _guard = self.lock();
+        let own = self.own_spki()?;
+        let Some(found) = self.read(key, &own)? else {
+            return Ok(None);
+        };
+        let left = PeerRecord {
+            relay,
+            ..found.clone()
+        };
+        let written = if left == found {
+            Ok(left)
+        } else {
+            self.write(&left, &own, true).map(|()| left)
+        };
+        Ok(Some((found, written)))
+    }
+
     /// Where the retained cache of what `key` granted this gateway lives:
     /// beside its record, as `<peer key hex>.sqlite3`.
     pub fn cache_path(&self, key: &DeviceKey) -> PathBuf {
@@ -355,7 +396,7 @@ impl PeerRecords {
         own: &[u8; 44],
     ) -> Result<Option<PeerEntry>, PrivateStateError> {
         match self.read(key, own) {
-            Ok(Some(record)) => Ok(Some(PeerEntry::Readable(record))),
+            Ok(Some(record)) => Ok(Some(PeerEntry::Readable(Box::new(record)))),
             Ok(None) => Ok(None),
             Err(PrivateStateError::Corrupt) => Ok(Some(PeerEntry::Unreadable(*key))),
             Err(error) => Err(error),
@@ -453,8 +494,9 @@ impl PeerRecords {
 /// peer key the gateway authenticated, which it learns only then.
 pub struct PeerSlot {
     records: Arc<PeerRecords>,
-    /// Where a new enrollment dialed; `None` for a slot over an existing peer.
-    address: Option<SocketAddr>,
+    /// Where a new enrollment dialed, and the relay its record keeps; `None`
+    /// for a slot over an existing peer.
+    address: Option<(SocketAddr, Option<RelayAddress>)>,
     peer: Mutex<Option<DeviceKey>>,
     refusal: Mutex<Option<SlotRefusal>>,
     /// The peer a save was asked for, from the moment its pin was seen, and
@@ -632,7 +674,7 @@ impl ClientPendingStore for PeerSlot {
             peer,
             match &existing {
                 None => SlotFound::Absent,
-                Some(old) => SlotFound::Kept(Box::new(PeerEntry::Readable(old.clone()))),
+                Some(old) => SlotFound::Kept(Box::new(PeerEntry::Readable(Box::new(old.clone())))),
             },
         );
         let replace = match &existing {
@@ -655,15 +697,16 @@ impl ClientPendingStore for PeerSlot {
                 true
             }
         };
-        let address = match (self.address, &existing) {
-            (Some(address), _) => address,
-            (None, Some(old)) => old.address,
+        let (address, relay) = match (&self.address, &existing) {
+            (Some((address, relay)), _) => (*address, relay.clone()),
+            (None, Some(old)) => (old.address, old.relay.clone()),
             (None, None) => return Err(PrivateStateError::Conflict),
         };
         let record = PeerRecord {
             key: peer,
             pin: *gateway_pin,
             address,
+            relay,
             intent,
             phase: PeerPhase::Pending,
         };
@@ -765,6 +808,10 @@ struct Stored {
     gateway_key: String,
     pin: String,
     address: String,
+    /// Absent when no relay is set, so a record without one keeps the shape
+    /// older builds read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay: Option<RelayAddress>,
     invitation: String,
     attempt: String,
     consent: String,
@@ -788,6 +835,7 @@ fn encode(record: &PeerRecord, own: &[u8; 44]) -> Result<Vec<u8>, PrivateStateEr
         gateway_key: STANDARD.encode(own),
         pin: STANDARD.encode(record.pin),
         address: record.address.to_string(),
+        relay: record.relay.clone(),
         invitation: STANDARD.encode(intent.invitation().bytes()),
         attempt: STANDARD.encode(intent.attempt().bytes()),
         consent: STANDARD.encode(intent.consent().bytes()),
@@ -854,6 +902,7 @@ fn decode(bytes: &[u8], key: &DeviceKey, own: &[u8; 44]) -> Result<PeerRecord, P
             .address
             .parse()
             .map_err(|_| PrivateStateError::Corrupt)?,
+        relay: stored.relay,
         intent,
         phase,
     })

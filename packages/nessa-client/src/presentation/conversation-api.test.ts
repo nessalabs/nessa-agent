@@ -1,3 +1,4 @@
+import { questionTargets } from "../application/question-target.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import { expect, it, vi } from "vitest"
 import { executionTargets } from "../application/execution-target.js"
@@ -19,6 +20,7 @@ const conversationId = "00000000-0000-4000-8000-000000000001"
 const view: ConversationView = {
   conversationId,
   artifacts: [],
+  notes: [],
   approvalMode: "ask",
   approvalModes: [
     {
@@ -656,7 +658,15 @@ it("correlates a question answer acknowledgement with its action", async () => {
     .mockResolvedValue({ requestId: "question-action", applied: true })
   const api = createConversationApi({ request }, () => "question-action")
   await expect(
-    api.answerQuestion(conversationId, "execution", "ask", null),
+    api.answerQuestion(
+      questionTargets({
+        conversationId,
+        questions: [
+          { executionId: "execution", questionId: "ask", message: "Ask", questions: [] },
+        ],
+      })[0]!,
+      null,
+    ),
   ).resolves.toEqual({ requestId: "question-action", applied: true })
   expect(request).toHaveBeenCalledWith("conversation.answerQuestion", {
     conversationId,
@@ -718,9 +728,13 @@ it.each([false, true])(
     const api = createConversationApi({ request }, () => "generated")
     const choices = [{ key: "environment", values: ["staging"] }]
     const error = await api
-      .answerQuestion(conversationId, "execution", "ask", choices, {
-        requestId: "lost-answer",
-      })
+      .answerQuestion(
+        questionTargets({ conversationId, questions: [ask] })[0]!,
+        choices,
+        {
+          requestId: "lost-answer",
+        },
+      )
       .catch((error: unknown) => error)
     expect(error).toBeInstanceOf(NessaConversationControlError)
     expect(error).toMatchObject({
@@ -738,7 +752,7 @@ it.each([false, true])(
       // A fresh read may justify a new deliberate action, not replay of the
       // failed action. The provider remains the owner of ask consumption.
       await expect(
-        api.answerQuestion(conversationId, "execution", "ask", choices, {
+        api.answerQuestion(questionTargets(current)[0]!, choices, {
           requestId: "deliberate-answer",
         }),
       ).resolves.toEqual({ requestId: "deliberate-answer", applied: true })
@@ -755,13 +769,29 @@ it("keeps question refusal and mismatched acknowledgement in the shared control 
     .mockResolvedValueOnce({ requestId: "another-action", applied: true })
   const api = createConversationApi({ request }, () => "question-action")
   const refused = await api
-    .answerQuestion(conversationId, "execution", "ask", null)
+    .answerQuestion(
+      questionTargets({
+        conversationId,
+        questions: [
+          { executionId: "execution", questionId: "ask", message: "Ask", questions: [] },
+        ],
+      })[0]!,
+      null,
+    )
     .catch((error: unknown) => error)
   expect(refused).toBeInstanceOf(NessaConversationControlError)
   expect(refused).toMatchObject({ uncertain: false, requestId: "question-action" })
   expect(refused).not.toHaveProperty("retry")
   const mismatched = await api
-    .answerQuestion(conversationId, "execution", "ask", null)
+    .answerQuestion(
+      questionTargets({
+        conversationId,
+        questions: [
+          { executionId: "execution", questionId: "ask", message: "Ask", questions: [] },
+        ],
+      })[0]!,
+      null,
+    )
     .catch((error: unknown) => error)
   expect(mismatched).toBeInstanceOf(NessaConversationControlError)
   expect(mismatched).toMatchObject({ uncertain: true, requestId: "question-action" })
@@ -1556,4 +1586,170 @@ it("waits out one delete's worst case, and only for delete", async () => {
   await api.close(conversationId)
   expect(request.mock.calls[0]![2]).toEqual({ atLeastMs: conversationDeleteTimeoutMs })
   expect(request.mock.calls[1]![2]).toBeUndefined()
+})
+
+const note = {
+  messageId: "2f1d1c1e-3b7a-4c7e-9a51-0c1e2d3f4a5b",
+  text: "Use the May fares",
+  acceptedAtMs: 1_700_000_000_000,
+  delivery: "next_turn",
+  deliveryState: "assigned",
+  executionId: "run-2",
+  afterExecutionId: "run-1",
+  author: { kind: "grant", surface: "phone" },
+} as const
+
+it("leaves a note under a stable request and retries it as the same note", async () => {
+  const receipt = {
+    requestId: "note-1",
+    messageId: note.messageId,
+    acceptedAtMs: note.acceptedAtMs,
+    deliveryState: "pending",
+  }
+  const request = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("connection lost"))
+    .mockResolvedValue(receipt)
+  const api = createConversationApi({ request }, () => "generated")
+  const failure = await api
+    .message(conversationId, "Use the May fares", "next_turn", { requestId: "note-1" })
+    .catch((error: unknown) => error)
+  expect(failure).toBeInstanceOf(NessaConversationMutationError)
+  await expect(
+    (failure as NessaConversationMutationError<unknown>).retry(),
+  ).resolves.toEqual(receipt)
+  expect(request).toHaveBeenCalledTimes(2)
+  for (const call of request.mock.calls)
+    expect(call).toEqual([
+      "conversation.message",
+      {
+        conversationId,
+        requestId: "note-1",
+        text: "Use the May fares",
+        delivery: "next_turn",
+      },
+    ])
+  // A generated request identity when none is given.
+  await api.message(conversationId, "fyi", "record_only").catch(() => undefined)
+  expect(request.mock.calls[2][1]).toMatchObject({
+    requestId: "generated",
+    delivery: "record_only",
+  })
+})
+
+it("refuses a note outside its bounds before anything is sent", () => {
+  const request = vi.fn()
+  const api = createConversationApi({ request }, () => "generated")
+  for (const text of ["", "  \n", "x".repeat(8193)])
+    expect(() => api.message(conversationId, text, "next_turn")).toThrow(TypeError)
+  expect(() =>
+    api.message(conversationId, "x", "later" as unknown as "next_turn"),
+  ).toThrow(TypeError)
+  expect(() => api.message("not-a-uuid", "x", "record_only")).toThrow(TypeError)
+  expect(request).not.toHaveBeenCalled()
+})
+
+it("accepts a note receipt only for its request and with a coherent state", async () => {
+  const base = {
+    requestId: "note-1",
+    messageId: note.messageId,
+    acceptedAtMs: note.acceptedAtMs,
+  }
+  for (const valid of [
+    { ...base, deliveryState: "recorded" },
+    { ...base, deliveryState: "pending" },
+    { ...base, deliveryState: "assigned", executionId: "run-2" },
+    { ...base, deliveryState: "retired", retiredReason: "permission_lost" },
+  ]) {
+    const api = createConversationApi(
+      { request: vi.fn().mockResolvedValue(valid) },
+      () => "generated",
+    )
+    await expect(
+      api.message(conversationId, "x", "next_turn", { requestId: "note-1" }),
+    ).resolves.toEqual(valid)
+  }
+  for (const invalid of [
+    { ...base, requestId: "another", deliveryState: "pending" },
+    { ...base, deliveryState: "delivered" },
+    { ...base, deliveryState: "assigned" },
+    { ...base, deliveryState: "pending", executionId: "run-2" },
+    { ...base, deliveryState: "retired" },
+    { ...base, deliveryState: "retired", retiredReason: "stale" },
+    { ...base, deliveryState: "pending", acceptedAtMs: -1 },
+    { ...base, deliveryState: "pending", extra: true },
+  ]) {
+    const api = createConversationApi(
+      { request: vi.fn().mockResolvedValue(invalid) },
+      () => "generated",
+    )
+    await expect(
+      api.message(conversationId, "x", "next_turn", { requestId: "note-1" }),
+    ).rejects.toBeInstanceOf(NessaConversationMutationError)
+  }
+})
+
+it("reads where the caller's note stands and refuses a status that contradicts itself", async () => {
+  const found = {
+    found: true,
+    requestId: "note-1",
+    messageId: note.messageId,
+    acceptedAtMs: note.acceptedAtMs,
+    deliveryState: "assigned",
+    executionId: "run-2",
+  }
+  const request = vi.fn().mockResolvedValue(found)
+  const api = createConversationApi({ request }, () => "generated")
+  await expect(api.messageStatus(conversationId, "note-1")).resolves.toEqual(found)
+  expect(request).toHaveBeenCalledWith("conversation.messageStatus", {
+    conversationId,
+    requestId: "note-1",
+  })
+  const missing = { found: false, requestId: "note-1" }
+  await expect(
+    createConversationApi(
+      { request: vi.fn().mockResolvedValue(missing) },
+      () => "generated",
+    ).messageStatus(conversationId, "note-1"),
+  ).resolves.toEqual(missing)
+  for (const invalid of [
+    { ...missing, deliveryState: "pending" },
+    { ...found, requestId: "another" },
+    { ...found, executionId: undefined },
+  ]) {
+    await expect(
+      createConversationApi(
+        { request: vi.fn().mockResolvedValue(invalid) },
+        () => "generated",
+      ).messageStatus(conversationId, "note-1"),
+    ).rejects.toThrow()
+  }
+  await expect(api.messageStatus(conversationId, "")).rejects.toThrow(TypeError)
+})
+
+it("accepts a view's bounded notes and refuses an incoherent one", async () => {
+  const read = (notes: unknown[]) =>
+    createConversationApi(
+      { request: vi.fn().mockResolvedValue({ ...view, notes }) },
+      () => "generated",
+    ).read(conversationId)
+  await expect(read([note])).resolves.toMatchObject({ notes: [note] })
+  await expect(read(Array(64).fill(note))).resolves.toBeDefined()
+  for (const invalid of [
+    Array(65).fill(note),
+    [{ ...note, text: "" }],
+    [{ ...note, text: "x".repeat(8193) }],
+    [{ ...note, deliveryState: "pending" }],
+    [{ ...note, author: { kind: "app", surface: "phone" } }],
+    [{ ...note, author: { kind: "owner", surface: "" } }],
+    [{ ...note, delivery: "later" }],
+    [{ ...note, policyRevision: 3 }],
+  ])
+    await expect(read(invalid)).rejects.toThrow()
+  await expect(
+    createConversationApi(
+      { request: vi.fn().mockResolvedValue({ ...view, notes: undefined }) },
+      () => "generated",
+    ).read(conversationId),
+  ).rejects.toThrow()
 })

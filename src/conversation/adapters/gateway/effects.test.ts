@@ -1,5 +1,9 @@
-import { prepareSubmission, executionTargets } from "@nessa/client"
-import { permissionTargets } from "@nessa/client"
+import {
+  prepareSubmission,
+  executionTargets,
+  permissionTargets,
+  questionTargets,
+} from "@nessa/client"
 import {
   IMAGE_ATTACHMENT_TYPES,
   linkedFileProblem,
@@ -46,6 +50,7 @@ function gatewayView(): ConversationView {
   return {
     questions: [],
     artifacts: [],
+    notes: [],
     conversationId: "00000000-0000-4000-8000-000000000001",
     title: null,
     revision: "capabilities",
@@ -906,6 +911,7 @@ it.each([
             close: refuse,
             remove: refuse,
             answer: refuse,
+            answerQuestion: refuse,
             cancel: refuse,
             reorder: refuse,
           },
@@ -922,6 +928,7 @@ it.each([
           })[0]!,
         ),
       () => effects.answer(reviewTarget(), "option"),
+      () => effects.answerQuestion(askTarget(), null),
       () => effects.cancel(reviewTarget()),
       () => effects.reorder("00000000-0000-4000-8000-000000000001", ["execution"]),
     ]
@@ -1581,6 +1588,72 @@ it("tells the follower the files its agent published, by what they are held as a
   stop()
 })
 
+it("tells the follower each note as its row shows it, and nothing it does not", async () => {
+  const gateway = subscribing()
+  const effects = effectsOf(() => gateway.client)
+  const { said, follower } = told()
+  const stop = effects.follow("server", follower)
+  await settle()
+  const left = {
+    text: "Mind the deploy window",
+    acceptedAtMs: 1_000,
+    author: { kind: "grant" as const, surface: "phone" },
+  }
+  gateway.opens[0]!.handlers.view({
+    cursor: cursor("1"),
+    view: {
+      ...gatewayView(),
+      notes: [
+        { ...left, messageId: "n1", delivery: "record_only", deliveryState: "recorded" },
+        {
+          ...left,
+          messageId: "n2",
+          delivery: "next_turn",
+          deliveryState: "assigned",
+          executionId: "run-2",
+          afterExecutionId: "run-1",
+        },
+        {
+          ...left,
+          messageId: "n3",
+          delivery: "next_turn",
+          deliveryState: "retired",
+          retiredReason: "permission_lost",
+          afterExecutionId: "run-2",
+        },
+      ],
+    },
+  })
+  const author = { kind: "grant", surface: "phone" }
+  // When it was accepted, what it was left for, and the turn that took it
+  // are the gateway's record; the row shows who, where it stands, and what.
+  expect(said).toEqual([
+    {
+      view: expect.objectContaining({
+        notes: [
+          { id: "n1", text: left.text, author, deliveryState: "recorded" },
+          {
+            id: "n2",
+            text: left.text,
+            author,
+            deliveryState: "assigned",
+            afterExecutionId: "run-1",
+          },
+          {
+            id: "n3",
+            text: left.text,
+            author,
+            deliveryState: "retired",
+            retiredReason: "permission_lost",
+            afterExecutionId: "run-2",
+          },
+        ],
+      }),
+    },
+  ])
+  stop()
+})
+
 it("reads a held file back through the client's verified fetch", async () => {
   const bytes = new Blob(["png"])
   const fetch = vi.fn(async () => bytes)
@@ -1617,3 +1690,42 @@ function reviewTarget() {
     ],
   })[0]!
 }
+
+function askTarget() {
+  return questionTargets({
+    conversationId: "00000000-0000-4000-8000-000000000001",
+    questions: [
+      {
+        executionId: "turn",
+        questionId: "ask",
+        message: "Choose",
+        questions: [
+          {
+            key: "field",
+            prompt: "Choose",
+            required: false,
+            multiSelect: false,
+            freeText: true,
+            options: [{ value: "value", label: "Value" }],
+          },
+        ],
+      },
+    ],
+  })[0]!
+}
+
+it("passes the captured question target and answers through the gateway adapter", async () => {
+  const answerQuestion = vi.fn(async () => ({ requestId: "action", applied: true }))
+  const effects = effectsOf(
+    () => ({ conversation: { answerQuestion } }) as unknown as NessaClient,
+  )
+  const target = askTarget()
+  await effects.answerQuestion(target, [{ key: "field", values: ["value"] }])
+  await effects.answerQuestion(target, [{ key: "field", values: [], ownWords: "Answer" }])
+  await effects.answerQuestion(target, null)
+  expect(answerQuestion.mock.calls).toEqual([
+    [target, [{ key: "field", values: ["value"], ownWords: null }]],
+    [target, [{ key: "field", values: [], ownWords: "Answer" }]],
+    [target, null],
+  ])
+})

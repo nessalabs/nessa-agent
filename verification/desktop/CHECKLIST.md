@@ -1347,6 +1347,16 @@ says why where the conversations would be.
   is chosen; the gateway refuses a host its `config.json` does not name, and a
   paired machine that is not connected.
 
+## Restored local tab lifetimes
+
+- [ ] **Restoration creates a fresh local tab while preserving its durable target.**
+  Finishing the original close affects the original remote conversation; the
+  replacement owns its follow and has no old cancellation notice. Same-remote
+  and different-remote replacements are measured at 360, 600 and 1440 pixels
+  in both engines.
+  _Check:_ `local-tab-lifetimes.mjs`; ordering rows LT1/LT6/LT7 in
+  [local tab lifetimes](../../docs/design/local-tab-identities.md).
+
 ## Committed transcript controls
 
 - [ ] **Unconfirmed history has one notice and no offered controls.**
@@ -1363,6 +1373,17 @@ says why where the conversations would be.
   dispatch zero gateway closes; confirmed complete-empty permits omission and one
   close. A truncated complete-empty view still preserves the reference. Both
   engines and all three widths assert the original local tab closes in every case.
+
+- [ ] **A question answer belongs to the conversation whose fields were shown.**
+  _Check:_ `committed-transcript.mjs --mode prod` renders the production
+  `ConversationQuestions`, store controls and client serializer in Chromium and
+  WebKit at 360/600/1440 pixels. Two conversations share turn/question IDs:
+  three offered fields remain operable, an equal-key simultaneous ask retains
+  its middle selection, switching transfers zero selections,
+  and exactly two serialized actions retain their original targets (valid
+  offered choice, then null decline). Source projection/recorder evidence;
+  gateway/SDK tests own current-state admission. The primitive and ordering
+  table are [question targets](../../docs/design/question-targets.md).
 
 ### Onboarding readiness recovery
 
@@ -1537,3 +1558,38 @@ WebKit and is dev-only in run-all.
     asserted on real files by `cargo test -p nessa-app -- saving`.
 - [ ] **A conversation with no turn, only a file published while none ran,
   shows that file and not the empty welcome.** _Check:_ `--only empty`.
+
+## Transcript notes
+
+`transcript-notes.mjs` loads `fixtures/transcript-notes/`, a dev-server page
+that mounts the production transcript in the desktop window over a fake
+gateway and in a 420 px panel; the panel applies the same view as its follow
+does. The view has the gateway's shape: two turns, and two inputs still
+waiting, each listed both as a queued turn and as pending. It has seven
+notes: one in each state, from the owner and from someone the conversation
+is shared with, one left before any turn, one after a turn the bounded view
+left out (older than every turn it keeps), one left between the two waiting
+inputs, and one whose text is a single word of over 300 characters. The script runs
+in Chromium and WebKit and is dev-only in run-all. The rule it holds is
+`placeNotes` and `TranscriptNote` (`src/conversation`), which both surfaces
+use.
+
+- [ ] **A note is a row of its own, right after the turn it followed.**
+  _Check:_ `transcript-notes.mjs --only placement`. On both surfaces, notes
+  and what the turns say read, top to bottom: the note left before any turn
+  and the note after the dropped turn, the first turn, its two notes in the
+  order left, the second turn, its two notes, the first waiting input, the
+  note left after it, and the second waiting input. No note is inside a chat
+  bubble or a turn's reply.
+- [ ] **Each note says who left it, from where, and where it stands, in the
+  same words on both surfaces.** _Check:_ `--only labels`. "Note left by the
+  owner, from desktop" or "Note left by someone it is shared with, from
+  phone"; no state for a recorded note, then "Waiting for the next turn",
+  "Given to a turn", "Not delivered: expired" and "Not delivered:
+  sharing changed".
+- [ ] **A long note wraps inside its row and nothing scrolls sideways.**
+  _Check:_ `--only wrap --shots <dir>`. Every note's left and right edges are
+  within 0.5 px of its column, and its `scrollWidth` is at most its
+  `clientWidth` + 1. The long note's text runs over more than two lines. The
+  columns and the page have no horizontal overflow. The screenshots show both
+  transcripts.

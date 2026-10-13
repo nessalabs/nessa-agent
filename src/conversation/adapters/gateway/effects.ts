@@ -27,6 +27,7 @@ import {
 } from "../../application/ports"
 import type { CommandFailure, ConversationSelection, ReadFailure } from "../../model"
 import { heldFileReader } from "./held-files"
+import { shownNote } from "./notes"
 
 /**
  * The gateway's view as the panel's own, received at `receivedAtMs` on the
@@ -35,7 +36,7 @@ import { heldFileReader } from "./held-files"
  * against the panel's clock does not move with the difference between the two
  * machines' clocks.
  */
-function conversationView(
+export function conversationView(
   { serverNowMs, ...value }: GatewayConversationView,
   receivedAtMs: number,
 ): ConversationView {
@@ -68,6 +69,7 @@ function conversationView(
         ? {}
         : { executionId: artifact.executionId }),
     })),
+    notes: value.notes.map(shownNote),
     capabilities: {
       queue: value.capabilities.queue,
       steer: value.capabilities.steer,
@@ -763,12 +765,10 @@ export function gatewayEffects(
         throw controlFailure(error)
       }
     },
-    async answerQuestion(conversationId, executionId, questionId, choices) {
+    async answerQuestion(target, choices) {
       try {
         await api().answerQuestion(
-          conversationId,
-          executionId,
-          questionId,
+          target,
           choices === null
             ? null
             : choices.map((choice) => ({

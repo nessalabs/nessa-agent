@@ -40,6 +40,7 @@ const functional = [
   "safe-area",
   "columns",
   "committed-transcript",
+  "local-tab-lifetimes",
   "lease-details",
   "load-fallback",
   "gateway-states",
@@ -56,6 +57,7 @@ const functional = [
   "message-sync",
   "command-order",
   "published-files",
+  "transcript-notes",
 ]
 
 const options = cli({
@@ -151,7 +153,10 @@ try {
 }
 const scheduled = checksUnder(options.mode, checks)
 const leftOutSet = new Set(scheduled.leftOut)
-const sharesPage = (check) => functional.includes(check) && check !== "message-sync"
+const sharesPage = (check) =>
+  functional.includes(check) &&
+  check !== "message-sync" &&
+  !(options.mode === "prod" && check === "committed-transcript")
 const dir = mkdtempSync(join(tmpdir(), "nessa-desktop-verify-all-"))
 const summary = []
 const documents = {}
@@ -183,7 +188,8 @@ try {
     if (!sharesPage(check)) {
       if (check === "perf-budget" && options.url) args.push("--url", options.url)
       if (options.runs) args.push("--runs", options.runs)
-      if (check === "message-sync") args.push("--mode", "prod")
+      if (check === "message-sync" || check === "committed-transcript")
+        args.push("--mode", "prod")
     } else {
       args.push("--url", page.url)
       // The shared page is already started. The child must still hear prod,

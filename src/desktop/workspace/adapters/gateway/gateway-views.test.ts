@@ -14,6 +14,7 @@ import {
   approvalId,
   inputId,
   modelFor,
+  noteId,
   publishedAfterId,
   publishedBeforeId,
   replyId,
@@ -22,7 +23,7 @@ import {
   summaryFrom,
   transcriptFrom,
 } from "./gateway-views"
-import { GATEWAY_NOW_MS, row, view } from "./fake-gateway"
+import { GATEWAY_NOW_MS, note, row, view } from "./fake-gateway"
 
 const at = () => 42
 
@@ -290,6 +291,164 @@ describe("a conversation view as a transcript", () => {
     })
     // No other message ever has the loose files' ids.
     expect(new Set(transcript.messages.map((message) => message.id)).size).toBe(7)
+  })
+
+  it("shows each note as a row of its own right after the turn or waiting input it followed, and one left before any turn or after a dropped turn first", () => {
+    const transcript = transcriptFrom(
+      view("c", {
+        messages: [
+          turn({ executionId: "e1", parts: [textPart("Charted", 0)] }),
+          turn({ executionId: "e2", userText: "Again" }),
+        ],
+        artifacts: [
+          {
+            executionId: "e1",
+            lease: "lease-1",
+            name: "chart.png",
+            digest: `sha256:${"a".repeat(64)}`,
+            mimeType: "image/png",
+            size: 3,
+          },
+        ],
+        notes: [
+          note("first"),
+          // Its turn is older than every turn the bounded view kept.
+          note("dropped", { afterExecutionId: "e0" }),
+          note("after-e1", { afterExecutionId: "e1" }),
+          note("unlisted", { afterExecutionId: "e3" }),
+          note("after-e2", {
+            afterExecutionId: "e2",
+            delivery: "next_turn",
+            deliveryState: "retired",
+            retiredReason: "expired",
+            author: { kind: "grant", surface: "phone" },
+          }),
+        ],
+        pending: [
+          {
+            executionId: "e3",
+            text: "Waiting",
+            attachments: [],
+            files: [],
+            mode: "queued",
+          },
+        ],
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(transcript.messages.map((message) => [message.id, message.role])).toEqual([
+      [noteId("first"), "note"],
+      [noteId("dropped"), "note"],
+      [inputId("e1"), "user"],
+      // After the whole turn: its reply and the files it published.
+      [replyId("e1"), "agent"],
+      [noteId("after-e1"), "note"],
+      [inputId("e2"), "user"],
+      [noteId("after-e2"), "note"],
+      [inputId("e3"), "user"],
+      // Right after the input still waiting it followed.
+      [noteId("unlisted"), "note"],
+    ])
+    const shown = transcript.messages.find((message) => message.id === noteId("after-e2"))
+    // What its row draws, and nothing of the gateway's own record.
+    expect(shown?.note).toEqual({
+      id: "after-e2",
+      text: "Note after-e2",
+      author: { kind: "grant", surface: "phone" },
+      deliveryState: "retired",
+      retiredReason: "expired",
+      afterExecutionId: "e2",
+    })
+    expect(shown?.parts).toEqual([])
+    // A note is no turn's text: nothing reads it as what was said.
+    expect(messageText(shown!)).toBe("")
+    expect(new Set(transcript.messages.map((message) => message.id)).size).toBe(9)
+  })
+
+  it("puts a note left between two inputs waiting right after the first, as the gateway lists them", () => {
+    const queued = (executionId: string, text: string) => ({
+      executionId,
+      text,
+      attachments: [],
+      files: [],
+      mode: "queued" as const,
+    })
+    // The gateway lists every input waiting both as a queued turn and as pending.
+    const transcript = transcriptFrom(
+      view("c", {
+        messages: [
+          turn({ executionId: "e1", parts: [textPart("Done", 0)] }),
+          turn({ executionId: "q1", userText: "First waiting", status: "queued" }),
+          turn({ executionId: "q2", userText: "Second waiting", status: "queued" }),
+        ],
+        pending: [queued("q1", "First waiting"), queued("q2", "Second waiting")],
+        notes: [
+          note("between", { afterExecutionId: "q1" }),
+          note("after-q2", { afterExecutionId: "q2" }),
+        ],
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(transcript.messages.map((message) => message.id)).toEqual([
+      inputId("e1"),
+      replyId("e1"),
+      inputId("q1"),
+      noteId("between"),
+      inputId("q2"),
+      noteId("after-q2"),
+    ])
+  })
+
+  it("draws an input waiting that the view lists apart from its turns after every turn, its note right after it, as the panel does", () => {
+    const queued = (executionId: string, text: string) => ({
+      executionId,
+      text,
+      attachments: [],
+      files: [],
+      mode: "queued" as const,
+    })
+    // A bounded view can list a waiting input without its turn. Which order
+    // waiting inputs are drawn in is the panel's and the desktop's one shared
+    // answer: the listed turns first, then the rest (`waiting-notes.test.tsx`).
+    const transcript = transcriptFrom(
+      view("c", {
+        truncated: true,
+        messages: [
+          turn({ executionId: "e1", parts: [textPart("Done", 0)] }),
+          turn({ executionId: "q1", userText: "Listed waiting", status: "queued" }),
+        ],
+        pending: [queued("p0", "Unlisted waiting"), queued("q1", "Listed waiting")],
+        notes: [note("after-p0", { afterExecutionId: "p0" })],
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(transcript.messages.map((message) => message.id)).toEqual([
+      inputId("e1"),
+      replyId("e1"),
+      inputId("q1"),
+      inputId("p0"),
+      noteId("after-p0"),
+    ])
+    // The latest input is still the last one the view lists apart, as before.
+    expect(transcript.latestInputId).toBe("p0")
+  })
+
+  it("names a note apart from every input, reply and list of published files", () => {
+    for (const messageId of ["reply", "published", "a/b", "/note:x", ""])
+      expect(noteId(messageId)).toMatch(/^\/note:[^/]*$/)
+    expect(noteId("a/b")).not.toBe(noteId("a%002Fb"))
+    expect([
+      inputId("x"),
+      replyId("x"),
+      publishedAfterId,
+      publishedBeforeId,
+    ]).not.toContain(noteId("x"))
   })
 
   it("D17 (#390): says which app wrote a turn, waiting or not, and nothing of the person's own", () => {
