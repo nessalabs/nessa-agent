@@ -4,7 +4,7 @@ use crate::application::dto::{
     CredentialMetadataDto, CredentialTransitionDto, InitiatorDto, IssuanceCauseDto,
     TransitionCauseDto,
 };
-use crate::application::pairing::VerifiedOwnerPhoneDeviceProof;
+use crate::application::pairing::{OwnerPhoneOriginalReceipt, VerifiedOwnerPhoneDeviceProof};
 use crate::domain::{
     pairing::{
         AttemptFailure, AttemptId, ConsentClass, ConsentIntent, ConsentIntentId, DeviceKey, Event,
@@ -207,6 +207,20 @@ impl StoredPairing {
             .as_ref()
             .map(StoredOwnerPhoneOriginal::restore)
             .transpose()
+    }
+    pub(super) fn owner_phone_receipt(
+        &self,
+        canonical: &[CredentialTransitionDto],
+    ) -> Result<OwnerPhoneOriginalReceipt, PairingError> {
+        // restore owns source/approval/key/digest agreement with the stored original.
+        let record = self.restore(canonical)?;
+        let original = self.owner_phone_request()?.ok_or(PairingError::Conflict)?;
+        let (_, _, digest) = record
+            .owner_phone_approval()
+            .ok_or(PairingError::Conflict)?;
+        Ok(OwnerPhoneOriginalReceipt::restored(
+            original, digest, record,
+        ))
     }
     /// Who this enrollment enrolls, as stored.
     pub(crate) fn class(&self) -> ConsentClass {
