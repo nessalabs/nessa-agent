@@ -25,7 +25,9 @@ Upload progress is owned by the conversation application and carries its local
 conversation and admitted placement together; see [attachment lifetimes](design/attachment-lifetimes.md).
 The panel carries that target through hashing and the store through staging.
 The conversation application mints placements and publishes one resource-usage
-snapshot for retention and preview eviction; resource IDs identify shared bytes.
+snapshot for retention and preview eviction. The immutable resource value carries
+byte identity and authoritative metadata together; storage and accounting use
+that value's object identity.
 
 ## Today
 
