@@ -67,6 +67,7 @@ verification/
       scripted-e2e.mjs      one signed-out command: the gateway-backed checks in Chromium and WebKit, one verdict line (`pnpm test:e2e:scripted`)
       drag.mjs              pane drag: pointer path, zones, cancels, selection
       focus.mjs             where the caret lands after each pane and dialog change
+      lib/overview-keyboard.mjs atomic observation/action for incrementally mounted overview rows
       responsive.mjs        approval card, composer controls and thinking control, column titles, Settings widths and Integrations narrow, a pane's home
       widgets.mjs           widget hosts: a card, its pane, the window, Escape's order, focus, drag over the window
       message-sync.mjs      active DOM delivery, stalled list/read independence and idle cost

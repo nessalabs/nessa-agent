@@ -315,6 +315,10 @@ _ADR 238 › Focus follows the focused pane_; keys in
   panes unchanged, and retain the switcher. An unbound key remains unconsumed;
   closing the switcher restores ordinary split commands.
   _Check:_ `focus.mjs` (`focus-bound-keys`), [workspace shortcuts](../../docs/design/workspace-shortcuts.md).
+- [ ] **Keys during incremental overview rendering use the mounted prefix.**
+  The probe is armed before opening and performs End/Down/Home in the same
+  callback that observes eligible rows, retaining its own measurements.
+  _Check:_ `focus.mjs` (`focus-overview-arriving`), `lib/overview-keyboard.test.mjs`.
 - [ ] **A burst of keys leaves a working window**: no error, a focused pane.
   _Check:_ `focus.mjs` (`focus-mash`).
 - [ ] **A pane command from the overview**: one that is a navigation leaves
