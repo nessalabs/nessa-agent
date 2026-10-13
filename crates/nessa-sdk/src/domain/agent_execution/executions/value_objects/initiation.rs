@@ -48,7 +48,15 @@ impl GrantInitiator {
         role: GrantRole,
         policy_revision: u64,
     ) -> Result<Self, ExecutionError> {
-        let grant = grant.into();
+        Self::checked(grant.into(), role, policy_revision)
+    }
+    // Not generic, so the checks are one function that every caller's
+    // instantiation of `new` shares.
+    fn checked(
+        grant: String,
+        role: GrantRole,
+        policy_revision: u64,
+    ) -> Result<Self, ExecutionError> {
         if grant.trim().is_empty() {
             return Err(ExecutionError::EmptyValue("share grant"));
         }
