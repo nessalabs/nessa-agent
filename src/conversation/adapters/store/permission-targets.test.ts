@@ -112,14 +112,14 @@ it.each(["answer", "cancel"] as const)(
 )
 
 it.each(["answer", "cancel"] as const)(
-  "PT4: a delayed %s does nothing after restoration reuses the local tab for another conversation",
+  "PT4: a delayed %s does nothing after restoration replaces the original local tab",
   async (kind) => {
     const { store, create, answer, cancel } = fixture()
     const target = captured(first)
     store.dispatch(
       restoreConversations({ tabs: [{ conversationId: second, title: "Restored" }] }),
     )
-    expect(store.getState().conversation.conversations[0]?.id).toBe("c0")
+    expect(store.getState().conversation.conversations[0]?.id).not.toBe("c0")
     await store.dispatch(
       controlConversation({ id: "c0", control: { kind, target, optionId: "allow" } }),
     )

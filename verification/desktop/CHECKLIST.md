@@ -1347,6 +1347,16 @@ says why where the conversations would be.
   is chosen; the gateway refuses a host its `config.json` does not name, and a
   paired machine that is not connected.
 
+## Restored local tab lifetimes
+
+- [ ] **Restoration creates a fresh local tab while preserving its durable target.**
+  Finishing the original close affects the original remote conversation; the
+  replacement owns its follow and has no old cancellation notice. Same-remote
+  and different-remote replacements are measured at 360, 600 and 1440 pixels
+  in both engines.
+  _Check:_ `local-tab-lifetimes.mjs`; ordering rows LT1/LT6/LT7 in
+  [local tab lifetimes](../../docs/design/local-tab-identities.md).
+
 ## Committed transcript controls
 
 - [ ] **Unconfirmed history has one notice and no offered controls.**

@@ -1,6 +1,6 @@
 import { emptyTabs, type ConversationTabs } from "../model"
 
-/** UI-session tabs plus local id counters (gone once the server mints ids). */
+/** UI-session tab/turn lifetimes, distinct from durable gateway identities. */
 export type LocalTabs = ConversationTabs & {
   nextConversationId: number
   nextTurnId: number

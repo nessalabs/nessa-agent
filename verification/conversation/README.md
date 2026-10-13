@@ -35,3 +35,10 @@ and close thunk after decoding each published history state. The browser measure
 saved-reference counts and external close-port invocations, with complete-empty
 as the permitted counterpart. It proves the UI consumer's dispatch decision;
 it does not run a gateway or establish physical provider cleanup.
+
+`lifetime-fixture.html?same` restores the same remote conversation; without the
+query it restores another. Both mount the production `useConversation` follow
+and controls over a gated close port. `local-tab-lifetimes.mjs` measures fresh
+local identity, old follow cleanup, replacement follow, original close target,
+and replacement notices at 360, 600 and 1440 pixels in both engines. The
+fixture is served in development and is excluded from product assets.
