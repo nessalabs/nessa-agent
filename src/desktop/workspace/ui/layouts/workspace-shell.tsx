@@ -167,7 +167,8 @@ const moves: Partial<Record<ShortcutCommand, Direction>> = {
 /**
  * Runs the window's keys: the commands every layout shares, and `own` for
  * the ones the window answers with its own parts (the switcher, the list). A
- * handler returning false leaves the key alone. Where the caret goes after
+ * handler may decline an unavailable action; its bound key remains consumed.
+ * Where the caret goes after
  * each is not the keys' business: it follows the focused pane
  * (`adapters/dom/focus.ts`).
  */
