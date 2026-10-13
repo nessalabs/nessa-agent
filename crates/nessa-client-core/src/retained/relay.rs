@@ -12,8 +12,9 @@
 //! Both legs share the connect's one budget. What a joined stream carries is
 //! the same pinned TLS as a direct one, so the relay leg decides nothing
 //! about the gateway: it only finds a path to it.
-use nessa_protocol::relay::{read_frame, write_frame, GatewayKey, RelayAddress, RelayFrame};
-use std::fmt;
+use nessa_protocol::relay::{
+    read_frame, write_frame, GatewayKey, RelayAddress, RelayFrame, RelayRefusal,
+};
 use std::io::{Error, ErrorKind, Result as IoResult};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -29,25 +30,6 @@ pub(super) struct RelayRoute {
     pub(super) address: RelayAddress,
     pub(super) key: GatewayKey,
 }
-
-/// Why the relay did not join the reader to its gateway. Carried inside the
-/// leg's `ConnectionRefused` error.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum RelayRefusal {
-    /// The gateway is not registered at the relay.
-    Offline,
-    /// The gateway is registered but did not accept in time.
-    NoAnswer,
-}
-impl fmt::Display for RelayRefusal {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Offline => "the gateway is not registered at the relay",
-            Self::NoAnswer => "the gateway did not accept through the relay in time",
-        })
-    }
-}
-impl std::error::Error for RelayRefusal {}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Leg {
@@ -184,15 +166,8 @@ pub(super) fn relay_leg(route: &RelayRoute, timeout: Duration) -> IoResult<TcpSt
     stream.set_write_timeout(None)?;
     match answer {
         RelayFrame::Joined => Ok(stream),
-        RelayFrame::Offline => Err(Error::new(
-            ErrorKind::ConnectionRefused,
-            RelayRefusal::Offline,
-        )),
-        RelayFrame::NoAnswer => Err(Error::new(
-            ErrorKind::ConnectionRefused,
-            RelayRefusal::NoAnswer,
-        )),
-        _ => Err(Error::from(ErrorKind::InvalidData)),
+        other => Err(RelayRefusal::of(other)
+            .map_or_else(|| Error::from(ErrorKind::InvalidData), Error::from)),
     }
 }
 

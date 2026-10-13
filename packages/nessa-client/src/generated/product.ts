@@ -2193,12 +2193,13 @@ export interface PeerGateway {
   /** What this gateway's poller last saw reading the peer. Only in peer.list, and only for a pending or active peer; absent for a revoked or unreadable one, and in the results of peer.enroll and peer.forget. */
   sync?: PeerSync
 }
-/** How reading a peer last went, since this gateway started. waiting: not read yet, or still pending on the peer. synced: the last read brought the retained cache up to what the peer grants. syncing: the last read saved some of what the peer grants and stopped at a bound (a page bound or its time budget); the next continues it. A read an owner command stops leaves the state as it was. unreachable: the peer could not be reached, or the last read ran out of its time budget before it saved anything; reads back off. failed: the peer answered but the read failed; reads back off. quota: this gateway's retained cache of the peer is full; each read still withdraws what the peer no longer grants, and reads back off until the peer grants less. */
+/** How reading a peer last went, since this gateway started. waiting: not read yet, or still pending on the peer. synced: the last read brought the retained cache up to what the peer grants. syncing: the last read saved some of what the peer grants and stopped at a bound (a page bound or its time budget); the next continues it. A read an owner command stops leaves the state as it was. unreachable: the peer could not be reached, or the last read ran out of its time budget before it saved anything; reads back off. away: the peer's address did not answer and its relay said the peer is not registered with it (asleep, quit or offline, as far as the relay can tell; nothing authenticates that word); the retained cache is kept and readable, and reads back off as for unreachable. failed: the peer answered but the read failed; reads back off. quota: this gateway's retained cache of the peer is full; each read still withdraws what the peer no longer grants, and reads back off until the peer grants less. */
 export const PeerSyncState = {
   Waiting: "waiting",
   Synced: "synced",
   Syncing: "syncing",
   Unreachable: "unreachable",
+  Away: "away",
   Failed: "failed",
   Quota: "quota",
 } as const

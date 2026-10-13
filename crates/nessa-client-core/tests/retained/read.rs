@@ -2,6 +2,7 @@
 //! and how it ends: a full cache still withdraws what the gateway no longer
 //! grants, and a read its budget cut short counts only if it saved something.
 use super::*;
+use nessa_protocol::relay::RelayFrame;
 
 /// A walk over conversations whose answers the test sets, keeping what the
 /// walk asked of each.
@@ -413,6 +414,7 @@ fn a_relayed_connect_ends_when_the_injected_budget_is_spent() {
             address: RelayAddress::try_from(silent.local_addr().unwrap().to_string()).unwrap(),
             key: [3; 32],
         }),
+        offline: Arc::default(),
     };
     let started = std::time::Instant::now();
     let ended = std::thread::scope(|scope| {
@@ -432,4 +434,82 @@ fn a_relayed_connect_ends_when_the_injected_budget_is_spent() {
     };
     assert_eq!(error.kind(), std::io::ErrorKind::ConnectionAborted);
     assert!(started.elapsed() < Duration::from_secs(15));
+}
+
+/// Issue #266, R3: a read that never reached its gateway is `Away` only when
+/// its relay said the gateway is not registered with it; every other end,
+/// a busy gateway's `NoAnswer` included, is reported as before.
+#[test]
+fn a_read_is_away_only_when_its_relay_said_the_gateway_is_offline() {
+    let unreachable = ReadEnd::Failed(ReadFailure::Unreachable);
+    assert_eq!(
+        away(unreachable.clone(), true),
+        ReadEnd::Failed(ReadFailure::Away)
+    );
+    assert_eq!(away(unreachable.clone(), false), unreachable);
+    for end in [
+        ReadEnd::Read(report(true)),
+        ReadEnd::Incomplete,
+        ReadEnd::Failed(ReadFailure::Refused),
+        ReadEnd::Failed(ReadFailure::Stopped),
+    ] {
+        assert_eq!(away(end.clone(), true), end);
+    }
+}
+
+/// A monotonic clock that never moves, so no budget runs out.
+struct Still;
+impl MonotonicClock for Still {
+    fn elapsed_ms(&self) -> u64 {
+        0
+    }
+}
+
+/// A relay that takes one `Connect` and answers `answer`.
+fn answering_relay(answer: RelayFrame) -> (RelayAddress, std::thread::JoinHandle<()>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = RelayAddress::try_from(listener.local_addr().unwrap().to_string()).unwrap();
+    let serving = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        nessa_protocol::relay::read_frame(&mut stream).unwrap();
+        stream.write_all(&answer.encode()).unwrap();
+    });
+    (address, serving)
+}
+
+/// The connector notes the relay's `Offline` whichever way the race ends,
+/// does not take a busy gateway's `NoAnswer` for it, and clears it once a
+/// connect succeeds.
+#[test]
+fn the_connector_notes_a_relay_offline_and_a_connect_clears_it() {
+    let refused = SocketAddr::from(([127, 0, 0, 1], 0));
+    let connector = |address: RelayAddress, offline: &Arc<AtomicBool>| StoppableConnector {
+        ending: Arc::new(Stopping {
+            stop: ReadStop::new(),
+            clock: Arc::new(Still),
+            until: u64::MAX,
+        }),
+        relay: Some(RelayRoute {
+            address,
+            key: [9; 32],
+        }),
+        offline: offline.clone(),
+    };
+    for (answer, noted) in [(RelayFrame::Offline, true), (RelayFrame::NoAnswer, false)] {
+        let offline = Arc::new(AtomicBool::new(false));
+        let (address, serving) = answering_relay(answer);
+        assert!(connector(address, &offline)
+            .connect(refused, Duration::from_secs(5))
+            .is_err());
+        serving.join().unwrap();
+        assert_eq!(offline.load(Ordering::SeqCst), noted, "{answer:?}");
+    }
+
+    let offline = Arc::new(AtomicBool::new(true));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let unused = RelayAddress::try_from("127.0.0.1:9".to_owned()).unwrap();
+    connector(unused, &offline)
+        .connect(listener.local_addr().unwrap(), Duration::from_secs(5))
+        .unwrap();
+    assert!(!offline.load(Ordering::SeqCst));
 }

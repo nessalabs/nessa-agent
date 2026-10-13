@@ -68,8 +68,12 @@ impl Device {
     /// Start the fixture's gateway in `mode`, relayed, under `directory`,
     /// and read its paired device's binding with a pinned status.
     fn start(directory: &Path, mode: &str) -> (Gateway, Self) {
+        Self::start_with(directory, |root| Gateway::start_relayed(root, mode))
+    }
+    /// The same, with the gateway `start` starts under its root.
+    fn start_with(directory: &Path, start: impl FnOnce(&Path) -> Gateway) -> (Gateway, Self) {
         let root = directory.join("gateway");
-        let gateway = Gateway::start_relayed(&root, mode);
+        let gateway = start(&root);
         let profile: Value =
             serde_json::from_slice(&std::fs::read(root.join("profile.json")).unwrap()).unwrap();
         let address: SocketAddr = profile["gatewayAddress"].as_str().unwrap().parse().unwrap();
@@ -156,8 +160,9 @@ impl Device {
         )
     }
     /// A read whose direct dial is refused, retried while the gateway has
-    /// not yet registered at `relay` (the relay answers `Offline` until it
-    /// does, which the read reports as `Unreachable`).
+    /// not yet registered at `relay`: until it does, the relay answers
+    /// `Offline`, which the read reports as `Away`, or the relay is not yet
+    /// listening, which it reports as `Unreachable`.
     fn read_once_registered(
         &self,
         cache: &mut RetainedCache,
@@ -166,7 +171,9 @@ impl Device {
         let registered = Instant::now() + Duration::from_secs(20);
         loop {
             match self.read(cache, REFUSED, Some(relay)) {
-                Err(ReadFailure::Unreachable) if Instant::now() < registered => {
+                Err(ReadFailure::Unreachable | ReadFailure::Away)
+                    if Instant::now() < registered =>
+                {
                     thread::sleep(Duration::from_millis(100));
                 }
                 read => return read,
@@ -553,4 +560,99 @@ fn readers_past_the_gateways_relay_pool_get_no_answer_while_direct_reads_go_on()
         "the gateway's relay pool is {POOL}: {} joined",
         held.len()
     );
+}
+
+/// A relay this test process serves, which outlives the gateways it
+/// starts; dropping it stops it and waits until it has.
+struct TestRelay {
+    address: RelayAddress,
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    serving: Option<JoinHandle<()>>,
+}
+impl TestRelay {
+    fn start() -> Self {
+        use crate::relay::{
+            application::{Relay, RelayLimits},
+            infrastructure::{serve_tcp, Ed25519Proofs, OsRelayEntropy},
+        };
+        use crate::timer::{Timer, TokioTimer};
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let (bound, address) = mpsc::channel();
+        let serving = thread::spawn(move || {
+            let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+            runtime.block_on(async move {
+                let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                bound.send(socket.local_addr().unwrap()).unwrap();
+                let timer: Arc<dyn Timer> = Arc::new(TokioTimer::new());
+                let relay = Relay::new(
+                    timer.clone(),
+                    Arc::new(OsRelayEntropy),
+                    Arc::new(Ed25519Proofs),
+                    RelayLimits::default(),
+                );
+                serve_tcp(socket, relay, timer, async {
+                    let _ = stopped.await;
+                })
+                .await;
+            });
+        });
+        let address = address.recv().unwrap();
+        Self {
+            address: RelayAddress::try_from(address.to_string()).unwrap(),
+            stop: Some(stop),
+            serving: Some(serving),
+        }
+    }
+}
+impl Drop for TestRelay {
+    fn drop(&mut self) {
+        let _ = self.stop.take().map(|stop| stop.send(()));
+        if let Some(serving) = self.serving.take() {
+            let _ = serving.join();
+        }
+    }
+}
+
+/// RL12 (R3): a gateway that stops serving is `Away` to a reader whose
+/// direct dial fails, once its relay has dropped the registration; what
+/// the reader cached is unchanged and still readable; and the reader reads
+/// fresh again once the gateway is back.
+#[test]
+fn a_gateway_that_stops_is_away_with_the_cache_kept_and_reads_again_once_back() {
+    let relay = TestRelay::start();
+    let at = relay.address.as_str().to_owned();
+    let directory = tempfile::tempdir().unwrap();
+    let (gateway, device) = Device::start_with(directory.path(), |root| {
+        Gateway::start_relayed_at(root, "", &at)
+    });
+    assert_eq!(device.relay(), relay.address);
+    let mut cache = device.cache("away.sqlite3");
+    let read = device
+        .read_once_registered(&mut cache, &relay.address)
+        .unwrap();
+    assert!(read.complete);
+    let held = cache.conversation_ids(&device.receiver).unwrap();
+    assert!(held.len() >= 2);
+
+    // The gateway's serve connection closes with its process, and the relay
+    // drops its registration when it sees that.
+    drop(gateway);
+    let dropped = Instant::now() + Duration::from_secs(20);
+    let away = loop {
+        match device.read(&mut cache, REFUSED, Some(&relay.address)) {
+            Err(ReadFailure::Unreachable) if Instant::now() < dropped => {
+                thread::sleep(Duration::from_millis(100));
+            }
+            ended => break ended,
+        }
+    };
+    assert_eq!(away, Err(ReadFailure::Away));
+    assert_eq!(cache.conversation_ids(&device.receiver).unwrap(), held);
+
+    let _back = Gateway::start_relayed_at(&device.root, "", &at);
+    let again = device
+        .read_once_registered(&mut cache, &relay.address)
+        .unwrap();
+    assert!(again.complete);
+    assert_eq!(cache.conversation_ids(&device.receiver).unwrap(), held);
 }

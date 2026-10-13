@@ -181,6 +181,53 @@ pub fn key_id(key: &GatewayKey) -> String {
     key[..4].iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// Why a relay did not join a reader to the gateway it asked for: its
+/// `Offline` or `NoAnswer`, carried inside the reader's `ConnectionRefused`
+/// error so whoever reports the failure can tell `away` from
+/// `unreachable` (`docs/design/auth/relay.md`, "The sleeping gateway").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelayRefusal {
+    /// The gateway is not registered at the relay.
+    Offline,
+    /// The gateway is registered but did not accept in time.
+    NoAnswer,
+}
+
+impl RelayRefusal {
+    /// The refusal a reader's relay leg ends with for `frame`, if it is one.
+    pub fn of(frame: RelayFrame) -> Option<Self> {
+        match frame {
+            RelayFrame::Offline => Some(Self::Offline),
+            RelayFrame::NoAnswer => Some(Self::NoAnswer),
+            _ => None,
+        }
+    }
+    /// The refusal `error` carries, if a relay leg made it.
+    pub fn carried(error: &io::Error) -> Option<Self> {
+        error
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<Self>())
+            .copied()
+    }
+}
+
+impl From<RelayRefusal> for io::Error {
+    fn from(refusal: RelayRefusal) -> Self {
+        io::Error::new(io::ErrorKind::ConnectionRefused, refusal)
+    }
+}
+
+impl fmt::Display for RelayRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Offline => "the gateway is not registered at the relay",
+            Self::NoAnswer => "the gateway did not accept through the relay in time",
+        })
+    }
+}
+
+impl std::error::Error for RelayRefusal {}
+
 /// Why bytes are not a relay frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RelayFrameError {

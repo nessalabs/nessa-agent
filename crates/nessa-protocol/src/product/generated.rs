@@ -2161,6 +2161,7 @@ pub enum PeerSyncState {
     Synced,
     Syncing,
     Unreachable,
+    Away,
     Failed,
     Quota,
 }
@@ -2171,6 +2172,7 @@ impl PeerSyncState {
             Self::Synced => "synced",
             Self::Syncing => "syncing",
             Self::Unreachable => "unreachable",
+            Self::Away => "away",
             Self::Failed => "failed",
             Self::Quota => "quota",
         }

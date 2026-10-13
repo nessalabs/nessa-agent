@@ -2,8 +2,9 @@
 
 Status: design accepted; slices R1 (the relay service) and R2a (the
 gateway serving through a relay) merged, R2b-1 (the reader's race of
-direct and relay) merged, R2b-2 (peer gateways using a relay) merged, R2c
-(end to end over a real relay, gateway and reader) in review. Part of
+direct and relay) merged, R2b-2 (peer gateways using a relay) merged;
+R2c (end to end over a real relay, gateway and reader), R3 (`away`), R4
+(`nessa env dial --relay`) and R5 (measurements) in review together. Part of
 [#263](https://github.com/nessalabs/nessa-agent/issues/263); it also carries
 the relay half of slice I ([#706](https://github.com/nessalabs/nessa-agent/issues/706)),
 so one relay serves phones, peer gateways and paired environments. The map's

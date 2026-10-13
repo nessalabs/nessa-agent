@@ -73,30 +73,35 @@ impl Gateway {
         Self::start_mode(root, "")
     }
     pub(super) fn start_mode(root: &Path, mode: &str) -> Self {
-        Self::spawn(root, mode, Stdio::null(), false)
+        Self::spawn(root, mode, Stdio::null(), None)
     }
     /// A gateway in `mode` that also serves a relay in its own process and
     /// is registered at it; the relay's address is in `relay-address`.
     pub(super) fn start_relayed(root: &Path, mode: &str) -> Self {
-        Self::spawn(root, mode, Stdio::null(), true)
+        Self::spawn(root, mode, Stdio::null(), Some("here"))
+    }
+    /// A gateway in `mode` registered at the relay the test serves at
+    /// `relay`, which outlives it.
+    pub(super) fn start_relayed_at(root: &Path, mode: &str, relay: &str) -> Self {
+        Self::spawn(root, mode, Stdio::null(), Some(relay))
     }
     /// A gateway that also commits and revokes on request, from inside its own
     /// process, so its process-local watch producer sees the change.
     pub(super) fn start_live(root: &Path) -> Self {
-        Self::spawn(root, "live", Stdio::piped(), false)
+        Self::spawn(root, "live", Stdio::piped(), None)
     }
     /// Actual Agent-produced semantic prefix and controlled terminal suffix.
     pub(super) fn start_semantic(root: &Path) -> Self {
-        Self::spawn(root, "semantic", Stdio::piped(), false)
+        Self::spawn(root, "semantic", Stdio::piped(), None)
     }
-    fn spawn(root: &Path, mode: &str, input: Stdio, relay: bool) -> Self {
+    fn spawn(root: &Path, mode: &str, input: Stdio, relay: Option<&str>) -> Self {
         let mut command = Command::new(std::env::current_exe().unwrap());
         command
             .args(["--exact", GATEWAY, "--nocapture"])
             .env("NESSA_ONLINE_GATEWAY", root)
             .env("NESSA_ONLINE_GATE", mode);
-        if relay {
-            command.env("NESSA_ONLINE_RELAY", "1");
+        if let Some(relay) = relay {
+            command.env("NESSA_ONLINE_RELAY", relay);
         } else {
             command.env_remove("NESSA_ONLINE_RELAY");
         }

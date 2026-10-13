@@ -57,7 +57,7 @@ use nessa_protocol::product::generated::{
     PASSIVE_MIN_REQUEST_TIMEOUT_MS,
 };
 use nessa_protocol::product_contract::generated::RecordReadErrorCode;
-use nessa_protocol::relay::{RelayAddress, DIRECT_HEAD_START};
+use nessa_protocol::relay::{RelayAddress, RelayRefusal, DIRECT_HEAD_START};
 use nessa_sync::replication::{
     application::{StoreError, SyncError},
     catalogue::{
@@ -173,6 +173,12 @@ pub enum ReadFailure {
     /// answered is not the pinned one, or the read's budget ran out before
     /// it saved anything.
     Unreachable,
+    /// The direct dial did not connect and the reader's relay answered that
+    /// the gateway is not registered with it: asleep, quit or offline, as
+    /// far as the relay can tell. Nothing authenticates that answer, so it
+    /// is no more than the relay's word; the cache is unchanged and
+    /// readable, and the read is backed off as for `Unreachable`.
+    Away,
     /// What the cache holds cannot continue against what the gateway now
     /// serves (another incarnation, epoch or scope, or a head behind the
     /// cache). Only emptying the cache helps.
@@ -266,6 +272,10 @@ struct StoppableConnector {
     /// The read's stop and its budget on the injected clock.
     ending: Arc<Stopping>,
     relay: Option<RelayRoute>,
+    /// Set when the relay leg of the last connect answered `Offline`, and
+    /// cleared when a connect succeeds. The leg sets it itself, so a race
+    /// that ends at its budget or its stop still keeps the relay's word.
+    offline: Arc<AtomicBool>,
 }
 impl GatewayConnector for StoppableConnector {
     fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<Box<dyn GatewayStream>> {
@@ -276,15 +286,25 @@ impl GatewayConnector for StoppableConnector {
             None => TcpStream::connect_timeout(&address, timeout)?,
             Some(route) => {
                 let route = route.clone();
+                let offline = self.offline.clone();
                 race(
                     move |left| TcpStream::connect_timeout(&address, left),
-                    move |left| relay_leg(&route, left),
+                    move |left| {
+                        let joined = relay_leg(&route, left);
+                        if let Err(error) = &joined {
+                            if RelayRefusal::carried(error) == Some(RelayRefusal::Offline) {
+                                offline.store(true, Ordering::SeqCst);
+                            }
+                        }
+                        joined
+                    },
                     timeout,
                     DIRECT_HEAD_START,
                     &|| self.ending.cancelled(),
                 )?
             }
         };
+        self.offline.store(false, Ordering::SeqCst);
         self.ending.stop.register(&socket)?;
         Ok(Box::new(Socket::new(socket, self.ending.stop.clone())))
     }
@@ -431,7 +451,8 @@ impl RetainedCache {
     ///
     /// A read that reaches its budget having saved something ends `Ok` and
     /// incomplete, with what it saved kept; one that saved nothing ends
-    /// `Unreachable`. One stopped by `stop` ends `Stopped`. A full cache
+    /// `Unreachable`, or `Away` when it never connected and its relay said
+    /// the gateway is not registered with it. One stopped by `stop` ends `Stopped`. A full cache
     /// (`Quota`) or one that could not be written (`Cache`) still withdraws
     /// every conversation the gateway no longer grants before it ends so.
     pub fn read(
@@ -453,10 +474,12 @@ impl RetainedCache {
         });
         let before = withdrawn.len();
         self.progressed = false;
-        let result = self.read_inner(access, &ending, max_withdrawn, withdrawn);
+        let offline = Arc::new(AtomicBool::new(false));
+        let result = self.read_inner(access, &ending, &offline, max_withdrawn, withdrawn);
         stop.release();
         let progressed = self.progressed || withdrawn.len() > before;
-        match read_end(result, stop.is_stopped(), ending.spent(), progressed) {
+        let end = read_end(result, stop.is_stopped(), ending.spent(), progressed);
+        match away(end, offline.load(Ordering::SeqCst)) {
             ReadEnd::Read(report) => Ok(report),
             ReadEnd::Incomplete => Ok(ReadReport {
                 moved: true,
@@ -471,6 +494,7 @@ impl RetainedCache {
         &mut self,
         access: ReaderAccess<'_>,
         ending: &Arc<Stopping>,
+        offline: &Arc<AtomicBool>,
         max_withdrawn: usize,
         withdrawn: &mut Vec<String>,
     ) -> Result<ReadReport, ReadFailure> {
@@ -498,6 +522,7 @@ impl RetainedCache {
                         key: relay_key(&access.pin)?,
                     })
                 }),
+                offline: offline.clone(),
             },
             self.clock.clone(),
             ending.clone(),
@@ -761,13 +786,23 @@ fn walked(
 
 /// How a read that has returned ends, from what it returned, whether it was
 /// stopped, whether its budget is spent, and whether it saved anything.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum ReadEnd {
     Read(ReadReport),
     /// Cut short by the budget after saving something: what it saved stands
     /// and the next read carries on from it.
     Incomplete,
     Failed(ReadFailure),
+}
+/// `end`, reported as `Away` when the read never reached its gateway and
+/// the relay said the gateway is not registered with it (`offline`). A
+/// read that connected clears `offline`, so a session that fails later is
+/// `Unreachable` as before.
+fn away(end: ReadEnd, offline: bool) -> ReadEnd {
+    match end {
+        ReadEnd::Failed(ReadFailure::Unreachable) if offline => ReadEnd::Failed(ReadFailure::Away),
+        end => end,
+    }
 }
 fn read_end(
     result: Result<ReadReport, ReadFailure>,

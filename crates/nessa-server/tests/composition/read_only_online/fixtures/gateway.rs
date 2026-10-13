@@ -276,12 +276,14 @@ async fn gateway_child() {
         Ok(address) => address.parse().unwrap(),
         Err(_) => "127.0.0.1:0".parse().unwrap(),
     };
-    // `NESSA_ONLINE_RELAY`: a real relay in this process, and the gateway
-    // registered at it, so a reader whose direct dial fails reads through
-    // it, whatever the mode.
-    let relay = match std::env::var_os("NESSA_ONLINE_RELAY") {
-        Some(_) => Some(serve_relay(root).await),
-        None => None,
+    // `NESSA_ONLINE_RELAY`: the gateway registered at a real relay, so a
+    // reader whose direct dial fails reads through it, whatever the mode.
+    // `here` serves that relay in this process; anything else is the
+    // address of one the test serves, which outlives this gateway.
+    let relay = match std::env::var("NESSA_ONLINE_RELAY").as_deref() {
+        Ok("here") => Some(serve_relay(root).await),
+        Ok(address) => Some(note_relay(root, address.to_owned())),
+        Err(_) => None,
     };
     let (prepared, commands, _peers) = prepare(
         &NativeConfig {
@@ -606,7 +608,7 @@ async fn live_control(
 }
 
 /// Serve a relay on a fresh local port for the rest of this process, and
-/// note its address in `relay-address` for the reading test.
+/// note its address.
 async fn serve_relay(root: &Path) -> RelayAddress {
     use crate::relay::{
         application::{Relay, RelayLimits},
@@ -615,6 +617,7 @@ async fn serve_relay(root: &Path) -> RelayAddress {
     use crate::timer::{Timer, TokioTimer};
     let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = socket.local_addr().unwrap().to_string();
+    let noted = note_relay(root, address);
     let timer: Arc<dyn Timer> = Arc::new(TokioTimer::new());
     let relay = Relay::new(
         timer.clone(),
@@ -628,8 +631,12 @@ async fn serve_relay(root: &Path) -> RelayAddress {
         timer,
         std::future::pending::<()>(),
     ));
-    // A restart serves a fresh relay: the address the last process noted
-    // is no longer anyone's.
+    noted
+}
+
+/// Note `address` in `relay-address` for the reading test, in place of
+/// whatever relay the last process noted.
+fn note_relay(root: &Path, address: String) -> RelayAddress {
     let noted = root.join("relay-address");
     match std::fs::remove_file(&noted) {
         Err(error) if error.kind() != io::ErrorKind::NotFound => panic!("{error}"),
