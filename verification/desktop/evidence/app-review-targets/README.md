@@ -32,3 +32,26 @@ callback reads last answer: expected turn/review/allow/first; received other-tur
 The identity checks above cover the fixture's pending request correlation.
 Production authorization and SDK target issuance retain their existing owners;
 these fake-gateway results are not evidence of server authorization.
+
+Normal signed-out scripted verification also passed on this source tree with
+latest-main native baseline `5d254cd45f14603e6a381e3be446c7f4309217a6`:
+
+| Check | Chromium | WebKit |
+| --- | --- | --- |
+| mcp-apps-gateway | pass | pass |
+| gateway-window | pass | pass |
+| scripted-scenarios | pass | pass |
+
+```text
+Verdict: pass
+mcp-apps-gateway: 16/16 held
+gateway-window: 13/13 held
+scripted-scenarios: 8/8 held
+```
+
+The mandatory Cargo build used the private `/tmp/825-cargo-target` APFS clone.
+The process ran the coordinator's read-only binary at
+`/tmp/nessa-797-combined-cargo-target/debug/nessa`. UI source, Git metadata,
+installed dependencies and Vite caches were private to this checkout; UI pin
+remained `5963247f906d9cba4457bc98f2bb6cbf70e5e379`. The only recorded request
+noise was the already-labelled `/browser/check` abort following HTTP 204 (#485).
