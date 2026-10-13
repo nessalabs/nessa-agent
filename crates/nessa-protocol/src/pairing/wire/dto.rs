@@ -111,6 +111,11 @@ pub(super) enum WireRequest<'a> {
     Status {
         public: WirePublic<'a>,
     },
+    RecoverOwnerPhone {
+        #[serde(rename = "requestId")]
+        request_id: [u8; 16],
+        digest: [u8; 32],
+    },
     OpenProduct {},
     OpenEnvironment {},
 }
@@ -125,6 +130,12 @@ pub(super) enum WireReply<'a> {
         response: Cow<'a, [u8]>,
     },
     Status {
+        status: WireStatus<'a>,
+    },
+    OwnerPhoneRecovery {
+        #[serde(rename = "requestId")]
+        request_id: [u8; 16],
+        digest: [u8; 32],
         status: WireStatus<'a>,
     },
     Refused {},
