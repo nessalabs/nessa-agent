@@ -366,7 +366,8 @@ fn composed_catalog() -> AgentsListResult {
                     "description": "The provider decides."
                 }]
             }]
-        }]
+        }],
+        "nativeHooks": {"claude": "off", "codex": "off"}
     }))
     .unwrap()
 }
@@ -3072,5 +3073,39 @@ async fn an_agent_catalog_frame_is_the_generated_shape() {
     let frame: AgentsListed = serde_json::from_value(first["payload"].clone()).unwrap();
     assert_eq!(frame.subscription_id, id);
     assert_eq!(frame.catalog.environments, ["build.example"]);
+    client.close().await;
+}
+
+/// Row AC9: a native hooks command sends the catalog again, with the choice
+/// `agents.list` answers then.
+#[tokio::test]
+async fn the_agent_catalog_is_sent_again_when_the_hooks_choice_changes() {
+    let mut fixture = CatalogFixture::new().await;
+    let hooks_directory = tempfile::tempdir().unwrap();
+    let hooks = crate::agents::infrastructure::NativeHooksPreferences::open(
+        hooks_directory.path().join("hooks"),
+        Arc::new(TestClock),
+    )
+    .unwrap();
+    fixture.inner.state = fixture.inner.state.clone().with_native_hooks(hooks.clone());
+    let mut client = fixture.connect();
+    let (id, first) = fixture.subscribe(&mut client, "agents").await;
+    assert_eq!(first["payload"]["catalog"]["nativeHooks"]["claude"], "off");
+    hooks
+        .set(crate::agents::application::NativeHooksChange {
+            agent: crate::agents::application::NativeHooksAgent::Claude,
+            enabled: true,
+            request_id: "request-on".into(),
+            organization_id: "organization".into(),
+            principal_id: "principal".into(),
+            surface_id: "surface".into(),
+            caller_kind: "user".into(),
+        })
+        .await
+        .unwrap();
+    let changed = client.until(&id, |_| true).await.remove(0);
+    assert_eq!(changed["payload"]["catalog"]["nativeHooks"]["claude"], "on");
+    let read = fixture.inner.call("agents.list", json!({})).await;
+    assert_eq!(read["payload"], changed["payload"]["catalog"]);
     client.close().await;
 }

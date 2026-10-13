@@ -313,6 +313,11 @@ fn resolver_from(root: &Path, input: ResolverTestInput) -> CurrentAgentResolver 
         provider_directory: root.join("providers"),
         clock: Arc::new(SystemClock),
         images: Arc::new(NoImages),
+        native_hooks: crate::agents::infrastructure::NativeHooksPreferences::open(
+            root.join("providers"),
+            Arc::new(SystemClock),
+        )
+        .unwrap(),
         warm_up: CurrentOpenCodeWarmUp::new(
             Arc::new(FileWarmUpRecords::new(root.join("warm-up-records")).unwrap()),
             Arc::new(DurableWarmUpAudit::new(root.join("warm-up-audit")).unwrap()),

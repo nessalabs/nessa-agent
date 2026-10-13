@@ -4,6 +4,7 @@ import { createAgentsApi } from "./agents-api.js"
 
 const offered = {
   environments: ["devbox", "me@build.example"],
+  nativeHooks: { claude: "off", codex: "off" },
   agents: [
     {
       agent: "claude",
@@ -109,7 +110,11 @@ it("enforces the schema-owned configured-agent count for unique valid rows", asy
     agent: `agent-${index}`,
   }))
   const api = createAgentsApi({
-    request: vi.fn().mockResolvedValue({ agents, environments: [] }),
+    request: vi.fn().mockResolvedValue({
+      agents,
+      environments: [],
+      nativeHooks: offered.nativeHooks,
+    }),
   })
   expect((await api.list()).agents).toHaveLength(bounds.maxConfiguredAgents)
   agents.push({ ...offered.agents[0], agent: "one-too-many" })
@@ -155,4 +160,46 @@ it("rejects invalid invocation IDs before dispatch and preserves bounded IDs", a
       { atLeastMs: 46 * 60 * 1000 },
     )
   }
+})
+
+it("sends a native-hooks choice and reads the choice now in effect", async () => {
+  const result = { requestId: "turn", agent: "claude", enabled: true }
+  const request = vi.fn().mockResolvedValue(result)
+  const api = createAgentsApi({ request })
+  expect(await api.setNativeHooks("claude", true, "turn")).toEqual(result)
+  expect(request).toHaveBeenCalledWith("agents.setNativeHooks", {
+    agent: "claude",
+    enabled: true,
+    requestId: "turn",
+  })
+})
+
+it("rejects an unknown harness and a hooks copy on an agent row before display", async () => {
+  const request = vi
+    .fn()
+    .mockResolvedValue({ requestId: "turn", agent: "opencode", enabled: true })
+  const api = createAgentsApi({ request })
+  await expect(api.setNativeHooks("claude", true, "turn")).rejects.toThrow(
+    "Invalid native hooks agent",
+  )
+  // The catalog-level choice is the only copy: a row repeating it could disagree.
+  request.mockResolvedValue({
+    ...offered,
+    agents: [{ ...offered.agents[0], nativeHooks: "on" }],
+  })
+  await expect(api.list()).rejects.toThrow()
+})
+
+it("rejects a hooks result that answers another request or harness", async () => {
+  const request = vi
+    .fn()
+    .mockResolvedValue({ requestId: "other", agent: "claude", enabled: true })
+  const api = createAgentsApi({ request })
+  await expect(api.setNativeHooks("claude", true, "turn")).rejects.toThrow(
+    "Native hooks result answers a different command",
+  )
+  request.mockResolvedValue({ requestId: "turn", agent: "codex", enabled: true })
+  await expect(api.setNativeHooks("claude", true, "turn")).rejects.toThrow(
+    "Native hooks result answers a different command",
+  )
 })

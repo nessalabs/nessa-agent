@@ -8,6 +8,9 @@
  * window's focus ring on its controls. Measured as numbers, in Chromium and
  * WebKit.
  */
+import { mkdirSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { attempt, chosen } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
@@ -72,6 +75,28 @@ function corner(page) {
     },
     { settings: css.settings, tokens: safeAreaTokens },
   )
+}
+
+async function openNativeHooksState(page, url, state) {
+  const fixture = new URL(
+    `/verification/desktop/fixtures/native-hooks-on/index.html?state=${state}`,
+    url,
+  ).href
+  await page.goto(fixture)
+  await need(page, css.settings, "Settings")
+  await settled(page)
+  await show(page, "Privacy & Permissions", "Access")
+}
+
+async function shotNativeHooks(page, row, name) {
+  const shot = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "../evidence/settings-native-hooks",
+  )
+  mkdirSync(shot, { recursive: true })
+  const group = page.locator(".settings-group", { has: row })
+  await group.scrollIntoViewIfNeeded()
+  await group.screenshot({ path: join(shot, name) })
 }
 
 const checks = {
@@ -317,6 +342,130 @@ const checks = {
     return { landed: m, failures }
   },
 
+  /**
+   * Privacy & Permissions › Access, with no gateway: Claude and Codex hook
+   * rows rest, and the page says hooks can approve, deny, or change a tool call.
+   */
+  "native-hooks": async (page, { engine }) => {
+    const failures = []
+    await show(page, "Privacy & Permissions", "Access")
+    const read = await page.$$eval("[data-setting]", (rows) =>
+      rows
+        .filter((row) =>
+          ["claude-native-hooks", "codex-native-hooks"].includes(row.dataset.setting),
+        )
+        .map((row) => ({
+          id: row.dataset.setting,
+          disabled: row.hasAttribute("data-disabled"),
+          switches: row.querySelectorAll('[role="switch"]').length,
+          text: row.textContent ?? "",
+        })),
+    )
+    const note = await page.$eval("#settings-panel", (panel) => panel.textContent ?? "")
+    if (
+      !note.includes(
+        "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts.",
+      )
+    )
+      failures.push("the page does not say what hooks can do")
+    for (const id of ["claude-native-hooks", "codex-native-hooks"]) {
+      const row = read.find((item) => item.id === id)
+      if (!row) failures.push(`${id} is missing`)
+      else if (!row.disabled || row.switches !== 0)
+        failures.push(`${id} is usable without a gateway: ${JSON.stringify(row)}`)
+      else if (!row.text.includes("Not available in this window."))
+        failures.push(`${id} does not say it is unavailable`)
+    }
+    const shot = join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../evidence/settings-native-hooks",
+    )
+    mkdirSync(shot, { recursive: true })
+    const group = page.locator(".settings-group", {
+      has: page.locator('[data-setting="claude-native-hooks"]'),
+    })
+    await group.scrollIntoViewIfNeeded()
+    await group.screenshot({ path: join(shot, `access-resting-${engine}.png`) })
+    return { read, failures }
+  },
+
+  /**
+   * The same Access group with a gateway connected and Claude's choice on:
+   * the switch is on, and the row says the repo's settings apply and that a
+   * change waits for the next start.
+   */
+  "native-hooks-on": async (page, { engine, url }) => {
+    const failures = []
+    const fixture = new URL(
+      "/verification/desktop/fixtures/native-hooks-on/index.html",
+      url,
+    ).href
+    await page.goto(fixture)
+    await need(page, css.settings, "Settings")
+    await settled(page)
+    await show(page, "Privacy & Permissions", "Access")
+    const row = page.locator('[data-setting="claude-native-hooks"]')
+    const text = (await row.textContent()) ?? ""
+    const checked = await row.locator('[role="switch"]').getAttribute("aria-checked")
+    if (checked !== "true") failures.push(`Claude's switch is ${checked}, not on`)
+    if (!text.includes("turn it on only for projects you trust"))
+      failures.push("the on row does not show the trust warning")
+    if (!text.includes("Applies the next time each conversation's agent starts."))
+      failures.push("the on row does not say the choice applies at the next start")
+    const note = await page.$eval("#settings-panel", (panel) => panel.textContent ?? "")
+    if (
+      !note.includes(
+        "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts.",
+      )
+    )
+      failures.push("the page does not say what hooks can do")
+    const shot = join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../evidence/settings-native-hooks",
+    )
+    mkdirSync(shot, { recursive: true })
+    const group = page.locator(".settings-group", { has: row })
+    await group.scrollIntoViewIfNeeded()
+    await group.screenshot({ path: join(shot, `access-on-${engine}.png`) })
+    return { checked, failures }
+  },
+
+  /**
+   * Claude is on but not in the catalog: the row keeps the choice and says
+   * the agent isn't set up.
+   */
+  "native-hooks-unset": async (page, { engine, url }) => {
+    const failures = []
+    await openNativeHooksState(page, url, "unset")
+    const row = page.locator('[data-setting="claude-native-hooks"]')
+    const text = (await row.textContent()) ?? ""
+    if (!text.includes("This agent isn't set up."))
+      failures.push("the unset row does not say the agent isn't set up")
+    if (!text.includes("turn it on only for projects you trust"))
+      failures.push("the unset row does not keep the trust warning")
+    await shotNativeHooks(page, row, `access-unset-${engine}.png`)
+    return { failures }
+  },
+
+  /**
+   * A refused change leaves the row saying it could not change.
+   */
+  "native-hooks-failed": async (page, { engine, url }) => {
+    const failures = []
+    await openNativeHooksState(page, url, "failed")
+    const row = page.locator('[data-setting="claude-native-hooks"]')
+    await row.locator('[role="switch"]').click()
+    await row.getByText("Could not change this.").waitFor()
+    const text = (await row.textContent()) ?? ""
+    const checked = await row.locator('[role="switch"]').getAttribute("aria-checked")
+    if (!text.includes("Could not change this."))
+      failures.push("the failed row does not say the change failed")
+    if (checked !== "true")
+      failures.push(`the failed change did not keep Claude's stored choice: ${checked}`)
+    await shotNativeHooks(page, row, `access-failed-${engine}.png`)
+    return { failures }
+  },
+
   /** Keyboard focus on a tab and a switch shows the window's focus ring. */
   "focus-ring": async (page, { engine }) => {
     const failures = []
@@ -354,13 +503,16 @@ const checks = {
 
 const meta = {
   name: "settings-page",
-  summary: "Settings' page: masthead, condensing bar, arrival motion, search, focus",
+  summary:
+    "Settings' page: masthead, condensing bar, arrival motion, search, focus, native hooks",
   defaults: { engine: "chromium,webkit" },
   options: { only: { type: "string" } },
   help: `
 Usage: node verification/desktop/scripts/settings-page.mjs [options]
 
-  --only <list>   Checks, comma-separated: masthead, condense, arrive, search, focus-ring
+  --only <list>   Checks, comma-separated: masthead, condense, arrive, search,
+                  focus-ring, native-hooks, native-hooks-on, native-hooks-unset,
+                  native-hooks-failed
 
 Per engine:
   masthead    every title below the titlebar row (16px clear) at 1440×900,
@@ -370,7 +522,13 @@ Per engine:
               the window's controls; scrolled back, it goes
   arrive      a page's motion is at most 300ms; none under less motion
   search      Enter lands on the setting, in view and marked a moment; ⌘F
-  focus-ring  a tab and a switch show the window's focus ring`,
+  focus-ring  a tab and a switch show the window's focus ring
+  native-hooks  Access rests Claude and Codex hook rows without a gateway, and
+                 says a hook can deny or change a tool call
+  native-hooks-on  with a gateway, Claude's switch on shows the trust warning
+                 and that the choice applies at the next start
+  native-hooks-unset  Claude on, and not in the catalog, says it isn't set up
+  native-hooks-failed  a refused change says it could not change`,
 }
 
 await main(meta, async ({ options, rep, url }) => {

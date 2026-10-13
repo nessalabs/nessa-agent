@@ -46,6 +46,7 @@ function view(ids: string[]): ConversationView {
       agentFeatures: {
         permissionDenial: "unknown",
         nativeHookSuppression: "unknown",
+        nativeHooks: "off",
         compactionReporting: "unsupported_not_implemented",
         modelSwitchReporting: "unsupported_not_implemented",
         permissionDeferral: "unsupported_not_implemented",
