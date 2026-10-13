@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest"
-import {
-  historyExtent,
-  historyNotices,
-  type ConversationTranscriptState,
-} from "./history"
+import { historyExtent, historyNotices } from "./history"
+import type { ConversationTranscriptState } from "./types"
 
 const whole: { readonly omitted: false; readonly unconfirmed: false } | undefined =
   undefined
