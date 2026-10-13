@@ -11,8 +11,10 @@
 //! generation that is already published is verified again before the service
 //! changes. One that is not does not gate launchd: this registration runs the
 //! bundled tree by absolute path, and publication continues on a thread that
-//! keeps the service-label lock until `stage_runtime` returns. Existing
-//! versions remain available across app replacement.
+//! keeps the service-label lock until `stage_runtime` returns. File durability
+//! and the tree digest overlap on a pool sized to the machine; both finish
+//! before the exclusive rename. Existing versions remain available across app
+//! replacement.
 //! Its `pruning` module then collects, under the same lock and only once a
 //! gateway is up, the versions neither the new service, the loaded service, nor
 //! an outstanding retirement can still need; it never fails registration.

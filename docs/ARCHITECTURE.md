@@ -574,8 +574,12 @@ private version directory outside the app. When that generation is already
 published, launchd arguments name only that directory, and this process validates
 it before the service changes. When it is not published yet, this registration
 launches the bundled tree by absolute path so the gateway can bind, and a
-background thread holding the same lock publishes the generation afterwards; the
-next registration points the service at that directory. Exclusive atomic
+background thread holding the same lock publishes the generation afterwards.
+That publication flushes files on a bounded pool while it hashes the tree, and
+it still requires a matching digest and durable files and directories before
+the exclusive rename. The next registration points the service at that directory.
+Replacing or moving the app while that first job is running from the bundle does
+not retarget it; a copy that observes the change publishes nothing. Exclusive atomic
 publication prevents replacing an existing version, and no search path derives
 from either directory — the service runs `nessa`, `node`, and `nessa-mcp` by
 absolute path, so neither the gateway's `PATH` nor the agent's contains that

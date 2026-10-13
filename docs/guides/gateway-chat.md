@@ -853,10 +853,11 @@ The desktop publishes its bundled runtime under
 `~/Library/Application Support/Nessa/gateway-runtimes/<service-label>/<fingerprint>/`.
 On APFS it copy-on-write clones regular-file data into a private temporary sibling;
 other filesystems use the durable byte-copy fallback. It copies relative internal
-symlinks, preserves bytes and executable bits, removes removable bundle-supplied
-extended attributes, syncs every file after either copy path and then its directories, verifies
-the same full-tree SHA-256 used by packaging, then publishes with an exclusive
-atomic rename. A generation that is already there is verified again before launchd
+symlinks, preserves bytes and executable bits, and removes removable bundle-supplied
+extended attributes. File durability and the full-tree SHA-256 used by packaging
+then run together: hashing reads bytes that are already written while `sync_all`
+flushes them on a pool sized to the machine. Every file and directory sync
+finishes, and that digest matches, before an exclusive atomic rename. A generation that is already there is verified again before launchd
 changes, and the service's executable and `--desktop-runtime` argument point only
 at that directory, so replacing `Nessa.app` cannot replace files under that
 gateway. A generation that is not there yet does not block the gateway: that
@@ -864,7 +865,10 @@ registration runs the bundled tree by absolute path — the same fingerprint, st
 on nobody's `PATH` — and the publication runs afterwards on a thread that keeps
 the per-label lock until it finishes. The next registration points the service
 at the published directory. Until that registration, replacing the app can still
-change files the running process opens from the bundle. No search path is derived
+change files the running process opens from the bundle; the running job keeps
+the bundle path it was given and is not retargeted onto the staged copy. Moving
+the bundle, or changing a file in it, while that copy is in progress publishes
+nothing and removes only that attempt's temporary directory. No search path is derived
 from either directory. Corrupt existing versions cause an error; they are never
 repaired in place. Failed attempts remove only their own temporary directory.
 

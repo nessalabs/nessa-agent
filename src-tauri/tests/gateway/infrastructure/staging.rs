@@ -1,8 +1,9 @@
 use super::super::generation::random_generation;
 use super::{
     begin_stage_measurement, clone_file, end_stage_measurement, entry_name, finalize_file,
-    launch_settings, publish, stage_runtime, stage_runtime_cached, stage_runtime_using,
-    tree_fingerprint, utf8, validate_runtime, StagePhases, ValidatedRuntimes,
+    launch_settings, parallelism, publish, stage_runtime, stage_runtime_cached,
+    stage_runtime_using, tree_fingerprint, utf8, validate_runtime, CopyHookGuard, StagePhases,
+    ValidatedRuntimes,
 };
 use serde_json::json;
 use std::{
@@ -378,6 +379,79 @@ fn retained_versions_and_exclusive_publication_never_replace_existing_directorie
     assert!(publish(&temporary, &reserved).is_err());
     assert!(temporary.join("keep").exists());
     assert_eq!(fs::read_dir(reserved).unwrap().count(), 0);
+}
+
+/// The running job keeps the inode it exec'd. Later opens by the bundle path
+/// see a replacement, or fail if that path was moved. Nothing here retargets
+/// launchd onto the staged copy mid-session.
+#[test]
+fn the_first_launch_keeps_the_bundle_path_when_the_app_is_replaced_or_moved() {
+    let bundled = Path::new("/Applications/Nessa.app/Contents/Resources/runtime");
+    let planned = Path::new(
+        "/Users/me/Library/Application Support/Nessa/gateway-runtimes/so.nessa.gateway.prod/ab",
+    );
+    let launched = super::super::registration_runtime(false, bundled, planned);
+    assert_eq!(launched, bundled);
+    assert_eq!(launch_settings(launched), launch_settings(bundled));
+    assert!(!launch_settings(launched)
+        .to_string()
+        .contains(planned.to_str().unwrap()));
+    // The next registration is the one that can point at the published tree.
+    assert_eq!(
+        super::super::registration_runtime(true, bundled, planned),
+        planned
+    );
+}
+
+#[test]
+fn moving_the_bundle_during_copy_removes_only_this_attempt() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+    nessa_local_storage::create_directory(&versions).unwrap();
+    let unrelated = versions.join(".staging-another-attempt");
+    fs::create_dir(&unrelated).unwrap();
+    fs::write(unrelated.join("keep"), b"keep").unwrap();
+    let source_path = source.clone();
+    let moved = fixture.0.join("moved-bundle");
+    let moved_during_copy = moved.clone();
+    let _hook = CopyHookGuard::set(move |copied| {
+        if copied.file_name().and_then(|name| name.to_str()) == Some("manifest.json") {
+            fs::rename(&source_path, &moved_during_copy).unwrap();
+        }
+    });
+
+    assert!(stage_runtime(&source, &versions, &fingerprint).is_err());
+    assert!(!versions.join(&fingerprint).exists());
+    assert!(!source.exists());
+    assert_eq!(fs::read(moved.join("nessa")).unwrap(), b"gateway\0bytes");
+    assert_eq!(fs::read(moved.join("node")).unwrap(), b"node");
+    assert_eq!(fs::read_dir(&versions).unwrap().count(), 1);
+    assert_eq!(fs::read(unrelated.join("keep")).unwrap(), b"keep");
+}
+
+#[test]
+fn replacing_an_uncopied_bundle_file_during_copy_fails_closed() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+    let node = source.join("node");
+    let _hook = CopyHookGuard::set(move |copied| {
+        if copied.file_name().and_then(|name| name.to_str()) == Some("manifest.json") {
+            fs::write(&node, b"replaced while the gateway is running").unwrap();
+        }
+    });
+
+    assert!(stage_runtime(&source, &versions, &fingerprint).is_err());
+    assert!(!versions.join(&fingerprint).exists());
+    assert_eq!(fs::read_dir(&versions).unwrap().count(), 0);
+    assert_eq!(
+        fs::read(source.join("node")).unwrap(),
+        b"replaced while the gateway is running"
+    );
+    assert_eq!(fs::read(source.join("nessa")).unwrap(), b"gateway\0bytes");
 }
 
 #[test]
@@ -809,6 +883,7 @@ fn measure_runtime_staging_phases() {
         + phases.parent_sync;
     let report = serde_json::json!({
         "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "workers": parallelism(),
         "destination": "fresh directory under ~/Library/Application Support",
         "destination_path": root.0,
         "filesystem": command_text("stat", &["-f", "%T", root.0.to_str().unwrap()]),
@@ -831,6 +906,7 @@ fn measure_runtime_staging_phases() {
             "permissions": millis(phases.permissions),
             "xattr": millis(phases.xattr),
             "file_sync": millis(phases.file_sync),
+            "file_sync_work": millis(phases.file_sync_work),
             "dir_sync": millis(phases.dir_sync),
             "private_walk": millis(phases.private_walk),
             "manifest": millis(phases.manifest),
