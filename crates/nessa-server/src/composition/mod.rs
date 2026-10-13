@@ -48,6 +48,7 @@ mod managed_adapter;
 mod native_pairing;
 #[cfg(unix)]
 mod opencode_profile;
+mod relay_command;
 
 mod runtime_config;
 

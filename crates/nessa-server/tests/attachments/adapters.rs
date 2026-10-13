@@ -47,7 +47,7 @@ async fn a_conversation_holds_the_normalized_image_and_only_in_the_shape_it_was_
         StubNormalizer::producing(b"kept", "image/jpeg"),
     );
     fixture.upload(CONVERSATION, b"sent", "image/png").await;
-    let holds = ConversationHolds::new(fixture.service.clone());
+    let holds = ConversationHolds::new(fixture.service.clone(), fixture.reads());
     let asks = |conversation_id: &'static str, image: ImageReference| {
         let holds = &holds;
         async move {
@@ -82,7 +82,7 @@ async fn a_close_releases_through_the_service_and_reports_what_did_not_complete(
     // Released and recorded.
     let fixture = Fixture::new(AttachmentLimits::default());
     fixture.upload(CONVERSATION, b"first", "text/plain").await;
-    let holds = ConversationHolds::new(fixture.service.clone());
+    let holds = ConversationHolds::new(fixture.service.clone(), fixture.reads());
     assert!(holds.release(release(CONVERSATION)).await.is_ok());
     assert!(fixture.store.held().is_empty());
 
@@ -246,7 +246,7 @@ async fn image_bytes_are_missing_unavailable_or_the_bytes_and_never_more_than_as
 async fn a_release_in_nobodys_name_is_refused_as_invalid_and_lets_go_of_nothing() {
     let fixture = Fixture::new(AttachmentLimits::default());
     fixture.upload(CONVERSATION, b"first", "text/plain").await;
-    let holds = ConversationHolds::new(fixture.service.clone());
+    let holds = ConversationHolds::new(fixture.service.clone(), fixture.reads());
     let mut nobody = release(CONVERSATION);
     nobody.initiator_surface_id = " ".into();
     assert!(matches!(
@@ -327,7 +327,7 @@ async fn a_published_file_is_kept_and_a_failed_read_says_why() {
     use crate::conversation::application::{ArtifactKept, ArtifactReadFailure};
     use nessa_protocol::lease::CollectionRefusal;
     let fixture = Fixture::new(AttachmentLimits::default());
-    let holds = ConversationHolds::new(fixture.service.clone());
+    let holds = ConversationHolds::new(fixture.service.clone(), fixture.reads());
     let file: &[u8] = b"twenty bytes of file";
     for (end, refusal) in [
         (
@@ -388,4 +388,65 @@ async fn a_published_file_is_kept_and_a_failed_read_says_why() {
         Ok(ArtifactKept::AlreadyHeld)
     );
     assert!(!read.load(Ordering::SeqCst));
+}
+
+/// A fetch reads a held file back through the conversation's own port, as
+/// a surface reads it: only for the conversation's owner, only while it is
+/// held as exactly that file, and never more than one range.
+#[tokio::test]
+async fn a_held_file_reads_back_for_a_fetch_only_as_its_owner_and_while_held() {
+    use crate::attachments::application::HeldReads;
+    use crate::conversation::application::{HeldRange, HeldRangeError};
+    use nessa_sdk::application::agent_execution::sessions::PublishedFile;
+    use nessa_sdk::domain::common::value_objects::MediaType as Declared;
+    let fixture = Fixture::new(AttachmentLimits::default());
+    let bytes: Vec<u8> = (0..HeldReads::MAX_RANGE_BYTES * 2 + 5)
+        .map(|i| (i % 7) as u8)
+        .collect();
+    fixture
+        .held
+        .hold("org", CONVERSATION, &bytes, "application/octet-stream");
+    let holds = ConversationHolds::new(fixture.service.clone(), fixture.reads());
+    let range = |principal: &str, media_type: &str, offset: u64, max_bytes: usize| HeldRange {
+        organization_id: organization("org"),
+        principal_id: principal.into(),
+        conversation_id: conversation(CONVERSATION),
+        file: PublishedFile::new(
+            digest_of(&bytes),
+            Declared::parse(media_type).unwrap(),
+            bytes.len() as u64,
+        )
+        .unwrap(),
+        offset,
+        max_bytes,
+    };
+    let first = holds
+        .read_held(range("owner", "application/octet-stream", 0, usize::MAX))
+        .await
+        .unwrap();
+    assert_eq!(first, bytes[..HeldReads::MAX_RANGE_BYTES]);
+    let last = holds
+        .read_held(range(
+            "owner",
+            "application/octet-stream",
+            (HeldReads::MAX_RANGE_BYTES * 2) as u64,
+            10,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(last, bytes[HeldReads::MAX_RANGE_BYTES * 2..]);
+    // Someone else's read, or the same bytes declared otherwise: not held.
+    for refused in [
+        range("stranger", "application/octet-stream", 0, 10),
+        range("owner", "image/png", 0, 10),
+    ] {
+        assert_eq!(holds.read_held(refused).await, Err(HeldRangeError::NotHeld));
+    }
+    fixture.held.release_all();
+    assert_eq!(
+        holds
+            .read_held(range("owner", "application/octet-stream", 0, 10))
+            .await,
+        Err(HeldRangeError::NotHeld)
+    );
 }

@@ -39,11 +39,11 @@ use nessa_server::{
     agents::application::{AgentProbe, AgentProbeEvidence},
     app::dependencies::RuntimeDependencies,
     conversation::application::{
-        ConversationCaller, ConversationError, ConversationRepository, ReadGrants, RecordReadError,
+        ConversationCaller, ConversationError, ConversationRepository, RecordReadError,
         RecordReadFuture, RecordReadLease, RecordReadOperation, RecordReadResponse,
-        RecordReadSource, ShareConversation,
+        RecordReadSource, ShareConversation, ShareGrants,
     },
-    conversation::domain::Conversation,
+    conversation::domain::{Conversation, ShareRole},
     conversation::infrastructure::{LocalConversationStore, NessaCatalogueReadSource},
     device_pairing::infrastructure::ProtectedSessions,
     product::{DeviceCredentials, NativeSessions, ProductDependencies, ProductRouteState},
@@ -657,7 +657,9 @@ async fn an_environment_is_paired_but_never_shared_with() {
         action_id: "share-environment".into(),
     };
     assert!(matches!(
-        shares.share(caller, id.clone(), credential, 110).await,
+        shares
+            .share(caller, id.clone(), credential, ShareRole::Read, None, 110)
+            .await,
         Err(ConversationError::ShareTargetNotPaired)
     ));
     assert!(!metadata
@@ -667,6 +669,130 @@ async fn an_environment_is_paired_but_never_shared_with() {
     assert!(metadata.grants(&id).await.unwrap().is_empty());
     stop.send(()).unwrap();
     listener.await.unwrap().unwrap();
+}
+
+/// Row K3 (`docs/design/auth/peer-gateways.md`): a hosted worker holds no
+/// read grant outside its leases. Paired as an environment, its key and
+/// credential open a session on the gateway it serves, holding
+/// `environment.serve` alone, and the catalogue head, a conversation's
+/// records head, and a watch of either are each refused `forbidden`. A
+/// device the owner shared that conversation with is let past the same
+/// checks with the same calls.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn k3_a_worker_reads_nothing_on_the_gateway_it_serves() {
+    let fixture = Fixture::new().await;
+    let metadata = conversation_store(&fixture);
+    let sessions = sessions_on(
+        &fixture,
+        Arc::new(Devices(fixture.registry.clone())),
+        metadata.clone(),
+    );
+    let (address, stop, listener, _) = fixture.listener_serving(Some(sessions)).await;
+    let worker = pair_as(&fixture, address, "worker", ConsentClass::PeerEnvironment).await;
+    let device = pair(&fixture, address, "device").await;
+    let conversation = Conversation::new(
+        ConversationId::new(&Uuid::new_v4().to_string()).unwrap(),
+        fixture.session.context().organization_id().clone(),
+        fixture.session.context().principal_id().clone(),
+        "panel".into(),
+        "create".into(),
+        1,
+        AgentId::Claude,
+        ConversationModelId::new("model").unwrap(),
+        ConversationApprovalMode::Ask,
+    )
+    .unwrap();
+    let id = conversation.id().clone();
+    metadata.create(conversation).await.unwrap();
+    let shares = ShareConversation {
+        conversations: metadata.as_ref(),
+        receivers: fixture.receivers.as_ref(),
+        grants: metadata.as_ref(),
+        access: fixture.registry.as_ref(),
+        gateway: &gateway(),
+    };
+    let caller = ConversationCaller {
+        organization_id: fixture.session.context().organization_id().clone(),
+        principal_id: fixture.session.context().principal_id().clone(),
+        surface_id: "panel".into(),
+        action_id: "share-device".into(),
+    };
+    assert!(shares
+        .share(
+            caller,
+            id.clone(),
+            CredentialId::new(device.credential.clone()).unwrap(),
+            ShareRole::Read,
+            None,
+            110
+        )
+        .await
+        .unwrap());
+    // The same calls, made by `paired`: its session's answer, and each
+    // call's.
+    let calls = |paired: &Paired| {
+        let credential = paired.credential.clone();
+        let (receiver, epoch) = (paired.receiver.clone(), paired.epoch.to_string());
+        let saved = paired.store.clone();
+        let conversation = id.to_string();
+        blocking(move || {
+            let mut probe = Probe::open(address, &saved);
+            let nonce = probe.nonce.clone();
+            let ready = probe.authenticate(&credential, &nonce).unwrap();
+            let by_receiver = json!({"receiverId": receiver, "accessEpoch": epoch});
+            let mut in_conversation = by_receiver.clone();
+            in_conversation["conversationId"] = json!(conversation);
+            let calls = [
+                ("conversation.catalogueHead", by_receiver.clone()),
+                ("conversation.watchCatalogue", by_receiver),
+                ("conversation.recordsHead", in_conversation.clone()),
+                ("conversation.watchRecords", in_conversation),
+            ]
+            .map(|(method, params)| (method, probe.call(method, params).unwrap()));
+            (ready, calls)
+        })
+    };
+    // The device, shared with, is let past each check of who may read, as
+    // row H8 finds: its catalogue head is answered, its records head finds
+    // no history yet, and this fixture keeps no watches.
+    let (_, by_device) = calls(&device).await;
+    let device_codes: Vec<_> = by_device
+        .iter()
+        .map(|(method, answer)| (*method, code(answer).to_owned()))
+        .collect();
+    assert_eq!(
+        device_codes,
+        [
+            ("conversation.catalogueHead", String::new()),
+            (
+                "conversation.watchCatalogue",
+                "temporarily_unavailable".into()
+            ),
+            ("conversation.recordsHead", "history_pruned".into()),
+            (
+                "conversation.watchRecords",
+                "temporarily_unavailable".into()
+            ),
+        ]
+    );
+    assert_eq!(by_device[0].1["ok"], true, "{}", by_device[0].1);
+    // The worker is who it was paired as, holding serving alone, and is
+    // refused each.
+    let (ready, by_worker) = calls(&worker).await;
+    assert_eq!(ready["ok"], true, "{ready}");
+    assert_eq!(
+        ready["payload"]["grants"],
+        json!([{
+            "action": "environment.serve",
+            "resource": {"organizationId": "org", "id": "gateway"},
+        }])
+    );
+    for (method, answer) in &by_worker {
+        assert_eq!(code(answer), "forbidden", "worker {method}: {answer}");
+    }
+    stop.send(()).unwrap();
+    listener.await.unwrap().unwrap();
+    fixture.gateway.shutdown().await;
 }
 
 /// Row H8 (`docs/design/auth/peer-gateways.md`): a paired peer reads, on the
@@ -744,7 +870,14 @@ async fn a_peer_reads_only_what_it_was_granted() {
         };
         assert!(matches!(
             shares
-                .share(caller(request), id.clone(), peer_credential.clone(), 110)
+                .share(
+                    caller(request),
+                    id.clone(),
+                    peer_credential.clone(),
+                    ShareRole::Read,
+                    None,
+                    110,
+                )
                 .await,
             Err(ConversationError::ShareTargetNotPaired)
         ));
@@ -762,6 +895,8 @@ async fn a_peer_reads_only_what_it_was_granted() {
             caller("share-peer"),
             id.clone(),
             peer_credential.clone(),
+            ShareRole::Read,
+            None,
             110
         )
         .await
@@ -853,6 +988,8 @@ async fn a_peer_reads_only_what_it_was_granted() {
             caller("share-device"),
             ungranted.clone(),
             CredentialId::new(device.credential.clone()).unwrap(),
+            ShareRole::Read,
+            None,
             110,
         )
         .await

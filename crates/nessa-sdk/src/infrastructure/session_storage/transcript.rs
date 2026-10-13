@@ -756,8 +756,8 @@ mod tests {
         },
         domain::agent_execution::{
             executions::{
-                ExecutionId, InvocationKind, InvocationStage, MessageChunk, QueueMutation,
-                SchedulingCause, MESSAGE_CLONES,
+                ExecutionId, Initiation, InvocationKind, InvocationStage, MessageChunk,
+                QueueMutation, SchedulingCause, MESSAGE_CLONES,
             },
             permissions::{
                 PermissionCancellationReason, PermissionDecision, PermissionEffect, PermissionId,
@@ -963,6 +963,7 @@ mod tests {
             submission: SubmissionMode::Immediate,
             target_event_offset: None,
             actor: ActionContext::new("user", "surface", "request").unwrap(),
+            initiation: Initiation::owner(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -1384,6 +1385,7 @@ mod tests {
                 reserved_output_tokens: 1,
             },
             actor: ActionContext::new("user", "surface", "request").unwrap(),
+            initiation: Initiation::owner(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -1642,6 +1644,33 @@ mod tests {
             TranscriptFold::restore(changed_scope, 2, &checkpoint),
             Err(TranscriptError::Scope)
         ));
+    }
+
+    /// A turn a share grant started keeps its grant, role and policy revision
+    /// through a checkpoint and the fold restored from it.
+    #[test]
+    fn a_grant_initiation_survives_a_checkpoint_and_its_restore() {
+        use crate::domain::agent_execution::executions::{GrantInitiator, GrantRole};
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let initiation =
+            Initiation::grant(GrantInitiator::new("receiver", GrantRole::Drive, 7).unwrap());
+        let mut input = accepted_input("driven");
+        let SessionChange::InputAccepted(record) = &mut input else {
+            panic!("an accepted input")
+        };
+        record.initiation = initiation.clone();
+        fold.apply(&records(&scope, 3, &save_frames(input, 2, 1)))
+            .unwrap();
+        let checkpoint = fold.checkpoint().unwrap();
+        let restored = TranscriptFold::restore(scope, fold.applied(), &checkpoint).unwrap();
+        assert_eq!(restored.snapshot(), fold.snapshot());
+        assert_eq!(
+            restored.snapshot().unwrap().invocations[0].initiation,
+            initiation
+        );
     }
 
     #[test]
@@ -1976,33 +2005,36 @@ mod tests {
     }
 
     #[test]
-    fn a_version_one_batch_and_checkpoint_are_another_version() {
-        let mut batch: Value = serde_json::from_slice(
-            &snapshot::encode_semantic_batch(std::slice::from_ref(&opened())).unwrap(),
-        )
-        .unwrap();
-        batch["schemaVersion"] = serde_json::json!(1);
-        assert_eq!(
-            snapshot::decode_semantic_batch(
-                &serde_json::to_vec(&batch).unwrap(),
-                &ProviderContext::Absent,
-            ),
-            Err(StorageError::AnotherVersion { found: Some(1) })
-        );
-
-        let scope = scope();
-        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
-        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+    fn version_one_and_two_batches_and_checkpoints_are_another_version() {
+        // Version 2 records predate the saved turn initiation; neither is read.
+        for found in [1, 2] {
+            let mut batch: Value = serde_json::from_slice(
+                &snapshot::encode_semantic_batch(std::slice::from_ref(&opened())).unwrap(),
+            )
             .unwrap();
-        let checkpoint = fold.checkpoint().unwrap();
-        let mut value: Value = serde_json::from_reader(checkpoint.reader()).unwrap();
-        value["schemaVersion"] = serde_json::json!(1);
-        assert_eq!(
-            TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&value).unwrap()]),
-            Err(TranscriptError::Decision(StorageError::AnotherVersion {
-                found: Some(1)
-            }))
-        );
+            batch["schemaVersion"] = serde_json::json!(found);
+            assert_eq!(
+                snapshot::decode_semantic_batch(
+                    &serde_json::to_vec(&batch).unwrap(),
+                    &ProviderContext::Absent,
+                ),
+                Err(StorageError::AnotherVersion { found: Some(found) })
+            );
+
+            let scope = scope();
+            let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+            fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+                .unwrap();
+            let checkpoint = fold.checkpoint().unwrap();
+            let mut value: Value = serde_json::from_reader(checkpoint.reader()).unwrap();
+            value["schemaVersion"] = serde_json::json!(found);
+            assert_eq!(
+                TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&value).unwrap()]),
+                Err(TranscriptError::Decision(StorageError::AnotherVersion {
+                    found: Some(found)
+                }))
+            );
+        }
     }
 
     #[test]

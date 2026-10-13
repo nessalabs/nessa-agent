@@ -20,13 +20,15 @@ agent.add_hook(BeforeInvocation, |context: &InvocationContext<'_>| {
     Ok(())
 });
 
-let receipt = agent.enqueue(request, verified_actor).await?;
+let receipt = agent.enqueue(request, Submitter::owner(verified_actor)).await?;
 let result = receipt.wait().await?;
 ```
 
 `request` is an `ExecutionRequest`: a fresh execution ID, validated `PromptText`,
 and explicit input/output token budgets. `verified_actor` is an `ActionContext`
-constructed by the host after authorization. The SDK does not guess token counts
+constructed by the host after authorization. A `Submitter` pairs it with the
+turn's `Initiation`: `Submitter::owner` for the conversation's owner. Every turn's
+tools run unchecked for now; the record says so. The SDK does not guess token counts
 or treat a caller-supplied principal string as authenticated identity. See the
 [complete queued interaction](../../src/application/agent_execution/agents/agent.rs)
 and the [executable provider composition example](../../examples/claude_acp.rs) for composition.
@@ -51,10 +53,10 @@ host / future chat RPC
         -> AgentProvider::open(saved provider context or None)
         -> save attached context identity -> Attached
     -> Agent::add_hook(event, callback)
-    -> Agent::enqueue(request, actor)
+    -> Agent::enqueue(request, submitter)
         -> capability validation + saved queue admission
         -> wait for the single invocation slot
-        -> save submitted input and caller attribution
+        -> save submitted input, caller attribution, and initiation
         -> before hooks
         -> provider prepares/restores its live context
         -> provider executes while Agent drains observations

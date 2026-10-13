@@ -314,6 +314,34 @@ impl NativeHookSuppressionSupport {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum NativeHooksChoice {
+    Off,
+    On,
+}
+impl NativeHooksChoice {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::On => "on",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeHooksAgent {
+    Claude,
+    Codex,
+}
+impl NativeHooksAgent {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CompactionReportingSupport {
     UnsupportedNotImplemented,
     SupportedWithInvocationCorrelation,
@@ -439,6 +467,7 @@ impl IncomingElicitationSupport {
 pub struct ConversationAgentFeatures {
     pub permission_denial: PermissionDenialSupport,
     pub native_hook_suppression: NativeHookSuppressionSupport,
+    pub native_hooks: NativeHooksChoice,
     pub compaction_reporting: CompactionReportingSupport,
     pub model_switch_reporting: ModelSwitchReportingSupport,
     pub permission_deferral: PermissionDeferralSupport,
@@ -598,6 +627,8 @@ pub struct ConversationTool {
     pub mcp: Option<ConversationMcpTool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_hooks: Option<NativeHooksChoice>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -898,9 +929,63 @@ pub struct ConversationDeleteParams {
     pub conversation_id: String,
     pub request_id: String,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationShareRole {
+    Read,
+    Comment,
+    Drive,
+}
+impl ConversationShareRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Comment => "comment",
+            Self::Drive => "drive",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationToolPreset {
+    ReadOnlyTools,
+    NoShell,
+    AskEverything,
+    All,
+}
+impl ConversationToolPreset {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnlyTools => "read_only_tools",
+            Self::NoShell => "no_shell",
+            Self::AskEverything => "ask_everything",
+            Self::All => "all",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationToolPolicy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<ConversationToolPreset>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deny: Option<Vec<String>>,
+}
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationShareParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub credential_id: String,
+    pub role: ConversationShareRole,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ConversationToolPolicy>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationUnshareParams {
     pub conversation_id: String,
     pub request_id: String,
     pub credential_id: String,
@@ -914,7 +999,10 @@ pub struct ConversationSharesParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationShare {
     pub credential_id: String,
-    pub role: String,
+    pub role: ConversationShareRole,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ConversationToolPolicy>,
+    pub policy_revision: u64,
     pub granted_at_ms: u64,
 }
 #[derive(Deserialize, Serialize)]
@@ -1588,9 +1676,36 @@ pub struct AgentOption {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentsSetNativeHooksParams {
+    pub request_id: String,
+    pub agent: NativeHooksAgent,
+    pub enabled: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentsSetNativeHooksResult {
+    pub request_id: String,
+    pub agent: NativeHooksAgent,
+    pub enabled: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentsListResult {
     pub agents: Vec<AgentOption>,
     pub environments: Vec<String>,
+    pub native_hooks: AgentsNativeHooks,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentsNativeHooks {
+    pub claude: NativeHooksChoice,
+    pub codex: NativeHooksChoice,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentsListed {
+    pub subscription_id: ConversationSubscriptionId,
+    pub catalog: AgentsListResult,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2234,6 +2349,10 @@ pub const MIN_AGENT_INSTALL_REQUEST_ID_CHARACTERS: usize = 1;
 /// Published bound from the product schema.
 pub const MAX_AGENT_INSTALL_REQUEST_ID_BYTES: usize = 256;
 /// Published bound from the product schema.
+pub const MIN_NATIVE_HOOKS_REQUEST_ID_CHARACTERS: usize = 1;
+/// Published bound from the product schema.
+pub const MAX_NATIVE_HOOKS_REQUEST_ID_BYTES: usize = 256;
+/// Published bound from the product schema.
 pub const MAX_PHYSICAL_RECORD_PAYLOAD_BYTES: usize = 65546;
 /// Published bound from the product schema.
 pub const MAX_RECORD_PAGE_RECORDS: usize = 16;
@@ -2284,6 +2403,9 @@ pub mod product_method {
     pub const ARTIFACT_READ: &str = "artifact.read";
     pub const ATTACHMENT_BEGIN: &str = "attachment.begin";
     pub const AGENTS_LIST: &str = "agents.list";
+    pub const AGENTS_SET_NATIVE_HOOKS: &str = "agents.setNativeHooks";
+    pub const AGENTS_SUBSCRIBE: &str = "agents.subscribe";
+    pub const AGENTS_UNSUBSCRIBE: &str = "agents.unsubscribe";
     pub const CONVERSATION_SET_APPROVAL_MODE: &str = "conversation.setApprovalMode";
     pub const AGENTS_INSTALL_OPTIONS: &str = "agents.installOptions";
     pub const AGENTS_INSTALL: &str = "agents.install";
@@ -2326,6 +2448,7 @@ pub mod product_event {
     pub const CONVERSATION_WATCH_ENDED: &str = "conversation.watchEnded";
     pub const CONVERSATION_VIEW: &str = "conversation.view";
     pub const CONVERSATION_LISTED: &str = "conversation.listed";
+    pub const AGENTS_LISTED: &str = "agents.listed";
     pub const CONVERSATION_SUBSCRIPTION_ENDED: &str = "conversation.subscriptionEnded";
 }
 pub fn wire_shape_session_challenge(value: &Value) -> bool {
@@ -2507,7 +2630,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 62
+                items.len() <= 65
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -2559,6 +2682,9 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "artifact.read",
     "attachment.begin",
     "agents.list",
+    "agents.setNativeHooks",
+    "agents.subscribe",
+    "agents.unsubscribe",
     "conversation.setApprovalMode",
     "agents.installOptions",
     "agents.install",
@@ -2607,10 +2733,15 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
 /// a watch.
 pub fn action_for_method(method: &str) -> Option<&'static str> {
     match method {
-        "server.health" | "agents.list" | "agents.installOptions" => Some("server.read"),
+        "server.health"
+        | "agents.list"
+        | "agents.subscribe"
+        | "agents.unsubscribe"
+        | "agents.installOptions" => Some("server.read"),
         "credential.issue"
         | "credential.list"
         | "credential.revoke"
+        | "agents.setNativeHooks"
         | "mcpServers.list"
         | "mcpServers.save"
         | "mcpServers.remove"

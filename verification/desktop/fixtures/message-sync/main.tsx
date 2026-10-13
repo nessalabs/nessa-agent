@@ -203,6 +203,7 @@ Object.assign(window, {
                 status: "completed",
                 details: "Three rows",
                 input: "{}",
+                nativeHooks: "off",
                 mcp: {
                   server: fixtureServer,
                   tool: "show_fixture",

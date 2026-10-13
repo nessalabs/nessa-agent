@@ -51,6 +51,14 @@ impl ProviderOpenRequest {
         }
     }
 
+    /// The SDK session this open is for, when the request names one.
+    ///
+    /// Recorded on this process start's hooks audit. It does not choose the
+    /// hooks setting: each process start reads the current switch.
+    pub fn session_key(&self) -> Option<&str> {
+        self.session.as_ref().map(|session| session.as_str())
+    }
+
     /// Split the request into the SDK session it opens for (when it names
     /// one), the requested restoration identity, and startup stop observation.
     ///

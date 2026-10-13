@@ -12,7 +12,7 @@ use crate::application::agent_execution::{
 };
 use crate::domain::agent_execution::{
     executions::{
-        ExecutionId, ExecutionOutcome, InvocationKind, InvocationStage, QueueMutation,
+        ExecutionId, ExecutionOutcome, Initiation, InvocationKind, InvocationStage, QueueMutation,
         SchedulingCause, SubmissionMode,
     },
     prompts::{McpAppSource, MessageSender, PromptText, UserMessage},
@@ -73,6 +73,7 @@ pub(super) fn turn(id: &str, message: UserMessage, tools: Vec<ToolCallUpdate>) -
             reserved_output_tokens: 1,
         },
         actor: ActionContext::new("user", "test", "invoke").unwrap(),
+        initiation: Initiation::owner(),
         acknowledgement: SubmissionAcknowledgement::Pending,
         events,
         scheduling: Vec::new(),

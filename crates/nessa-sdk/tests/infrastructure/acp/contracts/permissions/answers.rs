@@ -15,6 +15,11 @@ struct AnswerAudit {
 impl ExecutionAudit for AnswerAudit {
     fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
         Box::pin(async move {
+            // The process-start record is not one of the answer calls these
+            // tests number. Counting it shifts every reject and stall.
+            if matches!(record, ExecutionAuditRecord::NativeHooksLaunch(_)) {
+                return Ok(());
+            }
             let call = {
                 let mut records = self.records.lock().unwrap();
                 records.push(record);
@@ -115,6 +120,9 @@ fn answers(audit: &AnswerAudit) -> Vec<PermissionAnswerRecord> {
             }
             ExecutionAuditRecord::LateProviderResult(record) => {
                 panic!("a review is not a late provider result: {record:?}")
+            }
+            ExecutionAuditRecord::NativeHooksLaunch(record) => {
+                panic!("a review is not a hooks launch: {record:?}")
             }
         })
         .collect()
@@ -945,7 +953,7 @@ async fn agent_acp_permission_query_does_not_wait_behind_consumed_answer_audit()
     let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
     let mut events = agent.subscribe();
     let receipt = agent
-        .enqueue(prompt("write"), close_action())
+        .enqueue(prompt("write"), Submitter::owner(close_action()))
         .await
         .unwrap();
     let permission = loop {

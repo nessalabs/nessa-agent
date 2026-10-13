@@ -8,7 +8,11 @@ async fn ready_native_acknowledgement_survives_close_and_restoration() {
     *backend.execution_gate.lock().unwrap() = Some(execution_gate);
     let running = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.invoke(input("ready-target"), actor()).await }
+        async move {
+            agent
+                .invoke(input("ready-target"), Submitter::owner(actor()))
+                .await
+        }
     });
     timeout(Duration::from_secs(2), backend.executing.notified())
         .await
@@ -17,7 +21,11 @@ async fn ready_native_acknowledgement_survives_close_and_restoration() {
     *backend.control_gate.lock().unwrap() = Some(control_gate);
     let steering = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.steer(input("ready-steering"), actor()).await }
+        async move {
+            agent
+                .steer(input("ready-steering"), Submitter::owner(actor()))
+                .await
+        }
     });
     timeout(Duration::from_secs(2), backend.control_entered.notified())
         .await
@@ -57,7 +65,10 @@ async fn ready_native_acknowledgement_survives_close_and_restoration() {
         Some(input("ready-target").execution_id)
     );
     assert!(matches!(
-        agent.steer(input("ready-steering"), actor()).await.unwrap(),
+        agent
+            .steer(input("ready-steering"), Submitter::owner(actor()))
+            .await
+            .unwrap(),
         SteeringDelivery::Injected { .. }
     ));
     assert_eq!(backend.steers.load(Ordering::SeqCst), 1);
@@ -67,7 +78,7 @@ async fn ready_native_acknowledgement_survives_close_and_restoration() {
         probe_with_manager(false, restored_storage.manager().await).await;
     assert!(matches!(
         restored
-            .steer(input("ready-steering"), actor())
+            .steer(input("ready-steering"), Submitter::owner(actor()))
             .await
             .unwrap(),
         SteeringDelivery::Injected { .. }

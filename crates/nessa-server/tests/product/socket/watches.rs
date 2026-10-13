@@ -78,6 +78,11 @@ struct WatchFixture {
 
 impl WatchFixture {
     async fn new() -> Self {
+        Self::granted(crate::conversation::domain::ShareAccess::read()).await
+    }
+
+    /// A fixture whose watching device holds `access` on the conversation.
+    async fn granted(access: crate::conversation::domain::ShareAccess) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().join("conversations");
         nessa_local_storage::create_directory(&private).unwrap();
@@ -101,8 +106,9 @@ impl WatchFixture {
             )
             .await
             .unwrap();
-        // The watching device is granted the conversation (read grants).
-        crate::conversation_test_support::grant_read(metadata.as_ref(), &id, "receiver").await;
+        // The watching device is granted the conversation (share grants).
+        crate::conversation_test_support::grant_as(metadata.as_ref(), &id, "receiver", access)
+            .await;
         let storage = Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
         storage.initialize().await.unwrap();
         let records = Arc::new(CountingRecords {
@@ -299,6 +305,31 @@ async fn real_commit_waits_for_physical_ack_then_emits_only_opaque_watch_identit
     fixture.finish(peer, socket).await;
 }
 
+/// Row J1 (`docs/design/read-grants.md`): a records watch admits a Comment
+/// or a Drive grant exactly as it admits Read, and its notice follows a
+/// commit.
+#[tokio::test]
+async fn a_comment_or_drive_grant_watches_records_as_read_does() {
+    for access in crate::conversation_test_support::roles_beyond_read() {
+        let fixture = WatchFixture::granted(access.clone()).await;
+        let (socket, mut peer) = test_socket(None);
+        let socket = tokio::spawn(run_authenticated(
+            socket,
+            fixture.state.clone(),
+            fixture.session.clone(),
+        ));
+        fixture.watch(&peer, "install");
+        let acknowledgement = text(peer.message().await);
+        assert_eq!(acknowledgement["ok"], true, "{access:?}: {acknowledgement}");
+        let watch = acknowledgement["payload"]["watchId"].as_str().unwrap().to_owned();
+        fixture.commit().await;
+        let notice = text(peer.message().await);
+        assert_eq!(notice["event"], "conversation.changed", "{access:?}");
+        assert_eq!(notice["payload"], json!({"watchId": watch}));
+        fixture.finish(peer, socket).await;
+    }
+}
+
 #[tokio::test]
 async fn repeat_unwatch_is_cleanup_without_source_or_receiver_read_and_no_redundant_event() {
     let fixture = WatchFixture::new().await;
@@ -488,9 +519,10 @@ async fn watch_admission_worker_loss_retains_original_owner_while_other_read_and
     );
     let control = text(peer.message().await);
     assert_eq!(control["id"], "control-while-watch-held");
-    // Current policy admitted and the actual control dispatcher answered. This
-    // fixture has no Agent/service, so it proves dispatch progress, not a stopped Agent.
-    assert_eq!(control["error"]["code"], "conversations_not_configured");
+    // The control was read and answered while the watch is held: this session
+    // is a paired device, so admission refuses its close (issue 707, row
+    // J12). That answer proves dispatch progress, not a stopped Agent.
+    assert_eq!(control["error"]["code"], "forbidden");
     assert_eq!(work.completed.load(Ordering::SeqCst), 0);
     drop(peer);
     socket.await.unwrap();
@@ -2318,8 +2350,8 @@ impl Drop for HostWatchFixture {
 async fn revoke_grant(fixture: &WatchFixture) {
     let grants = fixture.state.passive_read.as_ref().unwrap().2.clone();
     let revoked = grants
-        .change(crate::conversation::application::ReadGrantChange {
-            transition: crate::conversation::application::ReadGrantTransition::Revoke,
+        .change(crate::conversation::application::ShareGrantChange {
+            transition: crate::conversation::application::ShareGrantTransition::Revoke,
             conversation_id: fixture.id.clone(),
             receiver_id: None,
             credential_id: CredentialId::new("receiver-credential").unwrap(),

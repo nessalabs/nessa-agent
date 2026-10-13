@@ -77,19 +77,25 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
         *backend.execution_gate.lock().unwrap() = Some(gate);
         let active = tokio::spawn({
             let agent = agent.clone();
-            async move { agent.invoke(input("active"), actor()).await }
+            async move {
+                agent
+                    .invoke(input("active"), Submitter::owner(actor()))
+                    .await
+            }
         });
         backend.executing.notified().await;
         if stage == InvocationStage::Queued {
             let result = timeout(
                 Duration::from_secs(2),
-                agent.steer(input("steering"), actor()),
+                agent.steer(input("steering"), Submitter::owner(actor())),
             )
             .await
             .unwrap();
             assert!(matches!(result, Err(AgentError::SubmissionUnresolved)));
             assert!(matches!(
-                agent.steer(input("steering"), actor()).await,
+                agent
+                    .steer(input("steering"), Submitter::owner(actor()))
+                    .await,
                 Err(AgentError::SubmissionUnresolved)
             ));
             assert_eq!(backend.steers.load(Ordering::SeqCst), 0);
@@ -99,7 +105,7 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
             // A later successful save cannot erase the uncertain committed admission.
             assert_eq!(
                 agent
-                    .enqueue(input("next"), actor())
+                    .enqueue(input("next"), Submitter::owner(actor()))
                     .await
                     .unwrap()
                     .wait()
@@ -118,7 +124,9 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
             assert_eq!(record.scheduling[0].stage, InvocationStage::Queued);
             assert_eq!(record.scheduling[0].cause, SchedulingCause::Submitted);
             assert!(matches!(
-                agent.steer(input("steering"), actor()).await,
+                agent
+                    .steer(input("steering"), Submitter::owner(actor()))
+                    .await,
                 Err(AgentError::SubmissionUnresolved)
             ));
             assert_eq!(backend.steers.load(Ordering::SeqCst), 0);
@@ -129,13 +137,19 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
         *backend.close_gate.lock().unwrap() = Some(gate);
         let steering = tokio::spawn({
             let agent = agent.clone();
-            async move { agent.steer(input("steering"), actor()).await }
+            async move {
+                agent
+                    .steer(input("steering"), Submitter::owner(actor()))
+                    .await
+            }
         });
         timeout(Duration::from_secs(2), backend.closing.notified())
             .await
             .expect("panic must start supervised cleanup");
         assert!(matches!(
-            agent.enqueue(input("blocked"), actor()).await,
+            agent
+                .enqueue(input("blocked"), Submitter::owner(actor()))
+                .await,
             Err(AgentError::Closed)
         ));
         assert_eq!(backend.executions.load(Ordering::SeqCst), 1);
@@ -160,7 +174,7 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
         assert_eq!(active.await.unwrap(), Ok(ExecutionOutcome::Completed));
         let retry = timeout(
             Duration::from_secs(2),
-            agent.steer(input("steering"), actor()),
+            agent.steer(input("steering"), Submitter::owner(actor())),
         )
         .await
         .unwrap()
@@ -194,14 +208,16 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
         }
         assert!(final_event.actor.is_none());
         assert!(matches!(
-            agent.enqueue(input("still-blocked"), actor()).await,
+            agent
+                .enqueue(input("still-blocked"), Submitter::owner(actor()))
+                .await,
             Err(AgentError::Closed)
         ));
         agent.close(actor()).await.unwrap();
         reattach_after_explicit_close(&agent).await;
         assert_eq!(
             agent
-                .enqueue(input("recovered"), actor())
+                .enqueue(input("recovered"), Submitter::owner(actor()))
                 .await
                 .unwrap()
                 .wait()
@@ -211,7 +227,10 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
         agent.close(actor()).await.unwrap();
         drop(agent);
         let (restored, restored_backend) = probe_with_manager(false, storage.manager().await).await;
-        let restored_delivery = restored.steer(input("steering"), actor()).await.unwrap();
+        let restored_delivery = restored
+            .steer(input("steering"), Submitter::owner(actor()))
+            .await
+            .unwrap();
         assert!(matches!(
             restored_delivery,
             SteeringDelivery::Injected { evidence, .. } if evidence == original_evidence

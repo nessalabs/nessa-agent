@@ -9,11 +9,14 @@
 //!          cannot change it
 //! stop asked ──▶ the connection being served is closed, its leases end as
 //!               they do when a gateway goes away, and dialing stops
+//! drain asked ──▶ the connection being served drains its leases and ends by
+//!                itself; nothing is dialed again, and a dial or wait under
+//!                way stops ──▶ past the drain's deadline, stop is asked
 //! ```
 //!
 //! Arrows are steps, in order. A refusal is redacted (see `dial.rs`), so a
 //! revoked key is dialed again like a full gateway: the wait caps how often.
-use super::timer::Timer;
+use crate::timer::Timer;
 use std::{future::Future, io, time::Duration};
 use tokio::sync::watch;
 
@@ -37,7 +40,11 @@ impl Default for Backoff {
 }
 
 /// Dial with `connect` and serve each connection with `serve` until `stop`
-/// says true, or until `connect` fails with [`io::ErrorKind::InvalidInput`].
+/// says true, or `drain` does, or until `connect` fails with
+/// [`io::ErrorKind::InvalidInput`]. Once `drain` says true nothing is dialed
+/// again: the connection being served drains and ends by itself (`serve`
+/// is handed what drains it), and is waited for. A `drain` whose sender is
+/// gone never says it.
 /// The waits between dials, and how long a connection was served, are
 /// measured on `timer`.
 ///
@@ -54,6 +61,7 @@ pub(crate) async fn redial<C, Connect, Connected, Serve, Served>(
     backoff: Backoff,
     timer: &dyn Timer,
     mut stop: watch::Receiver<bool>,
+    mut drain: watch::Receiver<bool>,
 ) -> io::Result<()>
 where
     Connect: FnMut() -> Connected,
@@ -63,17 +71,22 @@ where
 {
     let mut wait = backoff.first;
     loop {
-        if *stop.borrow_and_update() {
+        if *stop.borrow_and_update() || *drain.borrow_and_update() {
             return Ok(());
         }
         let dialed = tokio::select! {
             dialed = connect() => dialed,
             _ = stopped(&mut stop) => return Ok(()),
+            _ = stopped(&mut drain) => return Ok(()),
         };
         match dialed {
             Ok(connection) => {
                 let since = timer.now();
                 serve(connection, stop.clone()).await;
+                if *drain.borrow() {
+                    tracing::info!("drained; dialing no more");
+                    return Ok(());
+                }
                 if timer.now().since(since) >= backoff.most {
                     wait = backoff.first;
                 }
@@ -88,8 +101,30 @@ where
         tokio::select! {
             () = timer.sleep(wait) => {}
             _ = stopped(&mut stop) => return Ok(()),
+            _ = stopped(&mut drain) => return Ok(()),
         }
         wait = (wait * 2).min(backoff.most);
+    }
+}
+
+/// Once `drain` says true, wait `deadline` on `timer`, then ask `stop`: a
+/// drain that has not ended by itself by then is cut, its leases left to end
+/// as they do when a gateway goes away. Returns once stop is asked, by this
+/// or by anything else; never, when nothing can say drain.
+pub(crate) async fn stop_past_deadline(
+    mut drain: watch::Receiver<bool>,
+    deadline: Duration,
+    timer: &dyn Timer,
+    stop: &watch::Sender<bool>,
+) {
+    stopped(&mut drain).await;
+    let mut stopping = stop.subscribe();
+    tokio::select! {
+        () = timer.sleep(deadline) => {
+            tracing::warn!(?deadline, "the drain ran past its deadline; closing the connection");
+            stop.send_replace(true);
+        }
+        _ = stopped(&mut stopping) => {}
     }
 }
 

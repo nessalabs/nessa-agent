@@ -21,8 +21,8 @@ use crate::env_serve::application::{
     LedgerEntry, PeerGrants, Runners, ServeTimings, Serving,
 };
 use crate::env_serve::domain::{Agents, CommandGrant, Peer, PeerGrant};
-use crate::env_serve::infrastructure::TokioTimer;
 use crate::env_serve::install::Platform;
+use crate::timer::TokioTimer;
 use nessa_protocol::lease::{
     decode, encode, Cleanup, CommandEnd, Data, FromEnvironment, GrantedTerms as WireTerms, Sandbox,
     ToEnvironment, KEEPALIVE_INTERVAL, SILENCE_LIMIT,
@@ -220,6 +220,8 @@ struct Connector {
     runner: Mutex<Option<Arc<dyn CommandRunner>>>,
     /// What a serving host's owner grants this gateway, over SSH.
     grants: Arc<SshGrant>,
+    /// Asks every serving host to drain.
+    drain: tokio::sync::watch::Sender<bool>,
 }
 
 impl Connector {
@@ -250,6 +252,7 @@ impl Connector {
             frames: Arc::new(Mutex::new(Vec::new())),
             runner: Mutex::new(None),
             grants: Arc::default(),
+            drain: tokio::sync::watch::channel(false).0,
         })
     }
     /// Cut every connection both ways, as a network that went away.
@@ -298,12 +301,14 @@ impl LeaseConnector for Connector {
                     },
                     self.ledger.clone(),
                     Arc::new(NoOutbox),
+                    None,
                     ServeTimings {
                         grace: Duration::from_millis(10),
                         kill: Duration::from_millis(100),
                         ..ServeTimings::default()
                     },
                     Arc::new(TokioTimer::new()),
+                    self.drain.subscribe(),
                 ));
             }
             Reach::Stalling(mut gate) => {
@@ -516,12 +521,13 @@ impl LeaseConnector for Connector {
             from_environment: Box::new(from_environment),
             to_environment: Box::new(to_environment),
             keep: Box::new(()),
-            artifacts: Arc::new(NoChannels),
+            artifacts: super::connector::ArtifactTransport::Channels(Arc::new(NoChannels)),
         })
     }
 }
 
-/// A connection with no artifact channel to offer.
+/// An SSH connection whose artifact channels never open: these tests
+/// carry no file.
 struct NoChannels;
 impl super::connector::ArtifactChannels for NoChannels {
     fn open(&self) -> io::Result<super::connector::ArtifactChannel> {
@@ -1390,6 +1396,164 @@ async fn a_stop_racing_the_lease_end_is_answered_with_the_hosts_evidence() {
     );
 }
 
+/// A fetch given up just before its lease's End is asked tells the host
+/// so first: its `Undelivered` is queued ahead of the End, so the host never
+/// settles it as answered by the lease's end.
+#[tokio::test]
+async fn a_fetch_given_up_just_before_its_lease_ends_is_undelivered_before_the_end() {
+    use crate::conversation::application::{
+        EnvironmentFuture, FetchAsk, HeldSource, HeldSourceFailure,
+    };
+    use nessa_sdk::application::agent_execution::sessions::PublishedFile;
+    use nessa_sdk::domain::common::value_objects::{MediaType, Sha256Digest};
+    /// Never read: the fetch is given up before the host accepts it.
+    struct Unread;
+    impl HeldSource for Unread {
+        fn read(
+            &self,
+            _offset: u64,
+            _max: usize,
+        ) -> EnvironmentFuture<'_, Result<Vec<u8>, HeldSourceFailure>> {
+            Box::pin(async { Err(HeldSourceFailure::NotHeld) })
+        }
+    }
+    let (_open, gate) = tokio::sync::watch::channel(true);
+    let connector = Connector::new(Reach::Stalling(gate));
+    let environment = environment(connector.clone(), Arc::new(Audit::default()));
+    let (binding, _host) = binding(true);
+    let id = lease();
+    let opened = environment
+        .open(&id, &terms("claude"), binding)
+        .await
+        .unwrap_or_else(|_| panic!("granted"));
+    let mut fetch = opened
+        .hold
+        .fetch(FetchAsk {
+            request: "given-up".into(),
+            destination: "a.bin".into(),
+            file: PublishedFile::new(
+                Sha256Digest::parse(&format!("sha256:{}", "0".repeat(64))).unwrap(),
+                MediaType::parse("application/octet-stream").unwrap(),
+                1,
+            )
+            .unwrap(),
+            source: Arc::new(Unread),
+            delivered: Arc::default(),
+        })
+        .expect("a host's lease fetches");
+    // Polled once, so its Fetch is queued; then given up, and the lease's
+    // End asked at once, with nothing awaited between.
+    tokio::select! {
+        biased;
+        _ = &mut fetch => panic!("answered before the host could accept it"),
+        () = std::future::ready(()) => {}
+    }
+    drop(fetch);
+    let _ = tokio::time::timeout(
+        Duration::from_millis(100),
+        opened.hold.end(LeaseEndCause::Closed),
+    )
+    .await;
+    let (undelivered, end) = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            {
+                let frames = connector.frames.lock().unwrap();
+                let undelivered = frames.iter().position(|frame| {
+                    matches!(frame, ToEnvironment::Undelivered { request, .. } if request.starts_with("given-up#"))
+                });
+                let end = frames.iter().position(
+                    |frame| matches!(frame, ToEnvironment::End { lease } if lease == id.as_str()),
+                );
+                if let (Some(undelivered), Some(end)) = (undelivered, end) {
+                    break (undelivered, end);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the Undelivered and the End reach the host");
+    assert!(undelivered < end, "the Undelivered goes ahead of the End");
+}
+
+/// A fetch asked again under the call of one given up before the host's
+/// last word is a new ask with a name of its own on the wire, so nothing
+/// the host says of the first can be taken as the second's.
+#[tokio::test]
+async fn a_fetch_asked_again_under_a_call_given_up_is_named_apart_on_the_wire() {
+    use crate::conversation::application::{
+        EnvironmentFuture, FetchAsk, HeldSource, HeldSourceFailure,
+    };
+    use nessa_sdk::application::agent_execution::sessions::PublishedFile;
+    use nessa_sdk::domain::common::value_objects::{MediaType, Sha256Digest};
+    /// Never read: each fetch is given up before the host accepts it.
+    struct Unread;
+    impl HeldSource for Unread {
+        fn read(
+            &self,
+            _offset: u64,
+            _max: usize,
+        ) -> EnvironmentFuture<'_, Result<Vec<u8>, HeldSourceFailure>> {
+            Box::pin(async { Err(HeldSourceFailure::NotHeld) })
+        }
+    }
+    let ask = || FetchAsk {
+        request: "reused".into(),
+        destination: "a.bin".into(),
+        file: PublishedFile::new(
+            Sha256Digest::parse(&format!("sha256:{}", "0".repeat(64))).unwrap(),
+            MediaType::parse("application/octet-stream").unwrap(),
+            1,
+        )
+        .unwrap(),
+        source: Arc::new(Unread),
+        delivered: Arc::default(),
+    };
+    let (_open, gate) = tokio::sync::watch::channel(true);
+    let connector = Connector::new(Reach::Stalling(gate));
+    let environment = environment(connector.clone(), Arc::new(Audit::default()));
+    let (binding, _host) = binding(true);
+    let opened = environment
+        .open(&lease(), &terms("claude"), binding)
+        .await
+        .unwrap_or_else(|_| panic!("granted"));
+    for _ in 0..2 {
+        let mut fetch = opened.hold.fetch(ask()).expect("a host's lease fetches");
+        // Polled once, so its Fetch is queued; then given up unanswered.
+        tokio::select! {
+            biased;
+            _ = &mut fetch => panic!("answered before the host could accept it"),
+            () = std::future::ready(()) => {}
+        }
+        drop(fetch);
+    }
+    let named = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let named: Vec<String> = connector
+                .frames
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|frame| match frame {
+                    ToEnvironment::Fetch { request, .. } => Some(request.clone()),
+                    _ => None,
+                })
+                .collect();
+            if named.len() == 2 {
+                break named;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("both are asked");
+    assert!(
+        named.iter().all(|name| name.starts_with("reused#")),
+        "{named:?}"
+    );
+    assert_ne!(named[0], named[1], "each ask has a name of its own");
+}
+
 /// A harness's stop and a lease's end are delivered even when the host's
 /// queue is full when they are asked: a stop let go of, an end abandoned,
 /// and an end whose caller stopped waiting before it was queued all reach
@@ -1707,6 +1871,15 @@ impl crate::env_serve::application::ArtifactOutbox for NoOutbox {
     ) -> Result<nessa_protocol::lease::StagedArtifact, nessa_protocol::lease::PublishRefusal> {
         Err(nessa_protocol::lease::PublishRefusal::StagingFailed)
     }
+    fn read(
+        &self,
+        _lease: &str,
+        _artifact: u32,
+        _offset: u64,
+        _length: usize,
+    ) -> std::io::Result<Vec<u8>> {
+        Err(std::io::Error::other("no outbox"))
+    }
     fn discard(&self, _lease: &str, _artifact: u32) {}
     fn close(&self, _lease: &str) {}
 }
@@ -1834,6 +2007,52 @@ async fn a_stopped_command_is_stopped_on_the_host_and_answers_the_stops_cause() 
         }
     );
     assert_eq!(result.stdout, b"partial");
+    assert_eq!(
+        result.cleanup,
+        Some(LeaseCleanup::Confirmed { forced: true })
+    );
+}
+
+/// Row K1: a command its host stopped as it drained, the gateway asking no
+/// stop, is a system stop, never a lost one.
+#[tokio::test]
+async fn k1_a_command_its_host_drained_is_stopped_by_the_system_not_lost() {
+    let connector = serving_commands();
+    let host = environment(connector.clone(), Arc::new(Audit::default()));
+    let commands = host.commands().unwrap();
+    let hold = commands
+        .grant(&lease(), &work(&["sleep", "60"]))
+        .await
+        .unwrap()
+        .hold;
+    let (_stop, stopped) = tokio::sync::watch::channel(None);
+    let running = tokio::spawn(hold.run(10_000, stopped));
+    // Drained once it runs, not before: one never run ends not started.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !connector
+            .ledger
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|entry| matches!(entry, LedgerEntry::CommandStarted { .. }))
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the command starts on the host");
+    connector.drain.send_replace(true);
+    let result = tokio::time::timeout(Duration::from_secs(5), running)
+        .await
+        .expect("a drained command is answered")
+        .unwrap();
+    assert_eq!(
+        result.exit,
+        CommandExit::Stopped {
+            cause: LeaseEndCause::Stopped
+        }
+    );
     assert_eq!(
         result.cleanup,
         Some(LeaseCleanup::Confirmed { forced: true })
@@ -2749,8 +2968,11 @@ async fn a_revoked_link_ends_each_lease_as_revoked_and_closes_once_they_are_ende
     let mut harness = link.start(id.as_str(), BTreeMap::new()).unwrap();
     harness.input.write_all(b"ping").await.unwrap();
     assert_eq!(read_some(&mut harness.output).await, b"ping");
-    link.revoke(Duration::from_secs(30));
-    link.revoke(Duration::from_secs(30));
+    assert!(link.revoke(Duration::from_secs(30)), "this call revoked it");
+    assert!(
+        !link.revoke(Duration::from_secs(30)),
+        "asked again, nothing more"
+    );
     // From the moment it is revoked, nothing more is started or published
     // on it: the host is ending every lease.
     assert_eq!(

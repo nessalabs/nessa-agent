@@ -1,6 +1,8 @@
-# Read grants — issue 704, slice G
+# Share grants — issue 704, slice G; roles, issue 707, slice J1
 
-Status: this branch. Part of [#252](https://github.com/nessalabs/nessa-agent/issues/252)
+Status: slice G merged in #720. Roles and tool policies (slice J1 of
+[#707](https://github.com/nessalabs/nessa-agent/issues/707)): this branch.
+Part of [#252](https://github.com/nessalabs/nessa-agent/issues/252)
 (slice G of [ADR 252](../adr/todo/252-runtime-roles-and-execution-leases.md)).
 The map's rules are in
 [Sharing a conversation](runtime-architecture.md#sharing-a-conversation) and
@@ -18,8 +20,11 @@ default and access is per conversation.
 
 ## What a grant is
 
-A grant is `(device, conversation id, role = Read)`, kept by the gateway in
-the metadata database (`read_grants`, beside the conversations). The device is
+A grant is `(device, conversation id, role, tool policy)`, kept by the
+gateway in the metadata database (`share_grants`, beside the
+conversations). The role is Read, Comment or Drive; a Drive grant, and only
+a Drive grant, also carries a tool policy (see [Roles and tool
+policies](#roles-and-tool-policies)). The device is
 named by its receiver binding, which pairing created, and by the credential
 the owner chose it by; both are minted when it paired and never reused. There
 is no grant by list, channel or filter: a conversation created or moved later
@@ -28,7 +33,8 @@ is not visible until it has its own grant (row G7).
 The owner manages grants with three socket methods, each admitted by Cedar for
 `credential.manage`, the grant that pairing a device already asks for:
 
-- `conversation.share {requestId, conversationId, credentialId}` grants Read.
+- `conversation.share {requestId, conversationId, credentialId, role, policy?}`
+  grants a role, or changes the role and policy the device already holds.
   The conversation must be the caller's and not deleted, and the credential an
   active paired device of the same owner (`share_target_not_paired`
   otherwise). A paired peer gateway is shared with the same way, and reads
@@ -40,9 +46,9 @@ The owner manages grants with three socket methods, each admitted by Cedar for
   conversation or an unpaired device.
 - `conversation.shares {conversationId}` lists the grants on one conversation.
 
-Each grant and revoke is journaled (`read_grant_changes`) in the same
-transaction as the grant itself: before and after, the owner's principal as
-initiator, the surface and request it came from, the time, and the catalogue
+Each grant, change of role or policy, and revoke is journaled
+(`share_grant_changes`) in the same transaction as the grant itself: the
+role and policy before and after, the owner's principal as initiator, the surface and request it came from, the time, and the catalogue
 revision it took (row G10). A repeat changes nothing and moves no revision,
 but is journaled with before equal to after (row G9), so a retry of any
 request answers what it answered the first time (row G16). A retried share is
@@ -52,7 +58,7 @@ device unpaired it is refused, and changes nothing.
 ## One authority
 
 "May this reader read this conversation" has one owner,
-`conversation::application::read_grants`:
+`conversation::application::share_grants`:
 
 - **Who is a grantee** is decided by construction. A session whose credential
   has a receiver binding is a paired device, because only pairing creates
@@ -86,14 +92,14 @@ Every read path asks it:
 The catalogue is narrowed in SQL rather than filtered after the read, because
 a filtered page must still be a whole page: a page of 200 rows that loses 199
 after the limit would stop a device's pass. The store states "this receiver
-holds a grant on this conversation" once (`store::read_grants::granted`) and
+holds a grant on this conversation" once (`store::share_grants::granted`) and
 uses it for `is_granted` and for the catalogue's page and resolve, so a device's catalogue and its reads cannot disagree.
 
 ```mermaid
 sequenceDiagram
     participant Owner as Owner surface
     participant Socket
-    participant Grants as read_grants (store)
+    participant Grants as share_grants (store)
     participant Device as Paired device
     Owner->>Socket: conversation.share (credentialId)
     Socket->>Grants: change Grant, bump the owner's catalogue revision, journal
@@ -126,19 +132,168 @@ the transaction that writes the grant (row G5). Every reader of that owner's
 catalogue sees the row changed; the owner's own list sends the same row again,
 which costs one frame.
 
+A change of role or policy on a grant the device already holds takes no
+catalogue revision (row J4). The catalogue says which conversations a device
+can read, and that has not changed; moving the row would make every reader
+of the owner's catalogue page it again for nothing. The device's head does
+not move either: it moves with grants and revokes only. The role is learnt
+from `conversation.shares` today and is asked where it is enforced, never
+read from the catalogue.
+
 A revoke removes the row from the device's pages; it is not sent as deleted
 (row G6). The sync engine refuses to bring a deleted identity back at a later
 revision, so a revoked row marked deleted could never be granted again. What a
 follower keeps of a conversation it can no longer read is its own follow rule
 and cache, on the follower's side; this gateway only stops serving it.
 
+## Roles and tool policies
+
+Slice J1 of #707 gives a grant a role and, for Drive, a tool policy. A
+Comment or a Drive grant reads exactly as a Read grant does (row J1). Slice
+J2 lets a Drive grant drive the one conversation it names, and J2b saves
+each turn with who started it (below). Later slices build on this: J3 admits
+Comment's notes, J4 enforces the policy.
+
+- **The role** is `ShareRole` (`conversation/domain`), Read < Comment <
+  Drive, with `at_least` to ask "does this role allow that one". The store's
+  grant predicate (`store::share_grants::granted`) is still the one statement
+  of "holds a grant", of any role.
+- **The tool policy** is `ToolPolicy`: a preset (`read_only_tools`,
+  `no_shell`, `ask_everything`, `all`) or allow and deny patterns. It is
+  checked for shape and size only: at most 16 patterns in each list, at
+  least one pattern in one of them, each 1 to 48 bytes, plain text. Nothing evaluates it yet. `ShareAccess`
+  holds the two together, so a Drive grant always has a policy and a Read or
+  Comment grant never has one (row J3). The store keeps the policy as JSON
+  and reads it back through the same constructors.
+- **Changing a grant** is sharing again with another role or policy. It is
+  applied, journaled with the role and policy before and after, and moves
+  the grant's policy revision; sharing the same role and policy again
+  changes nothing and is journaled with before equal to after (rows J4, J5).
+  The policy revision is the journal sequence of the change that last set
+  the role or policy. A later slice stamps it on the turns a Drive grant
+  starts, so a policy change affects only turns accepted after it.
+- **A retry** of a share answers from its journal row, and compares the role
+  and policy too: the same request id naming another role or policy is
+  refused `InvalidInput` (row J6).
+- **`conversation.shares`** reports each grant's role, its policy when it
+  drives, and its policy revision (row J7). `conversation.unshare` names no
+  role and ends a grant of any role (row J8).
+- **Bounds.** A conversation holds at most 64 grants and at most 8 Drive
+  grants (row J9). The Drive bound is what keeps a `conversation.shares`
+  answer inside one frame with every policy at its largest (row J10); both
+  are in [limits](../limits.md).
+
+```mermaid
+sequenceDiagram
+    participant Owner as Owner surface
+    participant Socket
+    participant Domain as ShareAccess (domain)
+    participant Grants as share_grants (store)
+    participant Device as Paired device
+    Owner->>Socket: conversation.share {role: drive, policy}
+    Socket->>Domain: ShareAccess::new(role, policy)
+    Domain-->>Socket: refused when drive has no policy, or read/comment has one
+    Socket->>Grants: change Grant(access)
+    Grants->>Grants: journal role and policy before/after, set policy_revision
+    Note over Grants: role change only: no catalogue revision, no notice
+    Device->>Socket: recordsHead / conversation.read
+    Socket->>Grants: admit_read (any role)
+    Socket-->>Device: records, exactly as for Read
+```
+
+## Driving a shared conversation
+
+Slice J2 of #707 admits a Drive grant's commands: `conversation.send`,
+`.steer`, `.stop`, `.answer`, `.answerQuestion`, `.cancel`, and
+`.receipt` for those commands. One function admits every socket request,
+`product::read_access::admit_request`:
+
+- **The owner's surfaces**, and every method outside Cedar's
+  `conversation.write`, are admitted by the method's grant exactly as
+  before.
+- **A paired session** is refused `forbidden` every `conversation.write`
+  method, even when Cedar grants it that, except the reads, lists and
+  subscriptions that ask its grants again (rows G12, G13) and the Drive
+  commands (row J12). So a device never acts as its owner beyond what a
+  share admits; Drive never deletes, archives, exports, re-shares or changes
+  the model.
+- **A Drive command** is the owner's, made from the device's surface: a
+  device signs in as its owner, and a party signed in as anyone else is
+  refused. It asks Cedar for the grant pairing mints,
+  `conversation.read`, then the share grant on the one conversation the
+  command names (`admit_drive`). A Drive grant admits it; a Read or Comment
+  grant is `forbidden`; no grant is `conversation_not_found`, as for a read
+  (row J11). The role is read at every command, so a grant lowered or
+  revoked refuses the next one (row J13).
+- **A driver sends text.** An image names a digest in the owner's
+  attachment store and a linked file a path on the owner's machine, so
+  either could name something never shared; both are refused, in a command
+  or a receipt, and so is the receipt of a create (row J14).
+
+The turn runs as one of the owner's: the device signs in as its owner, so
+the command is the owner's command from the device's surface. Its tools run
+unchecked, per the 2026-10-12 decision on #707, until slice J4 enforces the
+grant's policy.
+
+### Who started a turn
+
+Slice J2b saves every turn with who started it, in the SDK's turn record
+(`InvocationRecord::initiation`, record schema version 3): the owner, or the
+share grant that admitted it, with the role and the policy revision read for
+that command, and that its tools ran unchecked (row J15). The admission is
+the one authority: `admit_request` answers with the initiation it admitted,
+the socket hands it to `submit_command`, and the turn is saved with it.
+
+- **The stamp is per turn, as admitted.** A policy changed after a command
+  was admitted stamps the next command's turn and leaves this one as it was
+  admitted. A retry of the same request is answered from its saved receipt,
+  so a turn keeps the initiation it was first admitted with; the same turn
+  sent again as a new request under another revision is a conflict, as any
+  other message under that turn's id is.
+- **Admission audit names the actor, not the grant.** The SDK's admission
+  evidence carries the action context (the device's surface and the request
+  id); the grant is on the turn's record. Naming it in the audit too is left
+  to slice J4, which audits the grant's policy decisions.
+- **Only a turn is stamped.** Stop, answer, answer-question and cancel are
+  attributed by their action context alone (the device's surface and the
+  request id), as before.
+- **An app's message is the owner's.** An app's calls ask for
+  `conversation.write`, which no paired session is admitted for, so an app's
+  message always comes from the owner's own surface.
+
+```mermaid
+sequenceDiagram
+    participant Device as Paired device
+    participant Socket as admit_request
+    participant Cedar
+    participant Grants as share_grants
+    participant Service as ConversationService
+    Device->>Socket: conversation.send {conversationId, text}
+    Socket->>Socket: binding_of: a receiver binding, so paired
+    Socket->>Socket: binding owner is the session's principal, else forbidden
+    Socket->>Cedar: conversation.read (pairing's grant)
+    Cedar-->>Socket: allow
+    Socket->>Grants: held_grant(conversation, receiver)
+    Grants-->>Socket: drive, policy revision
+    Socket->>Socket: no image, no linked file
+    Socket->>Service: submit as the owner, surface = device credential,<br/>initiation = grant (receiver, Drive, revision), tools not checked
+    Service->>Service: turn record saved with that initiation
+    Service-->>Device: receipt
+    Device->>Socket: conversation.delete
+    Socket-->>Device: forbidden (not a Drive command)
+```
+
 ## What this slice does not do
 
 - **Follow rules** are the follower's table (a peer gateway, slice H, or a
   device's cache). Grants and follow rules are separate tables; this slice adds
   only the grant table, and nothing syncs by default.
-- **Comment and Drive roles** and tool policy revisions (#707). The role
-  column holds `read` only.
+- **Admitting Comment and enforcing Drive's policy** (#707, slices J3 and
+  J4). A Drive grant drives its conversation (slice J2) with its tools
+  unchecked.
+- **Driving through a peer gateway.** A peer forwards its people's commands
+  in a later slice. A peer signs in as its own principal, not its grantor,
+  so its own session is refused every Drive command `forbidden` (row J12).
 - **The Share control in the conversation header** on the desktop. The
   methods are on the wire and in the generated client; the desktop UI is a
   separate change with its browser verification.
@@ -176,6 +331,22 @@ and cache, on the follower's side; this gateway only stops serving it.
   `conversation.write` to reach the grant check behind Cedar.
 - **Existing paired devices see nothing after upgrade** until their owner
   shares conversations with them, which needs the Share control above.
+- **The metadata file is version 5.** Adding the role, policy and policy
+  revision changed the grant table's shape, so a version 4 file is refused
+  at start rather than read, as every alpha change of shape has been
+  (`a_version_4_database_is_refused_without_erasing_its_grants`).
+- **An owner's write asks the receiver authority.** Telling a paired
+  session from the owner's needs its receiver binding, so every
+  `conversation.write` request on a gateway that pairs reads it, as
+  `conversation.read` already did; when it cannot be read the request is
+  refused `temporarily_unavailable`.
+- **A driver shares its owner's request ids.** Receipts are keyed by
+  principal and request id, and a device signs in as its owner, so a driver
+  reusing an id its owner used is refused as a conflict rather than "not
+  found". It learns only that the id was used; request ids are random.
+- **A driver cannot attach.** Uploading an image (`attachment.begin`) and
+  linking a file are refused to a paired session; a shared upload needs its
+  own store scoped to the conversation.
 
 ## State and order table
 
@@ -203,4 +374,18 @@ otherwise.
 | G14 | A device unpaired (its binding inactive), whatever it was granted | Socket reads refused `unauthorized`; passive reads as before | `an_unpaired_device_reads_nothing_whatever_it_was_granted` |
 | G15 | A records watch installed while granted; the grant revoked; a record committed | No `conversation.changed` is delivered; the next notice is admitted again, refused, and the connection closes `authorization_lost` | `a_revoke_ends_an_installed_records_watch_at_its_next_notice` (`tests/product/socket/watches.rs`) |
 | G16 | A share or unshare retried with the same request id, after a later change | Answers what it answered the first time and changes nothing; the same request naming another device or the other change is refused `InvalidInput`. This holds for a request that changed nothing, which replays `applied: false`. A retried share is admitted like a new one first, so after a delete or an unpairing it is refused and changes nothing | `a_retried_share_replays_its_answer_and_never_undoes_a_later_unshare`, `a_retried_share_that_changed_nothing_never_undoes_a_later_unshare` |
-| G17 | A share past `MAX_READ_GRANTS_PER_CONVERSATION` (64) grants on one conversation | Refused `InvalidInput`, nothing written, so a `conversation.shares` answer fits one frame | `a_conversation_holds_a_bounded_number_of_grants` |
+| G17 | A share past `MAX_SHARE_GRANTS_PER_CONVERSATION` (64) grants on one conversation | Refused `InvalidInput`, nothing written, so a `conversation.shares` answer fits one frame | `a_conversation_holds_a_bounded_number_of_grants` |
+| J1 | A device holding a Comment or a Drive grant reads: record head and page, a records watch, its catalogue, `conversation.read` and a view subscription | Exactly as a Read grant: admitted, the same rows and head; refused once revoked | `a_comment_or_drive_grant_reads_records_as_read_does`; `a_comment_or_drive_grant_watches_records_as_read_does` (`tests/product/socket/watches.rs`); `a_comment_or_drive_grant_pages_and_resolves_as_read_does`; `a_comment_or_drive_grant_reads_on_the_socket_as_read_does` |
+| J3 | Share Drive without a policy, Read or Comment with one, a policy past its bounds or of no known shape, or an unknown role | Refused `InvalidInput`; nothing written or journaled | `drive_needs_a_policy_and_read_and_comment_take_none`, `tool_rules_are_bounded_and_plain` (`tests/conversation/share_access.rs`); `a_share_whose_role_and_policy_do_not_fit_is_refused_and_writes_nothing` |
+| J4 | Share again with another role (Read to Drive, Drive to Read) or another policy | Applied; journaled with role and policy before and after; the policy revision moves to that journal row; the catalogue revision and the device's head do not move | `a_change_of_role_or_policy_is_applied_journaled_and_moves_the_policy_revision` |
+| J5 | Share again with the role and policy already held | `applied: false`; journaled with before equal to after; the policy revision kept | `an_identical_share_changes_nothing_and_keeps_the_policy_revision` |
+| J6 | A share retried with its request id after a later change of role; the same request naming another role or policy | The first answer, nothing changed; the other is refused `InvalidInput` | `a_retried_share_replays_its_role_and_policy_or_is_refused` |
+| J7 | `conversation.shares` | Each grant's role, its policy when Drive, and its policy revision, which moves only with its own role or policy | `shares_reports_each_grants_role_policy_and_policy_revision` |
+| J8 | Unshare a Comment or a Drive grant | Revoked like Read, journaled with the role and policy it took away | `a_revoke_ends_a_grant_of_any_role`; `share_refuses_what_the_owner_cannot_grant` (unshare names no role) |
+| J9 | A Drive grant past `MAX_DRIVE_GRANTS_PER_CONVERSATION` (8), new or a change from another role | Refused `InvalidInput`, nothing written; a driver's own policy can still change | `a_conversation_holds_a_bounded_number_of_drive_grants` |
+| J10 | The largest `conversation.shares` answer: 64 grants, 8 of them Drive with the largest policy, every text at its longest | Fits one frame (`MAX_PAYLOAD_BYTES`); the schema states the bounds the domain enforces | `the_largest_shares_answer_fits_one_frame`, `the_schema_states_the_share_bounds_the_domain_enforces` (`tests/product/read_access.rs`) |
+| J11 | A paired session with pairing's `conversation.read` and a Drive grant sends, steers, stops, answers, cancels, or asks a receipt, naming the granted conversation; then naming another of the owner's | Admitted, and its message starts a turn there; the other is `conversation_not_found` | `a_drive_grant_drives_only_the_conversation_it_names` |
+| J12 | A paired session, holding `conversation.write` and a Drive grant, calls any other method whose grant is `conversation.write`; or, holding a Read or Comment grant, a Drive command; or a party signed in as a principal other than its grantor, as a peer is, holding Drive, a Drive command | `forbidden` | `a_paired_session_writes_only_what_a_drive_grant_admits` |
+| J13 | A Drive grant lowered to Read, then revoked; the device unpaired; or a device without pairing's `conversation.read` | The next command `forbidden`, `conversation_not_found`, `unauthorized`, and `forbidden` before its grant is read | `a_drive_grant_lowered_revoked_or_unpaired_drives_no_more` |
+| J14 | A driver's message, or receipt, naming an image or a linked file; a driver asking the receipt of a create | `forbidden` | `a_driver_sends_text_and_names_nothing_of_the_owners` |
+| J15 | The owner's turn, before and while devices are paired, from the owner's own unbound surface; a driver's sent and steered turns; the driver's retry of the same request, and its next turn, after the owner changed the grant's policy | Saved as the owner's; as the Drive grant with the revision read for it; the retry answered from its receipt with the first revision kept, the next turn with the new revision; each with tools not checked. A grant initiation survives a record checkpoint and its restore | `a_turn_is_saved_with_who_started_it`; `a_grant_initiation_survives_a_checkpoint_and_its_restore` (`nessa-sdk` `transcript.rs`) |

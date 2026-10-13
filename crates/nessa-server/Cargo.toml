@@ -40,6 +40,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tungstenite = "0.29"
 uuid = { version = "1", features = ["v4"] }
 getrandom = "0.3"
+socket2 = "0.6"
 # Installing an agent's own runtime: fetch an archive, hash it, unpack one file.
 # `reqwest` is blocking here on purpose — see `agent_install::infrastructure`.
 # Response compression is deliberately absent: the archive's digest is taken

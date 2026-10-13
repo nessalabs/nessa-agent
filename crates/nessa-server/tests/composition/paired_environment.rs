@@ -21,13 +21,14 @@ use crate::conversation::infrastructure::LocalReceiverAuthority;
 use crate::device_pairing::infrastructure::PairingOwnerCommands;
 use crate::env::{LEASE_PROTOCOL, VERSION};
 use crate::env_serve::application::{
-    serve, CommandRan, CommandRunner, CommandStop, ManualTimer, Runners, ServeTimings, Serving,
+    serve, CommandRan, CommandRunner, CommandStop, Runners, ServeTimings, Serving,
 };
 use crate::env_serve::domain::{Agents, CommandGrant, MaxLease, Peer, PeerGrant};
 use crate::env_serve::infrastructure::{
-    dial, ConfiguredLauncher, FileGrants, FileLedger, FileOutbox, LaunchSpec, TokioTimer,
+    dial, ConfiguredLauncher, FileGrants, FileLedger, FileOutbox, LaunchSpec,
 };
 use crate::product::{ProductDependencies, ProductRouteState};
+use crate::timer::{manual::ManualTimer, TokioTimer};
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
 use nessa_auth::adapters::local::LocalCredentialStore;
 use nessa_auth::adapters::pairing::{FilePairingState, ManualCode, NativeIdentity, OsEntropy};
@@ -300,7 +301,9 @@ struct Host {
     /// Where `ledger` is written.
     ledger_path: std::path::PathBuf,
     /// What its serving waits on.
-    timer: Arc<dyn crate::env_serve::application::Timer>,
+    timer: Arc<dyn crate::timer::Timer>,
+    /// Asks it to drain, as `env dial`'s signal does.
+    drain: Arc<watch::Sender<bool>>,
 }
 
 impl Host {
@@ -328,6 +331,7 @@ impl Host {
         Self {
             ledger_path: workspace.join("leases.jsonl"),
             timer: Arc::new(TokioTimer::new()),
+            drain: Arc::new(watch::channel(false).0),
             peer: Peer::Gateway { pin },
             grants: Arc::new(FileGrants::new(&workspace)),
             ledger: Arc::new(FileLedger::open(workspace.join("leases.jsonl")).unwrap()),
@@ -376,8 +380,10 @@ impl Host {
             },
             self.ledger.clone(),
             self.outbox.clone(),
+            None,
             ServeTimings::default(),
             self.timer.clone(),
+            self.drain.subscribe(),
         )
         .await;
     }
@@ -594,7 +600,7 @@ async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
     let native = a.native;
     let pairing = FilePairingEnvironment::open(&environment, &native.to_string(), clock()).unwrap();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
-    tokio::time::timeout(WAIT, pairing.enroll(code))
+    tokio::time::timeout(WAIT, crate::env_serve::application::enroll(&pairing, code))
         .await
         .unwrap()
         .unwrap();
@@ -659,6 +665,7 @@ async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
                 },
                 &TokioTimer::new(),
                 stopping,
+                watch::channel(false).1,
             )
             .await
         })
@@ -735,7 +742,7 @@ async fn waiting_for_approval_ends_when_denied_or_never_paired() {
     nessa_local_storage::create_directory(&denied).unwrap();
     let pairing = FilePairingEnvironment::open(&denied, &native, clock()).unwrap();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
-    tokio::time::timeout(WAIT, pairing.enroll(code))
+    tokio::time::timeout(WAIT, crate::env_serve::application::enroll(&pairing, code))
         .await
         .unwrap()
         .unwrap();
@@ -943,6 +950,137 @@ async fn a_paired_environment_expires_a_lease_and_both_sides_record_it() {
     assert_eq!(entries[4]["cleanup"]["outcome"], "confirmed");
 }
 
+/// Row K1: a paired environment asked to drain, as `env dial
+/// --drain-deadline` is at a signal, ends its lease on both sides with E's
+/// cleanup, never as lost: A sees the lease ending as the system stopping it
+/// and asks its End, E answers with what stopping the harness took, and then
+/// E stops serving and the connection closes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn k1_a_paired_environment_drains_and_both_sides_record_its_cleanup() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .unwrap();
+    // E runs `claude` as `cat`, which runs until it is stopped.
+    let cat = LaunchSpec {
+        executable: "/bin/cat".into(),
+        args: Vec::new(),
+        environment: Default::default(),
+    };
+    let host = Arc::new(Host::running(
+        &directory.path().join("e"),
+        e.pin,
+        HashMap::from([(nessa_protocol::agents::AgentId::Claude, cat)]),
+    ));
+    host.grants
+        .change(&host.peer, |_| {
+            Ok::<_, ()>(Some(PeerGrant::nothing().with_agents(Agents::All)))
+        })
+        .unwrap();
+    let (from_gateway, to_gateway) = tokio::io::split(stream);
+    let serving = {
+        let host = host.clone();
+        tokio::spawn(async move { host.serve(from_gateway, to_gateway).await })
+    };
+    a.until_connected(e.peer, true).await;
+
+    let environment = a.peers.environment(&e.peer);
+    let lease = LeaseId::new(uuid()).unwrap();
+    let terms = LeaseTerms {
+        environment: environment.declaration().environment,
+        work: LeaseWork::Agent(AgentWork::new("claude", "model").unwrap()),
+        sandbox: SandboxProfile::HarnessDefault,
+        grants: LeaseGrants::Opening,
+        deadline: LeaseDeadline::UntilEnded,
+    };
+    let given = Arc::new(std::sync::Mutex::new(None));
+    let binding = Arc::new(OnHost {
+        capabilities: crate::conversation_test_support::Provider::new(Arc::new(
+            crate::conversation_test_support::ProviderFactory::default(),
+        ))
+        .capabilities()
+        .clone(),
+        host: given.clone(),
+    });
+    let opened = tokio::time::timeout(WAIT, environment.open(&lease, &terms, binding))
+        .await
+        .unwrap()
+        .unwrap_or_else(|refusal| panic!("granted: {refusal:?}"));
+    let harness_host = given.lock().unwrap().clone().unwrap();
+    let mut harness = harness_host.start(HarnessLaunch::default()).unwrap();
+    let recorded = |kind: &'static str| {
+        let ledger = std::fs::read_to_string(&host.ledger_path).unwrap();
+        ledger.lines().any(|line| {
+            let entry: serde_json::Value = serde_json::from_str(line).unwrap();
+            entry["kind"] == kind && entry["lease"] == lease.as_str()
+        })
+    };
+    tokio::time::timeout(WAIT, async {
+        while !recorded("started") {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the harness starts");
+    let ends = opened
+        .hold
+        .ends()
+        .expect("a paired environment's lease can end there");
+    host.drain.send_replace(true);
+    // A system stop, as the gateway retiring is: never a lost lease.
+    assert_eq!(
+        tokio::time::timeout(WAIT, ends).await.expect("E ends it"),
+        LeaseEndCause::Stopped
+    );
+    // Draining, E has not stopped serving: it waits for A's End.
+    assert!(!serving.is_finished());
+    let released = tokio::time::timeout(WAIT, opened.hold.end(LeaseEndCause::Stopped))
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            released,
+            LeaseRelease::Released(LeaseCleanup::Confirmed { .. })
+        ),
+        "{released:?}"
+    );
+    // Every End answered: E stops serving, and A sees it leave.
+    tokio::time::timeout(WAIT, serving)
+        .await
+        .expect("a drained environment stops serving")
+        .unwrap();
+    a.until_connected(e.peer, false).await;
+    let mut rest = Vec::new();
+    tokio::time::timeout(WAIT, harness.output.read_to_end(&mut rest))
+        .await
+        .expect("the harness's output ends")
+        .expect("and reads to its end");
+    let entries: Vec<serde_json::Value> = std::fs::read_to_string(&host.ledger_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|entry: &serde_json::Value| entry["lease"] == lease.as_str())
+        .collect();
+    let kinds: Vec<_> = entries
+        .iter()
+        .map(|entry| entry["kind"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["granted", "started", "draining", "stopped", "ended"],
+        "{entries:?}"
+    );
+    assert_eq!(entries[4]["cause"], "drained");
+    assert_eq!(entries[4]["cleanup"]["outcome"], "confirmed");
+}
+
 /// Whether a key still serves is asked again this often in the revocation
 /// tests, in place of the keepalive interval.
 const RECHECK: Duration = Duration::from_millis(100);
@@ -963,6 +1101,14 @@ impl Gateway {
     /// Every record of `kind` in the gateway's environment audit under
     /// `root`.
     fn environment_records(root: &Path, kind: &str) -> Vec<serde_json::Value> {
+        Self::environment_audit(root)
+            .into_iter()
+            .filter(|record| record["kind"] == kind)
+            .collect()
+    }
+
+    /// Every record in the gateway's environment audit under `root`.
+    fn environment_audit(root: &Path) -> Vec<serde_json::Value> {
         let mut records = Vec::new();
         let mut directories = vec![root.join("environments")];
         while let Some(directory) = directories.pop() {
@@ -978,10 +1124,7 @@ impl Gateway {
                 let Ok(text) = std::fs::read_to_string(&path) else {
                     continue;
                 };
-                let Ok(record) = serde_json::from_str::<serde_json::Value>(&text) else {
-                    continue;
-                };
-                if record["kind"] == kind {
+                if let Ok(record) = serde_json::from_str::<serde_json::Value>(&text) {
                     records.push(record);
                 }
             }
@@ -1183,4 +1326,738 @@ async fn a_paired_environment_revoked_mid_lease_ends_it_on_both_sides_and_closes
         .err()
         .expect("a revoked environment is refused");
     assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
+}
+
+/// Every bytes of `bytes`, pulled in order until the end.
+async fn read_all(bytes: &mut Box<dyn crate::conversation::application::ArtifactBytes>) -> Vec<u8> {
+    let mut read = Vec::new();
+    while let Some(chunk) = tokio::time::timeout(WAIT, bytes.next())
+        .await
+        .expect("each chunk in time")
+        .expect("the file reads to its end")
+    {
+        read.extend_from_slice(&chunk);
+    }
+    read
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Row I9 end to end: E runs a harness for A under a lease over the
+/// connection E dialed. The harness publishes a file on its lease's
+/// publish point, and A asks E to publish another for the agent; A reads
+/// each over that same connection's lease frames, finds the bytes are
+/// what E published, and answers held. The harness is told the
+/// conversation holds its file, and E records each publish and A's answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paired_environment_publishes_a_file_and_the_gateway_reads_it_back() {
+    use crate::conversation::application::{ArtifactOffer, PublishAsk};
+    use crate::env_serve::application::{PublishAnswer, PublishRequest};
+    use nessa_protocol::lease::Collection;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .unwrap();
+    // E runs `claude` as a shell that notes its publish point where the
+    // test can find it, then runs as `cat` until it is stopped.
+    let harness = LaunchSpec {
+        executable: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            r#"printf %s "$NESSA_ARTIFACTS" > point.part && mv point.part point && exec cat"#
+                .into(),
+        ],
+        environment: Default::default(),
+    };
+    let host = Arc::new(Host::running(
+        &directory.path().join("e"),
+        e.pin,
+        HashMap::from([(nessa_protocol::agents::AgentId::Claude, harness)]),
+    ));
+    host.grants
+        .change(&host.peer, |_| {
+            Ok::<_, ()>(Some(PeerGrant::nothing().with_agents(Agents::All)))
+        })
+        .unwrap();
+    let workspace = host.ledger_path.parent().unwrap().to_path_buf();
+    let (from_gateway, to_gateway) = tokio::io::split(stream);
+    let _serving = {
+        let host = host.clone();
+        tokio::spawn(async move { host.serve(from_gateway, to_gateway).await })
+    };
+    a.until_connected(e.peer, true).await;
+
+    let environment = a.peers.environment(&e.peer);
+    let lease = LeaseId::new(uuid()).unwrap();
+    let terms = LeaseTerms {
+        environment: environment.declaration().environment,
+        work: LeaseWork::Agent(AgentWork::new("claude", "model").unwrap()),
+        sandbox: SandboxProfile::HarnessDefault,
+        grants: LeaseGrants::Opening,
+        deadline: LeaseDeadline::UntilEnded,
+    };
+    let given = Arc::new(std::sync::Mutex::new(None));
+    let binding = Arc::new(OnHost {
+        capabilities: crate::conversation_test_support::Provider::new(Arc::new(
+            crate::conversation_test_support::ProviderFactory::default(),
+        ))
+        .capabilities()
+        .clone(),
+        host: given.clone(),
+    });
+    let opened = tokio::time::timeout(WAIT, environment.open(&lease, &terms, binding))
+        .await
+        .unwrap()
+        .unwrap_or_else(|refusal| panic!("granted: {refusal:?}"));
+    let mut offers = opened
+        .hold
+        .artifacts()
+        .expect("a paired environment's lease publishes");
+    let harness_host = given.lock().unwrap().clone().unwrap();
+    let _harness = harness_host.start(HarnessLaunch::default()).unwrap();
+    let point_file = workspace.join("point");
+    let point = tokio::time::timeout(WAIT, async {
+        loop {
+            match std::fs::read_to_string(&point_file) {
+                Ok(point) if !point.is_empty() => break point,
+                _ => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        }
+    })
+    .await
+    .expect("the harness is told its publish point");
+
+    // The harness publishes a file larger than many ranges, as
+    // `nessa artifact publish` would.
+    let image: Vec<u8> = (0..300_017u32).map(|index| (index % 251) as u8).collect();
+    let image_path = workspace.join("Nessa.dmg");
+    std::fs::write(&image_path, &image).unwrap();
+    let publisher = tokio::spawn(async move {
+        let mut socket = tokio::net::UnixStream::connect(point).await.unwrap();
+        let mut line = serde_json::to_vec(&PublishRequest {
+            path: image_path.to_str().unwrap().to_owned(),
+            media_type: None,
+        })
+        .unwrap();
+        line.push(b'\n');
+        socket.write_all(&line).await.unwrap();
+        let mut answer = String::new();
+        tokio::io::BufReader::new(socket)
+            .read_line(&mut answer)
+            .await
+            .unwrap();
+        serde_json::from_str::<PublishAnswer>(&answer).unwrap()
+    });
+    let ArtifactOffer {
+        file,
+        mut bytes,
+        answer,
+        request,
+    } = tokio::time::timeout(WAIT, offers.recv())
+        .await
+        .expect("offered in time")
+        .expect("an offer");
+    assert_eq!(request, None);
+    assert_eq!(file.name, "Nessa.dmg");
+    assert_eq!(file.size, image.len() as u64);
+    let read = read_all(&mut bytes).await;
+    assert_eq!(read, image);
+    assert_eq!(sha256_hex(&read), file.digest);
+    answer.answer(Collection::Held).await;
+    assert_eq!(
+        tokio::time::timeout(WAIT, publisher)
+            .await
+            .expect("the harness is answered")
+            .unwrap(),
+        PublishAnswer::Held {
+            digest: sha256_hex(&image),
+            size: image.len() as u64,
+        }
+    );
+
+    // The gateway asks for one on the agent's behalf.
+    let report = b"a report the agent asked to keep".to_vec();
+    std::fs::write(workspace.join("report.txt"), &report).unwrap();
+    let publish = opened
+        .hold
+        .publish(PublishAsk {
+            request: "call-1".into(),
+            path: "report.txt".into(),
+            media_type: None,
+        })
+        .expect("a paired environment's lease publishes");
+    assert_eq!(tokio::time::timeout(WAIT, publish).await.unwrap(), Ok(()));
+    let ArtifactOffer {
+        file,
+        mut bytes,
+        answer,
+        request,
+    } = tokio::time::timeout(WAIT, offers.recv())
+        .await
+        .expect("offered in time")
+        .expect("an offer");
+    assert_eq!(request.as_deref(), Some("call-1"));
+    assert_eq!(read_all(&mut bytes).await, report);
+    assert_eq!(sha256_hex(&report), file.digest);
+    answer.answer(Collection::Held).await;
+
+    let released = tokio::time::timeout(WAIT, opened.hold.end(LeaseEndCause::Stopped))
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            released,
+            LeaseRelease::Released(LeaseCleanup::Confirmed { .. })
+        ),
+        "{released:?}"
+    );
+    // E recorded each publish and A's answer to it, before the lease ended.
+    let entries: Vec<serde_json::Value> = std::fs::read_to_string(&host.ledger_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|entry: &serde_json::Value| entry["lease"] == lease.as_str())
+        .collect();
+    let kinds: Vec<_> = entries
+        .iter()
+        .map(|entry| entry["kind"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "granted",
+            "started",
+            "published",
+            "collected",
+            "publish_asked",
+            "published",
+            "collected",
+            "stopped",
+            "ended",
+        ],
+        "{entries:?}"
+    );
+    assert_eq!(entries[2]["digest"], sha256_hex(&image));
+    assert_eq!(entries[3]["outcome"]["outcome"], "held");
+    assert_eq!(entries[5]["request"], "call-1");
+    assert_eq!(entries[6]["outcome"]["outcome"], "held");
+    // Nothing is left staged on E.
+    let staged = std::fs::read_dir(workspace.join("outbox"))
+        .map(|entries| entries.count())
+        .unwrap_or(0);
+    assert_eq!(staged, 0);
+    // A recorded every frame E sent it to a lease it held: none dropped.
+    let a_root = directory.path().join("a");
+    assert!(!Gateway::environment_records(&a_root, "connected").is_empty());
+    let dropped = Gateway::environment_records(&a_root, "frame_dropped");
+    assert!(dropped.is_empty(), "{dropped:?}");
+}
+
+/// Row I10: the paired environments' count of connection changes moves
+/// where each change is made: once when E's connection is admitted, once
+/// when it ends, and, revoked, once when it is revoked and once more when
+/// the revoked connection ends. Each wake finds the connected list already
+/// changed, so whoever reads it on the wake (the agent catalog's
+/// subscriptions) reads the list as it is after the change.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn connection_changes_are_said_as_a_paired_environment_connects_ends_and_is_revoked() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start_with(
+        &directory.path().join("a"),
+        SshTimings {
+            keepalive: RECHECK,
+            ..SshTimings::default()
+        },
+    )
+    .await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let mut changes = a.peers.connections();
+    let start = *changes.borrow();
+    // Woken until the count reaches `count`, the list then saying
+    // `connected`.
+    async fn until(
+        peers: &PeerEnvironments,
+        changes: &mut watch::Receiver<u64>,
+        peer: PeerEnvironment,
+        count: u64,
+        connected: bool,
+    ) {
+        tokio::time::timeout(WAIT, async {
+            while *changes.borrow_and_update() != count {
+                changes.changed().await.expect("the source stays open");
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("the count never reached {count}"));
+        assert_eq!(peers.connected().contains(&peer), connected, "{count}");
+    }
+
+    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .unwrap();
+    let served = serving(&directory.path().join("e"), e.pin, stream);
+    until(&a.peers, &mut changes, e.peer, start + 1, true).await;
+
+    // E goes: its connection ends from its side.
+    served.abort();
+    until(&a.peers, &mut changes, e.peer, start + 2, false).await;
+
+    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
+        .await
+        .unwrap();
+    let served = serving(&directory.path().join("e2"), e.pin, stream);
+    until(&a.peers, &mut changes, e.peer, start + 3, true).await;
+
+    a.revoke(&e);
+    until(&a.peers, &mut changes, e.peer, start + 5, false).await;
+    tokio::time::timeout(WAIT, served)
+        .await
+        .expect("the revoked environment's serving ends")
+        .unwrap();
+}
+
+/// A code file as a container's secret holds it: the display form and a
+/// line end.
+fn code_file(directory: &Path, name: &str, code: &ManualCode) -> std::path::PathBuf {
+    let path = directory.join(name);
+    let mut bytes = code.display_bytes().to_vec();
+    bytes.push(b'\n');
+    std::fs::write(&path, bytes).unwrap();
+    path
+}
+
+/// Row K2: `env dial --enroll-code-file` enrolls a machine paired with
+/// nothing, and on every later start, approved or not yet, finds it paired
+/// with that gateway and sends nothing, so a container's entrypoint is the
+/// same command each time.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn k2_a_code_file_enrolls_once_then_dials() {
+    use crate::env_serve::application::{approval, enroll_once, EnrolledOnce};
+    use crate::env_serve::infrastructure::{FileEnrollmentCode, FilePairingEnvironment};
+
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let created = a
+        .commands
+        .create(&a.session, ConsentClass::PeerEnvironment)
+        .await
+        .unwrap();
+    let code = FileEnrollmentCode(code_file(directory.path(), "code", created.code()));
+    let environment = directory.path().join("e-environment");
+    nessa_local_storage::create_directory(&environment).unwrap();
+    let address = a.native.to_string();
+    let enroll_once = || async {
+        let pairing = FilePairingEnvironment::open(&environment, &address, clock()).unwrap();
+        let enrolled = tokio::time::timeout(WAIT, enroll_once(&pairing, &code))
+            .await
+            .unwrap();
+        pairing.shutdown().await;
+        enrolled
+    };
+
+    assert_eq!(enroll_once().await, Ok(EnrolledOnce::Now));
+    // Restarted before the owner approved: still paired with A, nothing sent.
+    assert_eq!(enroll_once().await, Ok(EnrolledOnce::Before));
+    let id = created.record().id();
+    let claimed = a.commands.status(&a.session, id).await.unwrap();
+    let (_, key) = claimed.claim_binding().unwrap();
+    a.commands.approve(&a.session, id, key).await.unwrap();
+    let pairing = FilePairingEnvironment::open(&environment, &address, clock()).unwrap();
+    let (_, running) = watch::channel(false);
+    let (_, pin) = tokio::time::timeout(
+        WAIT,
+        approval(
+            &pairing,
+            Duration::from_millis(20),
+            &TokioTimer::new(),
+            running,
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .expect("not stopped");
+    pairing.shutdown().await;
+    drop(pairing);
+    // Restarted once approved: the same, and its pin is A's.
+    assert_eq!(enroll_once().await, Ok(EnrolledOnce::Before));
+    let saved = FilePairingEnvironment::approved_gateway(&environment, clock())
+        .await
+        .unwrap();
+    assert_eq!(saved, Some(pin));
+}
+
+/// Row K2: a volume paired with gateway A, given gateway B's address and
+/// code, refuses to dial B instead of taking B's code as its pairing's, and
+/// sends B nothing: B's invitation is still unclaimed. A pairing that
+/// recorded no gateway refuses too, and a file holding no code says so.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn k2_a_volume_paired_to_one_gateway_refuses_enrolling_with_another() {
+    use crate::env_serve::application::{enroll_once, NotEnrolled};
+    use crate::env_serve::infrastructure::{FileEnrollmentCode, FilePairingEnvironment};
+
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let b = Gateway::start(&directory.path().join("b")).await;
+    let environment = directory.path().join("e-environment");
+    nessa_local_storage::create_directory(&environment).unwrap();
+
+    let not_a_code = FileEnrollmentCode(directory.path().join("not-a-code"));
+    std::fs::write(&not_a_code.0, b"hello\n").unwrap();
+    let pairing =
+        FilePairingEnvironment::open(&environment, &a.native.to_string(), clock()).unwrap();
+    let refused = enroll_once(&pairing, &not_a_code).await.unwrap_err();
+    assert_eq!(
+        refused,
+        NotEnrolled::Failed(format!("{} holds no pairing code", not_a_code.0.display()))
+    );
+    let for_a = a
+        .commands
+        .create(&a.session, ConsentClass::PeerEnvironment)
+        .await
+        .unwrap();
+    // A code the gateway never gave: refused, and the address it recorded
+    // first is left over a pairing that does not exist, read by nothing.
+    let wrong = FileEnrollmentCode(directory.path().join("wrong"));
+    std::fs::write(&wrong.0, b"ABCD-EFGH\n").unwrap();
+    let refused = tokio::time::timeout(WAIT, enroll_once(&pairing, &wrong))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(
+        refused,
+        NotEnrolled::Failed("the code is not the one the gateway gave".into())
+    );
+    let code_a = FileEnrollmentCode(code_file(directory.path(), "code-a", for_a.code()));
+    tokio::time::timeout(WAIT, enroll_once(&pairing, &code_a))
+        .await
+        .unwrap()
+        .unwrap();
+    pairing.shutdown().await;
+    drop(pairing);
+
+    let for_b = b
+        .commands
+        .create(&b.session, ConsentClass::PeerEnvironment)
+        .await
+        .unwrap();
+    let code_b = FileEnrollmentCode(code_file(directory.path(), "code-b", for_b.code()));
+    let pairing =
+        FilePairingEnvironment::open(&environment, &b.native.to_string(), clock()).unwrap();
+    let refused = enroll_once(&pairing, &code_b).await.unwrap_err();
+    assert_eq!(
+        refused,
+        NotEnrolled::PairedElsewhere(Some(a.native.to_string()))
+    );
+    pairing.shutdown().await;
+    drop(pairing);
+    let unclaimed = b
+        .commands
+        .status(&b.session, for_b.record().id())
+        .await
+        .unwrap();
+    assert!(unclaimed.claim_binding().is_none());
+
+    // Paired, with no record of which gateway: refused, not guessed.
+    std::fs::remove_file(environment.join("paired-with")).unwrap();
+    let pairing =
+        FilePairingEnvironment::open(&environment, &a.native.to_string(), clock()).unwrap();
+    let refused = enroll_once(&pairing, &code_a).await.unwrap_err();
+    assert_eq!(refused, NotEnrolled::PairedElsewhere(None));
+    pairing.shutdown().await;
+}
+
+/// Row K3, the hosted-worker setup with two organizations, end to end:
+/// gateways A and B are one organization each, and workers W and X are
+/// paired one to each, serving from workspaces of their own. Each gateway
+/// leases, runs commands, and reads published files only on its own
+/// worker; the other's key is refused at A's door, its name is
+/// unreachable from each gateway, and a path out of a worker's workspace
+/// is refused. Each worker's ledger holds its own gateway's leases alone,
+/// and each gateway's environment audit names its own worker alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn k3_two_organizations_share_no_lease_workspace_artifact_tool_or_audit() {
+    use crate::conversation::application::{
+        ArtifactOffer, EnvironmentLease, PublishAsk, PublishFailure,
+    };
+    use nessa_protocol::lease::{Collection, PublishRefusal};
+
+    let directory = tempfile::tempdir().unwrap();
+    let (a_root, b_root) = (directory.path().join("a"), directory.path().join("b"));
+    // Two gateways, each started as its own organization.
+    let a = Gateway::start(&a_root).await;
+    let b = Gateway::start(&b_root).await;
+    let w = a
+        .pair(
+            &directory.path().join("w-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let x = b
+        .pair(
+            &directory.path().join("x-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+
+    // Leases: X's key is not paired with A. With A's pin it is refused at
+    // A's door; with its own pin, the key it finds is not B's, and the dial
+    // is cut there.
+    let refused = dial(a.native, x.identity.clone(), w.pin, clock())
+        .await
+        .err()
+        .expect("a key paired with B is refused by A");
+    assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
+    let not_b = dial(a.native, x.identity.clone(), x.pin, clock())
+        .await
+        .err()
+        .expect("A is not the gateway X's pin names");
+    assert_eq!(not_b.kind(), ErrorKind::ConnectionAborted);
+
+    // Each worker runs `claude` as `cat`, which runs until it is stopped;
+    // each owner grants its own gateway agents and commands.
+    let cat = LaunchSpec {
+        executable: "/bin/cat".into(),
+        args: Vec::new(),
+        environment: Default::default(),
+    };
+    let worker = |name: &str, pin: [u8; 44]| {
+        let host = Arc::new(Host::running(
+            &directory.path().join(name),
+            pin,
+            HashMap::from([(nessa_protocol::agents::AgentId::Claude, cat.clone())]),
+        ));
+        let commands = CommandGrant::new(CommandWork::MAX_TIMEOUT_MS).unwrap();
+        host.grants
+            .change(&host.peer, |_| {
+                Ok::<_, ()>(Some(
+                    PeerGrant::nothing()
+                        .with_agents(Agents::All)
+                        .with_commands(commands),
+                ))
+            })
+            .unwrap();
+        host
+    };
+    let (w_host, x_host) = (worker("w", w.pin), worker("x", x.pin));
+    let mut serving = Vec::new();
+    for (gateway, machine, host) in [(&a, &w, &w_host), (&b, &x, &x_host)] {
+        let stream = dial(
+            gateway.native,
+            machine.identity.clone(),
+            machine.pin,
+            clock(),
+        )
+        .await
+        .unwrap();
+        let (from_gateway, to_gateway) = tokio::io::split(stream);
+        let host = host.clone();
+        serving.push(tokio::spawn(async move {
+            host.serve(from_gateway, to_gateway).await
+        }));
+        gateway.until_connected(machine.peer, true).await;
+    }
+    // Each gateway's paired environments hold its own worker alone; a
+    // command on the other's name finds no connection.
+    assert_eq!(a.peers.connected(), [w.peer]);
+    assert_eq!(b.peers.connected(), [x.peer]);
+    assert_eq!(a.echo(w.peer, "a").await.unwrap().stdout, b"a");
+    assert_eq!(b.echo(x.peer, "b").await.unwrap().stdout, b"b");
+    assert_eq!(
+        a.echo(x.peer, "across").await.unwrap_err(),
+        CommandRefusal::Environment(LeaseRefusal::EnvironmentUnreachable)
+    );
+    assert_eq!(
+        b.echo(w.peer, "across").await.unwrap_err(),
+        CommandRefusal::Environment(LeaseRefusal::EnvironmentUnreachable)
+    );
+
+    // An agent lease `gateway` asks of `machine`, with the harness host it
+    // is given.
+    type Given = Arc<std::sync::Mutex<Option<Arc<dyn HarnessHost>>>>;
+    async fn agent_lease(
+        gateway: &Gateway,
+        machine: &Machine,
+    ) -> (LeaseId, Result<EnvironmentLease, LeaseRefusal>, Given) {
+        let environment = gateway.peers.environment(&machine.peer);
+        let lease = LeaseId::new(uuid()).unwrap();
+        let terms = LeaseTerms {
+            environment: environment.declaration().environment,
+            work: LeaseWork::Agent(AgentWork::new("claude", "model").unwrap()),
+            sandbox: SandboxProfile::HarnessDefault,
+            grants: LeaseGrants::Opening,
+            deadline: LeaseDeadline::UntilEnded,
+        };
+        let given: Given = Arc::new(std::sync::Mutex::new(None));
+        let binding = Arc::new(OnHost {
+            capabilities: crate::conversation_test_support::Provider::new(Arc::new(
+                crate::conversation_test_support::ProviderFactory::default(),
+            ))
+            .capabilities()
+            .clone(),
+            host: given.clone(),
+        });
+        let opened = tokio::time::timeout(WAIT, environment.open(&lease, &terms, binding))
+            .await
+            .unwrap();
+        (lease, opened, given)
+    }
+    // Nor does an agent lease on the other's name reach it.
+    for (gateway, theirs) in [(&a, &x), (&b, &w)] {
+        let (_, refused, _) = agent_lease(gateway, theirs).await;
+        assert_eq!(
+            refused
+                .err()
+                .expect("no lease on the other organization's worker"),
+            LeaseRefusal::EnvironmentUnreachable
+        );
+    }
+
+    // Workspaces and artifacts: the same name in each workspace holds that
+    // organization's file, and each gateway's lease reads its own.
+    for (name, text) in [("w", "for A"), ("x", "for B")] {
+        std::fs::write(directory.path().join(name).join("report.txt"), text).unwrap();
+    }
+    let mut leases = Vec::new();
+    for (gateway, machine, text) in [(&a, &w, "for A"), (&b, &x, "for B")] {
+        let (lease, opened, given) = agent_lease(gateway, machine).await;
+        let opened = opened.unwrap_or_else(|refusal| panic!("granted: {refusal:?}"));
+        let mut offers = opened
+            .hold
+            .artifacts()
+            .expect("a paired environment's lease publishes");
+        let harness_host = given.lock().unwrap().clone().unwrap();
+        let harness = harness_host.start(HarnessLaunch::default()).unwrap();
+        let publish = opened
+            .hold
+            .publish(PublishAsk {
+                request: "report".into(),
+                path: "report.txt".into(),
+                media_type: None,
+            })
+            .expect("a paired environment's lease publishes");
+        assert_eq!(tokio::time::timeout(WAIT, publish).await.unwrap(), Ok(()));
+        let ArtifactOffer {
+            mut bytes, answer, ..
+        } = tokio::time::timeout(WAIT, offers.recv())
+            .await
+            .expect("offered in time")
+            .expect("an offer");
+        assert_eq!(read_all(&mut bytes).await, text.as_bytes());
+        answer.answer(Collection::Held).await;
+        leases.push((lease, opened, harness));
+    }
+    // A path out of W's workspace, into X's, where a file is, is refused
+    // before anything is read.
+    let across = leases[0]
+        .1
+        .hold
+        .publish(PublishAsk {
+            request: "across".into(),
+            path: "../x/report.txt".into(),
+            media_type: None,
+        })
+        .expect("a paired environment's lease publishes");
+    assert_eq!(
+        tokio::time::timeout(WAIT, across).await.unwrap(),
+        Err(PublishFailure::NotPublished(
+            PublishRefusal::OutsideWorkspace
+        ))
+    );
+    for (_, opened, _) in &leases {
+        let released = tokio::time::timeout(WAIT, opened.hold.end(LeaseEndCause::Stopped))
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                released,
+                LeaseRelease::Released(LeaseCleanup::Confirmed { .. })
+            ),
+            "{released:?}"
+        );
+    }
+
+    // Audit: each worker's ledger records the command its own gateway ran,
+    // and not the other's.
+    for (host, mine, theirs) in [(&w_host, "a", "b"), (&x_host, "b", "a")] {
+        let commands: Vec<serde_json::Value> = std::fs::read_to_string(&host.ledger_path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .filter(|entry| entry["kind"] == "command_granted")
+            .map(|entry| entry["argv"].clone())
+            .collect();
+        assert!(
+            commands.contains(&serde_json::json!(["echo", mine])),
+            "{commands:?}"
+        );
+        assert!(
+            !commands.contains(&serde_json::json!(["echo", theirs])),
+            "{commands:?}"
+        );
+    }
+    // And the agent leases its own gateway asked, granted and ended, and
+    // none of the other's.
+    for (host, mine, theirs) in [
+        (&w_host, &leases[0].0, &leases[1].0),
+        (&x_host, &leases[1].0, &leases[0].0),
+    ] {
+        let ledger = std::fs::read_to_string(&host.ledger_path).unwrap();
+        let kinds: Vec<String> = ledger
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .filter(|entry| entry["lease"] == mine.as_str())
+            .map(|entry| entry["kind"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(kinds.first().map(String::as_str), Some("granted"));
+        assert_eq!(kinds.last().map(String::as_str), Some("ended"));
+        assert!(!ledger.contains(theirs.as_str()));
+    }
+    // Each gateway's environment audit, which records its workers'
+    // connections, names its own worker at that worker's workspace, and
+    // nothing of the other's.
+    for (root, mine, theirs, workspace) in [(&a_root, &w, &x, "w"), (&b_root, &x, &w, "x")] {
+        let records = Gateway::environment_audit(root);
+        assert!(!records.is_empty());
+        for record in &records {
+            assert_eq!(record["host"], mine.peer.name(), "{record}");
+        }
+        let connected = Gateway::environment_records(root, "connected");
+        assert_eq!(connected.len(), 1, "{connected:?}");
+        assert_eq!(
+            connected[0]["workspace"],
+            directory
+                .path()
+                .join(workspace)
+                .canonicalize()
+                .unwrap()
+                .to_str()
+                .unwrap()
+        );
+        assert!(!format!("{records:?}").contains(&theirs.peer.name()));
+    }
+    // Nothing is left serving past the test.
+    for task in serving {
+        task.abort();
+    }
 }

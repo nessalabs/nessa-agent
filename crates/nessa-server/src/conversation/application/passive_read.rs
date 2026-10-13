@@ -1,7 +1,7 @@
 //! Admission for bounded passive reads, before a record or catalogue source is touched.
 
 use super::metadata_target::load_conversation;
-use super::{admit_read, ConversationRepository, ReadGrants, Reader};
+use super::{admit_read, ConversationRepository, Reader, ShareGrants};
 use crate::conversation::domain::ReceiverBinding;
 use nessa_auth::{
     application::{
@@ -53,8 +53,8 @@ pub struct AdmitPassiveRead<'a> {
     pub conversations: &'a dyn ConversationRepository,
     /// Published grant for the read actually being admitted.
     pub grants: &'a dyn PassiveReadGrants,
-    /// Which conversations each paired device was granted (`read_grants`).
-    pub read_grants: &'a dyn ReadGrants,
+    /// Which conversations each paired device was granted (`share_grants`).
+    pub share_grants: &'a dyn ShareGrants,
 }
 
 impl AdmitPassiveRead<'_> {
@@ -139,7 +139,7 @@ impl AdmitPassiveRead<'_> {
         // Only pairing makes a receiver binding, so this reader is a paired
         // device and reads only what it was granted (rows G1, G3, G4).
         admit_read(
-            self.read_grants,
+            self.share_grants,
             &Reader::of(Some(&binding)),
             conversation_id,
         )

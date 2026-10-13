@@ -97,7 +97,9 @@ async fn claude_sends_the_selected_level_before_the_mode_and_offers_the_narrowed
         CLAUDE_LEVELS.to_vec()
     );
     assert_eq!(
-        agent.invoke(prompt("hello"), close_action()).await,
+        agent
+            .invoke(prompt("hello"), Submitter::owner(close_action()))
+            .await,
         Ok(ExecutionOutcome::Completed)
     );
     agent.close(close_action()).await.unwrap();
@@ -151,7 +153,9 @@ async fn a_live_change_is_verified_and_a_level_not_offered_is_refused_unsent() {
     assert_eq!(agent.effort_level(), Some(level("high")));
     // The next turn runs, at the verified level.
     assert_eq!(
-        agent.invoke(prompt("hello"), close_action()).await,
+        agent
+            .invoke(prompt("hello"), Submitter::owner(close_action()))
+            .await,
         Ok(ExecutionOutcome::Completed)
     );
     agent.close(close_action()).await.unwrap();
@@ -163,7 +167,10 @@ async fn a_change_while_a_turn_is_queued_or_running_is_busy() {
     let (_root, binding) = claude("permission", CLAUDE_LEVELS);
     let agent = agent(Arc::new(binding)).await;
     // The turn waits on a permission nobody answers.
-    let _receipt = agent.enqueue(prompt("held"), close_action()).await.unwrap();
+    let _receipt = agent
+        .enqueue(prompt("held"), Submitter::owner(close_action()))
+        .await
+        .unwrap();
     let failure = agent
         .set_effort_level(level("high"), close_action())
         .await
@@ -241,7 +248,9 @@ async fn codex_sends_the_level_after_the_model_and_narrows_to_what_it_lists() {
         AgentError::InvalidInput(_)
     ));
     assert_eq!(
-        agent.invoke(prompt("hello"), close_action()).await,
+        agent
+            .invoke(prompt("hello"), Submitter::owner(close_action()))
+            .await,
         Ok(ExecutionOutcome::Completed)
     );
     agent.close(close_action()).await.unwrap();
@@ -317,7 +326,9 @@ async fn a_live_level_is_kept_by_a_restored_connection_and_reset_by_a_new_attach
         .collect();
     assert_eq!(sent, ["low", "max", "low"]);
     assert_eq!(
-        agent.invoke(prompt("hello"), close_action()).await,
+        agent
+            .invoke(prompt("hello"), Submitter::owner(close_action()))
+            .await,
         Ok(ExecutionOutcome::Completed)
     );
     agent.close(close_action()).await.unwrap();
@@ -407,7 +418,7 @@ async fn each_admission_records_the_level_in_force() {
     // default, and the record says so.
     assert_eq!(
         agent
-            .enqueue(prompt("first"), close_action())
+            .enqueue(prompt("first"), Submitter::owner(close_action()))
             .await
             .unwrap()
             .wait()
@@ -420,7 +431,7 @@ async fn each_admission_records_the_level_in_force() {
         .unwrap();
     assert_eq!(
         agent
-            .enqueue(prompt("second"), close_action())
+            .enqueue(prompt("second"), Submitter::owner(close_action()))
             .await
             .unwrap()
             .wait()
@@ -437,7 +448,7 @@ async fn each_admission_records_the_level_in_force() {
     let agent = audited_agent(Arc::new(binding), audit.clone()).await;
     assert_eq!(
         agent
-            .enqueue(prompt("hello"), close_action())
+            .enqueue(prompt("hello"), Submitter::owner(close_action()))
             .await
             .unwrap()
             .wait()
@@ -494,7 +505,7 @@ async fn detached_the_level_is_the_bindings_and_work_admitted_then_says_so() {
     assert_eq!(failure.session_state(), &ProviderSessionState::Usable);
     // Queued while detached: recorded at the level it will run at.
     let receipt = agent
-        .enqueue(prompt("later"), close_action())
+        .enqueue(prompt("later"), Submitter::owner(close_action()))
         .await
         .unwrap();
     assert_eq!(*audit.0.lock().unwrap(), [Some("low".to_owned())]);
@@ -687,7 +698,10 @@ async fn a_verified_change_that_cannot_be_recorded_is_in_force_and_retires_the_a
     assert_eq!(stages(&audit), [Requested, Applied]);
     assert_eq!(agent.effort_level(), Some(level("high")));
     // Retired, not just told so: no turn runs under the unrecorded level.
-    assert!(agent.invoke(prompt("after"), close_action()).await.is_err());
+    assert!(agent
+        .invoke(prompt("after"), Submitter::owner(close_action()))
+        .await
+        .is_err());
     let _ = agent.close(close_action()).await;
 }
 

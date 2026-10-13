@@ -53,7 +53,11 @@ async fn observations_before_rejection_preserve_evidence_and_require_protocol_cl
             let mut updates = agent.subscribe();
             let invocation = tokio::spawn({
                 let agent = agent.clone();
-                async move { agent.invoke(input("rejected"), actor()).await }
+                async move {
+                    agent
+                        .invoke(input("rejected"), Submitter::owner(actor()))
+                        .await
+                }
             });
             let observed = timeout(Duration::from_secs(2), updates.next())
                 .await
@@ -159,7 +163,10 @@ async fn observations_before_rejection_preserve_evidence_and_require_protocol_cl
             let (restored, _) = probe_with_manager(false, imported.manager().await).await;
             restored.close(actor()).await.unwrap();
             if cleanup_failure.is_some() {
-                assert!(agent.invoke(input("blocked"), actor()).await.is_err());
+                assert!(agent
+                    .invoke(input("blocked"), Submitter::owner(actor()))
+                    .await
+                    .is_err());
                 assert_eq!(backend.executions.load(Ordering::SeqCst), 1);
             }
             *backend.cleanup_report.lock().unwrap() = None;
@@ -178,7 +185,9 @@ async fn observations_before_rejection_preserve_evidence_and_require_protocol_cl
                 recover_after_automatic_stop(&agent).await;
             }
             assert_eq!(
-                agent.invoke(input("restored"), actor()).await,
+                agent
+                    .invoke(input("restored"), Submitter::owner(actor()))
+                    .await,
                 Ok(ExecutionOutcome::Completed)
             );
             agent.close(actor()).await.unwrap();
@@ -195,7 +204,9 @@ async fn observations_after_rejection_never_reenter_the_rejected_history() {
         let rejection = AgentError::InvalidInput("not admitted".into());
         *backend.execution_error.lock().unwrap() = Some(rejection.clone());
         assert_eq!(
-            agent.invoke(input("rejected"), actor()).await,
+            agent
+                .invoke(input("rejected"), Submitter::owner(actor()))
+                .await,
             Err(rejection.clone())
         );
         assert_eq!(backend.closes.load(Ordering::SeqCst), 0);
@@ -211,7 +222,9 @@ async fn observations_after_rejection_never_reenter_the_rejected_history() {
         backend.execution_rejected.store(false, Ordering::SeqCst);
         backend.suppress_terminal.store(false, Ordering::SeqCst);
         *backend.execution_error.lock().unwrap() = None;
-        let result = agent.invoke(input("later"), actor()).await;
+        let result = agent
+            .invoke(input("later"), Submitter::owner(actor()))
+            .await;
         assert!(
             matches!(&result, Err(AgentError::Protocol(_))),
             "{result:?}"
@@ -253,18 +266,20 @@ async fn same_poll_observation_and_rejection_are_drained_before_next_dispatch() 
                 async move {
                     match mode {
                         SubmissionMode::Immediate => {
-                            agent.invoke(input("same-poll"), actor()).await
+                            agent
+                                .invoke(input("same-poll"), Submitter::owner(actor()))
+                                .await
                         }
                         SubmissionMode::Queued => {
                             agent
-                                .enqueue(input("same-poll"), actor())
+                                .enqueue(input("same-poll"), Submitter::owner(actor()))
                                 .await?
                                 .wait()
                                 .await
                         }
                         SubmissionMode::BoundarySteering => {
                             agent
-                                .enqueue_steering(input("same-poll"), actor())
+                                .enqueue_steering(input("same-poll"), Submitter::owner(actor()))
                                 .await?
                                 .wait()
                                 .await
@@ -281,7 +296,10 @@ async fn same_poll_observation_and_rejection_are_drained_before_next_dispatch() 
             assert!(!invocation.is_finished());
             assert_eq!(backend.executions.load(Ordering::SeqCst), 1);
             // A competing invocation cannot reach the provider during cleanup.
-            assert!(agent.invoke(input("too-early"), actor()).await.is_err());
+            assert!(agent
+                .invoke(input("too-early"), Submitter::owner(actor()))
+                .await
+                .is_err());
             assert_eq!(backend.executions.load(Ordering::SeqCst), 1);
             let observed = timeout(Duration::from_secs(2), updates.next())
                 .await
@@ -331,7 +349,9 @@ async fn same_poll_observation_and_rejection_are_drained_before_next_dispatch() 
             backend.suppress_terminal.store(false, Ordering::SeqCst);
             recover_after_automatic_stop(&agent).await;
             assert_eq!(
-                agent.invoke(input("after-cleanup"), actor()).await,
+                agent
+                    .invoke(input("after-cleanup"), Submitter::owner(actor()))
+                    .await,
                 Ok(ExecutionOutcome::Completed)
             );
             assert_eq!(backend.executions.load(Ordering::SeqCst), 2);
@@ -351,7 +371,7 @@ async fn clean_rejection_does_not_wait_for_an_open_observation_stream() {
     assert_eq!(
         timeout(
             Duration::from_secs(2),
-            agent.invoke(input("clean-rejection"), actor())
+            agent.invoke(input("clean-rejection"), Submitter::owner(actor()))
         )
         .await
         .unwrap(),
@@ -363,7 +383,9 @@ async fn clean_rejection_does_not_wait_for_an_open_observation_stream() {
     backend.execution_rejected.store(false, Ordering::SeqCst);
     backend.suppress_terminal.store(false, Ordering::SeqCst);
     assert_eq!(
-        agent.invoke(input("usable"), actor()).await,
+        agent
+            .invoke(input("usable"), Submitter::owner(actor()))
+            .await,
         Ok(ExecutionOutcome::Completed)
     );
     assert_eq!(backend.closes.load(Ordering::SeqCst), 0);

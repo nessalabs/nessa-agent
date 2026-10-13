@@ -893,7 +893,7 @@ refusals.
 | `run` | Run one command on a named environment with a timeout and bounded output; returns exit status and captured output. It publishes nothing until [#766](https://github.com/nessalabs/nessa-agent/issues/766): `artifacts_publish` acts only under the agent's own lease, so a file a command made on another host is refused `environment_not_leased` | `environment.run`: a lease whose work is a command | Caller's tool policy on the command (allowlist, deny patterns); environment grants `command`; sandbox profile; budgets; everything audited with the caller as initiator |
 | `preview.open`, `preview.close` | Forward a loopback port the agent's own processes listen on to the surface's loopback for the life of the lease; returns the local URL once a request through it succeeds | The forward on the SSH session, or a bounded stream on a paired connection | The port is owned by the lease's process scope; HTTP, WebSocket and SSE only; recorded and shown; closed with the lease |
 | `artifacts_publish` | Attach a file from where the agent runs to the conversation by digest; returns `held` or `alreadyHeld` with its digest, size and name, or a typed refusal (slice D3a, served in process) | The artifact channel, asked by the gateway (`Publish`) | Only under the conversation's Live agent lease, where the agent runs; the turn's person as initiator, the lease as cause; per-lease byte budgets |
-| `artifacts.fetch` | Fetch a held file by digest into the environment (slice D3b, to follow) | Lease-scoped tickets | Hold ownership; per-lease byte budgets |
+| `artifacts_fetch` | Place a file the conversation holds, named by digest, media type and size, in the workspace where the agent runs; returns `placed` or `alreadyPlaced` with its path, digest, size and whether its end is recorded, or a typed refusal, `audit_unavailable` when it could not be recorded (slice D3b, served in process) | The artifact channel the other way, asked by the gateway (`Fetch`): sftp writes to a part on the host | Only under the conversation's Live agent lease, where the agent runs, on a host that opted in (`envServe.artifactsIn`); recorded asked for the turn's person before the host is asked, and ended once; every range read from the hold for the turn's person; per-lease byte budget; never replaces anything at the destination |
 | `conversation.read`, `message.send`, `turn.cancel` | Already planned under 0012: read a thread's records, leave a note, stop a turn | Existing product methods | Existing grants |
 
 The signatures are the same whatever the box: `run({environment:
@@ -1016,6 +1016,14 @@ subscription batch, and recorded as a semantic record with the owner as
 initiator. Nothing is granted by conversation list, by folder or by
 default; a peer with no grant on an id cannot tell it exists.
 
+Where it stands: grants per conversation id are built (slice G,
+[read grants](read-grants.md)), and each grant now has its role and, for
+Drive, its tool policy and policy revision (slice J1 of #707). Those are
+stored, journaled and listed only: every role reads exactly as Read, and
+every command that changes a conversation is still refused to a paired
+party. Admitting Drive's commands, Comment's notes and enforcing the policy
+are the later slices of #707.
+
 - **Role** is Read, Comment or Drive, as in situation 7. Drive never
   includes delete, export, re-share or changing the model; those stay the
   owner's.
@@ -1094,7 +1102,7 @@ machines is a transfer of an artifact:
 | --- | --- | --- |
 | Agent output on an environment to the gateway (a DMG, a screenshot, a log) | The **artifact channel**: sftp on the SSH connection; a bounded artifact stream on a paired connection | Digest on receipt; hold recorded with the lease as cause |
 | Gateway to a surface (download, preview) | `artifact.read`, by range over the surface's own authenticated connection: the product socket for a desktop or browser, the device's protected channel for a phone | Size and digest of the assembled file, on receipt |
-| Gateway to an environment (an image in a prompt, a file the agent needs) | Lease-scoped ticket, fetched by digest | Digest on receipt |
+| Gateway to an environment (a file the agent needs: `artifacts_fetch`) | The **artifact channel** the other way: sftp writes over the lease's own SSH connection into a part on the host, resumed by the part's length (slice D3b) | Size and SHA-256 of the part as it is on disk, on the host, before it is linked |
 | Surface upload (a screenshot you drag in) | The existing ticketed upload | Digest at the gateway |
 
 The lease's control channel carries events and effect requests, never
@@ -1409,11 +1417,143 @@ sequenceDiagram
   first call's record stands; asked in another turn, or for
   another person, it is held once (`alreadyHeld`) and recorded again for
   them, within the conversation's record bound.
+- **Over a paired connection** there is no second channel to open, so the
+  gateway reads the staged copy over the lease frames, by artifact and
+  range, at most four 64 KiB ranges of one file unanswered; the
+  environment answers only for a copy still waiting for its `Collected`.
+  The budgets, records and refusals above hold unchanged, but nothing is
+  resumed: when the connection goes, the lease goes with it (row I9 in
+  [peer gateways](auth/peer-gateways.md#reading-a-published-file-over-the-connection-row-i9)).
 - **`here` is not served yet.** In process there is no artifact channel, so
   a conversation not placed on a host is refused `publish_unavailable`;
-  staging a copy for `here` is a follow-up.
-- **No bytes on the control channel.** `Publish` and its answers carry a
-  path and what the file is, as `Published` always has.
+  staging a copy for `here` is a follow-up. A paired connection has none
+  either, but its files are read over the lease frames (row I9), so a
+  publish there is asked as anywhere else.
+- **No bytes on the control channel.** `Publish` carries the path and,
+  when the agent named one, the media type; `Published` carries the file's
+  metadata (what it is and where its staged copy lies); `NotPublished`
+  carries the refusal's reason. None of these frames carries the file's
+  bytes.
+
+### The agent fetches a file (slice D3b)
+
+The agent places a file the conversation holds in its workspace with the
+`artifacts_fetch` tool, beside `artifacts_publish` (revision
+`environment-tools/3`): `{environment, digest, mediaType, size,
+destination}`, the file named exactly as the view names it, `destination`
+absolute or relative to the workspace. It is decided as `artifacts_publish`
+is: the running turn's person asks, with the tool call as their request,
+only under the conversation's Live agent lease, and `environment` must name
+where the agent runs now (`environment_not_leased` otherwise). The host
+takes files only when its `config.json` sets `envServe.artifactsIn`;
+otherwise every fetch is refused `fetch_unavailable`, as it is for `here`
+and for a paired connection, which has no artifact channel. Fetch and
+publish run only inside a lease the peer's grant admitted, so the agent
+grant covers them; a per-peer flag for files is a follow-up.
+
+```mermaid
+sequenceDiagram
+    participant A as Agent (tool call)
+    participant C as ConversationService::fetch_artifact
+    participant Q as FetchRequests (per live conversation)
+    participant H as ConversationAttachments::read_held (HeldReads)
+    participant L as HostLink (SSH adapter)
+    participant E as nessa env serve (LeaseFetches, FileInbox)
+    participant S as SessionManager::record_lease (the conversation's records)
+    A->>C: artifacts_fetch{environment, digest, mediaType, size, destination}
+    C->>C: a turn under the Live agent lease? where the agent runs? one file, one destination? (no_turn, environment_not_leased, invalid)
+    C->>L: LeaseHold::fetch, not yet polled (here: fetch_unavailable)
+    C->>Q: take(lease, call, size) (duplicate_request, budget_exceeded)
+    C->>S: FetchAsked{lease, call, file, destination, the turn's person} while the lease is the latest and Live (no_turn), with fewer than 4 under way (busy)
+    Note over C,S: not saved: audit_unavailable, its size given back, the environment never asked; FetchEnded{auditUnavailable} kept beside it
+    C->>H: its first byte, for the turn's person (not_held, source_unavailable); each range under a server.fetch_reads permit
+    L->>E: Fetch{lease, request, destination, digest, mediaType, size} (no bytes)
+    E->>E: in flight, size, digest? destination inside the workspace, its directory there, nothing at it?
+    alt exactly this file already there
+        E->>E: ledger: fetched(alreadyPlaced)
+        E->>L: Fetched{alreadyPlaced{path}}
+    else refused
+        E->>E: ledger: fetched(refused)
+        E->>L: FetchRefused{reason}
+    else free
+        E->>E: an empty private part, named by the host's number; ledger: fetch_accepted
+        E->>L: FetchAccepted{path of the part}
+        loop each range of at most 32 KiB
+            L->>H: read_held(person, file, offset): held now? (not_held stops it)
+            L->>E: sftp WRITE to the part, on an artifact channel
+        end
+        Note over L,E: a channel that fails is reopened; the write goes on from the part's length (FSTAT) or what was acknowledged, whichever is less
+        Note over L,E: given up before Delivered (or a FetchAccepted nobody waits for): Undelivered, the part let go, ledger fetch_unanswered
+        L->>E: Delivered{request}
+        E->>E: the part as it is on disk: size and SHA-256 (mismatch)
+        E->>E: mode 0666 less the umask; link that very file at the destination resolved again, never over anything (occupied), held to it by inode; part let go
+        E->>E: ledger: fetched(outcome)
+        E->>L: Fetched{placed{path} | refused{reason}}
+    end
+    L->>C: placed | already placed | the reason (or timed_out, cancelled: the wait or the stop dropped it)
+    C->>Q: finish: its size given back unless it may be placed
+    C->>S: FetchEnded{lease, call, outcome}, once for every FetchAsked, while the lease is still the latest (saved once more if not)
+    C-->>A: placed | alreadyPlaced {path, digest, size, recorded} | refused {code, message}
+```
+
+| Ordering | Holds because | Enforced by |
+| --- | --- | --- |
+| The environment is asked only for a file the turn's person's conversation holds now, and every range is read again for them, so a file let go mid-write stops there and nothing is placed | `fetch_artifact` reads the first byte before `LeaseHold::fetch` is polled; `HeldFile::read` asks `ConversationAttachments::read_held` for every range, which asks `HeldReads` (ownership, then the hold) each time | `a_file_not_held_or_let_go_mid_fetch_is_refused_not_held_and_nothing_is_placed`; `a_hold_let_go_mid_write_stops_it_not_held_and_nothing_is_placed`; `a_held_file_reads_back_for_a_fetch_only_as_its_owner_and_while_held` |
+| A lease's fetches write at most `artifact.fetch_bytes`. A fetch's size is reserved before the environment is asked. It is given back when its answer says this call placed nothing (any refusal, or `alreadyPlaced`), or when no answer came (`unanswered`, `timed_out`, `cancelled`, the call dropped) and `Delivered` was never queued. It stays counted when placed, or when no answer came after `Delivered` was queued, since the host may place it | `FetchRequests::take` before the probe read; `FetchAsk::delivered`, set by the SSH adapter just before it queues `Delivered`; `Taken`'s drop calls `finish` with the answer's `FetchCallRefusal::placed_nothing` (for an answer with none, `!delivered`, the flag it carries), or `!delivered` when the call is dropped before it answers | `a_fetch_past_the_leases_budget_is_refused_before_the_host_is_asked`; `a_fetch_stopped_before_delivery_gives_its_size_back_and_one_after_does_not`; `a_fetched_file_is_written_over_an_artifact_channel_and_placed_verified` (the flag is set); `a_fetch_the_host_refuses_is_answered_by_its_reason_and_replaces_nothing` (it is not) |
+| Every fetch that reaches the environment is first recorded in the conversation's records as `FetchAsked`, naming the lease, the tool call, the file, the destination as asked and the turn's person (principal, surface, the call as request), and is recorded `FetchEnded` once with what it came to, whatever that is: placed, already placed, the host's reason, `not_held`, `source_unavailable`, `channel_unavailable`, or `unanswered`, `timed_out` or `cancelled` with whether every byte was delivered, so an end never says a file may be placed when the environment was never asked or never sent it all. An asking that cannot be saved is refused `audit_unavailable`, the environment never asked and its size given back; an end that cannot be saved, even once more, is answered `recorded: false` (an error to the agent), a placement or a refusal alike, and logged. A refusal decided before the asking (`no_turn`, `environment_not_leased`, `invalid`, `fetch_unavailable`, `duplicate_request`, `budget_exceeded`, `busy`) records nothing. A lease keeps at most `CurrentLease::MAX_ASKED_FETCHES` askings without an end, the most a host takes in flight, so they never crowd out its own records | `fetch_within` calls `ask_fetch` after `FetchRequests::take` and before `LeaseHold::fetch`'s future is first polled; `ask_fetch` decides under `record_lease`'s lock and marks the end owed as the asking is folded; `fetch_artifact` records the end with `end_fetch` after the wait and the stop, from the outcome `fetch_within` set or, when it was dropped, from which of the two dropped it; `CurrentLease::apply` refuses an asking that is not its asker's request, is asked twice, is past the bound or is under a lease no longer Live, and an end never asked | `a_fetch_is_recorded_asked_for_the_turns_person_before_the_host_is_asked_and_ended_once`; `a_fetch_that_cannot_be_recorded_asked_is_refused_audit_unavailable_and_never_asked`; `a_fetch_timed_out_or_cancelled_is_recorded_ended_timed_out_or_cancelled`; `a_fetch_whose_end_cannot_be_saved_is_answered_unrecorded`; `a_fetch_answer_says_where_the_file_is_and_is_an_error_unless_placed_and_recorded`; `a_fetch_timed_out_while_its_asking_is_saved_ends_undelivered_and_never_asked`; `a_fetch_with_no_answer_says_it_may_be_placed_only_once_every_byte_was_delivered`; `a_fetch_past_what_a_lease_may_have_under_way_is_refused_busy_and_never_asked`; `a_fetch_without_this_conversations_lease_or_turn_is_refused_typed` (nothing recorded); `a_fetch_is_kept_while_under_way_and_changes_nothing_the_lease_holds`; `fetch_records_the_lease_rules_refuse_are_corrupt`; `a_fetch_record_past_its_bounds_is_corrupt`; `a_checkpoint_keeps_a_fetch_under_way_and_folds_it_again` |
+| One fetch per tool call at a time; a cancelled call lets its call go | `FetchRequests::take` refuses a held call; `Taken` drops with the call | `a_fetch_for_a_call_already_fetching_is_refused_and_a_cancelled_one_lets_its_call_go` |
+| Every `Fetch` the host answers ends in exactly one terminal ledger entry, `fetched` or `fetch_unanswered`, written before any frame that says it, and every fetch entry (`fetch_accepted` too) carries what was asked (destination, digest, media type, size), so each stands on its own: a refusal at ask time is `fetched(refused)`, `unavailable` on a host that takes no files included; a taken fetch is settled once, by its placing, by `Undelivered` (`fetch_unanswered`, nothing sent), or by the lease's end. Three exceptions write none: a `Fetch` repeating a request the host still holds is logged and dropped, so the first one's entry stays its only one; an acceptance that cannot be recorded is refused `auditUnavailable` with no entry, its part let go; and a last word that cannot be recorded is said `Fetched{refused: auditUnavailable}`, never as it was, a file this fetch placed taken back first (only while its name is still that file, by device and inode) and one already there left; one that cannot be taken back is still said placed, unrecorded on the host, its lease's end uncertain. A fetch given up while being accepted is recorded `fetch_unanswered` whatever the acceptance finds | `LeaseFetches::ask` drops a held request before anything is recorded; `settle`, `undelivered`, `answer` and `end` each record before sending, and each removes the fetch from `taken` under the same lock; `settle` calls `ArtifactInbox::take_back` with the `PlacedFile` that `place` answered | `a_fetch_is_taken_into_a_part_and_placed_once_delivered_each_step_recorded_first`; `a_fetch_whose_outcome_cannot_be_recorded_is_answered_audit_unavailable_and_taken_back`; `a_placed_file_is_taken_back_only_while_its_name_is_still_that_file`; `a_fetch_is_refused_with_its_reason_and_takes_nothing` (the repeated request); `a_fetch_that_cannot_be_recorded_is_refused_and_its_part_let_go`; `a_fetch_given_up_while_being_accepted_lets_its_part_go_once_made`; `a_fetch_given_up_while_being_accepted_is_unanswered_even_when_refused`; `a_placed_file_that_cannot_be_taken_back_is_still_said_placed`; `a_fetch_cut_off_by_a_lost_connection_is_recorded_unanswered` |
+| A fetch the lease's end finds unanswered is answered `leaseEnded` before `Ended`, and every part is let go, whatever ends the lease: the gateway's `End`, or its granted deadline passing. A lease any of whose fetch entries went unrecorded ends `uncertain` | `Served::end`, which `expire` calls too, awaits `LeaseFetches::end` before it records and answers the lease's end; `ArtifactInbox::close`; `LeaseFetches::end` resolves `false` once any fetch entry failed | `a_lease_end_answers_every_fetch_under_way_before_its_ended`; `a_fetch_under_way_when_its_lease_expires_is_answered_lease_ended`; `a_fetch_entry_that_cannot_be_recorded_makes_its_leases_end_uncertain` |
+| A fetch the gateway gives up on (cancelled, timed out, its source let go, its channel failing) before `Delivered` is queued places nothing, holds no part and frees its place under `artifact.host_fetches_in_flight`, wherever it was: from the moment its `Fetch` is queued until the host's last word or `Delivered`, `Fetching`'s drop sends `Undelivered`, so one given up before `FetchAccepted` arrived, or with it arrived but unread, lets its part go too; the late `FetchAccepted` then finds no waiter and is dropped. The host remembers an `Undelivered` it gets while still accepting and lets the part go once made, lets an accepted part go at once, and logs and drops one for a request it no longer holds (refused, already placed). The host places only on `Delivered`, so a later `Delivered` names nothing held. Each ask names itself on the wire by its call and the connection's count of fetches (`<call>#<n>`), so a call asked again after one given up is a new name, and nothing the host still says of the first reaches the second | `Fetching` (drop guard) in `link.rs`, the one sender of `Undelivered`; `Routes::fetches_asked`; `LeaseFetches::undelivered` and `Taken::undelivered`; the sftp write opens the part WRITE only, so a part let go is never made again (`NoSuchFile`, answered `leaseEnded`) | `an_undelivered_fetch_lets_its_part_go_and_places_nothing`; `a_fetch_given_up_while_being_accepted_lets_its_part_go_once_made`; `a_fetch_given_up_before_its_acceptance_leaves_no_part_and_frees_its_place`; `a_fetch_given_up_with_its_acceptance_unread_lets_its_part_go`; `a_hold_let_go_mid_write_stops_it_not_held_and_nothing_is_placed`; `a_part_the_host_let_go_is_no_such_file_and_never_made_again`; `a_fetch_asked_again_under_a_call_given_up_is_named_apart_on_the_wire` |
+| What is placed is what was named: the very file hashed on disk after the last write | `FileInbox::place` hashes one open of the part, links that descriptor (`/proc/self/fd` with `AT_SYMLINK_FOLLOW` where there is one, else by path), then holds what is at the name to it by device and inode (`same_file`): anything else there is `mismatch`, and is taken back only when it is what the link was made from (the part's path, or the copy's name, now that very file); a file someone else put at the name after the link is left. A check-then-unlink window remains, since no call removes a name only if it is a given file | `a_part_that_is_not_the_file_asked_is_refused_mismatch_and_nothing_is_placed`; `a_link_that_is_not_the_hashed_file_is_a_mismatch_and_only_what_was_linked_is_taken_back`; `a_fetch_the_host_refuses_is_answered_by_its_reason_and_replaces_nothing` |
+| Fetch reads never crowd out a surface's: at most `server.fetch_reads` ranges are read for fetches at once, apart from `server.artifact_reads`; a range the store answers busy waits `FETCH_BUSY_BACKOFF` (250 ms, 500 ms, then `artifact.fetch_busy_backoff` each time), its permit let go, before asking again | `HeldFile::read` holds one of the service's `fetch_reads` permits for each range read | `concurrent_fetches_never_read_more_than_the_gateways_bound_at_once`; `a_file_not_held_or_let_go_mid_fetch_is_refused_not_held_and_nothing_is_placed` (the pause) |
+| Nothing at the destination is ever replaced, even something put there after the check | the file is hard-linked (`linkat`), which refuses an existing name; across file systems a private copy is linked the same way | `a_link_never_replaces_what_is_at_the_destination` |
+| The destination stays inside the workspace however it is reached, and its last component is never followed | resolved by `FileInbox::resolve` at the check and again at placing: the canonical parent under the canonical workspace, opened `O_NOFOLLOW` and compared by device and inode | `a_destination_outside_the_workspace_is_refused_however_it_is_reached` |
+| A write cut mid-way resumes from what the host has, never past what it acknowledged | `SftpSession::write_file` starts from the lesser of the part's `FSTAT` length and the acknowledged offset, at most `artifact.read_resumes` times | `a_cut_write_resumes_by_the_parts_length_and_reproduces_the_exact_bytes`; `a_resume_starts_from_the_shorter_of_acknowledged_and_on_the_host`; `a_channel_cut_mid_write_is_resumed_by_the_parts_length_and_still_verifies` |
+| No file bytes on the lease's control stream | `Fetch`, `FetchAccepted`, `Delivered`, `Fetched` carry paths and names only | `a_fetch_names_its_file_and_its_answers_carry_no_bytes`; `a_fetched_file_is_written_over_an_artifact_channel_and_placed_verified` |
+| A host that did not opt in takes nothing | `serve` holds `NoInbox` unless `envServe.artifactsIn`; each fetch is refused `unavailable` at its destination, recorded as any refusal (`auditUnavailable` when it cannot be) | `a_fetch_is_refused_with_its_reason_and_takes_nothing` |
+| A fetch call never waits past its wait or its caller: every step that can wait, the placement store's and the held file's reads included, runs inside `artifact.fetch_call_wait` and the call's stop | `fetch_artifact` bounds all of `fetch_within` by both; what it reserved is let go by `Taken`'s drop | `a_fetch_whose_placement_read_stalls_is_timed_out_or_cancelled`; `a_fetch_not_answered_within_its_wait_answers_timed_out` |
+| A connection with no file channel (a paired one) is never asked to fetch: the agent is refused `fetch_unavailable` before any frame, and the host makes and records nothing | `HostLink::writes_files` (true only for `ArtifactTransport::Channels`); `SshHold::fetch` answers `None` then | `a_paired_connection_is_never_asked_to_fetch` |
+
+- **Codes.** Decided by the conversation: `no_turn`,
+  `environment_not_leased`, `invalid`, `fetch_unavailable`,
+  `duplicate_request`, `budget_exceeded`, `busy` (as many under way as a
+  lease may have), `audit_unavailable` (it could not be recorded, so the
+  environment was not asked), `not_held`, `source_unavailable`,
+  `channel_unavailable`, `unanswered`, `timed_out`, `cancelled`. Otherwise
+  the host's reason: `fetch_unavailable` (not opted in), `outside_workspace`,
+  `no_directory`, `occupied`, `size`, `invalid`, `busy`, `mismatch`,
+  `placing_failed`, `audit_unavailable`, `lease_ended`. `unanswered`,
+  `timed_out` and `cancelled` carry `delivered`: whether every byte reached
+  the environment first. Delivered, it is not known whether the file is
+  placed, and its size stays counted against the lease. Not delivered,
+  nothing is placed and its size is given back; the environment may never
+  have been asked, as when the call's wait runs out while its asking is
+  saved.
+- **Records.** The gateway records each fetch in the conversation's own
+  records, beside the host's ledger: `fetch_asked` (the lease, the call,
+  the file, the destination as asked, and the turn's person) before the
+  host is asked, and `fetch_ended` (placed or already placed with its path,
+  or the reason, with `delivered` for one that had no answer) once it is
+  over. A saved lease keeps a `fetch_asked` until
+  its end arrives, so it says which ends are still owed.
+- **Bounds.** One file is at most `artifact.max_file_bytes`; a lease's
+  fetches write at most `artifact.fetch_bytes`; a host takes at most
+  `artifact.host_fetches_in_flight` unanswered fetches per lease; a call
+  waits at most `artifact.fetch_call_wait`. Ranges are the hold's own
+  (`artifact.read_range_bytes`), at most 16 writes outstanding, and at most
+  `server.fetch_reads` read at once across the gateway; a busy store is
+  asked again only after a pause (`artifact.fetch_busy_backoff`).
+- **The part.** It lives in the host's private inbox beside its outbox,
+  under the lease's digest, named by the host's own number for the fetch
+  (the gateway's request is any text), made empty with mode 0600 by the
+  host and only ever opened by the gateway, never created, and never
+  reused. Every part of a lease goes when the lease ends, and every part
+  an earlier serving process left goes when serving starts.
+- **Mode.** A placed file gets the mode this account's other new files
+  get: 0666 less the umask, read once when the process starts (while it is
+  the only thread, since reading the umask sets it), or 0644 when it was
+  not read.
 
 ## Previews: a port, not a file
 
@@ -1551,7 +1691,7 @@ locally.
 | Phone commands | None | Durable intent outbox, receipt lookup before retry, exact-turn Stop | `nessa-client-core`; gateway receipts | #267 |
 | Where agents run | In process only: gateway composes the SDK `Agent` and its ACP binding per conversation; Nessa advertises no ACP client filesystem or terminal | An `Environment` port in the conversation application with the in-process adapter first; a lease recorded for every run | Gateway `conversation` composition | A [#698](https://github.com/nessalabs/nessa-agent/issues/698) |
 | SSH environments | None | `nessa env serve` on the remote host, installed on first use; lease frames over SSH stdio | Gateway environment adapter; `nessa-server` CLI | B [#699](https://github.com/nessalabs/nessa-agent/issues/699), F [#703](https://github.com/nessalabs/nessa-agent/issues/703) |
-| Peer gateways and hosted workers | A gateway invites a peer with the device enrollment under its own consent class; the credential names a `gateway` principal that can hold only reads (H, first part: [peer gateways](auth/peer-gateways.md)). A paired environment holding `environment.serve` dials the native listener and serves leases over that connection as an SSH host does (I, parts 1a and 1b: [environment peers](auth/peer-gateways.md#environment-peers)) | Gateway-to-gateway pairing under a `gateway` principal kind; outbound connection from the environment side; relay fallback; environment-only gateways as workers | Gateway `device_pairing`, environment role; `nessa-auth` | H [#705](https://github.com/nessalabs/nessa-agent/issues/705), I [#706](https://github.com/nessalabs/nessa-agent/issues/706), K [#708](https://github.com/nessalabs/nessa-agent/issues/708) |
+| Peer gateways and hosted workers | A gateway invites a peer with the device enrollment under its own consent class; the credential names a `gateway` principal that can hold only reads (H, first part: [peer gateways](auth/peer-gateways.md)). A paired environment holding `environment.serve` dials the native listener and serves leases over that connection as an SSH host does (I, parts 1a and 1b: [environment peers](auth/peer-gateways.md#environment-peers)), and the files it publishes are read over that same connection (I-2b); the agent catalogue a surface follows (`agents.subscribe`) changes as paired environments connect, disconnect and are revoked (I-3) | Gateway-to-gateway pairing under a `gateway` principal kind; outbound connection from the environment side; relay fallback; environment-only gateways as workers | Gateway `device_pairing`, environment role; `nessa-auth` | H [#705](https://github.com/nessalabs/nessa-agent/issues/705), I [#706](https://github.com/nessalabs/nessa-agent/issues/706), K [#708](https://github.com/nessalabs/nessa-agent/issues/708) |
 | Sandboxes | Whatever the harness does by default | Sandbox profiles in the lease, declared per binding and per environment, refused when unenforceable | SDK bindings; environment adapters | A [#698](https://github.com/nessalabs/nessa-agent/issues/698) declares; later profiles per binding |
 | Policy hooks | Capability reporting merged (#142); no configured pre-tool runtime | Verdicts at the gateway; pre-tool verdicts enforced by the environment's SDK from the snapshot the lease carries, with evidence | SDK application owner (0014) | #130 slices |
 | Extensions | MCP Apps in a sandboxed iframe; one MCP connection per harness session; remote MCP with gateway-owned OAuth | Unchanged; an extension holds only the opening's token | Gateway `mcp_servers`, `mcp_authorization` | 344, 392 |
@@ -1559,7 +1699,7 @@ locally.
 | Agent tools for the mesh | `nessa-mcp` serves shell and other Nessa tools locally; no environment argument | `environments.list`, `thread.create` with an environment, `run` on an environment, `artifacts.publish`/`fetch`, all thin over product methods and validated by the gateway | `nessa-mcp`; gateway `environment.*` methods | 0012; C [#700](https://github.com/nessalabs/nessa-agent/issues/700), I [#706](https://github.com/nessalabs/nessa-agent/issues/706) |
 | Reaching the gateway from outside | Loopback `/session`; native listener with pairing to Approved when configured | Overlay or tunnel are the person's choice and need nothing new; the relay is #266; the native listener admits only minted credentials on both paths | Gateway `device_pairing`, composition | #263, #265, #266 |
 | Directional sync | The device client follows what its credential grants, all of it | Follow rules per peer (which granted conversations, how much to keep) beside grants per peer (which conversations, which role); two gateways never merge stores; environment policy per peer and per work kind | `nessa-client-core` follow table; gateway grants; sync engine scope | #257, #262; G [#704](https://github.com/nessalabs/nessa-agent/issues/704) |
-| Sharing | Grants are per principal across its organization's conversations; devices get `conversation.read` on all of the owner's | Grants per conversation id with a role (Read, Comment, Drive) and a per-principal tool policy revision carried on each accepted turn | Gateway `auth`, `conversation`; 0014 policy owner | 0011 phase B; #130 slices; G [#704](https://github.com/nessalabs/nessa-agent/issues/704), J [#707](https://github.com/nessalabs/nessa-agent/issues/707) |
+| Sharing | Grants per conversation id (G); each grant has a role, Read, Comment or Drive, and a Drive grant a tool policy and its revision (J1), but every role only reads and a paired party's writes are refused | Grants per conversation id with a role (Read, Comment, Drive) and a per-principal tool policy revision carried on each accepted turn | Gateway `auth`, `conversation`; 0014 policy owner | 0011 phase B; #130 slices; G [#704](https://github.com/nessalabs/nessa-agent/issues/704), J [#707](https://github.com/nessalabs/nessa-agent/issues/707) |
 | Previews | None | Lease-scoped loopback forwards over the SSH session or a paired stream, only for the lease's own ports, recorded and shown | Gateway environment adapters; `nessa-mcp` | B [#699](https://github.com/nessalabs/nessa-agent/issues/699), I [#706](https://github.com/nessalabs/nessa-agent/issues/706) |
 | Environment health and limits | None | Idle sleep with native resume, low-disk pause, health in `environments.list` | `nessa env serve`; environment adapters | B [#699](https://github.com/nessalabs/nessa-agent/issues/699) |
 | Backup and restore | None | Export cut with deletion inventory; quarantined restore | New gateway module | #270 |

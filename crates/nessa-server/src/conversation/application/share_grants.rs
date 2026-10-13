@@ -1,7 +1,14 @@
-//! Per-conversation read grants (issue 704, slice G of ADR 252): which paired
-//! device may read which of its owner's conversations.
-//! `docs/design/read-grants.md` holds the rules and the state table its tests
-//! are written from.
+//! Per-conversation share grants (issue 704, slice G of ADR 252; roles and
+//! tool policies, issue 707): which paired party may do what in which of its
+//! owner's conversations. `docs/design/read-grants.md` holds the rules and
+//! the state table its tests are written from.
+//!
+//! A grant has a role, Read, Comment or Drive, and a Drive grant a tool
+//! policy ([`ShareAccess`]). Every role reads, and reads exactly as Read
+//! does (row J1). Only a Drive grant drives the conversation it names
+//! ([`admit_drive`], row J11); its tools run unchecked until the policy is
+//! enforced (issue 707, slice J4). A later slice admits Comment's notes by
+//! asking the role from here.
 //!
 //! One authority answers "may this reader read this conversation":
 //! [`admit_read`] for one conversation, and for a paired device's list the
@@ -17,8 +24,8 @@
 //!
 //! A paired device's catalogue pages are narrowed by the store in SQL, because
 //! a filtered page must still be a whole page; the store answers
-//! [`ReadGrants::is_granted`] and those pages with one predicate
-//! (`store::read_grants::granted`), so the two cannot disagree.
+//! [`ShareGrants::is_granted`] and those pages with one predicate
+//! (`store::share_grants::granted`), so the two cannot disagree.
 //!
 //! Who is a grantee is decided by construction, not by a list of credential
 //! kinds: a session whose credential has a receiver binding was paired,
@@ -39,7 +46,7 @@
 use super::metadata_target::load_conversation;
 use super::{ConversationCaller, ConversationError, ConversationFuture, ConversationRepository};
 use crate::conversation::application::ReceiverAuthority;
-use crate::conversation::domain::ReceiverBinding;
+use crate::conversation::domain::{ReceiverBinding, ShareAccess, ShareRole, ToolPolicy};
 use nessa_auth::application::ports::{AccessError, AccessReader};
 use nessa_auth::domain::{AuthContext, CredentialId, Resource};
 use nessa_protocol::conversation::domain::ConversationId;
@@ -77,6 +84,15 @@ pub async fn reader_of(
     receivers: &dyn ReceiverAuthority,
     context: &AuthContext,
 ) -> Result<Reader, ReadRefusal> {
+    Ok(Reader::of(binding_of(receivers, context).await?.as_ref()))
+}
+
+/// The active receiver binding `context`'s credential holds, checked as
+/// [`reader_of`] says, or `None` for the owner's own surface.
+pub async fn binding_of(
+    receivers: &dyn ReceiverAuthority,
+    context: &AuthContext,
+) -> Result<Option<ReceiverBinding>, ReadRefusal> {
     let binding = receivers.resolve(context.credential_id()).await?;
     if let Some(binding) = &binding {
         if !binding.active {
@@ -88,16 +104,17 @@ pub async fn reader_of(
             return Err(ReadRefusal::Unverifiable);
         }
     }
-    Ok(Reader::of(binding.as_ref()))
+    Ok(binding)
 }
 
 /// Whether `reader` may read conversation `id`. Ownership is the caller's
-/// check, made where the conversation is loaded; this answers only the grant.
+/// check, made where the conversation is loaded; this answers only the grant,
+/// which any role satisfies (row J1).
 /// An ungranted id is refused `WrongOwner`, the answer a conversation that is
 /// not the owner's gets, so a device cannot tell an ungranted id from one that
 /// does not exist (row G1).
 pub async fn admit_read(
-    grants: &dyn ReadGrants,
+    grants: &dyn ShareGrants,
     reader: &Reader,
     id: &ConversationId,
 ) -> Result<(), ReadRefusal> {
@@ -111,26 +128,78 @@ pub async fn admit_read(
     }
 }
 
+/// Why a paired party may not drive a conversation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DriveRefusal {
+    /// It holds no grant there: to it, the conversation does not exist, as
+    /// for a read (row G1).
+    NotGranted,
+    /// It holds a Read or Comment grant there, which may see the
+    /// conversation but not drive it.
+    BelowDrive,
+    /// The grant could not be read.
+    Unverifiable,
+}
+
+/// Whether `reader` may drive conversation `id`: start and steer turns in it,
+/// stop them, answer and cancel their questions, and look up the receipts of
+/// those commands (row J11). Only a Drive grant does; ownership is the
+/// caller's check, as for [`admit_read`]. A role is read from the grant at
+/// each command, so a role lowered or revoked refuses the next command, and
+/// one already admitted finishes (row J13).
+///
+/// The grant as it admitted the command, which a turn the command starts is
+/// saved with (row J15); `None` for the owner, who needs none.
+pub async fn admit_drive(
+    grants: &dyn ShareGrants,
+    reader: &Reader,
+    id: &ConversationId,
+) -> Result<Option<HeldGrant>, DriveRefusal> {
+    match reader {
+        Reader::Owner => Ok(None),
+        Reader::PairedDevice { receiver_id } => match grants.held_grant(id, receiver_id).await {
+            Ok(Some(held)) if held.role.at_least(ShareRole::Drive) => Ok(Some(held)),
+            Ok(Some(_)) => Err(DriveRefusal::BelowDrive),
+            Ok(None) => Err(DriveRefusal::NotGranted),
+            Err(_) => Err(DriveRefusal::Unverifiable),
+        },
+    }
+}
+
+/// The role a party holds on one conversation, and the revision of the
+/// grant that set it, read together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeldGrant {
+    pub role: ShareRole,
+    /// As [`ShareGrant::policy_revision`].
+    pub policy_revision: u64,
+}
+
 /// One grant as the owner sees it in `conversation.shares`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReadGrant {
+pub struct ShareGrant {
     pub conversation_id: ConversationId,
     pub receiver_id: String,
     pub credential_id: CredentialId,
+    pub access: ShareAccess,
+    /// The journal sequence of the change that last set the role or the
+    /// policy, which every turn a Drive grant starts is saved with.
+    pub policy_revision: u64,
     pub granted_at_ms: u64,
 }
 
-/// Grant or revoke, as the owner decided it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReadGrantTransition {
-    Grant,
+/// Grant with a role and policy, or revoke, as the owner decided it. A grant
+/// on a party that already holds one replaces its role and policy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ShareGrantTransition {
+    Grant(ShareAccess),
     Revoke,
 }
 
-impl ReadGrantTransition {
-    pub fn as_str(self) -> &'static str {
+impl ShareGrantTransition {
+    pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Grant => "granted",
+            Self::Grant(_) => "granted",
             Self::Revoke => "revoked",
         }
     }
@@ -139,14 +208,21 @@ impl ReadGrantTransition {
 /// The most grants one conversation holds, so its `conversation.shares`
 /// answer always fits one socket frame. A grant past it is refused
 /// `InvalidInput` (`docs/limits.md`).
-pub const MAX_READ_GRANTS_PER_CONVERSATION: i64 = 64;
+pub const MAX_SHARE_GRANTS_PER_CONVERSATION: i64 = 64;
 
-/// One owner decision about one device and one conversation, with who made
-/// it. The store writes the grant, its journal row and the catalogue
+/// The most Drive grants one conversation holds. A Drive grant carries a tool
+/// policy, and this bound is what keeps a `conversation.shares` answer of
+/// [`MAX_SHARE_GRANTS_PER_CONVERSATION`] grants inside one frame with every
+/// policy at its largest (rows J9, J10). A grant or change past it is refused
+/// `InvalidInput` (`docs/limits.md`).
+pub const MAX_DRIVE_GRANTS_PER_CONVERSATION: i64 = 8;
+
+/// One owner decision about one paired party and one conversation, with who
+/// made it. The store writes the grant, its journal row and the catalogue
 /// revision in one transaction.
 #[derive(Clone)]
-pub struct ReadGrantChange {
-    pub transition: ReadGrantTransition,
+pub struct ShareGrantChange {
+    pub transition: ShareGrantTransition,
     pub conversation_id: ConversationId,
     /// Absent only for a revoke of a device whose binding is gone: the grant
     /// is then found by its credential.
@@ -156,32 +232,57 @@ pub struct ReadGrantChange {
     pub at_ms: u64,
 }
 
-/// The gateway's table of read grants. Grants and follow rules are separate
+/// The gateway's table of share grants. Grants and follow rules are separate
 /// tables: this is the owner's side only, and a follower's choice of what to
 /// keep never reaches it.
-pub trait ReadGrants: Send + Sync {
-    /// Whether `receiver_id` holds a grant on `id`.
+pub trait ShareGrants: Send + Sync {
+    /// The grant `receiver_id` holds on `id`, or `None` when it holds none
+    /// there.
+    fn held_grant<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        receiver_id: &'a str,
+    ) -> ConversationFuture<'a, Option<HeldGrant>>;
+    /// The role `receiver_id` holds on `id`, or `None` when it holds no
+    /// grant there.
+    fn held_role<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        receiver_id: &'a str,
+    ) -> ConversationFuture<'a, Option<ShareRole>> {
+        Box::pin(async move {
+            Ok(self
+                .held_grant(id, receiver_id)
+                .await?
+                .map(|held| held.role))
+        })
+    }
+    /// Whether `receiver_id` holds a grant on `id`, of any role.
     fn is_granted<'a>(
         &'a self,
         id: &'a ConversationId,
         receiver_id: &'a str,
-    ) -> ConversationFuture<'a, bool>;
-    /// Apply one change. `false` when it changed nothing (granting a grant
-    /// already held, revoking one not held). Every admitted request is
-    /// journaled under its request id, a no-op too (before equal to after),
-    /// and a retry of the same request answers from that row and changes
-    /// nothing (rows G9, G16). A retry is admitted like a new request first:
-    /// ownership for both, and not deleted for a grant.
-    fn change(&self, change: ReadGrantChange) -> ConversationFuture<'_, bool>;
+    ) -> ConversationFuture<'a, bool> {
+        Box::pin(async move { Ok(self.held_role(id, receiver_id).await?.is_some()) })
+    }
+    /// Apply one change. `false` when it changed nothing (granting the role
+    /// and policy already held, revoking a grant not held). A grant naming
+    /// another role or policy than the one held replaces them and is `true`
+    /// (row J4). Every admitted request is journaled under its request id, a
+    /// no-op too (before equal to after), and a retry of the same request
+    /// answers from that row and changes nothing (rows G9, G16, J5, J6). A
+    /// retry is admitted like a new request first: ownership for both, and
+    /// not deleted for a grant.
+    fn change(&self, change: ShareGrantChange) -> ConversationFuture<'_, bool>;
     /// The grants on one conversation, oldest first.
-    fn grants<'a>(&'a self, id: &'a ConversationId) -> ConversationFuture<'a, Vec<ReadGrant>>;
+    fn grants<'a>(&'a self, id: &'a ConversationId) -> ConversationFuture<'a, Vec<ShareGrant>>;
 }
 
 /// The owner's share commands: `conversation.share`, `.unshare`, `.shares`.
 pub struct ShareConversation<'a> {
     pub conversations: &'a dyn ConversationRepository,
     pub receivers: &'a dyn ReceiverAuthority,
-    pub grants: &'a dyn ReadGrants,
+    pub grants: &'a dyn ShareGrants,
     /// The credential registry, read for the principal a share target names.
     pub access: &'a dyn AccessReader,
     /// This gateway, the resource a share target's read must be on.
@@ -189,7 +290,10 @@ pub struct ShareConversation<'a> {
 }
 
 impl ShareConversation<'_> {
-    /// Grant `credential`'s receiver Read on `id`. The credential must be an
+    /// Grant `credential`'s receiver `role` on `id` with `policy`, or replace
+    /// the role and policy it holds there. A Drive grant needs a policy and a
+    /// Read or Comment grant takes none; either mistake is `InvalidInput` and
+    /// writes nothing (row J3). The credential must be an
     /// active paired device or peer gateway of the caller that holds
     /// `conversation.read` on this gateway, or `ShareTargetNotPaired`: an environment's
     /// credential serves and can never read, so a share to it would record a
@@ -202,9 +306,12 @@ impl ShareConversation<'_> {
         caller: ConversationCaller,
         id: ConversationId,
         credential: CredentialId,
+        role: ShareRole,
+        policy: Option<ToolPolicy>,
         at_ms: u64,
     ) -> Result<bool, ConversationError> {
         caller.actor()?;
+        let access = ShareAccess::new(role, policy).map_err(|_| ConversationError::InvalidInput)?;
         let binding = self
             .receivers
             .resolve(&credential)
@@ -240,8 +347,8 @@ impl ShareConversation<'_> {
             return Err(ConversationError::ShareTargetNotPaired);
         }
         self.grants
-            .change(ReadGrantChange {
-                transition: ReadGrantTransition::Grant,
+            .change(ShareGrantChange {
+                transition: ShareGrantTransition::Grant(access),
                 conversation_id: id,
                 receiver_id: Some(binding.receiver_id),
                 credential_id: credential,
@@ -251,7 +358,7 @@ impl ShareConversation<'_> {
             .await
     }
 
-    /// Revoke `credential`'s grant on `id`. Allowed on a deleted conversation
+    /// Revoke `credential`'s grant on `id`, whatever its role. Allowed on a deleted conversation
     /// and for a device since unpaired: taking access away needs no more
     /// than ownership, which the store checks as it writes.
     pub async fn unshare(
@@ -263,8 +370,8 @@ impl ShareConversation<'_> {
     ) -> Result<bool, ConversationError> {
         caller.actor()?;
         self.grants
-            .change(ReadGrantChange {
-                transition: ReadGrantTransition::Revoke,
+            .change(ShareGrantChange {
+                transition: ShareGrantTransition::Revoke,
                 conversation_id: id,
                 receiver_id: None,
                 credential_id: credential,
@@ -279,7 +386,7 @@ impl ShareConversation<'_> {
         &self,
         caller: &ConversationCaller,
         id: &ConversationId,
-    ) -> Result<Vec<ReadGrant>, ConversationError> {
+    ) -> Result<Vec<ShareGrant>, ConversationError> {
         self.owner_of(caller, id).await?;
         self.grants.grants(id).await
     }

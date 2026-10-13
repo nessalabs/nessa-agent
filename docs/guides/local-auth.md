@@ -358,6 +358,50 @@ Each change is kept, with who made it and the grant before and after, in
 `environment/grants-audit.jsonl`; a change that cannot be recorded there is
 not made.
 
+To serve one gateway from a container, run one container per gateway, and so
+per organization: a gateway is one organization, and a machine is paired with
+one gateway. [docs/guides/env-worker/](env-worker/) has an example image and a
+compose file. The container runs the same command on every start:
+
+```sh
+nessa env dial gateway.example:47650 --enroll-code-file /run/secrets/nessa_enroll_code --drain-deadline 20s
+```
+
+`--enroll-code-file` reads the code of an environment invitation from a file,
+such as a mounted secret, only while nothing is paired on the machine's data
+volume. Before it sends the code, it records the gateway's address there. A
+restart, approved or not yet, finds the machine paired with that same address,
+written the same way, sends nothing and goes on to wait for approval or dial.
+A volume paired with another gateway, or with one it did not record (paired
+by `env enroll` before this flag existed), is refused rather than dialed: run
+`env dial` without `--enroll-code-file` to serve it, or remove its
+`environment/pairing` directory to pair it again. A start that cannot reach
+the gateway to enroll exits, and the container's restart policy tries again.
+
+The container runs as its own account (uid 10001 in the example), which must
+be able to read the code file, and must own `config.json`, readable by no one
+else (`chmod 600`): `nessa` refuses a configuration another account could have
+written.
+
+`--drain-deadline` turns the container runtime's SIGTERM into a drain. The
+machine refuses new leases, ends each one it holds with its cleanup recorded on
+both sides, waits until the gateway has answered every end, and exits. The
+gateway records each drained lease as stopped by the system. Set the deadline
+below the container's stop grace (`stop_grace_period`), so the drain finishes
+before the runtime kills the process; past the deadline, the connection is
+closed and what is still held is lost. A second signal closes it at once.
+
+Grant the gateway what it may run there with `nessa env grant` against the same
+volume, for example `docker compose run --rm --entrypoint nessa worker-acme env
+grant --agent claude`. Grants and pairing live on the volume, so they survive
+a replace.
+
+Replace a worker by stopping the old container before starting the new one on
+the same volume, which is what `docker compose up -d --force-recreate` does for
+a single service. Two containers never serve one volume at once: the second
+waits up to 15 seconds for the first to let go of the volume, then exits, and
+its restart policy starts it again.
+
 To let the agent run single commands on a host with its `run` tool (beside
 `environments_list`), name the host in `environmentTools.commandHosts` on the
 gateway, and on the host itself set `envServe.commands` in its `config.json`.
@@ -391,6 +435,25 @@ On the host:
 ```json
 {
   "envServe": { "commands": true }
+}
+```
+
+To let the agent place a file the conversation holds in the host's workspace
+with its `artifacts_fetch` tool, set `envServe.artifactsIn` in the host's
+`config.json`. It is off until set, and every fetch is refused until it is. A
+fetched file is written as the host's account into a private part beside the
+host's outbox, checked against its size and SHA-256 there, and then linked at
+its destination inside the workspace, in a directory that already exists and
+only where nothing is: an existing file is never replaced. It gets the mode the
+account's other new files get (0666 less its umask). The agent fetches
+only under its own lease, on the host where it runs, and only files its
+conversation holds for the person whose turn asked. Limits are in
+[docs/limits.md](../limits.md) (`artifact.fetch_bytes`,
+`artifact.fetch_call_wait`, `artifact.host_fetches_in_flight`).
+
+```json
+{
+  "envServe": { "commands": true, "artifactsIn": true }
 }
 ```
 

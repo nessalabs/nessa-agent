@@ -4,7 +4,7 @@ use crate::{
     domain::pairing::{DeviceKey, PublicIntent},
 };
 use opaque_ke::rand::{CryptoRng, RngCore};
-use ring::signature::{Ed25519KeyPair, KeyPair};
+use ring::signature::{Ed25519KeyPair, KeyPair, UnparsedPublicKey, ED25519};
 use rustls::{
     client::{
         danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
@@ -92,6 +92,29 @@ impl NativeIdentity {
     pub fn device_key(&self) -> DeviceKey {
         device_key(&self.spki)
     }
+    /// The raw Ed25519 public key: the id a relay registers this identity
+    /// under (`docs/design/auth/relay.md`).
+    pub fn public_key(&self) -> [u8; 32] {
+        let mut key = [0; 32];
+        key.copy_from_slice(&self.spki[12..]);
+        key
+    }
+    /// Prove this key to a relay: an Ed25519 signature over the relay proof
+    /// message for `challenge`, the relay's fresh nonce. The message starts
+    /// with [`RELAY_PROOF_CONTEXT`], never with the 64 spaces a TLS 1.3
+    /// handshake signature starts with, so a relay cannot use its challenge
+    /// to get a signature it could present in a handshake.
+    pub fn sign_relay_challenge(
+        &self,
+        challenge: &[u8; 32],
+    ) -> Result<[u8; 64], PairingCryptoError> {
+        let pair = Ed25519KeyPair::from_seed_unchecked(self.seed.expose_bytes())
+            .map_err(|_| PairingCryptoError::Unavailable)?;
+        let signature = pair.sign(&relay_proof_message(&self.public_key(), challenge));
+        let mut bytes = [0; 64];
+        bytes.copy_from_slice(signature.as_ref());
+        Ok(bytes)
+    }
     fn certified_key(&self) -> Result<Arc<CertifiedKey>, PairingCryptoError> {
         let mut bytes = Zeroizing::new(Vec::with_capacity(48));
         bytes.extend_from_slice(&PKCS8_PREFIX);
@@ -105,6 +128,24 @@ impl NativeIdentity {
             signing,
         )))
     }
+}
+/// What every relay proof message starts with.
+pub const RELAY_PROOF_CONTEXT: &[u8] = b"nessa-relay-serve-v1\0";
+/// The context, the key, then the challenge: the one layout a relay proof
+/// signs.
+fn relay_proof_message(key: &[u8; 32], challenge: &[u8; 32]) -> Vec<u8> {
+    let mut message = Vec::with_capacity(RELAY_PROOF_CONTEXT.len() + 64);
+    message.extend_from_slice(RELAY_PROOF_CONTEXT);
+    message.extend_from_slice(key);
+    message.extend_from_slice(challenge);
+    message
+}
+/// Whether `signature` is `key`'s relay proof for `challenge`, as
+/// [`NativeIdentity::sign_relay_challenge`] makes it.
+pub fn verify_relay_proof(key: &[u8; 32], challenge: &[u8; 32], signature: &[u8; 64]) -> bool {
+    UnparsedPublicKey::new(&ED25519, key)
+        .verify(&relay_proof_message(key, challenge), signature)
+        .is_ok()
 }
 impl fmt::Debug for NativeIdentity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -41,6 +41,7 @@ const view: ConversationView = {
     agentFeatures: {
       permissionDenial: "unknown",
       nativeHookSuppression: "unknown",
+      nativeHooks: "off",
       compactionReporting: "unsupported_not_implemented",
       modelSwitchReporting: "unsupported_not_implemented",
       permissionDeferral: "unsupported_not_implemented",
@@ -432,6 +433,7 @@ it("rejects duplicate identities and impossible steering order at the response b
     status: "completed",
     input: "{}",
     details: "done",
+    nativeHooks: "off",
   }
   const request = vi.fn()
   const api = createConversationApi({ request }, () => "id")
@@ -576,6 +578,7 @@ it("accepts bounded omissions and the intentional pending-message overlap", asyn
         status: "running",
         input: "{}",
         details: "",
+        nativeHooks: "off",
       },
     ],
   })

@@ -5,6 +5,7 @@
 //! MessageChunk --> MessageKind + optional MessageId + immutable text
 //! scheduling evidence --> SchedulingTransition --> validated stage/cause/initiator
 //! undispatched immediate close --> InvocationCancellation --> cause/initiator
+//! host admission --> Initiation --> owner or share grant + tool checking
 //! ordered transitions --> validate_history --> continuous stages + stable kind/target
 //! ```
 //!
@@ -30,6 +31,9 @@ pub use transition::{SchedulingInitiator, SchedulingTransition, SchedulingTransi
 
 mod submission;
 pub use submission::SubmissionMode;
+
+mod initiation;
+pub use initiation::{GrantInitiator, GrantRole, Initiation, Initiator, ToolChecking};
 
 mod queue_order;
 pub use queue_order::{QueueOrderChange, QueueOrderError};

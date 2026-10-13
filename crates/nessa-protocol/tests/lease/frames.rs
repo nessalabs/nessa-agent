@@ -1,9 +1,10 @@
 //! Lease frames: their wire shape, the hello another build is recognised by,
 //! and the bounds on a frame and the bytes it carries.
 use super::{
-    decode, encode, fingerprint, read_hello, Cleanup, Collection, CollectionRefusal, CommandEnd,
-    Data, EndingCause, FromEnvironment, GrantRefusal, GrantedTerms, Hello, PublishRefusal, Sandbox,
-    StagedArtifact, ToEnvironment, MAX_DATA_BYTES, MAX_FRAME_BYTES,
+    decode, encode, fingerprint, read_hello, ArtifactReadRefusal, Cleanup, Collection,
+    CollectionRefusal, CommandEnd, Data, EndingCause, FetchOutcome, FetchRefusal, FromEnvironment,
+    GrantRefusal, GrantedTerms, Hello, PublishRefusal, Sandbox, StagedArtifact, ToEnvironment,
+    MAX_DATA_BYTES, MAX_FRAME_BYTES,
 };
 use crate::pairing::FrameReader;
 use std::collections::BTreeMap;
@@ -73,6 +74,28 @@ fn every_frame_round_trips_and_names_its_lease() {
             request: "call-1".into(),
             path: "build/Nessa.dmg".into(),
             media_type: Some("application/x-apple-diskimage".into()),
+        },
+        ToEnvironment::Fetch {
+            lease: "l".into(),
+            request: "call-3".into(),
+            destination: "assets/logo.png".into(),
+            digest: "ab".repeat(32),
+            media_type: "image/png".into(),
+            size: 7,
+        },
+        ToEnvironment::Delivered {
+            lease: "l".into(),
+            request: "call-3".into(),
+        },
+        ToEnvironment::Undelivered {
+            lease: "l".into(),
+            request: "call-3".into(),
+        },
+        ToEnvironment::ReadArtifact {
+            lease: "l".into(),
+            artifact: 3,
+            offset: 65_536,
+            length: 65_536,
         },
     ];
     for frame in to {
@@ -163,6 +186,30 @@ fn every_frame_round_trips_and_names_its_lease() {
             request: "call-2".into(),
             reason: PublishRefusal::OutsideWorkspace,
         },
+        FromEnvironment::FetchAccepted {
+            lease: "l".into(),
+            request: "call-3".into(),
+            path: "/home/me/.local/share/nessa/environment/inbox/l/1.part".into(),
+        },
+        FromEnvironment::FetchRefused {
+            lease: "l".into(),
+            request: "call-4".into(),
+            reason: FetchRefusal::Occupied,
+        },
+        FromEnvironment::Fetched {
+            lease: "l".into(),
+            request: "call-3".into(),
+            outcome: FetchOutcome::Placed {
+                path: "/work/assets/logo.png".into(),
+            },
+        },
+        FromEnvironment::Fetched {
+            lease: "l".into(),
+            request: "call-5".into(),
+            outcome: FetchOutcome::Refused {
+                reason: FetchRefusal::Mismatch,
+            },
+        },
         FromEnvironment::Ran {
             lease: "l".into(),
             end: CommandEnd::Exited { code: 1 },
@@ -170,6 +217,18 @@ fn every_frame_round_trips_and_names_its_lease() {
             stderr: Data(Vec::new()),
             dropped_bytes: 7,
             cleanup: Cleanup::Confirmed { forced: false },
+        },
+        FromEnvironment::ArtifactRead {
+            lease: "l".into(),
+            artifact: 3,
+            offset: 65_536,
+            data: Data(vec![1, 2, 3]),
+        },
+        FromEnvironment::ArtifactNotRead {
+            lease: "l".into(),
+            artifact: 3,
+            offset: 0,
+            reason: ArtifactReadRefusal::NotStaged,
         },
     ];
     for frame in from {
@@ -331,6 +390,90 @@ fn a_gateway_asked_publish_names_its_request_and_its_refusal_answers_it() {
     );
 }
 
+/// Gate: a fetch names the file by digest, media type and size and where
+/// it goes; its answers name the request and carry no bytes of it, only
+/// where the bytes are to be written and what became of it.
+#[test]
+fn a_fetch_names_its_file_and_its_answers_carry_no_bytes() {
+    let text = |frame: &dyn erased::Frame| frame.text();
+    assert_eq!(
+        text(&ToEnvironment::Fetch {
+            lease: "l".into(),
+            request: "call-1".into(),
+            destination: "a.png".into(),
+            digest: "ab".repeat(32),
+            media_type: "image/png".into(),
+            size: 7,
+        }),
+        format!(
+            r#"{{"type":"fetch","lease":"l","request":"call-1","destination":"a.png","digest":"{}","mediaType":"image/png","size":7}}"#,
+            "ab".repeat(32)
+        )
+    );
+    assert_eq!(
+        text(&ToEnvironment::Delivered {
+            lease: "l".into(),
+            request: "call-1".into(),
+        }),
+        r#"{"type":"delivered","lease":"l","request":"call-1"}"#
+    );
+    assert_eq!(
+        text(&ToEnvironment::Undelivered {
+            lease: "l".into(),
+            request: "call-1".into(),
+        }),
+        r#"{"type":"undelivered","lease":"l","request":"call-1"}"#
+    );
+    assert_eq!(
+        text(&FromEnvironment::FetchAccepted {
+            lease: "l".into(),
+            request: "call-1".into(),
+            path: "/in/1.part".into(),
+        }),
+        r#"{"type":"fetchAccepted","lease":"l","request":"call-1","path":"/in/1.part"}"#
+    );
+    assert_eq!(
+        text(&FromEnvironment::FetchRefused {
+            lease: "l".into(),
+            request: "call-1".into(),
+            reason: FetchRefusal::NoDirectory,
+        }),
+        r#"{"type":"fetchRefused","lease":"l","request":"call-1","reason":"noDirectory"}"#
+    );
+    assert_eq!(
+        text(&FromEnvironment::Fetched {
+            lease: "l".into(),
+            request: "call-1".into(),
+            outcome: FetchOutcome::AlreadyPlaced {
+                path: "/work/a.png".into(),
+            },
+        }),
+        r#"{"type":"fetched","lease":"l","request":"call-1","outcome":{"outcome":"alreadyPlaced","path":"/work/a.png"}}"#
+    );
+    assert_eq!(
+        text(&FromEnvironment::Fetched {
+            lease: "l".into(),
+            request: "call-1".into(),
+            outcome: FetchOutcome::Refused {
+                reason: FetchRefusal::LeaseEnded,
+            },
+        }),
+        r#"{"type":"fetched","lease":"l","request":"call-1","outcome":{"outcome":"refused","reason":"leaseEnded"}}"#
+    );
+}
+
+/// Serialises any frame to its JSON text.
+mod erased {
+    pub(super) trait Frame {
+        fn text(&self) -> String;
+    }
+    impl<T: serde::Serialize> Frame for T {
+        fn text(&self) -> String {
+            String::from_utf8(serde_json::to_vec(self).unwrap()).unwrap()
+        }
+    }
+}
+
 #[test]
 fn the_wire_names_are_camel_case() {
     let text = String::from_utf8(
@@ -455,6 +598,68 @@ fn unknown_fields_and_frames_are_refused() {
     assert!(decode::<ToEnvironment>(br#"{"type":"end","lease":"l","more":1}"#).is_err());
     assert!(decode::<ToEnvironment>(br#"{"type":"exec","lease":"l"}"#).is_err());
     assert!(decode::<FromEnvironment>(br#"{"type":"output","channel":1,"data":""}"#).is_err());
+}
+
+/// A read over the lease stream names its artifact and range, and its
+/// answer carries the bytes base64, or why not, by name.
+#[test]
+fn an_artifact_read_names_its_range_and_its_answer_the_bytes_or_why_not() {
+    assert_eq!(
+        String::from_utf8(
+            serde_json::to_vec(&ToEnvironment::ReadArtifact {
+                lease: "l".into(),
+                artifact: 2,
+                offset: 10,
+                length: 4,
+            })
+            .unwrap()
+        )
+        .unwrap(),
+        r#"{"type":"readArtifact","lease":"l","artifact":2,"offset":10,"length":4}"#
+    );
+    assert_eq!(
+        String::from_utf8(
+            serde_json::to_vec(&FromEnvironment::ArtifactRead {
+                lease: "l".into(),
+                artifact: 2,
+                offset: 10,
+                data: Data(b"abcd".to_vec()),
+            })
+            .unwrap()
+        )
+        .unwrap(),
+        r#"{"type":"artifactRead","lease":"l","artifact":2,"offset":10,"data":"YWJjZA=="}"#
+    );
+    for (reason, name) in [
+        (ArtifactReadRefusal::NotStaged, "notStaged"),
+        (ArtifactReadRefusal::Unreadable, "unreadable"),
+        (ArtifactReadRefusal::Busy, "busy"),
+    ] {
+        assert_eq!(
+            serde_json::to_value(FromEnvironment::ArtifactNotRead {
+                lease: "l".into(),
+                artifact: 2,
+                offset: 10,
+                reason,
+            })
+            .unwrap(),
+            serde_json::json!({
+                "type": "artifactNotRead",
+                "lease": "l",
+                "artifact": 2,
+                "offset": 10,
+                "reason": name,
+            })
+        );
+    }
+    // The largest range one answer carries fits in a frame.
+    let largest = FromEnvironment::ArtifactRead {
+        lease: "l".repeat(256),
+        artifact: u32::MAX,
+        offset: u64::MAX,
+        data: Data(vec![0xff; MAX_DATA_BYTES]),
+    };
+    assert!(encode(&largest).is_ok());
 }
 
 #[test]

@@ -1,7 +1,7 @@
 //! Explicit host composition for a local smoke run. Permissions default to deny.
 use nessa_sdk::application::agent_execution::agents::{AgentFuture, AttachmentRequest};
 use nessa_sdk::application::agent_execution::executions::{
-    ExecutionAudit, ExecutionAuditRecord, ExecutionRequest, ExecutionUpdate,
+    ExecutionAudit, ExecutionAuditRecord, ExecutionRequest, ExecutionUpdate, Submitter,
 };
 
 use nessa_sdk::application::agent_execution::permissions::{
@@ -129,6 +129,15 @@ impl ExecutionAudit for TracingExecutionAudit {
                         execution = record.execution_id().as_str(),
                         target = record.target().as_str(),
                         "Native steering acknowledged"
+                    );
+                }
+                ExecutionAuditRecord::NativeHooksLaunch(record) => {
+                    tracing::info!(
+                        session = record.session_id().unwrap_or(""),
+                        launch = record.launch_id(),
+                        harness = record.harness(),
+                        allowed = record.allowed(),
+                        "harness process started with this hooks choice"
                     );
                 }
             }
@@ -324,7 +333,7 @@ async fn run_with_storage(
         };
         let executing = session.clone();
         let action = ActionContext::new("nessa.smoke-host", "nessa.cli", execution_id.as_str())?;
-        let pending = tokio::spawn(async move { executing.invoke(input, action).await });
+        let pending = tokio::spawn(async move { executing.invoke(input, Submitter::owner(action)).await });
         tokio::pin!(pending);
         let mut requested_close = false;
         let mut allowed = 0;

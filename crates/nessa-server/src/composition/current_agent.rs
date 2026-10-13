@@ -107,6 +107,7 @@ pub(super) struct CurrentAgentResolverInput {
     pub(super) provider_directory: PathBuf,
     pub(super) clock: Arc<dyn Clock>,
     pub(super) images: Arc<dyn UserImageSource>,
+    pub(super) native_hooks: Arc<crate::agents::infrastructure::NativeHooksPreferences>,
     pub(super) warm_up: CurrentOpenCodeWarmUp,
 }
 
@@ -133,6 +134,7 @@ impl CurrentAgentResolver {
                 clock: input.clock,
                 images: input.images,
                 credentials: input.credentials,
+                native_hooks: input.native_hooks,
             },
             warm_up: input.warm_up,
             warm_up_resolving: Arc::new(AtomicUsize::new(0)),

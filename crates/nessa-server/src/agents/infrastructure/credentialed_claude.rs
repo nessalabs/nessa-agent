@@ -17,8 +17,9 @@ use nessa_sdk::{
         agents::AgentError,
         executions::ExecutionAudit,
         providers::{
-            AgentProvider, ApprovalMode, ProviderIdentity, ProviderOpenError, ProviderOpenFuture,
-            ProviderOpenRequest, ProviderSessionDeleter, ProviderSessionDeletionFuture,
+            AgentProvider, ApprovalMode, NativeHooksSwitch, ProviderIdentity, ProviderOpenError,
+            ProviderOpenFuture, ProviderOpenRequest, ProviderSessionDeleter,
+            ProviderSessionDeletionFuture,
         },
     },
     domain::{
@@ -46,6 +47,7 @@ pub struct CredentialedClaudeProvider {
     audit: Arc<dyn ExecutionAudit>,
     prompt: SystemPrompt,
     approval_mode: ApprovalMode,
+    native_hooks: NativeHooksSwitch,
     credentials: Arc<dyn AgentCredentialSource>,
     identity: ProviderIdentity,
     capabilities: EffectiveCapabilities,
@@ -78,6 +80,7 @@ impl CredentialedClaudeProvider {
             audit,
             prompt,
             approval_mode: ApprovalMode::Ask,
+            native_hooks: NativeHooksSwitch::off(),
             credentials,
             identity,
             capabilities,
@@ -103,6 +106,14 @@ impl CredentialedClaudeProvider {
         Ok(self)
     }
 
+    /// Let Claude run its own hooks when a process start reads the switch on.
+    /// Off keeps today's suppression request. A deletion's process start
+    /// suppresses hooks whatever the switch says.
+    pub fn with_native_hooks(mut self, native_hooks: NativeHooksSwitch) -> Self {
+        self.native_hooks = native_hooks;
+        self
+    }
+
     /// A Claude binding launched with the credential current now.
     async fn current(&self) -> Result<ClaudeAcpProvider, ProviderOpenError> {
         let mut config = self.config.clone();
@@ -116,6 +127,7 @@ impl CredentialedClaudeProvider {
         ClaudeAcpProvider::new(config, &self.model, self.limits, self.audit.clone())
             .map_err(ProviderOpenError::no_resources)?
             .with_system_prompt(self.prompt.clone())
+            .with_native_hooks(self.native_hooks.clone())
             .with_approval_mode(self.approval_mode)
             .map_err(ProviderOpenError::no_resources)
     }
@@ -144,6 +156,10 @@ impl ProviderSessionDeleter for CredentialedClaudeProvider {
 impl AgentProvider for CredentialedClaudeProvider {
     fn approval_mode(&self) -> Option<ApprovalMode> {
         Some(self.approval_mode)
+    }
+
+    fn native_hooks_allowed(&self) -> bool {
+        self.native_hooks.allowed()
     }
 
     fn identity(&self) -> ProviderIdentity {

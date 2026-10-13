@@ -35,7 +35,7 @@ use std::{
     collections::HashMap,
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
+    os::unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, PoisonError},
     time::Duration,
@@ -299,6 +299,29 @@ impl ArtifactOutbox for FileOutbox {
         request: &PublishRequest,
     ) -> Result<StagedArtifact, PublishRefusal> {
         self.copy(lease, artifact, request)
+    }
+
+    /// Opened without following a link: the copy is this outbox's own
+    /// file, named by the lease's digest and the artifact's number.
+    fn read(&self, lease: &str, artifact: u32, offset: u64, length: usize) -> io::Result<Vec<u8>> {
+        let path = self.lease_directory(lease).join(artifact.to_string());
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)?;
+        let mut data = vec![0; length];
+        let mut filled = 0;
+        while filled < length {
+            let at = offset.saturating_add(filled as u64);
+            match file.read_at(&mut data[filled..], at) {
+                Ok(0) => break,
+                Ok(read) => filled += read,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        }
+        data.truncate(filled);
+        Ok(data)
     }
 
     fn discard(&self, lease: &str, artifact: u32) {

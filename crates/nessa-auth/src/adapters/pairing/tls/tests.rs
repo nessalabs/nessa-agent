@@ -285,3 +285,43 @@ fn public_native_accept_bounds_actual_peer_ingress() {
     ));
     assert_eq!(read.load(Ordering::SeqCst), 4096);
 }
+
+fn relay_identity(seed: u8) -> NativeIdentity {
+    NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([seed; 32]))).unwrap()
+}
+
+#[test]
+fn a_relay_proof_verifies_only_for_its_key_and_its_challenge() {
+    let identity = relay_identity(3);
+    let other = relay_identity(4);
+    let key = identity.public_key();
+    assert_eq!(&identity.public_spki()[12..], &key);
+    let challenge = [7; 32];
+    let proof = identity.sign_relay_challenge(&challenge).unwrap();
+    assert!(verify_relay_proof(&key, &challenge, &proof));
+    // Another challenge, another key, or a flipped bit is not this proof.
+    assert!(!verify_relay_proof(&key, &[8; 32], &proof));
+    assert!(!verify_relay_proof(&other.public_key(), &challenge, &proof));
+    let mut flipped = proof;
+    flipped[0] ^= 1;
+    assert!(!verify_relay_proof(&key, &challenge, &flipped));
+    // Another key's proof of the same challenge does not stand for this key.
+    let theirs = other.sign_relay_challenge(&challenge).unwrap();
+    assert!(!verify_relay_proof(&key, &challenge, &theirs));
+}
+
+#[test]
+fn a_relay_proof_signs_its_context_first_and_never_a_handshake_prefix() {
+    let identity = relay_identity(5);
+    let key = identity.public_key();
+    let challenge = [9; 32];
+    let proof = identity.sign_relay_challenge(&challenge).unwrap();
+    let mut message = RELAY_PROOF_CONTEXT.to_vec();
+    message.extend_from_slice(&key);
+    message.extend_from_slice(&challenge);
+    UnparsedPublicKey::new(&ED25519, key)
+        .verify(&message, &proof)
+        .unwrap();
+    // TLS 1.3 signs 64 spaces, then its context; a relay proof never starts so.
+    assert_ne!(RELAY_PROOF_CONTEXT[0], b' ');
+}

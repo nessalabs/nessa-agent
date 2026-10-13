@@ -36,6 +36,14 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 /// Row `artifact.publish_call_wait` in `docs/limits.md`.
 pub const PUBLISH_CALL_WAIT: Duration = Duration::from_secs(16 * 60);
 
+/// How long an `artifacts_fetch` call waits, from its ask, for its file to
+/// be written to the environment, checked and placed before it answers that
+/// it does not know (`timed_out`). A file is written range by range from the
+/// conversation's hold, each range waiting at most its read's busy wait.
+/// Stopped before every byte was written, the environment is told so and
+/// places nothing. Row `artifact.fetch_call_wait` in `docs/limits.md`.
+pub const FETCH_CALL_WAIT: Duration = Duration::from_secs(16 * 60);
+
 /// Why a placement could not be read or written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(
@@ -103,6 +111,8 @@ pub(crate) struct Environments {
     commands: Option<CommandPolicy>,
     /// How long an `artifacts_publish` call waits for its file to be kept.
     publish_wait: Duration,
+    /// How long an `artifacts_fetch` call waits for its file to be placed.
+    fetch_wait: Duration,
 }
 
 impl From<Arc<dyn Environment>> for Environments {
@@ -116,6 +126,7 @@ impl From<Arc<dyn Environment>> for Environments {
             placements: None,
             commands: None,
             publish_wait: PUBLISH_CALL_WAIT,
+            fetch_wait: FETCH_CALL_WAIT,
         }
     }
 }
@@ -136,6 +147,7 @@ impl Environments {
             placements: Some(placements),
             commands: None,
             publish_wait: PUBLISH_CALL_WAIT,
+            fetch_wait: FETCH_CALL_WAIT,
         }
     }
 
@@ -164,6 +176,19 @@ impl Environments {
     /// How long an `artifacts_publish` call waits for its file to be kept.
     pub(crate) fn publish_wait(&self) -> Duration {
         self.publish_wait
+    }
+
+    /// These environments, whose `artifacts_fetch` calls wait `wait` rather
+    /// than [`FETCH_CALL_WAIT`]. For tests.
+    #[cfg(test)]
+    pub(crate) fn with_fetch_wait(mut self, wait: Duration) -> Self {
+        self.fetch_wait = wait;
+        self
+    }
+
+    /// How long an `artifacts_fetch` call waits for its file to be placed.
+    pub(crate) fn fetch_wait(&self) -> Duration {
+        self.fetch_wait
     }
 
     /// Which commands an agent may run, and where; `None` when none.

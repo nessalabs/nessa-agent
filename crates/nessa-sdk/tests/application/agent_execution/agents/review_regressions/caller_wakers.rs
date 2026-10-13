@@ -170,15 +170,21 @@ async fn panicking_receipt_consumer_preserves_independent_queued_work() {
         let (agent, backend, storage) = probe(false).await;
         let (release, gate) = oneshot::channel();
         *backend.execution_gate.lock().unwrap() = Some(gate);
-        let original = agent.enqueue(input("original"), actor()).await.unwrap();
+        let original = agent
+            .enqueue(input("original"), Submitter::owner(actor()))
+            .await
+            .unwrap();
         timeout(BOUND, backend.executing.notified()).await.unwrap();
         let tail = agent
-            .enqueue(input("independent-tail"), actor())
+            .enqueue(input("independent-tail"), Submitter::owner(actor()))
             .await
             .unwrap();
         let mut retries = Vec::new();
         for _ in 0..HEALTHY_WAITERS {
-            let retry = agent.enqueue(input("original"), actor()).await.unwrap();
+            let retry = agent
+                .enqueue(input("original"), Submitter::owner(actor()))
+                .await
+                .unwrap();
             assert_eq!(original.id(), retry.id());
             retries.push(retry);
         }
@@ -253,9 +259,15 @@ async fn panicking_receipt_consumer_does_not_fail_its_withdrawal() {
         let (agent, backend, storage) = probe(false).await;
         let (release, gate) = oneshot::channel();
         *backend.execution_gate.lock().unwrap() = Some(gate);
-        let active = agent.enqueue(input("active"), actor()).await.unwrap();
+        let active = agent
+            .enqueue(input("active"), Submitter::owner(actor()))
+            .await
+            .unwrap();
         timeout(BOUND, backend.executing.notified()).await.unwrap();
-        let withdrawn = agent.enqueue(input("withdrawn"), actor()).await.unwrap();
+        let withdrawn = agent
+            .enqueue(input("withdrawn"), Submitter::owner(actor()))
+            .await
+            .unwrap();
         let (caller, notification) = caller_wake(panics(fault));
         let mut withdrawn: ReceiptWait = Box::pin(withdrawn.wait());
         register(&mut withdrawn, Waker::from(caller.clone()));
@@ -305,8 +317,13 @@ async fn panicking_event_subscriber_does_not_stop_the_invocation_that_published(
         let mut next: Pin<Box<dyn Future<Output = _> + Send + '_>> = Box::pin(updates.next());
         register(&mut next, Waker::from(caller.clone()));
 
-        let first = agent.enqueue(input("first"), actor()).await.unwrap();
-        let tail = agent.enqueue(input("tail"), actor()).await;
+        let first = agent
+            .enqueue(input("first"), Submitter::owner(actor()))
+            .await
+            .unwrap();
+        let tail = agent
+            .enqueue(input("tail"), Submitter::owner(actor()))
+            .await;
         timeout(BOUND, notification).await.unwrap().unwrap();
         let first = timeout(BOUND, first.wait()).await.unwrap();
         let tail = match tail {
@@ -356,9 +373,12 @@ async fn panicking_attachment_cancellation_waiter_does_not_interrupt_close() {
         assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Absent);
         reattach_after_explicit_close(&agent).await;
         assert_eq!(
-            timeout(BOUND, agent.invoke(input("after"), actor()))
-                .await
-                .unwrap(),
+            timeout(
+                BOUND,
+                agent.invoke(input("after"), Submitter::owner(actor()))
+            )
+            .await
+            .unwrap(),
             Ok(ExecutionOutcome::Completed)
         );
         timeout(BOUND, agent.close(actor())).await.unwrap().unwrap();
@@ -462,7 +482,11 @@ async fn panicking_lock_waiter_does_not_fail_the_admission_that_released_it() {
             let (saving, release) = storage.pause_next_save();
             let admitting = {
                 let agent = agent.clone();
-                tokio::spawn(async move { agent.enqueue(input("queued"), actor()).await })
+                tokio::spawn(async move {
+                    agent
+                        .enqueue(input("queued"), Submitter::owner(actor()))
+                        .await
+                })
             };
             timeout(BOUND, saving).await.unwrap().unwrap();
 
@@ -524,7 +548,10 @@ async fn panicking_attachment_waiter_leaves_the_attachment_attached() {
         assert_eq!(caller.calls.load(Ordering::SeqCst), 1);
         assert_eq!(timeout(BOUND, attaching).await.unwrap(), Ok(()));
         assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Attached);
-        let queued = agent.enqueue(input("after"), actor()).await.unwrap();
+        let queued = agent
+            .enqueue(input("after"), Submitter::owner(actor()))
+            .await
+            .unwrap();
         assert_eq!(
             timeout(BOUND, queued.wait()).await.unwrap(),
             Ok(ExecutionOutcome::Completed)
@@ -551,9 +578,12 @@ async fn panicking_close_waiter_does_not_interrupt_close() {
         assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Absent);
         reattach_after_explicit_close(&agent).await;
         assert_eq!(
-            timeout(BOUND, agent.invoke(input("after"), actor()))
-                .await
-                .unwrap(),
+            timeout(
+                BOUND,
+                agent.invoke(input("after"), Submitter::owner(actor()))
+            )
+            .await
+            .unwrap(),
             Ok(ExecutionOutcome::Completed)
         );
         timeout(BOUND, agent.close(actor())).await.unwrap().unwrap();
@@ -629,9 +659,12 @@ fn double_fault_close_waiter_child() {
         assert!(backend.close_gate.lock().unwrap().is_none(), "close held");
         reattach_after_explicit_close(&agent).await;
         assert_eq!(
-            timeout(BOUND, agent.invoke(input("after"), actor()))
-                .await
-                .unwrap(),
+            timeout(
+                BOUND,
+                agent.invoke(input("after"), Submitter::owner(actor()))
+            )
+            .await
+            .unwrap(),
             Ok(ExecutionOutcome::Completed)
         );
         timeout(BOUND, agent.close(actor())).await.unwrap().unwrap();
@@ -672,9 +705,12 @@ fn triple_fault_attachment_waiter_child() {
         assert!(backend.open_gate.lock().unwrap().is_none(), "open held");
         assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Attached);
         assert_eq!(
-            timeout(BOUND, agent.invoke(input("after"), actor()))
-                .await
-                .unwrap(),
+            timeout(
+                BOUND,
+                agent.invoke(input("after"), Submitter::owner(actor()))
+            )
+            .await
+            .unwrap(),
             Ok(ExecutionOutcome::Completed)
         );
         timeout(BOUND, agent.close(actor())).await.unwrap().unwrap();
@@ -720,25 +756,33 @@ impl JoinedOperation {
         match self {
             Self::Invoke => (
                 Box::pin(async {
-                    let _ = agent.invoke(input("joined"), actor()).await;
+                    let _ = agent
+                        .invoke(input("joined"), Submitter::owner(actor()))
+                        .await;
                 }),
                 "invocation joined".into(),
             ),
             Self::Enqueue => (
                 Box::pin(async {
-                    let _ = agent.enqueue(input("joined"), actor()).await;
+                    let _ = agent
+                        .enqueue(input("joined"), Submitter::owner(actor()))
+                        .await;
                 }),
                 "admission of joined".into(),
             ),
             Self::EnqueueSteering => (
                 Box::pin(async {
-                    let _ = agent.enqueue_steering(input("joined"), actor()).await;
+                    let _ = agent
+                        .enqueue_steering(input("joined"), Submitter::owner(actor()))
+                        .await;
                 }),
                 "admission of joined".into(),
             ),
             Self::Steer => (
                 Box::pin(async {
-                    let _ = agent.steer(input("joined"), actor()).await;
+                    let _ = agent
+                        .steer(input("joined"), Submitter::owner(actor()))
+                        .await;
                 }),
                 "steering of joined".into(),
             ),
