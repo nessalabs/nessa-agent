@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
-use super::batch::Batch;
+use super::batch::{Batch, PickerRequestId};
 use super::content_type::ContentTypes;
 use super::files::{answered_within, ChosenFiles, Kind, OnDisk, Stored, LONGEST_LOOK_WAIT};
 use super::picker::{FilePicker, Picked};
@@ -309,11 +309,13 @@ async fn describe_one(
 
 /// The files the person chooses, or why there are none.
 ///
-/// Takes nothing: what may be attached is the host's question, not the page's.
-/// An empty array is the ordinary cancellation — somebody opened the picker and
-/// changed their mind — and is not a failure.
+/// Takes the panel's validated request identity, which the host carries through
+/// the batch and readiness events. What may be attached remains the host's
+/// question, not the page's. An empty array is the ordinary cancellation —
+/// somebody opened the picker and changed their mind — and is not a failure.
 #[tauri::command]
 pub async fn choose_attachment_files(
+    request_id: PickerRequestId,
     app: AppHandle,
     deps: State<'_, HostDependencies>,
 ) -> Result<Vec<ChosenFile>, FileNotAttached> {
@@ -325,7 +327,7 @@ pub async fn choose_attachment_files(
         deps.tickets.clone(),
         deps.readiness.clone(),
         &Telling(&app),
-        &Batch::next(),
+        &Batch::picked(request_id),
         LONGEST_LOOK_WAIT,
         LONGEST_READY_WAIT,
     )

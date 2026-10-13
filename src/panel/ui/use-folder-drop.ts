@@ -5,29 +5,34 @@ import {
   readDroppedFolder,
 } from "../adapters/dropped-folder"
 import type { AttachmentRefusal } from "../application/attachment-notice"
+import type { AttachmentDestination } from "./use-file-attachments"
 
 /** Preserve the receiving draft and block its submission until traversal settles. */
 export function useFolderDrop(
-  conversationId: string,
-  addFiles: (files: readonly File[], conversationId: string) => void,
+  destination: AttachmentDestination,
+  addFiles: (files: readonly File[], destination: AttachmentDestination) => void,
   /** Named, not assumed: a walk can finish after somebody has changed tabs. */
-  refuse: (refusal: AttachmentRefusal, conversationId: string) => void,
+  refuse: (refusal: AttachmentRefusal, destination: AttachmentDestination) => void,
 ) {
   const pending = React.useRef<{
     controller: AbortController
-    conversationId: string
+    destination: AttachmentDestination
   } | null>(null)
   React.useEffect(() => () => pending.current?.controller.abort(), [])
   function addFolderEntries(entries: FileSystemEntry[]) {
-    if (pending.current) {
-      refuse({ reason: "reading-folder" }, conversationId)
+    if (
+      pending.current?.destination.store === destination.store &&
+      pending.current.destination.resources === destination.resources
+    ) {
+      refuse({ reason: "reading-folder" }, destination)
       return
     }
     const controller = new AbortController()
-    pending.current = { controller, conversationId }
+    const operation = { controller, destination }
+    pending.current = operation
     void readDroppedFolder(entries, 20, controller.signal)
       .then((files) => {
-        if (!controller.signal.aborted) addFiles(files, conversationId)
+        if (!controller.signal.aborted) addFiles(files, destination)
       })
       .catch((error: unknown) => {
         if (!controller.signal.aborted)
@@ -40,15 +45,18 @@ export function useFolderDrop(
                     ? "folder-too-large"
                     : "unreadable-folder",
             },
-            conversationId,
+            destination,
           )
       })
       .finally(() => {
-        pending.current = null
+        if (pending.current === operation) pending.current = null
       })
   }
   return {
     addFolderEntries,
-    isPending: (id: string) => pending.current?.conversationId === id,
+    isPending: (id: string) =>
+      pending.current?.destination.store === destination.store &&
+      pending.current.destination.resources === destination.resources &&
+      pending.current.destination.conversationId === id,
   }
 }

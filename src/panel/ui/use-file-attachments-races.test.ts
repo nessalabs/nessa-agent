@@ -16,6 +16,8 @@ const hostBoundary = vi.hoisted(() => ({
   choose: vi.fn(),
   read: vi.fn(),
   drop: undefined as undefined | ((payload: DroppedOnPanel) => void),
+  batch: undefined as
+    undefined | ((batch: string, gesture: "picked" | "dropped") => void),
 }))
 
 vi.mock("../../host", async (importOriginal) => ({
@@ -24,7 +26,12 @@ vi.mock("../../host", async (importOriginal) => ({
   chooseAttachmentFiles: hostBoundary.choose,
   readAttachmentBytes: hostBoundary.read,
   onAttachmentReadying: () => Promise.resolve(() => {}),
-  onAttachmentBatch: () => Promise.resolve(() => {}),
+  onAttachmentBatch: (
+    handler: (batch: string, gesture: "picked" | "dropped") => void,
+  ) => {
+    hostBoundary.batch = handler
+    return Promise.resolve(() => {})
+  },
   onAttachmentDragging: () => Promise.resolve(() => {}),
   onAttachmentDropped: (handler: (payload: DroppedOnPanel) => void) => {
     hostBoundary.drop = handler
@@ -141,9 +148,11 @@ async function dropImage(url: string) {
   expect(hostBoundary.drop, "actual App host-drop subscription must exist").toBeTypeOf(
     "function",
   )
+  const batch = `image-only-text-gesture-${url}`
+  await act(async () => hostBoundary.batch?.(batch, "dropped"))
   await act(async () =>
     hostBoundary.drop!({
-      batch: "image-only-text-gesture",
+      batch,
       files: [],
       text: { plain: "", uriList: url, html: `<img src="${url}">` },
       refused: null,
@@ -238,6 +247,7 @@ beforeEach(() => {
     vi.fn(() => ({ cancel() {} })),
   )
   hostBoundary.choose.mockReset()
+  hostBoundary.batch = undefined
   hostBoundary.read.mockReset()
   hostBoundary.drop = undefined
   cleanups = []

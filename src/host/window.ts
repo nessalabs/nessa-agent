@@ -492,11 +492,18 @@ export interface ChosenFile {
  *
  * Every file comes back with a {@link ChosenFile.ticket}. Keep it: it is the
  * only way to read that file's bytes, and it is good once.
+ * `requestId` is minted and registered by the panel before this call so the
+ * separate readiness events keep the same destination even when pickers
+ * overlap.
  */
-export async function chooseAttachmentFiles(): Promise<ChosenFile[] | null> {
+export type PickerRequestId = `p-${string}`
+
+export async function chooseAttachmentFiles(
+  requestId: PickerRequestId,
+): Promise<ChosenFile[] | null> {
   if (!inTauri) return null
   const { invoke } = await import("@tauri-apps/api/core")
-  return invoke<ChosenFile[]>("choose_attachment_files")
+  return invoke<ChosenFile[]>("choose_attachment_files", { requestId })
 }
 
 /**
