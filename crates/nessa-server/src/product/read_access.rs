@@ -24,13 +24,13 @@
 //! ```
 use super::{
     conversation::{caller, conversation_id},
-    socket::{admit_action, admit_grant, failure, success},
+    socket::{admit_grant, failure, success},
     state::ProductRouteState,
 };
 use crate::conversation::application::{
     binding_of, error_code, paired_facts, AccessAction, ConversationAccessPolicyEvaluator,
-    ConversationError, OwnerAccess, PairedAccess, PairedParty, PairedRefusal, ReceiverBinding,
-    RequestShape, ShareConversation, ShareGrant, MAX_POLICY_REVISION,
+    ConversationError, OwnerAccess, PairedAccess, PairedParty, PairedRefusal, Reader,
+    ReceiverBinding, RequestShape, ShareConversation, ShareGrant, MAX_POLICY_REVISION,
 };
 use crate::conversation::domain::{
     CommandHosts, ShareRole, ToolChoice, ToolPolicy, ToolPreset, ToolRules,
@@ -61,6 +61,21 @@ async fn paired_binding(
     binding_of(receivers.as_ref(), session.context())
         .await
         .map_err(refusal_code)
+}
+
+pub(super) async fn reader(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<Reader, &'static str> {
+    if let Some(phone) = super::owner_phone::current(state, session).await? {
+        return Ok(Reader::OwnerPhone(Box::new(phone)));
+    }
+    Ok(match paired_binding(state, session).await? {
+        Some(binding) => Reader::PairedDevice {
+            receiver_id: binding.receiver_id,
+        },
+        None => Reader::Owner,
+    })
 }
 
 /// The access policy a paired party is asked of. It is bound with the
@@ -189,6 +204,20 @@ pub(super) async fn admit_conversation(
     session: &AuthenticatedSession,
     id: &ConversationId,
 ) -> Result<(), &'static str> {
+    let reader = reader(state, session).await?;
+    if let Reader::OwnerPhone(phone) = &reader {
+        let Some((_, conversations, _)) = state.passive_read.as_ref() else {
+            return Err("temporarily_unavailable");
+        };
+        let target =
+            crate::conversation::application::load_conversation(conversations.as_ref(), id)
+                .await
+                .map_err(|_| "temporarily_unavailable")?
+                .ok_or("conversation_not_found")?;
+        return phone
+            .admit_conversation(&target, AccessAction::Read)
+            .map_err(refusal_code);
+    }
     let Some(binding) = paired_binding(state, session).await? else {
         return Ok(());
     };
@@ -214,15 +243,83 @@ pub(super) async fn admit_conversation(
         .map_err(paired_code)
 }
 
-/// Whether `session` may ask for the owner's list (`conversation.list` on
-/// the catalogue its binding reads). A paired device lists through its
-/// catalogue, which the store narrows to its grants; the socket's lists are
-/// the owner's own, so the policy refuses them to a device (row G12) rather
-/// than it being handed a list filtered after it was read.
+/// The handler supplies an ID only after canonical typed decoding. Existing
+/// metadata is independently scoped by Cedar before effects; absence remains
+/// the command owner's fact (missing target, missing receipt, or a new creation),
+/// never fabricated target metadata or a Rust permission verdict.
+pub(super) async fn admit_command_target(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    id: &ConversationId,
+) -> Result<(), &'static str> {
+    let Reader::OwnerPhone(phone) = reader(state, session).await? else {
+        return Ok(());
+    };
+    let Some((_, repository, _)) = state.passive_read.as_ref() else {
+        return Err("temporarily_unavailable");
+    };
+    if let Some(target) =
+        crate::conversation::application::load_conversation(repository.as_ref(), id)
+            .await
+            .map_err(|_| "temporarily_unavailable")?
+    {
+        phone
+            .admit_conversation(&target, AccessAction::Act)
+            .map_err(refusal_code)?;
+    }
+    Ok(())
+}
+
+/// A list/index is buffered as one response. Every actual returned candidate
+/// asks target policy; a failure refuses the whole batch without a cursor or
+/// partial metadata disclosure. Ordinary/legacy readers keep their admission.
+pub(super) async fn admit_index_rows(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    rows: &[nessa_protocol::product::generated::ConversationSummary],
+) -> Result<(), ConversationError> {
+    let Some(phone) = super::owner_phone::current(state, session)
+        .await
+        .map_err(|_| ConversationError::Metadata)?
+    else {
+        return Ok(());
+    };
+    let Some((_, repository, _)) = state.passive_read.as_ref() else {
+        return Err(ConversationError::Metadata);
+    };
+    for row in rows {
+        let id = conversation_id(&row.conversation_id)?;
+        let target = crate::conversation::application::load_conversation(repository.as_ref(), &id)
+            .await?
+            .ok_or(ConversationError::Metadata)?;
+        phone
+            .admit_entry(
+                target.owner(),
+                target.organization(),
+                target.deletion().is_some(),
+            )
+            .map_err(|_| ConversationError::Metadata)?;
+    }
+    Ok(())
+}
+
+/// Whether `session` may ask for the owner's list. A paired device lists
+/// through its catalogue, which the store narrows to its grants; the socket's
+/// lists are the owner's own, so a device is refused them (row G12) rather
+/// than handed a list filtered after it was read.
 pub(super) async fn admit_list(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
 ) -> Result<(), &'static str> {
+    if let Some(phone) = super::owner_phone::current(state, session).await? {
+        return phone
+            .admit_catalogue(
+                &phone.receiver().owner_id,
+                &phone.receiver().organization_id,
+                AccessAction::List,
+            )
+            .map_err(refusal_code);
+    }
     let Some(binding) = paired_binding(state, session).await? else {
         return Ok(());
     };
@@ -300,9 +397,20 @@ pub(super) async fn admit_request(
 ) -> Result<Initiation, &'static str> {
     let method = frame.method.as_str();
     let as_owner = || async {
-        admit_action(state, session, method).await?;
+        let action = action_for_method(method).ok_or("unknown_method")?;
+        admit_grant(state, session, action).await?;
         Ok(Initiation::owner())
     };
+    // Canonical first-party purpose is distinct from a share-grant driver.
+    // Cedar admits its published method; decoded target/input admission still
+    // precedes each handler effect. The initiation retains existing owner tool
+    // approval behavior rather than a Drive grant's unchecked tool execution.
+    if super::owner_phone::admit_method(state, session, method)
+        .await?
+        .is_some()
+    {
+        return as_owner().await;
+    }
     let writes = action_for_method(method) == Some("conversation.write");
     if !writes || ADMITTED_BY_ITS_OWN_CHECK.contains(&method) {
         return as_owner().await;

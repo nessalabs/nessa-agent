@@ -168,6 +168,12 @@ impl Gateway {
             OrganizationId::new(organization).unwrap(),
             AudienceId::new(gateway).unwrap(),
             ProductDependencies {
+                owner_phone_purpose: auth.clone(),
+                owner_phone_policy: Arc::new(
+                    crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new()
+                        .unwrap(),
+                ),
+                owner_phone_receivers: None,
                 verifier: auth.clone(),
                 access: auth.clone(),
                 clock: Arc::new(SystemClock),

@@ -242,11 +242,16 @@ async fn production_catalogue_owner_retains_lease_after_cancel_and_late_initiali
         tokio::spawn(async move {
             source
                 .read(
-                    CatalogueReadScope {
-                        receiver_id: "receiver".into(),
-                        organization_id: caller().organization_id,
-                        owner_id: caller().principal_id,
-                        access_epoch: 7,
+                    crate::conversation::application::AdmittedCatalogueRead {
+                        scope: CatalogueReadScope {
+                            receiver_id: "receiver".into(),
+                            organization_id: caller().organization_id,
+                            owner_id: caller().principal_id,
+                            access_epoch: 7,
+                        },
+                        reader: crate::conversation::application::Reader::PairedDevice {
+                            receiver_id: "receiver".into(),
+                        },
                     },
                     caller().principal_id,
                     CatalogueReadOperation::Head,

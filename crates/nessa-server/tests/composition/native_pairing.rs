@@ -135,6 +135,11 @@ fn product(registry: Arc<LocalCredentialStore>) -> ProductRouteState {
         OrganizationId::new("org").unwrap(),
         AudienceId::new("gateway").unwrap(),
         ProductDependencies {
+            owner_phone_purpose: registry.clone(),
+            owner_phone_policy: Arc::new(
+                crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new().unwrap(),
+            ),
+            owner_phone_receivers: None,
             verifier: registry.clone(),
             access: registry,
             clock: Arc::new(SystemClock),
@@ -504,3 +509,8 @@ async fn a_relay_that_cannot_be_reached_leaves_direct_readers_served() {
         "the drain is joined: {joined:?}"
     );
 }
+
+#[path = "owner_phone.rs"]
+mod owner_phone;
+#[path = "phone_endpoint.rs"]
+mod phone_endpoint;

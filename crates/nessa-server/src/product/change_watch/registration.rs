@@ -162,6 +162,17 @@ impl WatchSelector {
         state: &ProductRouteState,
         session: &AuthenticatedSession,
     ) -> Result<Admitted, WatchRefusal> {
+        let method = match self {
+            Self::Records { .. } => "conversation.watchRecords",
+            Self::Catalogue { .. } => "conversation.watchCatalogue",
+        };
+        super::super::owner_phone::admit_method(state, session, method)
+            .await
+            .map_err(|code| match code {
+                "temporarily_unavailable" => WatchRefusal::Unavailable,
+                "unauthorized" => WatchRefusal::Read(ReadRefusal::Unauthorized),
+                _ => WatchRefusal::Read(ReadRefusal::Forbidden),
+            })?;
         let (receivers, conversations, share_grants) = state
             .passive_read
             .as_ref()
@@ -174,6 +185,9 @@ impl WatchSelector {
         // admitted as a record head, and a catalogue watch as a catalogue head:
         // the same read the watch follows.
         let admission = AdmitPassiveRead {
+            owner_phone_purposes: state.owner_phone_purpose.as_ref(),
+            owner_phone_receivers: state.owner_phone_receivers.as_deref(),
+            owner_phone_policy: state.owner_phone_policy.clone(),
             authorization: AuthorizeAction {
                 access: state.access.as_ref(),
                 clock: state.clock.as_ref(),
@@ -184,7 +198,7 @@ impl WatchSelector {
             conversations: conversations.as_ref(),
             grants: &PUBLISHED_PASSIVE_READ_GRANTS,
             share_grants: share_grants.as_ref(),
-            access_policy: access_policy.as_ref(),
+            access_policy: access_policy.clone(),
         };
         let admitted = match self {
             Self::Records {
@@ -206,17 +220,25 @@ impl WatchSelector {
             }
             Self::Catalogue { receiver, epoch } => {
                 let admitted = admission
-                    .catalogue(session, receiver, *epoch, PassiveRead::CatalogueHead)
+                    .catalogue_admission(session, receiver, *epoch, PassiveRead::CatalogueHead)
                     .await
                     .map_err(WatchRefusal::Read)?;
                 // A catalogue watch fires on every change to the owner's
                 // catalogue, granted or not; the policy decides who may
                 // follow that (`catalogue.watch`). A peer gateway polls its
                 // head instead (`docs/design/auth/peer-gateways.md`).
-                admission
-                    .catalogue_watch(session, &admitted)
-                    .map_err(WatchRefusal::Read)?;
-                Admitted::Catalogue(admitted)
+                // First-party admission already asked canonical List on this
+                // exact catalogue; fresh method policy admitted this watch.
+                // Ordinary paired readers retain the incoming watch question.
+                if !matches!(
+                    admitted.reader,
+                    crate::conversation::application::Reader::OwnerPhone(_)
+                ) {
+                    admission
+                        .catalogue_watch(session, &admitted.scope)
+                        .map_err(WatchRefusal::Read)?;
+                }
+                Admitted::Catalogue(admitted.scope)
             }
         };
         Ok(admitted)

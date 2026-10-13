@@ -102,6 +102,17 @@ impl Drop for Worker {
 
 type CatalogueReadiness = Result<(Scope, Option<u64>), CatalogueSourceError>;
 
+// The source caller and entry policy travel with its explicit reader selection.
+struct SourceAdmission {
+    caller: ConversationCaller,
+    entries: CatalogueEntryAccess,
+    reader: Option<Reader>,
+}
+struct EntryReader<'a> {
+    access: &'a CatalogueEntryAccess,
+    reader: &'a Reader,
+}
+
 enum SourceScope {
     Expected(Scope),
     Discover { receiver: Id, origin: Id, epoch: Id },
@@ -160,6 +171,56 @@ impl NessaCatalogueSource {
         Ok((source, head.expect("discovery initializes a captured head")))
     }
 
+    pub(crate) fn new_as_reader(
+        catalogue: Arc<dyn ConversationCatalogue>,
+        caller: ConversationCaller,
+        entries: CatalogueEntryAccess,
+        scope: Scope,
+        reader: Reader,
+    ) -> Result<Self, CatalogueWorkerError> {
+        Self::start_with_readiness_as_reader(
+            catalogue,
+            SourceAdmission {
+                caller,
+                entries,
+                reader: Some(reader),
+            },
+            SourceScope::Expected(scope),
+            spawn_worker,
+            make_runtime,
+            |ready| ready.recv(),
+        )
+        .map(|(source, _)| source)
+    }
+
+    pub(crate) fn discover_as_reader(
+        catalogue: Arc<dyn ConversationCatalogue>,
+        caller: ConversationCaller,
+        entries: CatalogueEntryAccess,
+        receiver: Id,
+        origin: Id,
+        epoch: Id,
+        reader: Reader,
+    ) -> Result<(Self, u64), CatalogueWorkerError> {
+        let (source, head) = Self::start_with_readiness_as_reader(
+            catalogue,
+            SourceAdmission {
+                caller,
+                entries,
+                reader: Some(reader),
+            },
+            SourceScope::Discover {
+                receiver,
+                origin,
+                epoch,
+            },
+            spawn_worker,
+            make_runtime,
+            |ready| ready.recv(),
+        )?;
+        Ok((source, head.expect("discovery initializes a captured head")))
+    }
+
     fn start_with_spawn(
         catalogue: Arc<dyn ConversationCatalogue>,
         caller: ConversationCaller,
@@ -210,6 +271,39 @@ impl NessaCatalogueSource {
         )
             -> Result<Result<(Scope, Option<u64>), CatalogueSourceError>, RecvError>,
     ) -> Result<(Self, Option<u64>), CatalogueWorkerError> {
+        Self::start_with_readiness_as_reader(
+            catalogue,
+            SourceAdmission {
+                caller,
+                entries,
+                reader: None,
+            },
+            scope,
+            spawn,
+            make_runtime,
+            receive,
+        )
+    }
+
+    fn start_with_readiness_as_reader(
+        catalogue: Arc<dyn ConversationCatalogue>,
+        admission: SourceAdmission,
+        scope: SourceScope,
+        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> IoResult<JoinHandle<()>>,
+        make_runtime: impl FnOnce() -> IoResult<Runtime> + Send + 'static,
+        receive: impl FnOnce(Receiver<CatalogueReadiness>) -> Result<CatalogueReadiness, RecvError>,
+    ) -> Result<(Self, Option<u64>), CatalogueWorkerError> {
+        let SourceAdmission {
+            caller,
+            entries,
+            reader: admitted_reader,
+        } = admission;
+        let reader = admitted_reader.unwrap_or_else(|| match &scope {
+            SourceScope::Expected(scope) => device(scope),
+            SourceScope::Discover { receiver, .. } => Reader::PairedDevice {
+                receiver_id: receiver.as_str().to_owned(),
+            },
+        });
         if let SourceScope::Expected(scope) = &scope {
             check_catalogue_scope_identity(&caller.organization_id, &caller.principal_id, scope)
                 .map_err(CatalogueWorkerError::Source)?;
@@ -231,9 +325,6 @@ impl NessaCatalogueSource {
                     origin,
                     epoch,
                 } => runtime.block_on(async {
-                    let reader = Reader::PairedDevice {
-                        receiver_id: receiver.as_str().to_owned(),
-                    };
                     let head = catalogue
                         .head(&caller.organization_id, &caller.principal_id, &reader)
                         .await
@@ -269,9 +360,10 @@ impl NessaCatalogueSource {
             while let Ok(command) = receiver.recv() {
                 match command {
                     Command::Head(scope, reply) => {
-                        let _ = reply.send(runtime.block_on(read_head(
+                        let _ = reply.send(runtime.block_on(read_head_as_reader(
                             &*catalogue,
                             &caller,
+                            &reader,
                             &expected,
                             &scope,
                         )));
@@ -281,6 +373,7 @@ impl NessaCatalogueSource {
                             &*catalogue,
                             &caller,
                             &entries,
+                            &reader,
                             &expected,
                             &request,
                         )));
@@ -289,7 +382,10 @@ impl NessaCatalogueSource {
                         let _ = reply.send(runtime.block_on(read_resolved(
                             &*catalogue,
                             &caller,
-                            &entries,
+                            EntryReader {
+                                access: &entries,
+                                reader: &reader,
+                            },
                             &expected,
                             &pass,
                             &id,
@@ -423,9 +519,10 @@ fn device(scope: &Scope) -> Reader {
     }
 }
 
-async fn read_head(
+async fn read_head_as_reader(
     catalogue: &dyn ConversationCatalogue,
     caller: &ConversationCaller,
+    reader: &Reader,
     expected: &Scope,
     scope: &Scope,
 ) -> Result<u64, CatalogueSourceError> {
@@ -433,11 +530,7 @@ async fn read_head(
         return Err(CatalogueSourceError::IdentityChanged);
     }
     let head = catalogue
-        .head(
-            &caller.organization_id,
-            &caller.principal_id,
-            &device(scope),
-        )
+        .head(&caller.organization_id, &caller.principal_id, reader)
         .await
         .map_err(map_error)?;
     if head.incarnation != scope.incarnation().as_str() {
@@ -455,6 +548,7 @@ async fn read_manifest(
     catalogue: &dyn ConversationCatalogue,
     caller: &ConversationCaller,
     access: &CatalogueEntryAccess,
+    reader: &Reader,
     expected: &Scope,
     request: &ManifestRequest,
 ) -> Result<ManifestPage, CatalogueSourceError> {
@@ -464,7 +558,12 @@ async fn read_manifest(
     validate_manifest_request(request, MAX_CATALOGUE_ENTRIES)
         .map_err(|_| CatalogueSourceError::InvalidRequest)?;
     let receiver = expected.receiver().as_str();
-    let mut admission = access.reading(&caller.organization_id, &caller.principal_id, receiver);
+    let mut admission = access.reading(
+        &caller.organization_id,
+        &caller.principal_id,
+        receiver,
+        reader,
+    );
     let mut entries = Vec::with_capacity(request.max_entries);
     let mut pass = request.pass.clone();
     let has_more = loop {
@@ -472,7 +571,7 @@ async fn read_manifest(
             .page(CataloguePageRequest {
                 organization: caller.organization_id.clone(),
                 owner: caller.principal_id.clone(),
-                reader: device(expected),
+                reader: reader.clone(),
                 manifest: ManifestRequest {
                     pass: pass.clone(),
                     max_entries: request.max_entries - entries.len(),
@@ -484,6 +583,9 @@ async fn read_manifest(
         for descriptor in page.entries {
             match admission.admits(&descriptor) {
                 CatalogueEntryAnswer::Shown => entries.push(to_entry(descriptor)),
+                CatalogueEntryAnswer::Dropped if matches!(reader, Reader::OwnerPhone(_)) => {
+                    return Err(CatalogueSourceError::Unavailable)
+                }
                 CatalogueEntryAnswer::Dropped => {}
                 CatalogueEntryAnswer::Undecided => return Err(CatalogueSourceError::Unavailable),
             }
@@ -508,12 +610,13 @@ async fn read_manifest(
 async fn read_resolved(
     catalogue: &dyn ConversationCatalogue,
     caller: &ConversationCaller,
-    access: &CatalogueEntryAccess,
+    admission: EntryReader<'_>,
     expected: &Scope,
     pass: &CataloguePass,
     id: &Id,
     bound: usize,
 ) -> Result<ResolvedEntry, CatalogueSourceError> {
+    let EntryReader { access, reader } = admission;
     if pass.scope != *expected {
         return Err(CatalogueSourceError::IdentityChanged);
     }
@@ -526,7 +629,7 @@ async fn read_resolved(
         .resolve(
             &caller.organization_id,
             &caller.principal_id,
-            &device(expected),
+            reader,
             expected.incarnation().as_str(),
             &id,
         )
@@ -535,7 +638,12 @@ async fn read_resolved(
         .ok_or(CatalogueSourceError::Unavailable)?;
     let receiver = expected.receiver().as_str();
     match access
-        .reading(&caller.organization_id, &caller.principal_id, receiver)
+        .reading(
+            &caller.organization_id,
+            &caller.principal_id,
+            receiver,
+            reader,
+        )
         .admits(&value.descriptor)
     {
         CatalogueEntryAnswer::Shown => {}
