@@ -60,7 +60,9 @@ mod snapshot;
 mod stream_fact;
 mod terminal_discovery;
 #[cfg(any(test, feature = "test-support"))]
-pub use fixtures::{UNMARKED_SESSION_BATCH, UNMARKED_SESSION_CHECKPOINT};
+pub use fixtures::{
+    ROLE_COPYING_SESSION_BATCH, UNMARKED_SESSION_BATCH, UNMARKED_SESSION_CHECKPOINT,
+};
 pub use memory::InMemoryStorage;
 pub use message_commit_clock::RuntimeMessageCommitClock;
 pub use ownership::SqliteOwnershipStore;

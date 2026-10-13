@@ -1000,6 +1000,29 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_carrying_its_grants_role_is_corrupt() {
+        let saved = crate::infrastructure::session_storage::ROLE_COPYING_SESSION_BATCH;
+        assert!(matches!(
+            decode_batch(saved, &ProviderContext::Absent),
+            Err(StorageError::Corrupt(_))
+        ));
+        // The role is the batch's only defect: without it, the same bytes
+        // are a current record.
+        let current =
+            String::from_utf8(saved.to_vec())
+                .unwrap()
+                .replacen(r#""role":"Drive","#, "", 1);
+        let changes = decode_batch(current.as_bytes(), &ProviderContext::Absent).unwrap();
+        assert_eq!(changes[0], opened_change());
+        assert!(matches!(
+            &changes[1],
+            SessionChange::InputAccepted(record)
+                if record.initiation
+                    == Initiation::grant(GrantInitiator::new("receiver", 1).unwrap())
+        ));
+    }
+
+    #[test]
     fn an_unmarked_or_other_version_is_not_read() {
         // Bytes main's encoder writes for one Opened and one InputAccepted.
         assert_eq!(
