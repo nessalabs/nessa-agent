@@ -328,7 +328,7 @@ it("attaches and sends the picked image once its read and upload have settled", 
   expect(active().draft).toContainEqual(
     expect.objectContaining({
       type: "file",
-      name: "picked.png",
+      resource: expect.objectContaining({ name: "picked.png" }),
       upload: expect.objectContaining({ status: "stored" }),
     }),
   )

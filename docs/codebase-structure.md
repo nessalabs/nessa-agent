@@ -22,8 +22,12 @@ and checks before considering the change complete. A new folder alone does not
 establish an architectural boundary.
 
 Upload progress is owned by the conversation application and carries its local
-conversation and file together; see [upload targets](design/upload-targets.md).
+conversation and admitted placement together; see [attachment lifetimes](design/attachment-lifetimes.md).
 The panel carries that target through hashing and the store through staging.
+The conversation application mints placements and publishes one resource-usage
+snapshot for retention and preview eviction. The immutable resource value carries
+byte identity and authoritative metadata together; storage and accounting use
+that value's object identity.
 
 ## Today
 
@@ -33,6 +37,12 @@ The conversation vertical has earned the split: the panel is a projection, and
 the gateway owns commands through the SDK Agent. New contexts establish the
 feature-first, role-below layout immediately, including their module map and test
 locations. Existing SDK layout changes are tracked in [the SDK organization task](todo/sdk-context-first-organization.md).
+
+The pure public [conversation resource contract](../src/conversation/resources.ts)
+exports construction/recognition of the immutable resource value and its ownership
+snapshot type. The implementation remains in the conversation model/query; resource
+adapters use this entry without loading conversation UI. Placements retain that
+exact value; byte storage, accounting and preview eviction use its object identity.
 
 ## Target shape
 

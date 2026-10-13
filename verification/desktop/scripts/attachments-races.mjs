@@ -7,7 +7,7 @@ import { launch } from "./lib/browser.mjs"
 import { attachmentVerification as selectors } from "./lib/selectors.mjs"
 
 const root = resolve(fileURLToPath(import.meta.url), "../../../..")
-const url = "http://127.0.0.1:1448/attachment-verification"
+const url = "http://127.0.0.1:1486/attachment-verification"
 const server = spawn(
   resolve(root, "node_modules/.bin/vite"),
   ["--config", "verification/desktop/fixtures/attachments-races/vite.config.ts"],
@@ -57,6 +57,12 @@ try {
         "second-url",
         "upload-parent-success",
         "upload-parent-failure",
+        "upload-placement-success",
+        "upload-placement-failure",
+        "shared-resource",
+        "owner-swap",
+        "detached-queue",
+        "native-svg",
       ]) {
         const context = await browser.newContext({
           viewport: { width: 800, height: 900 },
@@ -74,18 +80,145 @@ try {
             () => typeof window.__attachmentProbe?.drop === "function",
           )
           const snapshot = () => page.evaluate(() => window.__attachmentProbe.snapshot())
-          if (scenario.startsWith("upload-parent-")) {
-            await page.evaluate(() => window.__attachmentProbe.startParentUpload())
+          if (scenario === "native-svg") {
+            await page.evaluate(() => window.__attachmentProbe.attachNativeSvg())
+            const image = page
+              .getByRole("button", { name: "Open native.svg", exact: true })
+              .locator("img")
+            await image.waitFor()
+            await page.waitForFunction(() => {
+              const image = document.querySelector("[data-upload] img")
+              return (
+                image instanceof HTMLImageElement &&
+                image.complete &&
+                image.naturalWidth > 0
+              )
+            })
+            assert.equal(await image.evaluate((image) => image.naturalWidth), 4)
+            await page.screenshot({ path: `/tmp/816-r3-native-svg-${engine}.png` })
+          } else if (scenario === "detached-queue") {
+            await page.evaluate(() => window.__attachmentProbe.startDetachedUploads())
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().detachedStageCount === 3,
+            )
+            await page.evaluate(() => window.__attachmentProbe.detachCoordinator())
+            await page.locator(selectors.editor).waitFor({ state: "detached" })
+            await page.evaluate(() => window.__attachmentProbe.finishDetachedUpload())
+            await page.waitForFunction(
+              () =>
+                window.__attachmentProbe
+                  .snapshot()
+                  .draft.find((part) => part.type === "file")?.upload.status === "stored",
+            )
+            assert.equal((await snapshot()).detachedStageCount, 3)
+            await page.evaluate(() => window.__attachmentProbe.remountCoordinator())
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().detachedStageCount === 4,
+            )
+            assert.equal(await page.locator(selectors.uploadTile).count(), 4)
+            await page.screenshot({ path: `/tmp/816-r2-remount-${engine}.png` })
+          } else if (scenario === "owner-swap") {
+            await page.evaluate(() => window.__attachmentProbe.startOwnerUpload())
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().sharedUploads.length === 1,
+            )
+            await page
+              .getByRole("button", { name: "Open original.png", exact: true })
+              .click()
+            await page
+              .getByRole("dialog", { name: "original.png", exact: true })
+              .waitFor()
+            await page.screenshot({ path: `/tmp/816-r2-preview-original-${engine}.png` })
+            await page.evaluate(() => window.__attachmentProbe.swapOwner())
+            await page
+              .getByRole("dialog", { name: "original.png", exact: true })
+              .waitFor({ state: "detached" })
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().sharedUploads.length === 2,
+            )
+            await page.screenshot({
+              path: `/tmp/816-r2-preview-replacement-${engine}.png`,
+            })
+            await page.evaluate(() => window.__attachmentProbe.finishOriginalOwner())
+            assert.equal(
+              (await snapshot()).draft.find((part) => part.type === "file").upload.status,
+              "uploading",
+            )
+            assert.equal(
+              await page.locator(selectors.uploadTile).getAttribute("data-upload"),
+              "uploading",
+            )
+            await page.evaluate(() => window.__attachmentProbe.finishSharedUpload())
+            await page.waitForFunction(
+              () =>
+                window.__attachmentProbe
+                  .snapshot()
+                  .draft.find((part) => part.type === "file")?.upload.status === "stored",
+            )
+            assert.equal(
+              await page.locator(selectors.uploadTile).getAttribute("data-upload"),
+              "stored",
+            )
+          } else if (scenario === "shared-resource") {
+            await page.evaluate(() => window.__attachmentProbe.startSharedUploads())
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().sharedUploads.length === 2,
+            )
+            const shared = await snapshot()
+            assert.equal(
+              new Set(
+                shared.tabs.flatMap((tab) => tab.files.map((file) => file.placementId)),
+              ).size,
+              2,
+            )
+            assert.equal(
+              new Set(
+                shared.tabs.flatMap((tab) =>
+                  tab.files.map((file) => file.sharedResource),
+                ),
+              ).size,
+              1,
+            )
+            await page.evaluate(() => window.__attachmentProbe.removeSharedParent())
+            await page.waitForFunction(
+              () =>
+                window.__attachmentProbe
+                  .snapshot()
+                  .sharedUploads.filter((upload) => upload.aborted).length === 1,
+            )
+            assert.equal((await snapshot()).sharedBytesRetained, true)
+            await page.evaluate(() => window.__attachmentProbe.finishSharedUpload())
+            await page.waitForFunction(
+              () =>
+                window.__attachmentProbe.snapshot().draft[0]?.upload.status === "stored",
+            )
+            assert.equal(
+              await page.locator(selectors.uploadTile).getAttribute("data-upload"),
+              "stored",
+            )
+            await page.evaluate(() => window.__attachmentProbe.closeSharedParent())
+            assert.equal((await snapshot()).sharedBytesRetained, false)
+          } else if (
+            scenario.startsWith("upload-parent-") ||
+            scenario.startsWith("upload-placement-")
+          ) {
+            await page.evaluate(
+              (sameParent) => window.__attachmentProbe.startParentUpload(sameParent),
+              scenario.startsWith("upload-placement-"),
+            )
             const tile = page.locator(selectors.uploadTile)
             await tile.waitFor()
             assert.equal(await tile.count(), 1)
             assert.equal(await tile.getAttribute("data-upload"), "uploading")
             await page.evaluate(
               (failed) => window.__attachmentProbe.finishParentUpload(failed),
-              scenario === "upload-parent-failure",
+              scenario.endsWith("-failure"),
             )
             assert.equal(await tile.getAttribute("data-upload"), "uploading")
-            assert.equal((await snapshot()).draft[0].upload.status, "uploading")
+            assert.equal(
+              (await snapshot()).draft.find((part) => part.type === "file").upload.status,
+              "uploading",
+            )
           } else if (scenario === "control") {
             await page.locator(selectors.editor).press("Enter")
             await page.waitForFunction(
