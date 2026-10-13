@@ -98,7 +98,7 @@ invented disclosure.
 | Passive snapshot capture runs after the native call | Keep translation inside the same serial admission; another call receives Busy while capture is held |
 | Capture waiter cancels, then close starts | Preserve admitted capture result and private lock until translation finishes; close waits for it, then scope can reopen |
 | Passive capture throws | Return its failure without inventing native effects; release admission for a subsequent call |
-| Public receipt correlation and restored catalogue cursor | Delegate exact public intent fields and Id validation to their existing owners; changed retry attempt makes sameIntent false; cursor restoration grants no read authority |
+| Public receipt correlation and restored catalogue cursor | Delegate exact public intent fields, Auth-owned wire class name and Id validation to their existing owners; receipt/status class comparison uses the published name without a Swift spelling policy; changed retry attempt makes sameIntent false; cursor restoration grants no read authority |
 | Local private record empty, online or offline | Return None without connection/cache/entropy/write; locally saved correlation is not current authority |
 | Local pending record versus issued record | Preserve exact public intent, Auth-derived DeviceKey and pinned gateway SPKI; only issued has its original credential/receiver together |
 | Substituted private store reports pending and issued, or load fails | Original typed private failure or Conflict; no winner/fallback/false absence |

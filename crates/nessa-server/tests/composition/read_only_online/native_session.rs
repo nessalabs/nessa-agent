@@ -1,5 +1,6 @@
 //! The native session uses the real paired gateway, physical cache and private scope.
 use super::fixtures::{Gateway, Setup};
+use nessa_auth::domain::pairing::ConsentClass;
 use nessa_client_core::{
     pairing::NativeClientError,
     retained::{ReadFailure, ReadStop, RetainedTranscript},
@@ -47,6 +48,10 @@ fn generated_swift_runs_paired_native_lifecycle() {
 
 fn run_swift(binary: &OsStr, mode: &str, profile: &Value, setup: &Setup) {
     let output = Command::new(binary)
+        .env(
+            "NESSA_NATIVE_EXPECTED_CONSENT_CLASS",
+            ConsentClass::DeviceRead.as_str(),
+        )
         .env("NESSA_NATIVE_EXPECTED_CREDENTIAL_ID", &setup.credential)
         .env(
             "NESSA_NATIVE_EXPECTED_DEVICE_KEY",

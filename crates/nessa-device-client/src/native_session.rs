@@ -282,6 +282,11 @@ impl NativePublicIntent {
     pub fn expiry_ms(&self) -> u64 {
         self.value.expiry_ms()
     }
+    /// Auth-owned wire class name for receipt/status correlation, delegated to
+    /// [`ConsentClass::as_str`] without foreign spelling or normalization policy.
+    pub fn consent_class_name(&self) -> String {
+        self.value.class().as_str().to_owned()
+    }
     /// Original owner-selected public consent class.
     pub fn consent_class(&self) -> NativeConsentClass {
         self.value.class().into()

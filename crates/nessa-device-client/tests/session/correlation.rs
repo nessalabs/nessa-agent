@@ -71,6 +71,15 @@ fn receipt_public_correlation_preserves_all_fields_for_every_phase_and_class() {
                 ConsentClass::PeerEnvironment => NativeConsentClass::PeerEnvironment,
             };
             assert_eq!(mapped.consent_class(), expected);
+            // Compare the original owner publication byte-for-byte. Enum debug
+            // names and normalization are not wire class names.
+            let original_name = public.class().as_str();
+            assert_eq!(
+                mapped.consent_class_name().as_bytes(),
+                original_name.as_bytes()
+            );
+            assert_eq!(receipt.public_intent().consent_class_name(), original_name);
+            assert_ne!(mapped.consent_class_name(), format!("{class:?}"));
         }
     }
 }
@@ -92,6 +101,7 @@ fn changed_attempt_is_not_same_intent_but_preserves_the_enrollment_correlation()
     assert_eq!(old.generation(), new.generation());
     assert_eq!(old.expiry_ms(), new.expiry_ms());
     assert_eq!(old.consent_class(), new.consent_class());
+    assert_eq!(old.consent_class_name(), new.consent_class_name());
 }
 #[test]
 fn saved_cursor_restoration_uses_id_owner_without_narrowing_or_normalizing() {

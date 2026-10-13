@@ -21,6 +21,7 @@ import Foundation
                     && local.gatewayPin().count == 44 && issued.receiver() == arguments[5]
                     && issued.credential() == ProcessInfo.processInfo.environment["NESSA_NATIVE_EXPECTED_CREDENTIAL_ID"]!
                     && local.publicIntent().consentClass() == .deviceRead
+                    && local.publicIntent().consentClassName() == expectedConsentClassName()
             })
             precondition(localMatches)
             if arguments[0] == "terminal" {
@@ -80,6 +81,7 @@ import Foundation
             let intent = status.receipt()!.publicIntent()
             precondition(intent.invitation().count == 16 && intent.attempt().count == 16)
             precondition(intent.consent().count == 16 && intent.consentClass() == .deviceRead)
+            precondition(intent.consentClassName() == expectedConsentClassName())
             precondition(status.failure() == nil && status.purgeFailure() == nil)
             precondition(status.purgeAttempted())
             let local = try native.localEnrollment()
@@ -113,6 +115,7 @@ import Foundation
             let intent = receipt.publicIntent()
             precondition(intent.invitation().count == 16 && intent.attempt().count == 16)
             precondition(intent.consent().count == 16 && intent.consentClass() == .deviceRead)
+            precondition(intent.consentClassName() == expectedConsentClassName())
             precondition(intent.generation() > 0 && intent.expiryMs() > 0)
             precondition(receipt.sameIntent(other: receipt))
             precondition(status.receipt()?.organization() != nil && status.receipt()?.resource() != nil)
@@ -139,6 +142,7 @@ import Foundation
         precondition(local.issued()?.receiver() == receiver)
         precondition(local.issued()?.credential() == ProcessInfo.processInfo.environment["NESSA_NATIVE_EXPECTED_CREDENTIAL_ID"]!)
         precondition(local.gatewayPin().count == 44)
+        precondition(local.publicIntent().consentClassName() == expectedConsentClassName())
         do {
             _ = try native.cataloguePage(after: nil, maximum: UInt32.max)
             fatalError("Core catalogue bound was bypassed")
@@ -195,6 +199,11 @@ import Foundation
         }
         try reopened.close()
         print("PASS: Swift \(mode) actual paired cache, scope, UInt64 progress, owned snapshots and closed-session error")
+    }
+    static func expectedConsentClassName() -> String {
+        // Supplied independently by the Rust paired owner through Auth's wire
+        // publication, rather than deriving text from the generated Swift enum.
+        return ProcessInfo.processInfo.environment["NESSA_NATIVE_EXPECTED_CONSENT_CLASS"]!
     }
     static func expectedDeviceKey() -> Data {
         let text = ProcessInfo.processInfo.environment["NESSA_NATIVE_EXPECTED_DEVICE_KEY"]!
