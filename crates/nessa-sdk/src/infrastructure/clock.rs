@@ -52,14 +52,17 @@ pub type ClockSleep = Pin<Box<dyn Future<Output = ()> + Send>>;
 pub trait Clock: Send + Sync {
     /// The current moment. Never earlier than one this clock returned before.
     fn now(&self) -> ClockInstant;
-    /// Unix milliseconds at [`Self::now`].
+    /// Unix milliseconds at `at`, a moment on this clock.
     ///
-    /// A permission's `dueAtMs` is this plus the wait, so a client counts down
-    /// on the same clock that decides the review. [`RuntimeClock`] reads the
+    /// A permission's `dueAtMs` is this at the moment its deadline is armed,
+    /// plus the wait, so a client counts down on the same clock that decides
+    /// the review. It converts a moment already read rather than reading the
+    /// time again: two reads can straddle a pause, and then the card and the
+    /// deadline disagree by that pause. [`RuntimeClock`] converts onto the
     /// process's one wall timeline, [`process_unix_ms`], which a gateway also
     /// stamps its views from. A later read of the wall clock is not a second
     /// opinion.
-    fn unix_ms(&self) -> u64;
+    fn unix_ms_at(&self, at: ClockInstant) -> u64;
     /// Resolves once [`Self::now`] has reached `deadline`, at once if it
     /// already has. It is not polled again after it resolves.
     fn sleep_until(&self, deadline: ClockInstant) -> ClockSleep;
@@ -89,11 +92,18 @@ impl RuntimeClock {
 /// other, and a countdown ended early or ran long by the correction
 /// (`a_view_carries_the_gateways_time_from_its_clock` in `nessa-server`).
 pub fn process_unix_ms() -> u64 {
+    process_unix_ms_at(std::time::Instant::now())
+}
+/// [`process_unix_ms`] at `instant` rather than now.
+fn process_unix_ms_at(instant: std::time::Instant) -> u64 {
     static ANCHOR: OnceLock<(std::time::Instant, u64)> = OnceLock::new();
     let (origin, unix_origin_ms) =
         *ANCHOR.get_or_init(|| (std::time::Instant::now(), unix_epoch_ms()));
-    let elapsed = u64::try_from(origin.elapsed().as_millis()).unwrap_or(u64::MAX);
-    unix_origin_ms.saturating_add(elapsed)
+    let millis = |span: Duration| u64::try_from(span.as_millis()).unwrap_or(u64::MAX);
+    match instant.checked_duration_since(origin) {
+        Some(after) => unix_origin_ms.saturating_add(millis(after)),
+        None => unix_origin_ms.saturating_sub(millis(origin.duration_since(instant))),
+    }
 }
 fn unix_epoch_ms() -> u64 {
     std::time::SystemTime::now()
@@ -110,8 +120,12 @@ impl Clock for RuntimeClock {
     fn now(&self) -> ClockInstant {
         ClockInstant(self.origin.elapsed())
     }
-    fn unix_ms(&self) -> u64 {
-        process_unix_ms()
+    fn unix_ms_at(&self, at: ClockInstant) -> u64 {
+        match self.origin.checked_add(at.0) {
+            Some(instant) => process_unix_ms_at(instant.into_std()),
+            // Past what the runtime can represent: no wall time reaches it.
+            None => u64::MAX,
+        }
     }
     fn sleep_until(&self, deadline: ClockInstant) -> ClockSleep {
         match self.origin.checked_add(deadline.0) {
@@ -148,7 +162,10 @@ mod tests {
         let later = RuntimeClock::new();
         // Clocks made at different moments still agree on what time it is,
         // and that time is the process timeline's, which only moves forward.
-        let (a, b) = (earlier.unix_ms(), later.unix_ms());
+        let (a, b) = (
+            earlier.unix_ms_at(earlier.now()),
+            later.unix_ms_at(later.now()),
+        );
         let last = process_unix_ms();
         assert!(first <= a && a <= b && b <= last, "{first} {a} {b} {last}");
         assert!(last - first < 60_000);

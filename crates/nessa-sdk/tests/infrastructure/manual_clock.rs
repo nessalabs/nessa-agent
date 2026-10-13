@@ -108,8 +108,8 @@ impl Clock for ManualClock {
     fn now(&self) -> ClockInstant {
         *self.now.borrow()
     }
-    fn unix_ms(&self) -> u64 {
-        let elapsed = u64::try_from(self.now().since_origin().as_millis()).unwrap_or(u64::MAX);
+    fn unix_ms_at(&self, at: ClockInstant) -> u64 {
+        let elapsed = u64::try_from(at.since_origin().as_millis()).unwrap_or(u64::MAX);
         self.unix_origin_ms.saturating_add(elapsed)
     }
     fn sleep_until(&self, deadline: ClockInstant) -> ClockSleep {

@@ -978,3 +978,62 @@ async fn a_deadline_answer_that_cannot_be_written_publishes_no_notice() {
         );
     }
 }
+
+/// A clock whose every reading is a second after the last.
+struct SteppingClock(Arc<ManualClock>);
+impl Clock for SteppingClock {
+    fn now(&self) -> ClockInstant {
+        let now = self.0.now();
+        self.0.advance(Duration::from_secs(1));
+        now
+    }
+    fn unix_ms_at(&self, at: ClockInstant) -> u64 {
+        self.0.unix_ms_at(at)
+    }
+    fn sleep_until(&self, deadline: ClockInstant) -> ClockSleep {
+        self.0.sleep_until(deadline)
+    }
+}
+
+/// The card's `dueAtMs` and the moment the worker answers are one deadline.
+///
+/// Read separately, a pause between the two readings dated the card earlier
+/// than the deadline was armed, so the card said the time was up while the
+/// worker kept waiting for the rest.
+#[tokio::test]
+async fn a_cards_due_time_is_the_moment_the_deadline_answers() {
+    let (mut worker, mut execution, mut events, _recovery, clock) = blocked_worker("", false).await;
+    worker.config.clock = Arc::new(SteppingClock(clock.clone()));
+    worker
+        .permission(&mut execution, RpcId::Number(77), permission_params(), None)
+        .await
+        .map_err(WorkerFailure::into_error)
+        .unwrap();
+    let due_at_ms = loop {
+        let event = timeout(Duration::from_secs(1), events.recv())
+            .await
+            .expect("the review is published")
+            .unwrap();
+        if let ExecutionUpdate::PermissionRequested { deadline, .. } = event.update() {
+            break deadline
+                .as_ref()
+                .and_then(|deadline| deadline.due_at_ms())
+                .expect("a promised deadline");
+        }
+    };
+    let armed = worker
+        .armed_permissions
+        .values()
+        .next()
+        .expect("the review is armed");
+    assert_eq!(
+        clock.unix_ms_at(armed.at),
+        due_at_ms,
+        "the card and the worker disagree on when the deadline answers"
+    );
+    worker
+        .scope
+        .cleanup(Duration::ZERO, Duration::from_secs(2))
+        .await
+        .unwrap();
+}

@@ -2662,6 +2662,9 @@ impl<P: AcpProfile> Worker<P> {
             &options,
             &self.profile.deadline_deny_preference(),
         );
+        // One reading of the clock arms the deadline and dates the card, so
+        // the two cannot differ by whatever happens between two readings.
+        let armed_at = self.config.clock.now();
         // A wall clock past what a client can read gives no moment a card
         // could show, so the review waits for a person as it would with no
         // deadline, rather than be decided at a time nobody was told.
@@ -2670,6 +2673,7 @@ impl<P: AcpProfile> Worker<P> {
             .clone()
             .promise(unix_deadline_ms(
                 &*self.config.clock,
+                armed_at,
                 settlement.deadline().wait(),
             ))
             .ok();
@@ -2684,7 +2688,7 @@ impl<P: AcpProfile> Worker<P> {
         )?;
         self.permissions.insert(permission_id.clone(), wire_id);
         if armed {
-            let at = self.config.clock.now() + settlement.deadline().wait();
+            let at = armed_at + settlement.deadline().wait();
             self.armed_permissions
                 .insert(permission_id, ArmedPermission { at, settlement });
         }
@@ -3956,9 +3960,9 @@ fn rejection_option(
 ///
 /// `clock` is the binding's clock. The countdown a card shows and the moment
 /// this worker decides are the same timeline.
-fn unix_deadline_ms(clock: &dyn Clock, wait: std::time::Duration) -> u64 {
+fn unix_deadline_ms(clock: &dyn Clock, armed_at: ClockInstant, wait: std::time::Duration) -> u64 {
     let wait_ms = crate::domain::agent_execution::permissions::wait_ms(wait);
-    clock.unix_ms().saturating_add(wait_ms)
+    clock.unix_ms_at(armed_at).saturating_add(wait_ms)
 }
 
 impl<P: AcpProfile> Worker<P> {

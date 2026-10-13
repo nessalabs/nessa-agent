@@ -36,7 +36,7 @@ async fn pending(mode: &str) -> PendingReview {
     let wait_ms = crate::domain::agent_execution::permissions::wait_ms(deadline.wait());
     assert_eq!(
         deadline.due_at_ms(),
-        Some(clock.unix_ms().saturating_add(wait_ms)),
+        Some(clock.unix_ms_at(clock.now()).saturating_add(wait_ms)),
         "dueAtMs is the injected clock plus the wait"
     );
     PendingReview {
@@ -950,7 +950,11 @@ async fn close_during_a_pending_request_forgets_the_deadline() {
                 assert!(deadline.armed());
                 assert_eq!(
                     deadline.due_at_ms(),
-                    Some(clock.unix_ms().saturating_add(wait_ms(deadline.wait())))
+                    Some(
+                        clock
+                            .unix_ms_at(clock.now())
+                            .saturating_add(wait_ms(deadline.wait()))
+                    )
                 );
                 break id;
             }
@@ -1325,7 +1329,11 @@ async fn codex_prefers_decline_and_says_when_only_cancel_is_offered() {
         assert!(deadline.armed(), "{mode}");
         assert_eq!(
             deadline.due_at_ms(),
-            Some(clock.unix_ms().saturating_add(wait_ms(deadline.wait()))),
+            Some(
+                clock
+                    .unix_ms_at(clock.now())
+                    .saturating_add(wait_ms(deadline.wait()))
+            ),
             "{mode}"
         );
         clock
