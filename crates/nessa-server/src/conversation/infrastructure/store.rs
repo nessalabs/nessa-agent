@@ -1,5 +1,8 @@
 mod acquisition;
+mod export;
 mod share_grants;
+
+pub use export::{ExportFacts, ExportSkip, NamedRecord, RevocationFact};
 
 use super::catalogue_changes::CatalogueChanges;
 
@@ -190,6 +193,13 @@ impl LocalConversationStore {
             .grant_write_pause
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(pause);
+    }
+
+    /// Ownership, summaries, tombstones, live grants, and grants whose latest
+    /// journal row is a revoke. A row whose identity this cut cannot name is
+    /// skipped. The database itself failing to read is the error.
+    pub fn export_facts(&self) -> ConversationFuture<'_, ExportFacts> {
+        self.run(export::read)
     }
     #[cfg(test)]
     pub(super) fn hold_mutation(&self) -> MutexGuard<'_, Connection> {

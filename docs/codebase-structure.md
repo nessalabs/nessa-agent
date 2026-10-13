@@ -1317,6 +1317,17 @@ by its static profile.
 Neither adapter puts the source value in settings, plist, arguments, audit records,
 or logs.
 
+## Export cut
+
+`crates/nessa-server/src/backup/` is the gateway's export cut and deletion
+inventory (#271, the capture half of #272). The ordering table is
+[the export cut](design/export-cut.md). `domain/` says what a cut may hold
+and which stores it names. `application/` takes the conversation service's
+admission lock, reads every store, appends fences already committed, and
+publishes only after the mac. `infrastructure/` reads the namespace and
+writes the bundle. The mac key stays beside the deletion inventory and is
+not part of the bundle. Restore and quarantine are not in this module.
+
 ## Attachments
 
 `crates/nessa-server/src/attachments/` owns the files a conversation uploads so

@@ -7,7 +7,9 @@ use crate::conversation::domain::{
 use nessa_auth::application::ports::Clock;
 use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId};
 use nessa_local_database::{
-    rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior},
+    rusqlite::{
+        params, Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior,
+    },
     OpenError, Schema,
 };
 use nessa_protocol::conversation::read_scope::ReadRefusal;
@@ -679,6 +681,97 @@ impl ReceiverAuthority for LocalReceiverAuthority {
             }).await.map_err(|_| ReadRefusal::Unverifiable)?
         })
     }
+}
+
+/// One receiver the export cut may keep. No secret is a field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExportedReceiver {
+    pub receiver_id: String,
+    pub credential_id: String,
+    pub access_epoch: u64,
+    pub active: bool,
+}
+
+/// Read `path` without opening it through [`LocalReceiverAuthority::open`],
+/// which would advance the policy row. A row that cannot be named is omitted
+/// from the returned list and counted in the `Err` only when the file itself
+/// cannot be read. Skipped rows are the second value.
+pub fn export_receivers(
+    path: &std::path::Path,
+) -> Result<(String, Vec<ExportedReceiver>, Vec<String>), ()> {
+    let connection =
+        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|_| ())?;
+    let head: i64 = connection
+        .query_row(
+            "SELECT COALESCE(MAX(sequence), 0) FROM receiver_transitions",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|_| ())?;
+    let mut statement = connection
+        .prepare(
+            "SELECT receiver_id, credential_id, access_epoch, active
+             FROM receivers ORDER BY receiver_id",
+        )
+        .map_err(|_| ())?;
+    let mut rows = statement.query([]).map_err(|_| ())?;
+    let mut receivers = Vec::new();
+    let mut skipped = Vec::new();
+    let mut index = 0u64;
+    while let Some(row) = rows.next().map_err(|_| ())? {
+        index += 1;
+        let receiver_id: String = match row.get(0) {
+            Ok(value) => value,
+            Err(_) => {
+                skipped.push(format!("row-{index}"));
+                continue;
+            }
+        };
+        let credential_id: String = match row.get(1) {
+            Ok(value) => value,
+            Err(_) => {
+                skipped.push(format!("row-{index}"));
+                continue;
+            }
+        };
+        let epoch: i64 = match row.get(2) {
+            Ok(value) => value,
+            Err(_) => {
+                skipped.push(format!("row-{index}"));
+                continue;
+            }
+        };
+        let active: i64 = match row.get(3) {
+            Ok(value) => value,
+            Err(_) => {
+                skipped.push(format!("row-{index}"));
+                continue;
+            }
+        };
+        let Some(access_epoch) = u64::try_from(epoch).ok().filter(|epoch| *epoch > 0) else {
+            skipped.push(format!("row-{index}"));
+            continue;
+        };
+        if !nameable(&receiver_id) || !nameable(&credential_id) || (active != 0 && active != 1) {
+            skipped.push(format!("row-{index}"));
+            continue;
+        }
+        receivers.push(ExportedReceiver {
+            receiver_id,
+            credential_id,
+            access_epoch,
+            active: active == 1,
+        });
+    }
+    let watermark = head.to_string();
+    if watermark.is_empty() {
+        return Err(());
+    }
+    Ok((watermark, receivers, skipped))
+}
+
+fn nameable(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 512 && value.bytes().all(|byte| byte >= 0x20)
 }
 
 #[cfg(test)]
