@@ -310,7 +310,7 @@ it("does not bring a refusal back when a refused send hands the draft over again
   // the mechanism behind it, and there is no longer a file-shaped half of it:
   // nothing works out whether to show a refusal by looking at the draft.
   const store = await mount({
-    send: () => Promise.reject(new SubmissionRefusedError("attachment-not-found")),
+    submit: () => Promise.reject(new SubmissionRefusedError("attachment-not-found")),
   })
   await drop([huge()])
   expect(announced()).toEqual([expect.stringContaining("File is too large")])

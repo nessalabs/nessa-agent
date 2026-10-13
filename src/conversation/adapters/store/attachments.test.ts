@@ -1,3 +1,4 @@
+import { executionTargets } from "@nessa/client"
 /**
  * What `sendDraft` does with a draft that holds files, and how a file gets from
  * attached to stored, against the real store and substituted effects.
@@ -109,8 +110,7 @@ function storeWith(
       : undefined
   const effects = {
     ...echo,
-    send: vi.fn(echo.send),
-    steer: vi.fn(echo.steer),
+    submit: vi.fn(echo.submit),
     // The gateway's answer, whatever was uploaded: a normalized reference.
     stageAttachment: vi.fn<ConversationEffects["stageAttachment"]>(async () => stored),
     ...(follow ? { follow } : {}),
@@ -147,7 +147,7 @@ async function expectRefused(
   expect(context.current().error).toMatch(reason)
   expect(context.draft()).toEqual(before)
   expect(context.current().turns).toEqual([])
-  expect(context.effects.send).not.toHaveBeenCalled()
+  expect(context.effects.submit).not.toHaveBeenCalled()
 }
 
 // Which drafts cannot go is `declineReason`'s, and tested there over every
@@ -209,7 +209,7 @@ it("sends files far over the message total when what the gateway stored fits", a
   await context.store.dispatch(followConversation("c0"))
   const sent = await context.store.dispatch(sendDraft({ content: [], id: "c0" }))
   expect(sent.meta.requestStatus).toBe("fulfilled")
-  expect(context.effects.send).toHaveBeenCalledExactlyOnceWith(
+  expect(context.effects.submit).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ attachments: [stored, stored] }),
   )
 })
@@ -315,10 +315,10 @@ it("sends the reference the gateway returned, never the digest this window compu
     sendDraft({ content: [{ type: "text", text: "what is this?" }], id: "c0" }),
   )
   expect(result.meta.requestStatus).toBe("fulfilled")
-  expect(context.effects.send).toHaveBeenCalledExactlyOnceWith(
+  expect(context.effects.submit).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ text: "what is this?", attachments: [stored] }),
   )
-  expect(JSON.stringify(vi.mocked(context.effects.send).mock.calls)).not.toContain(
+  expect(JSON.stringify(vi.mocked(context.effects.submit).mock.calls)).not.toContain(
     LOCAL_DIGEST,
   )
   expect(context.draft()).toEqual([])
@@ -328,7 +328,7 @@ it("sends a message of images alone, leaving the tab's name to the gateway", asy
   const context = await readyToSend()
   const result = await context.store.dispatch(sendDraft({ content: [], id: "c0" }))
   expect(result.meta.requestStatus).toBe("fulfilled")
-  expect(context.effects.send).toHaveBeenCalledExactlyOnceWith(
+  expect(context.effects.submit).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ text: "", attachments: [stored] }),
   )
   // The gateway names the conversation from its first message; the view brings it.
@@ -338,19 +338,19 @@ it("sends a message of images alone, leaving the tab's name to the gateway", asy
 it("steers with images the same way", async () => {
   const context = await readyToSend()
   await context.store.dispatch(sendDraft({ content: [], id: "c0", steering: true }))
-  expect(context.effects.steer).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ attachments: [stored] }),
+  expect(context.effects.submit).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ attachments: [stored], mode: "steering" }),
   )
-  expect(context.effects.send).not.toHaveBeenCalled()
+  expect(context.effects.submit).toHaveBeenCalledOnce()
 })
 
 it("retries an uncertain send with the identical images and identities", async () => {
   const echo = scenarioEffects("echo")
   const send = vi
-    .fn<ConversationEffects["send"]>()
+    .fn<ConversationEffects["submit"]>()
     .mockRejectedValueOnce(new Error("connection lost"))
-    .mockImplementation(echo.send)
-  const context = await readyToSend({ scenario: echo, send })
+    .mockImplementation(echo.submit)
+  const context = await readyToSend({ scenario: echo, submit: send })
   await context.store
     .dispatch(sendDraft({ content: [{ type: "text", text: "look" }], id: "c0" }))
     .unwrap()
@@ -360,7 +360,15 @@ it("retries an uncertain send with the identical images and identities", async (
   await context.store.dispatch(
     controlConversation({
       id: "c0",
-      control: { kind: "retry", executionId: turn.executionId! },
+      control: {
+        kind: "retry",
+        target: executionTargets({
+          conversationId:
+            context.store.getState().conversation.conversations[0]!.serverConversationId!,
+          messages: [{ executionId: turn.executionId! }],
+          pending: [],
+        })[0]!,
+      },
     }),
   )
   expect(send).toHaveBeenCalledTimes(2)
@@ -370,7 +378,7 @@ it("retries an uncertain send with the identical images and identities", async (
 
 /** The gateway refusing a send before admitting it, as the effects adapter reports it. */
 const refusing =
-  (reason: CommandFailure): ConversationEffects["send"] =>
+  (reason: CommandFailure): ConversationEffects["submit"] =>
   () =>
     Promise.reject(new SubmissionRefusedError(reason))
 
@@ -386,10 +394,10 @@ it.each([
   async (reason, text) => {
     const echo = scenarioEffects("echo")
     const send = vi
-      .fn<ConversationEffects["send"]>()
+      .fn<ConversationEffects["submit"]>()
       .mockImplementationOnce(refusing(reason))
-      .mockImplementation(echo.send)
-    const context = await readyToSend({ scenario: echo, send })
+      .mockImplementation(echo.submit)
+    const context = await readyToSend({ scenario: echo, submit: send })
     const before = context.draft()
     await context.store
       .dispatch(sendDraft({ content: [{ type: "text", text: "look" }], id: "c0" }))
@@ -413,7 +421,7 @@ it.each(["attachment-not-found", "attachment-unavailable"] as const)(
     const echo = scenarioEffects("echo")
     const context = await readyToSend({
       scenario: echo,
-      send: vi.fn(refusing(reason)),
+      submit: vi.fn(refusing(reason)),
     })
     const file = context.draft()[0]!
     await context.store
@@ -434,8 +442,7 @@ it("knows a message the client would not put on the wire was never sent", async 
   // The model puts no per-image byte bound on a stored reference: how heavy one
   // image may be is the protocol's rule, enforced by the client, which refuses
   // the arguments before anything is sent. A refusal there is a refusal, not a
-  // lost acknowledgement, so the turn is failed and the draft comes back rather
-  // than the panel showing a message of unknown delivery with nothing to edit.
+  // lost acknowledgement. Preparation now refuses before the draft becomes a turn.
   const context = await readyToSend({
     stageAttachment: vi.fn(async () => ({ ...stored, size: 6 * 1024 * 1024 })),
   })
@@ -444,10 +451,10 @@ it("knows a message the client would not put on the wire was never sent", async 
     .dispatch(sendDraft({ content: [{ type: "text", text: "look" }], id: "c0" }))
     .unwrap()
     .catch(() => undefined)
-  // "failed", not "unknown": nothing was sent, so delivery is not in question.
-  expect(context.current().turns[0]).toMatchObject({ receipt: "failed" })
+  expect(context.current().turns).toEqual([])
+  expect(context.effects.submit).not.toHaveBeenCalled()
   expect(context.current().error).toMatch(/an image must contain/)
-  expect(context.draft()).toEqual([{ type: "text", text: "look" }, ...before])
+  expect(context.draft()).toEqual(before)
 })
 
 it("keeps a draft's stored images when Stop names the running turn", async () => {
@@ -479,8 +486,10 @@ it("keeps a draft's stored images when Stop names the running turn", async () =>
   expect(close).not.toHaveBeenCalled()
   if (!turn || turn.from !== "user" || !turn.executionId) throw new Error("missing turn")
   expect(stop).toHaveBeenCalledWith(
-    context.current().serverConversationId,
-    turn.executionId,
+    expect.objectContaining({
+      conversationId: context.current().serverConversationId,
+      executionId: turn.executionId,
+    }),
   )
   expect(context.draft()).toEqual([file])
 })
@@ -512,7 +521,7 @@ it("declines a send with no session yet, with a reason and the draft kept", asyn
   )
   expect(context.draft()).toEqual(before)
   expect(context.current().turns).toEqual([])
-  expect(context.effects.send).not.toHaveBeenCalled()
+  expect(context.effects.submit).not.toHaveBeenCalled()
 })
 
 it("closes on the gateway a conversation it only ever uploaded into, when its tab closes", async () => {

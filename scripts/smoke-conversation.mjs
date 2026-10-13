@@ -211,12 +211,14 @@ try {
   let lostResponse
   try {
     await proxy.guard(
-      client.conversation.send(
-        conversationId,
-        `answer this fixture\nfixtureCorrelation:${answerExecutionId}`,
-        [imageReference],
-        [],
-        { requestId: sendRequestId, executionId: answerExecutionId },
+      client.conversation.submit(
+        client.conversation.prepare(
+          conversationId,
+          `answer this fixture\nfixtureCorrelation:${answerExecutionId}`,
+          [imageReference],
+          [],
+          { requestId: sendRequestId, executionId: answerExecutionId },
+        ),
       ),
     )
     assert.fail("the proxy must drop the committed send response")
@@ -311,12 +313,17 @@ try {
   )
 
   const steered = await proxy.guard(
-    client.conversation.steer(
-      conversationId,
-      `refine it\nfixtureCorrelation:${steerExecutionId}`,
-      [],
-      [],
-      { requestId: "request-steer", executionId: steerExecutionId },
+    client.conversation.submit(
+      client.conversation.prepare(
+        conversationId,
+        `refine it\nfixtureCorrelation:${steerExecutionId}`,
+        [],
+        [],
+        {
+          ...{ requestId: "request-steer", executionId: steerExecutionId },
+          mode: "steering",
+        },
+      ),
     ),
   )
   assert.equal(steered.executionId, steerExecutionId)
@@ -437,12 +444,14 @@ try {
     1,
   )
 
-  const cancelReceipt = await restarted.conversation.send(
-    conversationId,
-    `wait for close\nfixtureCorrelation:${cancelExecutionId}`,
-    [],
-    [],
-    { requestId: "request-cancel-execution", executionId: cancelExecutionId },
+  const cancelReceipt = await restarted.conversation.submit(
+    restarted.conversation.prepare(
+      conversationId,
+      `wait for close\nfixtureCorrelation:${cancelExecutionId}`,
+      [],
+      [],
+      { requestId: "request-cancel-execution", executionId: cancelExecutionId },
+    ),
   )
   assert.equal(cancelReceipt.executionId, cancelExecutionId)
   await viewWith(

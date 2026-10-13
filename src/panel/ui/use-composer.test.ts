@@ -85,9 +85,9 @@ async function pressSend(
 }
 
 function storeWithAttachedFile(connected = true) {
-  const send = vi.fn(scenarioEffects("echo").send)
+  const send = vi.fn(scenarioEffects("echo").submit)
   const store = makeStore(
-    createDependencies({ conversation: { ...scenarioEffects("echo"), send } }),
+    createDependencies({ conversation: { ...scenarioEffects("echo"), submit: send } }),
   )
   // Connected, as the panel usually is. Only the phase and the presence of a
   // hello are read.
@@ -179,9 +179,9 @@ it("says why nothing was sent when there is no session yet, and keeps the draft"
 })
 
 it("still reaches sendDraft, with the draft's own prose, when the editor is between mounts", async () => {
-  const send = vi.fn(scenarioEffects("echo").send)
+  const send = vi.fn(scenarioEffects("echo").submit)
   const store = makeStore(
-    createDependencies({ conversation: { ...scenarioEffects("echo"), send } }),
+    createDependencies({ conversation: { ...scenarioEffects("echo"), submit: send } }),
   )
   store.dispatch(
     sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),

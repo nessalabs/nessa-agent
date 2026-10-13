@@ -12,6 +12,7 @@
  * app's review and of message sync (`verification/desktop/fixtures/`).
  */
 import {
+  preparedSubmissionFields,
   NessaRpcError,
   createSubscriptionGate,
   subscriptionLimits,
@@ -26,6 +27,15 @@ import {
   type ViewSubscriptionHandlers,
 } from "@nessa/client"
 import type { GatewayClient } from "./gateway-source"
+
+/** Canonical identities for named test conversations; display names stay separate. */
+export const gatewayConversationIds = {
+  a: "00000000-0000-4000-8000-000000000001",
+  b: "00000000-0000-4000-8000-000000000002",
+  s: "00000000-0000-4000-8000-000000000003",
+  fast: "00000000-0000-4000-8000-000000000004",
+  slow: "00000000-0000-4000-8000-000000000005",
+} as const
 
 type Method =
   | "subscribe"
@@ -63,7 +73,7 @@ export function row(
 ): ConversationSummary {
   return {
     conversationId,
-    title: `Title of ${conversationId}`,
+    title: `Title of ${Object.entries(gatewayConversationIds).find(([, id]) => id === conversationId)?.[0] ?? conversationId}`,
     preview: "Last said",
     createdAtMs: 1_000,
     updatedAtMs: 2_000,
@@ -329,12 +339,26 @@ export function fakeGateway(
             views.set(conversationId, view(conversationId, { revision: "created" }))
           return { conversationId }
         }) as never,
-      send: (...args) =>
-        answer("send", args, () => ({
-          executionId: args[4]?.executionId ?? "",
-          disposition: "queued",
-          requestId: args[4]?.requestId ?? "",
-        })) as never,
+      submit: (prepared) => {
+        preparedSubmissionFields(prepared)
+        return answer(
+          "send",
+          [
+            prepared.conversationId,
+            prepared.text,
+            prepared.attachments,
+            prepared.files,
+            { executionId: prepared.executionId, requestId: prepared.requestId },
+          ],
+          () => ({
+            conversationId: prepared.conversationId,
+            target: prepared.target,
+            executionId: prepared.executionId,
+            disposition: "queued",
+            requestId: prepared.requestId,
+          }),
+        ) as never
+      },
       answer: (...args) =>
         answer("answer", args, () => ({ requestId: "answer", applied: true })) as never,
       archive: (...args) =>

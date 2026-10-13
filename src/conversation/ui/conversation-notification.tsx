@@ -1,3 +1,4 @@
+import { executionTargets } from "@nessa/client"
 import { AgentNotification } from "@nessa-ui/react/agent-notification"
 import type { Conversation } from "../model"
 import {
@@ -41,6 +42,15 @@ export function ConversationNotification({
         onRetry={connection.retry}
       />
     )
+  const targets = conversation.serverConversationId
+    ? executionTargets({
+        conversationId: conversation.serverConversationId,
+        messages: conversation.turns.flatMap((turn) =>
+          turn.executionId ? [{ executionId: turn.executionId }] : [],
+        ),
+        pending: [],
+      })
+    : []
   const notice = conversationNotice(conversation)
   if (!notice) return null
   return (
@@ -63,10 +73,18 @@ export function ConversationNotification({
         notice.retry
           ? () => {
               if (notice.retry?.kind === "submission") {
+                const target = targets.find(
+                  (target) =>
+                    target.executionId ===
+                    (notice.retry?.kind === "submission"
+                      ? notice.retry.executionId
+                      : undefined),
+                )
+                if (!target) return
                 void dispatch(
                   controlConversation({
                     id: conversation.id,
-                    control: { kind: "retry", executionId: notice.retry.executionId },
+                    control: { kind: "retry", target },
                   }),
                 )
               } else if (notice.retry?.kind === "draft") {

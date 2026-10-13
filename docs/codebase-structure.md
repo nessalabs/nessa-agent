@@ -638,6 +638,16 @@ tests live in `src/conversation/adapters/store/permission-targets.test.ts`.
 See [permission targets](design/permission-targets.md) for the ordering table and
 the distinction between captured intent and server-owned authorization.
 
+Client message preparation in `presentation/conversation-api.ts` issues copied
+`PreparedSubmission` values before effects and consumes them through `submit`.
+`application/execution-target.ts` captures read-only conversation/execution intent
+for stop/remove from those values or an enclosing view. The panel retains the
+original prepared operation per Redux store in `adapters/store/slice.ts`, outside
+serializable state. Client regressions live in
+`presentation/prepared-submission.test.ts`; panel interleavings in
+`adapters/store/prepared-operations.test.ts`. See
+[prepared submissions](design/prepared-submissions.md) for ordering and ownership.
+
 `crates/nessa-server/src/conversation/` groups durable conversation ownership and
 access (domain), shared Agent orchestration (application), and private
 metadata/audit adapters (infrastructure). The conversation's identity and summary,

@@ -1,8 +1,8 @@
+import { prepareSubmission } from "@nessa/client"
 import { expect, it } from "vitest"
 import {
   ConversationReadFailedError,
   HeldFileReadError,
-  SubmissionRefusedError,
   type ConversationEffects,
 } from "../../application/ports"
 import type { ConversationView } from "../../application/view"
@@ -44,16 +44,17 @@ it("publishes complete history after echo admission and preserves it on replay",
     messages: [],
     revision: "0",
   })
-  const input = {
+  const input = prepareSubmission({
+    mode: "queued",
     conversationId,
     executionId: "execution-1",
-    actionId: "action-1",
+    requestId: "action-1",
     text: "hello",
     attachments: [],
     files: [],
-  }
+  })
   // Each change is told to the follower, a task later.
-  await effects.send(input)
+  await effects.submit(input)
   await Promise.resolve()
   const first = views.at(-1)
   expect(first).toMatchObject({
@@ -61,15 +62,18 @@ it("publishes complete history after echo admission and preserves it on replay",
     messages: [{ executionId: input.executionId, userText: input.text }],
     revision: "1",
   })
-  await effects.send(input)
+  await effects.submit(input)
   await Promise.resolve()
   expect(views.at(-1)).toEqual(first)
-  await effects.steer({
-    ...input,
-    executionId: "execution-2",
-    actionId: "action-2",
-    text: "again",
-  })
+  await effects.submit(
+    prepareSubmission({
+      ...input,
+      mode: "steering",
+      executionId: "execution-2",
+      requestId: "action-2",
+      text: "again",
+    }),
+  )
   await Promise.resolve()
   expect(views.at(-1)).toMatchObject({
     transcriptState: "complete",
@@ -81,7 +85,14 @@ it("publishes complete history after echo admission and preserves it on replay",
   })
   stop()
   const told = views.length
-  await effects.steer({ ...input, executionId: "execution-3", actionId: "action-3" })
+  await effects.submit(
+    prepareSubmission({
+      ...input,
+      mode: "steering",
+      executionId: "execution-3",
+      requestId: "action-3",
+    }),
+  )
   await Promise.resolve()
   // Nothing is told after the follow is stopped.
   expect(views).toHaveLength(told)
@@ -96,7 +107,10 @@ it("publishes complete history after echo admission and preserves it on replay",
  * green while the two adapters disagreed.
  */
 it("refuses a follow the offline scenario cannot serve in the port's own words", async () => {
-  const said = await firstWord(scenarioEffects("offline"), "server")
+  const said = await firstWord(
+    scenarioEffects("offline"),
+    "00000000-0000-4000-8000-000000000001",
+  )
   expect(said).toMatchObject({ failed: "unavailable" })
   // The scenario's own sentence is still the cause, so a developer reading the
   // console learns which backend refused and why.
@@ -112,27 +126,20 @@ it("refuses a follow of a conversation the echo scenario never opened the same w
   })
   // And a conversation it did open is still followed, so the guard is about
   // the failure and not about refusing everything.
-  await effects.create("server")
-  expect(await firstWord(effects, "server")).toMatchObject({
-    view: { conversationId: "server" },
+  await effects.create("00000000-0000-4000-8000-000000000001")
+  expect(await firstWord(effects, "00000000-0000-4000-8000-000000000001")).toMatchObject({
+    view: { conversationId: "00000000-0000-4000-8000-000000000001" },
   })
 })
 
-it("still refuses a message the client would not put on the wire", async () => {
-  // The other half of the same contract, and the reason this substitute exists:
-  // it asks the client the same question the gateway adapter does.
-  const error = await scenarioEffects("echo")
-    .send({
-      conversationId: "server",
+it("rejects an unprepared message even when the static type is bypassed", async () => {
+  const effects = scenarioEffects("echo")
+  await expect(
+    effects.submit({
+      conversationId: "00000000-0000-4000-8000-000000000001",
       executionId: "execution",
-      actionId: "action",
-      text: "look",
-      attachments: [{ digest: "sha256:NOPE", mimeType: "image/png", size: 1 }],
-      files: [],
-    })
-    .catch((error: unknown) => error)
-  expect(error).toBeInstanceOf(SubmissionRefusedError)
-  expect(error).toMatchObject({ reason: "invalid-request" })
+    } as never),
+  ).rejects.toThrow(TypeError)
 })
 
 it("echoes the images it was sent back as published files it holds, until it closes", async () => {
@@ -147,14 +154,17 @@ it("echoes the images it was sent back as published files it holds, until it clo
     bytes,
     new AbortController().signal,
   )
-  await effects.send({
-    conversationId,
-    executionId: "execution-1",
-    actionId: "action-1",
-    text: "look",
-    attachments: [image],
-    files: [],
-  })
+  await effects.submit(
+    prepareSubmission({
+      mode: "queued",
+      conversationId,
+      executionId: "execution-1",
+      requestId: "action-1",
+      text: "look",
+      attachments: [image],
+      files: [],
+    }),
+  )
   const told = await firstWord(effects, conversationId)
   expect(told).toMatchObject({
     view: {
@@ -191,14 +201,17 @@ it("lists the newest 64 files the echo agent published, as the gateway's view do
     new AbortController().signal,
   )
   for (let turn = 1; turn <= 65; turn++)
-    await effects.send({
-      conversationId,
-      executionId: `execution-${turn}`,
-      actionId: `action-${turn}`,
-      text: "again",
-      attachments: [image],
-      files: [],
-    })
+    await effects.submit(
+      prepareSubmission({
+        mode: "queued",
+        conversationId,
+        executionId: `execution-${turn}`,
+        requestId: `action-${turn}`,
+        text: "again",
+        attachments: [image],
+        files: [],
+      }),
+    )
   const told = await firstWord(effects, conversationId)
   const artifacts = (told as { view: { artifacts: { executionId?: string }[] } }).view
     .artifacts

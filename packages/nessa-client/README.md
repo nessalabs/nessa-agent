@@ -180,7 +180,7 @@ requests, and releases subscriptions. It is safe to call repeatedly.
 
 - `client.server.health()` reads authorized gateway health.
 - `client.conversation.create({ conversationId? })` creates or reopens an agent conversation.
-- `client.conversation.send(id, text, attachments)` queues a message of text, images, or both; `steer(id, text, attachments)` uses supported steering. Pass `[]` for text alone.
+- `client.conversation.prepare(id, text, attachments, files, { mode? })` captures one immutable message before any effects. `submit(prepared)` sends it; mode is `queued` by default or `steering`. The wrapper fills omitted execution/action IDs and delegates to the same `prepareSubmission` owner used by optimistic surfaces.
 - `client.attachments.begin(id, file)` and `client.attachments.upload(ticket, file)` stage bytes so a message can refer to them by digest.
 - `client.mcpApps.callTool`, `readResource`, `fetchResource`, and `releaseApp` make an MCP App's calls to its own server, fetch its HTML, and release a mount of it; `sendMessage` and `updateModelContext` let it speak in its conversation (MCP Apps `ui/message`, `ui/update-model-context`).
 - `client.mcpServers.list`, `save`, `remove`, `inspect`, `authorize`, and `revoke` manage the gateway's stored MCP servers. `carriesMcpServersGrant(client.productSession)` reports whether the credential carries the grant those methods ask for on this session's organization and gateway: the action `protocol/product/manifest.json` publishes, and the resource Cedar compares. Every failure is a `NessaMcpServersError`, whose `refusal` is the typed code with its details for that code, and whose `forbidden` says the session refused the caller — that answer is decisive even when the grant is present. Variable values go out on `save` and are never listed.
@@ -204,9 +204,19 @@ credential is sent. Transport errors do not imply a mutation was rolled back.
 
 ```ts
 const { conversationId } = await client.conversation.create()
-const receipt = await client.conversation.send(conversationId, "Hello", [])
+const prepared = client.conversation.prepare(conversationId, "Hello")
+const receipt = await client.conversation.submit(prepared)
 const view = await client.conversation.read(conversationId)
 ```
+
+Preparation captures the conversation, execution, action, delivery mode, text and
+copied image/file references together. It exposes `prepared.target` immediately,
+so Stop can address that exact operation before admission answers. `stop(target)`
+and `remove(target)` also accept targets from `executionTargets(view)` over a
+whole conversation view. A receipt returns the original conversation and target;
+it cannot mint a target combined with another caller-picked conversation. These
+values are process-local, frozen and opaque: spread/JSON copies are rejected.
+The gateway still decides current access and execution state.
 
 Read serially while the surface is visible to display current streamed output. Each
 view replaces the previous one; `revision` is opaque, and `truncated` indicates
@@ -268,7 +278,10 @@ const stored =
 
 // Storage keeps any file; a message names only images. This is that step.
 const image = asImageAttachment(stored)
-if (image) await client.conversation.send(conversationId, "What is in this picture?", [image])
+if (image) {
+  const prepared = client.conversation.prepare(conversationId, "What is in this picture?", [image])
+  await client.conversation.submit(prepared)
+}
 ```
 
 **Send the returned reference, never the digest you computed.** The gateway

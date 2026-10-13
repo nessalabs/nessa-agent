@@ -79,7 +79,7 @@ for (const outcome of [
       .mockResolvedValueOnce(view(["a", "b"]))
       .mockResolvedValueOnce(view(serverOrder))
     const reorder = vi.fn(async () => outcome)
-    const send = vi.fn(effects.send)
+    const send = vi.fn(effects.submit)
     const remove = vi.fn(effects.remove)
     const store = makeStore(
       createDependencies({
@@ -87,7 +87,7 @@ for (const outcome of [
           ...effects,
           follow: followByReading(read),
           reorder,
-          send,
+          submit: send,
           remove,
         },
       }),

@@ -254,7 +254,7 @@ export async function agentTurn(
     if (create) await client.conversation.create({ conversationId, agent })
     // The view's messages are its turns; this one is the one after `before`.
     before = (await client.conversation.read(conversationId)).messages.length
-    await client.conversation.send(conversationId, text)
+    await client.conversation.submit(client.conversation.prepare(conversationId, text))
   } catch (error) {
     throw new CannotRun(
       `the gateway refused the ${agent} conversation (a live ${agent}: is it signed in on this machine?): ${error.message}`,

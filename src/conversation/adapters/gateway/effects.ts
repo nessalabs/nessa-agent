@@ -689,28 +689,9 @@ export function gatewayEffects(
       open()
       return stop
     },
-    async send(input) {
+    async submit(input) {
       try {
-        return await api().send(
-          input.conversationId,
-          input.text,
-          input.attachments,
-          input.files,
-          { executionId: input.executionId, requestId: input.actionId },
-        )
-      } catch (error) {
-        throw submissionFailure(error)
-      }
-    },
-    async steer(input) {
-      try {
-        return await api().steer(
-          input.conversationId,
-          input.text,
-          input.attachments,
-          input.files,
-          { executionId: input.executionId, requestId: input.actionId },
-        )
+        return await api().submit(input)
       } catch (error) {
         throw submissionFailure(error)
       }
@@ -768,9 +749,9 @@ export function gatewayEffects(
         throw controlFailure(error)
       }
     },
-    async remove(conversationId, executionId) {
+    async remove(target) {
       try {
-        await api().remove(conversationId, executionId)
+        await api().remove(target)
       } catch (error) {
         throw controlFailure(error)
       }
@@ -814,9 +795,9 @@ export function gatewayEffects(
         throw controlFailure(error)
       }
     },
-    async stop(conversationId, executionId) {
+    async stop(target) {
       try {
-        await api().stop(conversationId, executionId)
+        await api().stop(target)
       } catch (error) {
         throw controlFailure(error)
       }

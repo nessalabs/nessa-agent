@@ -1,4 +1,12 @@
-import { permissionTargetConversation, type PermissionTarget } from "@nessa/client"
+import {
+  prepareSubmission,
+  executionTargets,
+  executionTargetConversation,
+  permissionTargetConversation,
+  type PreparedSubmission,
+  type ExecutionTarget,
+  type PermissionTarget,
+} from "@nessa/client"
 import {
   type ApprovalMode,
   contentText,
@@ -6,7 +14,6 @@ import {
   conversationSelectionOpen,
   MAX_SENT_PREVIEW_BYTES,
   messageFiles,
-  messageImages,
   storedImages,
   type CommandFailure,
   type ConversationSelection,
@@ -31,7 +38,6 @@ import {
   declineReason,
   draftMessage,
   failSend,
-  imageRefusalMessage,
   refusalReleasesImages,
   submissionRefusalMessage,
   type SendOutcome,
@@ -129,7 +135,49 @@ const commandFailure = (error: unknown): CommandFailure | undefined =>
  * going; once it has, the same execution is stopped even if the tab was
  * closed locally in between.
  */
-const stopAfterAdmission = new Set<string>()
+type PreparedOperation = { prepared: PreparedSubmission; stopRequested: boolean }
+// getState is unique to a Redux store, even when effects/dependencies are shared.
+// The promise owns its operation after tab closure; the table retains retry intent
+// only while its original local turn remains (prepared-operation tests).
+const operationTables = new WeakMap<
+  () => ThunkConfig["state"],
+  Map<string, Map<string, PreparedOperation>>
+>()
+function operationsOf(getState: () => ThunkConfig["state"]) {
+  let table = operationTables.get(getState)
+  if (!table) operationTables.set(getState, (table = new Map()))
+  for (const [id, operations] of table) {
+    const current = getState().conversation.conversations.find(
+      (conversation) => conversation.id === id,
+    )
+    for (const [executionId] of operations) {
+      if (
+        !current?.turns.some(
+          (turn) => turn.from === "user" && turn.executionId === executionId,
+        )
+      )
+        operations.delete(executionId)
+    }
+    if (!operations.size) table.delete(id)
+  }
+  return table
+}
+
+/** Admission is known even if the separately requested stop acknowledgement fails. */
+async function stopAfterAdmission(
+  operation: PreparedOperation,
+  id: string,
+  { dispatch, extra }: Pick<GetThunkAPI<ThunkConfig>, "dispatch" | "extra">,
+) {
+  if (!operation.stopRequested) return
+  try {
+    await extra.conversation.stop(operation.prepared.target)
+  } catch (error) {
+    dispatch(
+      showError({ id, message: controlDetail(error), failure: commandFailure(error) }),
+    )
+  }
+}
 
 /** Capture a tab and logical submission before awaiting any connection or admission. */
 export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
@@ -159,6 +207,22 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
     const serverId = conv.serverConversationId ?? crypto.randomUUID()
     const executionId = crypto.randomUUID()
     const actionId = crypto.randomUUID()
+    let prepared: PreparedSubmission
+    try {
+      prepared = prepareSubmission({
+        conversationId: serverId,
+        executionId,
+        requestId: actionId,
+        mode: input.steering ? "steering" : "queued",
+        text,
+        attachments: images,
+        files,
+      })
+    } catch (error) {
+      dispatch(showError({ id, message: detail(error) }))
+      return rejectWithValue({ kind: "invalid-submission" })
+    }
+    const operation = { prepared, stopRequested: false }
     dispatch(bindConversation({ id, serverId }))
     dispatch(
       submissionStarted({
@@ -166,34 +230,33 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
         conversationId: id,
         executionId,
         actionId,
-        mode: input.steering ? "steering" : "queued",
+        mode: prepared.mode,
       }),
     )
+    const operations = operationsOf(getState)
+    let retained = operations.get(id)
+    if (!retained) operations.set(id, (retained = new Map()))
+    retained.set(executionId, operation)
     let admissionAttempted = false
     try {
       const created = await extra.conversation.create(serverId, conv.selection)
       if (created.conversationId !== serverId)
         throw new Error("Gateway returned a different conversation identity.")
       dispatch(conversationReady(id))
-      const submission = {
-        conversationId: serverId,
-        executionId,
-        actionId,
-        text,
-        attachments: images,
-        files,
-      }
       admissionAttempted = true
-      const receipt = await (input.steering
-        ? extra.conversation.steer(submission)
-        : extra.conversation.send(submission))
-      if (receipt.executionId !== executionId)
+      const receipt = await extra.conversation.submit(prepared)
+      if (
+        receipt.conversationId !== prepared.conversationId ||
+        receipt.executionId !== executionId
+      )
         throw new Error("Gateway returned a different submission identity.")
       dispatch(submissionAccepted({ id, executionId }))
-      if (stopAfterAdmission.delete(executionId))
-        await extra.conversation.stop(serverId, executionId)
+      await stopAfterAdmission(operation, id, { dispatch, extra })
+      retained.delete(executionId)
       await dispatch(refollowConversation(id))
     } catch (error) {
+      if (sendOutcome(error, admissionAttempted).kind !== "uncertain")
+        retained.delete(executionId)
       dispatch(
         submissionFailed({
           id,
@@ -444,7 +507,7 @@ export type Control =
   | { kind: "setApprovalMode"; mode: ApprovalMode }
   | { kind: "close" }
   | { kind: "reorder"; executionIds: string[] }
-  | { kind: "remove"; executionId: string }
+  | { kind: "remove"; target: ExecutionTarget }
   | { kind: "answer"; target: PermissionTarget; optionId: string }
   | {
       kind: "answerQuestion"
@@ -454,15 +517,15 @@ export type Control =
       choices: { key: string; values: string[]; ownWords?: string }[] | null
     }
   | { kind: "cancel"; target: PermissionTarget }
-  | { kind: "stop"; executionId: string }
-  | { kind: "retry"; executionId: string }
+  | { kind: "stop"; target: ExecutionTarget }
+  | { kind: "retry"; target: ExecutionTarget }
 export const controlConversation = createAsyncThunk<
   void,
   { id: string; control: Control },
   ThunkConfig
 >("conversation/control", async ({ id, control }, { dispatch, getState, extra }) => {
   const current = getState().conversation.conversations.find((item) => item.id === id)
-  if (!current?.serverConversationId || current.controlPending) return
+  if (!current?.serverConversationId) return
   const serverId = current.serverConversationId
   // A delayed action belongs to the conversation captured on the approval
   // card, even if its local tab has since been rebound. No create/control
@@ -472,6 +535,29 @@ export const controlConversation = createAsyncThunk<
     permissionTargetConversation(control.target) !== serverId
   )
     return
+  if (
+    (control.kind === "stop" || control.kind === "remove" || control.kind === "retry") &&
+    executionTargetConversation(control.target) !== serverId
+  )
+    return
+  if (control.kind === "stop") {
+    const operation = operationsOf(getState).get(id)?.get(control.target.executionId)
+    if (operation) operation.stopRequested = true
+    // Cancellation can overtake creation or a retry; it never owns the ordinary
+    // control busy state (PS6/PS12). The gateway resolves current authority.
+    try {
+      await extra.conversation.stop(control.target)
+    } catch (error) {
+      dispatch(
+        showError({ id, message: controlDetail(error), failure: commandFailure(error) }),
+      )
+      throw error
+    } finally {
+      await dispatch(refollowConversation(id))
+    }
+    return
+  }
+  if (current.controlPending) return
   const requestedOrder = control.kind === "reorder" ? [...control.executionIds] : []
   dispatch(controlStarted(id))
   if (control.kind === "close")
@@ -513,7 +599,7 @@ export const controlConversation = createAsyncThunk<
         break
       }
       case "remove":
-        await extra.conversation.remove(serverId, control.executionId)
+        await extra.conversation.remove(control.target)
         break
       case "answer":
         await extra.conversation.answer(control.target, control.optionId)
@@ -529,45 +615,23 @@ export const controlConversation = createAsyncThunk<
       case "cancel":
         await extra.conversation.cancel(control.target)
         break
-      case "stop":
-        await extra.conversation.stop(serverId, control.executionId)
-        break
       case "retry": {
+        const executionId = control.target.executionId
+        const operation = operationsOf(getState).get(id)?.get(executionId)
         const turn = current.turns.find(
-          (turn) => turn.from === "user" && turn.executionId === control.executionId,
+          (turn) => turn.from === "user" && turn.executionId === executionId,
         )
-        if (!turn || turn.from !== "user" || !turn.actionId || turn.receipt !== "unknown")
-          return
-        // The turn's content has not changed since it was sent, so this names
-        // the same images and the same paths: one execution ID stays one
-        // message.
-        const images = messageImages(turn.content)
-        if (!images.ok) {
-          // Not reachable from a turn this window sent — it only became a turn
-          // because its images could go. Said rather than skipped all the same.
-          dispatch(
-            showError({
-              id,
-              message: imageRefusalMessage(images.refusal, extra.canChoosePaths),
-            }),
-          )
-          return
-        }
-        const input = {
-          conversationId: serverId,
-          executionId: control.executionId,
-          actionId: turn.actionId,
-          text: contentText(turn.content),
-          attachments: images.images,
-          files: messageFiles(turn.content),
-        }
-        dispatch(submissionReattempted({ id, executionId: control.executionId }))
-        const receipt = await (turn.mode === "steering"
-          ? extra.conversation.steer(input)
-          : extra.conversation.send(input))
-        if (receipt.executionId !== control.executionId)
+        if (!operation || turn?.from !== "user" || turn.receipt !== "unknown") return
+        dispatch(submissionReattempted({ id, executionId }))
+        const receipt = await extra.conversation.submit(operation.prepared)
+        if (
+          receipt.conversationId !== operation.prepared.conversationId ||
+          receipt.executionId !== executionId
+        )
           throw new Error("Gateway returned a different submission identity.")
-        dispatch(submissionAccepted({ id, executionId: control.executionId }))
+        dispatch(submissionAccepted({ id, executionId }))
+        await stopAfterAdmission(operation, id, { dispatch, extra })
+        operationsOf(getState).get(id)?.delete(executionId)
         break
       }
     }
@@ -626,19 +690,20 @@ export const stopGenerating = createAsyncThunk<
   const current = getState().conversation.conversations.find((item) => item.id === id)
   const executionId = current ? capturedTurn(current.turns) : undefined
   if (!executionId) return
-  const admitting = current?.turns.some(
-    (turn) =>
-      turn.from === "user" &&
-      turn.executionId === executionId &&
-      turn.receipt === "sending",
-  )
-  if (admitting) stopAfterAdmission.add(executionId)
-  await dispatch(
-    controlConversation({
-      id,
-      control: { kind: "stop", executionId },
-    }),
-  )
+  const operation = operationsOf(getState).get(id)?.get(executionId)
+  const target =
+    operation?.prepared.target ??
+    (current?.serverConversationId
+      ? executionTargets({
+          conversationId: current.serverConversationId,
+          messages: current.turns.flatMap((turn) =>
+            turn.executionId ? [{ executionId: turn.executionId }] : [],
+          ),
+          pending: current.remote?.pending ?? [],
+        }).find((target) => target.executionId === executionId)
+      : undefined)
+  if (!target) return
+  await dispatch(controlConversation({ id, control: { kind: "stop", target } })).unwrap()
 })
 
 /**

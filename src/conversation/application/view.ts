@@ -125,23 +125,11 @@ export type ConversationView = {
   interactionViewError?: string
 }
 
-/** Stable logical identities survive an uncertain acknowledgement and explicit retry. */
-export type Submission = {
-  runtime?: ConversationRuntime
-  conversationId: string
-  executionId: string
-  actionId: string
-  /** May be blank only when `attachments` or `files` is not empty. */
-  text: string
-  /** Images already staged into this conversation. A retry re-sends the same list. */
-  attachments: ImageReference[]
-  /**
-   * Files on this machine the message points the agent at, by path. Nothing
-   * was uploaded for these; a retry re-sends the same list.
-   */
-  files: LinkedFile[]
+export type SubmissionReceipt = {
+  readonly conversationId: string
+  readonly executionId: string
+  readonly disposition: string
 }
-export type SubmissionReceipt = { executionId: string; disposition: string }
 
 /**
  * One read of the list: its rows, and whether the gateway says they are every
