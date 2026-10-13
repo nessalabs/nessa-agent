@@ -18,3 +18,9 @@ FAIL restore:different [chromium 360]
 Source-asserted revert: turn counter reset
 FAIL src/conversation/application/saved-tabs.test.ts > LT7: restoration uses fresh local lifetimes while preserving remote selection and titles
 AssertionError: expected 1 to be 17 // Object.is equality
+
+Published fixture contract correction: required serverNowMs/artifacts and published feature variants
+committed-transcript: 115/115 held (Chromium/WebKit, widths360/600/1440)
+Required-field revert: removing artifacts rejected by pnpm typecheck
+Restored published fixture: typecheck and lint passed
+Whole desktop replay remains failed in unrelated lease/mode/app-review/published-files scenarios; tracked separately.
