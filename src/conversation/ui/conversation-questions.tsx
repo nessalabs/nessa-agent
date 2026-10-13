@@ -115,7 +115,7 @@ function ConversationQuestion({
         <QuestionnaireTitle>{ask.message}</QuestionnaireTitle>
       </QuestionnaireHeader>
       {ask.questions.map((question) => (
-        <QuestionnaireItem key={question.key} name={question.key}>
+        <QuestionnaireItem key={question.key}>
           {/* With one question the framing above is the question, so repeating
               it as a title would say the same thing twice. */}
           {ask.questions.length > 1 || question.header ? (

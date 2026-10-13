@@ -225,7 +225,6 @@ describe("run-all's sum", () => {
     assert.deepEqual(devServerOnlyChecks, [
       "panel-list-follow",
       "mode-publication",
-      "committed-transcript",
       "lease-details",
       "app-review",
       "gateway-states",
@@ -238,6 +237,10 @@ describe("run-all's sum", () => {
       leftOut: [...devServerOnlyChecks],
     })
     assert.deepEqual(checksUnder("dev", ["smoke", "app-review"]).leftOut, [])
+    assert.deepEqual(checksUnder("prod", ["committed-transcript"]), {
+      run: ["committed-transcript"],
+      leftOut: [],
+    })
   })
 
   it("records a dev-server step as left out only under prod", () => {

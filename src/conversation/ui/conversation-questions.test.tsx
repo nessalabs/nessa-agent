@@ -84,8 +84,11 @@ function show(
 }
 
 function choose(key: string, value: string) {
-  const input = host.querySelector<HTMLInputElement>(
-    `input[name="${CSS.escape(key)}"][value="${CSS.escape(value)}"]`,
+  const field = [...host.querySelectorAll("fieldset")].find(
+    (item) => item.querySelector("legend")?.textContent === key,
+  )
+  const input = field?.querySelector<HTMLInputElement>(
+    `input[value="${CSS.escape(value)}"]`,
   )
   if (!input) throw new Error(`no ${value} for ${key}`)
   act(() => input.click())
@@ -184,4 +187,35 @@ it("QT1: equal turn and ask names in another conversation do not inherit its ans
   expect(answer().disabled).toBe(false)
   show([question("field", false)], "00000000-0000-4000-8000-000000000002")
   expect(answer().disabled).toBe(true)
+})
+
+it("QT10: simultaneous asks with equal field keys have independent native radio groups", () => {
+  const conversation = {
+    id: "conversation",
+    serverConversationId: "00000000-0000-4000-8000-000000000001",
+    controlPending: false,
+    remote: {
+      questions: ["first", "second"].map((questionId) => ({
+        executionId: "execution",
+        questionId,
+        message: questionId,
+        questions: [question("same-field", false)],
+      })),
+    },
+  } as unknown as Conversation
+  act(() =>
+    root.render(
+      React.createElement(ConversationQuestions, {
+        conversation,
+        gatewayAvailable: true,
+      }),
+    ),
+  )
+  const inputs = [...host.querySelectorAll<HTMLInputElement>('input[value="a"]')]
+  const [first, second] = inputs
+  if (!first || !second) throw new Error("Both simultaneous asks must render a choice")
+  act(() => first.click())
+  act(() => second.click())
+  expect(inputs.map((input) => input.checked)).toEqual([true, true])
+  expect(new Set(inputs.map((input) => input.name)).size).toBe(2)
 })

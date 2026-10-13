@@ -46,7 +46,7 @@ export function questionTargets(view: QuestionView): readonly QuestionTarget[] {
             }),
           ),
         ),
-      }) as QuestionTarget
+      } satisfies Omit<QuestionTarget, typeof questionTarget>) as QuestionTarget
       issued.add(target)
       return target
     }),

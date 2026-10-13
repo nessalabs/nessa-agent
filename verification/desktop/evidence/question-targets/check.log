@@ -1,0 +1,13 @@
+ok    question-target-identities [chromium 360]
+ok    question-target-identities [chromium 600]
+ok    question-target-identities [chromium 1440]
+ok    question-target-identities [webkit 360]
+ok    question-target-identities [webkit 600]
+ok    question-target-identities [webkit 1440]
+committed-transcript: 121/121 held
+Source-asserted revert: full-question-identity
+FAIL  question-target-identities [chromium 360]
+        - another conversation inherited the original answer draft
+Source-asserted revert: native-group-owner
+ERROR question-target-identities [chromium 360]
+locator.check: Clicking the checkbox did not change its state
