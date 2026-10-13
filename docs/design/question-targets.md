@@ -22,9 +22,10 @@ neither authenticates a fabricated view nor grants authority.
 | QT8 | Pending state or authority changes after capture | Existing server refusal, no replay | SDK/gateway owners |
 | QT9 | Another conversation publishes equal turn/ask names | Do not inherit the previous conversation’s answer draft | Full target identity in React key |
 | QT10 | Simultaneous asks reuse an agent field key | Selecting one ask does not unset another ask’s selection | Questionnaire primitive generates each native group identity |
+| QT11 | Caller mutates answer choices while transport serialization waits | Serialize the original choice snapshot that passed correlation | Deep copied/frozen choices before `questionFields`, same snapshot passed to RPC |
 
 Tests in `question-target.test.ts` and store `question-targets.test.ts` exercise
-QT1–QT7; `conversation-questions.test.tsx` covers QT9/QT10. Existing acknowledgement
+QT1–QT7/QT11; `conversation-questions.test.tsx` covers QT9/QT10. Existing acknowledgement
 and SDK tests retain QT8 ownership. Local-tab
 replacement during already-admitted preparation belongs to the tab lifecycle
 owner and is separate from capture. No wire schema or provider policy changes.

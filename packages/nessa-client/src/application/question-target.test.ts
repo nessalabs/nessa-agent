@@ -151,3 +151,40 @@ function rejectedSignatures(api: ConversationApi, target: QuestionTarget) {
   return forged
 }
 void rejectedSignatures
+
+it("QT11: queued serialization retains the exact answer snapshot that passed correlation", async () => {
+  const [target] = questionTargets(source())
+  let release!: () => void
+  const gate = new Promise<void>((done) => {
+    release = done
+  })
+  let serialized: unknown
+  let captured: unknown
+  const request = vi.fn(async (_method: string, params: unknown) => {
+    await gate
+    serialized = JSON.parse(JSON.stringify(params))
+    captured = params
+    return { requestId: "action", applied: true }
+  })
+  const api = createConversationApi({ request }, () => "action")
+  const choices = [{ key: "field-a", values: ["value-a"], ownWords: "Original" }]
+  const pending = api.answerQuestion(target!, choices)
+  choices[0]!.values[0] = "value-b"
+  choices[0]!.key = "field-b"
+  choices[0]!.ownWords = "Replacement"
+  choices.push({ key: "field-b", values: ["value-b"], ownWords: "Added" })
+  release()
+  await expect(pending).resolves.toEqual({ requestId: "action", applied: true })
+  expect(request).toHaveBeenCalledTimes(1)
+  expect(serialized).toEqual({
+    conversationId: first,
+    executionId: "turn-a",
+    questionId: "ask-a",
+    requestId: "action",
+    choices: [{ key: "field-a", values: ["value-a"], ownWords: "Original" }],
+  })
+  const fields = captured as { choices: { values: string[] }[] }
+  expect(Object.isFrozen(fields.choices)).toBe(true)
+  expect(Object.isFrozen(fields.choices[0])).toBe(true)
+  expect(Object.isFrozen(fields.choices[0]!.values)).toBe(true)
+})

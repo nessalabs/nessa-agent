@@ -11,3 +11,7 @@ FAIL  question-target-identities [chromium 360]
 Source-asserted revert: native-group-owner
 ERROR question-target-identities [chromium 360]
 locator.check: Clicking the checkbox did not change its state
+Source-asserted revert: queued choice values snapshot
+FAIL QT11: queued serialization retains the exact answer snapshot that passed correlation
+-         "value-a",
++         "value-b",

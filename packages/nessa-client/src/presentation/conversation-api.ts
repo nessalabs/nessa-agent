@@ -251,6 +251,10 @@ function validConversationId(value: string): string {
   return value
 }
 
+type CapturedQuestionChoice = Readonly<Omit<ConversationQuestionChoice, "values">> & {
+  readonly values: readonly string[]
+}
+
 export function createConversationApi(
   session: RpcRequester,
   newId: () => string,
@@ -263,7 +267,7 @@ export function createConversationApi(
       | readonly string[]
       | readonly ImageAttachment[]
       | readonly LinkedFile[]
-      | readonly ConversationQuestionChoice[]
+      | readonly CapturedQuestionChoice[]
       | null
       | undefined
     >,
@@ -471,11 +475,22 @@ export function createConversationApi(
       )
     },
     answerQuestion: (target, choices, options = {}) => {
+      const capturedChoices =
+        choices === null
+          ? null
+          : Object.freeze(
+              choices.map((choice) =>
+                Object.freeze({
+                  ...choice,
+                  values: Object.freeze([...choice.values]),
+                }),
+              ),
+            )
       const {
         conversationId: id,
         executionId,
         questionId,
-      } = questionFields(target, choices)
+      } = questionFields(target, capturedChoices)
       validConversationId(id)
       const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
       return mutate(
@@ -485,7 +500,7 @@ export function createConversationApi(
           requestId,
           executionId,
           questionId,
-          choices: choices === null ? null : choices.map((choice) => ({ ...choice })),
+          choices: capturedChoices,
         },
         (value) => conversationMutation(value, requestId),
         false,

@@ -1,7 +1,4 @@
-import type {
-  ConversationQuestion,
-  ConversationQuestionChoice,
-} from "../generated/product.js"
+import type { ConversationQuestion } from "../generated/product.js"
 
 declare const questionTarget: unique symbol
 
@@ -61,7 +58,8 @@ export function questionTargetConversation(target: QuestionTarget): string {
 /** @internal Serialize issued identities and correlate answers with the captured published ask. */
 export function questionFields(
   target: QuestionTarget,
-  choices?: readonly ConversationQuestionChoice[] | null,
+  choices?:
+    readonly { readonly key: string; readonly values: readonly string[] }[] | null,
 ) {
   if (!issued.has(target))
     throw new TypeError("Use a question target captured from a view")
