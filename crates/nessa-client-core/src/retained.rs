@@ -71,7 +71,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+mod device;
 mod saved;
+pub use device::{RetainedEnrollmentClient, RetainedEnrollmentStatus, RetainedPurge};
 pub use saved::{
     RetainedCatalogueEntry, RetainedCataloguePage, RetainedProgress, RetainedTranscript,
     RetainedTranscriptSnapshot,
@@ -168,6 +170,9 @@ pub enum ReadFailure {
     /// The private cache could not be opened or written; trying again may
     /// help. Conversations the gateway no longer grants were still withdrawn.
     Cache,
+    /// A cache commit may have taken effect. Reload durable progress or purge
+    /// evidence before treating the write as absent or retrying it.
+    CacheUncertain,
     /// The private cache is damaged, or has a shape this build does not
     /// read. It is derived from the gateway, so only emptying it helps.
     CacheDamaged,
@@ -357,14 +362,7 @@ impl RetainedCache {
         wall: Arc<dyn WallClock>,
         clock: Arc<dyn MonotonicClock>,
     ) -> Result<Self, ReadFailure> {
-        let limits = Limits::new(
-            MAX_RECORD_PAGE_RECORDS,
-            MAX_RECORD_PAGE_PAYLOAD_BYTES,
-            MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
-        )
-        .map_err(|_| ReadFailure::Cache)?;
-        let policy = CachePolicy::new(CACHE_BYTES, CHECKPOINT_BYTES, limits)
-            .map_err(|_| ReadFailure::Cache)?;
+        let policy = retained_policy().map_err(|error| cache_failure(&error))?;
         let cache = ReadOnlyCache::open(path, policy, wall.clone())
             .map_err(|error| cache_failure(&error))?;
         Ok(Self {
@@ -903,6 +901,17 @@ fn unread(error: GatewayError) -> Result<Conversation, ReadFailure> {
     }
 }
 
+/// One policy publication for both retained reads and enrollment purges.
+fn retained_policy() -> Result<CachePolicy, CacheError> {
+    let limits = Limits::new(
+        MAX_RECORD_PAGE_RECORDS,
+        MAX_RECORD_PAGE_PAYLOAD_BYTES,
+        MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+    )
+    .map_err(|_| CacheError::InvalidPolicy)?;
+    CachePolicy::new(CACHE_BYTES, CHECKPOINT_BYTES, limits)
+}
+
 /// A cache failure as the caller acts on it: a cache that cannot be read as
 /// one is emptied, a full one is reported as such, and anything else may pass.
 fn cache_failure(error: &CacheError) -> ReadFailure {
@@ -910,6 +919,7 @@ fn cache_failure(error: &CacheError) -> ReadFailure {
         CacheError::Corrupt | CacheError::OutdatedSchema | CacheError::CatalogueMetadata => {
             ReadFailure::CacheDamaged
         }
+        CacheError::Uncertain => ReadFailure::CacheUncertain,
         CacheError::Quota => ReadFailure::Quota,
         CacheError::Scope { .. } => ReadFailure::ResetRequired,
         _ => ReadFailure::Cache,

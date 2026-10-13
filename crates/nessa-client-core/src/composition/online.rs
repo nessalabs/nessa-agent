@@ -288,13 +288,11 @@ fn open_paired(path: &Path, policy: CachePolicy) -> Result<Paired, OpenError> {
         .map_err(|_| OpenError::PrivateState)?
         .ok_or(OpenError::NotPaired)?;
     let credential = saved.credential().as_str().to_owned();
-    let receiver = Id::new(saved.receiver().as_str()).map_err(|_| OpenError::PrivateState)?;
     let (key, pin, _) = saved.into_enrollment().into_parts();
     let identity = NativeIdentity::restore(key).map_err(|_| OpenError::PrivateState)?;
     let cache = profile.cache.clone();
     let store = Arc::new(PurgeBeforeEnd::new(
         state,
-        receiver,
         Box::new(move || {
             ReadOnlyCache::open(&cache, policy, Arc::new(SystemClock))
                 .map(|cache| Box::new(cache) as Box<dyn CachePurges + Send>)
