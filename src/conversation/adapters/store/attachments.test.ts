@@ -1,4 +1,4 @@
-import { executionTargets } from "@nessa/client"
+import { executionTargets, prepareSubmission } from "@nessa/client"
 import { AttachmentResource } from "../../model"
 /**
  * What `sendDraft` does with a draft that holds files, and how a file gets from
@@ -849,10 +849,15 @@ it.each(["remove", "close", "delete"] as const)(
       dispatch(
         submissionStarted({
           conversationId: "c0",
-          executionId: `e${index}`,
-          actionId: `q${index}`,
-          mode: "queued",
           content: tabs.conversations[0]!.draft,
+          prepared: prepareSubmission({
+            conversationId: "00000000-0000-4000-8000-000000000001",
+            executionId: `e${index}`,
+            requestId: `q${index}`,
+            mode: "queued",
+            text: "",
+            attachments: [stored],
+          }),
         }),
       )
       dispatch(submissionAccepted({ id: "c0", executionId: `e${index}` }))
