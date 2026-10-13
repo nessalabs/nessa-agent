@@ -1,5 +1,5 @@
 //! Immutable original request; values describe correlation, never current authority.
-use super::{ConsentClass, DeviceKey, PairingError};
+use super::{ConsentClass, ConsentIntent, DeviceKey, DisclosedConsent, PairingError};
 use crate::domain::{AudienceId, CredentialId, Grant, MembershipId, PrincipalId, Resource};
 use std::net::SocketAddr;
 
@@ -131,6 +131,21 @@ impl OwnerPhoneRequest {
     /// Permanent key independently verified by this request's signature.
     pub fn device_key(&self) -> DeviceKey {
         self.device_key
+    }
+    /// Compare complete disclosed scope through the canonical consent owner.
+    /// Public invitation/attempt/expiry remain the separately retained lineage.
+    pub fn correlate_disclosure(&self, disclosure: &DisclosedConsent) -> Result<(), PairingError> {
+        let public = disclosure.public();
+        let intent = ConsentIntent::new(
+            public.consent(),
+            public.generation(),
+            self.source.audience.clone(),
+            self.source.owner.clone(),
+            self.source.membership.clone(),
+            self.source.resource.clone(),
+            ConsentClass::OwnerPhoneReadWrite,
+        )?;
+        disclosure.verify_intent(&intent)
     }
     /// One domain-separated, length-delimited signing transcript. No secret,
     /// server-generated invitation identity or ambient clock changes replay identity.

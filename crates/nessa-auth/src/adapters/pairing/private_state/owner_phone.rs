@@ -1,5 +1,5 @@
 //! Original reservation and seed share FilePairingState's private lock and publisher.
-use super::FilePairingState;
+use super::{decode_public, encode_public, ClientRecord, FilePairingState, PUBLIC_INTENT_BYTES};
 use crate::{
     adapters::pairing::{relay_key, NativeIdentity},
     application::pairing::{
@@ -7,7 +7,10 @@ use crate::{
         OwnerPhoneReservation, PrivateKeyMaterial, PrivateStateError,
     },
     domain::{
-        pairing::{DeviceKey, OwnerPhoneContext, OwnerPhoneRequestId, OwnerPhoneSource},
+        pairing::{
+            ConsentClass, DeviceKey, OwnerPhoneContext, OwnerPhoneRequestId, OwnerPhoneSource,
+            PublicIntent,
+        },
         AudienceId, CredentialId, MembershipId, OrganizationId, PrincipalId, Resource, ResourceId,
         MAX_IDENTIFIER_BYTES,
     },
@@ -16,13 +19,25 @@ use std::{
     net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
     sync::MutexGuard,
 };
+use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
-const ORIGINAL_FILE: &str = "owner-phone-original";
+pub(super) const ORIGINAL_FILE: &str = "owner-phone-original";
 const RESERVED: &[u8; 4] = b"NSOR";
 const PREPARED: &[u8; 4] = b"NSOK";
 // Six bounded identifiers, UUID, pin, largest numeric endpoint and optional seed.
-const MAX_BYTES: usize =
-    4 + 16 + 6 * (2 + MAX_IDENTIFIER_BYTES) + 44 + 1 + 16 + 2 + 4 + 4 + 32 + DeviceKey::LENGTH;
+const MAX_BYTES: usize = 4
+    + 16
+    + 6 * (2 + MAX_IDENTIFIER_BYTES)
+    + 44
+    + 1
+    + 16
+    + 2
+    + 4
+    + 4
+    + 32
+    + DeviceKey::LENGTH
+    + 1
+    + PUBLIC_INTENT_BYTES;
 struct Creation<'a> {
     owner: &'a FilePairingState,
     _operation: MutexGuard<'a, ()>,
@@ -40,7 +55,7 @@ impl OwnerPhoneOriginalCreation for Creation<'_> {
         if saved.reservation() != &self.reservation || saved.key().is_some() {
             return Err(PrivateStateError::Conflict);
         }
-        let bytes = encode(&self.reservation, Some(key))?;
+        let bytes = encode(&self.reservation, Some(key), None)?;
         self.owner.publish(ORIGINAL_FILE, &bytes, true)
     }
 }
@@ -59,6 +74,23 @@ impl FilePairingState {
             Ok(())
         }
     }
+    pub(super) fn checked_owner_phone_enrollment(
+        original: &OwnerPhonePrivateOriginal,
+        enrollment: &ClientRecord,
+    ) -> Result<Zeroizing<Vec<u8>>, PrivateStateError> {
+        let (key, pin, public) = match enrollment {
+            ClientRecord::Pending(saved) => (saved.key(), saved.gateway_pin(), saved.intent()),
+            ClientRecord::Credential(saved) => (saved.key(), saved.gateway_pin(), saved.intent()),
+        };
+        let original_key = original.key().ok_or(PrivateStateError::Conflict)?;
+        if original.public_intent() != Some(public)
+            || original.reservation().context().gateway_pin() != pin
+            || !bool::from(original_key.expose_bytes().ct_eq(key.expose_bytes()))
+        {
+            return Err(PrivateStateError::Conflict);
+        }
+        encode(original.reservation(), Some(original_key), Some(public))
+    }
 }
 impl OwnerPhoneOriginalStore for FilePairingState {
     fn reserve_original(
@@ -75,7 +107,7 @@ impl OwnerPhoneOriginalStore for FilePairingState {
         if self.load_original_record()?.is_some() || self.load_client()?.is_some() {
             return Err(PrivateStateError::Conflict);
         }
-        let bytes = encode(&reservation, None)?;
+        let bytes = encode(&reservation, None, None)?;
         self.publish(ORIGINAL_FILE, &bytes, false)?;
         Ok(Box::new(Creation {
             owner: self,
@@ -103,7 +135,13 @@ impl OwnerPhoneOriginalStore for FilePairingState {
 fn encode(
     reservation: &OwnerPhoneReservation,
     key: Option<&PrivateKeyMaterial>,
+    public: Option<PublicIntent>,
 ) -> Result<Zeroizing<Vec<u8>>, PrivateStateError> {
+    if public
+        .is_some_and(|public| key.is_none() || public.class() != ConsentClass::OwnerPhoneReadWrite)
+    {
+        return Err(PrivateStateError::Corrupt);
+    }
     let mut bytes = Zeroizing::new(Vec::with_capacity(MAX_BYTES));
     bytes.extend_from_slice(if key.is_some() { PREPARED } else { RESERVED });
     bytes.extend_from_slice(reservation.id().bytes());
@@ -138,6 +176,10 @@ fn encode(
     if let Some(key) = key {
         bytes.extend_from_slice(key.expose_bytes());
         bytes.extend_from_slice(&public_key(key)?);
+    }
+    bytes.push(u8::from(public.is_some()));
+    if let Some(public) = public {
+        encode_public(&mut bytes, public);
     }
     Ok(bytes)
 }
@@ -210,21 +252,36 @@ fn decode(bytes: &[u8]) -> Result<OwnerPhonePrivateOriginal, PrivateStateError> 
     let context =
         OwnerPhoneContext::new(source, pin, endpoint).map_err(|_| PrivateStateError::Corrupt)?;
     let reservation = OwnerPhoneReservation::new(id, context);
-    let saved = if prepared {
+    let key = if prepared {
         let key = PrivateKeyMaterial::new(Zeroizing::new(input.take()?));
         let published_key = input.take::<{ DeviceKey::LENGTH }>()?;
         if public_key(&key)? != published_key {
             return Err(PrivateStateError::Corrupt);
         }
-        OwnerPhonePrivateOriginal::prepared(reservation, key)
+        Some(key)
     } else {
-        OwnerPhonePrivateOriginal::reserved(reservation)
+        None
+    };
+    let public = match input.take::<1>()?[0] {
+        0 => None,
+        1 if prepared => Some(decode_public(
+            &input.take::<PUBLIC_INTENT_BYTES>()?,
+            ConsentClass::OwnerPhoneReadWrite,
+        )?),
+        _ => return Err(PrivateStateError::Corrupt),
     };
     if !input.0.is_empty() {
         return Err(PrivateStateError::Corrupt);
     }
-    Ok(saved)
+    Ok(match (key, public) {
+        (Some(key), Some(public)) => OwnerPhonePrivateOriginal::bound(reservation, key, public),
+        (Some(key), None) => OwnerPhonePrivateOriginal::prepared(reservation, key),
+        (None, None) => OwnerPhonePrivateOriginal::reserved(reservation),
+        (None, Some(_)) => return Err(PrivateStateError::Corrupt),
+    })
 }
+
+mod adoption;
 
 #[cfg(test)]
 #[path = "../../../../tests/adapters/private_state/owner_phone.rs"]

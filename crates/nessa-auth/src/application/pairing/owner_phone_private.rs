@@ -1,6 +1,6 @@
 //! Original private reservation and seed publication, without remote authority.
 use super::{PrivateKeyMaterial, PrivateStateError};
-use crate::domain::pairing::{OwnerPhoneContext, OwnerPhoneRequestId};
+use crate::domain::pairing::{OwnerPhoneContext, OwnerPhoneRequestId, PublicIntent};
 
 /// Exact allocated original, durably reserved before entropy or signing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,6 +27,7 @@ impl OwnerPhoneReservation {
 pub struct OwnerPhonePrivateOriginal {
     reservation: OwnerPhoneReservation,
     key: Option<PrivateKeyMaterial>,
+    public_intent: Option<PublicIntent>,
 }
 impl OwnerPhonePrivateOriginal {
     /// A reservation whose generating operation was not durably acknowledged.
@@ -34,6 +35,7 @@ impl OwnerPhonePrivateOriginal {
         Self {
             reservation,
             key: None,
+            public_intent: None,
         }
     }
     /// Actual original seed and context from the same private record.
@@ -41,7 +43,25 @@ impl OwnerPhonePrivateOriginal {
         Self {
             reservation,
             key: Some(key),
+            public_intent: None,
         }
+    }
+    /// Restore Prepared with its exact accepted public lineage. Consumers and
+    /// the private codec validate correspondence; this constructs no authority.
+    pub fn bound(
+        reservation: OwnerPhoneReservation,
+        key: PrivateKeyMaterial,
+        public: PublicIntent,
+    ) -> Self {
+        Self {
+            reservation,
+            key: Some(key),
+            public_intent: Some(public),
+        }
+    }
+    /// Exact immutable lineage, absent until the explicit adoption owner binds it.
+    pub fn public_intent(&self) -> Option<PublicIntent> {
+        self.public_intent
     }
     /// Immutable original correlation.
     pub fn reservation(&self) -> &OwnerPhoneReservation {
