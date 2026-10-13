@@ -7,7 +7,7 @@ mod commands;
 mod connector;
 mod poller;
 mod records;
-pub use audit::{DurablePeerAudit, AUDIT_QUEUE};
+pub use audit::{DurablePeerAudit, AUDIT_HEADROOM, AUDIT_QUEUE};
 pub use commands::{
     EnrollmentEntropy, EnrollmentEntropySource, PeerCommands, PeerError, PeerSync, SyncState,
     AUDIT_DEADLINE, CONNECT, PREEMPT,

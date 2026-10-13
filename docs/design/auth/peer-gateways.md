@@ -1486,11 +1486,14 @@ the client and gives the head an access path by receiver
   stays due until a read finishes and frees a place. It is not failed for
   the wait. A slow peer holds one place until that cycle ends, and its read
   is bounded by its own `READ_BUDGET`; the peers inside the cap are read on
-  that tick. The audit queue holds every cycle that can be enqueueing
+  that tick.   The audit queue holds every cycle that can be enqueueing
   (`READS_AT_ONCE` of them) plus one owner command's record, and a cycle
   keeps its read slot until its records are answered or the audit deadline
-  passes. A full queue still refuses at once (row R22), which is more than
-  that bound handed over before the writer drained it.
+  passes. One owner command hands a record over at a time, and the next
+  waits for that place inside the same deadline
+  (`a_second_owner_record_waits_for_the_headroom`). A full queue still
+  refuses at once (row R22), which is more than that bound handed over
+  before the writer drained it.
 - **An enrollment that loses its last reply can leave a pending record.** B
   saves its record before it confirms, as a device does, so a connection
   that fails after that save answers `peer_unreachable` or

@@ -53,7 +53,7 @@
 //! committed the ending. The cycle still does not go on to read.
 //! `a_stop_after_an_ended_transition_commits_keeps_the_status_cause` is
 //! that race, with the stop winning.
-use super::audit::AUDIT_QUEUE;
+use super::audit::{AUDIT_HEADROOM, AUDIT_QUEUE};
 use super::commands::{
     CycleStop, CycleTurn, EnrollmentEntropySource, PeerCommands, PeerSync, PollerRecord, SyncState,
 };
@@ -106,11 +106,9 @@ pub const WITHDRAWN_PER_READ: usize = 16 * WITHDRAWN_PER_RECORD;
 /// The most records one cycle hands the audit: two status steps, a reset,
 /// and the two reads around it.
 const RECORDS_PER_CYCLE: usize = 3 + 2 * WITHDRAWN_PER_READ.div_ceil(WITHDRAWN_PER_RECORD);
-/// Room behind every cycle that can be enqueueing for one owner command's
-/// record. The command waits for its intent to be kept before it records
-/// the outcome, so one record is the headroom. The queue is that fit
-/// ([`AUDIT_QUEUE`]); a full queue still refuses at once (design row R22).
-const AUDIT_HEADROOM: usize = 1;
+/// The queue holds every cycle that can be enqueueing plus
+/// [`AUDIT_HEADROOM`] owner record. A full queue still refuses at once
+/// (design row R22).
 const _: () = assert!(READS_AT_ONCE * RECORDS_PER_CYCLE + AUDIT_HEADROOM <= AUDIT_QUEUE);
 /// How this gateway names itself to a peer's product session.
 const CLIENT_ID: &str = "nessa-peer-gateway";

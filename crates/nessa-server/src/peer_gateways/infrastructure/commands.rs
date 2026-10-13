@@ -31,14 +31,15 @@
 //! ahead of the command that stopped it, and a slow audit never holds the
 //! turn. Records from cycles running side by side land in the order they
 //! were handed to the audit's one writer.
+use super::audit::AUDIT_HEADROOM;
 use super::connector::raced;
 use super::records::{
     ForgetFailure, PeerEntry, PeerPhase, PeerRecord, PeerRecords, PeerSlot, SlotFound, SlotRefusal,
     SlotSave,
 };
 use crate::peer_gateways::application::{
-    CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerConnector, PeerHolding, PeerState,
-    PollerCause,
+    CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable, PeerConnector,
+    PeerHolding, PeerState, PollerCause,
 };
 use nessa_auth::adapters::pairing::relay_key;
 use nessa_auth::{
@@ -192,6 +193,11 @@ pub struct PeerCommands {
     /// takes it too, so a relay that cannot run does not stop a read. A read
     /// does not hold it.
     record_set: Arc<Semaphore>,
+    /// How many owner records may be handed to the audit at once: the
+    /// queue's headroom behind every poller cycle. A command waits for a
+    /// place inside its audit deadline, rather than being refused while the
+    /// cycles' records are still queued.
+    audit_room: Arc<Semaphore>,
     /// One turn per peer. The cycle reading that peer, or the owner command
     /// that names it, holds the permit. The cycle is registered under this
     /// lock together with taking and giving back the permit, so a command
@@ -352,6 +358,7 @@ impl PeerCommands {
             connector,
             entropy,
             record_set: Arc::new(Semaphore::new(1)),
+            audit_room: Arc::new(Semaphore::new(AUDIT_HEADROOM)),
             peers: Mutex::new(PeerTurns {
                 closed: false,
                 peers: HashMap::new(),
@@ -693,11 +700,23 @@ impl PeerCommands {
         }
     }
     /// Hand `record` to the audit, and whether it was kept within
-    /// [`AUDIT_DEADLINE`]. A record still on its way then counts as not kept.
+    /// [`AUDIT_DEADLINE`]. One owner record is handed over at a time, the
+    /// queue's headroom, so a second command waits for that place inside
+    /// the same deadline instead of being refused while poller cycles still
+    /// fill the queue
+    /// (`a_second_owner_record_waits_for_the_headroom`). A record
+    /// still on its way when the deadline passes counts as not kept.
     async fn keep(&self, record: PeerAuditRecord) -> bool {
+        let room = Arc::clone(&self.audit_room);
+        let audit = Arc::clone(&self.audit);
         matches!(
-            self.within(AUDIT_DEADLINE, || self.audit.record(record))
-                .await,
+            self.within(AUDIT_DEADLINE, || async move {
+                let Ok(_place) = room.acquire_owned().await else {
+                    return Err(PeerAuditUnavailable);
+                };
+                audit.record(record).await
+            })
+            .await,
             Some(Ok(()))
         )
     }

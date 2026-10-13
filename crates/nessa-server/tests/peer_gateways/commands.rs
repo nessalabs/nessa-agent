@@ -2,7 +2,9 @@
 //! that asks for it never finds it taken with no cycle to stop; and closing
 //! the commands for shutdown leaves no effect without its outcome.
 use super::*;
-use crate::peer_gateways::application::{PeerAuditFuture, PeerConnectFuture};
+use crate::peer_gateways::application::{PeerAuditFuture, PeerAuditRecord, PeerConnectFuture};
+use crate::peer_gateways::infrastructure::audit::DurablePeerAudit;
+use crate::peer_gateways::infrastructure::{AUDIT_HEADROOM, AUDIT_QUEUE};
 use nessa_auth::application::pairing::{ClientPendingStore, GatewayKeyStore, PrivateKeyMaterial};
 use nessa_auth::application::ports::Clock as WallClock;
 use nessa_auth::domain::AudienceId;
@@ -10,6 +12,7 @@ use nessa_protocol::pairing::socket::WAKE_TICK;
 use nessa_protocol::relay::{GatewayKey, DIRECT_HEAD_START};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::watch;
 
@@ -210,6 +213,107 @@ async fn a_peer_turn_is_dropped_when_its_wait_ends_after_the_cycle() {
         0,
         "a turn whose wait ended after its cycle was kept"
     );
+}
+
+/// The queue holds one owner record behind every poller cycle. A second
+/// command waits for that place while the writer is stalled, and is kept
+/// once the writer goes on, rather than being refused at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_owner_record_waits_for_the_headroom() {
+    let root = tempfile::tempdir().unwrap();
+    let peers = root.path().join("root");
+    let directory = root.path().join("audit");
+    nessa_local_storage::create_directory(&directory).unwrap();
+    let stall = HeadroomStall::new();
+    let release = HeadroomRelease(stall.clone());
+    let audit = Arc::new(DurablePeerAudit::with_writer_hook(
+        directory,
+        Arc::new(Wall),
+        Arc::new(Still),
+        AUDIT_QUEUE,
+        stall.hook(),
+    ));
+    let commands = commands_with(
+        peers.as_path(),
+        Arc::new(Still),
+        audit.clone(),
+        Arc::new(Nothing),
+    );
+    // One record for the writer to block on, then enough to leave exactly
+    // the headroom free once that record has been taken out of the queue.
+    drop(audit.record(owner_intent()));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !stall.reached.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the writer did not take the first record");
+    for _ in 0..(AUDIT_QUEUE - AUDIT_HEADROOM) {
+        drop(audit.record(owner_intent()));
+    }
+    let first = tokio::spawn({
+        let commands = commands.clone();
+        async move { commands.keep(owner_intent()).await }
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let second = tokio::spawn({
+        let commands = commands.clone();
+        async move { commands.keep(owner_intent()).await }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !second.is_finished(),
+        "the second owner record was refused while one already filled the headroom"
+    );
+    drop(release);
+    let (first, second) = tokio::join!(first, second);
+    assert!(first.unwrap(), "the first owner record was not kept");
+    assert!(second.unwrap(), "the second owner record was not kept");
+}
+
+fn owner_intent() -> PeerAuditRecord {
+    PeerAuditRecord::ForgetRequested {
+        operation: uuid::Uuid::new_v4(),
+        initiator: PrincipalId::new("owner").unwrap(),
+        peer: DeviceKey::new([4; 32]),
+    }
+}
+
+/// Blocks the audit writer on its first record until dropped.
+struct HeadroomStall {
+    reached: AtomicBool,
+    open: Mutex<bool>,
+    opened: std::sync::Condvar,
+}
+impl HeadroomStall {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            reached: AtomicBool::new(false),
+            open: Mutex::new(false),
+            opened: std::sync::Condvar::new(),
+        })
+    }
+    fn hook(self: &Arc<Self>) -> Arc<dyn Fn(u64) + Send + Sync> {
+        let stall = Arc::clone(self);
+        Arc::new(move |sequence| {
+            if sequence != 1 {
+                return;
+            }
+            stall.reached.store(true, Ordering::SeqCst);
+            let mut open = stall.open.lock().unwrap();
+            while !*open {
+                open = stall.opened.wait(open).unwrap();
+            }
+        })
+    }
+}
+struct HeadroomRelease(Arc<HeadroomStall>);
+impl Drop for HeadroomRelease {
+    fn drop(&mut self) {
+        *self.0.open.lock().unwrap() = true;
+        self.0.opened.notify_all();
+    }
 }
 
 fn peer_turns(commands: &Arc<PeerCommands>) -> usize {
