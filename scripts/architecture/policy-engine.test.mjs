@@ -301,3 +301,27 @@ test("the engine dependency is never renamed", () => {
     1,
   )
 })
+
+test("a path with spaces around :: still names the port", () => {
+  for (const source of [
+    "impl crate :: ports :: PolicyEvaluator for Stub {}",
+    "impl ::ports::PolicyEvaluator for Stub {}",
+    "impl PolicyEvaluator<T>for Stub {}",
+  ])
+    assert.equal(policyEngineViolations(product, source).length, 1, source)
+})
+
+test("any item behind a test cfg may substitute the port, an ungated one may not", () => {
+  for (const source of [
+    "#[cfg(test)]\nimpl PolicyEvaluator for Stub {\n    fn evaluate(&self) {}\n}",
+    "#[cfg(test)]\nfn stub() {\n    struct S;\n    impl PolicyEvaluator for S {}\n}",
+  ])
+    assert.deepEqual(policyEngineViolations(product, source), [], source)
+  assert.equal(
+    policyEngineViolations(
+      product,
+      "#[cfg(test)]\nuse fakes::Stub;\n#[derive(Debug)]\nstruct Real;\nimpl PolicyEvaluator for Real {}",
+    ).length,
+    1,
+  )
+})

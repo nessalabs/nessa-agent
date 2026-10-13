@@ -20,8 +20,8 @@ import { maskRustNonCode, normalizedPath } from "./rust-boundaries.mjs"
  * list scanned — from any other Rust, and does not pretend to; review holds
  * that half of the gate.
  *
- * Test code is what the compiler says it is: the body of a `#[cfg(test)]`
- * module, and a file that only test code loads: an out-of-line
+ * Test code is what the compiler says it is: an item behind a test `cfg`
+ * (a module, an `impl`, a function), and a file that only test code loads: an out-of-line
  * `#[cfg(test)] mod name;`, and the modules such files declare in turn. A
  * file product code also loads is product code. [`testCodeFiles`] follows
  * declarations the way rustc resolves a file's top-level modules, so no file
@@ -43,7 +43,7 @@ const ENGINE = /\bcedar_policy\b/
  * `impl PolicyEvaluator for X`, `impl<T> ports::ToolPolicyEvaluator<T> for X`.
  */
 const IMPLEMENTS =
-  /\bimpl\s*(?:<[^{;]*?>\s*)?(?:[\w:]*::)?\w*PolicyEvaluator\s*(?:<[^{;]*?>\s*)?\s+for\b/
+  /\bimpl\s*(?:<[^{;]*?>\s*)?(?:(?:\w+\s*)?::\s*)*\w*PolicyEvaluator(?:\s*<[^{;]*?>)?\s*\bfor\b/
 
 /**
  * A policy port renamed on import or re-export: `use ports::PolicyEvaluator as
@@ -90,24 +90,28 @@ const ATTRIBUTES = String.raw`((?:#\[[^\]]*\]\s*)*)`
 /** The `mod` keyword after a visibility, if any. */
 const MOD = String.raw`(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*`
 
-/** `text` with each inline `#[cfg(test)]` module's body blanked, lines kept. */
-function withoutTestModules(text) {
+/**
+ * `text` with each item behind a test cfg blanked, lines kept: a module, an
+ * `impl`, a function, a `use`. The item runs from its attributes to its
+ * matching `}`, or to its `;` when it has no body.
+ */
+function withoutTestItems(text) {
   const out = text.split("")
-  const opening = new RegExp(`${ATTRIBUTES}${MOD}\\{`, "g")
-  for (let match; (match = opening.exec(text));) {
-    if (!hasTestCfg(match[1])) {
-      opening.lastIndex = match.index + match[0].length
-      continue
-    }
-    let depth = 1
+  const attributes = /((?:#\[[^\]]*\]\s*)+)/g
+  for (let match; (match = attributes.exec(text));) {
+    if (!hasTestCfg(match[1])) continue
     let index = match.index + match[0].length
-    for (; index < text.length && depth > 0; index += 1) {
-      if (text[index] === "{") depth += 1
-      else if (text[index] === "}") depth -= 1
-    }
+    while (index < text.length && text[index] !== "{" && text[index] !== ";") index += 1
+    if (text[index] === "{") {
+      let depth = 1
+      for (index += 1; index < text.length && depth > 0; index += 1) {
+        if (text[index] === "{") depth += 1
+        else if (text[index] === "}") depth -= 1
+      }
+    } else index += 1
     for (let blank = match.index; blank < index; blank += 1)
       if (out[blank] !== "\n") out[blank] = " "
-    opening.lastIndex = index
+    attributes.lastIndex = index
   }
   return out.join("")
 }
@@ -237,7 +241,7 @@ export function policyEngineViolations(path, source, test = false) {
     violations.push(
       "a policy port keeps its name: renamed, it could be implemented where this check cannot see (CODING_STANDARDS.md#policy-goes-through-cedar)",
     )
-  if (!test && IMPLEMENTS.test(withoutTestModules(text)))
+  if (!test && IMPLEMENTS.test(withoutTestItems(text)))
     violations.push(
       "a policy port is implemented by a Cedar adapter in a `cedar` directory, not by hand-written Rust (CODING_STANDARDS.md#policy-goes-through-cedar)",
     )
