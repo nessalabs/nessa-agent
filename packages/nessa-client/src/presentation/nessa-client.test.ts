@@ -332,11 +332,14 @@ describe("NessaClient", () => {
       uptimeMs: 42,
     })
 
-    const receipt = await client.conversation.send(CONVERSATION_ID, "hey", [], [], {
-      executionId: "execution",
-      requestId: "action",
-    })
-    expect(receipt).toEqual({
+    const receipt = await client.conversation.submit(
+      client.conversation.prepare(CONVERSATION_ID, "hey", [], [], {
+        executionId: "execution",
+        requestId: "action",
+      }),
+    )
+    expect(receipt).toMatchObject({
+      conversationId: CONVERSATION_ID,
       executionId: "execution",
       disposition: "queued",
       requestId: "action",

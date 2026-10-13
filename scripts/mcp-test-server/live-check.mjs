@@ -129,7 +129,11 @@ async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))
     })
     const id = randomUUID()
     await client.conversation.create({ conversationId: id, agent })
-    step("send", (await client.conversation.send(id, PROMPT)).disposition ?? "admitted")
+    step(
+      "send",
+      (await client.conversation.submit(client.conversation.prepare(id, PROMPT)))
+        .disposition ?? "admitted",
+    )
     const answered = new Set()
     const reported = new Set()
     let view = null

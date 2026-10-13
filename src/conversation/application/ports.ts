@@ -1,10 +1,11 @@
-import type { PermissionTarget, QuestionTarget, QuestionChoice } from "@nessa/client"
 import type {
-  ConversationListing,
-  ConversationView,
-  Submission,
-  SubmissionReceipt,
-} from "./view"
+  PreparedSubmission,
+  ExecutionTarget,
+  PermissionTarget,
+  QuestionTarget,
+  QuestionChoice,
+} from "@nessa/client"
+import type { ConversationListing, ConversationView, SubmissionReceipt } from "./view"
 import {
   type ApprovalMode,
   type CommandFailure,
@@ -101,8 +102,7 @@ export interface ConversationEffects {
    * outcome `unknown`, since that is all the gateway promises.
    */
   delete(conversationId: string): Promise<void>
-  send(input: Submission): Promise<SubmissionReceipt>
-  steer(input: Submission): Promise<SubmissionReceipt>
+  submit(input: PreparedSubmission): Promise<SubmissionReceipt>
   /**
    * Put an image's original bytes on the gateway and learn what it stored them
    * as. The conversation must exist (`create` first). `file` describes exactly
@@ -130,7 +130,7 @@ export interface ConversationEffects {
     conversationId: string,
     executionIds: readonly string[],
   ): Promise<"applied" | "unchanged" | "queue_changed" | "priority_conflict">
-  remove(conversationId: string, executionId: string): Promise<void>
+  remove(target: ExecutionTarget): Promise<void>
   answer(target: PermissionTarget, optionId: string): Promise<void>
   /** Answer one question the agent asked; null choices decline it. */
   answerQuestion(
@@ -140,7 +140,7 @@ export interface ConversationEffects {
   cancel(target: PermissionTarget): Promise<void>
   close(conversationId: string): Promise<void>
   /** Stop one captured turn. The attachment stays open and its uploads stay held. */
-  stop(conversationId: string, executionId: string): Promise<void>
+  stop(target: ExecutionTarget): Promise<void>
 }
 
 /** No live transport accepted this operation; unlike a lost acknowledgement, no message was submitted. */

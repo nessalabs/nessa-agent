@@ -1,6 +1,7 @@
 import { questionTargets } from "../application/question-target.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import { expect, it, vi } from "vitest"
+import { executionTargets } from "../application/execution-target.js"
 import { permissionTargets } from "../application/permission-target.js"
 import { createConversationApi } from "./conversation-api.js"
 import { conversationDeleteTimeoutMs } from "../application/agent-budgets.js"
@@ -216,7 +217,7 @@ it("uses the ordinary configured request deadline for create, read, and send", a
   const api = createConversationApi({ request }, () => "identity")
   await api.create({ conversationId })
   await api.read(conversationId)
-  await api.send(conversationId, "hello")
+  await api.submit(api.prepare(conversationId, "hello"))
   expect(request.mock.calls.map((call) => call.length)).toEqual([2, 2, 2])
 })
 it("owns immutable message and action identities through an uncertain retry", async () => {
@@ -227,7 +228,7 @@ it("owns immutable message and action identities through an uncertain retry", as
   const api = createConversationApi({ request }, () => "unused")
   const options = { executionId: "execution", requestId: "action" }
   const error = await api
-    .send(conversationId, "hello", [], [], options)
+    .submit(api.prepare(conversationId, "hello", [], [], options))
     .catch((error) => error)
   options.executionId = "edited-id"
   options.requestId = "edited-action"
@@ -238,7 +239,8 @@ it("owns immutable message and action identities through an uncertain retry", as
     requestId: "action",
   })
   expect(request).toHaveBeenCalledTimes(1)
-  expect(await error.retry()).toEqual({
+  expect(await error.retry()).toMatchObject({
+    conversationId,
     executionId: "execution",
     disposition: "queued",
     requestId: "action",
@@ -260,11 +262,11 @@ it("generates distinct identities per intentional message, retaining each on ret
     disposition: "queued",
   }))
   const api = createConversationApi({ request }, () => `id-${++next}`)
-  expect(await api.send(conversationId, "same text", [])).toMatchObject({
+  expect(await api.submit(api.prepare(conversationId, "same text", []))).toMatchObject({
     executionId: "id-1",
     requestId: "id-2",
   })
-  expect(await api.send(conversationId, "same text", [])).toMatchObject({
+  expect(await api.submit(api.prepare(conversationId, "same text", []))).toMatchObject({
     executionId: "id-3",
     requestId: "id-4",
   })
@@ -331,7 +333,9 @@ it("routes every control with stable action and target identities", async () => 
     applied: true,
   }))
   const api = createConversationApi({ request }, () => "action")
-  await api.remove(conversationId, "execution")
+  await api.remove(
+    executionTargets({ ...view, pending: [{ executionId: "execution" }] })[0]!,
+  )
   await api.answer(reviewTarget("review"), "allow")
   await api.cancel(reviewTarget("review"), "user withdrew")
   await api.close(conversationId)
@@ -363,7 +367,9 @@ it("stops the named turn without closing the attachment", async () => {
     outcome: "cancelled",
   }))
   const api = createConversationApi({ request }, () => "action")
-  await expect(api.stop(conversationId, "turn")).resolves.toEqual({
+  await expect(
+    api.stop(executionTargets({ ...view, pending: [{ executionId: "turn" }] })[0]!),
+  ).resolves.toEqual({
     requestId: "action",
     stage: "settled",
     outcome: "cancelled",
@@ -611,7 +617,12 @@ it("rejects a response acknowledging a different execution or action", async () 
     .mockResolvedValue({ executionId: "other", disposition: "queued" })
   const api = createConversationApi({ request }, () => "id")
   await expect(
-    api.steer(conversationId, "correction", [], [], { executionId: "expected" }),
+    api.submit(
+      api.prepare(conversationId, "correction", [], [], {
+        ...{ executionId: "expected" },
+        mode: "steering",
+      }),
+    ),
   ).rejects.toBeInstanceOf(NessaConversationMutationError)
   request.mockResolvedValue({ requestId: "other", applied: true })
   await expect(
@@ -624,7 +635,10 @@ it("never offers a replay for controls whose acknowledgement was lost", async ()
   const api = createConversationApi({ request }, () => "action")
   const controls = [
     () => api.close(conversationId),
-    () => api.remove(conversationId, "execution"),
+    () =>
+      api.remove(
+        executionTargets({ ...view, pending: [{ executionId: "execution" }] })[0]!,
+      ),
     () => api.answer(reviewTarget(), "allow"),
     () => api.cancel(reviewTarget(), "withdrawn"),
   ]
@@ -835,7 +849,7 @@ it("never treats permission details as state for a different control", async () 
   )
   const api = createConversationApi({ request }, () => "action")
   const error = await api
-    .remove(conversationId, "execution")
+    .remove(executionTargets({ ...view, pending: [{ executionId: "execution" }] })[0]!)
     .catch((error: unknown) => error)
   expect(error).toMatchObject({ permissionSelection: undefined, uncertain: true })
 })
@@ -897,7 +911,11 @@ it.each([
     for (const failed of [
       await api.close(conversationId).catch((error) => error),
       await api.cancel(reviewTarget(), "no longer needed").catch((error) => error),
-      await api.remove(conversationId, "execution").catch((error) => error),
+      await api
+        .remove(
+          executionTargets({ ...view, pending: [{ executionId: "execution" }] })[0]!,
+        )
+        .catch((error) => error),
       await api.answer(reviewTarget(), "option").catch((error) => error),
     ]) {
       expect(failed).toBeInstanceOf(NessaConversationControlError)
@@ -925,7 +943,9 @@ it("reports invalid requests as known pre-admission rejections", async () => {
     .fn()
     .mockRejectedValue(new NessaRpcError("invalid_request", "invalid_request"))
   const api = createConversationApi({ request }, () => "identity")
-  const sendError = await api.send(conversationId, "hello", []).catch((error) => error)
+  const sendError = await api
+    .submit(api.prepare(conversationId, "hello", []))
+    .catch((error) => error)
   const closeError = await api.close(conversationId).catch((error) => error)
   expect(sendError).toMatchObject({ uncertain: false })
   expect(closeError).toMatchObject({ uncertain: false })
@@ -938,7 +958,9 @@ it("says the agent was still starting and that the same command may be retried",
       new NessaRpcError("agent_startup_deadline", "agent_startup_deadline"),
     )
   const api = createConversationApi({ request }, () => "identity")
-  const error = await api.send(conversationId, "hello").catch((error) => error)
+  const error = await api
+    .submit(api.prepare(conversationId, "hello"))
+    .catch((error) => error)
   expect(error).toBeInstanceOf(NessaConversationMutationError)
   expect(error.code).toBe(ConversationErrorCode.AgentStartupDeadline)
   // Startup runs before any input reaches the provider: this is a rejection,
@@ -968,7 +990,9 @@ it("leaves an unrecognized gateway code untyped instead of guessing a meaning", 
     .fn()
     .mockRejectedValue(new NessaRpcError("invented_code", "invented_code"))
   const api = createConversationApi({ request }, () => "identity")
-  const sendError = await api.send(conversationId, "hello").catch((error) => error)
+  const sendError = await api
+    .submit(api.prepare(conversationId, "hello"))
+    .catch((error) => error)
   expect(sendError.code).toBeUndefined()
   expect(sendError.uncertain).toBe(true)
   expect(sendError.message).toBe("Conversation command failed")
@@ -989,19 +1013,27 @@ it("enforces canonical conversation and UTF-8 byte limits before admission", asy
     }),
   )
   const api = createConversationApi({ request }, () => "request")
-  expect(() => api.send("conversation", "hello", [])).toThrow(TypeError)
-  expect(() => api.send(conversationId, "😀".repeat(2049), [])).toThrow(TypeError)
+  expect(() => api.submit(api.prepare("conversation", "hello", []))).toThrow(TypeError)
+  expect(() => api.submit(api.prepare(conversationId, "😀".repeat(2049), []))).toThrow(
+    TypeError,
+  )
   expect(() =>
-    api.send(conversationId, "hello", [], [], { executionId: "😀".repeat(65) }),
+    api.submit(
+      api.prepare(conversationId, "hello", [], [], { executionId: "😀".repeat(65) }),
+    ),
   ).toThrow(TypeError)
   expect(() =>
-    api.send(conversationId, "hello", [], [], { requestId: "😀".repeat(65) }),
+    api.submit(
+      api.prepare(conversationId, "hello", [], [], { requestId: "😀".repeat(65) }),
+    ),
   ).toThrow(TypeError)
   await expect(
-    api.send(conversationId, "😀".repeat(2048), [], [], {
-      executionId: "😀".repeat(64),
-      requestId: "😀".repeat(64),
-    }),
+    api.submit(
+      api.prepare(conversationId, "😀".repeat(2048), [], [], {
+        executionId: "😀".repeat(64),
+        requestId: "😀".repeat(64),
+      }),
+    ),
   ).resolves.toMatchObject({ disposition: "queued" })
   expect(request).toHaveBeenCalledOnce()
 })
@@ -1145,8 +1177,8 @@ function queued() {
 it("sends an image-only message, and steers with images the same way", async () => {
   const request = queued()
   const api = createConversationApi({ request }, () => "id")
-  await api.send(conversationId, "", [image])
-  await api.steer(conversationId, "  ", [image])
+  await api.submit(api.prepare(conversationId, "", [image]))
+  await api.submit(api.prepare(conversationId, "  ", [image], [], { mode: "steering" }))
   const command = { conversationId, executionId: "id", requestId: "id", files: [] }
   expect(request.mock.calls).toEqual([
     ["conversation.send", { ...command, text: "", attachments: [image] }],
@@ -1160,7 +1192,7 @@ it("sends a message that only points at files, and refuses a path it could not c
   const command = { conversationId, executionId: "id", requestId: "id", attachments: [] }
 
   // A file alone is a whole message; the path travels and nothing else does.
-  void api.send(conversationId, "", [], [file])
+  void api.submit(api.prepare(conversationId, "", [], [file]))
   expect(request.mock.calls).toEqual([
     ["conversation.send", { ...command, text: "", files: [file] }],
   ])
@@ -1190,7 +1222,9 @@ it("sends a message that only points at files, and refuses a path it could not c
     "/Users/ada/rep\u009frt.pdf",
     "/Users/ada/rep\u007frt.pdf",
   ])
-    expect(() => api.send(conversationId, "look", [], [{ path }])).toThrow(TypeError)
+    expect(() => api.submit(api.prepare(conversationId, "look", [], [{ path }]))).toThrow(
+      TypeError,
+    )
   // And the ordinary names next to them still go: a leading dot, a name of
   // three dots, a colon, and a percent sign.
   for (const path of [
@@ -1199,16 +1233,27 @@ it("sends a message that only points at files, and refuses a path it could not c
     "/Users/ada/2026-09-20 10:30.txt",
     "/Users/ada/100% done.pdf",
   ])
-    expect(() => api.send(conversationId, "look", [], [{ path }])).not.toThrow()
+    expect(() =>
+      api.submit(api.prepare(conversationId, "look", [], [{ path }])),
+    ).not.toThrow()
   expect(() =>
-    api.send(conversationId, "look", [], [{ path: "/a.pdf", name: "a.pdf" } as never]),
+    api.submit(
+      api.prepare(
+        conversationId,
+        "look",
+        [],
+        [{ path: "/a.pdf", name: "a.pdf" } as never],
+      ),
+    ),
   ).toThrow(TypeError)
   expect(() =>
-    api.send(
-      conversationId,
-      "look",
-      [],
-      Array.from({ length: 11 }, (_, index) => ({ path: `/${index}.pdf` })),
+    api.submit(
+      api.prepare(
+        conversationId,
+        "look",
+        [],
+        Array.from({ length: 11 }, (_, index) => ({ path: `/${index}.pdf` })),
+      ),
     ),
   ).toThrow(TypeError)
   expect(request.mock.calls).toHaveLength(5)
@@ -1223,7 +1268,9 @@ it("retries with the images it was given, whatever the caller did to its list si
     { ...image },
   ]
   const error = await api
-    .send(conversationId, "look", attachments, [], { executionId: "execution" })
+    .submit(
+      api.prepare(conversationId, "look", attachments, [], { executionId: "execution" }),
+    )
     .catch((error) => error)
   attachments[0]!.size = 4
   attachments.push({ ...image })
@@ -1251,23 +1298,29 @@ it("refuses a message the gateway would refuse, before admission", async () => {
     ["hello", "not a list"],
   ]
   for (const [text, attachments] of refused)
-    expect(() => api.send(conversationId, text, attachments as never)).toThrow(TypeError)
+    expect(() =>
+      api.submit(api.prepare(conversationId, text, attachments as never)),
+    ).toThrow(TypeError)
   expect(request).not.toHaveBeenCalled()
-  await api.send(
-    conversationId,
-    "hello",
-    Array.from({ length: 10 }, () => ({ ...image, size: 1024 * 1024 })),
+  await api.submit(
+    api.prepare(
+      conversationId,
+      "hello",
+      Array.from({ length: 10 }, () => ({ ...image, size: 1024 * 1024 })),
+    ),
   )
   // And a message of text alone needs no list at all.
-  await api.send(conversationId, "hello")
+  await api.submit(api.prepare(conversationId, "hello"))
   expect(request).toHaveBeenCalledTimes(2)
 })
 
 it("accepts an image of exactly the schema's maximum size", async () => {
   const request = queued()
-  await createConversationApi({ request }, () => "id").send(conversationId, "", [
-    { ...image, size: 5_242_880 },
-  ])
+  await createConversationApi({ request }, () => "id").submit(
+    createConversationApi({ request }, () => "id").prepare(conversationId, "", [
+      { ...image, size: 5_242_880 },
+    ]),
+  )
   expect(request).toHaveBeenCalledOnce()
 })
 
@@ -1293,8 +1346,10 @@ it.each([
       .fn()
       .mockRejectedValue(new NessaRpcError(code, "temporarily_unavailable"))
     const api = createConversationApi({ request }, () => "id")
-    for (const submit of [api.send, api.steer]) {
-      const error = await submit(conversationId, "look", [image]).catch((error) => error)
+    for (const mode of ["queued", "steering"] as const) {
+      const error = await api
+        .submit(api.prepare(conversationId, "look", [image], [], { mode }))
+        .catch((error) => error)
       expect(error).toBeInstanceOf(NessaConversationMutationError)
       expect(error).toMatchObject({ uncertain: false, code })
     }
@@ -1314,7 +1369,11 @@ it.each([
     .fn()
     .mockRejectedValue(new NessaRpcError(code, "attachment_not_found"))
   const error = await createConversationApi({ request }, () => "id")
-    .send(conversationId, "look", [image])
+    .submit(
+      createConversationApi({ request }, () => "id").prepare(conversationId, "look", [
+        image,
+      ]),
+    )
     .catch((error) => error)
   // The code is still reported when this client knows it; what it does not
   // report is that the message was refused.
@@ -1324,7 +1383,11 @@ it.each([
 it("does not read a rejection out of an error that is not the gateway's answer", async () => {
   const request = vi.fn().mockRejectedValue(new Error("attachment_not_found"))
   const error = await createConversationApi({ request }, () => "id")
-    .send(conversationId, "look", [image])
+    .submit(
+      createConversationApi({ request }, () => "id").prepare(conversationId, "look", [
+        image,
+      ]),
+    )
     .catch((error) => error)
   expect(error).toMatchObject({ uncertain: true, code: undefined })
 })

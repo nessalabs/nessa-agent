@@ -147,7 +147,7 @@ try {
   const view = await client.conversation.read(id)
   step("runtime", JSON.stringify(view.runtime ?? null))
 
-  const sent = await client.conversation.send(id, PROMPT)
+  const sent = await client.conversation.submit(client.conversation.prepare(id, PROMPT))
   step("send", `admitted: ${JSON.stringify(sent)}`)
 
   let last = null

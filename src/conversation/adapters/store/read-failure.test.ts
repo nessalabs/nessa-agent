@@ -101,7 +101,9 @@ function reading(read: () => Promise<ConversationView>) {
       ),
     }),
   )
-  store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
+  store.dispatch(
+    bindConversation({ id: "c0", serverId: "00000000-0000-4000-8000-000000000001" }),
+  )
   return store
 }
 
@@ -115,10 +117,9 @@ it.each([false, true])(
   "keeps a bound unavailable draft before any admission and resumes after a valid follow (steering=%s)",
   async (steering) => {
     const effects = scenarioEffects("echo")
-    await effects.create("server")
+    await effects.create("00000000-0000-4000-8000-000000000001")
     const create = vi.fn(effects.create)
-    const send = vi.fn(effects.send)
-    const steer = vi.fn(effects.steer)
+    const send = vi.fn(effects.submit)
     const followers: ConversationFollower[] = []
     let unavailable = false
     const store = makeStore(
@@ -127,8 +128,7 @@ it.each([false, true])(
         conversation: {
           ...effects,
           create,
-          send,
-          steer,
+          submit: send,
           follow(id, follower) {
             followers.push(follower)
             return effects.follow(id, {
@@ -146,7 +146,9 @@ it.each([false, true])(
         },
       }),
     )
-    store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
+    store.dispatch(
+      bindConversation({ id: "c0", serverId: "00000000-0000-4000-8000-000000000001" }),
+    )
     await store.dispatch(followConversation("c0"))
     const draft: MessageContent = [
       ...textContent("Keep this draft"),
@@ -180,9 +182,9 @@ it.each([false, true])(
       )
       expect({
         create: create.mock.calls.length,
-        send: send.mock.calls.length,
-        steer: steer.mock.calls.length,
-      }).toEqual({ create: 0, send: 0, steer: 0 })
+        submit: send.mock.calls.length,
+        steer: 0,
+      }).toEqual({ create: 0, submit: 0, steer: 0 })
       expect(declined.meta.requestStatus).toBe("rejected")
       expect(declined.payload).toEqual({ kind: "view-unavailable" })
       const retained = store.getState().conversation.conversations[0]!
@@ -202,10 +204,10 @@ it.each([false, true])(
       )
       expect(accepted.meta.requestStatus).toBe("fulfilled")
       expect(create).toHaveBeenCalledTimes(1)
-      expect(steering ? steer : send).toHaveBeenCalledTimes(1)
-      expect(steering ? send : steer).not.toHaveBeenCalled()
-      expect((steering ? steer : send).mock.calls[0]![0]).toMatchObject({
-        conversationId: "server",
+      expect(send).toHaveBeenCalledTimes(1)
+      expect(send.mock.calls[0]![0].mode).toBe(steering ? "steering" : "queued")
+      expect(send.mock.calls[0]![0]).toMatchObject({
+        conversationId: "00000000-0000-4000-8000-000000000001",
         text: "Keep this draft",
         files: [{ path: "/tmp/notes.txt" }],
       })
@@ -289,7 +291,7 @@ it("lets the next view clear the read failure, notice and all", async () => {
     .mockRejectedValueOnce(
       new NessaRpcError(ConversationErrorCode.TemporarilyUnavailable, "busy right now"),
     )
-    .mockResolvedValueOnce(view("server"))
+    .mockResolvedValueOnce(view("00000000-0000-4000-8000-000000000001"))
   const store = reading(read as () => Promise<ConversationView>)
   await store.dispatch(followConversation("c0"))
   expect(store.getState().conversation.conversations[0]!.readError).toBe("unavailable")
@@ -303,7 +305,7 @@ it("lets the next view clear the read failure, notice and all", async () => {
 function closedWithFailingRead(readCause: unknown) {
   const client = {
     conversation: {
-      create: async () => ({ conversationId: "server" }),
+      create: async () => ({ conversationId: "00000000-0000-4000-8000-000000000001" }),
       close: () => Promise.reject(new Error("acknowledgement lost")),
     },
     subscriptions: subscribing(() => Promise.reject(readCause)),
@@ -317,7 +319,9 @@ function closedWithFailingRead(readCause: unknown) {
       ),
     }),
   )
-  store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
+  store.dispatch(
+    bindConversation({ id: "c0", serverId: "00000000-0000-4000-8000-000000000001" }),
+  )
   return store
     .dispatch(controlConversation({ id: "c0", control: { kind: "close" } }))
     .then(() => store.getState().conversation.conversations[0]!)

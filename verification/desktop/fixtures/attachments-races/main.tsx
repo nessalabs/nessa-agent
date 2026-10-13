@@ -29,9 +29,9 @@ const store = makeStore({
   canChoosePaths: true,
   conversation: {
     ...effects,
-    send: async (input) => {
+    submit: async (input) => {
       sends.push(input)
-      return effects.send(input)
+      return effects.submit(input)
     },
   },
 })

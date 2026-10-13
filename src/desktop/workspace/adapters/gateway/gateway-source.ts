@@ -85,6 +85,7 @@
  * app's calls go on that client too (`connected`).
  */
 import {
+  prepareSubmission,
   permissionTargets,
   ConversationErrorCode,
   conversationErrorCode,
@@ -134,7 +135,7 @@ import {
 export interface GatewayClient {
   readonly conversation: Pick<
     ConversationApi,
-    "observe" | "create" | "send" | "answer" | "archive"
+    "observe" | "create" | "submit" | "answer" | "archive"
   >
   readonly subscriptions: Pick<SubscriptionApi, "view" | "list">
   readonly connectionState: ConnectionState
@@ -1170,52 +1171,64 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         if (listeners.size === 0) stopStreams()
       }
     },
-    send: (message) =>
-      within(async (live) => {
+    send: (message) => {
+      // Capture before connection/create: the caller may reuse its mutable
+      // draft or model object while either effect is pending (PS16).
+      const model = Object.freeze({ ...message.model })
+      const start = message.start !== undefined
+      let prepared
+      try {
+        prepared = prepareSubmission({
+          conversationId: message.sessionId,
+          executionId: message.messageId,
+          requestId: message.messageId,
+          text: message.text,
+          mode: "queued",
+        })
+      } catch (error) {
+        if (error instanceof TypeError)
+          return Promise.reject(new WorkspaceSourceError("not-supported"))
+        throw error
+      }
+      return within(async (live) => {
         // Only a first message opens its conversation, on the model chosen for it.
-        if (message.start) {
-          const agent = agentForProvider(message.model.provider)
+        if (start) {
+          const agent = agentForProvider(model.provider)
           await dispatch(live, (connected) => {
-            held(message.sessionId)
+            held(prepared.conversationId)
             return connected.conversation.create({
-              conversationId: message.sessionId,
+              conversationId: prepared.conversationId,
               ...(agent ? { agent } : {}),
-              model: message.model.modelId,
+              model: model.modelId,
             })
           })
         }
         await dispatch(live, (connected) => {
-          held(message.sessionId)
+          held(prepared.conversationId)
           // The gateway keeps a conversation on the model it was created with:
           // a message asking for another than the one it says it runs is
           // refused rather than sent on the old one, checked here, at the
           // send (W8). Not said yet, it cannot be told.
-          const known = knownModel(message.sessionId)
+          const known = knownModel(prepared.conversationId)
           if (
             known &&
-            (known.provider !== message.model.provider ||
-              known.modelId !== message.model.modelId)
+            (known.provider !== model.provider || known.modelId !== model.modelId)
           )
             throw new WorkspaceSourceError("not-supported")
           try {
-            return connected.conversation.send(message.sessionId, message.text, [], [], {
-              // The message's id names the same turn however often it is sent.
-              executionId: message.messageId,
-              requestId: message.messageId,
-            })
+            return connected.conversation.submit(prepared)
           } catch (error) {
-            // The client refuses a message past its bounds before sending it,
-            // by throwing `TypeError` at once (`ConversationApi.send`): sent
-            // again, it is refused again (F5).
+            // A client argument refusal is explicit, unlike a lost acknowledgement.
             if (error instanceof TypeError)
               throw new WorkspaceSourceError("not-supported")
             throw error
           }
         })
         // Taken out while it was on its way: sent, but not followed (R8).
-        if (!takenOut(message.sessionId)) follow(message.sessionId, "held")
-        publish(message.sessionId)
-      }),
+        if (!takenOut(prepared.conversationId)) follow(prepared.conversationId, "held")
+        publish(prepared.conversationId)
+      })
+    },
     approve: (sessionId, approvalId, scope, _initiator, optionId) =>
       scope === "always"
         ? // No option the gateway shows reaches past its request: the projection

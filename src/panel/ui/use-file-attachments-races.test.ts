@@ -243,11 +243,11 @@ beforeEach(() => {
   cleanups = []
   resources = createAttachmentResources()
   const effects = scenarioEffects("echo")
-  send = vi.fn(effects.send)
+  send = vi.fn(effects.submit)
   store = makeStore({
     attachments: resources,
     canChoosePaths: true,
-    conversation: { ...effects, send },
+    conversation: { ...effects, submit: send },
   })
   store.dispatch(
     sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),

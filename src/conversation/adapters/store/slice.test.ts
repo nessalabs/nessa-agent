@@ -1,3 +1,4 @@
+import { executionTargets } from "@nessa/client"
 import { permissionTargets } from "@nessa/client"
 import { describe, expect, it, vi } from "vitest"
 import { makeStore } from "../../../store"
@@ -166,8 +167,10 @@ describe("gateway conversation projection", () => {
 
   it("sends through injected effects, retaining server and submission identities", async () => {
     const effects = scenarioEffects("echo")
-    const send = vi.fn(effects.send)
-    const store = makeStore(createDependencies({ conversation: { ...effects, send } }))
+    const send = vi.fn(effects.submit)
+    const store = makeStore(
+      createDependencies({ conversation: { ...effects, submit: send } }),
+    )
     await store.dispatch(sendDraft({ content: textContent("hello") }))
     const conversation = store.getState().conversation.conversations[0]!
     expect(conversation.serverConversationId).toBeTruthy()
@@ -189,11 +192,13 @@ describe("gateway conversation projection", () => {
   it("queues two sends while the first admission is pending and preserves later drafts", async () => {
     const effects = scenarioEffects("echo")
     const gate = deferred<void>()
-    const send = vi.fn(async (input: Parameters<typeof effects.send>[0]) => {
+    const send = vi.fn(async (input: Parameters<typeof effects.submit>[0]) => {
       await gate.promise
-      return effects.send(input)
+      return effects.submit(input)
     })
-    const store = makeStore(createDependencies({ conversation: { ...effects, send } }))
+    const store = makeStore(
+      createDependencies({ conversation: { ...effects, submit: send } }),
+    )
     const first = store.dispatch(sendDraft({ content: textContent("one"), id: "c0" }))
     const second = store.dispatch(sendDraft({ content: textContent("two"), id: "c0" }))
     store.dispatch(setDraft({ draft: textContent("later"), id: "c0" }))
@@ -219,9 +224,9 @@ describe("gateway conversation projection", () => {
       createDependencies({
         conversation: {
           ...effects,
-          send: async (input) => {
+          submit: async (input) => {
             await gate.promise
-            return effects.send(input)
+            return effects.submit(input)
           },
         },
       }),
@@ -238,11 +243,13 @@ describe("gateway conversation projection", () => {
   it("keeps unknown admission separate from assistant output and retries identical IDs", async () => {
     const effects = scenarioEffects("echo")
     let fail = true
-    const send = vi.fn(async (input: Parameters<typeof effects.send>[0]) => {
+    const send = vi.fn(async (input: Parameters<typeof effects.submit>[0]) => {
       if (fail) throw new Error("connection lost")
-      return effects.send(input)
+      return effects.submit(input)
     })
-    const store = makeStore(createDependencies({ conversation: { ...effects, send } }))
+    const store = makeStore(
+      createDependencies({ conversation: { ...effects, submit: send } }),
+    )
     const content = [
       { type: "pasted-text" as const, id: "paste", text: "  code\n\n<tag>\t\n" },
     ]
@@ -256,7 +263,15 @@ describe("gateway conversation projection", () => {
     await store.dispatch(
       controlConversation({
         id: "c0",
-        control: { kind: "retry", executionId: turn.executionId },
+        control: {
+          kind: "retry",
+          target: executionTargets({
+            conversationId:
+              store.getState().conversation.conversations[0]!.serverConversationId!,
+            messages: [{ executionId: turn.executionId }],
+            pending: [],
+          })[0]!,
+        },
       }),
     )
     expect(send.mock.calls[1]).toEqual(send.mock.calls[0])
@@ -272,7 +287,7 @@ describe("gateway conversation projection", () => {
       createDependencies({
         conversation: {
           ...effects,
-          send: async () => {
+          submit: async () => {
             throw new Error("connection lost")
           },
           follow: followByReading(async (id) => ({
@@ -301,7 +316,15 @@ describe("gateway conversation projection", () => {
     await store.dispatch(
       controlConversation({
         id: "c0",
-        control: { kind: "retry", executionId: turn.executionId },
+        control: {
+          kind: "retry",
+          target: executionTargets({
+            conversationId:
+              store.getState().conversation.conversations[0]!.serverConversationId!,
+            messages: [{ executionId: turn.executionId }],
+            pending: [],
+          })[0]!,
+        },
       }),
     )
     expect(
@@ -317,9 +340,9 @@ describe("gateway conversation projection", () => {
     const effects = scenarioEffects("echo")
     const gate = deferred<void>()
     const sendGate = deferred<void>()
-    const stop = vi.fn(async (id: string, executionId: string) => {
+    const stop = vi.fn(async (target: Parameters<typeof effects.stop>[0]) => {
       await gate.promise
-      return effects.stop(id, executionId)
+      return effects.stop(target)
     })
     const close = vi.fn(async (id: string) => effects.close(id))
     const store = makeStore(
@@ -328,9 +351,9 @@ describe("gateway conversation projection", () => {
           ...effects,
           stop,
           close,
-          send: async (input) => {
+          submit: async (input) => {
             await sendGate.promise
-            return effects.send(input)
+            return effects.submit(input)
           },
         },
       }),
@@ -342,21 +365,24 @@ describe("gateway conversation projection", () => {
     const stopping = store.dispatch(stopGenerating(undefined))
     await Promise.resolve()
     expect(stop).toHaveBeenCalledWith(
-      store.getState().conversation.conversations[0]!.serverConversationId,
-      turn.executionId,
+      expect.objectContaining({
+        conversationId:
+          store.getState().conversation.conversations[0]!.serverConversationId,
+        executionId: turn.executionId,
+      }),
     )
     expect(close).not.toHaveBeenCalled()
-    expect(store.getState().conversation.conversations[0]!.controlPending).toBe(true)
+    expect(store.getState().conversation.conversations[0]!.controlPending).toBeFalsy()
     gate.resolve()
     await stopping
-    expect(store.getState().conversation.conversations[0]!.controlPending).toBe(false)
+    expect(store.getState().conversation.conversations[0]!.controlPending).toBeFalsy()
     store.dispatch(closeConversation("c0"))
     expect(close).not.toHaveBeenCalled()
     expect(store.getState().conversation.conversations).toHaveLength(1)
     sendGate.resolve()
     await sending
     expect(stop).toHaveBeenCalledTimes(2)
-    expect(stop).toHaveBeenNthCalledWith(2, stop.mock.calls[0]![0], turn.executionId)
+    expect(stop).toHaveBeenNthCalledWith(2, stop.mock.calls[0]![0])
   })
 
   it("Stop names the running turn when a later turn is only queued", async () => {
@@ -406,7 +432,9 @@ describe("gateway conversation projection", () => {
     store.dispatch(bindConversation({ id, serverId: serverId(1) }))
     await store.dispatch(followConversation(id))
     await store.dispatch(stopGenerating({ conversationId: id }))
-    expect(stop).toHaveBeenCalledWith(serverId(1), "active")
+    expect(stop).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: serverId(1), executionId: "active" }),
+    )
     expect(close).not.toHaveBeenCalled()
   })
 
@@ -607,7 +635,15 @@ describe("gateway conversation projection", () => {
     await store.dispatch(
       controlConversation({
         id: "c0",
-        control: { kind: "remove", executionId: "queued" },
+        control: {
+          kind: "remove",
+          target: executionTargets({
+            conversationId:
+              store.getState().conversation.conversations[0]!.serverConversationId!,
+            messages: [{ executionId: "queued" }],
+            pending: [],
+          })[0]!,
+        },
       }),
     )
     expect(answer).toHaveBeenCalledWith(
@@ -625,7 +661,9 @@ describe("gateway conversation projection", () => {
         permissionId: "permission",
       }),
     )
-    expect(remove).toHaveBeenCalledWith(id, "queued")
+    expect(remove).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: id, executionId: "queued" }),
+    )
   })
 
   it("keeps each local draft attached to its tab", () => {

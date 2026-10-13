@@ -5,6 +5,11 @@ import {
   type QuestionChoice,
 } from "../application/question-target.js"
 import {
+  executionFields,
+  issueExecutionTarget,
+  type ExecutionTarget,
+} from "../application/execution-target.js"
+import {
   NessaConversationMutationError,
   NessaConversationControlError,
 } from "../application/conversation-mutation-error.js"
@@ -66,10 +71,11 @@ export type ConversationActionOptions = {
   /** Stable action attribution. Creation, message admission and the idempotent `releaseApp` control support same-ID retries; other controls require a fresh read and a new deliberate action. */
   requestId?: string
 }
-/** Optional identities for optimistic display or explicit serializable retry state. */
-export type ConversationSendOptions = ConversationActionOptions & {
-  /** Reuse only for a retry of the same message. Generated when omitted. */
-  executionId?: string
+/** Optional IDs and delivery mode, filled by the client preparation wrapper. */
+export type ConversationPrepareOptions = ConversationActionOptions & {
+  /** Reuse only for the same logical message. */ executionId?: string
+  /** Queued by default; steering uses the agent's supported behavior. */ mode?:
+    "queued" | "steering"
 }
 /** Create a named conversation, or omit its identity to generate a UUID. */
 export type ConversationCreateOptions = ConversationActionOptions & {
@@ -92,8 +98,10 @@ export type ConversationCreateOptions = ConversationActionOptions & {
   environment?: string
 }
 /** Message admission receipt with the client-owned action identity. */
-export type ConversationSubmission = ConversationReceipt & {
-  /** Original action identifier. */ requestId: string
+export type ConversationSubmission = Readonly<ConversationReceipt> & {
+  /** Original conversation identity. */ readonly conversationId: string
+  /** Target owned before the admission request started. */ readonly target: ExecutionTarget
+  /** Original action identifier. */ readonly requestId: string
 }
 
 /** Agent conversation commands. Creation and message admission failures expose NessaConversationMutationError.retry(). Controls expose NessaConversationControlError with uncertain effect status and require a fresh read before another deliberate action. Read returns a bounded full replacement view, suitable for serialized polling. */
@@ -124,43 +132,25 @@ export type ConversationApi = {
    * page, not a larger list. Observing opens no provider.
    */
   observe: (options?: ConversationObserveOptions) => Promise<ConversationObserveResult>
-  /**
-   * Queue a message for this conversation without waiting for provider
-   * attachment: text, images, linked files, or any combination of them.
-   * @param text - At most 8 KiB UTF-8. May be blank only when the message
-   * carries an image or points at a file.
-   * @param attachments - The references `client.attachments` returned for
-   * images staged into this conversation, in order: at most 10, and 10 MiB
-   * together. Omit it, or pass `[]`, for a message that carries no image. A
-   * retry re-sends the same list, so the same execution ID always names the
-   * same message.
-   * @param files - Absolute paths on the machine the gateway runs on, in order,
-   * at most 10. Nothing is uploaded for these and nothing is read here: the
-   * message names where each file is, and the agent opens it itself if it
-   * decides to, which under the gateway's permission policy asks the reader
-   * first. A path means nothing to a gateway running anywhere else.
-   * @param options - Optional IDs support optimistic UI correlation.
-   * @throws TypeError before anything is sent when the message breaks these bounds.
+  /** Fill optional identities and capture a complete message before effects.
+   * Text is at most 8 KiB UTF-8 and may be blank only beside an image/file.
+   * Images are references returned by attachments staging, not original bytes;
+   * files are absolute paths on the gateway's machine. The shared published
+   * attachment validators own their bounds. Caller lists and entries are copied.
+   * Throws TypeError before create or admission when any argument is invalid.
    */
-  send: (
+  prepare: (
     conversationId: string,
     text: string,
     attachments?: readonly ImageAttachment[],
     files?: readonly LinkedFile[],
-    options?: ConversationSendOptions,
-  ) => Promise<ConversationSubmission>
-  /** Submit steering input using the agent's supported steering behavior. Takes the same message as `send`, under the same bounds. */
-  steer: (
-    conversationId: string,
-    text: string,
-    attachments?: readonly ImageAttachment[],
-    files?: readonly LinkedFile[],
-    options?: ConversationSendOptions,
-  ) => Promise<ConversationSubmission>
-  /** Remove the identified waiting input before provider dispatch. */
+    options?: ConversationPrepareOptions,
+  ) => PreparedSubmission
+  /** Submit the exact immutable message prepared before any asynchronous effects. */
+  submit: (prepared: PreparedSubmission) => Promise<ConversationSubmission>
+  /** Remove the captured waiting input before provider dispatch. */
   remove: (
-    conversationId: string,
-    executionId: string,
+    target: ExecutionTarget,
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
   /** Atomically reorder the complete waiting queue. Include every waiting execution once (at most 64); steering must remain ahead of ordinary input. A changed queue or priority conflict leaves it unchanged. Refresh after either outcome or an uncertain acknowledgement. */
@@ -202,8 +192,7 @@ export type ConversationApi = {
   ) => Promise<ConversationMutationResult>
   /** Stop the named turn. A queued turn is withdrawn and the active turn is cancelled. The attachment stays open. */
   stop: (
-    conversationId: string,
-    executionId: string,
+    target: ExecutionTarget,
     options?: ConversationActionOptions,
   ) => Promise<{ requestId: string; stage: string; outcome?: string }>
   /** Archive a conversation: `list()` stops showing it unless archived ones are asked for. Nothing is stopped or removed, and a new message unarchives it. `applied` is false when it was already archived, or when the gateway has no summary for it (nothing was said in it, or its summary was never written) — such a conversation is never listed, so there is nothing to archive. */
@@ -241,7 +230,11 @@ export type ConversationApi = {
 
 const utf8 = new TextEncoder()
 function boundedText(value: string, name: string, maxBytes: number): string {
-  if (!value.trim() || utf8.encode(value).byteLength > maxBytes)
+  if (
+    typeof value !== "string" ||
+    !value.trim() ||
+    utf8.encode(value).byteLength > maxBytes
+  )
     throw new TypeError(`${name} must contain 1-${maxBytes} UTF-8 bytes`)
   return value
 }
@@ -250,9 +243,105 @@ function observeDecimal(value: string): string {
   return value
 }
 function validConversationId(value: string): string {
-  if (!conversationIdPattern.test(value))
+  if (typeof value !== "string" || !conversationIdPattern.test(value))
     throw new TypeError("Conversation ID must be a canonical lowercase UUID")
   return value
+}
+
+/** Complete logical message intent before create/admission starts. */
+export type SubmissionInput = {
+  readonly conversationId: string
+  readonly executionId: string
+  readonly requestId: string
+  readonly mode: "queued" | "steering"
+  readonly text: string
+  readonly attachments?: readonly ImageAttachment[]
+  readonly files?: readonly LinkedFile[]
+}
+declare const preparedSubmission: unique symbol
+/** Process-local immutable message and its captured control target. */
+export type PreparedSubmission = Omit<SubmissionInput, "attachments" | "files"> & {
+  readonly attachments: readonly Readonly<ImageAttachment>[]
+  readonly files: readonly Readonly<LinkedFile>[]
+  readonly target: ExecutionTarget
+  readonly [preparedSubmission]: true
+}
+const preparedValues = new WeakSet<PreparedSubmission>()
+
+/** Validate and copy one complete message; no external effect runs here. */
+export function prepareSubmission(input: SubmissionInput): PreparedSubmission {
+  const { conversationId, text, mode } = input
+  const attachments = input.attachments ?? []
+  const linked = input.files ?? []
+  validConversationId(conversationId)
+  if (mode !== "queued" && mode !== "steering")
+    throw new TypeError("Invalid submission mode")
+  const executionId = boundedText(input.executionId, "Execution ID", 256)
+  const requestId = boundedText(input.requestId, "Request ID", 256)
+  // Capture into owned plain arrays, not caller slice/map/iterator results.
+  // Bounds cap the copy before any entry is retained; final validation remains
+  // with the published attachment validators (PS19).
+  const imageCount = Array.isArray(attachments) ? attachments.length : NaN
+  const fileCount = Array.isArray(linked) ? linked.length : NaN
+  if (
+    !Number.isSafeInteger(imageCount) ||
+    imageCount < 0 ||
+    imageCount > bounds.maxMessageImages
+  )
+    throw new TypeError("Invalid message attachments: too many images or not a list")
+  if (
+    !Number.isSafeInteger(fileCount) ||
+    fileCount < 0 ||
+    fileCount > bounds.maxMessageFiles
+  )
+    throw new TypeError("Invalid message files: too many files or not a list")
+  const images: Readonly<ImageAttachment>[] = []
+  const files: Readonly<LinkedFile>[] = []
+  for (let index = 0; index < imageCount; index++) {
+    const item = attachments[index]
+    images.push(
+      item && typeof item === "object" && !Array.isArray(item)
+        ? Object.freeze({ ...item })
+        : item,
+    )
+  }
+  for (let index = 0; index < fileCount; index++) {
+    const item = linked[index]
+    files.push(
+      item && typeof item === "object" && !Array.isArray(item)
+        ? Object.freeze({ ...item })
+        : item,
+    )
+  }
+  const problem = imageAttachmentsProblem(images)
+  if (problem) throw new TypeError(`Invalid message attachments: ${problem}`)
+  const filesProblem = linkedFilesProblem(files)
+  if (filesProblem) throw new TypeError(`Invalid message files: ${filesProblem}`)
+  // The copied payload decides whether text may be blank, not a changing source.
+  if (images.length === 0 && files.length === 0) boundedText(text, "Message", 8192)
+  else if (typeof text !== "string" || utf8.encode(text).byteLength > 8192)
+    throw new TypeError("Message must contain at most 8192 UTF-8 bytes")
+  const prepared = Object.freeze({
+    conversationId,
+    executionId,
+    requestId,
+    mode,
+    text,
+    attachments: Object.freeze(images),
+    files: Object.freeze(files),
+    target: issueExecutionTarget(conversationId, executionId),
+  }) as PreparedSubmission
+  preparedValues.add(prepared)
+  return prepared
+}
+
+/** Check a prepared value before a substitute or transport consumes it. */
+export function preparedSubmissionFields(
+  prepared: PreparedSubmission,
+): PreparedSubmission {
+  if (!preparedValues.has(prepared))
+    throw new TypeError("Use an original prepared submission")
+  return prepared
 }
 
 export function createConversationApi(
@@ -304,44 +393,6 @@ export function createConversationApi(
       }
     }
     return perform()
-  }
-  function submit(
-    method: string,
-    conversationId: string,
-    text: string,
-    attachments: readonly ImageAttachment[] = [],
-    linked: readonly LinkedFile[] = [],
-    options: ConversationSendOptions = {},
-  ) {
-    validConversationId(conversationId)
-    const executionId = boundedText(options.executionId ?? newId(), "Execution ID", 256)
-    const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
-    const problem = imageAttachmentsProblem(attachments)
-    if (problem) throw new TypeError(`Invalid message attachments: ${problem}`)
-    const filesProblem = linkedFilesProblem(linked)
-    if (filesProblem) throw new TypeError(`Invalid message files: ${filesProblem}`)
-    // Text may be blank only beside an image or a linked file: the message has
-    // to say something.
-    if (attachments.length === 0 && linked.length === 0)
-      boundedText(text, "Message", 8192)
-    else if (typeof text !== "string" || utf8.encode(text).byteLength > 8192)
-      throw new TypeError("Message must contain at most 8192 UTF-8 bytes")
-    // Copied and frozen with the command, so editing the caller's list between a
-    // failure and its retry cannot turn one execution ID into two messages.
-    const images = Object.freeze(
-      attachments.map(({ digest, mimeType, size }) =>
-        Object.freeze({ digest, mimeType, size }),
-      ),
-    )
-    const files = Object.freeze(linked.map(({ path }) => Object.freeze({ path })))
-    return mutate(
-      method,
-      { conversationId, executionId, requestId, text, attachments: images, files },
-      (value) => ({
-        ...conversationReceipt(value, executionId),
-        requestId,
-      }),
-    )
   }
   function action(
     method: string,
@@ -446,12 +497,50 @@ export function createConversationApi(
         }),
         id,
       ),
-    send: (id, text, attachments, files, options) =>
-      submit(ProductMethod.ConversationSend, id, text, attachments, files, options),
-    steer: (id, text, attachments, files, options) =>
-      submit(ProductMethod.ConversationSteer, id, text, attachments, files, options),
-    remove: (id, executionId, options) =>
-      action(ProductMethod.ConversationRemove, id, { executionId }, options),
+    prepare: (conversationId, text, attachments, files, options = {}) =>
+      prepareSubmission({
+        conversationId,
+        text,
+        attachments,
+        files,
+        mode: options.mode ?? "queued",
+        executionId: options.executionId ?? newId(),
+        requestId: options.requestId ?? newId(),
+      }),
+    submit: (prepared) => {
+      const {
+        conversationId,
+        executionId,
+        requestId,
+        text,
+        attachments,
+        files,
+        mode,
+        target,
+      } = preparedSubmissionFields(prepared)
+      return mutate(
+        mode === "steering"
+          ? ProductMethod.ConversationSteer
+          : ProductMethod.ConversationSend,
+        { conversationId, executionId, requestId, text, attachments, files },
+        (value) =>
+          Object.freeze({
+            ...conversationReceipt(value, executionId),
+            conversationId,
+            requestId,
+            target,
+          }),
+      )
+    },
+    remove: (target, options) => {
+      const { conversationId, executionId } = executionFields(target)
+      return action(
+        ProductMethod.ConversationRemove,
+        conversationId,
+        { executionId },
+        options,
+      )
+    },
     reorder: async (id, executionIds, options = {}) => {
       validConversationId(id)
       if (
@@ -519,7 +608,8 @@ export function createConversationApi(
       )
     },
     close: (id, options) => action(ProductMethod.ConversationClose, id, {}, options),
-    stop: (id, executionId, options = {}) => {
+    stop: (target, options = {}) => {
+      const { conversationId: id, executionId } = executionFields(target)
       validConversationId(id)
       const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
       boundedText(executionId, "Execution ID", 256)

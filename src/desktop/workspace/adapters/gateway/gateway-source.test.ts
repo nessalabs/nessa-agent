@@ -27,6 +27,7 @@ import { followWorkspace, loadWorkspace, sendMessage } from "../store/commands"
 import { approvalId } from "./gateway-views"
 import {
   deferred,
+  gatewayConversationIds,
   fakeGateway,
   GATEWAY_NOW_MS,
   row,
@@ -35,6 +36,7 @@ import {
 } from "./fake-gateway"
 import { gatewaySource, refusalOf, type GatewayClock } from "./gateway-source"
 
+const { a: conversationA, b: conversationB, s: conversationS } = gatewayConversationIds
 const timing = { callMs: 5_000, retryMs: 1_000 }
 const model = { provider: "anthropic", modelId: "claude-opus-5" }
 
@@ -146,13 +148,15 @@ const running = (id = "turn") => ({
 
 describe("the index and the list subscription", () => {
   it("the default gateway fixture conforms to the client view contract", () => {
-    expect(conversationView(view("a"), "a")).toEqual(view("a"))
+    expect(conversationView(view(conversationA), conversationA)).toEqual(
+      view(conversationA),
+    )
   })
 
   it("C1, R1: connected, lists every conversation in one section and channel, each at its first revision", async () => {
     const { gateway, source } = started()
-    gateway.rows.set("a", row("a", { running: true }))
-    gateway.rows.set("b", row("b", { title: null, preview: null }))
+    gateway.rows.set(conversationA, row(conversationA, { running: true }))
+    gateway.rows.set(conversationB, row(conversationB, { title: null, preview: null }))
     const index = await source.index()
     expect(index.sections).toHaveLength(1)
     expect(index.channels).toEqual([
@@ -160,7 +164,7 @@ describe("the index and the list subscription", () => {
     ])
     expect(index.sessions).toEqual([
       expect.objectContaining({
-        id: "a",
+        id: conversationA,
         channelId: index.channels[0].id,
         title: "Title of a",
         status: "running",
@@ -171,7 +175,7 @@ describe("the index and the list subscription", () => {
         revision: 1,
       }),
       expect.objectContaining({
-        id: "b",
+        id: conversationB,
         title: "",
         preview: "",
         status: "idle",
@@ -183,7 +187,7 @@ describe("the index and the list subscription", () => {
 
   it("R1: the index again keeps every revision, from the list already followed", async () => {
     const { gateway, source } = started()
-    gateway.rows.set("a", row("a"))
+    gateway.rows.set(conversationA, row(conversationA))
     await source.index()
     expect((await source.index()).sessions[0].revision).toBe(1)
     expect(gateway.count("subscribeList")).toBe(1)
@@ -191,7 +195,7 @@ describe("the index and the list subscription", () => {
 
   it("D1: a listener opens one list subscription, and nothing is asked on a timer", async () => {
     const { gateway, follow, advance } = started()
-    gateway.rows.set("a", row("a"))
+    gateway.rows.set(conversationA, row(conversationA))
     follow()
     await advance(timing.callMs * 3)
     expect(gateway.calls.map((call) => call.method)).toEqual(["subscribeList"])
@@ -199,21 +203,24 @@ describe("the index and the list subscription", () => {
 
   it("S1: a list frame says a changed summary at its next revision, and an unchanged one not at all", async () => {
     const { gateway, source, updates, follow } = started()
-    gateway.rows.set("a", row("a"))
+    gateway.rows.set(conversationA, row(conversationA))
     follow()
     await source.index()
     updates.length = 0
     gateway.publishList()
     await flush()
     expect(updates).toEqual([])
-    gateway.rows.set("a", row("a", { preview: "Something new", updatedAtMs: 3_000 }))
+    gateway.rows.set(
+      conversationA,
+      row(conversationA, { preview: "Something new", updatedAtMs: 3_000 }),
+    )
     gateway.publishList()
     await flush()
     expect(updates).toEqual([
       {
         kind: "session",
         session: expect.objectContaining({
-          id: "a",
+          id: conversationA,
           preview: "Something new",
           revision: 2,
         }),
@@ -224,62 +231,67 @@ describe("the index and the list subscription", () => {
   it("R2: an incomplete list frame keeps the sessions it leaves out; a complete one takes them out", async () => {
     const { gateway, source, updates, follow } = started()
     follow()
-    gateway.rows.set("a", row("a"))
-    gateway.rows.set("b", row("b"))
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.rows.set(conversationB, row(conversationB))
     await source.index()
-    gateway.rows.delete("b")
+    gateway.rows.delete(conversationB)
     gateway.complete = false
     gateway.publishList()
     await flush()
     expect((await source.index()).sessions.map((session) => session.id)).toEqual([
-      "a",
-      "b",
+      conversationA,
+      conversationB,
     ])
     expect(kinds(updates)).not.toContain("session-removed")
     gateway.complete = true
     gateway.publishList()
     await flush()
-    expect((await source.index()).sessions.map((session) => session.id)).toEqual(["a"])
+    expect((await source.index()).sessions.map((session) => session.id)).toEqual([
+      conversationA,
+    ])
     expect(updates).toContainEqual({
       kind: "session-removed",
-      sessionId: "b",
+      sessionId: conversationB,
       revision: 2,
     })
   })
 
   it("S2, S3: a session archived elsewhere is taken out, and listed again outranks its removal", async () => {
     const { gateway, source, updates, follow } = started()
-    gateway.rows.set("a", row("a"))
+    gateway.rows.set(conversationA, row(conversationA))
     follow()
     await source.index()
     updates.length = 0
-    gateway.rows.delete("a")
+    gateway.rows.delete(conversationA)
     gateway.publishList()
     await flush()
-    gateway.rows.set("a", row("a"))
+    gateway.rows.set(conversationA, row(conversationA))
     gateway.publishList()
     await flush()
     expect(updates).toEqual([
-      { kind: "session-removed", sessionId: "a", revision: 2 },
-      { kind: "session", session: expect.objectContaining({ id: "a", revision: 3 }) },
+      { kind: "session-removed", sessionId: conversationA, revision: 2 },
+      {
+        kind: "session",
+        session: expect.objectContaining({ id: conversationA, revision: 3 }),
+      },
     ])
   })
 
   it("D6: an incomplete list is every stored summary once observe finishes", async () => {
     const { gateway, source } = started()
-    for (const id of ["a", "b", "c", "d", "e"])
+    for (const id of [conversationA, conversationB, "c", "d", "e"])
       gateway.rows.set(id, row(id, { updatedAtMs: id.charCodeAt(0) * 1_000 }))
     gateway.listLimit = 2
     gateway.observePageSize = 1
     const ids = (await source.index()).sessions.map((session) => session.id).sort()
-    expect(ids).toEqual(["a", "b", "c", "d", "e"])
+    expect(ids).toEqual([conversationA, conversationB, "c", "d", "e"])
     expect(gateway.count("subscribeList")).toBe(1)
     expect(gateway.count("observe")).toBe(5)
   })
 
   it("D18: every incomplete frame walks, so a row it left out that went is taken out though the rows it names are the same", async () => {
     const { gateway, source, follow } = started()
-    for (const id of ["a", "b", "c", "d"])
+    for (const id of [conversationA, conversationB, "c", "d"])
       gateway.rows.set(id, row(id, { updatedAtMs: id.charCodeAt(0) * 1_000 }))
     gateway.listLimit = 2
     gateway.observePageSize = 1
@@ -288,12 +300,12 @@ describe("the index and the list subscription", () => {
     expect(gateway.count("observe")).toBe(4)
     // The oldest goes elsewhere: the frame names the same two as before,
     // and the list is still incomplete.
-    gateway.rows.delete("a")
+    gateway.rows.delete(conversationA)
     gateway.publishList()
     await flush()
     expect(gateway.count("observe")).toBe(7)
     expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual([
-      "b",
+      conversationB,
       "c",
       "d",
     ])
@@ -301,7 +313,7 @@ describe("the index and the list subscription", () => {
 
   it("D18: frames that come while a walk is on its way give way to the newest, which walks once", async () => {
     const { gateway, source, follow } = started()
-    for (const id of ["a", "b", "c"])
+    for (const id of [conversationA, conversationB, "c"])
       gateway.rows.set(id, row(id, { updatedAtMs: id.charCodeAt(0) * 1_000 }))
     gateway.listLimit = 2
     gateway.observePageSize = 10
@@ -321,8 +333,8 @@ describe("the index and the list subscription", () => {
     await flush()
     expect(gateway.count("observe")).toBe(3)
     expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual([
-      "a",
-      "b",
+      conversationA,
+      conversationB,
       "c",
       "d",
     ])
@@ -330,7 +342,7 @@ describe("the index and the list subscription", () => {
 
   it("D18: a walk that fails leaves the list unapplied, a gap, and walks again on the retry clock", async () => {
     const { gateway, source, updates, follow, advance } = started()
-    for (const id of ["a", "b", "c", "d"])
+    for (const id of [conversationA, conversationB, "c", "d"])
       gateway.rows.set(id, row(id, { updatedAtMs: id.charCodeAt(0) * 1_000 }))
     gateway.listLimit = 2
     gateway.observePageSize = 10
@@ -347,8 +359,8 @@ describe("the index and the list subscription", () => {
     expect(gateway.count("observe")).toBe(2)
     expect(updates).toContainEqual({ kind: "resync" })
     expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual([
-      "a",
-      "b",
+      conversationA,
+      conversationB,
       "c",
       "d",
     ])
@@ -356,15 +368,15 @@ describe("the index and the list subscription", () => {
 
   it("D18: an index asked after a walk failed walks again at once", async () => {
     const { gateway, source } = started()
-    for (const id of ["a", "b", "c", "d"])
+    for (const id of [conversationA, conversationB, "c", "d"])
       gateway.rows.set(id, row(id, { updatedAtMs: id.charCodeAt(0) * 1_000 }))
     gateway.listLimit = 2
     gateway.observePageSize = 10
     gateway.once("observe", () => Promise.reject(rpcCode("unavailable")))
     await expect(source.index()).rejects.toMatchObject({ reason: "unavailable" })
     expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual([
-      "a",
-      "b",
+      conversationA,
+      conversationB,
       "c",
       "d",
     ])
@@ -374,8 +386,8 @@ describe("the index and the list subscription", () => {
 
   it("a listener who leaves during an observe walk is asked no further page", async () => {
     const { gateway, source, follow } = started()
-    gateway.rows.set("a", row("a", { updatedAtMs: 1 }))
-    gateway.rows.set("b", row("b", { updatedAtMs: 2 }))
+    gateway.rows.set(conversationA, row(conversationA, { updatedAtMs: 1 }))
+    gateway.rows.set(conversationB, row(conversationB, { updatedAtMs: 2 }))
     gateway.rows.set("c", row("c", { updatedAtMs: 3 }))
     gateway.listLimit = 1
     gateway.observePageSize = 1
@@ -389,8 +401,8 @@ describe("the index and the list subscription", () => {
     await flush()
     expect(gateway.count("observe")).toBe(1)
     expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual([
-      "a",
-      "b",
+      conversationA,
+      conversationB,
       "c",
     ])
   })
@@ -398,12 +410,12 @@ describe("the index and the list subscription", () => {
   it("an observe page that does not finish keeps a summary it left out", async () => {
     const { gateway, source, updates, follow } = started()
     follow()
-    gateway.rows.set("a", row("a", { updatedAtMs: 1 }))
-    gateway.rows.set("b", row("b", { updatedAtMs: 2 }))
+    gateway.rows.set(conversationA, row(conversationA, { updatedAtMs: 1 }))
+    gateway.rows.set(conversationB, row(conversationB, { updatedAtMs: 2 }))
     gateway.rows.set("c", row("c", { updatedAtMs: 3 }))
     await source.index()
     expect(gateway.count("observe")).toBe(0)
-    gateway.rows.delete("b")
+    gateway.rows.delete(conversationB)
     gateway.complete = false
     gateway.listLimit = 1
     gateway.observePageSize = 1
@@ -411,8 +423,8 @@ describe("the index and the list subscription", () => {
     gateway.publishList()
     await flush()
     expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual([
-      "a",
-      "b",
+      conversationA,
+      conversationB,
       "c",
     ])
     expect(kinds(updates)).not.toContain("session-removed")
@@ -466,58 +478,69 @@ describe("the index and the list subscription", () => {
 describe("conversations", () => {
   it("R3: a transcript subscribes, sends no create, and reads at its first revision", async () => {
     const { gateway, source } = started()
-    gateway.views.set("a", view("a"))
-    const transcript = await source.transcript("a")
-    expect(transcript).toMatchObject({ sessionId: "a", revision: 1 })
-    expect(gateway.calls).toEqual([{ method: "subscribe", args: ["a", {}] }])
+    gateway.views.set(conversationA, view(conversationA))
+    const transcript = await source.transcript(conversationA)
+    expect(transcript).toMatchObject({ sessionId: conversationA, revision: 1 })
+    expect(gateway.calls).toEqual([{ method: "subscribe", args: [conversationA, {}] }])
   })
 
   it("D20: a transcript of a conversation followed is the view held, with no second subscription", async () => {
     const { gateway, source } = started()
-    gateway.views.set("a", view("a"))
-    await source.transcript("a")
-    expect(await source.transcript("a")).toMatchObject({ sessionId: "a", revision: 1 })
+    gateway.views.set(conversationA, view(conversationA))
+    await source.transcript(conversationA)
+    expect(await source.transcript(conversationA)).toMatchObject({
+      sessionId: conversationA,
+      revision: 1,
+    })
     expect(gateway.count("subscribe")).toBe(1)
   })
 
   it("R6, D2: a frame a person would see differently is the next transcript, whatever its revision; one that differs only in its revision is the same transcript", async () => {
     const { gateway, source, updates, follow } = started()
     follow()
-    gateway.views.set("a", view("a", { revision: "x" }))
-    expect((await source.transcript("a")).revision).toBe(1)
-    gateway.publish("a")
+    gateway.views.set(conversationA, view(conversationA, { revision: "x" }))
+    expect((await source.transcript(conversationA)).revision).toBe(1)
+    gateway.publish(conversationA)
     await flush()
-    expect(transcriptsOf(updates, "a")).toHaveLength(1)
+    expect(transcriptsOf(updates, conversationA)).toHaveLength(1)
     // A fresh fold numbers the same content anew: nothing to say.
-    gateway.views.set("a", view("a", { revision: "y" }))
-    gateway.publish("a")
+    gateway.views.set(conversationA, view(conversationA, { revision: "y" }))
+    gateway.publish(conversationA)
     await flush()
-    expect(transcriptsOf(updates, "a")).toHaveLength(1)
+    expect(transcriptsOf(updates, conversationA)).toHaveLength(1)
     // A live fact changes without the fold's revision: said.
-    gateway.views.set("a", view("a", { revision: "y", title: "Renamed" }))
-    gateway.publish("a")
+    gateway.views.set(
+      conversationA,
+      view(conversationA, { revision: "y", title: "Renamed" }),
+    )
+    gateway.publish(conversationA)
     await flush()
-    expect(transcriptsOf(updates, "a").map((said) => said.revision)).toEqual([1, 2])
-    expect((await source.transcript("a")).revision).toBe(2)
+    expect(transcriptsOf(updates, conversationA).map((said) => said.revision)).toEqual([
+      1, 2,
+    ])
+    expect((await source.transcript(conversationA)).revision).toBe(2)
   })
 
   it("D2: a frame that differs only in the gateway's time it was stamped with is the same transcript", async () => {
     const { gateway, source, updates, follow } = started()
     follow()
-    gateway.views.set("a", view("a"))
-    await source.transcript("a")
-    gateway.views.set("a", view("a", { serverNowMs: GATEWAY_NOW_MS + 5_000 }))
-    gateway.publish("a")
+    gateway.views.set(conversationA, view(conversationA))
+    await source.transcript(conversationA)
+    gateway.views.set(
+      conversationA,
+      view(conversationA, { serverNowMs: GATEWAY_NOW_MS + 5_000 }),
+    )
+    gateway.publish(conversationA)
     await flush()
-    expect(transcriptsOf(updates, "a")).toHaveLength(1)
+    expect(transcriptsOf(updates, conversationA)).toHaveLength(1)
   })
 
   it("a review's deadline is put on the window's clock as its frame arrives, whatever the gateway's clock reads", async () => {
     // The window's clock is the manual one, far behind the gateway's.
     const { gateway, source } = started()
     gateway.views.set(
-      "a",
-      view("a", {
+      conversationA,
+      view(conversationA, {
         messages: [running()],
         permissions: [
           permission({
@@ -532,34 +555,41 @@ describe("conversations", () => {
         ],
       }),
     )
-    const transcript = await source.transcript("a")
+    const transcript = await source.transcript(conversationA)
     expect(transcript.approval?.deadline?.dueAtMs).toBe(1_000_000 + 30_000)
   })
 
   it("a summary says a session waits on the person when its conversation asks", async () => {
     const { gateway, source, updates, follow } = started()
-    gateway.rows.set("a", row("a", { running: true }))
+    gateway.rows.set(conversationA, row(conversationA, { running: true }))
     gateway.views.set(
-      "a",
-      view("a", { messages: [running()], permissions: [permission()] }),
+      conversationA,
+      view(conversationA, { messages: [running()], permissions: [permission()] }),
     )
     await source.index()
     follow()
-    await source.transcript("a")
+    await source.transcript(conversationA)
     expect(updates).toContainEqual({
       kind: "session",
-      session: expect.objectContaining({ id: "a", status: "needs-you", revision: 2 }),
+      session: expect.objectContaining({
+        id: conversationA,
+        status: "needs-you",
+        revision: 2,
+      }),
     })
   })
 
   it("a summary is said again when what its conversation runs on comes to be known", async () => {
     const { gateway, source, updates, follow } = started()
     const listed = composerModels[composerModels.length - 1]
-    gateway.rows.set("a", row("a"))
+    gateway.rows.set(conversationA, row(conversationA))
     await source.index()
     follow()
-    gateway.views.set("a", view("a", { runtime: runtime(listed.modelId) }))
-    await source.transcript("a")
+    gateway.views.set(
+      conversationA,
+      view(conversationA, { runtime: runtime(listed.modelId) }),
+    )
+    await source.transcript(conversationA)
     expect(updates).toContainEqual({
       kind: "session",
       session: expect.objectContaining({
@@ -572,14 +602,17 @@ describe("conversations", () => {
   it("D3: a lagging subscription is opened again at once from the cursor last applied", async () => {
     const { gateway, source, updates, follow } = started()
     follow()
-    gateway.views.set("a", view("a"))
-    await source.transcript("a")
-    gateway.publish("a")
-    gateway.publish("a")
+    gateway.views.set(conversationA, view(conversationA))
+    await source.transcript(conversationA)
+    gateway.publish(conversationA)
+    gateway.publish(conversationA)
     await flush()
-    gateway.end("a", { reason: "lagging", lastDelivered: gateway.cursor("a") })
+    gateway.end(conversationA, {
+      reason: "lagging",
+      lastDelivered: gateway.cursor(conversationA),
+    })
     await flush()
-    expect(subscribesOf(gateway, "a")).toEqual([
+    expect(subscribesOf(gateway, conversationA)).toEqual([
       {},
       { after: { incarnation: "history-1", position: "3" } },
     ])
@@ -589,31 +622,41 @@ describe("conversations", () => {
   it("D8: a frame behind the cursor applied in the same history is not applied; one from another history is", async () => {
     const { gateway, source, updates, follow } = started()
     follow()
-    gateway.views.set("a", view("a", { revision: "1", title: "1" }))
-    await source.transcript("a")
-    gateway.views.set("a", view("a", { revision: "2", title: "2" }))
-    gateway.publish("a")
+    gateway.views.set(conversationA, view(conversationA, { revision: "1", title: "1" }))
+    await source.transcript(conversationA)
+    gateway.views.set(conversationA, view(conversationA, { revision: "2", title: "2" }))
+    gateway.publish(conversationA)
     await flush()
-    gateway.rewind("a", 0)
-    gateway.views.set("a", view("a", { revision: "behind", title: "behind" }))
-    gateway.publish("a")
+    gateway.rewind(conversationA, 0)
+    gateway.views.set(
+      conversationA,
+      view(conversationA, { revision: "behind", title: "behind" }),
+    )
+    gateway.publish(conversationA)
     await flush()
-    expect(transcriptsOf(updates, "a").map((said) => said.revision)).toEqual([1, 2])
+    expect(transcriptsOf(updates, conversationA).map((said) => said.revision)).toEqual([
+      1, 2,
+    ])
     gateway.incarnation = "history-2"
-    gateway.views.set("a", view("a", { revision: "replaced", title: "replaced" }))
-    gateway.publish("a")
+    gateway.views.set(
+      conversationA,
+      view(conversationA, { revision: "replaced", title: "replaced" }),
+    )
+    gateway.publish(conversationA)
     await flush()
-    expect(transcriptsOf(updates, "a").map((said) => said.revision)).toEqual([1, 2, 3])
+    expect(transcriptsOf(updates, conversationA).map((said) => said.revision)).toEqual([
+      1, 2, 3,
+    ])
   })
 
   it("D19: a cursor ahead of the history the gateway holds opens once more without it", async () => {
     const { gateway, source, updates, follow } = started()
     follow()
-    gateway.views.set("a", view("a"))
-    await source.transcript("a")
-    gateway.publish("a")
+    gateway.views.set(conversationA, view(conversationA))
+    await source.transcript(conversationA)
+    gateway.publish(conversationA)
     await flush()
-    gateway.rewind("a", 1)
+    gateway.rewind(conversationA, 1)
     gateway.setState({
       status: "reconnecting",
       attempt: 1,
@@ -621,35 +664,37 @@ describe("conversations", () => {
     })
     gateway.setState({ status: "connected" })
     await flush()
-    expect(subscribesOf(gateway, "a")).toEqual([
+    expect(subscribesOf(gateway, conversationA)).toEqual([
       {},
       { after: { incarnation: "history-1", position: "2" } },
       {},
     ])
-    expect(gateway.live("a")).toBe(1)
+    expect(gateway.live(conversationA)).toBe(1)
     // Started over: the view is said again, at the conversation's next count.
-    expect(transcriptsOf(updates, "a").map((said) => said.revision)).toEqual([1, 2])
+    expect(transcriptsOf(updates, conversationA).map((said) => said.revision)).toEqual([
+      1, 2,
+    ])
     expect(kinds(updates)).not.toContain("session-removed")
   })
 
   it("D4: a subscription the gateway ends as not found takes the session out, and is opened no more", async () => {
     const { gateway, source, updates, follow, advance } = started()
-    gateway.rows.set("a", row("a", { running: true }))
-    gateway.views.set("a", view("a"))
+    gateway.rows.set(conversationA, row(conversationA, { running: true }))
+    gateway.views.set(conversationA, view(conversationA))
     // An incomplete list, which proves nothing of what it leaves out.
     gateway.complete = false
     follow()
     await source.index()
-    await source.transcript("a")
-    gateway.end("a", { reason: "refused", code: "conversation_not_found" })
+    await source.transcript(conversationA)
+    gateway.end(conversationA, { reason: "refused", code: "conversation_not_found" })
     await flush()
     expect(updates).toContainEqual({
       kind: "session-removed",
-      sessionId: "a",
+      sessionId: conversationA,
       revision: 2,
     })
     expect((await source.index()).sessions).toEqual([])
-    await expect(source.transcript("a")).rejects.toMatchObject({
+    await expect(source.transcript(conversationA)).rejects.toMatchObject({
       reason: "unknown-session",
     })
     await advance(timing.retryMs * 3)
@@ -670,15 +715,17 @@ describe("conversations", () => {
     for (const reason of ["too_large", "invalid_frame"] as const) {
       const warn = quiet()
       const { gateway, source, updates, follow, advance } = started()
-      gateway.views.set("a", view("a"))
+      gateway.views.set(conversationA, view(conversationA))
       follow()
-      await source.transcript("a")
-      gateway.end("a", { reason })
+      await source.transcript(conversationA)
+      gateway.end(conversationA, { reason })
       await advance(timing.retryMs * 3)
       expect(gateway.count("subscribe")).toBe(1)
       expect(kinds(updates)).not.toContain("resync")
       expect(warn).toHaveBeenCalled()
-      await expect(source.transcript("a")).resolves.toMatchObject({ sessionId: "a" })
+      await expect(source.transcript(conversationA)).resolves.toMatchObject({
+        sessionId: conversationA,
+      })
       expect(gateway.count("subscribe")).toBe(2)
       warn.mockRestore()
     }
@@ -687,36 +734,40 @@ describe("conversations", () => {
   it("R11: a subscription refused for good is not followed, is no gap, and Try Again follows it again", async () => {
     const warn = quiet()
     const { gateway, source, updates, follow, advance } = started()
-    gateway.views.set("a", view("a"))
+    gateway.views.set(conversationA, view(conversationA))
     follow()
     gateway.once("subscribe", () =>
       Promise.reject(rpcCode("conversation_state_unreadable")),
     )
-    await expect(source.transcript("a")).rejects.toMatchObject({
+    await expect(source.transcript(conversationA)).rejects.toMatchObject({
       reason: "not-supported",
     })
     await advance(timing.retryMs * 3)
     expect(gateway.count("subscribe")).toBe(1)
     expect(kinds(updates)).not.toContain("resync")
-    await expect(source.transcript("a")).resolves.toMatchObject({ sessionId: "a" })
-    expect(gateway.live("a")).toBe(1)
+    await expect(source.transcript(conversationA)).resolves.toMatchObject({
+      sessionId: conversationA,
+    })
+    expect(gateway.live(conversationA)).toBe(1)
     warn.mockRestore()
   })
 
   it("R3, D15: a subscription that could not open is opened again on the retry clock, and the next list frame resyncs", async () => {
     const { gateway, source, updates, follow, advance } = started()
-    gateway.rows.set("a", row("a", { running: true }))
-    gateway.views.set("a", view("a"))
+    gateway.rows.set(conversationA, row(conversationA, { running: true }))
+    gateway.views.set(conversationA, view(conversationA))
     follow()
     await source.index()
     gateway.once("subscribe", () => Promise.reject(rpcCode("temporarily_unavailable")))
-    await expect(source.transcript("a")).rejects.toMatchObject({ reason: "unavailable" })
+    await expect(source.transcript(conversationA)).rejects.toMatchObject({
+      reason: "unavailable",
+    })
     await advance(timing.retryMs - 1)
     expect(gateway.count("subscribe")).toBe(1)
     await advance(1)
     expect(gateway.count("subscribe")).toBe(2)
-    expect(transcriptsOf(updates, "a")).toEqual([
-      expect.objectContaining({ sessionId: "a", revision: 1 }),
+    expect(transcriptsOf(updates, conversationA)).toEqual([
+      expect.objectContaining({ sessionId: conversationA, revision: 1 }),
     ])
     gateway.publishList()
     await flush()
@@ -725,14 +776,14 @@ describe("conversations", () => {
 
   it("D16: a subscription that ends as the gateway stops it waits the retry clock, then opens from its cursor", async () => {
     const { gateway, source, follow, advance } = started()
-    gateway.views.set("a", view("a"))
+    gateway.views.set(conversationA, view(conversationA))
     follow()
-    await source.transcript("a")
-    gateway.end("a", { reason: "source_closed" })
+    await source.transcript(conversationA)
+    gateway.end(conversationA, { reason: "source_closed" })
     await flush()
     expect(gateway.count("subscribe")).toBe(1)
     await advance(timing.retryMs)
-    expect(subscribesOf(gateway, "a")).toEqual([
+    expect(subscribesOf(gateway, conversationA)).toEqual([
       {},
       { after: { incarnation: "history-1", position: "1" } },
     ])
@@ -740,18 +791,22 @@ describe("conversations", () => {
 
   it("D17: the retry clock runs only while someone listens, and stops when the last one leaves", async () => {
     const { gateway, source, follow, advance } = started()
-    gateway.views.set("a", view("a"))
-    gateway.views.set("b", view("b"))
+    gateway.views.set(conversationA, view(conversationA))
+    gateway.views.set(conversationB, view(conversationB))
     // No listener: nothing is opened again.
     gateway.once("subscribe", () => Promise.reject(rpcCode("temporarily_unavailable")))
-    await expect(source.transcript("a")).rejects.toMatchObject({ reason: "unavailable" })
+    await expect(source.transcript(conversationA)).rejects.toMatchObject({
+      reason: "unavailable",
+    })
     await advance(timing.retryMs * 3)
     expect(gateway.count("subscribe")).toBe(1)
     // A listener who leaves before the clock runs takes it with them.
     const stop = follow()
     await flush()
     gateway.once("subscribe", () => Promise.reject(rpcCode("temporarily_unavailable")))
-    await expect(source.transcript("b")).rejects.toMatchObject({ reason: "unavailable" })
+    await expect(source.transcript(conversationB)).rejects.toMatchObject({
+      reason: "unavailable",
+    })
     const opened = gateway.count("subscribe") + gateway.count("subscribeList")
     stop()
     await advance(timing.retryMs * 3)
@@ -836,59 +891,61 @@ describe("conversations", () => {
 
   it("D24: the last listener leaving while the list and a conversation are opening, then one back before they are answered, opens both again once the old opens are closed", async () => {
     const { gateway, source, follow } = started()
-    gateway.rows.set("a", row("a"))
-    gateway.views.set("a", view("a"))
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.views.set(conversationA, view(conversationA))
     const listHeld = deferred<void>()
     const viewHeld = deferred<void>()
     gateway.once("subscribeList", (normal) => listHeld.promise.then(normal))
     gateway.once("subscribe", (normal) => viewHeld.promise.then(normal))
     const stop = follow()
-    const shown = source.transcript("a")
+    const shown = source.transcript(conversationA)
     await flush()
     expect(gateway.count("subscribeList")).toBe(1)
-    expect(subscribesOf(gateway, "a")).toHaveLength(1)
+    expect(subscribesOf(gateway, conversationA)).toHaveLength(1)
     // Mounted, unmounted and mounted again, as StrictMode does.
     stop()
     follow()
     await flush()
     expect(gateway.count("subscribeList")).toBe(1)
-    expect(subscribesOf(gateway, "a")).toHaveLength(1)
+    expect(subscribesOf(gateway, conversationA)).toHaveLength(1)
     listHeld.resolve()
     viewHeld.resolve()
     await flush()
     expect(gateway.count("unsubscribe")).toBe(2)
     expect(gateway.count("subscribeList")).toBe(2)
-    expect(subscribesOf(gateway, "a")).toHaveLength(2)
+    expect(subscribesOf(gateway, conversationA)).toHaveLength(2)
     expect(gateway.live("list")).toBe(1)
-    expect(gateway.live("a")).toBe(1)
-    expect((await shown).sessionId).toBe("a")
-    expect((await source.index()).sessions.map((session) => session.id)).toEqual(["a"])
+    expect(gateway.live(conversationA)).toBe(1)
+    expect((await shown).sessionId).toBe(conversationA)
+    expect((await source.index()).sessions.map((session) => session.id)).toEqual([
+      conversationA,
+    ])
   })
 
   it("D13: a subscription answered after its session was taken out is closed unused, and its frame applies nothing", async () => {
     const { gateway, source, updates, follow } = started()
-    gateway.rows.set("a", row("a"))
-    gateway.views.set("a", view("a"))
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.views.set(conversationA, view(conversationA))
     follow()
     await source.index()
     const held = deferred<void>()
     gateway.once("subscribe", (normal) => held.promise.then(normal))
-    const shown = source.transcript("a").catch((error: unknown) => error)
+    const shown = source.transcript(conversationA).catch((error: unknown) => error)
     await flush()
-    await source.archive("a", "person")
+    await source.archive(conversationA, "person")
     expect(await shown).toMatchObject({ reason: "unknown-session" })
     held.resolve()
     await flush()
     expect(gateway.count("unsubscribe")).toBe(1)
-    expect(gateway.live("a")).toBe(0)
-    expect(transcriptsOf(updates, "a")).toEqual([])
+    expect(gateway.live(conversationA)).toBe(0)
+    expect(transcriptsOf(updates, conversationA)).toEqual([])
   })
 
   it("D14: a conversation opened, sent to by an app and restored at once is subscribed once", async () => {
     const { gateway, source, follow } = started()
-    gateway.views.set("a", view("a"))
-    const shown = source.transcript("a")
-    const called = source.appCall("a", () => Promise.resolve("done"))
+    gateway.views.set(conversationA, view(conversationA))
+    const shown = source.transcript(conversationA)
+    const called = source.appCall(conversationA, () => Promise.resolve("done"))
     follow()
     await Promise.all([shown, called])
     await flush()
@@ -899,23 +956,23 @@ describe("conversations", () => {
 describe("every call settles on its own timer (C4)", () => {
   it("an index, a transcript, a send and an archive that get no answer settle unavailable", async () => {
     const { gateway, source, advance } = started()
-    gateway.rows.set("a", row("a"))
-    gateway.views.set("a", view("a"))
-    gateway.views.set("b", view("b"))
-    await source.transcript("a")
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.views.set(conversationA, view(conversationA))
+    gateway.views.set(conversationB, view(conversationB))
+    await source.transcript(conversationA)
     for (const method of ["subscribeList", "subscribe", "send", "archive"] as const)
       gateway.once(method, () => new Promise(() => {}))
     const calls = [
       source.index(),
-      source.transcript("b"),
+      source.transcript(conversationB),
       source.send({
-        sessionId: "a",
+        sessionId: conversationA,
         messageId: "m",
         text: "hi",
         model,
         initiator: "person",
       }),
-      source.archive("a", "person"),
+      source.archive(conversationA, "person"),
     ].map((call) => call.catch((error: unknown) => error))
     await advance(timing.callMs)
     for (const settled of await Promise.all(calls))
@@ -1063,9 +1120,11 @@ describe("a connection that could not be made says why (#419)", () => {
       attempts++
       return refusing.promise
     })
-    const calls = [source.index(), source.transcript("a"), source.connected()].map(
-      (call) => call.catch((error: unknown) => error),
-    )
+    const calls = [
+      source.index(),
+      source.transcript(conversationA),
+      source.connected(),
+    ].map((call) => call.catch((error: unknown) => error))
     refusing.reject(unauthorized)
     for (const settled of await Promise.all(calls))
       expect(settled).toMatchObject({ reason: "signed-out" })
@@ -1080,8 +1139,8 @@ describe("a connection that could not be made says why (#419)", () => {
     const { source } = started(gateway, () =>
       ++attempts === 1 ? Promise.resolve(gateway.client) : Promise.reject(unauthorized),
     )
-    gateway.rows.set("a", row("a"))
-    gateway.views.set("a", view("a"))
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.views.set(conversationA, view(conversationA))
     const store = testStore(source)
     await store.dispatch(loadWorkspace())
     await flush()
@@ -1091,11 +1150,11 @@ describe("a connection that could not be made says why (#419)", () => {
       error: new NessaConnectionClosedError(4001, ""),
     })
     const outcome = await store.dispatch(
-      sendMessage({ sessionId: "a", text: "Hello there", initiator: "person" }),
+      sendMessage({ sessionId: conversationA, text: "Hello there", initiator: "person" }),
     )
     expect(outcome).toBe("refused")
     expect(gateway.count("send")).toBe(0)
-    expect(store.getState().workspace.outbox.a?.[0]?.delivery).toEqual({
+    expect(store.getState().workspace.outbox[conversationA]?.[0]?.delivery).toEqual({
       state: "failed",
       reason: "signed-out",
     })
@@ -1109,7 +1168,7 @@ describe("a connection that could not be made says why (#419)", () => {
     const { source } = started(gateway, () =>
       refuse ? Promise.reject(unauthorized) : Promise.resolve(gateway.client),
     )
-    gateway.rows.set("a", row("a"))
+    gateway.rows.set(conversationA, row(conversationA))
     const store = testStore(source)
     await store.dispatch(loadWorkspace())
     expect(store.getState().workspace).toMatchObject({
@@ -1119,7 +1178,7 @@ describe("a connection that could not be made says why (#419)", () => {
     refuse = false
     await store.dispatch(loadWorkspace())
     expect(store.getState().workspace.status).toBe("ready")
-    expect(Object.keys(store.getState().workspace.sessions)).toEqual(["a"])
+    expect(Object.keys(store.getState().workspace.sessions)).toEqual([conversationA])
     warn.mockRestore()
   })
 
@@ -1132,8 +1191,8 @@ describe("a connection that could not be made says why (#419)", () => {
         ? Promise.reject(new NessaConnectionClosedError(1006, ""))
         : Promise.resolve(gateway.client),
     )
-    gateway.rows.set("a", row("a"))
-    gateway.views.set("a", view("a"))
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.views.set(conversationA, view(conversationA))
     const store = testStore(source)
     store.dispatch(followWorkspace())
     await store.dispatch(loadWorkspace())
@@ -1147,7 +1206,7 @@ describe("a connection that could not be made says why (#419)", () => {
     await advance(1)
     await flush()
     expect(store.getState().workspace.status).toBe("ready")
-    expect(Object.keys(store.getState().workspace.sessions)).toEqual(["a"])
+    expect(Object.keys(store.getState().workspace.sessions)).toEqual([conversationA])
     warn.mockRestore()
   })
 
@@ -1165,16 +1224,16 @@ describe("a connection that could not be made says why (#419)", () => {
     const warn = quiet()
     const { gateway, source } = signedOutAfterFirst()
     gateway.views.set(
-      "a",
-      view("a", { messages: [running()], permissions: [permission()] }),
+      conversationA,
+      view(conversationA, { messages: [running()], permissions: [permission()] }),
     )
-    await source.transcript("a")
+    await source.transcript(conversationA)
     gateway.setState({
       status: "closed",
       error: new NessaConnectionClosedError(4001, ""),
     })
     await expect(
-      source.approve("a", approvalId(permission()), "once", "person", "opt-a"),
+      source.approve(conversationA, approvalId(permission()), "once", "person", "opt-a"),
     ).rejects.toMatchObject({ reason: "signed-out" })
     expect(gateway.count("answer")).toBe(0)
     warn.mockRestore()
@@ -1183,13 +1242,13 @@ describe("a connection that could not be made says why (#419)", () => {
   it("S7: an archive whose connection is refused is not sent, and says signed out", async () => {
     const warn = quiet()
     const { gateway, source } = signedOutAfterFirst()
-    gateway.rows.set("a", row("a"))
+    gateway.rows.set(conversationA, row(conversationA))
     await source.index()
     gateway.setState({
       status: "closed",
       error: new NessaConnectionClosedError(4001, ""),
     })
-    await expect(source.archive("a", "person")).rejects.toMatchObject({
+    await expect(source.archive(conversationA, "person")).rejects.toMatchObject({
       reason: "signed-out",
     })
     expect(gateway.count("archive")).toBe(0)
@@ -1313,13 +1372,13 @@ describe("a connection that could not be made says why (#419)", () => {
   for (const [path, call] of [
     [
       "opening a session",
-      (source: ReturnType<typeof started>["source"]) => source.transcript("a"),
+      (source: ReturnType<typeof started>["source"]) => source.transcript(conversationA),
     ],
     [
       "a send",
       (source: ReturnType<typeof started>["source"]) =>
         source.send({
-          sessionId: "a",
+          sessionId: conversationA,
           messageId: "m",
           text: "hi",
           model,
@@ -1329,20 +1388,27 @@ describe("a connection that could not be made says why (#419)", () => {
     [
       "an answer",
       (source: ReturnType<typeof started>["source"]) =>
-        source.approve("a", approvalId(permission()), "once", "person", "opt-a"),
+        source.approve(
+          conversationA,
+          approvalId(permission()),
+          "once",
+          "person",
+          "opt-a",
+        ),
     ],
     [
       "an archive",
-      (source: ReturnType<typeof started>["source"]) => source.archive("a", "person"),
+      (source: ReturnType<typeof started>["source"]) =>
+        source.archive(conversationA, "person"),
     ],
   ] as const)
     it(`S12: ${path} connects at once while the source waits`, async () => {
       const warn = quiet()
       const gateway = fakeGateway()
-      gateway.rows.set("a", row("a"))
+      gateway.rows.set(conversationA, row(conversationA))
       gateway.views.set(
-        "a",
-        view("a", { messages: [running()], permissions: [permission()] }),
+        conversationA,
+        view(conversationA, { messages: [running()], permissions: [permission()] }),
       )
       const { source, state } = counted(gateway)
       await source.index().catch(() => undefined)
@@ -1357,7 +1423,7 @@ describe("a connection that could not be made says why (#419)", () => {
     const gateway = fakeGateway()
     const { source, state } = counted(gateway)
     state.refuse = false
-    gateway.views.set("a", view("a"))
+    gateway.views.set(conversationA, view(conversationA))
     gateway.once("send", async (normal) => {
       const sent = await normal()
       state.refuse = true
@@ -1368,7 +1434,7 @@ describe("a connection that could not be made says why (#419)", () => {
       return sent
     })
     await source.send({
-      sessionId: "a",
+      sessionId: conversationA,
       messageId: "m",
       text: "hi",
       model,
@@ -1411,12 +1477,12 @@ describe("a connection that could not be made says why (#419)", () => {
 describe("the connection", () => {
   it("C2, D5: a lost connection ends every subscription and nothing more; back, it resyncs once and opens each again from its cursor", async () => {
     const { gateway, source, updates, follow } = started()
-    gateway.rows.set("a", row("a"))
-    gateway.views.set("a", view("a"))
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.views.set(conversationA, view(conversationA))
     follow()
     await source.index()
-    await source.transcript("a")
-    gateway.publish("a")
+    await source.transcript(conversationA)
+    gateway.publish(conversationA)
     await flush()
     updates.length = 0
     gateway.setState({
@@ -1431,7 +1497,7 @@ describe("the connection", () => {
     expect(updates).toEqual([{ kind: "resync" }])
     await flush()
     expect(gateway.count("subscribeList")).toBe(2)
-    expect(subscribesOf(gateway, "a")).toEqual([
+    expect(subscribesOf(gateway, conversationA)).toEqual([
       {},
       { after: { incarnation: "history-1", position: "2" } },
     ])
@@ -1463,18 +1529,18 @@ describe("the connection", () => {
     const { source, updates, follow, advance } = started(gateway, () =>
       Promise.resolve(++attempts === 1 ? gateway.client : next.client),
     )
-    gateway.views.set("a", view("a"))
-    next.views.set("a", view("a"))
+    gateway.views.set(conversationA, view(conversationA))
+    next.views.set(conversationA, view(conversationA))
     follow()
     await source.index()
-    await source.transcript("a")
+    await source.transcript(conversationA)
     updates.length = 0
     gateway.setState({ status: "closed", error: new Error("gone") })
     await advance(timing.retryMs)
     expect(attempts).toBe(2)
     expect(kinds(updates)).toEqual(["resync"])
     expect(next.count("subscribeList")).toBe(1)
-    expect(subscribesOf(next, "a")).toEqual([
+    expect(subscribesOf(next, conversationA)).toEqual([
       { after: { incarnation: "history-1", position: "1" } },
     ])
   })
@@ -1482,18 +1548,18 @@ describe("the connection", () => {
   it("C3, D22: dispose closes every subscription and the client, refuses later calls, and nothing applies after", async () => {
     const { gateway, source, updates, follow, advance } = started()
     follow()
-    gateway.rows.set("a", row("a"))
-    gateway.views.set("a", view("a"))
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.views.set(conversationA, view(conversationA))
     await source.index()
-    await source.transcript("a")
+    await source.transcript(conversationA)
     source.dispose()
     await flush()
     expect(gateway.closed()).toBe(true)
     expect(gateway.count("unsubscribe")).toBe(2)
     await expect(source.index()).rejects.toMatchObject({ reason: "unavailable" })
     const said = updates.length
-    gateway.views.set("a", view("a", { revision: "later" }))
-    gateway.publish("a")
+    gateway.views.set(conversationA, view(conversationA, { revision: "later" }))
+    gateway.publish(conversationA)
     gateway.publishList()
     gateway.setState({ status: "connected" })
     await advance(timing.retryMs * 3)
@@ -1517,7 +1583,7 @@ describe("writes", () => {
   it("W1: a first message opens its conversation on the chosen agent and model, sends it under its id, then follows it", async () => {
     const { gateway, source } = started()
     await source.send({
-      sessionId: "s",
+      sessionId: conversationS,
       messageId: "m",
       text: "Hello",
       model: { provider: "openai", modelId: "gpt-5" },
@@ -1527,21 +1593,21 @@ describe("writes", () => {
     expect(gateway.calls).toEqual([
       {
         method: "create",
-        args: [{ conversationId: "s", agent: "codex", model: "gpt-5" }],
+        args: [{ conversationId: conversationS, agent: "codex", model: "gpt-5" }],
       },
       {
         method: "send",
-        args: ["s", "Hello", [], [], { executionId: "m", requestId: "m" }],
+        args: [conversationS, "Hello", [], [], { executionId: "m", requestId: "m" }],
       },
-      { method: "subscribe", args: ["s", {}] },
+      { method: "subscribe", args: [conversationS, {}] },
     ])
   })
 
   it("W2: a message sent again goes under the same ids, so the gateway takes it once", async () => {
     const { gateway, source } = started()
-    gateway.views.set("s", view("s"))
+    gateway.views.set(conversationS, view(conversationS))
     const message = {
-      sessionId: "s",
+      sessionId: conversationS,
       messageId: "m",
       text: "Hello",
       model,
@@ -1563,19 +1629,22 @@ describe("writes", () => {
     const { gateway, source, updates, follow } = started()
     const asked = permission()
     gateway.views.set(
-      "a",
-      view("a", { revision: "1", messages: [running()], permissions: [asked] }),
+      conversationA,
+      view(conversationA, { revision: "1", messages: [running()], permissions: [asked] }),
     )
-    await source.transcript("a")
+    await source.transcript(conversationA)
     follow()
-    await source.approve("a", approvalId(asked), "once", "person", "opt-a")
+    await source.approve(conversationA, approvalId(asked), "once", "person", "opt-a")
     expect(gateway.calls.find((call) => call.method === "answer")?.args).toEqual([
-      { conversationId: "a", executionId: "turn", permissionId: "p1" },
+      { conversationId: conversationA, executionId: "turn", permissionId: "p1" },
       "opt-a",
     ])
     expect(gateway.count("subscribe")).toBe(1)
-    gateway.views.set("a", view("a", { revision: "2", messages: [running()] }))
-    gateway.publish("a")
+    gateway.views.set(
+      conversationA,
+      view(conversationA, { revision: "2", messages: [running()] }),
+    )
+    gateway.publish(conversationA)
     await flush()
     expect(updates).toContainEqual({
       kind: "transcript",
@@ -1592,18 +1661,24 @@ describe("writes", () => {
       ],
     })
     gateway.views.set(
-      "a",
-      view("a", { revision: "1", messages: [running()], permissions: [asked] }),
+      conversationA,
+      view(conversationA, { revision: "1", messages: [running()], permissions: [asked] }),
     )
-    await source.transcript("a")
-    await source.approve("a", approvalId(asked), "once", "person", "second")
+    await source.transcript(conversationA)
+    await source.approve(conversationA, approvalId(asked), "once", "person", "second")
     expect(gateway.calls.find((call) => call.method === "answer")?.args[1]).toBe("second")
   })
 
   it("W3: approving always is not supported, and nothing is answered", async () => {
     const { gateway, source } = started()
     await expect(
-      source.approve("a", approvalId(permission()), "always", "person", "opt-a"),
+      source.approve(
+        conversationA,
+        approvalId(permission()),
+        "always",
+        "person",
+        "opt-a",
+      ),
     ).rejects.toMatchObject({ reason: "not-supported" })
     expect(gateway.calls).toEqual([])
   })
@@ -1612,23 +1687,27 @@ describe("writes", () => {
     const { gateway, source } = started()
     const asked = permission()
     gateway.views.set(
-      "a",
-      view("a", { revision: "1", messages: [running()], permissions: [asked] }),
+      conversationA,
+      view(conversationA, { revision: "1", messages: [running()], permissions: [asked] }),
     )
-    await source.deny("a", approvalId(asked), "person", "opt-b")
+    await source.deny(conversationA, approvalId(asked), "person", "opt-b")
     expect(gateway.calls.find((call) => call.method === "answer")?.args[1]).toBe("opt-b")
     const allowOnly = permission({
       permissionId: "p2",
       options: [{ id: "only", label: "Allow", effect: "allow" }],
     })
     gateway.views.set(
-      "a",
-      view("a", { revision: "2", messages: [running()], permissions: [allowOnly] }),
+      conversationA,
+      view(conversationA, {
+        revision: "2",
+        messages: [running()],
+        permissions: [allowOnly],
+      }),
     )
-    gateway.publish("a")
+    gateway.publish(conversationA)
     await flush()
     await expect(
-      source.deny("a", approvalId(allowOnly), "person", "only"),
+      source.deny(conversationA, approvalId(allowOnly), "person", "only"),
     ).rejects.toMatchObject({
       reason: "not-supported",
     })
@@ -1637,11 +1716,13 @@ describe("writes", () => {
 
   it("W5: an approval no longer asked, or an id this source never wrote, is not waiting", async () => {
     const { gateway, source } = started()
-    gateway.views.set("a", view("a", { messages: [running()] }))
+    gateway.views.set(conversationA, view(conversationA, { messages: [running()] }))
     await expect(
-      source.approve("a", approvalId(permission()), "once", "person", "opt-a"),
+      source.approve(conversationA, approvalId(permission()), "once", "person", "opt-a"),
     ).rejects.toMatchObject({ reason: "not-waiting" })
-    await expect(source.deny("a", "not-an-id", "person", "opt-b")).rejects.toMatchObject({
+    await expect(
+      source.deny(conversationA, "not-an-id", "person", "opt-b"),
+    ).rejects.toMatchObject({
       reason: "not-waiting",
     })
     expect(gateway.count("answer")).toBe(0)
@@ -1651,67 +1732,71 @@ describe("writes", () => {
     const { gateway, source } = started()
     const asked = permission()
     gateway.views.set(
-      "a",
-      view("a", { revision: "1", messages: [running()], permissions: [asked] }),
+      conversationA,
+      view(conversationA, { revision: "1", messages: [running()], permissions: [asked] }),
     )
-    await source.transcript("a")
+    await source.transcript(conversationA)
     for (let i = 0; i < 8; i++) {
       gateway.views.set(`o${i}`, view(`o${i}`))
       await source.transcript(`o${i}`)
     }
-    expect(gateway.live("a")).toBe(0)
-    await source.approve("a", approvalId(asked), "once", "person", "opt-a")
-    expect(subscribesOf(gateway, "a")).toHaveLength(2)
+    expect(gateway.live(conversationA)).toBe(0)
+    await source.approve(conversationA, approvalId(asked), "once", "person", "opt-a")
+    expect(subscribesOf(gateway, conversationA)).toHaveLength(2)
     expect(gateway.count("answer")).toBe(1)
   })
 
   it("W6: archiving says the removal, at the summary's next revision, before it resolves, and lets its subscription go", async () => {
     const { gateway, source, updates, follow } = started()
-    gateway.rows.set("a", row("a"))
-    gateway.views.set("a", view("a"))
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.views.set(conversationA, view(conversationA))
     await source.index()
-    await source.transcript("a")
+    await source.transcript(conversationA)
     follow()
     updates.length = 0
-    await source.archive("a", "person")
-    expect(updates).toEqual([{ kind: "session-removed", sessionId: "a", revision: 2 }])
+    await source.archive(conversationA, "person")
+    expect(updates).toEqual([
+      { kind: "session-removed", sessionId: conversationA, revision: 2 },
+    ])
     expect((await source.index()).sessions).toEqual([])
     await flush()
-    expect(gateway.live("a")).toBe(0)
+    expect(gateway.live(conversationA)).toBe(0)
   })
 
   it("W6: a list frame that arrives while an archive is on its way cannot list the session again after it", async () => {
     const { gateway, source, updates, follow } = started()
-    gateway.rows.set("a", row("a"))
-    gateway.rows.set("b", row("b"))
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.rows.set(conversationB, row(conversationB))
     follow()
     await source.index()
     updates.length = 0
     const archived = deferred<void>()
     gateway.once("archive", (normal) => archived.promise.then(normal))
-    const archiving = source.archive("a", "person")
+    const archiving = source.archive(conversationA, "person")
     await flush()
-    // Read before the archive took effect: it still names "a".
-    gateway.rows.set("b", row("b", { preview: "moved" }))
+    // Read before the archive took effect: it still names conversationA.
+    gateway.rows.set(conversationB, row(conversationB, { preview: "moved" }))
     gateway.publishList()
     await flush()
     archived.resolve()
     await archiving
     await flush()
     expect(updates).toEqual([
-      { kind: "session-removed", sessionId: "a", revision: 2 },
+      { kind: "session-removed", sessionId: conversationA, revision: 2 },
       {
         kind: "session",
-        session: expect.objectContaining({ id: "b", preview: "moved" }),
+        session: expect.objectContaining({ id: conversationB, preview: "moved" }),
       },
     ])
-    expect((await source.index()).sessions.map((session) => session.id)).toEqual(["b"])
+    expect((await source.index()).sessions.map((session) => session.id)).toEqual([
+      conversationB,
+    ])
   })
 
   it("W7: marking read asks nothing of the gateway; pinning is not supported", async () => {
     const { gateway, source } = started()
-    await source.markRead("a")
-    await expect(source.setPinned("a", true, "person")).rejects.toMatchObject({
+    await source.markRead(conversationA)
+    await expect(source.setPinned(conversationA, true, "person")).rejects.toMatchObject({
       reason: "not-supported",
     })
     expect(gateway.calls).toEqual([])
@@ -1719,30 +1804,32 @@ describe("writes", () => {
 
   it("C5: an archive that never answers settles, and the list frames behind it still apply", async () => {
     const { gateway, source, updates, follow, advance } = started()
-    gateway.rows.set("a", row("a"))
+    gateway.rows.set(conversationA, row(conversationA))
     follow()
     await source.index()
     gateway.once("archive", () => new Promise(() => {}))
-    const archived = source.archive("a", "person").catch((error: unknown) => error)
+    const archived = source
+      .archive(conversationA, "person")
+      .catch((error: unknown) => error)
     await advance(timing.callMs)
     expect(await archived).toMatchObject({ reason: "unavailable" })
-    gateway.rows.set("a", row("a", { preview: "after" }))
+    gateway.rows.set(conversationA, row(conversationA, { preview: "after" }))
     gateway.publishList()
     await flush()
     expect(updates).toContainEqual({
       kind: "session",
-      session: expect.objectContaining({ id: "a", preview: "after" }),
+      session: expect.objectContaining({ id: conversationA, preview: "after" }),
     })
   })
 
   it("W6b: a second archive of a session is refused as unknown, asks nobody, and says no second removal", async () => {
     const { gateway, source, updates, follow } = started()
-    gateway.rows.set("a", row("a"))
+    gateway.rows.set(conversationA, row(conversationA))
     await source.index()
     follow()
     const outcomes = await Promise.allSettled([
-      source.archive("a", "person"),
-      source.archive("a", "agent"),
+      source.archive(conversationA, "person"),
+      source.archive(conversationA, "agent"),
     ])
     expect(outcomes[0].status).toBe("fulfilled")
     expect(outcomes[1]).toMatchObject({
@@ -1759,11 +1846,14 @@ describe("writes", () => {
     const other = composerModels.find(
       (each) => each.modelId !== runs.modelId || each.provider !== runs.provider,
     )!
-    gateway.views.set("s", view("s", { runtime: runtime(runs.modelId) }))
-    await source.transcript("s")
+    gateway.views.set(
+      conversationS,
+      view(conversationS, { runtime: runtime(runs.modelId) }),
+    )
+    await source.transcript(conversationS)
     const asking = (messageId: string, chosen: { provider: string; modelId: string }) =>
       source.send({
-        sessionId: "s",
+        sessionId: conversationS,
         messageId,
         text: "Again",
         model: { provider: chosen.provider, modelId: chosen.modelId },
@@ -1773,7 +1863,7 @@ describe("writes", () => {
     // Carrying `start` changes nothing: only the gateway's word counts.
     await expect(
       source.send({
-        sessionId: "s",
+        sessionId: conversationS,
         messageId: "m2",
         text: "Again",
         model: { provider: other.provider, modelId: other.modelId },
@@ -1793,7 +1883,7 @@ describe("writes", () => {
     const held = deferred<void>()
     gateway.once("subscribe", (normal) => held.promise.then(normal))
     await source.send({
-      sessionId: "s",
+      sessionId: conversationS,
       messageId: "m1",
       text: "Hi",
       model,
@@ -1803,7 +1893,7 @@ describe("writes", () => {
     const other = { provider: "openai", modelId: "gpt-5" }
     // Not said yet: it cannot be told, so it goes — and it runs on what the gateway created.
     await source.send({
-      sessionId: "s",
+      sessionId: conversationS,
       messageId: "m2",
       text: "Hi",
       model: other,
@@ -1818,10 +1908,10 @@ describe("writes", () => {
 
   it("W8: an unknown model cannot be compared, so the message goes", async () => {
     const { gateway, source } = started()
-    gateway.views.set("a", view("a"))
-    await source.transcript("a")
+    gateway.views.set(conversationA, view(conversationA))
+    await source.transcript(conversationA)
     await source.send({
-      sessionId: "a",
+      sessionId: conversationA,
       messageId: "m",
       text: "Hi",
       model: { provider: "openai", modelId: "gpt-5" },
@@ -1836,15 +1926,18 @@ describe("writes", () => {
     const other = composerModels.find(
       (each) => each.modelId !== runs.modelId || each.provider !== runs.provider,
     )!
-    gateway.views.set("s", view("s", { runtime: runtime(runs.modelId) }))
+    gateway.views.set(
+      conversationS,
+      view(conversationS, { runtime: runtime(runs.modelId) }),
+    )
     // While the first message's create is on its way, a frame says what the conversation runs.
     gateway.once("create", async (normal) => {
-      await source.transcript("s")
+      await source.transcript(conversationS)
       return normal()
     })
     await expect(
       source.send({
-        sessionId: "s",
+        sessionId: conversationS,
         messageId: "m",
         text: "Hi",
         model: { provider: other.provider, modelId: other.modelId },
@@ -1857,32 +1950,30 @@ describe("writes", () => {
 
   it("F5: a message the client refuses before sending is not supported, not a fault", async () => {
     const { gateway, source } = started()
-    gateway.client.conversation.send = () => {
-      throw new TypeError("Message must contain 1-8192 UTF-8 bytes")
-    }
     await expect(
       source.send({
-        sessionId: "a",
+        sessionId: conversationA,
         messageId: "m",
         text: "x".repeat(9000),
         model,
         initiator: "person",
       }),
     ).rejects.toMatchObject({ reason: "not-supported" })
+    expect(gateway.count("send")).toBe(0)
   })
 
   it("C6: an approval whose call settled unavailable is never sent, so the person's later answer is the one taken", async () => {
     const { gateway, source, advance } = started()
     const asked = permission()
     gateway.views.set(
-      "a",
-      view("a", { revision: "1", messages: [running()], permissions: [asked] }),
+      conversationA,
+      view(conversationA, { revision: "1", messages: [running()], permissions: [asked] }),
     )
     // The conversation's subscription answers only after the approval's call has settled.
     const held = deferred<void>()
     gateway.once("subscribe", (normal) => held.promise.then(normal))
     const approving = source
-      .approve("a", approvalId(asked), "once", "person", "opt-a")
+      .approve(conversationA, approvalId(asked), "once", "person", "opt-a")
       .catch((error: unknown) => error)
     await advance(timing.callMs)
     expect(await approving).toMatchObject({ reason: "unavailable" })
@@ -1890,7 +1981,7 @@ describe("writes", () => {
     await flush()
     expect(gateway.count("answer")).toBe(0)
     // The person answers again, and that is the answer taken.
-    await source.deny("a", approvalId(asked), "person", "opt-b")
+    await source.deny(conversationA, approvalId(asked), "person", "opt-b")
     expect(
       gateway.calls
         .filter((call) => call.method === "answer")
@@ -1900,8 +1991,8 @@ describe("writes", () => {
 
   it("C6: an archive whose call settled unavailable is never sent", async () => {
     const { gateway, source, follow, advance } = started()
-    for (const id of ["a", "b"])
-      gateway.rows.set(id, row(id, { updatedAtMs: id === "a" ? 1 : 2 }))
+    for (const id of [conversationA, conversationB])
+      gateway.rows.set(id, row(id, { updatedAtMs: id === conversationA ? 1 : 2 }))
     gateway.listLimit = 1
     // Two incomplete list frames ahead of the archive, each walking observe:
     // the first walk never answers; the second starts when it times out and
@@ -1914,7 +2005,9 @@ describe("writes", () => {
     gateway.rows.set("c", row("c", { updatedAtMs: 3 }))
     gateway.publishList()
     await advance(1_000)
-    const archiving = source.archive("a", "person").catch((error: unknown) => error)
+    const archiving = source
+      .archive(conversationA, "person")
+      .catch((error: unknown) => error)
     await advance(timing.callMs)
     expect(await archiving).toMatchObject({ reason: "unavailable" })
     second.resolve()
@@ -1930,7 +2023,7 @@ describe("writes", () => {
     void source.index().catch(() => undefined)
     const sending = source
       .send({
-        sessionId: "s",
+        sessionId: conversationS,
         messageId: "m",
         text: "Hi",
         model,
@@ -1956,7 +2049,7 @@ describe("writes", () => {
     gateway.once("create", () => created.promise)
     const sending = source
       .send({
-        sessionId: "s",
+        sessionId: conversationS,
         messageId: "m",
         text: "Hi",
         model,
@@ -1966,23 +2059,23 @@ describe("writes", () => {
       .catch((error: unknown) => error)
     await advance(timing.callMs)
     expect(await sending).toMatchObject({ reason: "unavailable" })
-    created.resolve({ conversationId: "s" })
+    created.resolve({ conversationId: conversationS })
     await flush()
     expect(gateway.count("send")).toBe(0)
   })
 
   it("R8: a session taken out is not followed, not sent to, and not opened by the subscriptions", async () => {
     const { gateway, source, follow, advance } = started()
-    gateway.rows.set("a", row("a"))
-    gateway.views.set("a", view("a", { messages: [running()] }))
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.views.set(conversationA, view(conversationA, { messages: [running()] }))
     await source.index()
-    await source.archive("a", "person")
-    await expect(source.transcript("a")).rejects.toMatchObject({
+    await source.archive(conversationA, "person")
+    await expect(source.transcript(conversationA)).rejects.toMatchObject({
       reason: "unknown-session",
     })
     await expect(
       source.send({
-        sessionId: "a",
+        sessionId: conversationA,
         messageId: "m",
         text: "Hi",
         model,
@@ -1999,20 +2092,20 @@ describe("writes", () => {
     const { gateway, source } = started()
     const start = { channelId: "gateway-conversations", title: "Hi" }
     await source.send({
-      sessionId: "s",
+      sessionId: conversationS,
       messageId: "m1",
       text: "Hi",
       model,
       initiator: "person",
       start,
     })
-    await source.archive("s", "person")
-    await expect(source.archive("s", "person")).rejects.toMatchObject({
+    await source.archive(conversationS, "person")
+    await expect(source.archive(conversationS, "person")).rejects.toMatchObject({
       reason: "unknown-session",
     })
     await expect(
       source.send({
-        sessionId: "s",
+        sessionId: conversationS,
         messageId: "m2",
         text: "Hi",
         model,
@@ -2026,22 +2119,22 @@ describe("writes", () => {
 
   it("S3b: a session listed again after its removal is not said to wait on the person from its old frame", async () => {
     const { gateway, source, updates, follow } = started()
-    gateway.rows.set("a", row("a", { running: true }))
+    gateway.rows.set(conversationA, row(conversationA, { running: true }))
     gateway.views.set(
-      "a",
-      view("a", { messages: [running()], permissions: [permission()] }),
+      conversationA,
+      view(conversationA, { messages: [running()], permissions: [permission()] }),
     )
     follow()
     await source.index()
-    await source.transcript("a")
-    gateway.rows.delete("a")
+    await source.transcript(conversationA)
+    gateway.rows.delete(conversationA)
     gateway.publishList()
     await flush()
-    gateway.rows.set("a", row("a"))
+    gateway.rows.set(conversationA, row(conversationA))
     gateway.publishList()
     await flush()
     const relisted = updates.filter((update) => update.kind === "session").pop()
-    expect(relisted).toMatchObject({ session: { id: "a", status: "idle" } })
+    expect(relisted).toMatchObject({ session: { id: conversationA, status: "idle" } })
   })
 })
 
@@ -2148,18 +2241,18 @@ describe("refusals are typed (F)", () => {
     try {
       const { gateway, source } = started()
       gateway.once("subscribe", () => Promise.reject(rpcCode("temporarily_unavailable")))
-      await expect(source.transcript("a")).rejects.toMatchObject({
+      await expect(source.transcript(conversationA)).rejects.toMatchObject({
         reason: "unavailable",
       })
       expect(debug).toHaveBeenCalledWith("[nessa] conversation read asked", {
         subject: "conversation",
         method: "conversation.subscribe",
-        sessionId: "a",
+        sessionId: conversationA,
       })
       expect(warn).toHaveBeenCalledWith("[nessa] conversation read refused", {
         subject: "conversation",
         method: "conversation.subscribe",
-        sessionId: "a",
+        sessionId: conversationA,
         reason: "unavailable",
         code: "temporarily_unavailable",
       })
@@ -2170,13 +2263,13 @@ describe("refusals are typed (F)", () => {
       gateway.once("subscribe", () =>
         Promise.reject(new NessaConnectionClosedError(1001, "going away")),
       )
-      await expect(source.transcript("a")).rejects.toMatchObject({
+      await expect(source.transcript(conversationA)).rejects.toMatchObject({
         reason: "unavailable",
       })
       expect(warn).toHaveBeenCalledWith("[nessa] conversation read refused", {
         subject: "conversation",
         method: "conversation.subscribe",
-        sessionId: "a",
+        sessionId: conversationA,
         reason: "unavailable",
         code: "1001",
         closeReason: "transport_interrupted",
@@ -2210,10 +2303,10 @@ describe("refusals are typed (F)", () => {
 describe("through the window's store, unchanged", () => {
   it("opens on the gateway's conversations, shows one, follows it, and resyncs on reconnect", async () => {
     const { gateway, source } = started()
-    gateway.rows.set("a", row("a", { running: true }))
+    gateway.rows.set(conversationA, row(conversationA, { running: true }))
     gateway.views.set(
-      "a",
-      view("a", {
+      conversationA,
+      view(conversationA, {
         revision: "1",
         messages: [
           {
@@ -2237,15 +2330,18 @@ describe("through the window's store, unchanged", () => {
     await flush()
     const state = () => store.getState().workspace
     expect(state().status).toBe("ready")
-    expect(Object.keys(state().sessions)).toEqual(["a"])
-    expect(state().transcripts.a?.messages.map(messageText)).toEqual([
+    expect(Object.keys(state().sessions)).toEqual([conversationA])
+    expect(state().transcripts[conversationA]?.messages.map(messageText)).toEqual([
       "Run the tests",
       "Working on it",
     ])
-    gateway.views.set("a", view("a", { revision: "2", messages: [running("turn")] }))
-    gateway.publish("a")
+    gateway.views.set(
+      conversationA,
+      view(conversationA, { revision: "2", messages: [running("turn")] }),
+    )
+    gateway.publish(conversationA)
     await flush()
-    expect(state().transcripts.a?.revision).toBe(2)
+    expect(state().transcripts[conversationA]?.revision).toBe(2)
     const lists = gateway.count("subscribeList")
     gateway.setState({
       status: "reconnecting",
@@ -2260,8 +2356,8 @@ describe("through the window's store, unchanged", () => {
 
   it("sends a message the window's conversation then shows under its id", async () => {
     const { gateway, source } = started()
-    gateway.rows.set("a", row("a"))
-    gateway.views.set("a", view("a"))
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.views.set(conversationA, view(conversationA))
     const store = testStore(source)
     store.dispatch(followWorkspace())
     await store.dispatch(loadWorkspace())
@@ -2270,28 +2366,31 @@ describe("through the window's store, unchanged", () => {
       const { executionId } = gateway.calls[gateway.calls.length - 1].args[4] as {
         executionId: string
       }
-      gateway.rows.set("a", row("a", { running: true, updatedAtMs: 3_000 }))
+      gateway.rows.set(
+        conversationA,
+        row(conversationA, { running: true, updatedAtMs: 3_000 }),
+      )
       gateway.views.set(
-        "a",
-        view("a", {
+        conversationA,
+        view(conversationA, {
           revision: "2",
           messages: [{ ...running(executionId), userText: "Hello there" }],
         }),
       )
       const sent = await normal()
-      gateway.publish("a")
+      gateway.publish(conversationA)
       return sent
     })
     const outcome = await store.dispatch(
-      sendMessage({ sessionId: "a", text: "Hello there", initiator: "person" }),
+      sendMessage({ sessionId: conversationA, text: "Hello there", initiator: "person" }),
     )
     expect(outcome).toBe("sent")
     await flush()
     // The gateway's conversation holds it under the id it was sent with: the outbox lets it go.
-    expect(store.getState().workspace.outbox.a).toBeUndefined()
-    expect(store.getState().workspace.transcripts.a?.messages.map(messageText)).toEqual([
-      "Hello there",
-    ])
+    expect(store.getState().workspace.outbox[conversationA]).toBeUndefined()
+    expect(
+      store.getState().workspace.transcripts[conversationA]?.messages.map(messageText),
+    ).toEqual(["Hello there"])
   })
 })
 
@@ -2328,31 +2427,31 @@ describe("MCP Apps (#384)", () => {
 
   it("each view applied is told to the apps in the order applied, and the same view is not told twice", async () => {
     const { gateway, source, told } = withApps()
-    gateway.views.set("a", view("a", { revision: "1", title: "1" }))
-    await source.transcript("a")
-    gateway.publish("a")
+    gateway.views.set(conversationA, view(conversationA, { revision: "1", title: "1" }))
+    await source.transcript(conversationA)
+    gateway.publish(conversationA)
     await flush()
-    gateway.views.set("a", view("a", { revision: "2", title: "2" }))
-    gateway.publish("a")
+    gateway.views.set(conversationA, view(conversationA, { revision: "2", title: "2" }))
+    gateway.publish(conversationA)
     await flush()
     expect(told).toEqual([
-      ["observe", "a", "1"],
-      ["observe", "a", "2"],
+      ["observe", conversationA, "1"],
+      ["observe", conversationA, "2"],
     ])
   })
 
   it("a subscription let go is not told: one whose open outlived its call", async () => {
     const { gateway, source, told, advance } = withApps()
-    gateway.views.set("a", view("a", { revision: "late" }))
+    gateway.views.set(conversationA, view(conversationA, { revision: "late" }))
     const held = deferred<void>()
     gateway.once("subscribe", (normal) => held.promise.then(normal))
-    const call = source.transcript("a").catch((error: unknown) => error)
+    const call = source.transcript(conversationA).catch((error: unknown) => error)
     await advance(timing.callMs)
     expect(await call).toMatchObject({ reason: "unavailable" })
     held.resolve()
     await flush()
     expect(told).toEqual([])
-    expect(gateway.live("a")).toBe(0)
+    expect(gateway.live(conversationA)).toBe(0)
   })
 
   it("an app's widget is named in its conversation, so two conversations' calls under one id are two widgets", async () => {
@@ -2366,13 +2465,13 @@ describe("MCP Apps (#384)", () => {
         ],
       },
     ]
-    gateway.views.set("a", view("a", { tools, messages }))
-    gateway.views.set("b", view("b", { tools, messages }))
+    gateway.views.set(conversationA, view(conversationA, { tools, messages }))
+    gateway.views.set(conversationB, view(conversationB, { tools, messages }))
     const widgetOf = async (id: string) =>
       (await source.transcript(id)).messages
         .flatMap((message) => message.parts)
         .find((part) => part.kind === "widget")
-    const [a, b] = [await widgetOf("a"), await widgetOf("b")]
+    const [a, b] = [await widgetOf(conversationA), await widgetOf(conversationB)]
     expect(a).toBeDefined()
     expect(b).toBeDefined()
     expect(a).not.toEqual(b)
@@ -2380,40 +2479,40 @@ describe("MCP Apps (#384)", () => {
 
   it("D4: a conversation the gateway says was deleted is forgotten by the apps, after it is taken out", async () => {
     const { gateway, source, told, updates, follow } = withApps()
-    gateway.rows.set("a", row("a"))
-    gateway.views.set("a", view("a"))
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.views.set(conversationA, view(conversationA))
     await source.index()
     follow()
-    await source.transcript("a")
-    gateway.end("a", { reason: "refused", code: "conversation_deleted" })
+    await source.transcript(conversationA)
+    gateway.end(conversationA, { reason: "refused", code: "conversation_deleted" })
     await flush()
     expect(kinds(updates)).toContain("session-removed")
     expect(told).toEqual([
-      ["observe", "a", "r1"],
-      ["forget", "a"],
+      ["observe", conversationA, "r1"],
+      ["forget", conversationA],
     ])
   })
 
   it("a subscription refused as deleted, even as a control error, is forgotten too", async () => {
     const { gateway, source, told } = withApps()
     gateway.once("subscribe", () => Promise.reject(rpcCode("conversation_deleted")))
-    await expect(source.transcript("a")).rejects.toMatchObject({
+    await expect(source.transcript(conversationA)).rejects.toMatchObject({
       reason: "unknown-session",
     })
     gateway.once("subscribe", () =>
       Promise.reject(
         new NessaConversationControlError(
-          "b",
+          conversationB,
           "r",
           undefined,
           rpcCode("conversation_deleted"),
         ),
       ),
     )
-    await source.transcript("b").catch(() => undefined)
+    await source.transcript(conversationB).catch(() => undefined)
     expect(told).toEqual([
-      ["forget", "a"],
-      ["forget", "b"],
+      ["forget", conversationA],
+      ["forget", conversationB],
     ])
   })
 
@@ -2423,10 +2522,10 @@ describe("MCP Apps (#384)", () => {
     // Not found may be this caller's alone.
     await source.transcript("missing").catch(() => undefined)
     // Archived here.
-    gateway.rows.set("b", row("b"))
+    gateway.rows.set(conversationB, row(conversationB))
     gateway.publishList()
     await source.index()
-    await source.archive("b", "person")
+    await source.archive(conversationB, "person")
     // Missing from a complete list: archived or deleted elsewhere, which a list cannot tell.
     gateway.rows.set("c", row("c"))
     gateway.publishList()
@@ -2454,8 +2553,10 @@ describe("MCP Apps (#384)", () => {
     })
     const updates: WorkspaceUpdate[] = []
     source.subscribe((update) => updates.push(update))
-    gateway.views.set("a", view("a"))
-    await expect(source.transcript("a")).resolves.toMatchObject({ sessionId: "a" })
+    gateway.views.set(conversationA, view(conversationA))
+    await expect(source.transcript(conversationA)).resolves.toMatchObject({
+      sessionId: conversationA,
+    })
     expect(kinds(updates)).toContain("transcript")
     expect(error).toHaveBeenCalled()
     error.mockRestore()
@@ -2485,7 +2586,7 @@ describe("an app's review is shown after its turn ended (#436)", () => {
   })
 
   /** Conversations whose turns have ended, listed and followed by the window, none opened. */
-  async function idle(ids: readonly string[] = ["a"], setup = started()) {
+  async function idle(ids: readonly string[] = [conversationA], setup = started()) {
     for (const id of ids) {
       setup.gateway.rows.set(id, row(id))
       setup.gateway.views.set(id, view(id, { revision: "1", messages: [ended] }))
@@ -2498,23 +2599,26 @@ describe("an app's review is shown after its turn ended (#436)", () => {
   it("P2, P3, D11: an app's call follows its conversation, and the review it opens is shown as the app's", async () => {
     const { gateway, source, updates } = await idle()
     const answer = deferred<string>()
-    const call = source.appCall("a", () => answer.promise)
+    const call = source.appCall(conversationA, () => answer.promise)
     await flush()
-    expect(gateway.live("a")).toBe(1)
-    gateway.views.set("a", view("a", { revision: "2", messages: [ended] }))
-    gateway.publish("a")
+    expect(gateway.live(conversationA)).toBe(1)
+    gateway.views.set(
+      conversationA,
+      view(conversationA, { revision: "2", messages: [ended] }),
+    )
+    gateway.publish(conversationA)
     await flush()
     // The review is a live fact of the view: the fold's revision stays.
     gateway.views.set(
-      "a",
-      view("a", { revision: "2", messages: [ended], permissions: [appReview] }),
+      conversationA,
+      view(conversationA, { revision: "2", messages: [ended], permissions: [appReview] }),
     )
-    gateway.publish("a")
+    gateway.publish(conversationA)
     await flush()
     expect(updates).toContainEqual({
       kind: "transcript",
       transcript: expect.objectContaining({
-        sessionId: "a",
+        sessionId: conversationA,
         approval: {
           id: approvalId(appReview),
           command: "app_delete_row {}",
@@ -2530,35 +2634,38 @@ describe("an app's review is shown after its turn ended (#436)", () => {
     })
     expect(updates).toContainEqual({
       kind: "session",
-      session: expect.objectContaining({ id: "a", status: "needs-you" }),
+      session: expect.objectContaining({ id: conversationA, status: "needs-you" }),
     })
     answer.resolve("answered")
     // The call settles as the app's own call did; the conversation stays followed.
     expect(await call).toBe("answered")
     await flush()
-    expect(gateway.live("a")).toBe(1)
+    expect(gateway.live(conversationA)).toBe(1)
   })
 
   it("P4: the person's answer to an app's review goes to the gateway by the option's id", async () => {
     const { gateway, source, updates } = await idle()
     const answer = deferred<string>()
-    void source.appCall("a", () => answer.promise)
+    void source.appCall(conversationA, () => answer.promise)
     gateway.views.set(
-      "a",
-      view("a", { revision: "2", messages: [ended], permissions: [appReview] }),
+      conversationA,
+      view(conversationA, { revision: "2", messages: [ended], permissions: [appReview] }),
     )
     await flush()
     gateway.once("answer", async (normal) => {
       answer.resolve("allowed")
       return normal()
     })
-    await source.approve("a", approvalId(appReview), "once", "person", "allow")
+    await source.approve(conversationA, approvalId(appReview), "once", "person", "allow")
     expect(gateway.calls.find((call) => call.method === "answer")?.args).toEqual([
-      { conversationId: "a", executionId: "turn", permissionId: "app-1" },
+      { conversationId: conversationA, executionId: "turn", permissionId: "app-1" },
       "allow",
     ])
-    gateway.views.set("a", view("a", { revision: "3", messages: [ended] }))
-    gateway.publish("a")
+    gateway.views.set(
+      conversationA,
+      view(conversationA, { revision: "3", messages: [ended] }),
+    )
+    gateway.publish(conversationA)
     await flush()
     expect(updates).toContainEqual({
       kind: "transcript",
@@ -2569,34 +2676,72 @@ describe("an app's review is shown after its turn ended (#436)", () => {
   it("P7: a call that is refused, or throws before it is sent, is passed on as it was", async () => {
     const { source } = await idle()
     const refusal = new Error("mcp_tool_not_for_app")
-    await expect(source.appCall("a", () => Promise.reject(refusal))).rejects.toBe(refusal)
+    await expect(
+      source.appCall(conversationA, () => Promise.reject(refusal)),
+    ).rejects.toBe(refusal)
     const thrown = new TypeError("past the bounds")
     await expect(
-      source.appCall("a", () => {
+      source.appCall(conversationA, () => {
         throw thrown
       }),
     ).rejects.toBe(thrown)
   })
 
   it("P8: a call in one conversation follows that conversation alone", async () => {
-    const { gateway, source } = await idle(["a", "b"])
+    const { gateway, source } = await idle([conversationA, conversationB])
     const answer = deferred<string>()
-    void source.appCall("a", () => answer.promise)
+    void source.appCall(conversationA, () => answer.promise)
     await flush()
-    expect(gateway.live("a")).toBe(1)
-    expect(gateway.live("b")).toBe(0)
+    expect(gateway.live(conversationA)).toBe(1)
+    expect(gateway.live(conversationB)).toBe(0)
     answer.resolve("done")
   })
 
   it("P9: a conversation taken out is not followed for an app's call, which still goes to the gateway", async () => {
     const { gateway, source } = await idle()
-    gateway.rows.delete("a")
+    gateway.rows.delete(conversationA)
     gateway.publishList()
     await flush()
     const asked = vi.fn(() => Promise.resolve("answered"))
-    await expect(source.appCall("a", asked)).resolves.toBe("answered")
+    await expect(source.appCall(conversationA, asked)).resolves.toBe("answered")
     await flush()
     expect(asked).toHaveBeenCalledTimes(1)
     expect(gateway.count("subscribe")).toBe(0)
   })
+})
+
+// d2dbcd60f2 (#400) retained caller-owned message/model references across create.
+it("PS16: captures immutable workspace intent before creation can await", async () => {
+  const { gateway, source } = started()
+  const created = deferred<void>()
+  gateway.once("create", (normal) => created.promise.then(normal))
+  const message = {
+    sessionId: conversationS as string,
+    messageId: "original-turn",
+    text: "original",
+    model: { ...model },
+    initiator: "person" as const,
+    start: { channelId: "gateway-conversations", title: "original" },
+  }
+  const sending = source.send(message)
+  await flush()
+  expect(gateway.count("create")).toBe(1)
+  message.sessionId = conversationB
+  message.messageId = "other-turn"
+  message.text = "edited"
+  message.model.modelId = "other-model"
+  message.start = { channelId: "other", title: "edited" }
+  created.resolve()
+  await sending
+  await flush()
+  const submission = gateway.calls.find((call) => call.method === "send")!
+  expect(submission.args).toEqual([
+    conversationS,
+    "original",
+    [],
+    [],
+    { executionId: "original-turn", requestId: "original-turn" },
+  ])
+  expect(gateway.live(conversationS)).toBe(1)
+  expect(gateway.live(conversationB)).toBe(0)
 })

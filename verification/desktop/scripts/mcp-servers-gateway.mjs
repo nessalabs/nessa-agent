@@ -1747,11 +1747,13 @@ async function chartTurn(client, conversationId, agent) {
   const { permissionTargets } = await import("@nessa/client")
   try {
     await client.conversation.create({ conversationId, agent })
-    await client.conversation.send(
-      conversationId,
-      `Use the tools of the "${SERVER}" MCP server. Call ${CHART_TOOL} (no arguments) ` +
-        "exactly once, and wait for its result. Do not use any other tool. " +
-        "When it has returned, reply with DONE.",
+    await client.conversation.submit(
+      client.conversation.prepare(
+        conversationId,
+        `Use the tools of the "${SERVER}" MCP server. Call ${CHART_TOOL} (no arguments) ` +
+          "exactly once, and wait for its result. Do not use any other tool. " +
+          "When it has returned, reply with DONE.",
+      ),
     )
   } catch (error) {
     throw new CannotRun(

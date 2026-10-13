@@ -1,3 +1,4 @@
+import { prepareSubmission } from "@nessa/client"
 /**
  * The panel's archive and delete, row by row of the state table in
  * docs/adr/done/182-conversation-deletion.md ("In the panel"). Each `describe`
@@ -35,14 +36,17 @@ async function spoken() {
   const effects = scenarioEffects("echo")
   for (const id of [kept, gone]) {
     await effects.create(id)
-    await effects.send({
-      conversationId: id,
-      executionId: `${id}:1`,
-      actionId: `${id}:a`,
-      text: "hello",
-      attachments: [],
-      files: [],
-    })
+    await effects.submit(
+      prepareSubmission({
+        mode: "queued",
+        conversationId: id,
+        executionId: `${id}:1`,
+        requestId: `${id}:a`,
+        text: "hello",
+        attachments: [],
+        files: [],
+      }),
+    )
   }
   return effects
 }
@@ -798,14 +802,17 @@ describe("any answer", () => {
   it("unarchives a conversation when somebody writes in it again", async () => {
     const { store, effects } = await gateway()
     await store.dispatch(archive(kept))
-    await effects.send({
-      conversationId: kept,
-      executionId: `${kept}:2`,
-      actionId: `${kept}:b`,
-      text: "back again",
-      attachments: [],
-      files: [],
-    })
+    await effects.submit(
+      prepareSubmission({
+        mode: "queued",
+        conversationId: kept,
+        executionId: `${kept}:2`,
+        requestId: `${kept}:b`,
+        text: "back again",
+        attachments: [],
+        files: [],
+      }),
+    )
     await store.dispatch(listConversations())
     expect(listed(store)).toContain(kept)
     expect(history(store).archivedIds).toEqual([])
