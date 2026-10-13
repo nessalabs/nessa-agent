@@ -1310,6 +1310,155 @@ describe("a connection that could not be made says why (#419)", () => {
     warn.mockRestore()
   })
 
+  /**
+   * A client whose handshake finished and whose connection is already closed.
+   * `onConnectionStateChange` does not replay that close: the fake, like the
+   * real client, only reports a later transition.
+   */
+  function closedClient(error: Error) {
+    const gateway = fakeGateway()
+    gateway.setState({ status: "closed", error })
+    return gateway
+  }
+
+  it("S19: a client closed before adoption is not kept, and the next call connects", async () => {
+    const warn = quiet()
+    const dead = closedClient(new NessaConnectionClosedError(1006, ""))
+    const live = fakeGateway()
+    let attempts = 0
+    const { source } = started(live, () => {
+      attempts++
+      return attempts === 1 ? Promise.resolve(dead.client) : Promise.resolve(live.client)
+    })
+    await expect(source.index()).rejects.toMatchObject({ reason: "not-listening" })
+    expect(dead.closed()).toBe(true)
+    expect(dead.count("subscribeList")).toBe(0)
+    await expect(source.index()).resolves.toMatchObject({ sessions: [] })
+    expect(attempts).toBe(2)
+    expect(live.count("subscribeList")).toBe(1)
+    warn.mockRestore()
+  })
+
+  it("S19: a credential revoked before adoption is signed out, and the background wait still holds", async () => {
+    const warn = quiet()
+    const dead = closedClient(new NessaConnectionClosedError(4002, ""))
+    const live = fakeGateway()
+    let attempts = 0
+    const { source, follow, advance } = started(live, () => {
+      attempts++
+      return attempts === 1 ? Promise.resolve(dead.client) : Promise.resolve(live.client)
+    })
+    follow()
+    await expect(source.index()).rejects.toMatchObject({ reason: "signed-out" })
+    expect(dead.closed()).toBe(true)
+    expect(dead.count("subscribeList")).toBe(0)
+    expect(attempts).toBe(1)
+    // The failed attempt starts the same wait as any refused connect.
+    await advance(timing.retryMs - 1)
+    expect(attempts).toBe(1)
+    await expect(source.connected()).rejects.toMatchObject({ reason: "unavailable" })
+    expect(attempts).toBe(1)
+    // A person's call does not wait out that budget.
+    await expect(source.index()).resolves.toMatchObject({ sessions: [] })
+    expect(attempts).toBe(2)
+    expect(live.count("subscribeList")).toBe(1)
+    warn.mockRestore()
+  })
+
+  it("S19: a client that closes while adoption subscribes is refused as signed out", async () => {
+    const warn = quiet()
+    const gateway = fakeGateway()
+    const revoked = new NessaConnectionClosedError(4002, "")
+    const inner = gateway.client
+    const client = {
+      conversation: inner.conversation,
+      subscriptions: inner.subscriptions,
+      get connectionState() {
+        return inner.connectionState
+      },
+      onConnectionStateChange(
+        handler: (state: FakeGateway["client"]["connectionState"]) => void,
+      ) {
+        const off = inner.onConnectionStateChange(handler)
+        // The close is reported before `current` can see it.
+        gateway.setState({ status: "closed", error: revoked })
+        return off
+      },
+      close() {
+        inner.close()
+      },
+    }
+    const live = fakeGateway()
+    let attempts = 0
+    const { source } = started(live, () => {
+      attempts++
+      return attempts === 1
+        ? Promise.resolve(client as FakeGateway["client"])
+        : Promise.resolve(live.client)
+    })
+    await expect(source.index()).rejects.toMatchObject({ reason: "signed-out" })
+    expect(gateway.closed()).toBe(true)
+    expect(gateway.count("subscribeList")).toBe(0)
+    await expect(source.index()).resolves.toMatchObject({ sessions: [] })
+    expect(attempts).toBe(2)
+    warn.mockRestore()
+  })
+
+  it("S19: a connect that is already closed after a live one is not kept", async () => {
+    const warn = quiet()
+    const first = fakeGateway()
+    const dead = closedClient(new NessaConnectionClosedError(4002, ""))
+    const live = fakeGateway()
+    const clients = [first.client, dead.client, live.client]
+    let attempts = 0
+    const { source } = started(first, () => {
+      const client = clients[attempts]
+      attempts++
+      return Promise.resolve(client!)
+    })
+    await expect(source.index()).resolves.toMatchObject({ sessions: [] })
+    expect(first.count("subscribeList")).toBe(1)
+    first.setState({
+      status: "closed",
+      error: new NessaConnectionClosedError(1006, ""),
+    })
+    await expect(source.index()).rejects.toMatchObject({ reason: "signed-out" })
+    expect(dead.closed()).toBe(true)
+    expect(dead.count("subscribeList")).toBe(0)
+    await expect(source.index()).resolves.toMatchObject({ sessions: [] })
+    expect(attempts).toBe(3)
+    expect(live.count("subscribeList")).toBe(1)
+    warn.mockRestore()
+  })
+
+  it("a client that is reconnecting when adopted is kept until that connection closes", async () => {
+    const recovering = fakeGateway()
+    recovering.setState({
+      status: "reconnecting",
+      attempt: 1,
+      error: new NessaConnectionClosedError(1006, ""),
+    })
+    const live = fakeGateway()
+    let attempts = 0
+    const { source } = started(live, () => {
+      attempts++
+      return attempts === 1
+        ? Promise.resolve(recovering.client)
+        : Promise.resolve(live.client)
+    })
+    await expect(source.index()).resolves.toMatchObject({ sessions: [] })
+    expect(attempts).toBe(1)
+    expect(recovering.closed()).toBe(false)
+    expect(recovering.count("subscribeList")).toBe(1)
+    recovering.setState({
+      status: "closed",
+      error: new NessaConnectionClosedError(1006, ""),
+    })
+    await expect(source.index()).resolves.toMatchObject({ sessions: [] })
+    expect(attempts).toBe(2)
+    expect(live.count("subscribeList")).toBe(1)
+  })
+
   for (const [path, call] of [
     [
       "opening a session",
