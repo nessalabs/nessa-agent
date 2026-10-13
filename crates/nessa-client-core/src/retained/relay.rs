@@ -20,13 +20,13 @@ use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use super::STOP_SLICE;
+
 /// How long the direct dial has to connect before the relay leg starts. A
 /// direct dial to a home address from another network usually times out
 /// rather than being refused, so without this the relay would wait out the
 /// whole budget.
 pub(super) const HEAD_START: Duration = Duration::from_millis(750);
-/// The longest the race waits before it asks its stop again.
-const STOP_SLICE: Duration = Duration::from_millis(50);
 
 /// Where a reader asks for its gateway when the direct dial does not
 /// connect: the relay's `host:port`, and the pinned gateway key it asks for.
@@ -65,8 +65,11 @@ enum Leg {
 /// `head_start` or has failed, each given what is left of `timeout`, and
 /// return the first to connect. Both failing returns the relay's error, the
 /// later and more telling one. `stopped` is asked at least every
-/// [`STOP_SLICE`]; a leg still running when the race returns ends on its own
-/// deadline, and what it connected is dropped.
+/// [`STOP_SLICE`]. A leg still running when the race returns is left to end
+/// on its own, and what it connected is dropped: a dial ends at its
+/// deadline, but the relay's host name lookup is bounded only by the
+/// system resolver. A `timeout` no longer than `head_start` starts the relay
+/// only after a refused direct dial.
 pub(super) fn race<T: Send + 'static>(
     direct: impl FnOnce(Duration) -> IoResult<T> + Send + 'static,
     relay: impl FnOnce(Duration) -> IoResult<T> + Send + 'static,
@@ -150,8 +153,9 @@ fn spawn<T: Send + 'static>(
         .map(drop)
 }
 
-/// Dial the relay at `route` and ask it for the gateway's key, all within
-/// `timeout`, the host name looked up inside it. `Joined` returns the
+/// Look up the relay at `route`, then dial it and ask it for the gateway's
+/// key within `timeout`. The lookup itself waits as long as the system
+/// resolver does; the race above bounds the caller. `Joined` returns the
 /// stream with the gateway's own bytes next on it.
 pub(super) fn relay_leg(route: &RelayRoute, timeout: Duration) -> IoResult<TcpStream> {
     let deadline = Instant::now()
