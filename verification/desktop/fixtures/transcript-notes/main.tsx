@@ -1,16 +1,18 @@
 /**
  * Notes left in a conversation, on both surfaces at once: the desktop window
  * over a fake gateway (`fake-gateway.ts`), and the panel's transcript beside
- * it, both showing the same two turns and the same notes — one in each state
- * a note can be in, from the owner and from someone it is shared with, one
- * left before any turn, one whose turn the view does not list, and one whose
- * text is a single word far wider than either column. `transcript-notes.mjs`
- * drives it.
+ * it, both reading the same view — two turns, two inputs still waiting, and
+ * the same notes: one in each state a note can be in, from the owner and from
+ * someone it is shared with, one left before any turn, one after a turn the
+ * bounded view left out, one left between the two inputs waiting, and one
+ * whose text is a single word far wider than either column.
+ * `transcript-notes.mjs` drives it.
  *
- * The desktop window reads the view through the real client's check
- * (`conversationView`) and its own adapter (`transcriptFrom`); the panel's
- * conversation is the view's turns with each note read the one way both read
- * it (`shownNote`).
+ * The view is the gateway's own shape: every input waiting is listed both as
+ * a queued turn and as pending. The desktop window reads it through the real
+ * client's check (`conversationView`) and its own adapter (`transcriptFrom`);
+ * the panel applies it as its follow does (`applyView`), each note read the
+ * one way both read it (`shownNote`).
  */
 import type {
   AgentsApi,
@@ -33,7 +35,8 @@ import {
   shownNote,
   type HeldFileReader,
 } from "../../../../src/conversation"
-import { textContent, type Conversation, type Turn } from "../../../../src/conversation/model"
+import { applyView } from "../../../../src/conversation/application/usecases/apply-view"
+import { conversation as newConversation } from "../../../../src/conversation/model"
 import { createDesktopDependencies } from "../../../../src/desktop/dependencies"
 import { makeDesktopStore } from "../../../../src/desktop/store"
 import { DesktopIconFamilyProvider } from "../../../../src/desktop/ui/icons"
@@ -66,8 +69,20 @@ const shared = { kind: "grant" as const, surface: "phone" }
 /** One word far wider than any column: it has to wrap inside its row. */
 const longWord = `deploy-window-${"x".repeat(320)}`
 
+/** Inputs still waiting to run, in the order they wait, after both turns. */
+const waiting = [
+  { executionId: "run-3", text: "Tag the release." },
+  { executionId: "run-4", text: "Announce it." },
+]
+
 const notes: ConversationView["notes"] = [
   note("before", { text: "Left before anything was asked.", author: owner }),
+  note("dropped", {
+    text: "Written after a turn this view no longer holds.",
+    author: owner,
+    // Older than every turn the view keeps: shown before the first.
+    afterExecutionId: "run-0",
+  }),
   note("assigned", {
     text: "Use the staging database for this.",
     author: owner,
@@ -98,8 +113,8 @@ const notes: ConversationView["notes"] = [
     delivery: "next_turn",
     deliveryState: "retired",
     retiredReason: "permission_lost",
-    // A turn this view does not list: shown after the last one.
-    afterExecutionId: "run-0",
+    // Left between the two inputs waiting: right after the first.
+    afterExecutionId: waiting[0]!.executionId,
   }),
 ]
 
@@ -109,24 +124,42 @@ gateway.rows.set(
   conversation,
   row(conversation, { title: "Transcript notes", preview: "Shipped." }),
 )
-gateway.views.set(
-  conversation,
-  conversationView(
-    view(conversation, {
-      revision: "1",
-      messages: turns.map((turn) => ({
+const wireView = conversationView(
+  view(conversation, {
+    revision: "1",
+    messages: [
+      ...turns.map((turn) => ({
         executionId: turn.executionId,
         userText: turn.asked,
         attachments: [],
         files: [],
-        status: "completed",
-        parts: [{ offset: 0, kind: "text", text: turn.said, toolId: "", noticeId: "" }],
+        status: "completed" as const,
+        parts: [
+          { offset: 0, kind: "text" as const, text: turn.said, toolId: "", noticeId: "" },
+        ],
       })),
-      notes,
-    }),
-    conversation,
-  ),
+      ...waiting.map((input) => ({
+        executionId: input.executionId,
+        userText: input.text,
+        attachments: [],
+        files: [],
+        status: "queued" as const,
+        parts: [],
+      })),
+    ],
+    pending: waiting.map((input) => ({
+      ...input,
+      attachments: [],
+      files: [],
+      mode: "queued" as const,
+    })),
+    // Bounded: it left out run-0, older than every turn it keeps.
+    truncated: true,
+    notes,
+  }),
+  conversation,
 )
+gateway.views.set(conversation, wireView)
 const dependencies = createDesktopDependencies({
   gateway: () =>
     Promise.resolve(
@@ -164,67 +197,11 @@ createRoot(rootElement).render(
   </React.StrictMode>,
 )
 
-// The panel's transcript of the same conversation.
-const panelTurns: Turn[] = turns.flatMap(({ executionId, asked, said }): Turn[] => [
-  {
-    id: `${executionId}:user`,
-    from: "user",
-    executionId,
-    receipt: "delivered",
-    content: textContent(asked),
-  },
-  {
-    id: `${executionId}:assistant`,
-    from: "assistant",
-    executionId,
-    text: said,
-    status: "completed",
-    parts: [{ offset: 0, kind: "text", text: said, toolId: "", noticeId: "" }],
-  },
-])
-const panelConversation: Conversation = {
-  id: "panel",
-  serverConversationId: conversation,
-  title: "Transcript notes",
-  phase: "idle",
-  draft: [],
-  turns: panelTurns,
-  remote: {
-    artifacts: [],
-    notes: notes.map(shownNote),
-    approvalMode: "ask",
-    approvalModes: [{ id: "ask", name: "Ask", description: "Asks." }],
-    questions: [],
-    running: false,
-    permissions: [],
-    tools: [],
-    pending: [],
-    capabilities: {
-      queue: true,
-      steer: true,
-      resume: true,
-      permissions: true,
-      imageInput: true,
-      agentFeatures: {
-        permissionDenial: "unknown",
-        nativeHookSuppression: "unknown",
-        nativeHooks: "off",
-        compactionReporting: "unsupported_not_implemented",
-        modelSwitchReporting: "unsupported_not_implemented",
-        permissionDeferral: "unsupported_not_implemented",
-        elicitationForwarding: "unknown",
-        preToolPolicy: "unsupported_not_implemented",
-        policyEndTurn: "unsupported",
-        policyCloseSession: "unsupported",
-        incomingElicitation: "unsupported",
-      },
-    },
-    lifecycle: { phase: "attached" },
-    queueComplete: true,
-    transcriptState: "complete",
-    truncated: false,
-  },
-}
+// The panel's transcript of the same view, applied as its follow applies it.
+const panelConversation = applyView(newConversation("panel"), {
+  ...wireView,
+  notes: wireView.notes.map(shownNote),
+})
 const panelStore = {
   dispatch: () => {},
   getState: () => ({}),
@@ -260,6 +237,7 @@ Object.assign(window, {
     /** Each note's id, in the order the transcripts must show it among the turns. */
     order: [
       "before",
+      "dropped",
       "Plan the release.",
       "Here is the plan.",
       "assigned",
@@ -268,7 +246,9 @@ Object.assign(window, {
       "Shipped.",
       "pending",
       "long",
+      "Tag the release.",
       "lost",
+      "Announce it.",
     ],
   },
 })

@@ -40,7 +40,7 @@ use super::{SessionSnapshot, StorageError};
 use crate::application::agent_execution::permissions::ActionContext;
 use crate::domain::agent_execution::executions::{ExecutionId, Initiator};
 use crate::domain::agent_execution::prompts::{NoteAuthor, NoteContext, UserMessage};
-use std::{collections::HashSet, error::Error, fmt};
+use std::{collections::{HashMap, HashSet}, error::Error, fmt};
 use uuid::Uuid;
 
 /// A value of a note is outside what one may hold.
@@ -544,9 +544,15 @@ pub(super) fn validate_saved(snapshot: &SessionSnapshot) -> Result<(), StorageEr
         }
     }
     // Every note a turn took is a `next_turn` note no other turn took and
-    // none retired.
+    // none retired, left before that turn: after the turn it follows.
+    let position: HashMap<&ExecutionId, usize> = snapshot
+        .invocations
+        .iter()
+        .enumerate()
+        .map(|(index, record)| (&record.request.execution_id, index))
+        .collect();
     let mut taken = HashSet::new();
-    for record in &snapshot.invocations {
+    for (index, record) in snapshot.invocations.iter().enumerate() {
         if record.notes.len() > NoteRecord::MAX_PER_TURN {
             return Err(corrupt("a turn takes more notes than it may"));
         }
@@ -556,8 +562,13 @@ pub(super) fn validate_saved(snapshot: &SessionSnapshot) -> Result<(), StorageEr
                 .iter()
                 .find(|note| &note.id == id)
                 .ok_or_else(|| corrupt("a turn takes a note the conversation does not hold"))?;
+            let left_before = note
+                .after_execution
+                .as_ref()
+                .is_none_or(|turn| position.get(turn).is_some_and(|after| *after < index));
             if note.delivery != NoteDelivery::NextTurn
                 || note.retired.is_some()
+                || !left_before
                 || !taken.insert(id)
             {
                 return Err(corrupt("a turn takes a note that was not pending"));

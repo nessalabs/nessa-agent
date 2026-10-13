@@ -25,7 +25,7 @@ import { inGroup, type AgentsGroup } from "../model/overview/agents-glance"
 import { drawn, type SideColumn } from "../../model/side-column"
 import type { SessionView } from "../model/session-groups"
 import { keepShownDrafts, type Draft } from "../model/session-lifecycle"
-import { unconfirmed, type Message, type Transcript, type TurnMessage } from "../model/transcript"
+import { unconfirmed, type Transcript, type TurnMessage } from "../model/transcript"
 
 /** An answer given to one approval: on its way, or refused with the reason. */
 export interface Answer {

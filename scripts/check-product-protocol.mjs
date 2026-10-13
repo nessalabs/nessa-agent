@@ -197,10 +197,49 @@ const note = view.notes[0]
 for (const valid of [
   { ...view, notes: [] },
   { ...view, notes: Array(64).fill(note) },
-  { ...view, notes: [{ ...note, executionId: undefined, afterExecutionId: undefined, deliveryState: "pending" }] },
-  { ...view, notes: [{ ...note, executionId: undefined, deliveryState: "retired", retiredReason: "permission_lost" }] },
-  { ...view, notes: [{ ...note, delivery: "record_only", deliveryState: "recorded", executionId: undefined }] },
-  { ...view, notes: [{ ...note, text: "x".repeat(8192), author: { kind: "owner", surface: "x".repeat(256) } }] },
+  {
+    ...view,
+    notes: [
+      {
+        ...note,
+        executionId: undefined,
+        afterExecutionId: undefined,
+        deliveryState: "pending",
+      },
+    ],
+  },
+  {
+    ...view,
+    notes: [
+      {
+        ...note,
+        executionId: undefined,
+        deliveryState: "retired",
+        retiredReason: "permission_lost",
+      },
+    ],
+  },
+  {
+    ...view,
+    notes: [
+      {
+        ...note,
+        delivery: "record_only",
+        deliveryState: "recorded",
+        executionId: undefined,
+      },
+    ],
+  },
+  {
+    ...view,
+    notes: [
+      {
+        ...note,
+        text: "x".repeat(8192),
+        author: { kind: "owner", surface: "x".repeat(256) },
+      },
+    ],
+  },
 ]) {
   if (!validateView(JSON.parse(JSON.stringify(valid))))
     throw new Error("Product conversation view rejects a bounded note list")

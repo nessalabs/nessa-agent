@@ -14,8 +14,9 @@ const stateTones: Record<Note["deliveryState"], StatusLabelTone> = {
  * A note somebody left in the conversation, as its own row: who left it and
  * from where, where it stands, and what it says. It is not a turn and not the
  * person's message, so it is no chat bubble — a quiet card between the turns.
- * What it says is shown as it was left, as plain text, never as markdown, and
- * a long word wraps rather than widening the transcript. The surface it was
+ * What it says is shown as it was left, as plain text and not as markdown
+ * (`transcript-note.test.tsx`), and a long word wraps rather than widening the
+ * transcript (`transcript-notes.mjs`). The surface it was
  * left from is a name the window did not choose, so it is isolated from the
  * words around it.
  *
@@ -49,6 +50,7 @@ export function TranscriptNote({ note }: { note: Note }) {
       </div>
       <p
         data-note-text
+        dir="auto"
         className="m-0 min-w-0 font-sans nessa-text-2 whitespace-pre-wrap [overflow-wrap:anywhere]"
       >
         {note.text}

@@ -154,7 +154,7 @@ afterEach(async () => {
   container.remove()
 })
 
-it("shows each note right after the turn it followed, one left before any turn first, and one whose turn is not shown last", async () => {
+it("shows each note right after the turn or waiting input it followed, and one left before any turn or after a dropped turn first", async () => {
   const waiting: Turn = {
     id: "three:user",
     from: "user",
@@ -162,20 +162,37 @@ it("shows each note right after the turn it followed, one left before any turn f
     receipt: "queued",
     content: textContent("Third ask"),
   }
+  const alsoWaiting: Turn = {
+    id: "four:user",
+    from: "user",
+    executionId: "four",
+    receipt: "queued",
+    content: textContent("Fourth ask"),
+  }
   await render(
     conversation(
       [
         note("first"),
         note("after-one", { afterExecutionId: "one" }),
-        note("unshown", { afterExecutionId: "gone" }),
+        // Its turn is older than every turn the bounded view kept.
+        note("dropped", { afterExecutionId: "gone" }),
+        // Left between two inputs waiting: it follows the first, not both.
+        note("between-waiting", { afterExecutionId: "three" }),
+        note("after-waiting", { afterExecutionId: "four" }),
         note("after-two", { afterExecutionId: "two" }),
         note("also-after-one", { afterExecutionId: "one" }),
       ],
-      [...turn("one", "First ask", "First answer"), ...turn("two", "Second ask", "Second answer"), waiting],
+      [
+        ...turn("one", "First ask", "First answer"),
+        ...turn("two", "Second ask", "Second answer"),
+        waiting,
+        alsoWaiting,
+      ],
     ),
   )
   expect(order()).toEqual([
     "note:first",
+    "note:dropped",
     "First ask",
     "First answer",
     "note:after-one",
@@ -184,7 +201,9 @@ it("shows each note right after the turn it followed, one left before any turn f
     "Second answer",
     "note:after-two",
     "Third ask",
-    "note:unshown",
+    "note:between-waiting",
+    "Fourth ask",
+    "note:after-waiting",
   ])
 })
 
@@ -217,7 +236,7 @@ it("labels each note with who left it, from where, and where it stands", async (
   expect(row("pending")?.querySelector("bdi")?.textContent).toBe("phone")
   expect(state("recorded")).toBeNull()
   expect(state("pending")).toBe("Waiting for the next turn")
-  expect(state("assigned")).toBe("Given to the next turn")
+  expect(state("assigned")).toBe("Given to a turn")
   expect(state("expired")).toBe("Not delivered: expired")
   expect(state("lost")).toBe("Not delivered: sharing changed")
   // Its own row, not a chat bubble and not a turn.

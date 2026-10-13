@@ -14,38 +14,61 @@ describe("placeNotes", () => {
     const placed = placeNotes(
       [note("a", "one"), note("b", "two"), note("c", "one")],
       ["one", "two"],
+      [],
     )
     expect([...placed.byExecution]).toEqual([
       ["one", [note("a", "one"), note("c", "one")]],
       ["two", [note("b", "two")]],
     ])
     expect(placed.before).toEqual([])
-    expect(placed.after).toEqual([])
+    expect(placed.byWaiting.size).toBe(0)
   })
 
   it("puts a note left before any turn before the first turn shown", () => {
-    const placed = placeNotes([note("first"), note("later", "one")], ["one"])
+    const placed = placeNotes([note("first"), note("later", "one")], ["one"], [])
     expect(placed.before).toEqual([note("first")])
     expect(placed.byExecution.get("one")).toEqual([note("later", "one")])
-    expect(placed.after).toEqual([])
+    expect(placed.byWaiting.size).toBe(0)
   })
 
-  it("puts a note whose turn is not shown after the last turn shown, and drops none", () => {
-    const notes = [note("a", "unlisted"), note("b", "one"), note("c", "also-unlisted")]
-    const placed = placeNotes(notes, ["one"])
-    expect(placed.after).toEqual([note("a", "unlisted"), note("c", "also-unlisted")])
+  it("puts a note whose turn the bounded view left out before the first turn shown, with those left before any turn", () => {
+    // The view keeps the newest notes but drops the oldest turns, so a note
+    // can follow a turn older than every turn shown.
+    const placed = placeNotes(
+      [note("first"), note("dropped", "zero"), note("kept", "one")],
+      ["one"],
+      ["two"],
+    )
+    expect(placed.before).toEqual([note("first"), note("dropped", "zero")])
+    expect(placed.byWaiting.size).toBe(0)
+    expect(placed.byExecution.get("one")).toEqual([note("kept", "one")])
+  })
+
+  it("puts each note that followed an input still waiting right after that input, not after every input waiting", () => {
+    // Two inputs waiting and a note left between them: it belongs to the first.
+    const placed = placeNotes(
+      [note("between", "q1"), note("b", "one"), note("last", "q2")],
+      ["one"],
+      ["q1", "q2"],
+    )
+    expect([...placed.byWaiting]).toEqual([
+      ["q1", [note("between", "q1")]],
+      ["q2", [note("last", "q2")]],
+    ])
+    expect(placed.before).toEqual([])
+    expect(placed.byExecution.get("one")).toEqual([note("b", "one")])
+  })
+
+  it("a turn shown wins over the same turn listed as waiting, and no note is dropped", () => {
+    const notes = [note("a", "one"), note("b", "gone"), note("c", "two"), note("d")]
+    const placed = placeNotes(notes, ["one"], ["one", "two"])
+    expect(placed.byExecution.get("one")).toEqual([note("a", "one")])
+    expect(placed.byWaiting.has("one")).toBe(false)
     expect(
       placed.before.length +
-        placed.after.length +
+        [...placed.byWaiting.values()].flat().length +
         [...placed.byExecution.values()].flat().length,
     ).toBe(notes.length)
-  })
-
-  it("with no turn shown, a note left before any turn is first and every other is after", () => {
-    const placed = placeNotes([note("a"), note("b", "one")], [])
-    expect(placed.before).toEqual([note("a")])
-    expect(placed.after).toEqual([note("b", "one")])
-    expect(placed.byExecution.size).toBe(0)
   })
 })
 
@@ -53,7 +76,7 @@ describe("noteStateLabel", () => {
   it.each([
     [{ deliveryState: "recorded" as const }, null],
     [{ deliveryState: "pending" as const }, "Waiting for the next turn"],
-    [{ deliveryState: "assigned" as const }, "Given to the next turn"],
+    [{ deliveryState: "assigned" as const }, "Given to a turn"],
     [
       { deliveryState: "retired" as const, retiredReason: "expired" as const },
       "Not delivered: expired",

@@ -1513,9 +1513,9 @@ it("leaves a note under a stable request and retries it as the same note", async
     .message(conversationId, "Use the May fares", "next_turn", { requestId: "note-1" })
     .catch((error: unknown) => error)
   expect(failure).toBeInstanceOf(NessaConversationMutationError)
-  await expect((failure as NessaConversationMutationError<unknown>).retry()).resolves.toEqual(
-    receipt,
-  )
+  await expect(
+    (failure as NessaConversationMutationError<unknown>).retry(),
+  ).resolves.toEqual(receipt)
   expect(request).toHaveBeenCalledTimes(2)
   for (const call of request.mock.calls)
     expect(call).toEqual([

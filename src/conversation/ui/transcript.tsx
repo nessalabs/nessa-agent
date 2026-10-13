@@ -108,7 +108,7 @@ export function Transcript({
   const provider = conversation.remote?.runtime?.agent
   const sentTurns = conversation.turns.filter((turn) => turn.from === "user").length
   const published = publishedByRow(conversation, rows)
-  const notes = notesByRow(conversation, rows)
+  const notes = notesByRow(conversation, rows, waitingUsers)
 
   return (
     <>
@@ -230,16 +230,21 @@ export function Transcript({
               files={published.after}
             />
             {waitingUsers.map((turn) => (
-              <TurnRow
-                key={`${turn.id}:waiting`}
-                turn={turn}
-                conversationId={conversation.serverConversationId}
-                streaming={false}
-                animateMount={animateMount}
-                onOpenPaste={onOpenPaste}
-              />
+              <React.Fragment key={`${turn.id}:waiting`}>
+                <TurnRow
+                  turn={turn}
+                  conversationId={conversation.serverConversationId}
+                  streaming={false}
+                  animateMount={animateMount}
+                  onOpenPaste={onOpenPaste}
+                />
+                <TranscriptNotes
+                  notes={
+                    (turn.executionId && notes.byWaiting.get(turn.executionId)) || []
+                  }
+                />
+              </React.Fragment>
             ))}
-            <TranscriptNotes notes={notes.after} />
             {conversation.phase === "thinking" &&
             (rows.length === 0 || rows.at(-1)?.status === "running") &&
             !conversation.readError &&
@@ -343,23 +348,29 @@ function publishedByRow(
 /**
  * The notes left in the conversation, by row: right after the row of the turn
  * each followed — the last row that names it, so a note comes after all of
- * that turn — and the rest before the first row or after everything else, as
- * `placeNotes` rules.
+ * that turn — one that followed an input shown waiting right after that
+ * input, and the rest before the first row, as `placeNotes` rules.
  */
 function notesByRow(
   conversation: Conversation,
   rows: readonly { key: string; promptId?: string; sourceTurnId?: string }[],
-): { byRow: Map<string, Note[]>; before: Note[]; after: Note[] } {
+  /** The inputs shown waiting after every row. */
+  waitingUsers: readonly Turn[],
+): { byRow: Map<string, Note[]>; before: Note[]; byWaiting: Map<string, Note[]> } {
   const notes = conversation.remote?.notes ?? []
   const byRow = new Map<string, Note[]>()
-  if (notes.length === 0) return { byRow, before: [], after: [] }
+  if (notes.length === 0) return { byRow, before: [], byWaiting: new Map() }
   const rowOf = rowsByExecution(conversation, rows, "last")
-  const placed = placeNotes(notes, rowOf.keys())
+  // Only the inputs this panel draws waiting, so no note waits on one it does not.
+  const waiting = waitingUsers.flatMap((turn) =>
+    turn.executionId ? [turn.executionId] : [],
+  )
+  const placed = placeNotes(notes, rowOf.keys(), waiting)
   for (const [execution, left] of placed.byExecution) {
     const row = rowOf.get(execution)
     if (row !== undefined) byRow.set(row, left)
   }
-  return { byRow, before: placed.before, after: placed.after }
+  return { byRow, before: placed.before, byWaiting: placed.byWaiting }
 }
 
 /**

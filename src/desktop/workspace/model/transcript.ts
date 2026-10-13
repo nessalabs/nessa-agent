@@ -85,8 +85,8 @@ export interface TurnMessage {
 
 /**
  * A note the owner, or someone the conversation is shared with, left in it:
- * not a turn and not the person's message, so it is drawn as a row of its own (`TranscriptNote`), with who left it and where
- * it stands. Nothing the window sends is a note, so it is never unsent.
+ * not a turn and not the person's message, so it is drawn as a row of its
+ * own (`TranscriptNote`), with who left it and where it stands. Nothing the window sends is a note, so it is never unsent.
  */
 export interface NoteMessage {
   readonly id: string

@@ -201,7 +201,7 @@ fn app_model_context_text(message: &UserMessage) -> Option<String> {
 }
 
 /// What the model is told before the notes a turn takes.
-const NOTES_PREAMBLE: &str = "Notes left in this conversation since its last turn, each by the conversation's owner or by someone it is shared with, and not written by the person sending this message:\n";
+const NOTES_PREAMBLE: &str = "Notes left in this conversation and not yet given to you, each by the conversation's owner or by someone it is shared with, and not written by the person sending this message:\n";
 
 /// The one text block that carries the notes `message` takes, or `None` when
 /// it takes none: [`NOTES_PREAMBLE`], then the notes as one JSON array of

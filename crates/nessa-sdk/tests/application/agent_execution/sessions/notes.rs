@@ -615,7 +615,34 @@ fn a_saved_note_taken_twice_retired_and_taken_or_following_no_turn_is_corrupt() 
                 ..pending("a", "one", 0)
             }],
         ),
+        // Taken by a turn before, or by the very turn, it follows.
+        (
+            vec![turn_taking("t", &["a"]), turn_taking("u", &[])],
+            vec![NoteRecord {
+                after_execution: Some(ExecutionId::new("u").unwrap()),
+                ..pending("a", "one", 0)
+            }],
+        ),
+        (
+            vec![turn_taking("t", &["a"])],
+            vec![NoteRecord {
+                after_execution: Some(ExecutionId::new("t").unwrap()),
+                ..pending("a", "one", 0)
+            }],
+        ),
     ];
+    // Taken by a later turn than the one it follows, even one queued behind
+    // a turn that took none: not corrupt.
+    let mut later = snapshot(vec![
+        turn_taking("n", &[]),
+        turn_taking("queued", &[]),
+        turn_taking("next", &["a"]),
+    ]);
+    later.notes = vec![NoteRecord {
+        after_execution: Some(ExecutionId::new("n").unwrap()),
+        ..pending("a", "one", 0)
+    }];
+    assert_eq!(validate_saved(&later), Ok(()));
     for (invocations, notes) in cases {
         let mut saved = snapshot(invocations);
         saved.notes = notes;

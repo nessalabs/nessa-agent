@@ -1009,9 +1009,9 @@ pub(super) mod build {
     ///   8 × 7 × (8 192 + 256) = 473 088.
     /// - Everything else, which none of the message's senders writes: the
     ///   request around it and every block's keys, quotes and braces, as the
-    ///   SDK measures them, `AcpConfig::LARGEST_MESSAGE_SYNTAX_BYTES`, 4 412.
+    ///   SDK measures them, `AcpConfig::LARGEST_MESSAGE_SYNTAX_BYTES`, 4 417.
     ///
-    /// 15 120 044 in all, 1 657 172 under [`MAX_FRAME_BYTES`].
+    /// 15 120 049 in all, 1 657 167 under [`MAX_FRAME_BYTES`].
     const LARGEST_MESSAGE_FRAME_BYTES: usize =
         (UserMessage::MAX_IMAGE_BYTES as usize + 2 * UserMessage::MAX_IMAGES) / 3 * 4
             + ESCAPED_ONCE * MAX_MCP_MESSAGE_BYTES

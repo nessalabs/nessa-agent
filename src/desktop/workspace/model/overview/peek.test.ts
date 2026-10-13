@@ -148,7 +148,9 @@ describe("peekOf", () => {
         deliveryState: "pending",
       },
     }
-    const peek = peekOf(conversation(asked, left, said, { ...left, id: "/note:n2", at: 4 }))
+    const peek = peekOf(
+      conversation(asked, left, said, { ...left, id: "/note:n2", at: 4 }),
+    )
     expect(peek.asked).toBe(asked)
     expect(peek.since).toEqual([said])
   })

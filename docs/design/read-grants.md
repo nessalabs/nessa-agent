@@ -415,8 +415,13 @@ makes it `assigned` to that turn for good; one that can no longer go is
   which surface; under the view's byte budget they yield after the
   transcript and before artifacts. `conversation.message` and
   `conversation.messageStatus` answer with the state, the turn and the
-  reason too. The panel and the desktop show each note in the transcript
-  after the turn it follows (row J24).
+  reason too. The panel and the desktop place notes by one rule
+  (`placeNotes`): a note goes right after the turn it follows, or after
+  that input while it still waits; one left before any turn, or after a
+  turn the view left out (always older than the turns it keeps), goes
+  before the first turn shown. It is drawn as a labelled note, never as
+  the person's message or the agent's reply, and its text as plain text
+  (row J24).
 
 ```mermaid
 sequenceDiagram

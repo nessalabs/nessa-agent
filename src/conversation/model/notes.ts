@@ -37,23 +37,34 @@ export type NoteAuthor = {
 
 /** Where each note is shown in a transcript (`placeNotes`). */
 export type NotePlacement<N extends Pick<Note, "afterExecutionId">> = {
-  /** Left before any turn: before the first turn shown. */
+  /**
+   * Before the first turn shown: left before any turn, or after a turn the
+   * bounded view left out, which is older than every turn it keeps.
+   */
   before: N[]
-  /** Right after the turn shown that was the last accepted when each was left, in the order left. */
+  /**
+   * Right after the turn shown that was the last accepted when each was left,
+   * in the order left.
+   */
   byExecution: Map<string, N[]>
-  /** Left after a turn that is not shown: after the last one shown. */
-  after: N[]
+  /**
+   * Right after the input still waiting that was the last accepted when each
+   * was left, by its execution id, in the order left.
+   */
+  byWaiting: Map<string, N[]>
 }
 
 /**
  * Where the notes left in a conversation go among the turns shown.
  *
  * A note goes right after the turn that was the last the conversation had
- * accepted when it was left. One left before any turn goes before the first
- * turn shown. One whose turn is not shown — not listed yet, or no longer —
- * goes after the last turn shown, so it is not dropped from view nor put
- * ahead of a turn it followed (`notes.test.ts`). The order they were left in is kept within
- * each place.
+ * accepted when it was left, and one whose turn is still an input waiting to
+ * run right after that input. One left before any turn goes before
+ * the first turn shown, and so does one whose turn is neither shown nor
+ * waiting: that turn is one the bounded view left out, and every turn the view
+ * leaves out is older than the ones it keeps, as `placePublished` holds too.
+ * No note is dropped from view, and the order they were left in is kept within
+ * each place (`notes.test.ts`).
  *
  * The one rule for every transcript that shows them, so the panel and the
  * desktop window cannot place the same note in two different places.
@@ -61,17 +72,32 @@ export type NotePlacement<N extends Pick<Note, "afterExecutionId">> = {
 export function placeNotes<N extends Pick<Note, "afterExecutionId">>(
   notes: readonly N[],
   shownExecutionIds: Iterable<string>,
+  /**
+   * The inputs still waiting to run that the transcript draws apart from its
+   * turns. A turn shown is placed as a turn even when it is waiting too.
+   */
+  waitingExecutionIds: Iterable<string>,
 ): NotePlacement<N> {
   const shown = new Set(shownExecutionIds)
-  const placement: NotePlacement<N> = { before: [], byExecution: new Map(), after: [] }
+  const waiting = new Set(waitingExecutionIds)
+  const placement: NotePlacement<N> = {
+    before: [],
+    byExecution: new Map(),
+    byWaiting: new Map(),
+  }
   for (const note of notes) {
     if (note.afterExecutionId === undefined) placement.before.push(note)
-    else if (!shown.has(note.afterExecutionId)) placement.after.push(note)
-    else
+    else if (shown.has(note.afterExecutionId))
       placement.byExecution.set(note.afterExecutionId, [
         ...(placement.byExecution.get(note.afterExecutionId) ?? []),
         note,
       ])
+    else if (waiting.has(note.afterExecutionId))
+      placement.byWaiting.set(note.afterExecutionId, [
+        ...(placement.byWaiting.get(note.afterExecutionId) ?? []),
+        note,
+      ])
+    else placement.before.push(note)
   }
   return placement
 }
@@ -111,7 +137,7 @@ export function noteStateLabel(note: Pick<Note, "deliveryState" | "retiredReason
     case "pending":
       return "Waiting for the next turn"
     case "assigned":
-      return "Given to the next turn"
+      return "Given to a turn"
     case "retired":
       return note.retiredReason === undefined
         ? "Not delivered"

@@ -3,7 +3,8 @@
  * Notes left in a conversation, in the desktop window and the panel at once
  * (`fixtures/transcript-notes/`): each note is a row of its own — inside no
  * chat bubble and no turn — right after the turn it followed, one left before
- * any turn first and one whose turn the view does not list last; each says
+ * any turn or after a turn the bounded view left out first, and one left
+ * between two inputs still waiting right after the first of them; each says
  * who left it, from where, and where it stands, in the same words on both
  * surfaces; and a note whose text is one very long word wraps inside its row,
  * leaving nothing wider than its column.
@@ -29,15 +30,16 @@ Usage: node verification/desktop/scripts/transcript-notes.mjs [options] [--shots
 
 Checks, per engine and layout (--only <names> to pick):
   placement  on both surfaces, notes and what the turns say read, top to
-             bottom: before, Plan the release., Here is the plan., assigned,
-             expired, Ship it., Shipped., pending, long, lost — a note left
-             before any turn first, each other right after its turn, and one
-             whose turn is not listed last; no note is inside a chat bubble or
-             a turn's reply
+             bottom: before, dropped, Plan the release., Here is the plan.,
+             assigned, expired, Ship it., Shipped., pending, long, Tag the
+             release., lost, Announce it. — a note left before any turn or
+             after a turn the view left out first, each other right after its
+             turn, and one left between the two waiting inputs right after
+             the first; no note is inside a chat bubble or a turn's reply
   labels     each note's author line and state, identical on both surfaces:
              "Note left by the owner, from desktop" or "Note left by someone it
              is shared with, from phone"; no state for a recorded note,
-             "Waiting for the next turn", "Given to the next turn", "Not
+             "Waiting for the next turn", "Given to a turn", "Not
              delivered: expired", "Not delivered: sharing changed"
   wrap       every note's row lies inside its transcript's column (within
              0.5 px) and is no wider than its own box (scrollWidth ≤
@@ -52,7 +54,8 @@ const ownerLine = "Note left by the owner, from desktop"
 const sharedLine = "Note left by someone it is shared with, from phone"
 const expectedLabels = {
   before: [ownerLine, null],
-  assigned: [ownerLine, "Given to the next turn"],
+  dropped: [ownerLine, null],
+  assigned: [ownerLine, "Given to a turn"],
   expired: [sharedLine, "Not delivered: expired"],
   pending: [sharedLine, "Waiting for the next turn"],
   long: [sharedLine, null],
@@ -99,7 +102,9 @@ const checks = {
         const order = await readingOrder(page, surface)
         seen[surface] = order
         if (JSON.stringify(order) !== JSON.stringify(expected))
-          failures.push(`${surface} reads ${order.join(" | ")}, not ${expected.join(" | ")}`)
+          failures.push(
+            `${surface} reads ${order.join(" | ")}, not ${expected.join(" | ")}`,
+          )
       }
       const inside = await page.evaluate(
         ({ anyNote, said }) =>
@@ -108,7 +113,8 @@ const checks = {
             .map((note) => note.getAttribute("data-note")),
         { anyNote: ui.anyNote, said: ui.said },
       )
-      if (inside.length) failures.push(`notes inside a bubble or reply: ${inside.join(", ")}`)
+      if (inside.length)
+        failures.push(`notes inside a bubble or reply: ${inside.join(", ")}`)
       await opened.settleRequests()
       failures.push(...opened.errors)
       return { order: seen, failures }
@@ -149,7 +155,9 @@ const checks = {
         if (!each.found) failures.push(`${each.surface} ${each.id}: no row`)
         else {
           if (each.label !== label)
-            failures.push(`${each.surface} ${each.id}: says "${each.label}", not "${label}"`)
+            failures.push(
+              `${each.surface} ${each.id}: says "${each.label}", not "${label}"`,
+            )
           if (each.status !== status)
             failures.push(
               `${each.surface} ${each.id}: state "${each.status}", not "${status}"`,
@@ -218,29 +226,36 @@ const checks = {
         },
       )
       if (measured.rows.length !== 2 * Object.keys(expectedLabels).length)
-        failures.push(`expected 6 notes on each surface, measured ${measured.rows.length}`)
+        failures.push(
+          `expected ${Object.keys(expectedLabels).length} notes on each surface, measured ${measured.rows.length}`,
+        )
       for (const row of measured.rows) {
         if (row.left < -0.5 || row.right < -0.5 || row.width <= 0)
           failures.push(
             `${row.surface} ${row.id} leaves its column: left ${row.left.toFixed(1)}, right ${row.right.toFixed(1)}`,
           )
         if (row.overflow > 1)
-          failures.push(`${row.surface} ${row.id} is ${row.overflow}px wider than its box`)
+          failures.push(
+            `${row.surface} ${row.id} is ${row.overflow}px wider than its box`,
+          )
       }
       for (const each of measured.lines)
         if (!(each.lines > 2))
-          failures.push(`${each.surface}: the long note runs over ${each.lines.toFixed(1)} lines`)
+          failures.push(
+            `${each.surface}: the long note runs over ${each.lines.toFixed(1)} lines`,
+          )
       for (const each of measured.sideways)
         if (each.overflow === null || each.overflow > 1)
-          failures.push(`${each.surface}: the column scrolls sideways by ${each.overflow}px`)
-      if (measured.page > 1) failures.push(`the page scrolls sideways by ${measured.page}px`)
+          failures.push(
+            `${each.surface}: the column scrolls sideways by ${each.overflow}px`,
+          )
+      if (measured.page > 1)
+        failures.push(`the page scrolls sideways by ${measured.page}px`)
       if (options.shots) {
         mkdirSync(options.shots, { recursive: true })
-        await page
-          .locator(`${ui.desktop} ${css.transcript}`)
-          .screenshot({
-            path: join(options.shots, `transcript-notes-desktop-${engine}-${layout}.png`),
-          })
+        await page.locator(`${ui.desktop} ${css.transcript}`).screenshot({
+          path: join(options.shots, `transcript-notes-desktop-${engine}-${layout}.png`),
+        })
         await page.locator(ui.panel).screenshot({
           path: join(options.shots, `transcript-notes-panel-${engine}-${layout}.png`),
         })
