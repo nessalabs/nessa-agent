@@ -432,7 +432,7 @@ fn catalogue() -> &'static [Limit] {
             id: "peer.audit_queue",
             tier: "fixed",
             owner: "AUDIT_QUEUE in crates/nessa-server/src/peer_gateways/infrastructure/audit.rs",
-            meaning: "the most peer audit records waiting to be written, one at a time in the order they were handed over; one poller cycle queues at most about half of it, and cycles running side by side share the queue, so it fills when they hand over together or the store falls behind; a record past it is refused at once, its sequence left as a gap, so peer.enroll, peer.forget or peer.relay answers peer_audit_unavailable before any effect and a peer read's change stands with its record logged as not kept; an owner command's record waits behind at most this many, well inside its 5 s audit deadline",
+            meaning: "the most peer audit records waiting to be written, one at a time in the order they were handed over; sized for every read running at once plus one owner command's record, and a record past it is refused at once, its sequence left as a gap, so peer.enroll, peer.forget or peer.relay answers peer_audit_unavailable before any effect and a peer read's change stands with its record logged as not kept; an owner command's record waits behind at most this many, inside its 5 s audit deadline",
         },
         Limit {
             id: "peer.reads_at_once",
@@ -444,7 +444,7 @@ fn catalogue() -> &'static [Limit] {
             id: "peer.withdrawn_per_read",
             tier: "fixed",
             owner: "WITHDRAWN_PER_READ in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs",
-            meaning: "the most conversations one read of a peer gateway withdraws, a quarter of peer.audit_queue's records of 64 each; a read that reaches it ends incomplete and the next cycle, soon, withdraws the rest",
+            meaning: "the most conversations one read of a peer gateway withdraws, sixteen records of 64; a read that reaches it ends incomplete and the next cycle, soon, withdraws the rest",
         },
         Limit {
             id: "command.default_timeout_ms",

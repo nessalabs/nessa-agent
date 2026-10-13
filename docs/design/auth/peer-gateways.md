@@ -1246,8 +1246,9 @@ sequenceDiagram
     O->>P: peer.enroll while reads run
     P-->>O: the record set, if no enroll, forget, or relay holds it; no read is stopped
     P->>U: each change as it is made (status, reset, conversations withdrawn): queued, in turn order
-    P->>P: give back the turn
+    P->>P: give back the turn, keep the read slot
     P->>U: wait for those records, all within one AUDIT_DEADLINE
+    P->>P: free the read slot
 ```
 
 - **Status first, every time.** No read happens without a fresh Active
@@ -1327,7 +1328,9 @@ sequenceDiagram
   when the gateway is built, to leave as long again for local writes. The
   cycle only hands its audit records over under the turn, which queues them
   at once, and waits for them after it gives the turn back, so a slow audit
-  never counts against `PREEMPT`. Only another owner command, or a stopped
+  never counts against `PREEMPT`. It keeps its read slot until those answers
+  come or `AUDIT_DEADLINE` passes, so another cycle does not enqueue while
+  they are still queued. Only another owner command, or a stopped
   cycle that does not give the turn back within `PREEMPT`, answers
   `peer_busy`. The stopped read carries on at the next cycle.
 - **Revocation ends reading.** A Terminal or Unclaimed status removes the
@@ -1363,8 +1366,9 @@ sequenceDiagram
   Each record goes to `PeerCommands::poller_changed` as the step ends,
   while the cycle still holds the turn, and the audit queues it at once; so
   the records are in the order the turn was held, and a change the cycle
-  made comes before the owner command that stopped it. The cycle waits for
-  their answers once it has given back the turn, all within one
+  made comes before the owner command that stopped it.   The cycle waits for
+  their answers once it has given back the turn, still holding its read
+  slot, all within one
   `AUDIT_DEADLINE`. An owner command's own record waits behind those
   ahead of it in the queue, within its own `AUDIT_DEADLINE`: a stalled
   store answers it `peer_audit_unavailable`, never holds it longer. A
@@ -1441,7 +1445,7 @@ sequenceDiagram
 | R22 | The audit queue is full (the store fell behind) | Answered at once, no wait: `peer.enroll`, `peer.forget` and `peer.relay` are `peer_audit_unavailable` with nothing dialed, removed or changed; a poller change lands and its record is logged as not kept, never written; each refusal uses up its sequence, so the next kept record follows a gap | `a_full_queue_refuses_the_owner_and_drops_the_poller_record` |
 | R23 | Native pairing stops with records queued and the store stalled; or its writer panics | The audit is closed and drained within one `AUDIT_DEADLINE` on the injected clock: records before the stall are written, the rest are logged and not, and the writer ends once the stalled write returns; a writer that panicked ends the drain at once, reported as not drained, its unwritten records logged | `close_drains_within_one_deadline`, `a_writer_that_panics_does_not_hold_the_drain` |
 | R24 | Native pairing stops while an enroll and a forget have handed over their intents; while a command holds the turn; or a command is asked after | The peer commands are closed before the audit. The first two are waited for, find the turn closed, and answer `peer_unavailable` with their outcomes kept, having read, dialed and removed nothing. A command holding the turn is waited for, within `PREEMPT`, and its outcome kept before the audit closes (past `PREEMPT`, see Known limits). One asked after is refused `peer_unavailable` before its intent, leaving no record | `a_command_admitted_before_shutdown_ends_with_its_outcome_and_no_effect`, `close_waits_for_a_command_holding_the_turn_and_keeps_its_outcome`, `a_command_asked_after_close_is_refused_before_its_intent` |
-| R25 | One read finds more conversations withdrawn than `WITHDRAWN_PER_READ` | It withdraws that many and ends incomplete; the next cycle withdraws the rest; one cycle's records stay within about half the audit's queue | `a_read_withdraws_at_most_its_cap_and_ends_incomplete`; the bound on a cycle's records is a compile-time assertion beside `WITHDRAWN_PER_READ` |
+| R25 | One read finds more conversations withdrawn than `WITHDRAWN_PER_READ` | It withdraws that many and ends incomplete; the next cycle withdraws the rest. Every cycle that can run at once, plus one owner command's record, fits in the audit queue | `a_read_withdraws_at_most_its_cap_and_ends_incomplete`; the fit is a compile-time assertion beside `WITHDRAWN_PER_READ`; `a_queue_of_64_refuses_two_full_cycles_and_the_sized_queue_keeps_every_cycle_and_an_owner_record` |
 | R26 | A stop wins the status wait after the worker has committed an ending, before the poller has taken the status answer. The poller's own stop, or the cycle an owner command stops | The answer is kept, so the audit names the cause it carried. The cycle does not continue into a read | `a_stop_after_an_ended_transition_commits_keeps_the_status_cause`, `a_stopped_status_records_its_cause_and_does_not_read` |
 | R27 | A peer kept with a relay whose address stops answering | Its status dial and its read race the address with the relay and go through the relay; the grant is read as over a direct connection | `a_peer_whose_address_stops_answering_is_read_through_its_relay`; the race itself in `tests/peer_gateways/connector.rs` |
 | R28 | A peer kept with a relay whose address does not answer, and whose relay says it is not registered there; or says `NoAnswer` | `away`, backed off as `unreachable`, the cache kept; a relay's `NoAnswer` (a busy peer) or a timeout stays `unreachable` | `a_peer_whose_relay_says_it_is_offline_is_listed_away`; the relay's answer kept in `both_failing_is_the_relays_refusal` |
@@ -1476,10 +1480,11 @@ the client and gives the head an access path by receiver
   stays due until a read finishes and frees a place. It is not failed for
   the wait. A slow peer holds one place until that cycle ends, and its read
   is bounded by its own `READ_BUDGET`; the peers inside the cap are read on
-  that tick. Cycles running side by side
-  share the audit queue: one cycle still hands over at most about half of
-  it, and two that withdraw their cap together can fill it. A full queue
-  still refuses at once (row R22).
+  that tick. The audit queue holds every cycle that can be enqueueing
+  (`READS_AT_ONCE` of them) plus one owner command's record, and a cycle
+  keeps its read slot until its records are answered or the audit deadline
+  passes. A full queue still refuses at once (row R22), which is more than
+  that bound handed over before the writer drained it.
 - **An enrollment that loses its last reply can leave a pending record.** B
   saves its record before it confirms, as a device does, so a connection
   that fails after that save answers `peer_unreachable` or

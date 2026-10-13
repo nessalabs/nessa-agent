@@ -18,7 +18,8 @@
 //!     otherwise (still pending) --> wait
 //!   every change above, as it is made --> PeerCommands::poller_changed
 //!                                          (queued by the audit at once)
-//!   give back the turn, free the read slot --> PeerCommands::poller_kept
+//!   give back the turn, still holding the read slot --> PeerCommands::poller_kept
+//!   free the read slot
 //! ```
 //! Arrows are calls, in order. No read happens without a fresh Active
 //! status, and nothing is removed without a Terminal one: a refused
@@ -42,7 +43,10 @@
 //! records to the audit's one writer, which keeps the order they were handed
 //! over.
 //! The cycle waits for the audit's answers only once it has given back the
-//! turn, so an audit that is slow or stalled never holds the turn. A stop
+//! turn, and it keeps its read slot until those answers come or
+//! [`super::AUDIT_DEADLINE`] passes, so an audit that is slow or stalled
+//! never holds the turn and a further cycle cannot enqueue while these
+//! records are still queued. A stop
 //! during the status wait does not drop the worker's answer: that answer
 //! names an ended enrollment's cause, and the worker may already have
 //! committed the ending. The cycle still does not go on to read.
@@ -91,18 +95,20 @@ pub const READ_BUDGET: Duration = Duration::from_secs(60);
 /// holds only its own place, and only until its own [`READ_BUDGET`].
 pub const READS_AT_ONCE: usize = 4;
 const _: () = assert!(READS_AT_ONCE >= 1);
-/// The most conversations one read withdraws: one record per
-/// [`WITHDRAWN_PER_RECORD`], so a cycle's records (two status steps, a
-/// reset, and the two reads around it) fill at most about half of the
-/// audit's queue ([`AUDIT_QUEUE`]), and an owner command's record has room
-/// behind them while the store keeps up (asserted when the gateway is built).
-/// A read that reaches it ends incomplete and the next cycle, soon,
-/// withdraws the rest.
-pub const WITHDRAWN_PER_READ: usize = AUDIT_QUEUE / 4 * WITHDRAWN_PER_RECORD;
-/// The most records one cycle hands the audit. Cycles running side by side
-/// share the queue; a full queue still refuses at once (design row R22).
+/// The most conversations one read withdraws: sixteen records of
+/// [`WITHDRAWN_PER_RECORD`]. Fixed, so the audit queue can be sized for
+/// every cycle running at once without a cycle growing with it. A read that
+/// reaches it ends incomplete and the next cycle, soon, withdraws the rest.
+pub const WITHDRAWN_PER_READ: usize = 16 * WITHDRAWN_PER_RECORD;
+/// The most records one cycle hands the audit: two status steps, a reset,
+/// and the two reads around it.
 const RECORDS_PER_CYCLE: usize = 3 + 2 * WITHDRAWN_PER_READ.div_ceil(WITHDRAWN_PER_RECORD);
-const _: () = assert!(RECORDS_PER_CYCLE <= AUDIT_QUEUE / 2 + 3);
+/// Room behind every cycle that can be enqueueing for one owner command's
+/// record. The command waits for its intent to be kept before it records
+/// the outcome, so one record is the headroom. The queue is that fit
+/// ([`AUDIT_QUEUE`]); a full queue still refuses at once (design row R22).
+const AUDIT_HEADROOM: usize = 1;
+const _: () = assert!(READS_AT_ONCE * RECORDS_PER_CYCLE + AUDIT_HEADROOM <= AUDIT_QUEUE);
 /// How this gateway names itself to a peer's product session.
 const CLIENT_ID: &str = "nessa-peer-gateway";
 
@@ -202,8 +208,8 @@ struct Shared {
 struct Poller {
     shared: Arc<Shared>,
     /// Places for reads running at once. A cycle holds one from the moment
-    /// it starts until it has given back the peer's turn, and frees it
-    /// before waiting on the audit.
+    /// it starts until its audit records are answered or the audit deadline
+    /// passes, so at most [`READS_AT_ONCE`] cycles are enqueueing together.
     reads: Arc<Semaphore>,
     due: HashMap<DeviceKey, Due>,
     running: JoinSet<Option<Pace>>,
@@ -401,9 +407,10 @@ impl Shared {
 
     /// One peer: under its turn, its record read again, the pinned status,
     /// then a read if it is Active, each change handed to the audit as it is
-    /// made. The read slot is freed once the turn is given back, and only
-    /// then are the audit's answers awaited. `None` when the poller stopped.
-    /// A failure is this peer's pace; it is not the pass's.
+    /// made. The turn is given back before the audit's answers are awaited,
+    /// and the read slot is held until they are, or [`super::AUDIT_DEADLINE`]
+    /// passes. `None` when the poller stopped. A failure is this peer's
+    /// pace; it is not the pass's.
     async fn cycle(&self, key: DeviceKey, permit: OwnedSemaphorePermit) -> Option<Pace> {
         let cycle = CycleStop::new();
         let turn = match self.take_turn(key, &cycle).await {
@@ -412,12 +419,15 @@ impl Shared {
         };
         let mut changes = Vec::new();
         let pace = self.held(key, &cycle, &mut changes).await;
-        // Given back before the answers are awaited: an audit, however slow,
-        // never holds the turn or this peer's read slot. The changes stand
-        // either way.
+        // The turn is given back first: an audit, however slow, never holds
+        // it. The read slot stays until the answers, so another cycle cannot
+        // enqueue while these records are still queued. The queue holds
+        // every such cycle plus one owner record
+        // (`a_queue_of_64_refuses_two_full_cycles_and_the_sized_queue_keeps_every_cycle_and_an_owner_record`).
+        // The changes stand either way.
         drop(turn);
-        drop(permit);
         self.commands.poller_kept(changes).await;
+        drop(permit);
         pace
     }
 

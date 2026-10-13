@@ -22,9 +22,12 @@
 //! fresh, the sequence counting from 1 in each process, the time from the
 //! injected wall clock when this adapter took the record. That is not claimed
 //! as the time of the peer's own effect. A full queue refuses the record at
-//! once, without waiting: one poller cycle queues at most about half of
-//! [`AUDIT_QUEUE`], so a full queue means the store has fallen behind, and an
-//! answer that waited would only hold its caller. A refused record uses up
+//! once, without waiting. The queue holds every poller cycle that can be
+//! enqueueing at once, plus one owner command's record; the poller asserts
+//! that fit, and keeps a read's slot until the cycle's answers come back.
+//! A full queue means more than that was handed over before the writer
+//! drained it, and an answer that waited would only hold its caller. A
+//! refused record uses up
 //! its sequence, and the log names it, so a gap in the files' sequences is a
 //! refused record, never a lost one (`a_full_queue_refuses_the_owner_and_drops_the_poller_record`).
 //! Only after `close` is nothing numbered. A process that stops between a
@@ -59,11 +62,13 @@ use std::{
 use tokio::sync::{oneshot, watch};
 use uuid::Uuid;
 
-/// The most records waiting to be written. Each waits for the ones before it,
-/// so an owner command's record can wait behind this many: at about 20 ms a
-/// synced write that is about 1.3 s, well inside the command's own
-/// [`super::AUDIT_DEADLINE`] (5 s).
-pub const AUDIT_QUEUE: usize = 64;
+/// The most records waiting to be written. Every read running at once may
+/// hand its cycle's records over before the writer drains them, and one
+/// owner command's record still fits behind that; the poller asserts the
+/// fit. Each record waits for the ones before it, so an owner command's
+/// record can wait behind this many: at about 20 ms a synced write, about
+/// 2.8 s, inside the command's own [`super::AUDIT_DEADLINE`] (5 s).
+pub const AUDIT_QUEUE: usize = 141;
 
 /// Called by the writer with each record's sequence before it writes it; a
 /// test stalls the store with it.

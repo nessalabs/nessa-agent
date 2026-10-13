@@ -2,8 +2,14 @@
 //! failures in a row, and one draw of entropy. And the status answer a stop
 //! does not drop once the worker has committed an ending, which the audit
 //! then records instead of continuing into a read.
+use super::super::audit::DurablePeerAudit;
 use super::*;
-use crate::peer_gateways::application::{CacheState, PeerState};
+use crate::peer_gateways::application::{
+    CacheState, PeerAudit, PeerAuditRecord, PeerAuditUnavailable, PeerState,
+};
+use futures_util::FutureExt;
+use nessa_auth::application::ports::Clock;
+use nessa_auth::domain::PrincipalId;
 use nessa_auth::domain::{
     pairing::{
         AttemptId, AttemptOutcome, ConsentClass, ConsentIntentId, DisclosedConsent, InvitationId,
@@ -12,6 +18,8 @@ use nessa_auth::domain::{
     AudienceId, OrganizationId, Resource, ResourceId,
 };
 use nessa_protocol::pairing::wire::NativePairingStatus;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 
 const POLICY: PollPolicy = PollPolicy {
     interval: Duration::from_secs(30),
@@ -431,4 +439,126 @@ async fn a_read_that_panics_still_reports_what_it_withdrew() {
         read_ended(joined, &withdrawn),
         (Err(ReadFailure::Cache), vec!["withdrawn".to_owned()])
     );
+}
+
+/// Two cycles on the reset path each hand over [`RECORDS_PER_CYCLE`] records.
+/// A queue of 64, the old depth, refuses that burst while the writer is
+/// stalled on the first record. The queue the gateway builds holds every
+/// cycle that can run at once plus one owner record, and keeps them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_queue_of_64_refuses_two_full_cycles_and_the_sized_queue_keeps_every_cycle_and_an_owner_record(
+) {
+    let two_cycles = 2 * RECORDS_PER_CYCLE;
+    assert!(
+        two_cycles > 64,
+        "two full cycles no longer overflow the old queue of 64"
+    );
+    let burst = READS_AT_ONCE * RECORDS_PER_CYCLE + AUDIT_HEADROOM;
+    assert!(burst <= AUDIT_QUEUE);
+    assert!(
+        refused_while_stalled(64, two_cycles).await > 0,
+        "a queue of 64 accepted two full cycles"
+    );
+    assert_eq!(
+        refused_while_stalled(AUDIT_QUEUE, burst).await,
+        0,
+        "a cycle or the owner record was refused while the writer was stalled"
+    );
+}
+
+/// How many of `count` records a stalled writer of `capacity` refuses.
+/// The writer blocks on the first record, so the queue cannot drain.
+async fn refused_while_stalled(capacity: usize, count: usize) -> usize {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("audit");
+    nessa_local_storage::create_directory(&directory).unwrap();
+    let stall = Stall::new();
+    let release = Release(stall.clone());
+    let audit = DurablePeerAudit::with_writer_hook(
+        directory,
+        Arc::new(Ticks(AtomicU64::new(1))),
+        Arc::new(Manual(AtomicU64::new(0))),
+        capacity,
+        stall.hook(),
+    );
+    let queued: Vec<_> = (0..count).map(|_| audit.record(owner_record())).collect();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !stall.reached.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the writer did not take the first record");
+    let mut refused = 0;
+    for record in queued {
+        if matches!(record.now_or_never(), Some(Err(PeerAuditUnavailable))) {
+            refused += 1;
+        }
+    }
+    drop(release);
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            audit.drained(Duration::from_secs(20))
+        )
+        .await
+        .is_ok(),
+        "the writer did not finish"
+    );
+    refused
+}
+
+/// Blocks the writer on the first record until dropped.
+struct Stall {
+    reached: AtomicBool,
+    open: Mutex<bool>,
+    opened: Condvar,
+}
+impl Stall {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            reached: AtomicBool::new(false),
+            open: Mutex::new(false),
+            opened: Condvar::new(),
+        })
+    }
+    fn hook(self: &Arc<Self>) -> Arc<dyn Fn(u64) + Send + Sync> {
+        let stall = Arc::clone(self);
+        Arc::new(move |sequence| {
+            if sequence != 1 {
+                return;
+            }
+            stall.reached.store(true, Ordering::SeqCst);
+            let mut open = stall.open.lock().unwrap();
+            while !*open {
+                open = stall.opened.wait(open).unwrap();
+            }
+        })
+    }
+}
+struct Release(Arc<Stall>);
+impl Drop for Release {
+    fn drop(&mut self) {
+        *self.0.open.lock().unwrap() = true;
+        self.0.opened.notify_all();
+    }
+}
+struct Ticks(AtomicU64);
+impl Clock for Ticks {
+    fn unix_milliseconds(&self) -> u64 {
+        self.0.fetch_add(1, Ordering::SeqCst)
+    }
+}
+struct Manual(AtomicU64);
+impl nessa_protocol::clock::Clock for Manual {
+    fn elapsed_ms(&self) -> u64 {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+fn owner_record() -> PeerAuditRecord {
+    PeerAuditRecord::ForgetRequested {
+        operation: uuid::Uuid::new_v4(),
+        initiator: PrincipalId::new("owner").unwrap(),
+        peer: DeviceKey::new([7; 32]),
+    }
 }
