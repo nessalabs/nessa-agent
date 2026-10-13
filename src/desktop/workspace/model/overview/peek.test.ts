@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest"
-import type { Message, Part, Transcript } from "../transcript"
+import type { Message, Part, Transcript, TurnMessage } from "../transcript"
 import { peekOf } from "./peek"
 
 const step = (label: string): Part => ({ kind: "step", step: "read", label })
 const text = (words: string): Part => ({ kind: "text", text: words })
 
-function message(role: Message["role"], at: number, ...parts: Part[]): Message {
+function message(role: TurnMessage["role"], at: number, ...parts: Part[]): Message {
   return { id: `${role}-${at}`, role, at, parts }
 }
 
@@ -131,6 +131,28 @@ describe("peekOf", () => {
     )
     expect(peek.asked).toBe(asked)
     expect(peek.since).toEqual([])
+  })
+
+  it("tells nothing of a note somebody left: it is no part of the turn", () => {
+    const asked = message("user", 1, text("Hi."))
+    const said = message("agent", 3, text("Hello."))
+    const left: Message = {
+      id: "/note:n1",
+      role: "note",
+      at: 2,
+      parts: [],
+      note: {
+        id: "n1",
+        text: "Mind the deploy window",
+        author: { kind: "grant", surface: "phone" },
+        deliveryState: "pending",
+      },
+    }
+    const peek = peekOf(
+      conversation(asked, left, said, { ...left, id: "/note:n2", at: 4 }),
+    )
+    expect(peek.asked).toBe(asked)
+    expect(peek.since).toEqual([said])
   })
 
   it("tells nothing of an empty conversation, and carries what the agent is doing", () => {

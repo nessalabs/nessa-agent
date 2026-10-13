@@ -28,6 +28,7 @@ function attached(
   const item = conversation("conversation")
   item.remote = {
     artifacts: [],
+    notes: [],
     approvalMode: "ask",
     approvalModes: [
       { id: "ask", name: "Provider asks", description: "The provider asks." },

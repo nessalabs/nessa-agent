@@ -67,6 +67,9 @@ pub(super) enum Shape {
     Artifact,
     Notes,
     Note,
+    NoteIds,
+    NoteRetirement,
+    NoteRetired,
     Metadata,
     Images,
     Image,
@@ -178,6 +181,13 @@ impl Shape {
             (Note, "delivery") => Text(KEY_BYTES),
             (Note, "author") => Initiator,
             (Note, "accepted_at_ms") => Number,
+            (Note, "after_execution") => Text(ExecutionId::MAX_BYTES),
+            (Note, "retired") | (NoteRetired, "retirement") => NoteRetirement,
+            (NoteRetirement, "reason") => Text(KEY_BYTES),
+            (NoteRetirement, "at_ms") => Number,
+            (Semantic, "NoteRetired") => NoteRetired,
+            (NoteRetired, "id") => Text(NoteId::MAX_BYTES),
+            (Metadata, "notes") => NoteIds,
             (Invocation, "metadata") => Metadata,
             (Invocation, "scheduling") => Scheduling,
             (Invocation, "events") => Events,
@@ -335,8 +345,16 @@ impl Shape {
             ),
             Note => matches!(
                 key,
-                "id" | "text" | "delivery" | "actor" | "author" | "accepted_at_ms"
+                "id" | "text"
+                    | "delivery"
+                    | "actor"
+                    | "author"
+                    | "accepted_at_ms"
+                    | "after_execution"
+                    | "retired"
             ),
+            NoteRetirement => matches!(key, "reason" | "at_ms"),
+            NoteRetired => matches!(key, "id" | "retirement"),
             ProviderError => matches!(key, "code" | "diagnostic"),
             AuthenticationError => key == "diagnostic",
             FailedAcknowledgement => matches!(key, "audit" | "storage"),
@@ -363,6 +381,7 @@ impl Shape {
             Self::LeaseRecords => Self::LeaseRecord,
             Self::Artifacts => Self::Artifact,
             Self::Notes => Self::Note,
+            Self::NoteIds => Self::Text(NoteId::MAX_BYTES),
             Self::FinalizedComponents => Self::FinalizedComponent,
             Self::Hooks => Self::Hook,
             Self::QueueEntries => Self::QueueEntry,
@@ -387,6 +406,8 @@ impl Shape {
             Self::LeaseRecords => CurrentLease::MAX_RECORDS,
             Self::Artifacts => ArtifactRecord::MAX_PER_CONVERSATION,
             Self::Notes => NoteRecord::MAX_PER_CONVERSATION,
+            // A turn takes no more notes than a message carries.
+            Self::NoteIds => UserMessage::MAX_NOTES,
             Self::QueueEntries | Self::QueueIds => QueueOrderChange::MAX_PENDING,
             // The message's own constructor refuses more; refuse them here
             // before the excess references are built.

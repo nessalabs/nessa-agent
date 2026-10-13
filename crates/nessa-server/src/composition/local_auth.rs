@@ -1207,6 +1207,9 @@ async fn conversations(
     };
     let service = service.map_err(|error| RunError::Agent(error.to_string()))?;
     service.bind_commands(storage.clone());
+    // A note's author is checked against the same grant table the socket
+    // admits it by (row J23).
+    service.bind_note_authors(metadata.clone());
     // A Drive grant's turn runs only where its tools are checked: against
     // the grant journal's policy, by the Cedar evaluator (slice J4 of #707).
     let evaluator = CedarToolPolicyEvaluator::new()

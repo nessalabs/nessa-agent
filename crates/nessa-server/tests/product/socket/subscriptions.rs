@@ -313,6 +313,8 @@ fn conversation_service_with_repository(
     )
     .unwrap();
     service.bind_commands(storage.clone());
+    // The store is the grant table, as `composition::local_auth` binds it.
+    service.bind_note_authors(metadata.clone());
     service.bind_drive_tools(crate::conversation::application::DriveTools {
         grants: metadata.clone(),
         evaluator: Arc::new(
@@ -2667,6 +2669,33 @@ impl SubscriptionFixture {
         committed.snapshot().unwrap().notes.clone()
     }
 
+    /// Where `note` stands in the fixture's conversation's records.
+    async fn note_state(
+        &self,
+        note: &nessa_sdk::application::agent_execution::sessions::NoteRecord,
+    ) -> nessa_sdk::application::agent_execution::sessions::NoteState {
+        let session = crate::conversation::application::conversation_session(&self.id);
+        let committed = self.storage.read_committed(session).await.unwrap().unwrap();
+        committed.snapshot().unwrap().note_state(note)
+    }
+
+    /// The notes the turn `execution` took, as its record names them.
+    async fn notes_taken_by(&self, execution: &str) -> Vec<String> {
+        let session = crate::conversation::application::conversation_session(&self.id);
+        let committed = self.storage.read_committed(session).await.unwrap().unwrap();
+        committed
+            .snapshot()
+            .unwrap()
+            .invocations
+            .iter()
+            .find(|record| record.request.execution_id.as_str() == execution)
+            .unwrap()
+            .notes
+            .iter()
+            .map(|id| id.as_str().to_owned())
+            .collect()
+    }
+
     /// How many turns the fixture's conversation's records hold.
     async fn turns(&self) -> usize {
         let session = crate::conversation::application::conversation_session(&self.id);
@@ -2707,13 +2736,14 @@ async fn the_owner_leaves_a_note_saved_with_who_left_it_and_no_turn() {
     assert_eq!(note.actor.principal_id(), "principal");
     assert_eq!(note.actor.surface_id(), "credential");
     assert_eq!(note.actor.request_id(), "note-1");
-    assert_eq!(note.state(), NoteState::Recorded);
+    assert_eq!(fixture.note_state(note).await, NoteState::Recorded);
     assert_eq!(fixture.turns().await, turns);
     let view = fixture.settled_read(1).await;
     assert!(
-        !view.to_string().contains("the parser review is ready"),
+        !view["messages"].to_string().contains("the parser review is ready"),
         "a note is not a turn: {view}"
     );
+    assert_eq!(view["notes"][0]["text"], "the parser review is ready", "{view}");
 }
 
 /// Row J17: a device holding pairing's `conversation.read` and a Comment
@@ -2971,7 +3001,7 @@ async fn message_status_finds_the_callers_own_note_by_its_request() {
 }
 
 /// Row J21: a note's text is 1 to 8192 bytes and not all blank, and its
-/// delivery is `record_only`; anything else is refused `invalid_request`
+/// delivery is `record_only` or `next_turn`; anything else is refused `invalid_request`
 /// and saves nothing. A deleted conversation refuses a note
 /// `conversation_deleted`.
 #[tokio::test]
@@ -2987,9 +3017,9 @@ async fn a_note_outside_its_bounds_or_on_a_deleted_conversation_is_refused() {
             .await;
         assert_eq!(answer["error"]["code"], "invalid_request", "{request}: {answer}");
     }
-    let mut next_turn = note_params(&fixture.id, "next", "x");
-    next_turn["delivery"] = json!("next_turn");
-    let answer = fixture.call("conversation.message", next_turn).await;
+    let mut later = note_params(&fixture.id, "later", "x");
+    later["delivery"] = json!("later");
+    let answer = fixture.call("conversation.message", later).await;
     assert_eq!(answer["error"]["code"], "invalid_request", "{answer}");
     assert!(fixture.notes().await.is_empty());
     let answer = fixture
@@ -3666,6 +3696,252 @@ async fn the_agent_catalog_is_sent_again_when_the_hooks_choice_changes() {
     let read = fixture.inner.call("agents.list", json!({})).await;
     assert_eq!(read["payload"], changed["payload"]["catalog"]);
     client.close().await;
+}
+
+/// `conversation.message` params leaving `text` for the next turn.
+fn next_turn_params(id: &ConversationId, request: &str, text: &str) -> Value {
+    let mut params = note_params(id, request, text);
+    params["delivery"] = json!("next_turn");
+    params
+}
+
+/// `conversation.messageStatus` params for request `request`.
+fn status_params(id: &ConversationId, request: &str) -> Value {
+    json!({"conversationId": id.to_string(), "requestId": request})
+}
+
+/// Rows J22 and J24: the owner leaves a note for the next turn. It is
+/// pending, and shown so, placed after the last turn; the next turn the
+/// owner sends takes it, its model is given it labelled with its author
+/// ahead of the owner's words, and the turn's saved message holds those
+/// words alone. It is assigned to that turn from then on, and the turn after
+/// takes nothing.
+#[tokio::test]
+async fn the_next_turn_takes_a_pending_note_and_it_stays_assigned_to_that_turn() {
+    use nessa_sdk::domain::agent_execution::prompts::{NoteAuthor, NoteContext};
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    fixture.settled_read(1).await;
+    let answer = fixture
+        .call(
+            "conversation.message",
+            next_turn_params(&fixture.id, "note", "use the May figures"),
+        )
+        .await;
+    assert_eq!(answer["ok"], true, "{answer}");
+    let receipt = &answer["payload"];
+    assert_eq!(receipt["deliveryState"], "pending", "{receipt}");
+    assert!(receipt.get("executionId").is_none(), "{receipt}");
+    let message_id = receipt["messageId"].clone();
+    let view = fixture.settled_read(1).await;
+    assert_eq!(
+        view["notes"],
+        json!([{
+            "messageId": message_id,
+            "text": "use the May figures",
+            "acceptedAtMs": receipt["acceptedAtMs"],
+            "delivery": "next_turn",
+            "deliveryState": "pending",
+            "afterExecutionId": "first",
+            "author": {"kind": "owner", "surface": "credential"},
+        }]),
+        "{view}"
+    );
+
+    fixture.turn("second").await;
+    fixture.settled_read(2).await;
+    let status = fixture
+        .call("conversation.messageStatus", status_params(&fixture.id, "note"))
+        .await;
+    assert_eq!(status["payload"]["deliveryState"], "assigned", "{status}");
+    assert_eq!(status["payload"]["executionId"], "second", "{status}");
+    assert_eq!(
+        fixture.notes_taken_by("second").await,
+        vec![message_id.as_str().unwrap().to_owned()]
+    );
+    let dispatched = fixture.provider.messages.lock().unwrap().clone();
+    let second = dispatched
+        .iter()
+        .find(|message| message.text_str() == "question second")
+        .unwrap();
+    assert_eq!(
+        second.notes(),
+        &[NoteContext::new(NoteAuthor::Owner, "credential", "use the May figures").unwrap()]
+    );
+    let session = crate::conversation::application::conversation_session(&fixture.id);
+    let committed = fixture.storage.read_committed(session).await.unwrap().unwrap();
+    assert!(committed
+        .snapshot()
+        .unwrap()
+        .invocations
+        .iter()
+        .all(|record| record.request.user_message.notes().is_empty()));
+    let view = fixture.settled_read(2).await;
+    assert_eq!(view["notes"][0]["deliveryState"], "assigned", "{view}");
+    assert_eq!(view["notes"][0]["executionId"], "second", "{view}");
+    // The same request again answers the same note, where it stands now.
+    let again = fixture
+        .call(
+            "conversation.message",
+            next_turn_params(&fixture.id, "note", "use the May figures"),
+        )
+        .await;
+    assert_eq!(again["payload"]["messageId"], message_id, "{again}");
+    assert_eq!(again["payload"]["deliveryState"], "assigned", "{again}");
+
+    fixture.turn("third").await;
+    fixture.settled_read(3).await;
+    assert!(fixture.notes_taken_by("third").await.is_empty());
+    // A record_only note is never taken.
+    let recorded = fixture
+        .call("conversation.message", note_params(&fixture.id, "kept", "fyi"))
+        .await;
+    assert_eq!(recorded["payload"]["deliveryState"], "recorded", "{recorded}");
+    fixture.turn("fourth").await;
+    fixture.settled_read(4).await;
+    assert!(fixture.notes_taken_by("fourth").await.is_empty());
+}
+
+/// Row J23: a grant's note is checked as the next turn is admitted. Held at
+/// Comment or above, even under a changed policy, it is taken; revoked, or
+/// lowered below Comment, it is retired `permission_lost` and no turn takes
+/// it. A steer takes no note.
+#[tokio::test]
+async fn a_grants_note_is_taken_while_it_holds_comment_and_retired_once_it_does_not() {
+    use crate::conversation::application::ShareGrantTransition;
+    use crate::conversation::domain::{ShareAccess, ShareRole};
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    fixture.settled_read(1).await;
+    let fixture = fixture.with_devices(this_device(true));
+    let comment = ShareAccess::new(ShareRole::Comment, None).unwrap();
+    fixture
+        .grant_to(ShareGrantTransition::Grant(comment.clone()))
+        .await;
+    grants(&fixture.authority, &["conversation.read", "server.read"]);
+    let leave = |request: &'static str| {
+        let fixture = &fixture;
+        async move {
+            let answer = fixture
+                .call("conversation.message", next_turn_params(&fixture.id, request, request))
+                .await;
+            assert_eq!(answer["ok"], true, "{request}: {answer}");
+            answer["payload"]["messageId"].as_str().unwrap().to_owned()
+        }
+    };
+    let status = |request: &'static str| {
+        let fixture = &fixture;
+        async move {
+            fixture
+                .call("conversation.messageStatus", status_params(&fixture.id, request))
+                .await["payload"]
+                .clone()
+        }
+    };
+    // The owner sends a turn from its own surface, which writes; the device
+    // then reads and comments again.
+    let owner_turn = |execution: &'static str, settled: usize| {
+        let fixture = &fixture;
+        async move {
+            grants(
+                &fixture.authority,
+                &["conversation.write", "conversation.read", "server.read"],
+            );
+            fixture.owner_turn(execution).await;
+            fixture.settled_read(settled).await;
+            grants(&fixture.authority, &["conversation.read", "server.read"]);
+        }
+    };
+
+    // Raised to Drive: a new policy revision, the role still Comment or
+    // above. The note is taken.
+    let kept = leave("kept").await;
+    fixture
+        .grant_to(ShareGrantTransition::Grant(drive_access()))
+        .await;
+    owner_turn("second", 2).await;
+    assert_eq!(fixture.notes_taken_by("second").await, vec![kept]);
+    assert_eq!(status("kept").await["deliveryState"], "assigned");
+
+    // Lowered to Read: the note is retired as the next turn is admitted.
+    let lowered = leave("lowered").await;
+    fixture
+        .grant_to(ShareGrantTransition::Grant(
+            ShareAccess::new(ShareRole::Read, None).unwrap(),
+        ))
+        .await;
+    owner_turn("third", 3).await;
+    assert!(fixture.notes_taken_by("third").await.is_empty());
+    let saved = fixture.notes().await;
+    let lowered_note = saved.iter().find(|note| note.id.as_str() == lowered).unwrap();
+    assert!(matches!(
+        fixture.note_state(lowered_note).await,
+        nessa_sdk::application::agent_execution::sessions::NoteState::Retired(retirement)
+            if retirement.reason
+                == nessa_sdk::application::agent_execution::sessions::NoteRetirementReason::PermissionLost
+    ));
+
+    // Revoked: the same.
+    fixture
+        .grant_to(ShareGrantTransition::Grant(comment.clone()))
+        .await;
+    let revoked = leave("revoked").await;
+    let revoked_status = status("revoked").await;
+    assert_eq!(revoked_status["deliveryState"], "pending", "{revoked_status}");
+    fixture.grant_to(ShareGrantTransition::Revoke).await;
+    owner_turn("fourth", 4).await;
+    let taken = fixture.notes_taken_by("fourth").await;
+    assert!(!taken.contains(&revoked), "{taken:?}");
+    let saved = fixture.notes().await;
+    let revoked_note = saved.iter().find(|note| note.id.as_str() == revoked).unwrap();
+    assert!(matches!(
+        fixture.note_state(revoked_note).await,
+        nessa_sdk::application::agent_execution::sessions::NoteState::Retired(_)
+    ));
+    let view = fixture.settled_read(4).await;
+    let shown = view["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|note| note["messageId"] == revoked.as_str())
+        .unwrap()
+        .clone();
+    assert_eq!(shown["deliveryState"], "retired", "{shown}");
+    assert_eq!(shown["retiredReason"], "permission_lost", "{shown}");
+    assert_eq!(shown["author"]["kind"], "grant", "{shown}");
+}
+
+/// Row J23: a steer starts no turn of its own, so it takes no note, and the
+/// note waits for the next turn the owner sends.
+#[tokio::test]
+async fn a_steer_takes_no_note() {
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    fixture.settled_read(1).await;
+    let answer = fixture
+        .call("conversation.message", next_turn_params(&fixture.id, "note", "x"))
+        .await;
+    assert_eq!(answer["ok"], true, "{answer}");
+    let steered = fixture
+        .call(
+            "conversation.steer",
+            json!({
+                "conversationId": fixture.id.to_string(),
+                "requestId": "steer",
+                "executionId": "steered",
+                "text": "steer",
+                "attachments": [],
+                "files": [],
+            }),
+        )
+        .await;
+    assert_eq!(steered["ok"], true, "{steered}");
+    fixture.settled_read(2).await;
+    assert!(fixture.notes_taken_by("steered").await.is_empty());
+    let status = fixture
+        .call("conversation.messageStatus", status_params(&fixture.id, "note"))
+        .await;
+    assert_eq!(status["payload"]["deliveryState"], "pending", "{status}");
 }
 
 /// A Drive grant to the fixture's device with `preset`.

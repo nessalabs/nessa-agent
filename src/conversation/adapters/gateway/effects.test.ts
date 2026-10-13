@@ -45,6 +45,7 @@ function gatewayView(): ConversationView {
   return {
     questions: [],
     artifacts: [],
+    notes: [],
     conversationId: "server",
     title: null,
     revision: "capabilities",
@@ -1485,6 +1486,72 @@ it("tells the follower the files its agent published, by what they are held as a
         artifacts: [
           { executionId: "run", name: "chart.png", ...held },
           { name: "loose.png", ...held },
+        ],
+      }),
+    },
+  ])
+  stop()
+})
+
+it("tells the follower each note as its row shows it, and nothing it does not", async () => {
+  const gateway = subscribing()
+  const effects = effectsOf(() => gateway.client)
+  const { said, follower } = told()
+  const stop = effects.follow("server", follower)
+  await settle()
+  const left = {
+    text: "Mind the deploy window",
+    acceptedAtMs: 1_000,
+    author: { kind: "grant" as const, surface: "phone" },
+  }
+  gateway.opens[0]!.handlers.view({
+    cursor: cursor("1"),
+    view: {
+      ...gatewayView(),
+      notes: [
+        { ...left, messageId: "n1", delivery: "record_only", deliveryState: "recorded" },
+        {
+          ...left,
+          messageId: "n2",
+          delivery: "next_turn",
+          deliveryState: "assigned",
+          executionId: "run-2",
+          afterExecutionId: "run-1",
+        },
+        {
+          ...left,
+          messageId: "n3",
+          delivery: "next_turn",
+          deliveryState: "retired",
+          retiredReason: "permission_lost",
+          afterExecutionId: "run-2",
+        },
+      ],
+    },
+  })
+  const author = { kind: "grant", surface: "phone" }
+  // When it was accepted, what it was left for, and the turn that took it
+  // are the gateway's record; the row shows who, where it stands, and what.
+  expect(said).toEqual([
+    {
+      view: expect.objectContaining({
+        notes: [
+          { id: "n1", text: left.text, author, deliveryState: "recorded" },
+          {
+            id: "n2",
+            text: left.text,
+            author,
+            deliveryState: "assigned",
+            afterExecutionId: "run-1",
+          },
+          {
+            id: "n3",
+            text: left.text,
+            author,
+            deliveryState: "retired",
+            retiredReason: "permission_lost",
+            afterExecutionId: "run-2",
+          },
         ],
       }),
     },

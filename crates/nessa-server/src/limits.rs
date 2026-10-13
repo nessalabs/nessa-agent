@@ -235,6 +235,24 @@ fn catalogue() -> &'static [Limit] {
             meaning: "the notes one author, a principal under one authority, leaves in one conversation in any 60 seconds on the gateway's wall clock; one more is refused message_quota_exceeded, and a clock set back makes no room",
         },
         Limit {
+            id: "conversation.pending_notes",
+            tier: "fixed",
+            owner: "NoteRecord::MAX_PENDING in crates/nessa-sdk/src/application/agent_execution/sessions/notes.rs",
+            meaning: "the next_turn notes one conversation keeps waiting for a turn, not counting one past its lifetime; one more next_turn note is refused message_quota_exceeded and nothing is saved",
+        },
+        Limit {
+            id: "conversation.note_lifetime",
+            tier: "fixed",
+            owner: "NoteRecord::PENDING_LIFETIME_MS in crates/nessa-sdk/src/application/agent_execution/sessions/notes.rs",
+            meaning: "how long a next_turn note waits for a turn, from when it was accepted, on the gateway's wall clock; the first turn admitted after that retires it expired",
+        },
+        Limit {
+            id: "conversation.notes_per_turn",
+            tier: "fixed",
+            owner: "UserMessage::MAX_NOTES in crates/nessa-sdk/src/domain/agent_execution/prompts/value_objects/user_message.rs, which NoteRecord::MAX_PER_TURN follows",
+            meaning: "the next_turn notes one turn takes, the oldest first; the rest wait for the next turn",
+        },
+        Limit {
             id: "conversation.note_bytes",
             tier: "fixed",
             owner: "NoteText::MAX_BYTES in crates/nessa-sdk/src/application/agent_execution/sessions/notes.rs, the schema's ConversationMessageParams",
@@ -564,6 +582,15 @@ pub(crate) fn effective_json(
     put(
         "conversation.note_rate",
         count(NoteRecord::MAX_PER_AUTHOR_IN_WINDOW),
+    );
+    put("conversation.pending_notes", count(NoteRecord::MAX_PENDING));
+    put(
+        "conversation.note_lifetime",
+        millis(Duration::from_millis(NoteRecord::PENDING_LIFETIME_MS)),
+    );
+    put(
+        "conversation.notes_per_turn",
+        count(NoteRecord::MAX_PER_TURN),
     );
     put("conversation.note_bytes", count(NoteText::MAX_BYTES));
     put(

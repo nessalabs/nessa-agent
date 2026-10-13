@@ -964,6 +964,7 @@ mod tests {
             target_event_offset: None,
             actor: ActionContext::new("user", "surface", "request").unwrap(),
             initiation: Initiation::owner(),
+            notes: Vec::new(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -1387,6 +1388,7 @@ mod tests {
             },
             actor: ActionContext::new("user", "surface", "request").unwrap(),
             initiation: Initiation::owner(),
+            notes: Vec::new(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -1698,6 +1700,8 @@ mod tests {
             actor: ActionContext::new("person", "phone", "note").unwrap(),
             author: Initiator::Grant(GrantInitiator::new("receiver", 7).unwrap()),
             accepted_at_ms: 1_700_000_000_000,
+            after_execution: None,
+            retired: None,
         };
         fold.apply(&records(
             &scope,

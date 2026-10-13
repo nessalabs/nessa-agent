@@ -17,6 +17,7 @@ function gatewayView(): ConversationView {
   return {
     questions: [],
     artifacts: [],
+    notes: [],
     conversationId: "server",
     title: null,
     revision: "capabilities",

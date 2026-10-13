@@ -27,6 +27,7 @@ import {
 } from "../../application/ports"
 import type { CommandFailure, ConversationSelection, ReadFailure } from "../../model"
 import { heldFileReader } from "./held-files"
+import { shownNote } from "./notes"
 
 /**
  * The gateway's view as the panel's own, received at `receivedAtMs` on the
@@ -68,6 +69,7 @@ function conversationView(
         ? {}
         : { executionId: artifact.executionId }),
     })),
+    notes: value.notes.map(shownNote),
     capabilities: {
       queue: value.capabilities.queue,
       steer: value.capabilities.steer,

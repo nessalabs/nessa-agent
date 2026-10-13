@@ -6,11 +6,12 @@ use super::view::{
     ConversationLeaseEnvironment, ConversationLeaseRefusal, ConversationLeaseSandbox,
     ConversationLeaseState, ConversationLeaseView, ConversationLifecycle,
     ConversationLifecyclePhase, ConversationMcpTool, ConversationMessage, ConversationMessageApp,
-    ConversationMessageStatus, ConversationPart, ConversationPending, ConversationPendingMode,
-    ConversationPermission, ConversationPermissionAsk, ConversationPermissionDeadline,
-    ConversationPermissionOption, ConversationPermissionOptionEffect, ConversationPermissionOrigin,
-    ConversationQuestion, ConversationRuntime, ConversationSelectionView, ConversationTool,
-    ConversationTranscriptState, ConversationView, NativeHooksChoice, MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationMessageStatus, ConversationNote, ConversationPart, ConversationPending,
+    ConversationPendingMode, ConversationPermission, ConversationPermissionAsk,
+    ConversationPermissionDeadline, ConversationPermissionOption,
+    ConversationPermissionOptionEffect, ConversationPermissionOrigin, ConversationQuestion,
+    ConversationRuntime, ConversationSelectionView, ConversationTool, ConversationTranscriptState,
+    ConversationView, NativeHooksChoice, MAX_STRUCTURED_CONTENT_BYTES,
 };
 use nessa_sdk::application::agent_execution::permissions::CancellationOrigin;
 use nessa_sdk::application::agent_execution::{
@@ -48,6 +49,8 @@ const MAX_TOOLS: usize = 16;
 const MAX_PERMISSIONS: usize = 16;
 /// Most artifacts the view lists: the newest, in the order they were recorded.
 pub const MAX_VIEW_ARTIFACTS: usize = 64;
+/// Most notes the view lists: the newest, in the order they were left.
+pub const MAX_VIEW_NOTES: usize = 64;
 // Application transcript body; product catalog enrichment is serialized afterward.
 pub const MAX_VIEW_BYTES: usize = 60_000;
 /// The largest single review the view offers, encoded. One review may not take
@@ -540,6 +543,12 @@ impl Projection {
                         [snapshot.artifacts.len().saturating_sub(MAX_VIEW_ARTIFACTS)..]
                         .iter()
                         .map(ConversationArtifact::from)
+                        .collect()
+                }),
+                notes: snapshot.map_or_else(Vec::new, |snapshot| {
+                    snapshot.notes[snapshot.notes.len().saturating_sub(MAX_VIEW_NOTES)..]
+                        .iter()
+                        .map(|note| ConversationNote::of(snapshot, note))
                         .collect()
                 }),
             },
@@ -1683,6 +1692,10 @@ pub fn bound_view_within(
             if message.files.pop().is_none() {
                 message.attachments.pop();
             }
+        } else if !view.notes.is_empty() {
+            // The oldest listed note yields once the transcript has nothing
+            // left to give: the conversation still holds it.
+            view.notes.remove(0);
         } else if !view.artifacts.is_empty() {
             // The oldest listed artifact yields once the transcript has
             // nothing left to give: the conversation still holds it.
@@ -1718,9 +1731,10 @@ fn transcript_can_yield(view: &ConversationView) -> bool {
 }
 
 /// Whether `view` still has anything a bound may give up before its
-/// interactions: its transcript, artifacts, tool calls or queue.
+/// interactions: its transcript, notes, artifacts, tool calls or queue.
 fn gives_up_anything_but_interactions(view: &ConversationView) -> bool {
     transcript_can_yield(view)
+        || !view.notes.is_empty()
         || !view.artifacts.is_empty()
         || !view.tools.is_empty()
         || !view.pending.is_empty()
