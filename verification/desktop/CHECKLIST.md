@@ -702,7 +702,11 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   each between FSI and PDI. _#436_ (`appCall` in
   `gateway-source.ts`, the `callTool` routing in `dependencies.ts`;
   `approvalHead` and `approvalAsker` in `approval-request.tsx`).
-  _Check:_ `app-review.mjs --shots <dir>`.
+  Other conversation, turn or review answers leave the original simulated
+  request waiting; its own Deny settles tool and message requests. Answer
+  records and callbacks use the SDK method's parameter/result types
+  (`fake-gateway.test.ts`, fixture typecheck).
+  _Check:_ `app-review.mjs --shots <dir>` (including `target`).
 - [ ] **An app's message is reviewed as a message, and lands labelled** (#390,
   rows D9, D17, D18, D19), in the same fixture: a context the app gives is
   taken at once, draws no card and starts no read; the app's message is read

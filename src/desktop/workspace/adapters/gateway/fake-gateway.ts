@@ -17,6 +17,7 @@ import {
   createSubscriptionGate,
   subscriptionLimits,
   type ConnectionState,
+  type ConversationApi,
   type ConversationListResult,
   type ConversationSummary,
   type ConversationView,
@@ -46,6 +47,16 @@ type Method =
   | "send"
   | "answer"
   | "archive"
+
+type AnswerArgs = Parameters<ConversationApi["answer"]>
+type AnswerResult = Awaited<ReturnType<ConversationApi["answer"]>>
+type AnswerBehaviour = (
+  normal: () => AnswerResult,
+  args: AnswerArgs,
+) => Promise<AnswerResult>
+type Call =
+  | { readonly method: "answer"; readonly args: AnswerArgs }
+  | { readonly method: Exclude<Method, "answer">; readonly args: readonly unknown[] }
 
 /** How one call is answered instead: given the normal answer, the promise to return. */
 type Behaviour = (normal: () => unknown) => Promise<unknown>
@@ -135,7 +146,7 @@ export function view(
 export interface FakeGateway {
   readonly client: GatewayClient
   /** Every call made, in order. */
-  readonly calls: { readonly method: Method; readonly args: readonly unknown[] }[]
+  readonly calls: Call[]
   readonly rows: Map<string, ConversationSummary>
   readonly views: Map<string, ConversationView>
   /** Whether a list names every conversation. */
@@ -156,7 +167,9 @@ export interface FakeGateway {
   /** The stored history's incarnation: every cursor names it. */
   incarnation: string
   /** The next call of `method` is answered by `behaviour` instead. */
-  once(method: Method, behaviour: Behaviour): void
+  once(method: Exclude<Method, "answer">, behaviour: Behaviour): void
+  /** Answer the next review with its captured SDK arguments, rather than a global last call. */
+  onceAnswer(behaviour: AnswerBehaviour): void
   /**
    * The conversation's stored history moved on: its position is the next,
    * and each live subscription to it is sent its view at that cursor.
@@ -204,7 +217,8 @@ export function fakeGateway(
   const calls: FakeGateway["calls"] = []
   const rows = new Map<string, ConversationSummary>()
   const views = new Map<string, ConversationView>()
-  const overrides = new Map<Method, Behaviour[]>()
+  const overrides = new Map<Exclude<Method, "answer">, Behaviour[]>()
+  const answerOverrides: AnswerBehaviour[] = []
   const observers = new Set<(state: ConnectionState) => void>()
   const positions = new Map<string, number>()
   const subscriptions = new Map<string, Live>()
@@ -272,7 +286,11 @@ export function fakeGateway(
         : {}),
     }
   }
-  const answer = (method: Method, args: readonly unknown[], normal: () => unknown) => {
+  const answer = (
+    method: Exclude<Method, "answer">,
+    args: readonly unknown[],
+    normal: () => unknown,
+  ) => {
     calls.push({ method, args })
     const behaviour = overrides.get(method)?.shift()
     return behaviour ? behaviour(normal) : Promise.resolve().then(normal)
@@ -359,8 +377,12 @@ export function fakeGateway(
           }),
         ) as never
       },
-      answer: (...args) =>
-        answer("answer", args, () => ({ requestId: "answer", applied: true })) as never,
+      answer: (...args) => {
+        calls.push({ method: "answer", args })
+        const normal = (): AnswerResult => ({ requestId: "answer", applied: true })
+        const behaviour = answerOverrides.shift()
+        return behaviour ? behaviour(normal, args) : Promise.resolve().then(normal)
+      },
       archive: (...args) =>
         answer("archive", args, () => {
           rows.delete(args[0])
@@ -429,8 +451,11 @@ export function fakeGateway(
     calls,
     rows,
     views,
-    once(method: Method, behaviour: Behaviour) {
+    once(method: Exclude<Method, "answer">, behaviour: Behaviour) {
       overrides.set(method, [...(overrides.get(method) ?? []), behaviour])
+    },
+    onceAnswer(behaviour: AnswerBehaviour) {
+      answerOverrides.push(behaviour)
     },
     publish(conversationId: string) {
       positions.set(conversationId, (positions.get(conversationId) ?? 1) + 1)

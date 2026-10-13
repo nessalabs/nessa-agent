@@ -42,7 +42,7 @@ verification/
       onboarding-readiness/ real setup with stalled HTTP response and retry cases
       provider-sign-in/     real transcript with typed auth refusal and controlled login launch
       message-sync/         real window over controlled active and stalled gateway reads
-      app-review/           real window over a fake gateway whose app's call asks for a review
+      app-review/           real window over a typed fake gateway whose app's call asks for a review
     scripts/
       provider-sign-in.mjs compact login recovery geometry, keyboard launch and replacement
       attachments-races.mjs pending image admission and concurrent URL-drop refusals
@@ -186,3 +186,6 @@ ends each step once its motion has, not after a fixed wait.
   runs them in the frontend job, through `pnpm frontend:check`.
 
 Per [machine-readable command output](../CODING_STANDARDS.md#machine-readable-command-output).
+
+The app-review fixture contract and ordering evidence are in
+[app review verification](../docs/design/app-review-verification.md).
