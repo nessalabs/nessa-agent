@@ -8,7 +8,8 @@ import {
 } from "react"
 import type { PermissionRule } from "@nessa/client"
 import type { PermissionRulesGateway } from "../adapters/permission-rules-gateway"
-import { Group, ItemRow, Row } from "./settings-controls"
+import { setting } from "../model/settings-catalogue"
+import { Group, ItemRow } from "./settings-controls"
 
 /**
  * Settings › Privacy & Permissions › Access: the owner's remembered rules,
@@ -95,25 +96,32 @@ export function PermissionRuleRows() {
         )
     })
   }
+  const entry = setting("remembered-rules")
+  const resting =
+    phase.kind === "absent"
+      ? "Not available in this window."
+      : phase.kind === "reading"
+        ? "Reading remembered rules."
+        : phase.kind === "unread"
+          ? "Could not read remembered rules."
+          : undefined
   return (
-    <Group
-      title="Remembered rules"
-      note="A tool you always allow or always deny in one project. Revoke one to be asked again."
-    >
-      <Row id="remembered-rules" />
-      {phase.kind === "absent" ? (
-        <ItemRow label="Not available in this window." unavailable />
-      ) : null}
-      {phase.kind === "unread" ? (
-        <ItemRow label="Could not read remembered rules." />
+    <Group title={entry.label} note={entry.detail}>
+      {resting !== undefined ? (
+        <ItemRow setting="remembered-rules" label={entry.label} detail={resting} unavailable />
       ) : null}
       {phase.kind === "ready" && phase.rules.length === 0 ? (
-        <ItemRow label="None" detail="Rules you save from a review appear here." />
+        <ItemRow
+          setting="remembered-rules"
+          label={entry.label}
+          detail="Rules you save from a review appear here."
+        />
       ) : null}
       {phase.kind === "ready"
-        ? phase.rules.map((rule) => (
+        ? phase.rules.map((rule, index) => (
             <ItemRow
               key={rule.id}
+              setting={index === 0 ? "remembered-rules" : undefined}
               label={`${rule.effect === "allow" ? "Always allow" : "Always deny"} ${rule.tool}`}
               detail={`${rule.source} · ${rule.workspace}`}
               data-rule={rule.id}

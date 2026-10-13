@@ -62,5 +62,5 @@ it("lists a rule and revokes it", async () => {
   const button = host.querySelector("button")
   await act(async () => button?.click())
   expect(revoked).toEqual(["pr_one"])
-  expect(host.textContent).toContain("None")
+  expect(host.textContent).toContain("Rules you save from a review appear here.")
 })
