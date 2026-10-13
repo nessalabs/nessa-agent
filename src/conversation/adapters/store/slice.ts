@@ -1,3 +1,4 @@
+import { permissionTargetConversation, type PermissionTarget } from "@nessa/client"
 import {
   type ApprovalMode,
   contentText,
@@ -444,7 +445,7 @@ export type Control =
   | { kind: "close" }
   | { kind: "reorder"; executionIds: string[] }
   | { kind: "remove"; executionId: string }
-  | { kind: "answer"; executionId: string; permissionId: string; optionId: string }
+  | { kind: "answer"; target: PermissionTarget; optionId: string }
   | {
       kind: "answerQuestion"
       executionId: string
@@ -452,7 +453,7 @@ export type Control =
       /** Null declines: the agent is told it was answered with nothing. */
       choices: { key: string; values: string[]; ownWords?: string }[] | null
     }
-  | { kind: "cancel"; executionId: string; permissionId: string }
+  | { kind: "cancel"; target: PermissionTarget }
   | { kind: "stop"; executionId: string }
   | { kind: "retry"; executionId: string }
 export const controlConversation = createAsyncThunk<
@@ -463,6 +464,14 @@ export const controlConversation = createAsyncThunk<
   const current = getState().conversation.conversations.find((item) => item.id === id)
   if (!current?.serverConversationId || current.controlPending) return
   const serverId = current.serverConversationId
+  // A delayed action belongs to the conversation captured on the approval
+  // card, even if its local tab has since been rebound. No create/control
+  // runs for that other conversation (permission-targets tests, PT4).
+  if (
+    (control.kind === "answer" || control.kind === "cancel") &&
+    permissionTargetConversation(control.target) !== serverId
+  )
+    return
   const requestedOrder = control.kind === "reorder" ? [...control.executionIds] : []
   dispatch(controlStarted(id))
   if (control.kind === "close")
@@ -507,12 +516,7 @@ export const controlConversation = createAsyncThunk<
         await extra.conversation.remove(serverId, control.executionId)
         break
       case "answer":
-        await extra.conversation.answer(
-          serverId,
-          control.executionId,
-          control.permissionId,
-          control.optionId,
-        )
+        await extra.conversation.answer(control.target, control.optionId)
         break
       case "answerQuestion":
         await extra.conversation.answerQuestion(
@@ -523,11 +527,7 @@ export const controlConversation = createAsyncThunk<
         )
         break
       case "cancel":
-        await extra.conversation.cancel(
-          serverId,
-          control.executionId,
-          control.permissionId,
-        )
+        await extra.conversation.cancel(control.target)
         break
       case "stop":
         await extra.conversation.stop(serverId, control.executionId)

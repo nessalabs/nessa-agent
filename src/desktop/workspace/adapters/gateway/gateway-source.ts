@@ -85,6 +85,7 @@
  * app's calls go on that client too (`connected`).
  */
 import {
+  permissionTargets,
   ConversationErrorCode,
   conversationErrorCode,
   isRetryableConnectionError,
@@ -1105,15 +1106,17 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     const review = reviewOf(approvalId)
     if (!review) throw new WorkspaceSourceError("not-waiting")
     await transcriptOf(sessionId, "person")
-    const permission = reads
-      .get(sessionId)
-      ?.view.permissions.find(
+    const view = reads.get(sessionId)?.view
+    const index =
+      view?.permissions.findIndex(
         (asked) =>
           asked.executionId === review.executionId &&
           asked.permissionId === review.permissionId,
-      )
-    if (!permission) throw new WorkspaceSourceError("not-waiting")
-    return permission
+      ) ?? -1
+    const permission = view?.permissions[index]
+    const target = view && permissionTargets(view)[index]
+    if (!permission || !target) throw new WorkspaceSourceError("not-waiting")
+    return { permission, target }
   }
 
   /**
@@ -1129,17 +1132,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     effect: "allow" | "deny",
   ) =>
     within(async (live) => {
-      const permission = await waitingReview(sessionId, approvalId)
+      const { permission, target } = await waitingReview(sessionId, approvalId)
       const option = permission.options.find((offered) => offered.id === optionId)
       if (!option || option.effect !== effect)
         throw new WorkspaceSourceError("not-supported")
       await dispatch(live, (connected) =>
-        connected.conversation.answer(
-          sessionId,
-          permission.executionId,
-          permission.permissionId,
-          option.id,
-        ),
+        connected.conversation.answer(target, option.id),
       )
     })
 

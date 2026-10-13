@@ -1744,6 +1744,7 @@ const checks = {
  * conversation: "could not run", with what it said.
  */
 async function chartTurn(client, conversationId, agent) {
+  const { permissionTargets } = await import("@nessa/client")
   try {
     await client.conversation.create({ conversationId, agent })
     await client.conversation.send(
@@ -1769,9 +1770,7 @@ async function chartTurn(client, conversationId, agent) {
       admitted = allow.call
       answered.add(permissionKey(allow.permission))
       await client.conversation.answer(
-        conversationId,
-        allow.permission.executionId,
-        allow.permission.permissionId,
+        permissionTargets(view)[view.permissions.indexOf(allow.permission)],
         allow.option.id,
       )
     }
