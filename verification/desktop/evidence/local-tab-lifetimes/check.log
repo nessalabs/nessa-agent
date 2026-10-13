@@ -1,0 +1,20 @@
+ok    restore:different [chromium 360]
+ok    restore:same [chromium 360]
+ok    restore:different [chromium 600]
+ok    restore:same [chromium 600]
+ok    restore:different [chromium 1440]
+ok    restore:same [chromium 1440]
+ok    restore:different [webkit 360]
+ok    restore:same [webkit 360]
+ok    restore:different [webkit 600]
+ok    restore:same [webkit 600]
+ok    restore:different [webkit 1440]
+ok    restore:same [webkit 1440]
+local-tab-lifetimes: 25/25 held
+Source-asserted revert: recycled local names
+FAIL restore:different [chromium 360]
+  - restoration reused local lifetime
+  - old completion polluted replacement notices
+Source-asserted revert: turn counter reset
+FAIL src/conversation/application/saved-tabs.test.ts > LT7: restoration uses fresh local lifetimes while preserving remote selection and titles
+AssertionError: expected 1 to be 17 // Object.is equality

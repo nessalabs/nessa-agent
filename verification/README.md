@@ -27,6 +27,8 @@ verification/
     README.md               committed transcript fixture and publication ownership
     fixture.html            real ConversationControls and applyView browser fixture
     fixture.tsx             typed current gateway view cases
+    lifetime-fixture.html   restored tab over a gated original close
+    lifetime-fixture.tsx    production follow/control consumers
     lease-fixture.html      the production details sheet over one published lease per page
     lease-fixture.tsx       each lease state the gateway publishes
   desktop/
@@ -46,6 +48,7 @@ verification/
       onboarding-readiness.mjs readiness deadline and retry in both browser engines
       run-all.mjs           every check, summarised
       committed-transcript.mjs history notices, permission controls, re-enable
+      local-tab-lifetimes.mjs restored local identities, follow and completion ownership
       lease-details.mjs     the details sheet's Where it runs, for every published lease state
       smoke.mjs             loads, sends, splits, Settings, overview; console errors
       icon-buttons.mjs      every icon button: size, shape, name, tooltip, hover, keyboard focus

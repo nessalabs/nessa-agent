@@ -173,7 +173,9 @@ function HistoryTabConsumer() {
     }
     const tabs = makeStore(createDependencies({ conversation: effects }))
     tabs.dispatch(restoreConversations({ tabs: [{ conversationId: serverId }] }))
-    await tabs.dispatch(followConversation("c0")).unwrap()
+    await tabs
+      .dispatch(followConversation(tabs.getState().conversation.activeId))
+      .unwrap()
     setActive({ store: tabs, closeCalls: () => closes })
     setResult({
       name: `${state}:${truncated}`,
@@ -184,7 +186,9 @@ function HistoryTabConsumer() {
   }
   const close = async () => {
     if (!active) return
-    await active.store.dispatch(closeTab("c0")).unwrap()
+    await active.store
+      .dispatch(closeTab(active.store.getState().conversation.activeId))
+      .unwrap()
     setResult(
       (previous) =>
         previous && {

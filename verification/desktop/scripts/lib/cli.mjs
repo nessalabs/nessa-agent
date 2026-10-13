@@ -130,6 +130,7 @@ export const devServerOnlyChecks = [
   "panel-list-follow",
   "mode-publication",
   "committed-transcript",
+  "local-tab-lifetimes",
   "lease-details",
   "app-review",
   "gateway-states",

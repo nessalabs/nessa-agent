@@ -655,8 +655,8 @@ const conversationSlice = createSlice({
   name: "conversation",
   initialState: emptyLocalTabs(),
   reducers: {
-    restoreConversations(_state, action: PayloadAction<SavedConversationTabs>) {
-      return restoreConversationTabs(action.payload)
+    restoreConversations(state, action: PayloadAction<SavedConversationTabs>) {
+      return restoreConversationTabs(state, action.payload)
     },
     cancellationChanged(
       state,
