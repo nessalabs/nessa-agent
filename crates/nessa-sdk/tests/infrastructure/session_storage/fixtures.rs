@@ -11,7 +11,7 @@ use nessa_sdk::{
         },
     },
     domain::agent_execution::{
-        executions::ExecutionId,
+        executions::{ExecutionId, Initiation},
         prompts::{PromptText, UserMessage},
         sessions::SessionId,
     },
@@ -36,6 +36,7 @@ pub(super) fn input_record(name: &str, bytes: usize) -> InvocationRecord {
             reserved_output_tokens: 1,
         },
         actor: ActionContext::new("user", "phone", "send").unwrap(),
+        initiation: Initiation::owner(),
         acknowledgement: SubmissionAcknowledgement::Pending,
         events: Vec::new(),
         scheduling: Vec::new(),

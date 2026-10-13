@@ -53,7 +53,7 @@ use nessa_sdk::application::agent_execution::{
         QueueReorder, SteeringDelivery, SteeringEvidence,
     },
     commands::{CreationStorage, CreationTaskFault},
-    executions::{ExecutionAudit, ExecutionRequest, ExecutionUpdate},
+    executions::{ExecutionAudit, ExecutionRequest, ExecutionUpdate, Submitter},
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
         PermissionCancellationRequest, QuestionAnswer,
@@ -67,7 +67,7 @@ use nessa_sdk::application::agent_execution::{
     },
 };
 use nessa_sdk::domain::agent_execution::{
-    executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
+    executions::{ExecutionId, ExecutionOutcome, Initiation, InvocationStage, MessageKind},
     leases::{AgentWork, LeaseEndCause, SandboxProfile, SandboxProfiles},
     permissions::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionId,
@@ -523,7 +523,9 @@ pub enum SubmissionMode {
 /// opening of the conversation for one mount.
 #[derive(Clone)]
 pub(super) enum Writer {
-    Person,
+    /// The person, with who their turn is saved as started by: the owner, or
+    /// the share grant that admitted it.
+    Person(Initiation),
     App {
         sender: McpAppSource,
         apps: Arc<AppReviews>,
@@ -535,9 +537,19 @@ impl Writer {
     fn is_app(&self) -> bool {
         matches!(self, Self::App { .. })
     }
+    /// Who the turn is saved as started by. An app's call asks for
+    /// `conversation.write`, which no paired session is admitted for
+    /// (`read_access::admit_request`), so an app's message is always from the
+    /// owner's own surface.
+    fn initiation(&self) -> Initiation {
+        match self {
+            Self::Person(initiation) => initiation.clone(),
+            Self::App { .. } => Initiation::owner(),
+        }
+    }
     fn sender(&self) -> MessageSender {
         match self {
-            Self::Person => MessageSender::Person,
+            Self::Person(_) => MessageSender::Person,
             Self::App { sender, .. } => MessageSender::App(sender.clone()),
         }
     }
@@ -558,7 +570,7 @@ impl Writer {
     /// admitted in ended or its mount was released. Never the person's.
     fn opening_ended(&self) -> bool {
         match self {
-            Self::Person => false,
+            Self::Person(_) => false,
             Self::App {
                 apps, epoch, mount, ..
             } => apps.admit(*epoch, mount).is_err(),
@@ -2516,9 +2528,16 @@ impl ConversationService {
         message: SubmittedMessage,
         mode: SubmissionMode,
     ) -> Result<SubmissionReceipt, ConversationError> {
-        self.submit_as(id, caller, execution_id, message, mode, Writer::Person)
-            .await
-            .map_err(SubmitFailure::into_error)
+        self.submit_as(
+            id,
+            caller,
+            execution_id,
+            message,
+            mode,
+            Writer::Person(Initiation::owner()),
+        )
+        .await
+        .map_err(SubmitFailure::into_error)
     }
     /// [`Self::submit`], written by `writer`. A message admitted while the
     /// conversation is idle — nothing runs, nothing waits — takes the
@@ -2801,21 +2820,28 @@ impl ConversationService {
                 took.asking();
             }
             asking.store(true, Ordering::SeqCst);
+            // Saved as started by whom it was admitted for: the owner, or
+            // the Drive grant as it stood at admission, its tools unchecked
+            // (row J15).
+            let submitter = Submitter {
+                context: actor,
+                initiation: writer.initiation(),
+            };
             let delivery = match mode {
                 SubmissionMode::Queue => live
                     .agent
-                    .enqueue(request, actor)
+                    .enqueue(request, submitter)
                     .await
                     .map(SubmissionDelivery::Queued),
                 SubmissionMode::Steer if !live.agent.operation_capabilities().native_steering() => {
                     live.agent
-                        .enqueue_steering(request, actor)
+                        .enqueue_steering(request, submitter)
                         .await
                         .map(SubmissionDelivery::Queued)
                 }
                 SubmissionMode::Steer => {
                     live.agent
-                        .steer(request, actor)
+                        .steer(request, submitter)
                         .await
                         .map(|delivery| match delivery {
                             SteeringDelivery::Queued(receipt) => {

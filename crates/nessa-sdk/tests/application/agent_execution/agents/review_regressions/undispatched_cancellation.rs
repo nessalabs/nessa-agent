@@ -101,7 +101,11 @@ async fn explicit_close_retains_undispatched_input_cause_actor_and_write_failure
                 }));
                 let invocation = tokio::spawn({
                     let agent = agent.clone();
-                    async move { agent.invoke(input("never-dispatched"), actor()).await }
+                    async move {
+                        agent
+                            .invoke(input("never-dispatched"), Submitter::owner(actor()))
+                            .await
+                    }
                 });
                 waiting.await.unwrap();
                 let closer = ActionContext::new("owner", "phone", "close-before-dispatch").unwrap();
@@ -183,7 +187,11 @@ async fn automatic_control_stop_retains_undispatched_input_cancellation() {
             *backend.prepare_gate.lock().unwrap() = Some(wait);
             let invocation = tokio::spawn({
                 let agent = agent.clone();
-                async move { agent.invoke(input("automatically-stopped"), actor()).await }
+                async move {
+                    agent
+                        .invoke(input("automatically-stopped"), Submitter::owner(actor()))
+                        .await
+                }
             });
             backend.preparing.notified().await;
             *backend.control_attachment.lock().unwrap() = state.clone();
@@ -256,7 +264,9 @@ async fn previous_cleanup_cannot_cancel_a_new_input_rejected_by_its_hook() {
         );
         if audit_failed {
             assert_eq!(
-                agent.invoke(input("hook-rejection"), actor()).await,
+                agent
+                    .invoke(input("hook-rejection"), Submitter::owner(actor()))
+                    .await,
                 Err(AgentError::AuditFailure)
             );
             assert_eq!(backend.executions.load(Ordering::SeqCst), 0);
@@ -267,7 +277,9 @@ async fn previous_cleanup_cannot_cancel_a_new_input_rejected_by_its_hook() {
         recover_after_automatic_stop(&agent).await;
         agent.add_invocation_hook(Arc::new(RejectBeforeDispatch));
         assert!(matches!(
-            agent.invoke(input("hook-rejection"), actor()).await,
+            agent
+                .invoke(input("hook-rejection"), Submitter::owner(actor()))
+                .await,
             Err(AgentError::BeforeInvocationHook(_))
         ));
         let saved = storage.snapshot();
@@ -314,7 +326,11 @@ async fn automatic_cancellation_evidence_survives_save_failure_and_caller_loss()
             *backend.prepare_gate.lock().unwrap() = Some(wait);
             let invocation = tokio::spawn({
                 let agent = agent.clone();
-                async move { agent.invoke(input("automatic-cancel-write"), actor()).await }
+                async move {
+                    agent
+                        .invoke(input("automatic-cancel-write"), Submitter::owner(actor()))
+                        .await
+                }
             });
             backend.preparing.notified().await;
             if matches!(fault, CancellationWriteFailure::Error) {
@@ -393,11 +409,15 @@ async fn automatic_stop_keeps_its_first_cause_when_explicit_close_overtakes_evid
         }));
         let invocation = tokio::spawn({
             let agent = agent.clone();
-            async move { agent.invoke(input("first-automatic-stop"), actor()).await }
+            async move {
+                agent
+                    .invoke(input("first-automatic-stop"), Submitter::owner(actor()))
+                    .await
+            }
         });
         waiting.await.unwrap();
         let queued = agent
-            .enqueue(input("waiting-for-close"), actor())
+            .enqueue(input("waiting-for-close"), Submitter::owner(actor()))
             .await
             .unwrap();
         *backend.control_attachment.lock().unwrap() =

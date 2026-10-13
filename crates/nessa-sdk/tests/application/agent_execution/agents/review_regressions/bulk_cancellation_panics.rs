@@ -119,18 +119,25 @@ async fn explicit_close_storage_panics_settle_every_pending_receipt_and_finalize
             *backend.execution_gate.lock().unwrap() = Some(gate);
             let active = tokio::spawn({
                 let agent = agent.clone();
-                async move { agent.invoke(input("active"), actor()).await }
+                async move {
+                    agent
+                        .invoke(input("active"), Submitter::owner(actor()))
+                        .await
+                }
             });
             backend.executing.notified().await;
-            let first = agent.enqueue(input("pending-one"), actor()).await.unwrap();
+            let first = agent
+                .enqueue(input("pending-one"), Submitter::owner(actor()))
+                .await
+                .unwrap();
             let priority = agent
-                .enqueue_steering(input("pending-two"), actor())
+                .enqueue_steering(input("pending-two"), Submitter::owner(actor()))
                 .await
                 .unwrap();
             // Steering drains first. This ordinary input follows the faulted
             // ordinary input and proves the batch continues after its save panic.
             let tail = agent
-                .enqueue(input("pending-three"), actor())
+                .enqueue(input("pending-three"), Submitter::owner(actor()))
                 .await
                 .unwrap();
             let closer = ActionContext::new("owner", "phone", "close").unwrap();
@@ -222,7 +229,7 @@ async fn explicit_close_storage_panics_settle_every_pending_receipt_and_finalize
             assert_eq!(saved.invocations[1].result, Some(first_result.clone()));
             assert_eq!(
                 agent
-                    .enqueue(input("pending-one"), actor())
+                    .enqueue(input("pending-one"), Submitter::owner(actor()))
                     .await
                     .unwrap()
                     .wait()
@@ -234,7 +241,7 @@ async fn explicit_close_storage_panics_settle_every_pending_receipt_and_finalize
             reattach_after_explicit_close(&agent).await;
             assert_eq!(
                 agent
-                    .enqueue(input("recovered"), actor())
+                    .enqueue(input("recovered"), Submitter::owner(actor()))
                     .await
                     .unwrap()
                     .wait()

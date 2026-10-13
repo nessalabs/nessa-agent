@@ -31,6 +31,7 @@ use nessa_protocol::product::generated::{
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
+use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, GrantRole, Initiation};
 
 /// The reader `session` is now: the owner when this gateway keeps no
 /// receiver bindings or the credential has none.
@@ -115,24 +116,33 @@ const ADMITTED_BY_ITS_OWN_CHECK: [&str; 6] = [
 /// one conversation the command names, so a Drive grant is what lets the
 /// device drive that conversation and no other (row J11). Its tools run
 /// unchecked until the grant's policy is enforced (slice J4).
+///
+/// Admitted, a request is answered with who it is from: a turn it starts is
+/// saved with the Drive grant that admitted it, its role and policy revision
+/// as read for this command, and every other with the owner (row J15). Both
+/// say the turn's tools run unchecked.
 pub(super) async fn admit_request(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     frame: &RequestFrame,
-) -> Result<(), &'static str> {
+) -> Result<Initiation, &'static str> {
     let method = frame.method.as_str();
+    let as_owner = || async {
+        admit_action(state, session, method).await?;
+        Ok(Initiation::owner())
+    };
     let writes = action_for_method(method) == Some("conversation.write");
     if !writes || ADMITTED_BY_ITS_OWN_CHECK.contains(&method) {
-        return admit_action(state, session, method).await;
+        return as_owner().await;
     }
     let Some((receivers, _, grants)) = state.passive_read.as_ref() else {
-        return admit_action(state, session, method).await;
+        return as_owner().await;
     };
     let Some(binding) = binding_of(receivers.as_ref(), session.context())
         .await
         .map_err(refusal_code)?
     else {
-        return admit_action(state, session, method).await;
+        return as_owner().await;
     };
     // A device signs in as its owner, so its command is the owner's from
     // the device's surface. A peer gateway signs in as its own principal
@@ -143,14 +153,34 @@ pub(super) async fn admit_request(
     let reader = Reader::of(Some(&binding));
     admit_grant(state, session, PAIRING_GRANT).await?;
     let id = drive_target(frame)?;
-    admit_drive(grants.as_ref(), &reader, &id)
+    let held = admit_drive(grants.as_ref(), &reader, &id)
         .await
         .map_err(|refusal| match refusal {
             DriveRefusal::NotGranted => refusal_code(ReadRefusal::WrongOwner),
             DriveRefusal::BelowDrive => "forbidden",
             DriveRefusal::Unverifiable => refusal_code(ReadRefusal::Unverifiable),
-        })?;
-    drives_only_text(frame)
+        })?
+        // Only the owner holds no grant, and this reader is a paired device.
+        .ok_or("forbidden")?;
+    drives_only_text(frame)?;
+    // A receiver id is at most 128 bytes, inside what a record keeps; one of
+    // only blanks, which no pairing mints, is refused as unverifiable.
+    GrantInitiator::new(
+        binding.receiver_id,
+        grant_role(held.role),
+        held.policy_revision,
+    )
+    .map(Initiation::grant)
+    .map_err(|_| refusal_code(ReadRefusal::Unverifiable))
+}
+
+/// The role a grant gave, as a saved turn names it.
+fn grant_role(role: ShareRole) -> GrantRole {
+    match role {
+        ShareRole::Read => GrantRole::Read,
+        ShareRole::Comment => GrantRole::Comment,
+        ShareRole::Drive => GrantRole::Drive,
+    }
 }
 
 /// The grant pairing mints a device (`device_pairing`), which a Drive

@@ -20,13 +20,15 @@ async fn oversized_admission_errors_settle_without_terminal_for_direct_and_queue
             let result = timeout(Duration::from_secs(3), async {
                 if queued {
                     agent
-                        .enqueue(input("rejected"), actor())
+                        .enqueue(input("rejected"), Submitter::owner(actor()))
                         .await
                         .unwrap()
                         .wait()
                         .await
                 } else {
-                    agent.invoke(input("rejected"), actor()).await
+                    agent
+                        .invoke(input("rejected"), Submitter::owner(actor()))
+                        .await
                 }
             })
             .await
@@ -55,7 +57,7 @@ async fn oversized_admission_errors_settle_without_terminal_for_direct_and_queue
             assert_eq!(
                 timeout(Duration::from_secs(3), async {
                     agent
-                        .enqueue(input("following"), actor())
+                        .enqueue(input("following"), Submitter::owner(actor()))
                         .await
                         .unwrap()
                         .wait()

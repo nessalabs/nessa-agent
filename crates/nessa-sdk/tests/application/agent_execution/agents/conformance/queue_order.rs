@@ -41,11 +41,23 @@ async fn waiting() -> (
     let (agent, backend, storage) = workflow().await;
     let (release, gate) = oneshot::channel();
     *backend.execution_gate.lock().unwrap() = Some(gate);
-    let first = agent.enqueue(request("running"), actor()).await.unwrap();
+    let first = agent
+        .enqueue(request("running"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     bounded(backend.dispatched.notified()).await;
-    let b = agent.enqueue(request("b"), actor()).await.unwrap();
-    let c = agent.enqueue(request("c"), actor()).await.unwrap();
-    let s = agent.enqueue_steering(request("s"), actor()).await.unwrap();
+    let b = agent
+        .enqueue(request("b"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let c = agent
+        .enqueue(request("c"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let s = agent
+        .enqueue_steering(request("s"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     (agent, backend, storage, release, vec![first, b, c, s])
 }
 #[tokio::test]
@@ -211,7 +223,9 @@ async fn panicking_reorder_audit_fences_and_recovers_without_applying_order() {
     ));
     assert!(reorders(&storage.snapshot()).is_empty());
     assert!(matches!(
-        agent.enqueue(request("later"), actor()).await,
+        agent
+            .enqueue(request("later"), Submitter::owner(actor()))
+            .await,
         Err(AgentError::Closed)
     ));
     for (index, receipt) in receipts.into_iter().enumerate() {
@@ -450,7 +464,9 @@ async fn panicking_reorder_persistence_fences_and_recovers_with_evidence() {
         Err(AgentError::Protocol(message)) if message == "scheduling task panicked"
     ));
     assert!(matches!(
-        agent.enqueue(request("later"), actor()).await,
+        agent
+            .enqueue(request("later"), Submitter::owner(actor()))
+            .await,
         Err(AgentError::Closed)
     ));
     assert_eq!(reorders(&storage.snapshot()).len(), 1);
@@ -471,7 +487,10 @@ async fn failed_membership_admission_retains_one_failed_receipt_without_dispatch
         id: ExecutionId::new("owned").unwrap(),
         kind: InvocationKind::Queued,
     });
-    let admission = agent.enqueue(request("owned"), actor()).await.unwrap();
+    let admission = agent
+        .enqueue(request("owned"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let evidence = admission.evidence().clone();
     assert!(matches!(
         &evidence,
@@ -480,7 +499,10 @@ async fn failed_membership_admission_retains_one_failed_receipt_without_dispatch
     let result = bounded(admission.wait()).await;
     assert!(result.is_err());
 
-    let retry = agent.enqueue(request("owned"), actor()).await.unwrap();
+    let retry = agent
+        .enqueue(request("owned"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     assert_eq!(retry.evidence(), &evidence);
     assert_eq!(bounded(retry.wait()).await, result);
     assert!(backend.executions.lock().unwrap().is_empty());
@@ -511,7 +533,10 @@ async fn panicking_membership_admission_cancels_the_pending_owner_once() {
         id: ExecutionId::new("owned").unwrap(),
         kind: InvocationKind::Queued,
     });
-    let admission = agent.enqueue(request("owned"), actor()).await.unwrap();
+    let admission = agent
+        .enqueue(request("owned"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let evidence = admission.evidence().clone();
     assert!(matches!(
         &evidence,
@@ -520,7 +545,10 @@ async fn panicking_membership_admission_cancels_the_pending_owner_once() {
     let result = bounded(admission.wait()).await;
     assert!(result.is_err());
 
-    let retry = agent.enqueue(request("owned"), actor()).await.unwrap();
+    let retry = agent
+        .enqueue(request("owned"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     assert_eq!(retry.evidence(), &evidence);
     assert_eq!(bounded(retry.wait()).await, result);
     assert!(backend.executions.lock().unwrap().is_empty());
@@ -555,7 +583,10 @@ async fn selected_write_failure_or_panic_never_dispatches_or_double_removes() {
         } else {
             storage.0.lock().unwrap().fail_queue = Some(mutation);
         }
-        let receipt = agent.enqueue(request("owned"), actor()).await.unwrap();
+        let receipt = agent
+            .enqueue(request("owned"), Submitter::owner(actor()))
+            .await
+            .unwrap();
         assert!(bounded(receipt.wait()).await.is_err());
         assert!(backend.executions.lock().unwrap().is_empty());
         assert!(agent.queued_ids().await.is_empty());
@@ -573,11 +604,23 @@ async fn selection_persistence_fences_reorder_and_keeps_dequeued_input_out_of_be
     let (agent, backend, storage) = workflow().await;
     let (finish_a, gate) = oneshot::channel();
     *backend.execution_gate.lock().unwrap() = Some(gate);
-    let a = agent.enqueue(request("a"), actor()).await.unwrap();
+    let a = agent
+        .enqueue(request("a"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     bounded(backend.dispatched.notified()).await;
-    let b = agent.enqueue(request("b"), actor()).await.unwrap();
-    let c = agent.enqueue(request("c"), actor()).await.unwrap();
-    let d = agent.enqueue(request("d"), actor()).await.unwrap();
+    let b = agent
+        .enqueue(request("b"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let c = agent
+        .enqueue(request("c"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let d = agent
+        .enqueue(request("d"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let (selected, waiting) = oneshot::channel();
     let (save, gate) = oneshot::channel();
     storage.0.lock().unwrap().pause_queue = Some((

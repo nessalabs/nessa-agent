@@ -60,7 +60,9 @@ impl Wake for ReceiptWake {
 fn register_receipt(receipt: QueueAdmission, agent: Agent) -> (InvocationWait, Arc<ReceiptWake>) {
     let probe = Arc::new(ReceiptWake {
         next: Mutex::new(Some(Box::pin(async move {
-            agent.invoke(input("after-receipt"), actor()).await
+            agent
+                .invoke(input("after-receipt"), Submitter::owner(actor()))
+                .await
         }))),
         first_poll: Mutex::new(None),
         outer: Mutex::new(None),
@@ -89,9 +91,13 @@ async fn completed_queue_receipt_admits_immediate_invocation_without_stale_busy(
         let (release, gate) = oneshot::channel();
         *backend.execution_gate.lock().unwrap() = Some(gate);
         let receipt = if steering {
-            agent.enqueue_steering(input("original"), actor()).await
+            agent
+                .enqueue_steering(input("original"), Submitter::owner(actor()))
+                .await
         } else {
-            agent.enqueue(input("original"), actor()).await
+            agent
+                .enqueue(input("original"), Submitter::owner(actor()))
+                .await
         }
         .unwrap();
         assert_eq!(receipt.id().as_str(), "original");
@@ -140,7 +146,10 @@ async fn completed_queue_receipt_retires_work_after_confirmed_attachment_cleanup
     *backend.execution_attachment.lock().unwrap() = ProviderSessionState::CleanupRequired;
     let (release, gate) = oneshot::channel();
     *backend.execution_gate.lock().unwrap() = Some(gate);
-    let original = agent.enqueue(input("original"), actor()).await.unwrap();
+    let original = agent
+        .enqueue(input("original"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     timeout(Duration::from_secs(5), backend.executing.notified())
         .await
         .unwrap();
@@ -171,7 +180,9 @@ async fn completed_queue_receipt_retires_work_after_confirmed_attachment_cleanup
         .await
         .unwrap();
     assert_eq!(
-        agent.invoke(input("recovered"), actor()).await,
+        agent
+            .invoke(input("recovered"), Submitter::owner(actor()))
+            .await,
         Ok(ExecutionOutcome::Completed)
     );
     assert_eq!(backend.executions.load(Ordering::SeqCst), 2);
@@ -263,12 +274,19 @@ async fn panicked_queue_receipt_exposes_actual_refusal_after_original_retirement
         *backend.execution_gate.lock().unwrap() = Some(gate);
         let active = tokio::spawn({
             let agent = agent.clone();
-            async move { agent.invoke(input("active"), actor()).await }
+            async move {
+                agent
+                    .invoke(input("active"), Submitter::owner(actor()))
+                    .await
+            }
         });
         timeout(Duration::from_secs(5), backend.executing.notified())
             .await
             .unwrap();
-        let queued = agent.enqueue(input("queued"), actor()).await.unwrap();
+        let queued = agent
+            .enqueue(input("queued"), Submitter::owner(actor()))
+            .await
+            .unwrap();
         let (receipt, probe) = register_receipt(queued, agent.clone());
         release.send(()).unwrap();
         assert_eq!(
@@ -314,7 +332,9 @@ async fn panicked_queue_receipt_exposes_actual_refusal_after_original_retirement
         agent.close(actor()).await.unwrap();
         reattach_after_explicit_close(&agent).await;
         assert_eq!(
-            agent.invoke(input("recovered"), actor()).await,
+            agent
+                .invoke(input("recovered"), Submitter::owner(actor()))
+                .await,
             Ok(ExecutionOutcome::Completed)
         );
         assert_eq!(
@@ -332,12 +352,19 @@ async fn withdrawn_receipt_preserves_busy_from_independent_active_invocation() {
     *backend.execution_gate.lock().unwrap() = Some(gate);
     let active = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.invoke(input("active"), actor()).await }
+        async move {
+            agent
+                .invoke(input("active"), Submitter::owner(actor()))
+                .await
+        }
     });
     timeout(Duration::from_secs(5), backend.executing.notified())
         .await
         .unwrap();
-    let queued = agent.enqueue(input("withdrawn"), actor()).await.unwrap();
+    let queued = agent
+        .enqueue(input("withdrawn"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let (receipt, probe) = register_receipt(queued, agent.clone());
     let withdrawer = ActionContext::new("owner", "phone", "withdraw").unwrap();
     assert_eq!(
@@ -381,12 +408,19 @@ async fn stopped_waiting_receipt_exposes_cleanup_refusal_without_runner_busy() {
     *backend.execution_gate.lock().unwrap() = Some(gate);
     let active = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.invoke(input("active"), actor()).await }
+        async move {
+            agent
+                .invoke(input("active"), Submitter::owner(actor()))
+                .await
+        }
     });
     timeout(Duration::from_secs(5), backend.executing.notified())
         .await
         .unwrap();
-    let queued = agent.enqueue(input("stopped"), actor()).await.unwrap();
+    let queued = agent
+        .enqueue(input("stopped"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let (receipt, probe) = register_receipt(queued, agent.clone());
     *backend.execution_attachment.lock().unwrap() = ProviderSessionState::CleanupReported(
         CleanupReport::unconfirmed(AgentError::CleanupUncertain),
@@ -436,11 +470,17 @@ async fn failed_invocation_tail_receipt_preserves_independent_settlement_busy() 
     backend.suppress_terminal.store(true, Ordering::SeqCst);
     let (release, gate) = oneshot::channel();
     *backend.execution_gate.lock().unwrap() = Some(gate);
-    let original = agent.enqueue(input("original"), actor()).await.unwrap();
+    let original = agent
+        .enqueue(input("original"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     timeout(Duration::from_secs(5), backend.executing.notified())
         .await
         .unwrap();
-    let tail = agent.enqueue(input("tail"), actor()).await.unwrap();
+    let tail = agent
+        .enqueue(input("tail"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let (tail, probe) = register_receipt(tail, agent.clone());
     release.send(()).unwrap();
     assert_eq!(
@@ -466,7 +506,9 @@ async fn failed_invocation_tail_receipt_preserves_independent_settlement_busy() 
     backend.execution_rejected.store(false, Ordering::SeqCst);
     backend.suppress_terminal.store(false, Ordering::SeqCst);
     assert_eq!(
-        agent.invoke(input("following"), actor()).await,
+        agent
+            .invoke(input("following"), Submitter::owner(actor()))
+            .await,
         Ok(ExecutionOutcome::Completed)
     );
     assert_eq!(backend.executions.load(Ordering::SeqCst), 2);
@@ -480,12 +522,19 @@ async fn failed_automatic_attachment_receipt_exposes_exact_attachment_refusal() 
     *backend.execution_gate.lock().unwrap() = Some(gate);
     let active = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.invoke(input("active"), actor()).await }
+        async move {
+            agent
+                .invoke(input("active"), Submitter::owner(actor()))
+                .await
+        }
     });
     timeout(Duration::from_secs(5), backend.executing.notified())
         .await
         .unwrap();
-    let waiting = agent.enqueue(input("waiting"), actor()).await.unwrap();
+    let waiting = agent
+        .enqueue(input("waiting"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     let (receipt, probe) = register_receipt(waiting, agent.clone());
     let failure = AgentError::InvalidInput("replacement attachment unavailable".into());
     *backend.open_error.lock().unwrap() = Some(failure.clone());

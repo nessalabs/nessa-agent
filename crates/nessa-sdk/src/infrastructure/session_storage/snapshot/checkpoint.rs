@@ -17,7 +17,7 @@ use crate::application::agent_execution::{
 };
 #[cfg(test)]
 use crate::domain::agent_execution::{
-    executions::ExecutionId,
+    executions::{ExecutionId, Initiation},
     prompts::{PromptText, UserMessage},
 };
 use crate::{
@@ -190,6 +190,7 @@ pub(crate) fn history_fixture(count: usize) -> SessionSnapshot {
                 reserved_output_tokens: 1,
             },
             actor: ActionContext::new("user", "fixture", "send").unwrap(),
+            initiation: Initiation::owner(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),

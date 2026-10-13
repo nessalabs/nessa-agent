@@ -35,13 +35,18 @@ async fn capability_admission_is_independent_of_provider_or_transport() {
         },
     ] {
         assert!(matches!(
-            agent.invoke(rejected, close_action()).await,
+            agent
+                .invoke(rejected, Submitter::owner(close_action()))
+                .await,
             Err(AgentError::InvalidInput(_))
         ));
     }
     assert_eq!(session.prompts.load(Ordering::SeqCst), 0);
     assert_eq!(
-        agent.invoke(input, close_action()).await.unwrap(),
+        agent
+            .invoke(input, Submitter::owner(close_action()))
+            .await
+            .unwrap(),
         ExecutionOutcome::Completed
     );
     assert_eq!(session.prompts.load(Ordering::SeqCst), 1);
@@ -65,12 +70,17 @@ async fn adapter_substitution_keeps_instances_and_controls_isolated() {
         reserved_output_tokens: 100,
     };
     assert_eq!(
-        offline.invoke(input.clone(), close_action()).await,
+        offline
+            .invoke(input.clone(), Submitter::owner(close_action()))
+            .await,
         Err(AgentError::Closed)
     );
     assert_eq!(recording.prompts.load(Ordering::SeqCst), 0);
     assert_eq!(
-        online.invoke(input, close_action()).await.unwrap(),
+        online
+            .invoke(input, Submitter::owner(close_action()))
+            .await
+            .unwrap(),
         ExecutionOutcome::Completed
     );
     assert_eq!(
@@ -175,6 +185,7 @@ pub(super) async fn provider_agent_with_review(
                 reserved_output_tokens: 1,
             },
             actor: close_action(),
+            initiation: Initiation::owner(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: vec![review],
             scheduling: Vec::new(),

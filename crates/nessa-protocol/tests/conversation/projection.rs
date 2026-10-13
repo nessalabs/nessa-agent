@@ -35,8 +35,8 @@ use nessa_sdk::application::agent_execution::sessions::{
 };
 use nessa_sdk::application::agent_execution::tools::ToolReviewInput;
 use nessa_sdk::domain::agent_execution::executions::{
-    ExecutionId, ExecutionOutcome, InvocationKind, InvocationStage, MessageChunk, MessageId,
-    QueueMutation, SchedulingCause,
+    ExecutionId, ExecutionOutcome, Initiation, InvocationKind, InvocationStage, MessageChunk,
+    MessageId, QueueMutation, SchedulingCause,
 };
 use nessa_sdk::domain::agent_execution::permissions::{
     PermissionApplicationId, PermissionCancellationReason, PermissionDecision, PermissionEffect,
@@ -271,6 +271,7 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
                 reserved_output_tokens: 10,
             },
             actor: ActionContext::new("person", "panel", "send").unwrap(),
+            initiation: Initiation::owner(),
             acknowledgement: SubmissionAcknowledgement::Acknowledged,
             events,
             scheduling: vec![],
