@@ -15,7 +15,6 @@ type HostDropActions = {
   ) => void
   /** The destination a batch was bound to when it began. */
   destinationOf: (batch: string) => AttachmentDestination | undefined
-  isCurrent: (destination: AttachmentDestination) => boolean
   addImageUrl: (url: string, destination: AttachmentDestination) => void
   focusComposer: () => void
   pasteAttachment: (text: string) => void
@@ -104,7 +103,7 @@ export function useHostDrop(actions: HostDropActions) {
         // is never announced for that reason, which makes this a fallback to
         // the open tab in that case; nothing below uses it.
         const destination = latest.current.destinationOf(dropped.batch)
-        if (!destination || !latest.current.isCurrent(destination)) return
+        if (!destination) return
         if (dropped.refused) {
           latest.current.refuse(pickerRefusal(dropped.refused), destination)
           return

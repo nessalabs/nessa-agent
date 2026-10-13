@@ -14,22 +14,40 @@ export function useFolderDrop(
   /** Named, not assumed: a walk can finish after somebody has changed tabs. */
   refuse: (refusal: AttachmentRefusal, destination: AttachmentDestination) => void,
 ) {
-  const pending = React.useRef<{
-    controller: AbortController
-    destination: AttachmentDestination
-  } | null>(null)
-  React.useEffect(() => () => pending.current?.controller.abort(), [])
+  const operations = React.useRef(
+    new Set<{
+      controller: AbortController
+      destination: AttachmentDestination
+    }>(),
+  )
+  const [active, setActive] = React.useState<
+    ReadonlySet<{
+      controller: AbortController
+      destination: AttachmentDestination
+    }>
+  >(new Set())
+  React.useEffect(
+    () => () => {
+      for (const operation of operations.current) operation.controller.abort()
+      operations.current.clear()
+    },
+    [],
+  )
   function addFolderEntries(entries: FileSystemEntry[]) {
     if (
-      pending.current?.destination.store === destination.store &&
-      pending.current.destination.resources === destination.resources
+      [...operations.current].some(
+        (operation) =>
+          operation.destination.store === destination.store &&
+          operation.destination.resources === destination.resources,
+      )
     ) {
       refuse({ reason: "reading-folder" }, destination)
       return
     }
     const controller = new AbortController()
     const operation = { controller, destination }
-    pending.current = operation
+    operations.current.add(operation)
+    setActive(new Set(operations.current))
     void readDroppedFolder(entries, 20, controller.signal)
       .then((files) => {
         if (!controller.signal.aborted) addFiles(files, destination)
@@ -49,14 +67,18 @@ export function useFolderDrop(
           )
       })
       .finally(() => {
-        if (pending.current === operation) pending.current = null
+        if (!operations.current.delete(operation)) return
+        setActive(new Set(operations.current))
       })
   }
   return {
     addFolderEntries,
     isPending: (id: string) =>
-      pending.current?.destination.store === destination.store &&
-      pending.current.destination.resources === destination.resources &&
-      pending.current.destination.conversationId === id,
+      [...active].some(
+        (operation) =>
+          operation.destination.store === destination.store &&
+          operation.destination.resources === destination.resources &&
+          operation.destination.conversationId === id,
+      ),
   }
 }

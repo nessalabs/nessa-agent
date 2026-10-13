@@ -6,15 +6,19 @@ store, conversation ID, original resource manager, and existing attach command.
 Capture it at the gesture boundary, before a picker, host event, folder walk,
 image read, or URL fetch can wait. It is local UI correlation, not gateway
 authorization. Delayed decisions read the captured store's live conversations
-and keep the original resource effects. Only the matching current store and
-conversation may render transient state or receive publication.
+and keep the original resource effects while that conversation remains open.
+Only the matching current store and conversation may render transient state;
+valid delayed results still publish to their captured live destination.
 
-The pending operation is one value shared by a ref (for synchronous admission)
-and state (for rendering). Its object identity owns cleanup, so an older
-completion cannot clear a later operation. Host batch entries retain the whole
-destination for at most 64 names; an unknown or evicted name has no destination
-and is ignored rather than assigned to the active tab. No epoch, cancellation
-flag or global registry is used.
+Each live picker, image read, or URL fetch is one complete operation value
+shared by a ref (for synchronous admission) and state (for rendering). Its
+object identity owns cleanup, so an older completion cannot clear a later
+operation. Folder walks follow the same per-operation ownership rule and abort
+every active controller on unmount. Only host-minted drop metadata uses the
+bounded 64-name cache; active picker destinations live with their active picker
+operation until that command settles. An unknown or evicted drop name has no
+destination and is ignored rather than assigned to the active tab. No epoch,
+cancellation flag or global registry is used.
 
 Picker readiness needs a host identity before its first event: picker calls may
 overlap, and the separate batch event has no ordering contract with the command
@@ -32,15 +36,16 @@ request is refused without replacing that request's captured destination.
 | Row | Ordering | Expected behavior | Public regression |
 | --- | --- | --- | --- |
 | AG1 | A/c0 refuses; same mounted component changes to B/c0 | B sees no A refusal; B notice survives later A callback | owner hook |
-| AG2 | A picker held; B starts picker; results and readiness events arrive in reverse order | Each batch tile and returned file stay with its captured store; A cleanup cannot clear B | owner hook and host command |
-| AG3 | A image read held; B starts read; A settles first | B pending remains; original store receives A attachment, never B | owner hook |
+| AG2 | A picker held; B starts picker; results and readiness events arrive in reverse order, with more than 64 picker requests still active | Each batch tile and returned file stay with its captured store; active picker metadata is never evicted; A cleanup cannot clear B | owner hook and host command |
+| AG3 | A image read held; B starts read; B settles first; A is still held | A remains pending after B finishes, then attaches to its original live destination | owner hook |
 | AG4 | A URL fetch held; B fetch starts; A succeeds/fails first | B pending/notice/controller remain intact | owner hook |
-| AG5 | Native batch begins in A, provider changes, host readying/drop arrives | Whole destination survives join; no B tile, notice or focus | owner and host-drop hooks |
-| AG6 | Old subscribed callback fires after owner replacement | Disposed callback publishes nothing | owner hook |
+| AG5 | Native batch begins in A, provider changes, host readying/drop arrives | Whole destination survives join; valid live result applies to A, with no B tile, notice or focus | owner and host-drop hooks |
+| AG6 | Old subscribed callback fires after owner replacement; several owned reads are active when the hook unmounts | Disposed callback publishes nothing; every active controller is aborted and all operations retire | owner hook |
 | AG7 | Same store changes tabs, then work completes; original tab closes | Attach original open tab; existing closed-tab notice remains on that store | existing picker/readying suites |
 | AG8 | Component unmounts while URL/read waits | Existing cancellation and no retired UI publication | owner hook |
-| AG9 | Folder read held in A; B/c0 starts a folder read; A settles | B spinner and operation survive A cleanup | folder owner regression |
+| AG9 | Folder read held in A; B/c0 starts a folder read; B settles first | A remains pending and attaches to its original live destination; unmount aborts every walk | folder owner regression |
 | AG10 | Two same-owner reads overlap | Existing reading refusal; first admitted operation still owns cleanup | existing races and owner hook |
+| AG11 | Drop begins in A, provider switches to B, result arrives while B is current | Valid result attaches to A's original live destination; B currentness gates only reveal and presentation | App and host-drop regression |
 
 The host-drop adapter carries the captured destination as one value; it does
 not resolve it to a local string and hand that to a replacement hook. The App

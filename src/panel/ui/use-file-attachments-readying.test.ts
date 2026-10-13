@@ -92,6 +92,11 @@ function Surface() {
 }
 
 const names = () => hook.pendingFiles.map((file) => file.name)
+const deferred = <T>() => {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => (resolve = done))
+  return { promise, resolve }
+}
 
 beforeEach(async () => {
   announced.clear()
@@ -431,6 +436,78 @@ it("keeps overlapping picker events and results with their registered stores", a
   ).toHaveLength(1)
 })
 
+it("keeps A's native image read pending after B finishes first", async () => {
+  const storeA = store
+  const resourcesA = resources
+  const conversationId = chat.active.id
+  const readA = deferred<ArrayBuffer | null>()
+  const readB = deferred<ArrayBuffer | null>()
+  readAttachmentBytes.mockImplementation((ticket: string) =>
+    ticket === "read-A" ? readA.promise : readB.promise,
+  )
+  const chosen = (name: string, ticket: string) => [
+    {
+      path: `/${name}`,
+      name,
+      size: 1,
+      mimeType: "image/png",
+      ticket,
+    },
+  ]
+
+  await act(async () => {
+    void hook.addChosenFiles(chosen("A.png", "read-A"))
+  })
+  expect(hook.isPending(conversationId)).toBe(true)
+
+  const resourcesB = createAttachmentResources()
+  const storeB = makeStore(
+    createDependencies({
+      conversation: scenarioEffects("echo") as unknown as ConversationEffects,
+    }),
+  )
+  await act(async () => storeB.dispatch(openConversation()))
+  await act(async () => storeB.dispatch(setActive(conversationId)))
+  store = storeB
+  resources = resourcesB
+  await act(async () => {
+    root.render(
+      React.createElement(Provider, {
+        store: storeB,
+        children: React.createElement(Surface),
+      }),
+    )
+  })
+  await act(async () => {
+    void hook.addChosenFiles(chosen("B.png", "read-B"))
+  })
+  expect(hook.isPending(conversationId)).toBe(true)
+
+  await act(async () => {
+    readB.resolve(new ArrayBuffer(1))
+    await Promise.resolve()
+  })
+  expect(hook.isPending(conversationId)).toBe(false)
+
+  store = storeA
+  resources = resourcesA
+  await act(async () => {
+    root.render(
+      React.createElement(Provider, {
+        store: storeA,
+        children: React.createElement(Surface),
+      }),
+    )
+  })
+  expect(hook.isPending(conversationId)).toBe(true)
+  expect(names()).toEqual(["A.png"])
+
+  await act(async () => {
+    readA.resolve(new ArrayBuffer(1))
+  })
+  await vi.waitFor(() => expect(hook.isPending(conversationId)).toBe(false))
+})
+
 it("ignores a batch it never heard named rather than guessing its owner", async () => {
   const here = chat.active.id
   await act(async () => say({ id: "unheard-of:0", name: "picked.pdf", readying: true }))
@@ -439,7 +516,7 @@ it("ignores a batch it never heard named rather than guessing its owner", async 
   expect(hook.isPending(here)).toBe(false)
 })
 
-it("remembers a bounded number of gestures, so a long session does not grow one", async () => {
+it("remembers a bounded number of drop names, so a long session does not grow one", async () => {
   // Nothing removes an entry when an attach ends — it can end in files, in a
   // refusal, or in a conversation that has since closed — so the map is a
   // window rather than a set of cleanup paths a fourth outcome could escape.
@@ -461,6 +538,30 @@ it("remembers a bounded number of gestures, so a long session does not grow one"
   await act(async () => say({ id: "b63:0", name: "kept.pdf", readying: true }))
   expect(names()).toEqual([])
   expect(hook.isPending(first)).toBe(true)
+})
+
+it("keeps readiness for an active picker even after more than 64 pickers start", async () => {
+  const firstConversationId = chat.active.id
+  const pickerIds: string[] = []
+  chooseAttachmentFiles.mockImplementation((requestId: string) => {
+    pickerIds.push(requestId)
+    return new Promise(() => {})
+  })
+
+  for (let index = 0; index < 65; index += 1) {
+    if (index > 0) await act(async () => store.dispatch(openConversation()))
+    await act(async () => hook.chooseFiles())
+  }
+  expect(pickerIds).toHaveLength(65)
+
+  await act(async () => store.dispatch(setActive(firstConversationId)))
+  await act(async () => {
+    announce(pickerIds[0]!, "picked")
+    say({ id: `${pickerIds[0]}:0`, name: "still-active.pdf", readying: true })
+  })
+
+  expect(names()).toEqual(["still-active.pdf"])
+  expect(hook.isPending(firstConversationId)).toBe(true)
 })
 
 it("stops listening when the panel goes, so a late answer reaches nothing", async () => {

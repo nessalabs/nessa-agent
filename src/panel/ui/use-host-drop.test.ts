@@ -51,7 +51,6 @@ const actions = {
   resources: {},
   addChosenFiles: vi.fn(),
   destinationOf: vi.fn((batch: string) => bound.get(batch)),
-  isCurrent: vi.fn(() => true),
   addImageUrl: vi.fn(),
   focusComposer: vi.fn(),
   pasteAttachment: vi.fn(),
@@ -88,7 +87,6 @@ const dropOf = (dropped: Partial<Dropped>): Dropped => ({
 beforeEach(async () => {
   actions.addChosenFiles.mockClear()
   actions.destinationOf.mockClear()
-  actions.isCurrent.mockClear()
   actions.addImageUrl.mockClear()
   actions.focusComposer.mockClear()
   actions.pasteAttachment.mockClear()

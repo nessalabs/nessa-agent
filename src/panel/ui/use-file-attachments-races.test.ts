@@ -351,6 +351,49 @@ it("attaches and sends the picked image once its read and upload have settled", 
   })
 })
 
+it("applies a host drop to A after the App switches to conversation B", async () => {
+  await mount()
+  const destinationStore = store
+  const conversationId = active().id
+  const batch = "b-origin-store-drop"
+  expect(hostBoundary.batch, "the App must subscribe to attachment batches").toBeTypeOf(
+    "function",
+  )
+  await act(async () => hostBoundary.batch!(batch, "dropped"))
+
+  await act(async () => store.dispatch(openConversation()))
+  expect(active().id).not.toBe(conversationId)
+  await act(async () =>
+    hostBoundary.drop?.({
+      batch,
+      files: [
+        {
+          path: "/Users/ada/original.pdf",
+          name: "original.pdf",
+          size: 4,
+          mimeType: "application/pdf",
+          ticket: "original-ticket",
+        },
+      ],
+      text: { plain: "", uriList: "", html: "" },
+      refused: null,
+    }),
+  )
+
+  expect(
+    destinationStore
+      .getState()
+      .conversation.conversations.find(
+        (conversation) => conversation.id === conversationId,
+      )?.draft,
+  ).toContainEqual(
+    expect.objectContaining({
+      type: "file",
+      resource: expect.objectContaining({ path: "/Users/ada/original.pdf" }),
+    }),
+  )
+})
+
 it("clears a failed native image read so the retained text can be sent", async () => {
   const reading = await pickImage()
   await act(async () =>

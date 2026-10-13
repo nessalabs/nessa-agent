@@ -283,17 +283,14 @@ export function App({
     owner: attachments.captureDestination().store,
     resources: attachmentResources,
     addChosenFiles: (chosen, destination) => {
-      if (!attachments.isCurrent(destination)) return
-      revealDraft(destination.conversationId)
+      if (attachments.isCurrent(destination)) revealDraft(destination.conversationId)
       void attachments.addChosenFiles(chosen, destination)
     },
     addImageUrl: (url, destination) => {
-      if (!attachments.isCurrent(destination)) return
-      revealDraft(destination.conversationId)
+      if (attachments.isCurrent(destination)) revealDraft(destination.conversationId)
       void attachments.addImageUrl(url, destination)
     },
     destinationOf: attachments.destinationOf,
-    isCurrent: attachments.isCurrent,
     focusComposer: focusRevealed,
     pasteAttachment,
     refuse: attachments.refuse,
