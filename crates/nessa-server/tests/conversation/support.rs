@@ -970,8 +970,9 @@ pub(crate) struct MemoryAttachments {
     pub(crate) ranges: Mutex<Vec<(String, u64)>>,
     /// When set, every file is let go once this many ranges were read.
     pub(crate) let_go_after: Mutex<Option<usize>>,
-    /// When set, every range takes this long to read.
-    pub(crate) range_delay: Mutex<Option<std::time::Duration>>,
+    /// Full fetch ranges wait for true (or sender drop). One-byte service probes
+    /// proceed; the host fixture's start gate lets all probes finish first.
+    pub(crate) hold_ranges: Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
     /// Ranges being read now, and the most ever read at once.
     pub(crate) reading: AtomicUsize,
     pub(crate) most_reading: AtomicUsize,
@@ -1035,9 +1036,13 @@ impl ConversationAttachments for MemoryAttachments {
         Box::pin(async move {
             let now = self.reading.fetch_add(1, Ordering::SeqCst) + 1;
             self.most_reading.fetch_max(now, Ordering::SeqCst);
-            let delay = *self.range_delay.lock().unwrap();
-            if let Some(delay) = delay {
-                tokio::time::sleep(delay).await;
+            let hold = if range.max_bytes > 1 {
+                self.hold_ranges.lock().unwrap().clone()
+            } else {
+                None
+            };
+            if let Some(mut hold) = hold {
+                let _ = hold.wait_for(|released| *released).await;
             }
             let read = self.read_range(range);
             self.reading.fetch_sub(1, Ordering::SeqCst);

@@ -65,6 +65,7 @@ use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
 use std::{
     collections::{BTreeMap, HashMap},
+    future::poll_fn,
     path::Path,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -1478,6 +1479,12 @@ struct Fetching {
     script: Mutex<FetchScript>,
     /// The bytes each fetch read, by request.
     read: Mutex<HashMap<String, Vec<u8>>>,
+    /// When set, actual host arrivals wait here before polling full-range reads,
+    /// leaving permits free for every service one-byte probe.
+    start_reads: Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
+    /// First full-range source futures polled, including semaphore waiters.
+    source_polled: AtomicUsize,
+    source_noted: tokio::sync::Notify,
     /// Said once a fetch is asked.
     noted: tokio::sync::Notify,
     /// Set, and said, once a lease's end is asked here.
@@ -1671,11 +1678,35 @@ impl LeaseHold for HostHold {
                 }
                 FetchScript::Place => {}
             }
+            let start = fetching.start_reads.lock().unwrap().clone();
+            if let Some(mut start) = start {
+                let _ = start.wait_for(|started| *started).await;
+            }
             let size = ask.file.size();
             let mut bytes = Vec::new();
             while (bytes.len() as u64) < size {
                 let max = (size - bytes.len() as u64).min(32 * 1024) as usize;
-                match ask.source.read(bytes.len() as u64, max).await {
+                let first_range = bytes.is_empty();
+                let mut source = ask.source.read(bytes.len() as u64, max);
+                let mut polled = false;
+                let read = poll_fn(|cx| {
+                    let read = source.as_mut().poll(cx);
+                    if first_range && !polled {
+                        // Observe after the real future reaches either the held
+                        // attachment read or the production semaphore wait.
+                        fetching.source_polled.fetch_add(1, Ordering::SeqCst);
+                        fetching.source_noted.notify_one();
+                        let start = fetching.start_reads.lock().unwrap().clone();
+                        if let Some(start) = start {
+                            assert!(*start.borrow(), "full reads start after all probes");
+                            assert!(read.is_pending(), "the first source poll stays held");
+                        }
+                    }
+                    polled = true;
+                    read
+                })
+                .await;
+                match read {
                     Ok(range) => bytes.extend(range),
                     Err(HeldSourceFailure::NotHeld) => return Err(FetchFailure::NotHeld),
                     Err(HeldSourceFailure::Unavailable) => {
@@ -4623,11 +4654,12 @@ async fn a_fetch_stopped_before_delivery_gives_its_size_back_and_one_after_does_
 async fn concurrent_fetches_never_read_more_than_the_gateways_bound_at_once() {
     let root = tempfile::tempdir().unwrap();
     let bytes: Vec<u8> = (0..100_000u32).map(|i| (i % 17) as u8).collect();
-    let (harness, _host, attachments, go) =
+    let (harness, host, attachments, go) =
         fetching_turn(root.path(), &bytes, FETCH_CALL_WAIT).await;
-    // Long enough that each fetch is still reading when the next one, its
-    // asking saved after the one before's, starts to read.
-    *attachments.range_delay.lock().unwrap() = Some(Duration::from_millis(50));
+    let (start, waiting) = tokio::sync::watch::channel(false);
+    *host.fetching.start_reads.lock().unwrap() = Some(waiting);
+    let (release, held) = tokio::sync::watch::channel(false);
+    *attachments.hold_ranges.lock().unwrap() = Some(held);
     // As many as one lease may have under way, more than read at once.
     let fetches: Vec<_> = (0..CurrentLease::MAX_ASKED_FETCHES)
         .map(|n| {
@@ -4640,6 +4672,40 @@ async fn concurrent_fetches_never_read_more_than_the_gateways_bound_at_once() {
             })
         })
         .collect();
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let noted = host.fetching.noted.notified();
+            if host.fetching.asks.lock().unwrap().len() == fetches.len() {
+                break;
+            }
+            noted.await;
+        }
+        // Every service probe completed before any full range acquires a permit.
+        assert_eq!(host.fetching.source_polled.load(Ordering::SeqCst), 0);
+        assert_eq!(attachments.reading.load(Ordering::SeqCst), 0);
+        start.send(true).unwrap();
+        loop {
+            let noted = host.fetching.source_noted.notified();
+            if host.fetching.source_polled.load(Ordering::SeqCst) == fetches.len() {
+                break;
+            }
+            noted.await;
+        }
+    })
+    .await
+    .expect("every actual fetch reached its first range poll");
+    assert!(fetches.len() > crate::conversation::application::FETCH_READS);
+    assert_eq!(
+        attachments.reading.load(Ordering::SeqCst),
+        crate::conversation::application::FETCH_READS,
+        "the production permits are saturated while full reads are held"
+    );
+    assert_eq!(
+        attachments.most_reading.load(Ordering::SeqCst),
+        crate::conversation::application::FETCH_READS,
+        "the held reads reached the bound without exceeding it"
+    );
+    release.send(true).unwrap();
     for fetch in fetches {
         assert!(matches!(
             tokio::time::timeout(Duration::from_secs(20), fetch)
