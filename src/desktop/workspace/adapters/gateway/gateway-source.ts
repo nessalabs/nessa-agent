@@ -1540,6 +1540,7 @@ function reasonFor(
     case ConversationErrorCode.AttachmentCleanupUnavailable:
     case ConversationErrorCode.ConversationErasureIncomplete:
     case ConversationErrorCode.MessageQuotaExceeded:
+      return "unavailable"
     // A native steer was saved, then refused because its grant moved before
     // injection. The attempt is settled, so it is not a clean refusal.
     case ConversationErrorCode.RevokedAfterSave:

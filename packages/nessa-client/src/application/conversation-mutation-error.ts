@@ -184,11 +184,13 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.AuditUnavailable:
     case ConversationErrorCode.SubmissionConflict:
     case ConversationErrorCode.SubmissionUnresolved:
+      return false
     // A native steer was saved, then refused because the grant moved before
     // injection. The saved attempt is settled as refused and nothing reached
     // the agent. Retrying that same execution is answered the same way and
     // is not a clean retry of a command that was never saved.
     case ConversationErrorCode.RevokedAfterSave:
+      return false
     case ConversationErrorCode.StalePermission:
     case ConversationErrorCode.AgentOperationFailed:
     case ConversationErrorCode.AttachmentCapacity:
