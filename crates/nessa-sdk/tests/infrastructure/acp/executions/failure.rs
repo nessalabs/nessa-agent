@@ -345,6 +345,7 @@ async fn finalized_provider_and_local_recipes_survive_storage_reload_exactly() {
             }],
             lease: None,
             artifacts: Vec::new(),
+            notes: Vec::new(),
         };
         let storage = InMemoryStorage::new();
         let lease = storage.open(session_id.clone()).await.unwrap();

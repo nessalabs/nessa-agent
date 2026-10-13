@@ -1510,6 +1510,7 @@ function reasonFor(
     case ConversationErrorCode.ConversationStateUnreadable:
     case ConversationErrorCode.ConversationConfigurationChanged:
     case ConversationErrorCode.ShareTargetNotPaired:
+    case ConversationErrorCode.IdempotencyConflict:
       return uncertain ? "unavailable" : "not-supported"
     // Not done now, or not known to be: busy, starting, stopped, storage or
     // audit that did not answer, an outcome the gateway could not settle.
@@ -1534,6 +1535,7 @@ function reasonFor(
     case ConversationErrorCode.AttachmentStorageUnavailable:
     case ConversationErrorCode.AttachmentCleanupUnavailable:
     case ConversationErrorCode.ConversationErasureIncomplete:
+    case ConversationErrorCode.MessageQuotaExceeded:
       return "unavailable"
     // An MCP App's own calls: this source makes none, so none of these can
     // answer it; one that did would be no answer it knows.

@@ -1270,6 +1270,7 @@ mod tests {
             queue_history: Vec::new(),
             lease: None,
             artifacts: Vec::new(),
+            notes: Vec::new(),
         };
         let mut changes = vec![SessionChange::Opened {
             id: session.clone(),
@@ -3412,6 +3413,7 @@ mod tests {
             queue_history: Vec::new(),
             lease: None,
             artifacts: Vec::new(),
+            notes: Vec::new(),
         };
         runtime
             .block_on(lease.save_changes(

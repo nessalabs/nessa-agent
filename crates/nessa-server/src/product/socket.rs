@@ -2883,6 +2883,7 @@ mod tests {
                     queue_history: Vec::new(),
                     lease: None,
                     artifacts: Vec::new(),
+                    notes: Vec::new(),
                 },
                 vec![SessionSaveUnit::new(vec![SessionChange::Opened {
                     id: session_id.clone(),

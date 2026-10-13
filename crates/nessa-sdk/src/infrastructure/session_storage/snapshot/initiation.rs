@@ -1,4 +1,5 @@
-//! JSON representation of who started a turn and whether its tools were checked.
+//! JSON representation of who started a turn and whether its tools were
+//! checked, and of the authority a note was left under (the same initiator).
 //! Decoding goes back through the domain constructors, so a saved grant breaks
 //! the same rules a live one would and is refused as corrupt.
 use super::tools::corrupt;
@@ -17,7 +18,7 @@ pub(super) struct Initiation {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-enum Initiator {
+pub(super) enum Initiator {
     Owner,
     Grant { grant: String, policy_revision: u64 },
 }
@@ -28,13 +29,7 @@ enum ToolChecking {
 impl From<&DomainInitiation> for Initiation {
     fn from(value: &DomainInitiation) -> Self {
         Self {
-            initiator: match value.initiator() {
-                DomainInitiator::Owner => Initiator::Owner,
-                DomainInitiator::Grant(grant) => Initiator::Grant {
-                    grant: grant.grant().into(),
-                    policy_revision: grant.policy_revision(),
-                },
-            },
+            initiator: value.initiator().into(),
             tools: match value.tools() {
                 DomainToolChecking::NotChecked => ToolChecking::NotChecked,
             },
@@ -45,12 +40,31 @@ impl Initiation {
     pub(super) fn decode(self) -> Result<DomainInitiation, StorageError> {
         // One tool-checking case exists, and both constructors give it.
         let ToolChecking::NotChecked = self.tools;
-        Ok(match self.initiator {
-            Initiator::Owner => DomainInitiation::owner(),
-            Initiator::Grant {
+        Ok(match self.initiator.decode()? {
+            DomainInitiator::Owner => DomainInitiation::owner(),
+            DomainInitiator::Grant(grant) => DomainInitiation::grant(grant),
+        })
+    }
+}
+impl From<&DomainInitiator> for Initiator {
+    fn from(value: &DomainInitiator) -> Self {
+        match value {
+            DomainInitiator::Owner => Self::Owner,
+            DomainInitiator::Grant(grant) => Self::Grant {
+                grant: grant.grant().into(),
+                policy_revision: grant.policy_revision(),
+            },
+        }
+    }
+}
+impl Initiator {
+    pub(super) fn decode(self) -> Result<DomainInitiator, StorageError> {
+        Ok(match self {
+            Self::Owner => DomainInitiator::Owner,
+            Self::Grant {
                 grant,
                 policy_revision,
-            } => DomainInitiation::grant(
+            } => DomainInitiator::Grant(
                 GrantInitiator::new(grant, policy_revision).map_err(corrupt)?,
             ),
         })

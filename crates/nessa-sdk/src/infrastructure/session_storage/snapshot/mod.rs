@@ -18,6 +18,7 @@ pub(super) mod decode;
 mod errors;
 mod initiation;
 mod leases;
+mod notes;
 mod permissions;
 mod queue_order;
 mod records;

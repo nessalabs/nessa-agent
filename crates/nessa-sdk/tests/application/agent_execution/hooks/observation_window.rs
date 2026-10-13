@@ -1299,6 +1299,10 @@ impl MessageCommitClock for ManualMessageClock {
             }
         })
     }
+
+    fn unix_milliseconds(&self) -> u64 {
+        self.now().as_millis() as u64
+    }
 }
 
 struct ReleasableHook {

@@ -289,6 +289,9 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   unknown_method: "unavailable",
   // A share is never a read; a read that met it would be no answer it knows.
   share_target_not_paired: "unavailable",
+  // A note's refusals; no read is ever answered with them.
+  idempotency_conflict: "unavailable",
+  message_quota_exceeded: "unavailable",
   model_unavailable: "unavailable",
   approval_mode_unavailable: "unavailable",
   approval_mode_not_applied: "unavailable",

@@ -127,6 +127,7 @@ async fn record_fixture(root: &Path, separate_open: bool, count: usize) -> (Scop
                     queue_history: vec![],
                     lease: None,
                     artifacts: Vec::new(),
+                    notes: Vec::new(),
                 },
                 vec![SessionSaveUnit::new(std::mem::take(&mut changes)).unwrap()],
             )
@@ -155,6 +156,7 @@ async fn record_fixture(root: &Path, separate_open: bool, count: usize) -> (Scop
                 queue_history: vec![],
                 lease: None,
                 artifacts: Vec::new(),
+                notes: Vec::new(),
             },
             vec![SessionSaveUnit::new(changes).unwrap()],
         )
@@ -221,6 +223,7 @@ pub(super) async fn source_records_with_artifact(root: &Path) -> (Scope, Vec<Rec
                 queue_history: vec![],
                 lease: Some(CurrentLease::apply(None, &issued).unwrap()),
                 artifacts: vec![artifact],
+                notes: Vec::new(),
             },
             vec![SessionSaveUnit::new(changes).unwrap()],
         )
