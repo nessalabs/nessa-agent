@@ -310,3 +310,90 @@ async fn native_listener_stops_on_a_listening_socket_failure() {
     );
     fixture.gateway.shutdown().await;
 }
+
+/// A connection the relay joined is served like a direct one, on a relay
+/// permit of its own pool, in both directions (issue #266, slice R2a, row
+/// RL16): with all eight connection permits held by silent direct peers, a
+/// relayed device is still answered while a ninth direct one is refused;
+/// with all four relay permits held, a relayed connection is refused while
+/// the pools stay apart. The drain waits for every relay permit, even one
+/// not yet in a connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_listener_serves_relayed_connections_on_their_own_permits() {
+    let fixture = Fixture::new().await;
+    // An open invitation, so a device's Hello is answered.
+    fixture
+        .gateway
+        .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
+        .await
+        .unwrap();
+    let pin = fixture.gateway.identity().public_spki();
+    let connections = connections(&fixture);
+    let relayed: Vec<_> = (0..4)
+        .map(|_| connections.relay_permit().expect("a relay permit"))
+        .collect();
+    assert!(
+        connections.relay_permit().is_none(),
+        "the relay pool holds four"
+    );
+    let mut relayed = relayed.into_iter();
+    // Eight direct peers that connect and never speak hold every
+    // connection permit in TLS.
+    let mut script = Vec::new();
+    let mut silent = Vec::new();
+    for _ in 0..8 {
+        let (server, device) = sockets();
+        script.push(Step::Give(Accepted::Connection(server)));
+        silent.push(device);
+    }
+    let (ninth_server, ninth_device) = sockets();
+    let ninth_answer = device_says_hello(ninth_device, pin);
+    script.push(Step::Give(Accepted::Connection(ninth_server)));
+    let (relayed_server, relayed_device) = sockets();
+    let relayed_answer = device_says_hello(relayed_device, pin);
+    script.push(Step::Give(Accepted::Relayed(
+        relayed_server,
+        relayed.next().unwrap(),
+    )));
+    let (accept, _) = ScriptedAccept::new(script);
+    let listener = NativeEnrollmentListener::new(accept, connections.clone());
+    let (stop, stopped) = oneshot::channel::<()>();
+    let mut running = tokio::spawn(listener.run(
+        OsEntropy::default,
+        async {
+            stopped.await.ok();
+        },
+        |kind| panic!("listener stopped on {kind:?}"),
+    ));
+    assert!(
+        !tokio::time::timeout(WAIT, ninth_answer)
+            .await
+            .unwrap()
+            .unwrap(),
+        "a ninth direct peer finds every connection permit held"
+    );
+    assert!(
+        tokio::time::timeout(WAIT, relayed_answer)
+            .await
+            .unwrap()
+            .unwrap(),
+        "a relayed device is answered on its relay permit"
+    );
+    stop.send(()).unwrap();
+    // Three relay permits are still held, as by accepts under way: the
+    // drain waits for them.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut running)
+            .await
+            .is_err(),
+        "the drain waited for the relay permits still held"
+    );
+    drop(relayed);
+    tokio::time::timeout(WAIT, running)
+        .await
+        .expect("the drain ends once every relay permit is back")
+        .unwrap()
+        .unwrap();
+    drop(silent);
+    fixture.gateway.shutdown().await;
+}

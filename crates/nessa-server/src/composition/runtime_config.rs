@@ -81,6 +81,55 @@ pub(super) const MAX_SSH_HOSTS: usize = 16;
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct NativeConfig {
     pub listen_address: SocketAddr,
+    /// A relay to serve through as well (issue #266): readers that cannot
+    /// reach the listen address reach this gateway through it. Absent, the
+    /// gateway serves only directly.
+    #[serde(default)]
+    pub relay: Option<RelayAddress>,
+}
+
+/// Longest relay address: a DNS name's limit.
+const MAX_RELAY_ADDRESS: usize = 255;
+
+/// Where a relay listens: `host:port`, where the host is a name or an
+/// address (an IPv6 one in brackets). Unlike the listen address it may be a
+/// name, since a relay is usually somewhere public; it is looked up at each
+/// dial.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub(super) struct RelayAddress(String);
+
+impl RelayAddress {
+    /// The `host:port` to dial.
+    pub(super) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for RelayAddress {
+    type Error = String;
+    fn try_from(address: String) -> Result<Self, Self::Error> {
+        let refuse = || format!("relay must be host:port, at most {MAX_RELAY_ADDRESS} bytes");
+        if address.len() > MAX_RELAY_ADDRESS
+            || address.chars().any(|c| c.is_whitespace() || c.is_control())
+        {
+            return Err(refuse());
+        }
+        let (host, port) = address.rsplit_once(':').ok_or_else(refuse)?;
+        let port_ok = port.parse::<u16>().is_ok_and(|port| port != 0);
+        let host_ok = !host.is_empty()
+            && match host.strip_prefix('[') {
+                Some(bracketed) => bracketed
+                    .strip_suffix(']')
+                    .is_some_and(|v6| v6.parse::<std::net::Ipv6Addr>().is_ok()),
+                None => !host.contains(':'),
+            };
+        if port_ok && host_ok {
+            Ok(Self(address))
+        } else {
+            Err(refuse())
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -381,6 +430,52 @@ mod tests {
         ] {
             assert!(RuntimeConfig::parse(bytes).is_err());
         }
+    }
+    /// A relay is optional, may be named by host or address, and anything
+    /// that is not `host:port` within 255 bytes refuses startup.
+    #[test]
+    fn native_relay_is_host_and_port() {
+        let relay = |bytes: &[u8]| {
+            RuntimeConfig::parse(bytes).map(|config| {
+                config
+                    .native
+                    .unwrap()
+                    .relay
+                    .map(|relay| relay.as_str().to_owned())
+            })
+        };
+        assert_eq!(
+            relay(br#"{"native":{"listenAddress":"127.0.0.1:1"}}"#).unwrap(),
+            None
+        );
+        for address in [
+            "relay.example:443",
+            "203.0.113.7:47651",
+            "[2001:db8::1]:47651",
+            "localhost:1",
+        ] {
+            let bytes =
+                format!(r#"{{"native":{{"listenAddress":"127.0.0.1:1","relay":"{address}"}}}}"#);
+            assert_eq!(relay(bytes.as_bytes()).unwrap().as_deref(), Some(address));
+        }
+        let long = format!("{}:1", "a".repeat(254));
+        for address in [
+            "",
+            "relay.example",
+            "relay.example:",
+            ":443",
+            "relay.example:0",
+            "relay.example:65536",
+            "relay example:443",
+            "2001:db8::1:443",
+            "[relay.example]:443",
+            long.as_str(),
+        ] {
+            let bytes =
+                format!(r#"{{"native":{{"listenAddress":"127.0.0.1:1","relay":"{address}"}}}}"#);
+            assert!(relay(bytes.as_bytes()).is_err(), "{address:?} is refused");
+        }
+        assert!(relay(br#"{"native":{"listenAddress":"127.0.0.1:1","relay":443}}"#).is_err());
     }
     /// Design rows S1 and S2: native pairing is off unless named, and a
     /// malformed native section refuses startup before anything is opened.

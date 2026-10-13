@@ -272,6 +272,7 @@ async fn gateway_child() {
     let (prepared, commands, _peers) = prepare(
         &NativeConfig {
             listen_address: address,
+            relay: None,
         },
         NativeInputs {
             namespace: root.to_path_buf(),
