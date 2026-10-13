@@ -1495,7 +1495,7 @@ impl TwoPeers {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_slow_peer_does_not_hold_up_the_others() {
     let directory = tempfile::tempdir().unwrap();
-    let mut peers = TwoPeers::start(&directory.path()).await;
+    let mut peers = TwoPeers::start(directory.path()).await;
     // C's status goes through and its read is held. A is not enrolled yet,
     // so the only read that can start is C's.
     let (key_c, _) = enroll(&peers.c, &peers.b, &peers.relay_c, true).await;
@@ -1608,7 +1608,7 @@ async fn a_slow_peer_does_not_hold_up_the_others() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_failing_peer_is_reported_and_the_other_is_read() {
     let directory = tempfile::tempdir().unwrap();
-    let mut peers = TwoPeers::start(&directory.path()).await;
+    let mut peers = TwoPeers::start(directory.path()).await;
     peers.enroll_both().await;
     stop(peers.c).await;
     let since = SystemClock.unix_milliseconds();
@@ -1643,7 +1643,7 @@ async fn a_failing_peer_is_reported_and_the_other_is_read() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_read_past_the_cap_waits_for_a_slot() {
     let directory = tempfile::tempdir().unwrap();
-    let mut peers = TwoPeers::start(&directory.path()).await;
+    let mut peers = TwoPeers::start(directory.path()).await;
     peers.enroll_both().await;
     let (accepted_a, accepted_c) = (peers.relay_a.accepted(), peers.relay_c.accepted());
     peers.relay_a.hold_after(1);
