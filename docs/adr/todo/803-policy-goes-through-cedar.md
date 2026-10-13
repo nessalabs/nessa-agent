@@ -164,13 +164,24 @@ request, `Part of #803`, because each pull request costs a full CI run (Saurav,
    pull requests: ownership first, then share grants. It touches files the
    slice J3 thread is editing, so it starts only when that is clear.
 4. **C: agent tools,** after slice J4 lands its tool-policy adapter.
-   `CommandPolicy`, MCP App call admission and model-hidden tools become
-   policies in that bundle, keyed on who started the turn. The turn's
-   initiation and its share grant are facts, so a grant can be limited to its
-   own command hosts: a Drive-started turn no longer inherits the gateway-wide
-   host list, and a grant with no host list gets no hosts unless its policy
-   says otherwise. The fixed harness deny lists are then generated from the
-   same policies rather than written twice.
+   `CommandPolicy` and MCP App call admission become policies beside that
+   bundle, keyed on who started the turn. The turn's initiation and its share
+   grant are facts, so a grant can be limited to its own command hosts: a
+   Drive-started turn no longer inherits the gateway-wide host list, and a
+   grant with no host list gets no hosts unless its policy says otherwise.
+   Three items in row C are not policy and stay as they are:
+   - **`hidden_for_model`** is the audience an MCP server declares for its
+     tool under the MCP Apps protocol. It is the same for every turn and names
+     no principal.
+   - **Claude's `DISALLOWED_TOOLS`** lists tools whose effects the runtime
+     cannot supervise. It is a capability of the pinned harness, the same for
+     everyone.
+   - **OpenCode's `SESSION_POLICY`** is the harness's fixed approval mode, a
+     protocol setting. Drive-started turns on OpenCode are refused by the
+     tool policy already.
+
+   Generating Cedar rules from these constants would add a second copy
+   without a rule anyone could change.
 5. **D: environment host.** Agent and command admission is a Cedar bundle on
    the host (`env_serve/infrastructure/cedar/`), asked through
    `LeasePolicyEvaluator`. Cedar sees the grant the peer holds: its entry, or
