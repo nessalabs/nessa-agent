@@ -309,3 +309,62 @@ it("publishes one validated receipt snapshot without rereading adapter getters (
   expect(identities).toBe(1)
   expect(dispositions).toBe(1)
 })
+
+it.each(["conversationId", "executionId", "requestId", "text"] as const)(
+  "rejects caller-owned %s scalars before preparing or any effect (PS24)",
+  (field) => {
+    const coercion = vi.fn(() => (field === "conversationId" ? first : "original"))
+    const caller = { trim: coercion, toString: coercion, toJSON: coercion }
+    const value = caller as unknown as string
+    const request = vi.fn()
+    const api = createConversationApi({ request }, () => "generated")
+    expect(() => prepareSubmission({ ...intent, [field]: value })).toThrow(TypeError)
+    expect(() =>
+      api.prepare(
+        field === "conversationId" ? value : first,
+        field === "text" ? value : "original",
+        [],
+        [],
+        {
+          executionId: field === "executionId" ? value : "execution",
+          requestId: field === "requestId" ? value : "request",
+        },
+      ),
+    ).toThrow(TypeError)
+    expect(request).not.toHaveBeenCalled()
+    expect(coercion).not.toHaveBeenCalled()
+    expect(Object.isFrozen(caller)).toBe(false)
+  },
+)
+
+it("rejects nonprimitive scalar create/read/control inputs before effects (PS24)", async () => {
+  const coercion = vi.fn(() => first)
+  const value = {
+    trim: coercion,
+    toString: coercion,
+    toJSON: coercion,
+  } as unknown as string
+  const request = vi.fn()
+  const api = createConversationApi({ request }, () => "generated")
+  expect(() => api.create({ conversationId: value })).toThrow(TypeError)
+  expect(() => api.create({ conversationId: first, requestId: value })).toThrow(TypeError)
+  await expect(api.read(value)).rejects.toThrow(TypeError)
+  expect(() => api.close(value)).toThrow(TypeError)
+  expect(() => api.close(first, { requestId: value })).toThrow(TypeError)
+  expect(request).not.toHaveBeenCalled()
+  expect(coercion).not.toHaveBeenCalled()
+})
+
+it.each(["conversationId", "executionId"] as const)(
+  "rejects a nonprimitive %s in a trusted target projection (PS24)",
+  (field) => {
+    const value = { toString: () => first, toJSON: () => second } as unknown as string
+    expect(() =>
+      executionTargets({
+        conversationId: field === "conversationId" ? value : first,
+        messages: [{ executionId: field === "executionId" ? value : "execution" }],
+        pending: [],
+      }),
+    ).toThrow(TypeError)
+  },
+)

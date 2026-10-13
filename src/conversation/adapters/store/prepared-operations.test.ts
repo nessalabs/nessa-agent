@@ -1,4 +1,5 @@
 import {
+  prepareSubmission,
   permissionTargets,
   executionTargets,
   type PreparedSubmission,
@@ -8,7 +9,11 @@ import { createDependencies } from "../../../composition/dependencies"
 import { makeStore } from "../../../store"
 import { scenarioEffects } from "../scenario/effects"
 import { textContent } from "../../model"
-import { ControlFailedError, type ConversationEffects } from "../../application/ports"
+import {
+  ControlFailedError,
+  SubmissionRefusedError,
+  type ConversationEffects,
+} from "../../application/ports"
 import {
   bindConversation,
   closeConversation,
@@ -17,6 +22,7 @@ import {
   sendDraft,
   setActive,
   setDraft,
+  submissionStarted,
   stopGenerating,
   type Control,
 } from "./slice"
@@ -502,4 +508,133 @@ it("serializes captured question DTOs without caller hooks after create awaits (
   expect(valuesHook).not.toHaveBeenCalled()
   expect(recordHook).not.toHaveBeenCalled()
   expect(listHook).not.toHaveBeenCalled()
+})
+
+it.each(["success", "create-refused", "admission-refused"] as const)(
+  "retains a synchronous first-publication Stop through %s and closure/pruning (PS25–26)",
+  async (outcome) => {
+    for (const closed of [false, true])
+      for (const stopRefused of [false, true]) {
+        const waiting = gate(),
+          echo = scenarioEffects("echo")
+        let originalId: string | undefined
+        const create = vi.fn(async (id: string) => {
+          if (id === originalId) {
+            await waiting.promise
+            if (outcome === "create-refused")
+              throw new SubmissionRefusedError("conversation-not-found")
+          }
+          return echo.create(id)
+        })
+        const submit = vi.fn(async (prepared: PreparedSubmission) => {
+          if (prepared.text === "original" && outcome === "admission-refused")
+            throw new SubmissionRefusedError("conversation-not-found")
+          return echo.submit(prepared)
+        })
+        const stop = vi.fn<ConversationEffects["stop"]>(async () => {})
+        if (stopRefused)
+          stop.mockRejectedValueOnce(
+            new ControlFailedError("conversation-not-found", "refused"),
+          )
+        const store = makeStore(
+          createDependencies({ conversation: { ...echo, create, submit, stop } }),
+        )
+        expect(
+          store.getState().conversation.conversations[0]!.serverConversationId,
+        ).toBeUndefined()
+        let observed = false
+        let partialPublications = 0
+        let stopping: Promise<unknown> = Promise.resolve()
+        let replacement: Promise<unknown> = Promise.resolve()
+        const unsubscribe = store.subscribe(() => {
+          const current = store
+            .getState()
+            .conversation.conversations.find((tab) => tab.id === "c0")
+          if (
+            !observed &&
+            current?.serverConversationId &&
+            !current.turns.some((turn) => turn.from === "user")
+          )
+            partialPublications++
+          const turn = current?.turns.find(
+            (turn) => turn.from === "user" && turn.receipt === "sending",
+          )
+          if (observed || !turn) return
+          observed = true
+          originalId = current!.serverConversationId
+          expect(current!.serverConversationId).toEqual(expect.any(String))
+          stopping = store.dispatch(stopGenerating({ conversationId: "c0" }))
+          if (closed) {
+            store.dispatch(closeConversation("c0"))
+            store.dispatch(openConversation())
+            replacement = store.dispatch(
+              sendDraft({ content: textContent("replacement") }),
+            )
+          }
+        })
+        const sending = store.dispatch(
+          sendDraft({ id: "c0", content: textContent("original") }),
+        )
+        expect(observed).toBe(true)
+        expect(partialPublications).toBe(0)
+        expect(stop).toHaveBeenCalledOnce()
+        const captured = stop.mock.calls[0]![0]
+        await replacement
+        waiting.resolve()
+        const result = await sending
+        await stopping
+        unsubscribe()
+        expect(result.meta.requestStatus).toBe(
+          outcome === "success" ? "fulfilled" : "rejected",
+        )
+        expect(stop).toHaveBeenCalledTimes(outcome === "success" ? 2 : 1)
+        if (outcome === "success") expect(stop.mock.calls[1]![0]).toBe(captured)
+        const original = submit.mock.calls.find(
+          ([prepared]) => prepared.text === "original",
+        )?.[0]
+        if (outcome === "create-refused") expect(original).toBeUndefined()
+        else expect(original!.target).toBe(captured)
+      }
+  },
+)
+
+it("rejects an absent local tab before publishing or creating an operation (PS27)", async () => {
+  const create = vi.fn(),
+    submit = vi.fn(),
+    stop = vi.fn()
+  const { store } = fixture({ create, submit, stop })
+  const before = store.getState().conversation
+  const result = await store.dispatch(
+    sendDraft({ id: "missing", content: textContent("original") }),
+  )
+  expect(result).toMatchObject({
+    meta: { requestStatus: "rejected" },
+    payload: { kind: "no-such-conversation" },
+  })
+  expect(store.getState().conversation).toBe(before)
+  expect(create).not.toHaveBeenCalled()
+  expect(submit).not.toHaveBeenCalled()
+  expect(stop).not.toHaveBeenCalled()
+})
+
+it("rejects a copied prepared value before binding or publishing its turn (PS1)", () => {
+  const store = makeStore(createDependencies({ conversation: scenarioEffects("echo") }))
+  const before = store.getState().conversation
+  const prepared = prepareSubmission({
+    conversationId: first,
+    executionId: "execution",
+    requestId: "action",
+    text: "original",
+    mode: "queued",
+  })
+  expect(() =>
+    store.dispatch(
+      submissionStarted({
+        conversationId: "c0",
+        content: textContent("original"),
+        prepared: { ...prepared },
+      }),
+    ),
+  ).toThrow(TypeError)
+  expect(store.getState().conversation).toBe(before)
 })

@@ -227,7 +227,11 @@ export type ConversationApi = {
 
 const utf8 = new TextEncoder()
 function boundedText(value: string, name: string, maxBytes: number): string {
-  if (!value.trim() || utf8.encode(value).byteLength > maxBytes)
+  if (
+    typeof value !== "string" ||
+    !value.trim() ||
+    utf8.encode(value).byteLength > maxBytes
+  )
     throw new TypeError(`${name} must contain 1-${maxBytes} UTF-8 bytes`)
   return value
 }
@@ -236,7 +240,7 @@ function observeDecimal(value: string): string {
   return value
 }
 function validConversationId(value: string): string {
-  if (!conversationIdPattern.test(value))
+  if (typeof value !== "string" || !conversationIdPattern.test(value))
     throw new TypeError("Conversation ID must be a canonical lowercase UUID")
   return value
 }

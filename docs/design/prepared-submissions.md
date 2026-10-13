@@ -45,6 +45,11 @@ own scheduling, authorization, current state, audit and physical cancellation.
 `src/conversation/adapters/store/slice.ts` retains process-local prepared
 operations under the actual Redux `getState` lifetime. Tables distinguish local
 tab and execution identity; two stores may share effects without sharing intent.
+The send use-case registers its operation before a single reducer publication
+binds the server identity and makes the turn visible. That publication derives
+server/execution/action/mode from the issued prepared value; it replaces send's
+separate bind and turn-start transitions. A synchronous subscriber can therefore
+Stop the same retained operation on its first visible turn.
 The send/retry promise retains its own operation across tab closure. Stopping
 runs before ordinary control busy/create handling, so it can overtake a gated
 retry without changing that retry's `controlPending`. A separately lost Stop
@@ -82,6 +87,10 @@ flowchart TD
 | PS21 | Caller replaces a control variant/target/values during create | Execute the captured command and copied values | `prepared-operations.test.ts` |
 | PS22 | Retry awaits create; tab closes and operation table is pruned | Retain eligible operation before await; submit original intent and repeat its requested Stop | `prepared-operations.test.ts` |
 | PS23 | Question records or arrays carry caller serialization hooks | Serialize copied DTO fields only; no caller hooks survive capture | `prepared-operations.test.ts` |
+| PS24 | Caller provides object scalars with string/JSON coercion | Reject before issuing any prepared value or performing create/control/read effects; retain only primitive strings | `prepared-submission.test.ts` |
+| PS25 | Synchronous subscriber Stops on first submission publication | Operation already registered; immediate Stop and same-target Stop after successful admission, including immediate refusal | `prepared-operations.test.ts` |
+| PS26 | First-publication subscriber Stops then closes tab and triggers pruning | Promise retains same operation and stops it after successful admission; refused create/admission performs no admission-triggered Stop | `prepared-operations.test.ts` |
+| PS27 | Requested local tab is absent before preparation | Reject without registration/publication/create/admission | `prepared-operations.test.ts` |
 
 
 Existing scenarios and gateway fakes consume the same prepared contract. Their

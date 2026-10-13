@@ -1,5 +1,6 @@
 import {
   prepareSubmission,
+  preparedSubmissionFields,
   executionTargets,
   executionTargetConversation,
   permissionTargetConversation,
@@ -135,7 +136,7 @@ const commandFailure = (error: unknown): CommandFailure | undefined =>
  * going; once it has, the same execution is stopped even if the tab was
  * closed locally in between.
  */
-type PreparedOperation = { prepared: PreparedSubmission; stopRequested: boolean }
+type PreparedOperation = { readonly prepared: PreparedSubmission; stopRequested: boolean }
 // getState is unique to a Redux store, even when effects/dependencies are shared.
 // The promise owns its operation after tab closure; the table retains retry intent
 // only while its original local turn remains (prepared-operation tests).
@@ -161,6 +162,22 @@ function operationsOf(getState: () => ThunkConfig["state"]) {
     if (!operations.size) table.delete(id)
   }
   return table
+}
+
+/** Bind a local tab without publishing a partial send transition. */
+function bindServerConversation(
+  tabs: LocalTabs,
+  id: string,
+  serverId: string,
+): LocalTabs {
+  const current = tabs.conversations.find((item) => item.id === id)
+  if (!current || current.serverConversationId) return tabs
+  return {
+    ...tabs,
+    conversations: tabs.conversations.map((item) =>
+      item.id === id ? { ...item, serverConversationId: serverId } : item,
+    ),
+  }
 }
 
 /** Admission is known even if the separately requested stop acknowledgement fails. */
@@ -222,21 +239,14 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
       dispatch(showError({ id, message: detail(error) }))
       return rejectWithValue({ kind: "invalid-submission" })
     }
-    const operation = { prepared, stopRequested: false }
-    dispatch(bindConversation({ id, serverId }))
-    dispatch(
-      submissionStarted({
-        content,
-        conversationId: id,
-        executionId,
-        actionId,
-        mode: prepared.mode,
-      }),
-    )
+    const operation: PreparedOperation = { prepared, stopRequested: false }
     const operations = operationsOf(getState)
     let retained = operations.get(id)
     if (!retained) operations.set(id, (retained = new Map()))
     retained.set(executionId, operation)
+    // The operation exists before the one publication that makes it stoppable.
+    // Subscribers can synchronously Stop/close; this promise still owns it (PS25–26).
+    dispatch(submissionStarted({ content, conversationId: id, prepared }))
     let admissionAttempted = false
     try {
       const created = await extra.conversation.create(serverId, conv.selection)
@@ -837,16 +847,32 @@ const conversationSlice = createSlice({
       return gateway.closeConversation(state, action.payload)
     },
     bindConversation(state, action: PayloadAction<{ id: string; serverId: string }>) {
-      const current = state.conversations.find((item) => item.id === action.payload.id)
-      if (current && !current.serverConversationId)
-        current.serverConversationId = action.payload.serverId
+      return bindServerConversation(state, action.payload.id, action.payload.serverId)
     },
     conversationReady(state, action: PayloadAction<string>) {
       const current = state.conversations.find((item) => item.id === action.payload)
       if (current) current.serverReady = true
     },
-    submissionStarted(state, action: PayloadAction<Parameters<typeof beginSend>[1]>) {
-      return beginSend(state, action.payload)
+    submissionStarted(
+      state,
+      action: PayloadAction<{
+        content: MessageContent
+        conversationId: string
+        prepared: PreparedSubmission
+      }>,
+    ) {
+      const { content, conversationId } = action.payload
+      const prepared = preparedSubmissionFields(action.payload.prepared)
+      return beginSend(
+        bindServerConversation(state, conversationId, prepared.conversationId),
+        {
+          content,
+          conversationId,
+          executionId: prepared.executionId,
+          actionId: prepared.requestId,
+          mode: prepared.mode,
+        },
+      )
     },
     submissionReattempted(
       state,

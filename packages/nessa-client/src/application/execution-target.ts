@@ -12,6 +12,8 @@ const issued = new WeakSet<ExecutionTarget>()
 
 /** @internal Only preparation and enclosing views issue execution targets. */
 export function issueExecutionTarget(conversationId: string, executionId: string) {
+  if (typeof conversationId !== "string" || typeof executionId !== "string")
+    throw new TypeError("Execution targets contain primitive string identities")
   const target = Object.freeze({ conversationId, executionId }) as ExecutionTarget
   issued.add(target)
   return target

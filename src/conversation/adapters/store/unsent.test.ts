@@ -98,10 +98,14 @@ it("carries the gateway's startup deadline into the notice as the panel's own re
   store.dispatch(
     submissionStarted({
       conversationId: tab.id,
-      executionId: "execution",
-      actionId: "action",
       content: textContent("retry"),
-      mode: "queued",
+      prepared: prepareSubmission({
+        conversationId: tab.serverConversationId!,
+        executionId: "execution",
+        requestId: "action",
+        text: "retry",
+        mode: "queued",
+      }),
     }),
   )
   const retried = store.getState().conversation.conversations[0]!
