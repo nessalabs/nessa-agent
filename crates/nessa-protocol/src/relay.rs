@@ -159,21 +159,26 @@ impl TryFrom<String> for RelayAddress {
         {
             return Err(refuse());
         }
-        let (host, port) = address.rsplit_once(':').ok_or_else(refuse)?;
-        let port_ok = port.parse::<u16>().is_ok_and(|port| port != 0);
-        let host_ok = !host.is_empty()
-            && match host.strip_prefix('[') {
-                Some(bracketed) => bracketed
-                    .strip_suffix(']')
-                    .is_some_and(|v6| v6.parse::<std::net::Ipv6Addr>().is_ok()),
-                None => !host.contains(':'),
-            };
-        if port_ok && host_ok {
-            Ok(Self(address))
-        } else {
-            Err(refuse())
+        match host_port(&address) {
+            Some(port) if port != 0 => Ok(Self(address)),
+            _ => Err(refuse()),
         }
     }
+}
+
+/// The port of `address` when it has the form `host:port`, the host a name
+/// or an address (an IPv6 one in brackets); nothing is looked up. A relay
+/// address and a gateway's dialed address share this shape.
+pub fn host_port(address: &str) -> Option<u16> {
+    let (host, port) = address.rsplit_once(':')?;
+    let host_ok = !host.is_empty()
+        && match host.strip_prefix('[') {
+            Some(bracketed) => bracketed
+                .strip_suffix(']')
+                .is_some_and(|v6| v6.parse::<std::net::Ipv6Addr>().is_ok()),
+            None => !host.contains(':'),
+        };
+    host_ok.then(|| port.parse().ok()).flatten()
 }
 
 /// A key shortened for logs: its first four bytes in hex.

@@ -57,7 +57,7 @@ use nessa_protocol::product::generated::{
     PASSIVE_MIN_REQUEST_TIMEOUT_MS,
 };
 use nessa_protocol::product_contract::generated::RecordReadErrorCode;
-use nessa_protocol::relay::{RelayAddress, RelayRefusal, DIRECT_HEAD_START};
+use nessa_protocol::relay::{host_port, RelayAddress, RelayRefusal, DIRECT_HEAD_START};
 use nessa_sync::replication::{
     application::{StoreError, SyncError},
     catalogue::{
@@ -291,10 +291,7 @@ pub fn dial_gateway(
         .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
     // An address that is not `host:port` fails on every dial: said as such,
     // never hidden behind the relay's answer.
-    if !address
-        .rsplit_once(':')
-        .is_some_and(|(host, port)| !host.is_empty() && port.parse::<u16>().is_ok())
-    {
+    if host_port(address).is_none() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "the gateway's address is not host:port",

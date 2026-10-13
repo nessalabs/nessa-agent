@@ -871,8 +871,8 @@ async fn relay() -> RelayAddress {
     address
 }
 
-/// Port 0 is never a listener's: a direct dial to it is refused at once,
-/// and no other test can take it in the meantime.
+/// Port 0 is never a listener's: a direct dial to it fails at once, and no
+/// other test can take it in the meantime.
 fn nowhere() -> String {
     "127.0.0.1:0".to_owned()
 }
@@ -935,7 +935,10 @@ async fn an_environment_with_only_a_relay_path_is_approved_and_serves_through_it
         .await
         .err()
         .expect("nothing listens at the direct address");
-    assert_eq!(direct.kind(), ErrorKind::ConnectionRefused);
+    // Refused on Linux, an unusable address on macOS: either way the
+    // direct dial's own error, not the relay's.
+    assert_ne!(direct.kind(), ErrorKind::InvalidInput);
+    assert_eq!(RelayRefusal::carried(&direct), None);
     let stream = dial(unreachable, Some(relay), identity, pin, clock())
         .await
         .unwrap();

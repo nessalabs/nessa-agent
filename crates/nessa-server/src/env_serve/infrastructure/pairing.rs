@@ -157,7 +157,7 @@ impl FilePairingEnvironment {
     async fn connect_or_relay(&self) -> io::Result<TcpStream> {
         let (store, address, relay) =
             (self.store.clone(), self.address.clone(), self.relay.clone());
-        tokio::task::spawn_blocking(move || {
+        let dialing = tokio::task::spawn_blocking(move || {
             let pin = relay.as_ref().and_then(|_| {
                 store
                     .load_pending()
@@ -167,9 +167,8 @@ impl FilePairingEnvironment {
             });
             let route = relay.as_ref().zip(pin.as_ref());
             dial_gateway(&address, route, CONNECT)
-        })
-        .await
-        .map_err(|_| io::Error::other("the dialing worker failed"))?
+        });
+        bounded(dialing).await
     }
 
     fn enroll_failure(&self, error: NativeClientError) -> String {
@@ -284,11 +283,11 @@ impl EnrollingPairing for FilePairingEnvironment {
     async fn send_code(&self, code: ManualCode) -> Result<(), String> {
         // Direct only: the relay is asked for a key this learns by enrolling.
         let address = self.address.clone();
-        let stream = tokio::task::spawn_blocking(move || dial_gateway(&address, None, CONNECT))
-            .await
-            .map_err(|_| io::Error::other("the dialing worker failed"))
-            .and_then(|connected| connected)
-            .map_err(|error| format!("{}: {error}", self.address))?;
+        let stream = bounded(tokio::task::spawn_blocking(move || {
+            dial_gateway(&address, None, CONNECT)
+        }))
+        .await
+        .map_err(|error| format!("{}: {error}", self.address))?;
         self.client
             .enroll(stream, code, OsEntropy)
             .await
@@ -336,6 +335,16 @@ pub(crate) fn answer_to_failure(error: NativeClientError, directory: &Path) -> A
         )),
         other => Answer::Unanswered(format!("{other:?}")),
     }
+}
+
+/// A connect on a blocking worker, waited for at most [`CONNECT`]: the
+/// name lookup inside it waits as long as the system resolver does, and a
+/// lookup that hangs is left to end on its own.
+async fn bounded(dialing: tokio::task::JoinHandle<io::Result<TcpStream>>) -> io::Result<TcpStream> {
+    tokio::time::timeout(CONNECT, dialing)
+        .await
+        .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))?
+        .map_err(|_| io::Error::other("the dialing worker failed"))?
 }
 
 #[cfg(test)]

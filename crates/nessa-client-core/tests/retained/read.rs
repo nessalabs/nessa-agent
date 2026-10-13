@@ -524,7 +524,7 @@ fn dial_gateway_says_a_bad_address_and_carries_the_relays_answer() {
         .unwrap()
         .public_spki();
     let unused = RelayAddress::try_from("127.0.0.1:9".to_owned()).unwrap();
-    for address in ["no-port", ":7443", "gw:port"] {
+    for address in ["no-port", ":7443", "gw:port", "::1"] {
         let refused = dial_gateway(address, Some((&unused, &pin)), Duration::from_secs(5))
             .expect_err("not an address");
         assert_eq!(
