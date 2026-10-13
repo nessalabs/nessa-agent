@@ -223,12 +223,12 @@ what makes `ask_everything` ask for every call.
 | Policy | Allows | Decided by |
 | --- | --- | --- |
 | The owner's turns | every tool | `tool.owner` |
-| `read_only_tools` | the tools listed as only reading this machine's files (not Codex's `search`, which is also its web search) | `tool.reads` |
+| `read_only_tools` | the tools listed as only reading this machine's files, and Claude's `ToolSearch`, which only loads another tool's schema (not Codex's `search`, which is also its web search) | `tool.reads` |
 | `no_shell` | those, and the tools listed as changing files or reaching the network without running a command | `tool.reads`, `tool.edits` |
 | `ask_everything`, `all` | every tool | `tool.preset.ask_everything`, `tool.preset.all` |
 | Allow and deny patterns | a tool an allow pattern matches, or every tool when there is no allow pattern; never one a deny pattern matches | `tool.rules.allow.<i>`, `tool.rules.unlisted`, `tool.rules.deny.<i>` |
 
-The lists are in `tools.cedar`. A tool no list names, such as an MCP
+The lists are in `tools.cedar`. They name no OpenCode tool: OpenCode runs the tools it allows without asking, so part 3 refuses a Drive turn on OpenCode rather than judge some of its calls. A tool no list names, such as an MCP
 server's, is refused by `read_only_tools` and `no_shell`: it might run a
 command. A pattern's `*` matches any run of characters and every other
 character is itself; patterns become Cedar JSON policies scoped to their

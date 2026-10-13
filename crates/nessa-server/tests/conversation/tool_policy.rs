@@ -58,6 +58,7 @@ fn read_only_tools_allows_only_named_readers() {
     for (source, name) in [
         (ToolSource::Claude, "Read"),
         (ToolSource::Claude, "Grep"),
+        (ToolSource::Claude, "ToolSearch"),
         (ToolSource::Codex, "read"),
         (ToolSource::Gateway, "environments_list"),
     ] {
@@ -115,6 +116,31 @@ fn no_shell_allows_named_readers_and_editors_and_no_command() {
     ] {
         assert_eq!(under(&policy, source, name), refused(&[]), "{name}");
     }
+}
+
+#[test]
+fn a_deferred_tool_is_loaded_then_judged_on_its_own() {
+    // Claude's harness asks for ToolSearch before a deferred tool such as
+    // WebFetch. The loader is allowed wherever reads are, so the tool after it
+    // is decided by its own name.
+    let no_shell = ToolPolicy::Preset(ToolPreset::NoShell);
+    assert_eq!(
+        under(&no_shell, ToolSource::Claude, "ToolSearch"),
+        allowed(&["tool.reads"])
+    );
+    assert_eq!(
+        under(&no_shell, ToolSource::Claude, "WebFetch"),
+        allowed(&["tool.edits"])
+    );
+    let read_only = ToolPolicy::Preset(ToolPreset::ReadOnlyTools);
+    assert_eq!(
+        under(&read_only, ToolSource::Claude, "ToolSearch"),
+        allowed(&["tool.reads"])
+    );
+    assert_eq!(
+        under(&read_only, ToolSource::Claude, "WebFetch"),
+        refused(&[])
+    );
 }
 
 #[test]

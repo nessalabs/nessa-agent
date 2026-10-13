@@ -17,6 +17,10 @@ permit (
 // Tools that only read this machine's files, for read_only_tools and
 // no_shell. Codex names the kind of action when it names no tool of its own;
 // its "search" kind is also its web search, so it is not listed here.
+// Claude's ToolSearch only loads another tool's schema; the harness calls it
+// before a deferred tool such as WebFetch, so refusing it refuses that tool.
+// OpenCode is not listed: the gateway does not admit a Drive turn on OpenCode
+// (slice J4 part 3), because OpenCode runs the tools it allows unasked.
 @id("tool.reads")
 permit (
   principal is Nessa::Grant,
@@ -25,7 +29,7 @@ permit (
 )
 when {
   ["read_only_tools", "no_shell"].contains(principal.toolPreset) &&
-  ((resource.source == "claude" && ["Read", "Glob", "Grep", "LS"].contains(resource.name)) ||
+  ((resource.source == "claude" && ["Read", "Glob", "Grep", "LS", "ToolSearch"].contains(resource.name)) ||
    (resource.source == "codex" && resource.name == "read") ||
    (resource.source == "gateway" && resource.name == "environments_list"))
 };
