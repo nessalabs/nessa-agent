@@ -3,6 +3,12 @@
 use super::{generation::random_generation, runtime_fingerprint};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::{
+    cell::RefCell,
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
+};
 use std::{
     collections::HashSet,
     ffi::{CString, OsString},
@@ -86,6 +92,181 @@ impl Drop for TemporaryRuntime {
 
 type CloneFile = fn(&Path, &Path) -> Result<bool, String>;
 
+/// Off unless a staging measurement test on this thread turns it on.
+///
+/// `phase!` compiles the operation alone outside tests, and these helpers are
+/// test-only with it. A test that arms the flag records how long each
+/// operation took; every other test leaves it off and runs the same operations.
+#[cfg(test)]
+static STAGE_TIMING: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+enum Phase {
+    Open,
+    Clone,
+    ByteCopy,
+    Permissions,
+    Xattr,
+    FileSync,
+    DirSync,
+    PrivateWalk,
+    Manifest,
+    Digest,
+    Publish,
+    ParentSync,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Default)]
+struct StagePhases {
+    open: Duration,
+    clone: Duration,
+    byte_copy: Duration,
+    permissions: Duration,
+    xattr: Duration,
+    file_sync: Duration,
+    dir_sync: Duration,
+    private_walk: Duration,
+    manifest: Duration,
+    digest: Duration,
+    publish: Duration,
+    parent_sync: Duration,
+    files: u64,
+    directories: u64,
+    symlinks: u64,
+    bytes: u64,
+    cloned_files: u64,
+    copied_files: u64,
+}
+
+#[cfg(test)]
+thread_local! {
+    static STAGE_PHASES: RefCell<Option<StagePhases>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn begin_stage_measurement() {
+    STAGE_TIMING.store(true, Ordering::SeqCst);
+    STAGE_PHASES.with(|slot| *slot.borrow_mut() = Some(StagePhases::default()));
+}
+
+#[cfg(test)]
+fn end_stage_measurement() -> StagePhases {
+    STAGE_TIMING.store(false, Ordering::SeqCst);
+    STAGE_PHASES.with(|slot| slot.borrow_mut().take().unwrap_or_default())
+}
+
+#[cfg(test)]
+fn timed<T>(kind: Phase, op: impl FnOnce() -> T) -> T {
+    if !STAGE_TIMING.load(Ordering::Relaxed) {
+        return op();
+    }
+    let started = Instant::now();
+    let value = op();
+    let elapsed = started.elapsed();
+    STAGE_PHASES.with(|slot| {
+        if let Some(phases) = slot.borrow_mut().as_mut() {
+            let bucket = match kind {
+                Phase::Open => &mut phases.open,
+                Phase::Clone => &mut phases.clone,
+                Phase::ByteCopy => &mut phases.byte_copy,
+                Phase::Permissions => &mut phases.permissions,
+                Phase::Xattr => &mut phases.xattr,
+                Phase::FileSync => &mut phases.file_sync,
+                Phase::DirSync => &mut phases.dir_sync,
+                Phase::PrivateWalk => &mut phases.private_walk,
+                Phase::Manifest => &mut phases.manifest,
+                Phase::Digest => &mut phases.digest,
+                Phase::Publish => &mut phases.publish,
+                Phase::ParentSync => &mut phases.parent_sync,
+            };
+            *bucket += elapsed;
+        }
+    });
+    value
+}
+
+#[cfg(test)]
+fn note_directory() {
+    if !STAGE_TIMING.load(Ordering::Relaxed) {
+        return;
+    }
+    STAGE_PHASES.with(|slot| {
+        if let Some(phases) = slot.borrow_mut().as_mut() {
+            phases.directories += 1;
+        }
+    });
+}
+
+#[cfg(test)]
+fn note_symlink() {
+    if !STAGE_TIMING.load(Ordering::Relaxed) {
+        return;
+    }
+    STAGE_PHASES.with(|slot| {
+        if let Some(phases) = slot.borrow_mut().as_mut() {
+            phases.symlinks += 1;
+        }
+    });
+}
+
+#[cfg(test)]
+fn note_file(cloned: bool, bytes: u64) {
+    if !STAGE_TIMING.load(Ordering::Relaxed) {
+        return;
+    }
+    STAGE_PHASES.with(|slot| {
+        if let Some(phases) = slot.borrow_mut().as_mut() {
+            phases.files += 1;
+            phases.bytes += bytes;
+            if cloned {
+                phases.cloned_files += 1;
+            } else {
+                phases.copied_files += 1;
+            }
+        }
+    });
+}
+
+/// Times `op` when a measurement is armed, and runs `op` directly otherwise.
+///
+/// Both arms evaluate the same expression. The direct arm is the only one the
+/// shipping build compiles.
+macro_rules! phase {
+    ($kind:expr, $op:expr) => {{
+        #[cfg(test)]
+        {
+            timed($kind, || $op)
+        }
+        #[cfg(not(test))]
+        {
+            $op
+        }
+    }};
+}
+
+macro_rules! note_dir {
+    () => {{
+        #[cfg(test)]
+        note_directory();
+    }};
+}
+
+macro_rules! note_link {
+    () => {{
+        #[cfg(test)]
+        note_symlink();
+    }};
+}
+
+macro_rules! note_copied {
+    ($cloned:expr, $bytes:expr) => {{
+        #[cfg(test)]
+        note_file($cloned, $bytes);
+    }};
+}
+
 pub(super) fn stage_runtime(
     source: &Path,
     installations: &Path,
@@ -121,12 +302,13 @@ fn stage_runtime_using(
     let source = source.canonicalize().map_err(|error| error.to_string())?;
     utf8(&source)?;
     nessa_local_storage::create_directory(installations).map_err(|error| error.to_string())?;
-    nessa_local_storage::sync_directory(
-        installations
-            .parent()
-            .ok_or("Missing runtime installation parent")?,
-    )
-    .map_err(|error| error.to_string())?;
+    let parent = installations
+        .parent()
+        .ok_or("Missing runtime installation parent")?;
+    phase!(
+        Phase::ParentSync,
+        nessa_local_storage::sync_directory(parent).map_err(|error| error.to_string())
+    )?;
     let published = installations.join(expected);
     match fs::symlink_metadata(&published) {
         Ok(_) => {
@@ -141,13 +323,17 @@ fn stage_runtime_using(
         .mode(0o700)
         .create(&temporary_path)
         .map_err(|error| error.to_string())?;
+    note_dir!();
     let temporary = TemporaryRuntime(temporary_path);
     copy_directory(&source, &source, &temporary.0, clone)?;
     validate_runtime(&temporary.0, expected)?;
-    publish(&temporary.0, &published)?;
+    phase!(Phase::Publish, publish(&temporary.0, &published))?;
     // After publication the old temporary path no longer exists; its guard cannot
     // remove the published directory even if directory synchronization fails.
-    nessa_local_storage::sync_directory(installations).map_err(|error| error.to_string())?;
+    phase!(
+        Phase::ParentSync,
+        nessa_local_storage::sync_directory(installations).map_err(|error| error.to_string())
+    )?;
     Ok(published)
 }
 
@@ -211,48 +397,71 @@ fn copy_directory(
         let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
         if metadata.file_type().is_symlink() {
             symlink(checked_link(root, &path)?, &output).map_err(|error| error.to_string())?;
+            note_link!();
         } else if metadata.is_dir() {
             DirBuilder::new()
                 .mode(0o700)
                 .create(&output)
                 .map_err(|error| error.to_string())?;
+            note_dir!();
             copy_directory(root, &path, &output, clone)?;
         } else if metadata.is_file() {
-            let mut input = OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-                .open(&path)
-                .map_err(|error| error.to_string())?;
+            let mut input = phase!(
+                Phase::Open,
+                OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                    .open(&path)
+                    .map_err(|error| error.to_string())
+            )?;
             let opened = input.metadata().map_err(|error| error.to_string())?;
             if !opened.is_file() {
                 return Err("Runtime changed to a non-file during copy".into());
             }
-            let cloned = clone(&path, &output)?;
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(!cloned)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-                .mode(0o600)
-                .open(&output)
-                .map_err(|error| error.to_string())?;
+            let cloned = phase!(Phase::Clone, clone(&path, &output))?;
+            let mut file = phase!(
+                Phase::Open,
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(!cloned)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                    .mode(0o600)
+                    .open(&output)
+                    .map_err(|error| error.to_string())
+            )?;
             if !cloned {
-                std::io::copy(&mut input, &mut file).map_err(|error| error.to_string())?;
+                phase!(
+                    Phase::ByteCopy,
+                    std::io::copy(&mut input, &mut file)
+                        .map(|_| ())
+                        .map_err(|error| error.to_string())
+                )?;
             }
             finalize_file(&file, opened.permissions().mode())?;
+            note_copied!(cloned, opened.len());
         } else {
             return Err("Unsupported runtime entry type".into());
         }
     }
-    nessa_local_storage::sync_directory(destination).map_err(|error| error.to_string())
+    phase!(
+        Phase::DirSync,
+        nessa_local_storage::sync_directory(destination).map_err(|error| error.to_string())
+    )
 }
 
 fn finalize_file(file: &fs::File, source_mode: u32) -> Result<(), String> {
-    file.set_permissions(Permissions::from_mode(0o600 | (source_mode & 0o111)))
-        .map_err(|error| error.to_string())?;
-    normalize_extended_attributes(file)?;
+    phase!(
+        Phase::Permissions,
+        file.set_permissions(Permissions::from_mode(0o600 | (source_mode & 0o111)))
+            .map_err(|error| error.to_string())
+    )?;
+    phase!(Phase::Xattr, normalize_extended_attributes(file))?;
     // copyfile clones still create a new directory entry whose file state must
     // reach disk before the containing directory can be published durably.
-    file.sync_all().map_err(|error| error.to_string())
+    phase!(
+        Phase::FileSync,
+        file.sync_all().map_err(|error| error.to_string())
+    )
 }
 
 fn normalize_extended_attributes(file: &fs::File) -> Result<(), String> {
@@ -378,8 +587,10 @@ pub(super) fn validate_runtime(directory: &Path, expected: &str) -> Result<(), S
     if !manifest.is_file() || manifest.file_type().is_symlink() {
         return Err("Runtime manifest must be a regular file".into());
     }
-    validate_private_tree(directory)?;
-    if runtime_fingerprint(directory)? != expected || tree_fingerprint(directory)? != expected {
+    phase!(Phase::PrivateWalk, validate_private_tree(directory))?;
+    if phase!(Phase::Manifest, runtime_fingerprint(directory))? != expected
+        || phase!(Phase::Digest, tree_fingerprint(directory))? != expected
+    {
         return Err("Runtime content does not match its manifest; installation preserved".into());
     }
     Ok(())

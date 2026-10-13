@@ -1,19 +1,23 @@
 use super::super::generation::random_generation;
 use super::{
-    clone_file, entry_name, finalize_file, launch_settings, publish, stage_runtime,
-    stage_runtime_cached, stage_runtime_using, tree_fingerprint, utf8, validate_runtime,
-    ValidatedRuntimes,
+    begin_stage_measurement, clone_file, end_stage_measurement, entry_name, finalize_file,
+    launch_settings, publish, stage_runtime, stage_runtime_cached, stage_runtime_using,
+    tree_fingerprint, utf8, validate_runtime, StagePhases, ValidatedRuntimes,
 };
 use serde_json::json;
 use std::{
     ffi::{CString, OsString},
     fs::{self, OpenOptions, Permissions},
+    io::{Read, Write},
+    os::fd::AsRawFd,
     os::unix::{
         ffi::OsStringExt,
-        fs::{symlink, PermissionsExt},
+        fs::{symlink, OpenOptionsExt, PermissionsExt},
     },
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 const TEST_ATTRIBUTE: &[u8] = b"com.nessa.runtime-staging-test\0";
@@ -388,4 +392,480 @@ fn replacing_bundle_after_manifest_selection_cannot_publish_the_wrong_version() 
     assert!(stage_runtime(&replacement, &versions, &selected).is_err());
     assert!(!versions.join(selected).exists());
     assert_eq!(fs::read_dir(versions).unwrap().count(), 0);
+}
+
+struct ArmedMeasurement {
+    finished: bool,
+}
+
+impl ArmedMeasurement {
+    fn begin() -> Self {
+        begin_stage_measurement();
+        Self { finished: false }
+    }
+
+    fn end(&mut self) -> StagePhases {
+        self.finished = true;
+        end_stage_measurement()
+    }
+}
+
+impl Drop for ArmedMeasurement {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = end_stage_measurement();
+        }
+    }
+}
+
+#[test]
+fn measurement_ledger_counts_the_staged_files_and_records_sync_and_digest() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    let fingerprint = Fixture::manifest(&source);
+    let mut armed = ArmedMeasurement::begin();
+    stage_runtime(&source, &fixture.0.join("versions"), &fingerprint).unwrap();
+    let phases = armed.end();
+    assert_eq!(phases.files, 3);
+    assert_eq!(phases.cloned_files + phases.copied_files, 3);
+    assert!(phases.directories >= 1);
+    assert!(phases.file_sync > Duration::ZERO);
+    assert!(phases.xattr > Duration::ZERO);
+    assert!(phases.digest > Duration::ZERO);
+    assert!(phases.publish > Duration::ZERO);
+}
+
+fn millis(duration: Duration) -> f64 {
+    (duration.as_secs_f64() * 1_000_000.0).round() / 1_000.0
+}
+
+fn env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
+}
+
+fn command_text(program: &str, args: &[&str]) -> String {
+    Command::new(program)
+        .args(args)
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .unwrap_or_default()
+}
+
+fn set_quarantine(path: &Path) {
+    let c_path = CString::new(path.to_str().unwrap()).unwrap();
+    let name = CString::new("com.apple.quarantine").unwrap();
+    let value = b"0083;00000000;;";
+    assert_eq!(
+        unsafe {
+            libc::setxattr(
+                c_path.as_ptr(),
+                name.as_ptr(),
+                value.as_ptr().cast(),
+                value.len(),
+                0,
+                0,
+            )
+        },
+        0,
+        "setxattr {}",
+        path.display()
+    );
+}
+
+fn quarantine_tree(dir: &Path) {
+    for entry in fs::read_dir(dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        let kind = entry.file_type().unwrap();
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            quarantine_tree(&path);
+        } else if kind.is_file() {
+            set_quarantine(&path);
+        }
+    }
+}
+
+fn write_repeated(path: &Path, len: u64) {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o644)
+        .open(path)
+        .unwrap();
+    let chunk = [0xA5u8; 1024 * 1024];
+    let mut left = len;
+    while left > 0 {
+        let n = usize::try_from(left.min(chunk.len() as u64)).unwrap();
+        file.write_all(&chunk[..n]).unwrap();
+        left -= u64::try_from(n).unwrap();
+    }
+    file.sync_all().unwrap();
+}
+
+struct MeasuredRoot(PathBuf);
+
+impl Drop for MeasuredRoot {
+    fn drop(&mut self) {
+        if self.0.components().any(|component| {
+            component
+                .as_os_str()
+                .to_string_lossy()
+                .starts_with("nessa-stage-measure-")
+        }) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+}
+
+fn fresh_application_support() -> MeasuredRoot {
+    let home = std::env::var("HOME").expect("HOME");
+    let root = PathBuf::from(home)
+        .join("Library/Application Support")
+        .join(format!(
+            "nessa-stage-measure-{}",
+            random_generation().unwrap()
+        ));
+    fs::create_dir_all(&root).unwrap();
+    MeasuredRoot(root)
+}
+
+struct ExecResult {
+    ms: f64,
+    status: Option<i32>,
+    error: Option<String>,
+}
+
+fn timed_exec(program: &Path, args: &[&str], timeout: Duration) -> ExecResult {
+    let started = Instant::now();
+    let mut child = match Command::new(program)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            return ExecResult {
+                ms: millis(started.elapsed()),
+                status: None,
+                error: Some(error.to_string()),
+            };
+        }
+    };
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let error = (!status.success()).then(|| {
+                    let mut stderr = String::new();
+                    if let Some(mut pipe) = child.stderr.take() {
+                        let _ = std::io::Read::read_to_string(&mut pipe, &mut stderr);
+                    }
+                    format!("exit {status}: {}", stderr.trim())
+                });
+                return ExecResult {
+                    ms: millis(started.elapsed()),
+                    status: status.code(),
+                    error,
+                };
+            }
+            Ok(None) if started.elapsed() > timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return ExecResult {
+                    ms: millis(started.elapsed()),
+                    status: None,
+                    error: Some(format!("exceeded {}s", timeout.as_secs())),
+                };
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(5)),
+            Err(error) => {
+                return ExecResult {
+                    ms: millis(started.elapsed()),
+                    status: None,
+                    error: Some(error.to_string()),
+                };
+            }
+        }
+    }
+}
+
+fn sync_microbench(dir: &Path) -> serde_json::Value {
+    let count = 128u64;
+    for index in 0..count {
+        let path = dir.join(format!("sync-{index}"));
+        fs::write(&path, [0x5Au8; 4096]).unwrap();
+    }
+    let mut paths = Vec::new();
+    for index in 0..count {
+        paths.push(dir.join(format!("sync-{index}")));
+    }
+    let time_all = |sync: fn(&fs::File) -> Result<(), String>| -> serde_json::Value {
+        let started = Instant::now();
+        for path in &paths {
+            let file = fs::File::open(path).unwrap();
+            if let Err(error) = sync(&file) {
+                return serde_json::json!({
+                    "ms": millis(started.elapsed()),
+                    "error": error,
+                });
+            }
+        }
+        serde_json::json!(millis(started.elapsed()))
+    };
+    serde_json::json!({
+        "files": count,
+        "file_sync_all_ms": time_all(|file| file.sync_all().map_err(|error| error.to_string())),
+        "libc_fsync_ms": time_all(|file| {
+            if unsafe { libc::fsync(file.as_raw_fd()) } == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error().to_string())
+            }
+        }),
+        "f_fullfsync_ms": time_all(|file| {
+            if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_FULLFSYNC) } == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error().to_string())
+            }
+        }),
+    })
+}
+
+/// Where a cold `stage_runtime` spends its time, plus launchd bootstrap and
+/// first execution beside it.
+///
+/// The tree matches the first-launch shape from #109: thousands of files and
+/// about 390MB, with a quarantine attribute on every file. The destination is
+/// a directory created for this attempt under Application Support. Set
+/// `NESSA_STAGING_PURGE=required` to drop the disk cache after the tree is
+/// built and before staging. `NESSA_STAGING_MEASUREMENT_NODE` names a real
+/// Node binary to stage and execute; without it the executable is `/usr/bin/true`.
+#[test]
+#[ignore = "cold ~390MB stage_runtime measurement for a macOS runner"]
+fn measure_runtime_staging_phases() {
+    let files = env_u64("NESSA_STAGING_FILES", 6337);
+    let directories = env_u64("NESSA_STAGING_DIRS", 685);
+    let bytes = env_u64("NESSA_STAGING_BYTES", 393_574_698);
+    let purge_required = std::env::var("NESSA_STAGING_PURGE").ok().as_deref() == Some("required");
+    let node = std::env::var_os("NESSA_STAGING_MEASUREMENT_NODE").map(PathBuf::from);
+
+    let root = fresh_application_support();
+    let source = root.0.join("source");
+    fs::create_dir_all(&source).unwrap();
+    let subdirs = directories.saturating_sub(1);
+    for index in 0..subdirs {
+        fs::create_dir(source.join(format!("d{index:04}"))).unwrap();
+    }
+    let executable_name = if node.is_some() { "node" } else { "probe" };
+    let executable_src = node.unwrap_or_else(|| PathBuf::from("/usr/bin/true"));
+    let executable_len = fs::copy(&executable_src, source.join(executable_name)).unwrap();
+    fs::set_permissions(source.join(executable_name), Permissions::from_mode(0o755)).unwrap();
+    let small_count = files.saturating_sub(3);
+    let small_bytes = small_count.saturating_mul(64);
+    for index in 0..small_count {
+        let dir = index % subdirs.max(1);
+        let path = if subdirs == 0 {
+            source.join(format!("f{index:05}"))
+        } else {
+            source.join(format!("d{dir:04}/f{index:05}"))
+        };
+        fs::write(&path, [0x11u8; 64]).unwrap();
+    }
+    let payload = bytes.saturating_sub(executable_len + small_bytes);
+    if payload > 0 {
+        write_repeated(&source.join("payload.bin"), payload);
+    }
+    if payload > 0 {
+        for index in 0..8 {
+            let from = if subdirs == 0 {
+                source.join(format!("link-{index}"))
+            } else {
+                source.join(format!("d0000/link-{index}"))
+            };
+            let target = if subdirs == 0 {
+                "payload.bin"
+            } else {
+                "../payload.bin"
+            };
+            symlink(target, &from).unwrap();
+        }
+    }
+    let fingerprint = Fixture::manifest(&source);
+    quarantine_tree(&source);
+
+    let purge = if purge_required {
+        let output = Command::new("sudo").args(["-n", "purge"]).output();
+        match output {
+            Ok(output) if output.status.success() => (true, String::new()),
+            Ok(output) => (
+                false,
+                String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            ),
+            Err(error) => (false, error.to_string()),
+        }
+    } else {
+        (false, "not requested".to_owned())
+    };
+    assert!(
+        !purge_required || purge.0,
+        "disk cache purge failed: {}",
+        purge.1
+    );
+
+    let installations = root.0.join("versions");
+    let mut armed = ArmedMeasurement::begin();
+    let started = Instant::now();
+    let staged = stage_runtime(&source, &installations, &fingerprint);
+    let wall = started.elapsed();
+    let phases = armed.end();
+    let staged = staged.unwrap_or_else(|error| panic!("stage_runtime failed: {error}"));
+
+    let exec_args: &[&str] = if executable_name == "node" {
+        &["--version"]
+    } else {
+        &[]
+    };
+    let first_exec = timed_exec(
+        &staged.join(executable_name),
+        exec_args,
+        Duration::from_secs(180),
+    );
+    let second_exec = timed_exec(
+        &staged.join(executable_name),
+        exec_args,
+        Duration::from_secs(180),
+    );
+
+    let quarantined = root.0.join("quarantined-exec");
+    fs::copy(&executable_src, &quarantined).unwrap();
+    fs::set_permissions(&quarantined, Permissions::from_mode(0o755)).unwrap();
+    set_quarantine(&quarantined);
+    let quarantined_first = timed_exec(&quarantined, exec_args, Duration::from_secs(180));
+    let quarantined_second = timed_exec(&quarantined, exec_args, Duration::from_secs(180));
+
+    let label = format!(
+        "com.nessa.stage-measure.{}",
+        &random_generation().unwrap()[..12]
+    );
+    let uid = unsafe { libc::getuid() };
+    let domain = format!("gui/{uid}");
+    let service = format!("{domain}/{label}");
+    let plist_path = root.0.join("measure.plist");
+    fs::write(
+        &plist_path,
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>{label}</string>
+<key>ProgramArguments</key><array><string>/bin/sleep</string><string>30</string></array>
+<key>RunAtLoad</key><true/>
+</dict></plist>"#
+        ),
+    )
+    .unwrap();
+    struct Bootout(String);
+    impl Drop for Bootout {
+        fn drop(&mut self) {
+            let _ = Command::new("/bin/launchctl")
+                .args(["bootout", &self.0])
+                .output();
+        }
+    }
+    let _bootout = Bootout(service.clone());
+    let launch_started = Instant::now();
+    let launch = Command::new("/bin/launchctl")
+        .args(["bootstrap", &domain])
+        .arg(&plist_path)
+        .output()
+        .unwrap();
+    let launch_ms = millis(launch_started.elapsed());
+    let launch_error = (!launch.status.success())
+        .then(|| String::from_utf8_lossy(&launch.stderr).trim().to_owned());
+
+    let bench_dir = root.0.join("sync-bench");
+    fs::create_dir(&bench_dir).unwrap();
+    let sync = sync_microbench(&bench_dir);
+    let accounted = phases.open
+        + phases.clone
+        + phases.byte_copy
+        + phases.permissions
+        + phases.xattr
+        + phases.file_sync
+        + phases.dir_sync
+        + phases.private_walk
+        + phases.manifest
+        + phases.digest
+        + phases.publish
+        + phases.parent_sync;
+    let report = serde_json::json!({
+        "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "destination": "fresh directory under ~/Library/Application Support",
+        "destination_path": root.0,
+        "filesystem": command_text("stat", &["-f", "%T", root.0.to_str().unwrap()]),
+        "product_version": command_text("sw_vers", &["-productVersion"]),
+        "architecture": command_text("uname", &["-m"]),
+        "cache_purge": { "requested": purge_required, "succeeded": purge.0, "detail": purge.1 },
+        "source": {
+            "files": phases.files,
+            "directories": phases.directories,
+            "symlinks": phases.symlinks,
+            "bytes": phases.bytes,
+            "cloned_files": phases.cloned_files,
+            "copied_files": phases.copied_files,
+            "executable": executable_name,
+        },
+        "phases_ms": {
+            "open": millis(phases.open),
+            "clone": millis(phases.clone),
+            "byte_copy": millis(phases.byte_copy),
+            "permissions": millis(phases.permissions),
+            "xattr": millis(phases.xattr),
+            "file_sync": millis(phases.file_sync),
+            "dir_sync": millis(phases.dir_sync),
+            "private_walk": millis(phases.private_walk),
+            "manifest": millis(phases.manifest),
+            "digest": millis(phases.digest),
+            "publish": millis(phases.publish),
+            "parent_sync": millis(phases.parent_sync),
+            "accounted": millis(accounted),
+            "wall": millis(wall),
+            "unaccounted": millis(wall.saturating_sub(accounted)),
+        },
+        "launchd_bootstrap_ms": launch_ms,
+        "launchd_bootstrap_error": launch_error,
+        "launchd_program": "/bin/sleep 30",
+        "first_exec_ms": first_exec.ms,
+        "first_exec_status": first_exec.status,
+        "first_exec_error": first_exec.error,
+        "second_exec_ms": second_exec.ms,
+        "second_exec_error": second_exec.error,
+        "quarantined_first_exec_ms": quarantined_first.ms,
+        "quarantined_first_exec_status": quarantined_first.status,
+        "quarantined_first_exec_error": quarantined_first.error,
+        "quarantined_second_exec_ms": quarantined_second.ms,
+        "quarantined_second_exec_error": quarantined_second.error,
+        "sync_microbench": sync,
+    });
+    let line = serde_json::to_string(&report).unwrap();
+    println!("NESSA_STAGE_PHASES {line}");
+    if let Ok(path) = std::env::var("NESSA_STAGING_MEASUREMENT_OUT") {
+        fs::write(path, format!("{line}\n")).unwrap();
+    }
+    assert!(phases.cloned_files > 0, "APFS clone did not run: {line}");
+    assert!(phases.file_sync > Duration::ZERO);
+    assert!(phases.digest > Duration::ZERO);
+    assert!(
+        launch.status.success(),
+        "launchctl bootstrap failed: {}",
+        String::from_utf8_lossy(&launch.stderr)
+    );
 }

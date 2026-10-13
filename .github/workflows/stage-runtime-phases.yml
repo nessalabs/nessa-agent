@@ -1,0 +1,65 @@
+name: Stage runtime phases
+
+# One measurement for #109. pull_request is how a branch can run it before the
+# file exists on the default branch; workflow_dispatch is not read from the
+# branch. It builds a ~390MB tree and times stage_runtime into a fresh
+# Application Support directory. Remove the pull_request trigger after the
+# numbers are recorded so later pushes do not pay for it again.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    name: Time stage_runtime on a cold Application Support directory
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: ./.github/actions/pnpm-install
+      - run: pnpm build
+      - name: Download the pinned Node binary used for first-exec timing
+        run: |
+          set -euo pipefail
+          arch="$(uname -m)"
+          case "$arch" in
+            arm64)
+              file="node-v26.8.1-darwin-arm64.tar.gz"
+              sum="6e577fd0d9db776db82306629e441a9dace416702622aebdd171c9dfaa41f4d2"
+              ;;
+            x86_64)
+              file="node-v26.8.1-darwin-x64.tar.gz"
+              sum="fe9c6dbf9c8e1b4443803d75e2a20366e420dae650c747dbb116b22975751baf"
+              ;;
+            *)
+              echo "unsupported arch $arch" >&2
+              exit 1
+              ;;
+          esac
+          curl -fsSL -o "$file" "https://nodejs.org/dist/v26.8.1/$file"
+          echo "$sum  $file" | shasum -a 256 -c -
+          dir="${file%.tar.gz}"
+          tar -xzf "$file" "$dir/bin/node"
+          echo "NESSA_STAGING_MEASUREMENT_NODE=$PWD/$dir/bin/node" >> "$GITHUB_ENV"
+      - name: Time each stage_runtime phase
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+          NESSA_STAGING_PURGE: required
+          NESSA_STAGING_MEASUREMENT_OUT: ${{ github.workspace }}/stage-phases.json
+        run: cargo test -p nessa-app --release measure_runtime_staging_phases -- --ignored --nocapture --test-threads=1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stage-runtime-phases
+          path: stage-phases.json
+          if-no-files-found: warn
