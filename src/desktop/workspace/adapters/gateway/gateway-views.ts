@@ -234,6 +234,9 @@ export const noteId = (messageId: string) => `/note:${encodeId(messageId)}`
  */
 export const unreadableId = (id: string) => `/unreadable:${encodeId(id)}`
 
+/** The final line when the gap list was cut. Not a record position. */
+export const unreadableOverflowId = "/unreadable-more"
+
 /** A file the agent published, as the part a message shows it by. */
 function publishedPart(artifact: ConversationView["artifacts"][number]): Part {
   return {
@@ -441,6 +444,13 @@ export function transcriptFrom(
     pushUnreadable(unreadable.byWaiting.get(waiting.executionId) ?? [])
     pushNotes(notes.byWaiting.get(waiting.executionId) ?? [])
   }
+  if (view.unreadableTruncated)
+    messages.push({
+      id: unreadableOverflowId,
+      role: "unreadable-overflow",
+      at: seen(unreadableOverflowId),
+      parts: [],
+    })
   const latestTurn = view.messages.at(-1)
   const history = historyExtent(view)
   // What runs is the tool and its exact input, which the gateway offers a

@@ -2,7 +2,9 @@
  * A conversation that opened with one record it could not read, on both
  * surfaces at once: the desktop window over a fake gateway, and the panel's
  * transcript beside it. Two turns of text stay visible. One line sits before
- * them and one after the turn it followed. `transcript-unreadable.mjs` drives it.
+ * them and one after the turn it followed. The gap list was cut, so both
+ * surfaces end with "More parts of this conversation couldn't be read".
+ * `transcript-unreadable.mjs` drives it.
  */
 import type {
   AgentsApi,
@@ -49,6 +51,7 @@ import "../../../../src/desktop/styles.css"
 
 const conversation = "7d1e2f3a-4b5c-4d6e-8f0a-1b2c3d4e5f61"
 const sentence = "Couldn't read this part of the conversation"
+const more = "More parts of this conversation couldn't be read"
 
 const gateway = fakeGateway()
 gateway.rows.set(
@@ -77,6 +80,7 @@ const wireView = conversationView(
       },
     ],
     unreadable: [{ id: "3" }, { id: "9", afterExecutionId: "run-1" }],
+    unreadableTruncated: true,
   }),
   conversation,
 )
@@ -155,6 +159,7 @@ createRoot(panelElement).render(
 Object.assign(window, {
   __unreadable: {
     sentence,
+    more,
     order: ["3", "Plan the release.", "Here is the plan.", "9"],
   },
 })

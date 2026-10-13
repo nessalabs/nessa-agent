@@ -38,6 +38,7 @@ function view() {
     artifacts: [],
     notes: [],
     unreadable: [],
+    unreadableTruncated: false,
     messages: [
       {
         executionId: "queued",
@@ -193,6 +194,14 @@ describe("conversation view agreement", () => {
       { id: "4" },
       { id: "12", afterExecutionId: "run-1" },
     ])
+    expect(conversationView(empty, "conversation").unreadableTruncated).toBe(false)
+    expect(
+      conversationView({ ...empty, unreadableTruncated: true }, "conversation")
+        .unreadableTruncated,
+    ).toBe(true)
+    expect(() =>
+      conversationView({ ...empty, unreadableTruncated: "yes" }, "conversation"),
+    ).toThrow(/unreadableTruncated/)
     expect(() =>
       conversationView({ ...empty, unreadable: [{ id: "01" }] }, "conversation"),
     ).toThrow(/unreadable id/)

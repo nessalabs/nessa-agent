@@ -332,7 +332,7 @@ pub(crate) fn decode_batch(
 /// One change inside a batch the preflight accepted.
 pub(crate) enum ReadChange {
     /// The change decoded.
-    Decoded(SessionChange),
+    Decoded(Box<SessionChange>),
     /// The change did not decode. `lease` is set when the object is a lease.
     Failed { lease: bool },
 }
@@ -376,7 +376,7 @@ pub(crate) fn read_batch(bytes: &[u8], context: &ProviderContext) -> BatchRead {
         };
         let lease = lease_object || matches!(wire, WireChange::Lease(_));
         match decode_wire_change(wire, &mut context) {
-            Ok(decoded) => read.push(ReadChange::Decoded(decoded)),
+            Ok(decoded) => read.push(ReadChange::Decoded(Box::new(decoded))),
             Err(_) => {
                 read.push(ReadChange::Failed { lease });
                 break;

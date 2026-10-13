@@ -1597,6 +1597,10 @@
           "maxItems": 32,
           "description": "Records this read could not apply, oldest first, at most 32. Empty when every record could be read. A chat with no turns may still list these. Each is one line in the transcript. The line is where a future report action attaches; this view carries no report control."
         },
+        "unreadableTruncated": {
+          "type": "boolean",
+          "description": "True when more records could not be read than the 32 lines in unreadable. Those records were still skipped. The transcript ends with one line: More parts of this conversation couldn't be read."
+        },
         "title": {
           "type": ["string", "null"],
           "minLength": 1,
@@ -1643,6 +1647,7 @@
         "artifacts",
         "notes",
         "unreadable",
+        "unreadableTruncated",
         "approvalMode",
         "approvalModes"
       ]

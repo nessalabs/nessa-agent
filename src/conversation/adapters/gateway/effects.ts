@@ -76,6 +76,7 @@ export function conversationView(
         ? {}
         : { afterExecutionId: part.afterExecutionId }),
     })),
+    unreadableTruncated: value.unreadableTruncated,
     capabilities: {
       queue: value.capabilities.queue,
       steer: value.capabilities.steer,

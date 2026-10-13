@@ -269,6 +269,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     "artifacts",
     "notes",
     "unreadable",
+    "unreadableTruncated",
     "title",
     "approvalMode",
     "approvalModes",
@@ -688,6 +689,7 @@ export function conversationView(value: unknown, expected: string): Conversation
   for (const artifact of items(item, "artifacts", 64)) conversationArtifact(artifact)
   for (const note of items(item, "notes", 64)) conversationNote(note)
   for (const part of items(item, "unreadable", 32)) conversationUnreadable(part)
+  flag(item, "unreadableTruncated")
   const capabilities = record(item.capabilities)
   const capabilityKeys = [
     "queue",

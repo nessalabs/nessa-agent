@@ -381,6 +381,11 @@ type ConversationState = {
      * Absent when that view listed none.
      */
     unreadable?: { id: string; afterExecutionId?: string }[]
+    /**
+     * More records could not be read than `unreadable` lists. The transcript
+     * ends with one line for that.
+     */
+    unreadableTruncated?: boolean
     /** The committed approval mode in this gateway view. */
     approvalMode: ApprovalMode
     /** The modes this conversation's agent can honour. */

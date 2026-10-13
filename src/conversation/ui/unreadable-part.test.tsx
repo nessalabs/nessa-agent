@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { textContent, type Conversation, type Turn } from "../model"
 import { ClockProvider } from "./clock"
 import { Transcript } from "./transcript"
-import { UNREADABLE_SENTENCE } from "./unreadable-part"
+import { UNREADABLE_MORE_SENTENCE, UNREADABLE_SENTENCE } from "./unreadable-part"
 
 class TestResizeObserver {
   observe() {}
@@ -23,6 +23,7 @@ const store = {
 function conversation(
   unreadable: { id: string; afterExecutionId?: string }[],
   turns: Turn[],
+  unreadableTruncated = false,
 ): Conversation {
   return {
     id: "tab",
@@ -35,6 +36,7 @@ function conversation(
       artifacts: [],
       notes: [],
       unreadable,
+      unreadableTruncated,
       approvalMode: "ask",
       approvalModes: [{ id: "ask", name: "Ask", description: "Asks." }],
       questions: [],
@@ -114,11 +116,15 @@ async function render(value: Conversation, emptyState = false) {
 
 function order() {
   return [
-    ...container.querySelectorAll("[data-unreadable], [data-slot='chat-bubble']"),
+    ...container.querySelectorAll(
+      "[data-unreadable], [data-unreadable-overflow], [data-slot='chat-bubble']",
+    ),
   ].map((element) =>
-    element.hasAttribute("data-unreadable")
-      ? `gap:${element.getAttribute("data-unreadable")}`
-      : (element.textContent ?? "").trim(),
+    element.hasAttribute("data-unreadable-overflow")
+      ? "more"
+      : element.hasAttribute("data-unreadable")
+        ? `gap:${element.getAttribute("data-unreadable")}`
+        : (element.textContent ?? "").trim(),
   )
 }
 
@@ -158,6 +164,34 @@ it("shows a record it could not read as a line, and the rest of the conversation
     expect(line.getAttribute("data-unreadable-report")).toBe("")
     expect(line.querySelector("button")).toBeNull()
   }
+})
+
+it("ends with one line when more records could not be read than the transcript lists", async () => {
+  await render(
+    conversation(
+      [{ id: "3" }, { id: "9", afterExecutionId: "one" }],
+      turn("one", "Plan the release.", "Here is the plan."),
+      true,
+    ),
+  )
+  expect(order()).toEqual([
+    "gap:3",
+    "Plan the release.",
+    "Here is the plan.",
+    "gap:9",
+    "more",
+  ])
+  const overflow = container.querySelectorAll("[data-unreadable-overflow]")
+  expect(overflow).toHaveLength(1)
+  expect(overflow[0]?.textContent).toBe(UNREADABLE_MORE_SENTENCE)
+  expect(overflow[0]?.querySelector("button")).toBeNull()
+})
+
+it("hides the empty welcome when the gap list was cut and no line was kept", async () => {
+  await render(conversation([], [], true), true)
+  expect(container.textContent).toContain(UNREADABLE_MORE_SENTENCE)
+  expect(container.textContent).not.toContain("Ready to start")
+  expect(container.querySelector("[data-unreadable-overflow]")).not.toBeNull()
 })
 
 it("shows the line when the chat has no turn, and not the empty welcome", async () => {

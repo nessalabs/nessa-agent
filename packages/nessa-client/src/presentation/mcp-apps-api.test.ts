@@ -256,6 +256,7 @@ function viewWithAppReview(argumentsJson: string) {
     artifacts: [],
     notes: [],
     unreadable: [],
+    unreadableTruncated: false,
     messages: [
       {
         executionId: app.executionId,

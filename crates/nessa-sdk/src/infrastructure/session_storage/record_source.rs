@@ -1093,13 +1093,13 @@ fn committed_source_error(error: SourceError) -> StorageError {
 
 fn committed_fold_error(error: super::transcript::TranscriptError) -> StorageError {
     // A decision keeps its cause. A record that cannot be read is skipped by
-    // the fold, so it is not an error here. `Scope` is a record delivered for
-    // another stream, or a decoded open whose session is not this one: those
-    // bytes will not match on a retry, so the chat stays corrupt and can be
-    // deleted. `Position` is a lifecycle race: this read stamps contiguous
-    // positions itself, and a head behind downloaded progress can catch up.
-    // `Checkpoint` and `CheckpointTooLarge` are not produced here. They stay
-    // retryable I/O. A malformed frame is skipped, not returned.
+    // the fold, including one whose scope is another stream, so it is not an
+    // error here. `Scope` is a decoded open whose session is not this one:
+    // those bytes will not match on a retry, so the chat stays corrupt and
+    // can be deleted. `Position` is a lifecycle race: this read stamps
+    // contiguous positions itself, and a head behind downloaded progress can
+    // catch up. `Checkpoint` and `CheckpointTooLarge` are not produced here.
+    // They stay retryable I/O. A malformed frame is skipped, not returned.
     match error {
         super::transcript::TranscriptError::Decision(cause) => cause,
         super::transcript::TranscriptError::Frame | super::transcript::TranscriptError::Scope => {

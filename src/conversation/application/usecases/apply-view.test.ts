@@ -658,4 +658,8 @@ it("carries each record the view could not read, and replaces them with the next
   expect(first.remote?.unreadable).toEqual([gap])
   expect(first.turns).toEqual(applyView(conversation("tab"), view).turns)
   expect(applyView(first, { ...view, unreadable: [] }).remote?.unreadable).toEqual([])
+  expect(first.remote?.unreadableTruncated).toBe(false)
+  expect(
+    applyView(first, { ...view, unreadableTruncated: true }).remote?.unreadableTruncated,
+  ).toBe(true)
 })

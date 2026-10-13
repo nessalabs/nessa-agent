@@ -177,7 +177,7 @@ pub struct UnreadablePart {
 }
 impl UnreadablePart {
     /// Most gap lines one chat keeps. A later record that cannot be read is
-    /// still skipped.
+    /// still skipped, and the fold records that the list was cut.
     pub const MAX_PER_CONVERSATION: usize = 32;
 
     pub(crate) fn at(position: u64, after_execution_id: Option<String>) -> Self {
@@ -229,6 +229,7 @@ pub struct CommittedSession {
     snapshot: Option<Arc<SessionSnapshot>>,
     status: CommittedStatus,
     unreadable: Vec<UnreadablePart>,
+    unreadable_truncated: bool,
 }
 impl CommittedSession {
     /// Validate a replacement read from a storage adapter. Full snapshot validation
@@ -267,8 +268,13 @@ impl CommittedSession {
             snapshot: snapshot.map(Arc::new),
             status,
             unreadable: Vec::new(),
+            unreadable_truncated: false,
         })
     }
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one argument per field of the committed read"
+    )]
     pub(crate) fn from_transcript(
         id: SessionId,
         incarnation: Id,
@@ -278,6 +284,7 @@ impl CommittedSession {
         snapshot: Option<Arc<SessionSnapshot>>,
         status: CommittedStatus,
         unreadable: Vec<UnreadablePart>,
+        unreadable_truncated: bool,
     ) -> Result<Self, StorageError> {
         if snapshot.as_ref().is_some_and(|snapshot| snapshot.id != id) {
             return Err(StorageError::IdentityMismatch);
@@ -296,6 +303,7 @@ impl CommittedSession {
             snapshot,
             status,
             unreadable,
+            unreadable_truncated,
         })
     }
     /// Exact session identity requested from storage.
@@ -335,6 +343,10 @@ impl CommittedSession {
     /// Records in this read that could not be applied, oldest first.
     pub fn unreadable(&self) -> &[UnreadablePart] {
         &self.unreadable
+    }
+    /// A record past the 32 kept gaps was also skipped.
+    pub fn unreadable_truncated(&self) -> bool {
+        self.unreadable_truncated
     }
 }
 impl fmt::Display for StorageError {

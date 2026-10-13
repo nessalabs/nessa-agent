@@ -669,6 +669,8 @@ export interface ConversationView {
   notes: ConversationNote[]
   /** Records this read could not apply, oldest first, at most 32. Empty when every record could be read. A chat with no turns may still list these. Each is one line in the transcript. The line is where a future report action attaches; this view carries no report control. */
   unreadable: ConversationUnreadable[]
+  /** True when more records could not be read than the 32 lines in unreadable. Those records were still skipped. The transcript ends with one line: More parts of this conversation couldn't be read. */
+  unreadableTruncated: boolean
   /** Name the gateway derived from the conversation's first message, the same one conversation.list shows; null before anything was said. */
   title: string | null
   /** Questions the agent is waiting on, oldest first. */

@@ -679,6 +679,7 @@ pub struct ConversationView {
     pub artifacts: Vec<ConversationArtifact>,
     pub notes: Vec<ConversationNote>,
     pub unreadable: Vec<ConversationUnreadable>,
+    pub unreadable_truncated: bool,
     #[serde(deserialize_with = "Option::deserialize")]
     pub title: Option<String>,
     pub questions: Vec<ConversationQuestion>,

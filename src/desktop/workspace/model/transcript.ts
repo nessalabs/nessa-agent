@@ -123,7 +123,8 @@ export interface QuestionChoice {
  * note somebody left in it (`NoteMessage`), or a saved record this read
  * could not apply (`UnreadableMessage`).
  */
-export type Message = TurnMessage | NoteMessage | UnreadableMessage
+export type Message =
+  TurnMessage | NoteMessage | UnreadableMessage | UnreadableOverflowMessage
 
 /** A message the person or the agent said in a turn. */
 export interface TurnMessage {
@@ -189,6 +190,22 @@ export interface UnreadableMessage {
   readonly parts: readonly Part[]
   readonly unreadable: { readonly id: string; readonly afterExecutionId?: string }
   readonly note?: never
+  readonly observedInput?: never
+  readonly delivery?: never
+  readonly app?: never
+}
+
+/**
+ * The final line when more records could not be read than the view lists
+ * (`UnreadableOverflowLine`). Not a record, and not a turn.
+ */
+export interface UnreadableOverflowMessage {
+  readonly id: string
+  readonly role: "unreadable-overflow"
+  readonly at: number
+  readonly parts: readonly Part[]
+  readonly note?: never
+  readonly unreadable?: never
   readonly observedInput?: never
   readonly delivery?: never
   readonly app?: never

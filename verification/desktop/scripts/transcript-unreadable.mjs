@@ -4,8 +4,10 @@
  * be read (#716). Both surfaces show the line "Couldn't read this part of
  * the conversation" and the turns around it. The line carries the record's
  * id and an empty `data-unreadable-report`, where a future report action
- * attaches. It is not the notice for a conversation the window could not
- * open, and not the notice that older history was left out.
+ * attaches. The gap list was cut, so both surfaces end with "More parts of
+ * this conversation couldn't be read". It is not the notice for a
+ * conversation the window could not open, and not the notice that older
+ * history was left out.
  *
  * The fixture is a page of the dev server's.
  */
@@ -29,9 +31,10 @@ Checks, per engine and layout (--only <names> to pick):
   line       on both surfaces, the lines and what the turn says read, top to
              bottom: 3, Plan the release., Here is the plan., 9. Each line
              says "Couldn't read this part of the conversation", carries
-             data-unreadable-report, and contains no button. The empty
-             welcome is absent, and so are the whole-chat unread sentence
-             and the omitted-history sentence
+             data-unreadable-report, and contains no button. Both surfaces
+             end with "More parts of this conversation couldn't be read".
+             The empty welcome is absent, and so are the whole-chat unread
+             sentence and the omitted-history sentence
 `,
 }
 
@@ -95,6 +98,24 @@ const checks = {
             failures.push(`${surface} report slot is ${JSON.stringify(line.report)}`)
           if (line.button) failures.push(`${surface} line contains a button`)
         }
+        const overflow = await page.evaluate(
+          (surface) =>
+            [...document.querySelectorAll(`${surface} [data-unreadable-overflow]`)].map(
+              (element) => ({
+                text: (element.textContent ?? "").trim(),
+                button: Boolean(element.querySelector("button")),
+              }),
+            ),
+          surface,
+        )
+        if (overflow.length !== 1)
+          failures.push(`${surface} has ${overflow.length} overflow lines, not 1`)
+        else if (overflow[0].text !== expected.more)
+          failures.push(
+            `${surface} ends with "${overflow[0].text}", not "${expected.more}"`,
+          )
+        else if (overflow[0].button)
+          failures.push(`${surface} overflow line contains a button`)
       }
       const text = await page.locator("body").innerText()
       if (text.includes("Nothing here yet"))
@@ -108,7 +129,9 @@ const checks = {
           page.evaluate(
             ({ surface, anyLine, said }) => {
               const boxes = [
-                ...document.querySelectorAll(`${surface} :is(${anyLine}, ${said})`),
+                ...document.querySelectorAll(
+                  `${surface} :is(${anyLine}, ${said}, [data-unreadable-overflow])`,
+                ),
               ]
                 .map((node) => node.getBoundingClientRect())
                 .filter((box) => box.width > 0 && box.height > 0)

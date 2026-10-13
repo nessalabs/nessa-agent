@@ -30,7 +30,9 @@ conversation", placed after the last turn that had been accepted when the gap
 was recorded. Pieces of the skipped record, and a later record whose turn was
 never accepted once a gap exists, stay out of the transcript and do not add
 another line. The line's element carries the gap's id so a future report
-action can attach to it; this change adds no report control.
+action can attach to it; this change adds no report control. A record skipped
+after those 32 is still skipped, and the transcript ends with one more line,
+"More parts of this conversation couldn't be read".
 
 A lease record that cannot be decoded or applied does not fail the chat. When
 a lease is held, that record marks the current lease unreadable and keeps its
@@ -49,9 +51,11 @@ line is still shown.
 | Observation of a turn that is present, when that observation itself cannot be applied | One line. The turn stays. | The turn was a different record and it could be read. |
 | Lease body that does not decode, or a lease change the current lease refuses | One line. A held lease becomes unreadable; its revision stays. | A lease is not the chat. Unknown kinds already keep the chat. |
 | Lease of a kind this build does not know | Applied as unreadable, and one line. | Same lease rule. The person still sees that something was skipped. |
-| Decoded `Opened` that the session accepts, whose session id is not this stream | The page is `conversation_state_unreadable`. | That open would name a different chat. An open that does not decode is a skip: the stream already names this chat. A later open the session fold refuses is a skip too. |
-| Checkpoint whose snapshot id or scope is not this stream | The checkpoint is refused and the chat is read again from its records. | The saved fold is not this chat. Replaying the records decides the gaps. |
-| Record whose scope is another stream | The page is refused (`Scope`). | The source delivered a different chat, not a bad record of this one. |
+| Decoded `Opened` that the session accepts, whose session id is not this stream | The page is `conversation_state_unreadable` (`TranscriptError::Scope`). | That open would name a different chat, so the page is not published. An open that does not decode is a skip: the stream already names this chat. A later open the session fold refuses is a skip too. This is the only saved record that refuses the page. |
+| Unit that stages a snapshot whose id is not this stream | One line. The staged unit is dropped. The page continues. | Invalid data that got as far as a snapshot. The wrong identity is not kept. The open above is refused before it is staged, so this row is the check after a stage that was not that open. |
+| Checkpoint whose snapshot id or scope is not this stream | The checkpoint is refused (`Scope`) and the chat is read again from its records. | Not a record of this chat. The fold was asked to resume a different one. Replaying the records decides the gaps. |
+| Observation of a source head for another scope, or a fold built for another physical schema | `Scope`, and nothing is read. | Not a bad record. The caller named a different chat, or a schema this fold does not read. |
+| Record whose scope is another stream | One line at that position. The next record is read. | Invalid data. The bytes are this position of this download; they are not a reason to hide the records around them. |
 | Position that is missing, repeated, or ahead of the downloaded prefix | Retryable I/O (`Position`). | The bytes may still arrive. This is not a record that cannot be read. |
 | Store, busy, and I/O failures | Unchanged. | The records were not read, so there is nothing to skip. |
 
@@ -61,15 +65,19 @@ for the lines.
 ### Where a gap is remembered
 
 Gaps live on the fold, its checkpoint, and `CommittedSession`. They are not
-fields of `SessionSnapshot`. The checkpoint requires the gap list, so a
-checkpoint written before this change is reread from the records. At most 32
-lines are kept; a later gap is still skipped and does not add a line. The id
-is the decimal physical position of the record. `afterExecutionId` is the last
-accepted turn at that moment, and it is absent when there was none.
+fields of `SessionSnapshot`. The checkpoint requires the gap list and whether
+it was cut, so a checkpoint written before this change is reread from the
+records. At most 32 lines are kept. A later gap is still skipped, adds no
+line, and sets `unreadableTruncated`. The id is the decimal physical position
+of the record. `afterExecutionId` is the last accepted turn at that moment,
+and it is absent when there was none. A duplicate of an id already kept does
+not set the flag.
 
 The view carries `unreadable`: an array of `{ id, afterExecutionId? }`, always
-present, possibly empty. An empty committed transcript may still contain these
-lines.
+present, possibly empty, and `unreadableTruncated`: a boolean, always
+present. An empty committed transcript may still contain these lines. When
+the flag is true the transcript ends with "More parts of this conversation
+couldn't be read", after the lines and the turns.
 
 ## Alternatives considered
 
@@ -99,7 +107,9 @@ A chat with a torn record opens. The torn part is a line, and a turn that was
 saved after it is shown when that turn's own record can be read. A checkpoint
 from before this change is rebuilt from the records once.
 
-The fold no longer treats a malformed frame or a contradictory decision as a
-reason to refuse the page. A position gap and a record from another stream
-still refuse the page. Reviewers should treat a new `Err` on the read path as
-a new fatal case that needs a row in the table above.
+The fold no longer treats a malformed frame, a contradictory decision, or a
+record from another stream as a reason to refuse the page. A position gap
+still refuses the page, because those bytes may still arrive. The one saved
+record that refuses the page is a decoded open the session would accept for
+another session id. Reviewers should treat a new `Err` on the read path as a
+new fatal case that needs a row in the table above.

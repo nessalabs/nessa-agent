@@ -2,6 +2,7 @@ import { memo } from "react"
 import {
   PublishedFiles,
   TranscriptNote,
+  UnreadableOverflowLine,
   UnreadablePartLine,
 } from "../../../../conversation"
 import { discardUnsent, resendMessage } from "../../adapters/store/commands"
@@ -65,6 +66,16 @@ export const Message = memo(function Message({
         data-new={isNew || undefined}
       >
         <UnreadablePartLine part={message.unreadable} />
+      </div>
+    )
+  if (message.role === "unreadable-overflow")
+    return (
+      <div
+        className="workspace-message"
+        data-role="unreadable-overflow"
+        data-new={isNew || undefined}
+      >
+        <UnreadableOverflowLine />
       </div>
     )
   if (message.role === "user") {

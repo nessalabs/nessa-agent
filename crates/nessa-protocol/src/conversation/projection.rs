@@ -569,6 +569,7 @@ impl Projection {
                         .collect()
                 }),
                 unreadable: Vec::new(),
+                unreadable_truncated: false,
             },
         };
         if let Some(snapshot) = snapshot {
@@ -678,6 +679,7 @@ impl Projection {
                 after_execution_id: part.after_execution_id().map(str::to_owned),
             })
             .collect();
+        next.view.unreadable_truncated = committed.unreadable_truncated();
         if let Some(snapshot) = snapshot {
             for id in order {
                 let Some(record) = snapshot

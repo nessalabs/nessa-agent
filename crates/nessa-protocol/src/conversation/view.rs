@@ -82,6 +82,9 @@ pub struct ConversationView {
     /// and a chat with no turns may still list these.
     #[serde(default)]
     pub unreadable: Vec<ConversationUnreadable>,
+    /// More records could not be read than [`Self::unreadable`] lists. The
+    /// transcript ends with one line for that. Always sent.
+    pub unreadable_truncated: bool,
 }
 
 /// One saved record the fold could not read. `id` is its physical position.

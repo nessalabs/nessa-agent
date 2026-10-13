@@ -23,7 +23,7 @@ import {
 import { MessageContentView } from "./message-content"
 import { PublishedFiles } from "./published-files"
 import { TranscriptNotes } from "./transcript-note"
-import { UnreadableParts } from "./unreadable-part"
+import { UnreadableOverflowLine, UnreadableParts } from "./unreadable-part"
 import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
 import { ProviderSignInCard } from "../../provider-authentication/ui/provider-sign-in"
 import { TranscriptDivider } from "@nessa-ui/react/transcript-divider"
@@ -130,6 +130,7 @@ export function Transcript({
             (conversation.remote?.artifacts ?? []).length === 0 &&
             (conversation.remote?.notes ?? []).length === 0 &&
             (conversation.remote?.unreadable ?? []).length === 0 &&
+            !conversation.remote?.unreadableTruncated &&
             conversation.phase === "idle" &&
             emptyState ? (
               <EmptyState
@@ -256,6 +257,7 @@ export function Transcript({
                 />
               </React.Fragment>
             ))}
+            {conversation.remote?.unreadableTruncated ? <UnreadableOverflowLine /> : null}
             {conversation.phase === "thinking" &&
             (rows.length === 0 || rows.at(-1)?.status === "running") &&
             !conversation.readError &&

@@ -31,6 +31,12 @@ export type ConversationView = {
    * transcript. Absent on a view built before the gateway sent the list.
    */
   unreadable?: { id: string; afterExecutionId?: string }[]
+  /**
+   * More records could not be read than `unreadable` lists. The transcript
+   * ends with one line for that. Absent on a view built before the gateway
+   * sent the flag.
+   */
+  unreadableTruncated?: boolean
   approvalMode: ApprovalMode
   approvalModes: ApprovalModeChoice[]
   approvalModeChange?: {

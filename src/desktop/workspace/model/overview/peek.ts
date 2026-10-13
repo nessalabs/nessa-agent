@@ -44,7 +44,12 @@ export function peekOf(transcript: Transcript, limit = peekParts): Peek {
   let total = 0
   for (let index = messages.length - 1; index > last; index--) {
     // A note, or a record this read could not apply, is not the turn's.
-    if (messages[index].role === "note" || messages[index].role === "unreadable") continue
+    if (
+      messages[index].role === "note" ||
+      messages[index].role === "unreadable" ||
+      messages[index].role === "unreadable-overflow"
+    )
+      continue
     const message = withoutCards(messages[index])
     // A message of widgets and files alone tells the peek nothing: it is not drawn at all.
     if (message.parts.length === 0 && messages[index].parts.length > 0) continue

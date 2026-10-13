@@ -30,7 +30,10 @@ pub use checkpoint::{TranscriptCheckpoint, MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES
 /// A rejected receiver input. No part of a rejected batch is published.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TranscriptError {
-    /// Receiver, source, incarnation, authorization epoch or schema differs.
+    /// The fold was asked to take another chat: a different physical schema,
+    /// an observation or checkpoint for another scope, or a decoded open
+    /// that names another session. A record whose own scope differs is not
+    /// this error; that record is one gap.
     Scope,
     /// Physical positions are missing, reordered or already applied.
     Position,
@@ -63,6 +66,9 @@ struct SavedFold<S = snapshot::checkpoint::Snapshot> {
     snapshot: Option<S>,
     group: Option<GroupCheckpoint>,
     unread: Vec<UnreadablePart>,
+    /// Required. A checkpoint that does not say whether the gap list was cut
+    /// is reread from the records.
+    unreadable_truncated: bool,
 }
 
 /// One source-scoped, effect-free semantic transcript receiver. `apply` stages
@@ -85,6 +91,9 @@ pub struct TranscriptFold {
     /// Gaps whose record position is at or before the last published save.
     /// A gap in the unpublished suffix is noted again when that suffix is replayed.
     unread: Vec<UnreadablePart>,
+    /// A record past [`UnreadablePart::MAX_PER_CONVERSATION`] was also skipped.
+    /// The transcript ends with one line for that; the list itself stays at 32.
+    unreadable_truncated: bool,
     /// A run of physical frames that are not frames. One line covers the run.
     resyncing: bool,
     #[cfg(test)]
@@ -112,6 +121,7 @@ impl TranscriptFold {
             pending: PendingBody::default(),
             frames: FrameValidator::after(0),
             unread: Vec::new(),
+            unreadable_truncated: false,
             resyncing: false,
             #[cfg(test)]
             semantic_decodes: 0,
@@ -209,10 +219,10 @@ impl TranscriptFold {
     /// remain unconfirmed until an explicit authenticated source-head observation.
     ///
     /// # Errors
-    /// Returns [`TranscriptError::Scope`] when a record belongs to another
-    /// stream or a decoded open names a different session, and
-    /// [`TranscriptError::Position`] when the suffix is not contiguous. A
-    /// record that cannot be read is not an error.
+    /// Returns [`TranscriptError::Scope`] when a decoded open names a
+    /// different session, and [`TranscriptError::Position`] when the suffix
+    /// is not contiguous. A record that cannot be read, including one whose
+    /// scope is another stream, is not an error.
     pub fn apply(&mut self, batch: &[Record]) -> Result<(), TranscriptError> {
         let mut transaction = self.transaction();
         transaction.apply(batch)?;
@@ -256,6 +266,7 @@ impl TranscriptFold {
             groups: self.groups.clone(),
             pending: self.pending.clone(),
             unread: self.unread.clone(),
+            unreadable_truncated: self.unreadable_truncated,
             resyncing: self.resyncing,
             loaded: self.loaded,
             freshness: self.freshness,
@@ -274,9 +285,6 @@ impl TranscriptFold {
         record: &Record,
         semantic: &mut CommittedTransactionState,
     ) -> Result<(), TranscriptError> {
-        if record.scope != self.scope {
-            return Err(TranscriptError::Scope);
-        }
         if record.position == 0 {
             return Err(TranscriptError::Position);
         }
@@ -288,6 +296,10 @@ impl TranscriptFold {
         }
         if record.position != downloaded.checked_add(1).ok_or(TranscriptError::Position)? {
             return Err(TranscriptError::Position);
+        }
+        if record.scope != self.scope {
+            self.skip_other_scope(record.position);
+            return Ok(());
         }
         let Some((&tag, bytes)) = record.payload.split_first() else {
             self.skip_frame(record.position);
@@ -361,12 +373,27 @@ impl TranscriptFold {
         }
     }
 
-    fn note_unreadable(&mut self, position: u64) {
-        if self.unread.len() >= UnreadablePart::MAX_PER_CONVERSATION {
-            return;
+    /// A record delivered for another scope. It is invalid data of this
+    /// stream: one line at its position, and the next record is read.
+    fn skip_other_scope(&mut self, position: u64) {
+        self.frames.skip(position);
+        self.pending.clear();
+        self.groups.reset_frame();
+        self.note_unreadable(position);
+        self.resyncing = false;
+        self.loaded = true;
+        if self.freshness == CommittedFreshness::Current {
+            self.freshness = CommittedFreshness::Unknown;
         }
+    }
+
+    fn note_unreadable(&mut self, position: u64) {
         let id = position.to_string();
         if self.unread.iter().any(|part| part.id() == id) {
+            return;
+        }
+        if self.unread.len() >= UnreadablePart::MAX_PER_CONVERSATION {
+            self.unreadable_truncated = true;
             return;
         }
         let after = self.committed.snapshot().and_then(|snapshot| {
@@ -473,7 +500,7 @@ impl TranscriptFold {
         let decoded: Vec<SessionChange> = read
             .into_iter()
             .filter_map(|change| match change {
-                snapshot::ReadChange::Decoded(change) => Some(change),
+                snapshot::ReadChange::Decoded(change) => Some(*change),
                 snapshot::ReadChange::Failed { .. } => None,
             })
             .collect();
@@ -489,6 +516,21 @@ impl TranscriptFold {
                 self.note_unreadable(position);
             }
             return Ok(());
+        }
+        // A decoded open the session would accept, naming another chat, is
+        // the one saved record that refuses the page. It would make this
+        // stream that other session. An open that does not decode never
+        // reaches here. A later open the session fold refuses is a skip.
+        if self.committed.snapshot().is_none()
+            && applicable.iter().any(|change| {
+                matches!(
+                    change,
+                    SessionChange::Opened { id, .. }
+                        if id.as_str() != self.scope.stream().as_str()
+                )
+            })
+        {
+            return Err(TranscriptError::Scope);
         }
         let mark = semantic.undo_len();
         if let Err(error) = self.committed.stage_apply(position, &applicable, semantic) {
@@ -511,7 +553,11 @@ impl TranscriptFold {
             .snapshot()
             .is_some_and(|state| state.id.as_str() != self.scope.stream().as_str())
         {
-            return Err(TranscriptError::Scope);
+            // The unit staged a snapshot for another session without being
+            // the open checked above. Drop it and keep reading.
+            self.committed.abandon_staged(semantic, mark);
+            self.note_unreadable(position);
+            return Ok(());
         }
         if unknown_lease {
             self.note_unreadable(position);
@@ -555,12 +601,18 @@ impl TranscriptFold {
             self.published.clone(),
             self.status(),
             self.unread.clone(),
+            self.unreadable_truncated,
         )
     }
 
     /// Records this fold could not read, oldest first, at most 32.
     pub fn unreadable(&self) -> &[UnreadablePart] {
         &self.unread
+    }
+
+    /// A record past the 32 kept gaps was also skipped.
+    pub fn unreadable_truncated(&self) -> bool {
+        self.unreadable_truncated
     }
 
     #[cfg(test)]
@@ -704,6 +756,7 @@ impl TranscriptFold {
             snapshot: self.snapshot().map(snapshot::checkpoint::SnapshotRef),
             group: self.groups.checkpoint(),
             unread: self.unread.clone(),
+            unreadable_truncated: self.unreadable_truncated,
         };
         let mut output = ChunkWriter::with_limit(max_bytes);
         if serde_json::to_writer(&mut output, &saved).is_err() {
@@ -789,6 +842,7 @@ impl TranscriptFold {
         // A, then drain that journal through D before requesting a new page.
         fold.frames = FrameValidator::after(saved.applied);
         fold.unread = saved.unread;
+        fold.unreadable_truncated = saved.unreadable_truncated;
         fold.loaded = saved.loaded;
         fold.mark_stale();
         Ok(fold)
@@ -803,6 +857,7 @@ struct ReceiverBackup {
     groups: GroupProgress,
     pending: PendingBody,
     unread: Vec<UnreadablePart>,
+    unreadable_truncated: bool,
     resyncing: bool,
     loaded: bool,
     freshness: CommittedFreshness,
@@ -838,6 +893,7 @@ impl TranscriptTransaction<'_> {
             self.fold.groups = backup.groups;
             self.fold.pending = backup.pending;
             self.fold.unread = backup.unread;
+            self.fold.unreadable_truncated = backup.unreadable_truncated;
             self.fold.resyncing = backup.resyncing;
             self.fold.loaded = backup.loaded;
             self.fold.freshness = backup.freshness;
@@ -1011,7 +1067,8 @@ mod tests {
         }
     }
 
-    /// An open whose session is not this stream. The page is refused.
+    /// The last record again, one position later, for another incarnation.
+    /// That record is one gap; the records ahead of it stay.
     fn with_foreign_tail(mut page: Vec<Record>) -> Vec<Record> {
         let mut poison = page.last().expect("page").clone();
         poison.position += 1;
@@ -1238,7 +1295,12 @@ mod tests {
         assert!(unwind.is_err());
         assert_eq!(fold.checkpoint().unwrap(), before);
         let late_invalid = with_foreign_tail(suffix.clone());
-        assert_eq!(fold.apply(&late_invalid), Err(TranscriptError::Scope));
+        {
+            let mut staged = fold.transaction();
+            staged.apply(&late_invalid).unwrap();
+            assert_eq!(staged.snapshot().unwrap().invocations.len(), 1);
+            assert_eq!(staged.unreadable().len(), 1);
+        }
         assert_eq!(fold.checkpoint().unwrap(), before);
         assert_eq!(fold.status(), status);
         fold.committed.assert_retained_accounting();
@@ -1427,6 +1489,8 @@ mod tests {
             assert_eq!(fold.snapshot().unwrap().invocations[0].events.len(), total);
         }
         let before = fold.checkpoint().unwrap();
+        let events_before = fold.snapshot().unwrap().invocations[0].events.len();
+        let unread_before = fold.unreadable().len();
         let rejected = with_foreign_tail(group_suffix(
             &fold,
             (0..64)
@@ -1438,7 +1502,15 @@ mod tests {
         MESSAGE_CLONES.with(|counter| counter.set((0, 0)));
         VALIDATION_CALLS.with(|counter| counter.set((0, 0)));
         SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.set(0));
-        assert!(fold.apply(&rejected).is_err());
+        {
+            let mut guard = fold.transaction();
+            guard.apply(&rejected).unwrap();
+            assert_eq!(
+                guard.snapshot().unwrap().invocations[0].events.len(),
+                events_before
+            );
+            assert!(guard.unreadable().len() > unread_before);
+        }
         assert_eq!(
             MESSAGE_CLONES.with(|counter| counter.get()),
             (64, 64 * 4096)
@@ -1831,14 +1903,15 @@ mod tests {
             id("access"),
         );
         let downloaded = fold.downloaded();
-        assert_eq!(fold.apply(&[foreign_scope]), Err(TranscriptError::Scope));
-        assert_eq!(fold.downloaded(), downloaded);
+        fold.apply(&[foreign_scope]).unwrap();
+        assert_eq!(fold.downloaded(), downloaded + 1);
+        assert_eq!(fold.unreadable().len(), 2);
         let mut unknown_schema = first[0].clone();
         unknown_schema.position = fold.downloaded() + 1;
         unknown_schema.payload[0] = 99;
         fold.apply(&[unknown_schema]).unwrap();
-        assert_eq!(fold.downloaded(), downloaded + 1);
-        assert_eq!(fold.unreadable().len(), 2);
+        assert_eq!(fold.downloaded(), downloaded + 2);
+        assert_eq!(fold.unreadable().len(), 3);
     }
 
     #[test]
@@ -2979,10 +3052,10 @@ mod tests {
                             invalid.push(unpublished.last().unwrap().clone());
                             assert_eq!(fold.apply(&invalid), Err(TranscriptError::Position));
                         } else {
-                            assert!(matches!(
-                                fold.apply(&semantic_refusal),
-                                Err(TranscriptError::Scope)
-                            ));
+                            let mut guard = fold.transaction();
+                            guard.apply(&semantic_refusal).unwrap();
+                            assert_eq!(guard.snapshot(), Some(published.as_ref()));
+                            assert!(!guard.unreadable().is_empty());
                         }
                         assert_eq!(VALIDATION_CALLS.with(|counter| counter.get()).0, 0);
                         assert_eq!(SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.get()), 0);
@@ -3292,13 +3365,74 @@ mod tests {
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
         fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
             .unwrap();
-        for index in 0..34 {
+        for index in 0..32 {
             let torn = save_payload_frames(b"{", fold.applied(), index + 1);
             fold.apply(&records(&scope, fold.downloaded() + 1, &torn))
                 .unwrap();
         }
         assert_eq!(fold.unreadable().len(), 32);
+        assert!(!fold.unreadable_truncated());
+        for index in 32..34 {
+            let torn = save_payload_frames(b"{", fold.applied(), index + 1);
+            fold.apply(&records(&scope, fold.downloaded() + 1, &torn))
+                .unwrap();
+        }
+        assert_eq!(fold.unreadable().len(), 32);
+        assert!(fold.unreadable_truncated());
         assert_eq!(fold.snapshot().unwrap().invocations.len(), 0);
+        let restored =
+            TranscriptFold::restore(scope, fold.applied(), &fold.checkpoint().unwrap()).unwrap();
+        assert_eq!(restored.unreadable().len(), 32);
+        assert!(restored.unreadable_truncated());
+    }
+
+    #[test]
+    fn a_record_from_another_stream_is_a_gap_and_the_chat_continues() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        let open = records(&scope, 1, &save_frames(opened(), 0, 0));
+        fold.apply(&open).unwrap();
+        let mut foreign = open[0].clone();
+        foreign.position = fold.downloaded() + 1;
+        foreign.scope = Scope::new(
+            foreign.scope.receiver().clone(),
+            foreign.scope.origin().clone(),
+            foreign.scope.stream().clone(),
+            id("other"),
+            foreign.scope.schema().clone(),
+            foreign.scope.access_epoch().clone(),
+        );
+        fold.apply(std::slice::from_ref(&foreign)).unwrap();
+        assert_eq!(fold.unreadable().len(), 1);
+        assert!(!fold.unreadable_truncated());
+        assert_eq!(fold.snapshot().unwrap().id.as_str(), "conversation");
+        let start = fold.downloaded() + 1;
+        let later = save_frames_at(recorded_context(), fold.applied(), 1, start);
+        fold.apply(&records(&scope, start, &later)).unwrap();
+        assert!(matches!(
+            fold.snapshot().unwrap().provider_context,
+            ProviderContext::Recorded(_)
+        ));
+        assert_eq!(fold.unreadable().len(), 1);
+        assert_eq!(fold.snapshot().unwrap().id.as_str(), "conversation");
+    }
+
+    #[test]
+    fn a_later_open_for_another_session_is_a_gap() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let start = fold.downloaded() + 1;
+        fold.apply(&records(
+            &scope,
+            start,
+            &save_frames_at(contradictory_open(), fold.applied(), 1, start),
+        ))
+        .unwrap();
+        assert_eq!(fold.snapshot().unwrap().id.as_str(), "conversation");
+        assert_eq!(fold.unreadable().len(), 1);
+        assert!(!fold.unreadable_truncated());
     }
 
     #[test]
