@@ -45,7 +45,7 @@ pub(crate) use cancellation::validate_hook_withdrawal;
 pub use cancellation::{CancellationOrigin, PermissionCancellation, PermissionCancellationRequest};
 pub use outcome::{admit_configured_outcome, ConfiguredRefusal, StopKind};
 pub use rules::{
-    is_remember_option, remember_effect, IdlePermissionRules, IdleReviewNotices, PermissionRules,
-    RememberError, RememberRequest, ReviewNotice, ReviewNotices, SettledRule, REMEMBER_ALLOW,
-    REMEMBER_DENY,
+    is_remember_option, remember_effect, IdlePermissionRules, IdleReviewNotices, PermissionCaller,
+    PermissionRules, RememberError, RememberRequest, ReviewNotice, ReviewNotices, SettledRule,
+    REMEMBER_ALLOW, REMEMBER_DENY,
 };

@@ -212,7 +212,11 @@ harness named one tool. A review Codex identifies only by ACP kind is not
 offered those choices: its once and deny choices stay, and Codex's own
 always choices still pass through. Selecting
 one asks the host `PermissionRules` to store a rule for that tool in that
-workspace, then answers the current review with the once option. The audit
+workspace, then answers the current review with the once option. The host is
+asked only after the review is checked: the answer's execution is the review's,
+and the once option of that effect was offered. Either miss refuses the choice
+and stores nothing. The host notes who is answering (`PermissionRules::note_answerer`)
+before the answer is queued; a missing note is not the owner. The audit
 basis is `ApprovalBasis::Rule`, naming the rule id, revision, and grantor. A
 later review of that tool in that workspace is answered the same way, without
 a card or a deadline, when a once option still exists. A shared user's turn is

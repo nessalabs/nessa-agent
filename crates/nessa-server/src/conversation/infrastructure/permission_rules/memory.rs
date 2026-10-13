@@ -1,24 +1,26 @@
 //! The live rules and the reviews waiting on a person.
 //!
 //! `settle` asks Cedar. A miss, or a policy that cannot be asked, asks the
-//! person. `remember` writes only for an owner turn the service armed, and
-//! only when Cedar permits the owner to grant a rule.
+//! person. `remember` writes only for a turn the service armed, and only when
+//! Cedar permits the caller who was noted for that answer. The file write and
+//! the cache update are one lock, so a revoke cannot land between them.
 
 use nessa_local_database::OpenError;
 use nessa_sdk::application::agent_execution::permissions::{
-    ApprovalRuleReference, PermissionRules, RememberError, RememberRequest, ReviewNotice,
-    ReviewNotices, SettledRule,
+    ActionContext, ApprovalRuleReference, PermissionCaller, PermissionRules, RememberError,
+    RememberRequest, ReviewNotice, ReviewNotices, SettledRule,
 };
 use nessa_sdk::domain::agent_execution::executions::ExecutionId;
 use nessa_sdk::domain::agent_execution::permissions::{PermissionEffect, PermissionId};
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::sync::watch;
 
 use crate::conversation::application::{
-    ListedPermissionRule, PermissionRuleCatalog, PermissionRulePolicyEvaluator, RuleCatalogError,
-    RuleChange, RulePrincipal, RuleSettlement, StoredPermissionRule,
+    rule_principal, ListedPermissionRule, PermissionRuleCatalog, PermissionRulePolicyEvaluator,
+    PermissionRuleRevocation, PermissionRuleRevocationAudit, RuleCatalogError, RuleChange,
+    RulePrincipal, RuleSettlement, StoredPermissionRule,
 };
 
 use super::cedar::CedarPermissionRuleEvaluator;
@@ -26,8 +28,13 @@ use super::store::{RuleStore, WriteError};
 
 const MAX_ARMS: usize = 1024;
 const MAX_NOTICES: usize = 64;
-/// How many waiting reviews one notice carries. The wire schema states the same bound.
-const PUBLISHED_REVIEWS: usize = 32;
+/// How many waiting reviews one notice carries. The board keeps the same
+/// number, so a replacement snapshot is every review still waiting. The wire
+/// schema states the same bound.
+const PUBLISHED_REVIEWS: usize = MAX_NOTICES;
+/// How many rules `conversation.permissionRules` may return. The wire schema
+/// states the same bound. A new key past it is not stored; replacing a key is.
+const MAX_RULES: usize = 256;
 
 /// One waiting review, as a notice names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,33 +54,65 @@ struct Arms {
     owner: HashMap<String, bool>,
 }
 
+struct NotedCallers {
+    order: VecDeque<String>,
+    callers: HashMap<String, PermissionCaller>,
+}
+
+/// The file and the rows a settle reads. One lock covers both, so a commit
+/// and the cache update cannot be split by a revoke.
+struct LiveRules {
+    store: RuleStore,
+    rows: Vec<StoredPermissionRule>,
+}
+
 /// Rules, who may be offered a remember choice, and the reviews still waiting.
 pub struct PermissionMemory {
-    store: Mutex<RuleStore>,
-    rows: Mutex<Vec<StoredPermissionRule>>,
+    rules: Mutex<LiveRules>,
     arms: Mutex<Arms>,
+    noted: Mutex<NotedCallers>,
     notices: Mutex<Vec<PublishedReview>>,
     generation: watch::Sender<u64>,
     evaluator: CedarPermissionRuleEvaluator,
+    revocations: Arc<dyn PermissionRuleRevocationAudit>,
 }
 
 impl PermissionMemory {
     /// Open the rules file, skipping rows that are not rules.
-    pub fn open(path: &Path) -> Result<Self, OpenError> {
+    ///
+    /// `revocations` is where a successful revoke leaves its evidence. The
+    /// file and the cache share one lock with that write.
+    pub fn open(
+        path: &Path,
+        revocations: Arc<dyn PermissionRuleRevocationAudit>,
+    ) -> Result<Self, OpenError> {
         let store = RuleStore::open(path)?;
         let rows = store.load().map_err(OpenError::from)?;
         let (generation, _) = watch::channel(0);
         Ok(Self {
-            store: Mutex::new(store),
-            rows: Mutex::new(rows),
+            rules: Mutex::new(LiveRules { store, rows }),
             arms: Mutex::new(Arms {
                 order: VecDeque::new(),
                 owner: HashMap::new(),
             }),
+            noted: Mutex::new(NotedCallers {
+                order: VecDeque::new(),
+                callers: HashMap::new(),
+            }),
             notices: Mutex::new(Vec::new()),
             generation,
             evaluator: CedarPermissionRuleEvaluator,
+            revocations,
         })
+    }
+
+    /// Whether Cedar permits `principal` to make `change`.
+    pub fn authorize(
+        &self,
+        principal: RulePrincipal,
+        change: RuleChange,
+    ) -> Result<(), RuleCatalogError> {
+        self.permit(principal, change)
     }
 
     /// The generation and the waiting reviews a notice should carry.
@@ -103,7 +142,7 @@ impl PermissionRules for PermissionMemory {
         if workspace.is_empty() || tool.is_empty() || (source != "claude" && source != "codex") {
             return None;
         }
-        let rules = lock(&self.rows).clone();
+        let rules = lock(&self.rules).rows.clone();
         let settlement = self
             .evaluator
             .settle(workspace, source, tool, &rules)
@@ -142,6 +181,25 @@ impl PermissionRules for PermissionMemory {
         }
     }
 
+    fn note_answerer(&self, execution: &ExecutionId, request_id: &str, caller: PermissionCaller) {
+        let mut noted = lock(&self.noted);
+        let key = noted_key(execution, request_id);
+        if noted.callers.insert(key.clone(), caller).is_none() {
+            noted.order.push_back(key);
+            while noted.order.len() > MAX_ARMS {
+                if let Some(old) = noted.order.pop_front() {
+                    noted.callers.remove(&old);
+                }
+            }
+        }
+    }
+
+    fn answerer(&self, execution: &ExecutionId, request_id: &str) -> Option<PermissionCaller> {
+        lock(&self.noted)
+            .callers
+            .remove(&noted_key(execution, request_id))
+    }
+
     fn remember(&self, request: RememberRequest<'_>) -> Result<SettledRule, RememberError> {
         if !self.offers_remember(request.execution_id)
             || request.workspace.is_empty()
@@ -150,28 +208,38 @@ impl PermissionRules for PermissionMemory {
         {
             return Err(RememberError::Refused);
         }
-        match self.evaluator.may(RulePrincipal::Owner, RuleChange::Grant) {
+        match self
+            .evaluator
+            .may(rule_principal(request.caller), RuleChange::Grant)
+        {
             Ok(true) => {}
             Ok(false) => return Err(RememberError::Refused),
             Err(_) => return Err(RememberError::Unavailable),
         }
+        let mut rules = lock(&self.rules);
+        let replacing = rules.rows.iter().any(|rule| {
+            rule.workspace == request.workspace
+                && rule.source == request.source
+                && rule.tool == request.tool
+        });
+        if !replacing && rules.rows.len() >= MAX_RULES {
+            return Err(RememberError::Unavailable);
+        }
         let id = format!("pr_{}", uuid::Uuid::new_v4().simple());
-        let stored = {
-            let mut store = lock(&self.store);
-            store
-                .remember(
-                    request.workspace,
-                    request.source,
-                    request.tool,
-                    request.effect,
-                    request.granted_by,
-                    id,
-                )
-                .map_err(|error| match error {
-                    WriteError::Database | WriteError::Revision => RememberError::Unavailable,
-                })?
-        };
-        replace_row(&mut lock(&self.rows), stored.clone());
+        let stored = rules
+            .store
+            .remember(
+                request.workspace,
+                request.source,
+                request.tool,
+                request.effect,
+                request.granted_by,
+                id,
+            )
+            .map_err(|error| match error {
+                WriteError::Database | WriteError::Revision => RememberError::Unavailable,
+            })?;
+        replace_row(&mut rules.rows, stored.clone());
         let reference = ApprovalRuleReference::new(&stored.id, &stored.revision, stored.granted_by)
             .map_err(|_| RememberError::Unavailable)?;
         Ok(SettledRule::new(reference, stored.effect))
@@ -227,16 +295,41 @@ impl PermissionRuleCatalog for PermissionMemory {
         principal: RulePrincipal,
     ) -> Result<Vec<ListedPermissionRule>, RuleCatalogError> {
         self.permit(principal, RuleChange::List)?;
-        Ok(lock(&self.rows).iter().map(listed).collect())
+        Ok(lock(&self.rules)
+            .rows
+            .iter()
+            .take(MAX_RULES)
+            .map(listed)
+            .collect())
     }
 
-    fn revoke(&self, id: &str, principal: RulePrincipal) -> Result<bool, RuleCatalogError> {
+    fn revoke(
+        &self,
+        id: &str,
+        principal: RulePrincipal,
+        actor: &ActionContext,
+    ) -> Result<bool, RuleCatalogError> {
         self.permit(principal, RuleChange::Revoke)?;
-        let removed = lock(&self.store)
+        let revocations = Arc::clone(&self.revocations);
+        let mut rules = lock(&self.rules);
+        let Some(existing) = rules.rows.iter().find(|rule| rule.id == id).cloned() else {
+            return Ok(false);
+        };
+        revocations.record(&PermissionRuleRevocation {
+            id: existing.id.clone(),
+            revision: existing.revision.clone(),
+            workspace: existing.workspace.clone(),
+            source: existing.source.clone(),
+            tool: existing.tool.clone(),
+            effect: existing.effect,
+            actor: actor.clone(),
+        })?;
+        let removed = rules
+            .store
             .revoke(id)
             .map_err(|_| RuleCatalogError::Unavailable)?;
         if removed {
-            lock(&self.rows).retain(|rule| rule.id != id);
+            rules.rows.retain(|rule| rule.id != id);
         }
         Ok(removed)
     }
@@ -255,6 +348,10 @@ impl PermissionMemory {
         let next = self.generation.borrow().saturating_add(1);
         self.generation.send_replace(next);
     }
+}
+
+fn noted_key(execution: &ExecutionId, request_id: &str) -> String {
+    format!("{}\0{request_id}", execution.as_str())
 }
 
 fn replace_row(rows: &mut Vec<StoredPermissionRule>, stored: StoredPermissionRule) {
@@ -295,13 +392,41 @@ mod tests {
         ActionContext, RememberError, RememberRequest, ReviewNotice,
     };
     use nessa_sdk::domain::agent_execution::permissions::PermissionId;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
-    fn opened() -> (tempfile::TempDir, PermissionMemory) {
+    struct RecordingRevocations {
+        records: Mutex<Vec<PermissionRuleRevocation>>,
+        fail: AtomicBool,
+    }
+
+    impl PermissionRuleRevocationAudit for RecordingRevocations {
+        fn record(&self, revocation: &PermissionRuleRevocation) -> Result<(), RuleCatalogError> {
+            if self.fail.load(Ordering::SeqCst) {
+                return Err(RuleCatalogError::Unavailable);
+            }
+            lock(&self.records).push(revocation.clone());
+            Ok(())
+        }
+    }
+
+    fn opened() -> (
+        tempfile::TempDir,
+        PermissionMemory,
+        Arc<RecordingRevocations>,
+    ) {
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().join("rules");
         nessa_local_storage::create_directory(&private).unwrap();
-        let memory = PermissionMemory::open(&private.join("permission-rules.sqlite3")).unwrap();
-        (directory, memory)
+        let revocations = Arc::new(RecordingRevocations {
+            records: Mutex::new(Vec::new()),
+            fail: AtomicBool::new(false),
+        });
+        let memory = PermissionMemory::open(
+            &private.join("permission-rules.sqlite3"),
+            revocations.clone(),
+        )
+        .unwrap();
+        (directory, memory, revocations)
     }
 
     fn execution(id: &str) -> ExecutionId {
@@ -310,6 +435,13 @@ mod tests {
 
     fn actor() -> ActionContext {
         ActionContext::new("owner", "surface", "request").unwrap()
+    }
+
+    fn audit() -> Arc<RecordingRevocations> {
+        Arc::new(RecordingRevocations {
+            records: Mutex::new(Vec::new()),
+            fail: AtomicBool::new(false),
+        })
     }
 
     fn remember(
@@ -325,13 +457,14 @@ mod tests {
             tool,
             effect,
             granted_by: &actor(),
+            caller: PermissionCaller::Owner,
             execution_id: &execution,
         })
     }
 
     #[test]
     fn an_invalid_row_is_skipped_and_a_valid_rule_still_answers() {
-        let (directory, _) = opened();
+        let (directory, _, _) = opened();
         let path = directory
             .path()
             .join("rules")
@@ -357,7 +490,7 @@ mod tests {
                 )
                 .unwrap();
         }
-        let memory = PermissionMemory::open(&path).unwrap();
+        let memory = PermissionMemory::open(&path, audit()).unwrap();
         let listed = memory.list(RulePrincipal::Owner).unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, "good");
@@ -371,7 +504,7 @@ mod tests {
 
     #[test]
     fn a_remembered_allow_answers_the_next_review_and_a_replacement_bumps_the_revision() {
-        let (_directory, memory) = opened();
+        let (_directory, memory, _) = opened();
         let first = remember(&memory, "Bash", PermissionEffect::Allow).unwrap();
         assert_eq!(first.reference().revision(), "1");
         let settled = memory.settle("/work", "claude", "Bash").unwrap();
@@ -390,7 +523,7 @@ mod tests {
 
     #[test]
     fn a_shared_user_cannot_list_or_revoke_and_an_unarmed_turn_cannot_remember() {
-        let (_directory, memory) = opened();
+        let (_directory, memory, revocations) = opened();
         let stored = remember(&memory, "Bash", PermissionEffect::Allow).unwrap();
         assert_eq!(
             memory.list(RulePrincipal::Grant).unwrap_err(),
@@ -398,10 +531,11 @@ mod tests {
         );
         assert_eq!(
             memory
-                .revoke(stored.reference().rule_id(), RulePrincipal::Grant)
+                .revoke(stored.reference().rule_id(), RulePrincipal::Grant, &actor())
                 .unwrap_err(),
             RuleCatalogError::Refused
         );
+        assert!(lock(&revocations.records).is_empty());
         assert!(memory
             .list(RulePrincipal::Owner)
             .unwrap()
@@ -415,19 +549,34 @@ mod tests {
             tool: "Read",
             effect: PermissionEffect::Allow,
             granted_by: &actor(),
+            caller: PermissionCaller::Owner,
             execution_id: &other,
         });
         assert_eq!(refused.unwrap_err(), RememberError::Refused);
         assert!(memory
-            .revoke(stored.reference().rule_id(), RulePrincipal::Owner)
+            .revoke(stored.reference().rule_id(), RulePrincipal::Owner, &actor())
             .unwrap());
+        let recorded = lock(&revocations.records);
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].id, stored.reference().rule_id());
+        assert_eq!(recorded[0].revision, stored.reference().revision());
+        assert_eq!(recorded[0].effect, PermissionEffect::Allow);
+        assert_eq!(recorded[0].workspace, "/work");
+        assert_eq!(recorded[0].source, "claude");
+        assert_eq!(recorded[0].tool, "Bash");
+        assert_eq!(recorded[0].actor.principal_id(), "owner");
+        assert_eq!(recorded[0].actor.request_id(), "request");
+        drop(recorded);
         assert!(memory.settle("/work", "claude", "Bash").is_none());
-        assert!(!memory.revoke("missing", RulePrincipal::Owner).unwrap());
+        assert!(!memory
+            .revoke("missing", RulePrincipal::Owner, &actor())
+            .unwrap());
+        assert_eq!(lock(&revocations.records).len(), 1);
     }
 
     #[test]
     fn a_waiting_review_is_published_and_cleared_once() {
-        let (_directory, memory) = opened();
+        let (_directory, memory, _) = opened();
         assert_eq!(memory.current().0, 0);
         let execution = execution("turn");
         let permission = PermissionId::new("perm").unwrap();
@@ -457,14 +606,14 @@ mod tests {
 
     #[test]
     fn reopening_keeps_the_rule() {
-        let (directory, memory) = opened();
+        let (directory, memory, _) = opened();
         let stored = remember(&memory, "Bash", PermissionEffect::Allow).unwrap();
         drop(memory);
         let path = directory
             .path()
             .join("rules")
             .join("permission-rules.sqlite3");
-        let memory = PermissionMemory::open(&path).unwrap();
+        let memory = PermissionMemory::open(&path, audit()).unwrap();
         assert_eq!(
             memory
                 .settle("/work", "claude", "Bash")
@@ -472,6 +621,135 @@ mod tests {
                 .reference()
                 .rule_id(),
             stored.reference().rule_id()
+        );
+    }
+
+    #[test]
+    fn a_grant_caller_cannot_store_a_rule_on_an_owner_turn() {
+        let (_directory, memory, _) = opened();
+        let execution = execution("turn");
+        memory.arm(&execution, true);
+        let refused = memory.remember(RememberRequest {
+            workspace: "/work",
+            source: "claude",
+            tool: "Read",
+            effect: PermissionEffect::Allow,
+            granted_by: &actor(),
+            caller: PermissionCaller::Grant,
+            execution_id: &execution,
+        });
+        assert_eq!(refused.unwrap_err(), RememberError::Refused);
+        assert!(memory.list(RulePrincipal::Owner).unwrap().is_empty());
+        assert!(memory.settle("/work", "claude", "Read").is_none());
+    }
+
+    #[test]
+    fn a_failed_revocation_record_leaves_the_rule() {
+        let (_directory, memory, revocations) = opened();
+        let stored = remember(&memory, "Bash", PermissionEffect::Allow).unwrap();
+        revocations.fail.store(true, Ordering::SeqCst);
+        assert_eq!(
+            memory
+                .revoke(stored.reference().rule_id(), RulePrincipal::Owner, &actor())
+                .unwrap_err(),
+            RuleCatalogError::Unavailable
+        );
+        assert!(lock(&revocations.records).is_empty());
+        assert_eq!(
+            memory
+                .settle("/work", "claude", "Bash")
+                .unwrap()
+                .reference()
+                .rule_id(),
+            stored.reference().rule_id()
+        );
+    }
+
+    #[test]
+    fn the_response_holds_at_most_256_rules_and_a_replacement_still_fits() {
+        let (_directory, memory, _) = opened();
+        for index in 0..256 {
+            remember(&memory, &format!("t{index:03}"), PermissionEffect::Allow).unwrap();
+        }
+        let execution = execution("turn");
+        let refused = memory.remember(RememberRequest {
+            workspace: "/work",
+            source: "claude",
+            tool: "overflow",
+            effect: PermissionEffect::Allow,
+            granted_by: &actor(),
+            caller: PermissionCaller::Owner,
+            execution_id: &execution,
+        });
+        assert_eq!(refused.unwrap_err(), RememberError::Unavailable);
+        assert_eq!(memory.list(RulePrincipal::Owner).unwrap().len(), 256);
+        let replaced = remember(&memory, "t000", PermissionEffect::Deny).unwrap();
+        assert_eq!(replaced.reference().revision(), "2");
+        assert_eq!(memory.list(RulePrincipal::Owner).unwrap().len(), 256);
+        assert!(memory.settle("/work", "claude", "overflow").is_none());
+    }
+
+    #[test]
+    fn a_notice_carries_every_review_the_board_still_holds() {
+        let (_directory, memory, _) = opened();
+        let execution = execution("turn");
+        for index in 0..40 {
+            memory.waiting(&ReviewNotice {
+                conversation_id: format!("conversation-{index}"),
+                execution_id: execution.clone(),
+                permission_id: PermissionId::new(format!("p{index}")).unwrap(),
+                tool: "Read".into(),
+            });
+        }
+        assert_eq!(memory.current().1.len(), 40);
+        for index in 40..70 {
+            memory.waiting(&ReviewNotice {
+                conversation_id: format!("conversation-{index}"),
+                execution_id: execution.clone(),
+                permission_id: PermissionId::new(format!("p{index}")).unwrap(),
+                tool: "Read".into(),
+            });
+        }
+        let reviews = memory.current().1;
+        assert_eq!(reviews.len(), 64);
+        assert_eq!(reviews[0].permission_id, "p6");
+        assert_eq!(reviews.last().unwrap().permission_id, "p69");
+    }
+
+    #[test]
+    fn remember_and_revoke_leave_the_cache_agreeing_with_the_file() {
+        let (directory, memory, _) = opened();
+        let memory = Arc::new(memory);
+        let writer = {
+            let memory = Arc::clone(&memory);
+            std::thread::spawn(move || {
+                for _ in 0..40 {
+                    let _ = remember(&memory, "Bash", PermissionEffect::Allow);
+                }
+            })
+        };
+        let revoker = {
+            let memory = Arc::clone(&memory);
+            std::thread::spawn(move || {
+                for _ in 0..40 {
+                    if let Ok(listed) = memory.list(RulePrincipal::Owner) {
+                        for rule in listed {
+                            let _ = memory.revoke(&rule.id, RulePrincipal::Owner, &actor());
+                        }
+                    }
+                }
+            })
+        };
+        writer.join().unwrap();
+        revoker.join().unwrap();
+        let path = directory
+            .path()
+            .join("rules")
+            .join("permission-rules.sqlite3");
+        let reopened = PermissionMemory::open(&path, audit()).unwrap();
+        assert_eq!(
+            memory.list(RulePrincipal::Owner).unwrap(),
+            reopened.list(RulePrincipal::Owner).unwrap()
         );
     }
 }

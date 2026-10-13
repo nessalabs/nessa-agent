@@ -8,10 +8,11 @@
 //! ```text
 //! stored rows ──▶ PermissionRulePolicyEvaluator ──▶ settle | may
 //! owner turn arm ──▶ PermissionRules::offers_remember
-//! remember / revoke / list ──▶ owner only
+//! caller ──▶ remember / revoke / list ──▶ Cedar may
+//! revoke ──▶ PermissionRuleRevocationAudit ──▶ then delete
 //! ```
 
-use nessa_sdk::application::agent_execution::permissions::ActionContext;
+use nessa_sdk::application::agent_execution::permissions::{ActionContext, PermissionCaller};
 use nessa_sdk::domain::agent_execution::permissions::PermissionEffect;
 
 /// Who is asking. A grant may be settled by a rule the owner stored. Only
@@ -113,15 +114,61 @@ pub struct ListedPermissionRule {
 pub enum RuleCatalogError {
     /// The caller may not list or revoke. Nothing was read or deleted.
     Refused,
-    /// The store or the policy could not be asked. Nothing was deleted.
+    /// The store, the policy, or the revocation record could not be asked.
+    /// A revoke that fails here has not deleted the rule.
     Unavailable,
 }
 
-/// List and revoke, for the owner's surfaces.
+/// The caller Cedar is asked about. A grant is not rewritten as the owner.
+pub fn rule_principal(caller: PermissionCaller) -> RulePrincipal {
+    match caller {
+        PermissionCaller::Owner => RulePrincipal::Owner,
+        PermissionCaller::Grant => RulePrincipal::Grant,
+    }
+}
+
+/// One rule a caller revoked. The record is the rule as it stood, and who
+/// revoked it. The sink assigns the observation time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PermissionRuleRevocation {
+    /// Rule that was deleted.
+    pub id: String,
+    /// Revision that was deleted.
+    pub revision: String,
+    /// Workspace the rule was scoped to.
+    pub workspace: String,
+    /// `claude` or `codex`.
+    pub source: String,
+    /// Tool the rule named.
+    pub tool: String,
+    /// Allow or deny, as the rule stood.
+    pub effect: PermissionEffect,
+    /// Who revoked it: principal, surface, and the request.
+    pub actor: ActionContext,
+}
+
+/// Immutable evidence that a rule was revoked, written before the row is deleted.
+///
+/// The same rule id and revision recorded again is acknowledged. A record that
+/// contradicts the one stored is refused. A sink that cannot take the record
+/// leaves the rule in place: a revoke is not successful without its evidence.
+pub trait PermissionRuleRevocationAudit: Send + Sync {
+    /// Commit `revocation`. [`RuleCatalogError::Unavailable`] when the sink
+    /// refuses it or cannot be reached.
+    fn record(&self, revocation: &PermissionRuleRevocation) -> Result<(), RuleCatalogError>;
+}
+
+/// List and revoke. Cedar admits or refuses `principal`; the owner is not assumed.
 pub trait PermissionRuleCatalog: Send + Sync {
-    /// The valid rules, in the order they were stored.
+    /// The valid rules, in the order they were stored, at most the response bound.
     fn list(&self, principal: RulePrincipal)
         -> Result<Vec<ListedPermissionRule>, RuleCatalogError>;
-    /// Delete `id`. `Ok(false)` when no rule has it. A shared user is refused.
-    fn revoke(&self, id: &str, principal: RulePrincipal) -> Result<bool, RuleCatalogError>;
+    /// Delete `id` after its revocation is recorded. `Ok(false)` when no rule
+    /// has it, which records nothing. A shared user is refused and nothing is deleted.
+    fn revoke(
+        &self,
+        id: &str,
+        principal: RulePrincipal,
+        actor: &ActionContext,
+    ) -> Result<bool, RuleCatalogError>;
 }

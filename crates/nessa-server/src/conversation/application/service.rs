@@ -56,8 +56,8 @@ use nessa_sdk::application::agent_execution::{
     commands::{CreationStorage, CreationTaskFault},
     executions::{ExecutionAudit, ExecutionRequest, ExecutionUpdate, Submitter},
     permissions::{
-        ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
-        PermissionCancellationRequest, PermissionRules, QuestionAnswer,
+        is_remember_option, ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
+        PermissionCaller, PermissionCancellationRequest, PermissionRules, QuestionAnswer,
     },
     providers::{
         AgentProvider, ApprovalMode as ProviderApprovalMode, CloseOutcome, OperationCapabilities,
@@ -177,7 +177,7 @@ impl ConversationCaller {
     /// split a log line whichever command wrote it. The conversation entity
     /// still asks the same question of its own fields, through the same
     /// function, so there is one rule and not two that have to agree.
-    pub(super) fn actor(&self) -> Result<ActionContext, ConversationError> {
+    pub(crate) fn actor(&self) -> Result<ActionContext, ConversationError> {
         Conversation::check_creator_context(&self.surface_id, &self.action_id)
             .map_err(|_| ConversationError::InvalidInput)?;
         ActionContext::new(
@@ -3504,6 +3504,7 @@ impl ConversationService {
         execution: String,
         permission: String,
         option: String,
+        permission_caller: PermissionCaller,
     ) -> Result<(), ConversationError> {
         let service = self.clone();
         supervised(async move {
@@ -3517,6 +3518,11 @@ impl ConversationService {
             // (`malformed_controls_do_not_open_a_dormant_owned_provider`).
             let option_id = PermissionOptionId::new(option.as_str())
                 .map_err(|_| ConversationError::InvalidInput)?;
+            if is_remember_option(option_id.as_str()) {
+                if let Some(rules) = service.inner.permission_rules.get() {
+                    rules.note_answerer(&execution_id, actor.request_id(), permission_caller);
+                }
+            }
             let live = service.resolve(&id, &caller).await?;
             // An app's review first: it is the gateway's own, not the agent's.
             match live

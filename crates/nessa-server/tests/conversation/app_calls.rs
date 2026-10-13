@@ -242,6 +242,7 @@ async fn a_destructive_call_waits_on_the_persons_review_and_is_sent_once_allowed
             review.execution_id.clone(),
             review.permission_id.clone(),
             DENY.into(),
+            nessa_sdk::application::agent_execution::permissions::PermissionCaller::Owner,
         )
         .await;
     // Ended, the identity names no app review: the agent's to answer, which

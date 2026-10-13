@@ -8,12 +8,15 @@
 //! ```text
 //! PermissionRules ─┐
 //! ReviewNotices    ├─▶ PermissionMemory ─▶ permission-rules.sqlite3
-//! PermissionRuleCatalog ─┘                         │
-//!                                                  └─▶ CedarPermissionRuleEvaluator
+//! PermissionRuleCatalog ─┘         │                 │
+//!                                  │                 └─▶ CedarPermissionRuleEvaluator
+//!                                  └─▶ DurablePermissionRuleRevocationAudit
 //! ```
 
+mod audit;
 mod cedar;
 mod memory;
 mod store;
 
+pub use audit::DurablePermissionRuleRevocationAudit;
 pub use memory::{PermissionMemory, PublishedReview};

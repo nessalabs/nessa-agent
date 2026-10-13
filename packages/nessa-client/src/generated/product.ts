@@ -2538,7 +2538,7 @@ export interface PermissionReviewNotice {
 }
 /** The reviews still waiting. A later event replaces this one; an empty list means none are waiting. */
 export interface PermissionReviewWaiting {
-  /** Waiting reviews, oldest first, at most 32. */
+  /** Waiting reviews, oldest first, at most 64. */
   reviews: PermissionReviewNotice[]
 }
 export const maxChangeWatchIdBytes = 57 as const

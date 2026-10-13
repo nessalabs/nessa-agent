@@ -182,6 +182,7 @@ pub(super) async fn serve(
                         "first".into(),
                         "permission".into(),
                         "allow".into(),
+                        nessa_sdk::application::agent_execution::permissions::PermissionCaller::Owner,
                     )
                     .await
                     .unwrap();

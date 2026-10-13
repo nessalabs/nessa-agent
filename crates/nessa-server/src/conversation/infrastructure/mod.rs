@@ -71,7 +71,9 @@
 //! `permission-rules.sqlite3` and answers them through
 //! `CedarPermissionRuleEvaluator` (`permission_rules/cedar/`). A miss asks
 //! the person. The same memory is the board a waiting review notifies, and
-//! clears when the review ends.
+//! clears when the review ends. `DurablePermissionRuleRevocationAudit` keeps
+//! each revocation, one immutable file per rule revision, written before the
+//! row is deleted.
 mod change_watch;
 pub use change_watch::{NessaRecordWatches, UuidWatchNamespaces};
 // Composed only by the Unix gateway (`composition/local_auth.rs`), as
@@ -139,7 +141,9 @@ pub use tool_policy::{
 };
 
 mod permission_rules;
-pub use permission_rules::{PermissionMemory, PublishedReview};
+pub use permission_rules::{
+    DurablePermissionRuleRevocationAudit, PermissionMemory, PublishedReview,
+};
 
 mod deletion_audit;
 pub use deletion_audit::DurableConversationDeletionAudit;

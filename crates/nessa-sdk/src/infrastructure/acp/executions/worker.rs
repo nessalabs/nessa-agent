@@ -384,6 +384,9 @@ struct ArmedPermission {
 
 /// What a later answer needs from the request that opened the review.
 struct PermissionContext {
+    /// Execution that opened the review. An answer for another execution
+    /// does not store a rule for this one.
+    execution: ExecutionId,
     tool: String,
     /// The once allow option, when the review offered one that is not the
     /// harness's persistent choice and not a Nessa remember choice.
@@ -392,6 +395,25 @@ struct PermissionContext {
     once_deny: Option<PermissionOptionId>,
     /// The harness named one tool. A kind alone is not a project rule.
     specific: bool,
+}
+
+/// The once option a remember choice may store, when this review offered it
+/// for this execution. Anything else is refused and nothing is stored.
+fn accepted_remember<'a>(
+    context: &'a PermissionContext,
+    execution: &ExecutionId,
+    effect: PermissionEffect,
+) -> Result<&'a PermissionOptionId, AgentError> {
+    if execution != &context.execution {
+        return Err(AgentError::InvalidInput(
+            "this review belongs to a different execution".into(),
+        ));
+    }
+    match effect {
+        PermissionEffect::Allow => context.once_allow.as_ref(),
+        PermissionEffect::Deny => context.once_deny.as_ref(),
+    }
+    .ok_or_else(|| AgentError::InvalidInput("this review has no once choice to remember".into()))
 }
 
 struct Worker<P> {
@@ -2102,6 +2124,10 @@ impl<P: AcpProfile> Worker<P> {
             .permission_context
             .get(&answer.id)
             .ok_or(AgentError::StalePermission)?;
+        // The once option and the execution are checked before anything is
+        // stored. A choice that was filtered out, never offered, or that names
+        // another execution leaves no rule behind.
+        let once = accepted_remember(context, &answer.execution_id, effect)?.clone();
         if !context.specific {
             return Err(AgentError::InvalidInput(
                 "this review does not name one tool".into(),
@@ -2123,16 +2149,28 @@ impl<P: AcpProfile> Worker<P> {
                 "only the owner can remember a permission".into(),
             ));
         }
+        let caller = self
+            .config
+            .permission_rules
+            .answerer(
+                &answer.execution_id,
+                answer.attribution.actor().request_id(),
+            )
+            .ok_or_else(|| {
+                AgentError::InvalidInput("the caller of this answer was not verified".into())
+            })?;
         let workspace = self.config.workspace.to_str().unwrap_or("");
+        let tool = context.tool.clone();
         let rule = self
             .config
             .permission_rules
             .remember(RememberRequest {
                 workspace,
                 source,
-                tool: &context.tool,
+                tool: &tool,
                 effect,
                 granted_by: answer.attribution.actor(),
+                caller,
                 execution_id: &answer.execution_id,
             })
             .map_err(|error| match error {
@@ -2143,13 +2181,6 @@ impl<P: AcpProfile> Worker<P> {
                     AgentError::InvalidInput("the permission rule could not be stored".into())
                 }
             })?;
-        let once = match effect {
-            PermissionEffect::Allow => context.once_allow.clone(),
-            PermissionEffect::Deny => context.once_deny.clone(),
-        }
-        .ok_or_else(|| {
-            AgentError::InvalidInput("this review has no once choice to remember".into())
-        })?;
         Ok(PermissionAnswer {
             attribution: ApprovalAttribution::new(
                 answer.attribution.actor().clone(),
@@ -2832,6 +2863,7 @@ impl<P: AcpProfile> Worker<P> {
             self.permission_context.insert(
                 permission_id.clone(),
                 PermissionContext {
+                    execution: asked.clone(),
                     tool: tool_name,
                     once_allow,
                     once_deny,
@@ -2864,6 +2896,7 @@ impl<P: AcpProfile> Worker<P> {
         self.permission_context.insert(
             permission_id.clone(),
             PermissionContext {
+                execution: asked.clone(),
                 tool: tool_name.clone(),
                 once_allow,
                 once_deny,
@@ -4372,6 +4405,50 @@ fn admitted_before_deadline<T>(queue: &mut mpsc::Receiver<T>, admitted: usize) -
         }
     }
     ready
+}
+
+#[cfg(test)]
+mod remember_tests {
+    use super::{accepted_remember, PermissionContext};
+    use crate::application::agent_execution::agents::AgentError;
+    use crate::domain::agent_execution::executions::ExecutionId;
+    use crate::domain::agent_execution::permissions::{PermissionEffect, PermissionOptionId};
+
+    fn context(once_allow: bool, once_deny: bool) -> PermissionContext {
+        PermissionContext {
+            execution: ExecutionId::new("turn").unwrap(),
+            tool: "Read".into(),
+            once_allow: once_allow.then(|| PermissionOptionId::new("allow-once").unwrap()),
+            once_deny: once_deny.then(|| PermissionOptionId::new("deny-once").unwrap()),
+            specific: true,
+        }
+    }
+
+    #[test]
+    fn a_remember_choice_needs_the_once_option_of_its_own_execution() {
+        let review = context(true, false);
+        let execution = ExecutionId::new("turn").unwrap();
+        assert_eq!(
+            accepted_remember(&review, &execution, PermissionEffect::Allow)
+                .unwrap()
+                .as_str(),
+            "allow-once"
+        );
+        assert!(matches!(
+            accepted_remember(&review, &execution, PermissionEffect::Deny),
+            Err(AgentError::InvalidInput(text)) if text.contains("no once choice")
+        ));
+        let other = ExecutionId::new("other").unwrap();
+        assert!(matches!(
+            accepted_remember(&review, &other, PermissionEffect::Allow),
+            Err(AgentError::InvalidInput(text)) if text.contains("different execution")
+        ));
+        let unoffered = context(false, false);
+        assert!(matches!(
+            accepted_remember(&unoffered, &execution, PermissionEffect::Allow),
+            Err(AgentError::InvalidInput(text)) if text.contains("no once choice")
+        ));
+    }
 }
 
 #[cfg(test)]

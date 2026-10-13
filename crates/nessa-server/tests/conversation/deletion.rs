@@ -424,6 +424,7 @@ async fn a_deleted_conversation_refuses_every_command_on_it() {
                 "turn-1".into(),
                 "permission".into(),
                 "allow".into(),
+                nessa_sdk::application::agent_execution::permissions::PermissionCaller::Owner,
             )
             .await,
     );

@@ -5,10 +5,10 @@ use super::{
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    error_code, ConversationCaller, ConversationError, ConversationService, ListedPermissionRule,
-    PermissionRuleCatalog, QuestionChoiceInput, ReadOpening, RequestedAgent, RequestedConversation,
-    RuleCatalogError, RulePrincipal, SubmissionMode, SubmittedFile, SubmittedImage,
-    SubmittedMessage,
+    error_code, rule_principal, ConversationCaller, ConversationError, ConversationService,
+    ListedPermissionRule, PermissionRuleCatalog, QuestionChoiceInput, ReadOpening, RequestedAgent,
+    RequestedConversation, RuleCatalogError, RuleChange, SubmissionMode, SubmittedFile,
+    SubmittedImage, SubmittedMessage,
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::conversation::projection::CommittedCursor;
@@ -50,7 +50,7 @@ use nessa_sdk::application::agent_execution::{
         CreationFailure, CreationReceipt, CreationStage, CreationStorageError, MutationFailure,
         MutationOutcome, MutationReceipt, MutationStage,
     },
-    permissions::{is_remember_option, PermissionSelectionState},
+    permissions::{is_remember_option, PermissionCaller, PermissionSelectionState},
     sessions::{NoteDelivery, NoteRetirementReason, NoteState},
 };
 use nessa_sdk::domain::agent_execution::executions::{Initiation, Initiator};
@@ -401,12 +401,17 @@ pub(super) async fn dispatch(
             }
             "conversation.answer" => {
                 let params = params!(ConversationAnswerParams);
-                // A remembered rule is the owner's. A share grant may answer
-                // this once; it may not store a rule for later reviews.
-                if is_remember_option(&params.option_id)
-                    && !matches!(initiation.initiator(), Initiator::Owner)
-                {
-                    return Ok(failure(&frame.id, "forbidden"));
+                let permission_caller = permission_caller(initiation.initiator());
+                // Cedar admits or refuses the caller who is answering. A grant
+                // is not rewritten as the owner, and a refusal writes nothing.
+                if is_remember_option(&params.option_id) {
+                    if let Some(rules) = state.permission_rules.as_deref() {
+                        if let Err(error) =
+                            rules.authorize(rule_principal(permission_caller), RuleChange::Grant)
+                        {
+                            return Ok(failure(&frame.id, catalog_code(error)));
+                        }
+                    }
                 }
                 service
                     .answer(
@@ -415,6 +420,7 @@ pub(super) async fn dispatch(
                         params.execution_id,
                         params.permission_id,
                         params.option_id,
+                        permission_caller,
                     )
                     .await?;
                 Ok(success(
@@ -479,11 +485,11 @@ pub(super) async fn dispatch(
             }
             "conversation.permissionRules" => {
                 let params = params!(ConversationPermissionRulesParams);
-                let rules = match remembered_rules(state, &frame.id, &initiation) {
+                let rules = match remembered_rules(state, &frame.id) {
                     Ok(rules) => rules,
                     Err(response) => return Ok(*response),
                 };
-                match rules.list(RulePrincipal::Owner) {
+                match rules.list(rule_principal(permission_caller(initiation.initiator()))) {
                     Ok(listed) => Ok(success(
                         &frame.id,
                         &ConversationPermissionRulesResult {
@@ -496,11 +502,16 @@ pub(super) async fn dispatch(
             }
             "conversation.revokePermissionRule" => {
                 let params = params!(ConversationRevokePermissionRuleParams);
-                let rules = match remembered_rules(state, &frame.id, &initiation) {
+                let rules = match remembered_rules(state, &frame.id) {
                     Ok(rules) => rules,
                     Err(response) => return Ok(*response),
                 };
-                match rules.revoke(&params.rule_id, RulePrincipal::Owner) {
+                let actor = caller(params.request_id.clone()).actor()?;
+                match rules.revoke(
+                    &params.rule_id,
+                    rule_principal(permission_caller(initiation.initiator())),
+                    &actor,
+                ) {
                     Ok(applied) => Ok(success(
                         &frame.id,
                         &ConversationRevokePermissionRuleResult {
@@ -543,21 +554,28 @@ pub(super) async fn dispatch(
     }
 }
 
-/// The owner's remembered rules, or the refusal a caller is told.
+/// The remembered rules, or the refusal when this gateway has none.
+///
+/// Who may read or change them is Cedar's answer, from the caller the
+/// request was admitted as. This does not decide that.
 fn remembered_rules<'a>(
     state: &'a ProductRouteState,
     request_id: &str,
-    initiation: &Initiation,
 ) -> Result<&'a crate::conversation::infrastructure::PermissionMemory, Box<OutgoingMessage>> {
-    if !matches!(initiation.initiator(), Initiator::Owner) {
-        return Err(Box::new(failure(request_id, "forbidden")));
-    }
     state.permission_rules.as_deref().ok_or_else(|| {
         Box::new(failure(
             request_id,
             ConversationErrorCode::ConversationsNotConfigured.as_str(),
         ))
     })
+}
+
+/// Who the admitted turn says is calling, as a fact Cedar can be asked about.
+fn permission_caller(initiator: &Initiator) -> PermissionCaller {
+    match initiator {
+        Initiator::Owner => PermissionCaller::Owner,
+        Initiator::Grant(_) => PermissionCaller::Grant,
+    }
 }
 
 fn catalog_code(error: RuleCatalogError) -> &'static str {

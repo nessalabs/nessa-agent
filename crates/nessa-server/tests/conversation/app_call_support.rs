@@ -813,6 +813,7 @@ impl Fixture {
                 review.execution_id.clone(),
                 review.permission_id.clone(),
                 option.into(),
+                nessa_sdk::application::agent_execution::permissions::PermissionCaller::Owner,
             )
             .await
             .unwrap();

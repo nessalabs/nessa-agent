@@ -59,6 +59,18 @@ impl SettledRule {
     }
 }
 
+/// Who is answering, as the host verified it.
+///
+/// Cedar admits a remembered rule for [`Self::Owner`] and refuses
+/// [`Self::Grant`]. A missing caller is not treated as the owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PermissionCaller {
+    /// The conversation's owner.
+    Owner,
+    /// Someone holding a share grant.
+    Grant,
+}
+
 /// What remembering a choice asks the host to store.
 #[derive(Clone, Debug)]
 pub struct RememberRequest<'a> {
@@ -70,9 +82,11 @@ pub struct RememberRequest<'a> {
     pub tool: &'a str,
     /// Allow or deny.
     pub effect: PermissionEffect,
-    /// The owner who clicked. A shared user is not given a request.
+    /// The person who clicked. The rule records this grantor.
     pub granted_by: &'a ActionContext,
-    /// The execution whose review offered the choice. Only an owner turn does.
+    /// Who is asking to store the rule. The host verified this.
+    pub caller: PermissionCaller,
+    /// The execution whose review offered the choice.
     pub execution_id: &'a ExecutionId,
 }
 
@@ -101,7 +115,25 @@ pub trait PermissionRules: Send + Sync {
     /// Record that `execution` is an owner turn (`owner`) or is not.
     fn arm(&self, execution: &ExecutionId, owner: bool);
 
-    /// Store a rule for the owner's choice. The review stays pending on error.
+    /// Record that the answer identified by `execution` and `request_id` is
+    /// `caller`. The host sets this before that answer is queued. A later note
+    /// for the same key replaces this one. Reading it in [`Self::answerer`]
+    /// removes it, so a later answer is not attributed to an earlier caller.
+    fn note_answerer(&self, execution: &ExecutionId, request_id: &str, caller: PermissionCaller) {
+        let _ = (self, execution, request_id, caller);
+    }
+
+    /// The caller noted for this answer, if the host set one.
+    ///
+    /// `None` when it did not. Callers must not treat `None` as the owner.
+    /// Reading removes the note.
+    fn answerer(&self, execution: &ExecutionId, request_id: &str) -> Option<PermissionCaller> {
+        let _ = (self, execution, request_id);
+        None
+    }
+
+    /// Store a rule for `request.caller`. The review stays pending on error.
+    /// Cedar admits or refuses that caller; the owner is not assumed.
     fn remember(&self, request: RememberRequest<'_>) -> Result<SettledRule, RememberError>;
 }
 

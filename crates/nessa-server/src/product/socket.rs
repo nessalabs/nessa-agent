@@ -1398,10 +1398,14 @@ async fn forward_review_notices(
     send: mpsc::Sender<QueuedResponse>,
     slots: Arc<Semaphore>,
 ) {
-    let mut seen = 0;
+    // `None` is unseen, including a generation of zero. A session that
+    // connects after a restart, or a new authentication, is sent the board
+    // as it stands — empty, when nothing is waiting — so a desktop does not
+    // keep a review the server no longer has.
+    let mut seen = None;
     loop {
         let (generation, reviews) = board.current();
-        if generation != seen {
+        if seen != Some(generation) {
             let payload = PermissionReviewWaiting {
                 reviews: reviews
                     .into_iter()
@@ -1428,9 +1432,9 @@ async fn forward_review_notices(
             if send.send(queued).await.is_err() {
                 break;
             }
-            seen = generation;
+            seen = Some(generation);
         }
-        board.wait_after(seen).await;
+        board.wait_after(generation).await;
     }
 }
 
@@ -2472,6 +2476,54 @@ mod tests {
                 "{method}"
             );
         }
+    }
+
+    struct FixedClock;
+    impl Clock for FixedClock {
+        fn unix_milliseconds(&self) -> u64 {
+            1
+        }
+    }
+
+    #[tokio::test]
+    async fn a_new_session_is_told_when_no_review_is_waiting() {
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("rules");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let clock = Arc::new(FixedClock);
+        let board = Arc::new(
+            crate::conversation::infrastructure::PermissionMemory::open(
+                &private.join("permission-rules.sqlite3"),
+                Arc::new(
+                    crate::conversation::infrastructure::DurablePermissionRuleRevocationAudit::new(
+                        private.join("revocations"),
+                        clock,
+                    )
+                    .unwrap(),
+                ),
+            )
+            .unwrap(),
+        );
+        let (send, mut recv) = mpsc::channel(1);
+        let slots = Arc::new(Semaphore::new(1));
+        let task = tokio::spawn(super::forward_review_notices(board, send, slots));
+        let queued = tokio::time::timeout(std::time::Duration::from_secs(2), recv.recv())
+            .await
+            .expect("the empty board is sent")
+            .expect("the notice task stays up");
+        match queued.message {
+            WireResponse::ReviewWaiting {
+                payload,
+                generation,
+            } => {
+                assert!(payload.reviews.is_empty());
+                assert_eq!(generation, 0);
+            }
+            _ => panic!("expected the empty board"),
+        }
+        drop(recv);
+        task.abort();
+        let _ = task.await;
     }
 
     /// The five passive reads skip ordinary dispatch, so their Cedar check is

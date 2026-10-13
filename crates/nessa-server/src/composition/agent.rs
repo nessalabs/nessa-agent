@@ -661,10 +661,18 @@ pub(super) fn providers(
     let native_hooks = NativeHooksPreferences::open(directory.to_owned(), clock.clone())
         .map_err(|error| RunError::Agent(error.to_string()))?;
     let rules_path = directory.join("permission-rules.sqlite3");
+    let revocations = Arc::new(
+        crate::conversation::infrastructure::DurablePermissionRuleRevocationAudit::new(
+            directory.join("audit").join("permission-rules"),
+            clock.clone(),
+        )
+        .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
     let permission_memory = Arc::new(
-        crate::conversation::infrastructure::PermissionMemory::open(&rules_path).map_err(
-            |cause| RunError::opening(crate::core::Dataset::PermissionRules, &rules_path, cause),
-        )?,
+        crate::conversation::infrastructure::PermissionMemory::open(&rules_path, revocations)
+            .map_err(|cause| {
+                RunError::opening(crate::core::Dataset::PermissionRules, &rules_path, cause)
+            })?,
     );
     let dependencies = ProviderDependencies {
         directory: directory.to_owned(),

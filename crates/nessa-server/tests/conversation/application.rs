@@ -1685,6 +1685,7 @@ async fn malformed_controls_do_not_open_a_dormant_owned_provider() {
                 "execution".into(),
                 "permission".into(),
                 "".into(),
+                nessa_sdk::application::agent_execution::permissions::PermissionCaller::Owner,
             )
             .await,
         Err(ConversationError::InvalidInput)
@@ -1814,6 +1815,7 @@ async fn permission_consumption_case(
                     "review".into(),
                     "permission".into(),
                     "allow".into(),
+                    nessa_sdk::application::agent_execution::permissions::PermissionCaller::Owner,
                 )
                 .await
         }
