@@ -145,6 +145,12 @@ pub fn verify_relay_proof(key: &[u8; 32], challenge: &[u8; 32], signature: &[u8;
         .verify(&relay_proof_message(key, challenge), signature)
         .is_ok()
 }
+/// The raw key inside a pinned gateway SPKI: the id the gateway is
+/// registered under at a relay. `None` when `pin` is not an Ed25519 SPKI.
+pub fn relay_key(pin: &[u8; 44]) -> Option<[u8; 32]> {
+    let spki = parse_spki(pin).ok()?;
+    Some(*device_key(&spki).bytes())
+}
 impl fmt::Debug for NativeIdentity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("NativeIdentity([REDACTED])")
