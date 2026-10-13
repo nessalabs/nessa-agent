@@ -124,7 +124,8 @@ pub struct PollPolicy {
     pub backoff_cap: Duration,
     /// The longest one read runs, by the injected clock.
     pub read_budget: Duration,
-    /// How many reads run at once. At least one.
+    /// How many reads run at once. Zero is read as one
+    /// (`a_schedule_of_no_places_still_reads_one`).
     pub reads_at_once: usize,
 }
 impl Default for PollPolicy {
@@ -169,9 +170,7 @@ impl PeerPoller {
     /// Start reading `commands`' peers with `inputs`.
     pub fn start(commands: Arc<PeerCommands>, inputs: PollInputs) -> Self {
         let (stop, stopped) = watch::channel(false);
-        // `READS_AT_ONCE` is at least one. A schedule of zero places would
-        // leave every due peer waiting for a slot that cannot exist.
-        let reads = Arc::new(Semaphore::new(inputs.policy.reads_at_once));
+        let reads = Arc::new(Semaphore::new(read_places(inputs.policy.reads_at_once)));
         #[cfg(test)]
         let lists = Arc::new(AtomicUsize::new(0));
         let shared = Arc::new(Shared {
@@ -1113,6 +1112,13 @@ fn look_again_soon(listed: bool, running: bool, left: u64) -> bool {
 /// (`a_held_read_lists_when_the_records_change_not_on_every_tick`).
 fn list_peers(changed: bool, since_list_ms: u64, interval_ms: u64) -> bool {
     changed || since_list_ms >= interval_ms
+}
+
+/// How many reads `asked` runs at once. Zero is one: a schedule of no
+/// places would leave every due peer waiting for a slot that cannot exist
+/// (`a_schedule_of_no_places_still_reads_one`).
+fn read_places(asked: usize) -> usize {
+    asked.max(1)
 }
 
 /// When the poller next wakes, on the injected clock: the soonest peer due,

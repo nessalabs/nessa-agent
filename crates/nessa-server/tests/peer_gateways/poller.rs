@@ -137,6 +137,13 @@ fn a_read_in_flight_wakes_within_a_tick_and_an_idle_poller_waits_its_schedule() 
 /// A wake while a read runs is every tick. The directory is scanned when the
 /// records change, or once an interval has passed.
 #[test]
+fn a_schedule_of_no_places_still_reads_one() {
+    assert_eq!(read_places(0), 1);
+    assert_eq!(read_places(1), 1);
+    assert_eq!(read_places(READS_AT_ONCE), READS_AT_ONCE);
+}
+
+#[test]
 fn a_running_read_lists_when_the_records_change_or_the_interval_passes() {
     let interval = POLICY.interval.as_millis() as u64;
     assert!(!list_peers(false, 0, interval));
