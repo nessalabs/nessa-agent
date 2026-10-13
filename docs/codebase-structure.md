@@ -629,6 +629,28 @@ numbers are the caller's: the gateway takes them from the selected model's
 
 ## Gateway conversation ownership
 
+First-party phone authorization is [ADR811](adr/todo/811-owner-phone-authorization.md).
+`nessa-server/src/product/phone_endpoint.rs` publishes actual authenticated native
+discovery; `product/phone.rs` maps the signed setup/status DTOs, and
+`product/owner_phone.rs` supplies current purpose/method/input admission.
+`device_pairing/application/owner_phone.rs` and its infrastructure adapter use
+Auth's original-request ledger and the existing activation/expiry/cleanup owners.
+`device_pairing/application/read_status.rs` projects exact signed TLS recovery
+through the same current original holding owner as read-only pairing.
+
+`conversation/application/owner_phone_policy.rs` retains current signed purpose,
+receiver holding and linkage before the shared conversation-access policy may
+see a first-party Person. Its Cedar adapter under
+`conversation/infrastructure/owner_phone_policy/cedar/` owns only purpose linkage,
+method and input restrictions; `access_policy/cedar/` remains the single actual
+conversation target and catalogue entry policy owner. The source's admitted
+reader and caller travel together through bounded catalogue workers. The receiver
+profile hash consumes each enforcing bundle's owning sources, so an actual
+policy change fences saved read epochs. Server fixtures split mounted discovery,
+signed replay/refusal, actual TLS recovery, held late Pair cleanup, native method
+effect accounting, catalogue and policy-profile proofs under
+`tests/composition/owner_phone*.rs` and `tests/conversation/owner_phone*.rs`.
+
 Client permission controls capture related IDs through
 `packages/nessa-client/src/application/permission-target.ts` and consume those
 opaque targets in `presentation/conversation-api.ts`. Panel effects and control

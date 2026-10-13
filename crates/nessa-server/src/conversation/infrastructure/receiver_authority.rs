@@ -681,6 +681,31 @@ impl ReceiverAuthority for LocalReceiverAuthority {
     }
 }
 
+impl crate::conversation::application::OwnerPhoneReceiverAuthority for LocalReceiverAuthority {
+    fn holding<'a>(
+        &'a self,
+        purpose: &'a nessa_auth::application::pairing::OwnerPhonePurpose,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<ReceiverBinding>, ReadRefusal>> + Send + 'a>>
+    {
+        let paired = PairedReceiver {
+            receiver_id: purpose.receiver().as_str().to_owned(),
+            credential_id: purpose.credential().clone(),
+            organization_id: purpose.organization().clone(),
+            owner_id: purpose.owner().clone(),
+            paired_epoch: purpose.paired_epoch(),
+        };
+        let authority = self.clone();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                LocalReceiverAuthority::holding(&authority, &paired)
+            })
+            .await
+            .map_err(|_| ReadRefusal::Unverifiable)?
+            .map_err(|_| ReadRefusal::Unverifiable)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

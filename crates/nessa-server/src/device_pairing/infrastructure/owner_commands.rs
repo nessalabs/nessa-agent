@@ -5,9 +5,12 @@ use crate::device_pairing::application::Approval;
 use nessa_auth::{
     adapters::pairing::{rand, CryptoRng, RngCore},
     application::{pairing::OwnerDecision, session::AuthenticatedSession},
-    domain::pairing::{ConsentClass, DeviceKey, InvitationId, PairingRecord},
+    domain::pairing::{
+        ConsentClass, DeviceKey, InvitationId, OwnerPhoneRequest, OwnerPhoneRequestId,
+        OwnerPhoneSource, PairingRecord,
+    },
 };
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
 /// Entropy for one new invitation's identities and code.
 pub trait InvitationEntropy: RngCore + CryptoRng + Send + 'static {}
@@ -28,6 +31,33 @@ pub struct PairingOwnerCommands {
     entropy: InvitationEntropySource,
 }
 impl PairingOwnerCommands {
+    /// Explicit signed first-party consent, with original replay identity unchanged.
+    pub async fn authorize_phone(
+        &self,
+        session: &AuthenticatedSession,
+        request: OwnerPhoneRequest,
+        signature: [u8; 64],
+    ) -> Result<super::PhoneAuthorization, PairingRuntimeError> {
+        self.gateway
+            .authorize_phone(session, request, signature, Entropy((self.entropy)()))
+            .await
+    }
+    /// Original bootstrap observation; this does not create or activate anything.
+    pub async fn phone_status(
+        &self,
+        session: &AuthenticatedSession,
+        source: OwnerPhoneSource,
+        request: OwnerPhoneRequestId,
+        digest: [u8; 32],
+    ) -> Result<super::PhoneAuthorization, PairingRuntimeError> {
+        self.gateway
+            .phone_status(session, source, request, digest)
+            .await
+    }
+    /// Passive listener/SPKI facts; callers still require fresh product admission.
+    pub fn native_endpoint(&self) -> Option<(SocketAddr, [u8; 44])> {
+        self.gateway.native_endpoint()
+    }
     /// Owner commands for `gateway`, creating invitations from `entropy`.
     pub fn new(gateway: Arc<GatewayPairing>, entropy: InvitationEntropySource) -> Self {
         Self { gateway, entropy }

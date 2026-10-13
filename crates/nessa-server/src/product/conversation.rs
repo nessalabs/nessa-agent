@@ -81,11 +81,29 @@ pub(super) async fn dispatch(
             }
         };
     }
+    macro_rules! target_params {
+        ($kind:ty) => {{
+            let value = params!($kind);
+            let id = conversation_id(&value.conversation_id)?;
+            if let Err(code) = super::read_access::admit_command_target(state, session, &id).await {
+                return Ok(failure(&frame.id, code));
+            }
+            value
+        }};
+    }
     let caller = |request_id: String| caller(session, request_id);
     let result: Result<OutgoingMessage, ConversationError> = async {
         match frame.method.as_str() {
             "conversation.create" => {
-                let params = params!(ConversationCreateParams);
+                let params = target_params!(ConversationCreateParams);
+                if let Err(code) = super::owner_phone::admit_creation(
+                    state,
+                    session,
+                    params.approval_mode.map(approval_mode).map(|mode| mode.as_str()),
+                    crate::conversation::application::ConversationService::default_creation_approval_mode().as_str(),
+                ).await {
+                    return Ok(failure(&frame.id, code));
+                }
                 let store = service.commands().ok_or(ConversationError::Unavailable)?;
                 service
                     .create_command(
@@ -104,7 +122,7 @@ pub(super) async fn dispatch(
                 ))
             }
             "conversation.read" => {
-                let params = params!(ConversationReadParams);
+                let params = target_params!(ConversationReadParams);
                 let id = conversation_id(&params.conversation_id)?;
                 if let Err(code) = super::read_access::admit_conversation(state, session, &id).await
                 {
@@ -115,7 +133,7 @@ pub(super) async fn dispatch(
                 Ok(success(&frame.id, &view))
             }
             "conversation.setApprovalMode" => {
-                let params = params!(ConversationSetApprovalModeParams);
+                let params = target_params!(ConversationSetApprovalModeParams);
                 let selected = service
                     .set_approval_mode(
                         conversation_id(&params.conversation_id)?,
@@ -145,7 +163,7 @@ pub(super) async fn dispatch(
                     return Ok(failure(&frame.id, code));
                 }
                 let listed =
-                    read_list(service, session, archived.unwrap_or(false), &frame.id).await?;
+                    read_list(state, service, session, archived.unwrap_or(false), &frame.id).await?;
                 Ok(success(&frame.id, &listed))
             }
             "conversation.observe" => {
@@ -165,10 +183,15 @@ pub(super) async fn dispatch(
                     )
                     .await;
                 trace_conversation_observe(observed.as_ref().err());
-                Ok(success(&frame.id, &observe_result(observed?)))
+                let observed = observe_result(observed?);
+                super::read_access::admit_index_rows(state, session, &observed.conversations).await?;
+                Ok(success(&frame.id, &observed))
             }
             "conversation.send" | "conversation.steer" => {
-                let params = params!(ConversationSendParams);
+                let params = target_params!(ConversationSendParams);
+                if let Err(code) = super::owner_phone::admit_submission_input(state, session, params.files.len()).await {
+                    return Ok(failure(&frame.id, code));
+                }
                 let mode = if frame.method == "conversation.steer" {
                     SubmissionMode::Steer
                 } else {
@@ -197,7 +220,7 @@ pub(super) async fn dispatch(
                 Ok(success(&frame.id, &receipt))
             }
             "conversation.stop" => {
-                let params = params!(ConversationStopParams);
+                let params = target_params!(ConversationStopParams);
                 let store = service.commands().ok_or(ConversationError::Unavailable)?;
                 let receipt = service
                     .stop_command(
@@ -214,7 +237,7 @@ pub(super) async fn dispatch(
                 ))
             }
             "conversation.receipt" => {
-                let params = params!(ConversationReceiptParams);
+                let params = target_params!(ConversationReceiptParams);
                 let store = service.commands().ok_or(ConversationError::Unavailable)?;
                 let id = conversation_id(&params.conversation_id)?;
                 let caller = caller(params.request_id.clone());
@@ -290,7 +313,7 @@ pub(super) async fn dispatch(
                 ))
             }
             "conversation.message" => {
-                let params = params!(ConversationMessageParams);
+                let params = target_params!(ConversationMessageParams);
                 let (note, state) = service
                     .leave_note(
                         conversation_id(&params.conversation_id)?,
@@ -316,7 +339,7 @@ pub(super) async fn dispatch(
                 ))
             }
             "conversation.messageStatus" => {
-                let params = params!(ConversationMessageStatusParams);
+                let params = target_params!(ConversationMessageStatusParams);
                 let found = service
                     .note_status(
                         conversation_id(&params.conversation_id)?,
@@ -337,7 +360,7 @@ pub(super) async fn dispatch(
                 ))
             }
             "conversation.reorder" => {
-                let params = params!(ConversationReorderParams);
+                let params = target_params!(ConversationReorderParams);
                 let outcome = service
                     .reorder(
                         conversation_id(&params.conversation_id)?,
@@ -351,7 +374,7 @@ pub(super) async fn dispatch(
                 ))
             }
             "conversation.remove" => {
-                let params = params!(ConversationRemoveParams);
+                let params = target_params!(ConversationRemoveParams);
                 let applied = service
                     .remove(
                         conversation_id(&params.conversation_id)?,
@@ -368,7 +391,7 @@ pub(super) async fn dispatch(
                 ))
             }
             "conversation.answerQuestion" => {
-                let params = params!(ConversationAnswerQuestionParams);
+                let params = target_params!(ConversationAnswerQuestionParams);
                 service
                     .answer_question(
                         conversation_id(&params.conversation_id)?,
@@ -396,7 +419,7 @@ pub(super) async fn dispatch(
                 ))
             }
             "conversation.answer" => {
-                let params = params!(ConversationAnswerParams);
+                let params = target_params!(ConversationAnswerParams);
                 service
                     .answer(
                         conversation_id(&params.conversation_id)?,
@@ -415,7 +438,7 @@ pub(super) async fn dispatch(
                 ))
             }
             "conversation.cancel" => {
-                let params = params!(ConversationCancelParams);
+                let params = target_params!(ConversationCancelParams);
                 service
                     .cancel_permission(
                         conversation_id(&params.conversation_id)?,
@@ -434,7 +457,7 @@ pub(super) async fn dispatch(
                 ))
             }
             "conversation.close" => {
-                let params = params!(ConversationCloseParams);
+                let params = target_params!(ConversationCloseParams);
                 service
                     .close(
                         conversation_id(&params.conversation_id)?,
@@ -450,7 +473,7 @@ pub(super) async fn dispatch(
                 ))
             }
             "conversation.archive" | "conversation.unarchive" => {
-                let params = params!(ConversationArchiveParams);
+                let params = target_params!(ConversationArchiveParams);
                 let applied = service
                     .archive(
                         conversation_id(&params.conversation_id)?,
@@ -467,7 +490,7 @@ pub(super) async fn dispatch(
                 ))
             }
             "conversation.delete" => {
-                let params = params!(ConversationDeleteParams);
+                let params = target_params!(ConversationDeleteParams);
                 let applied = service
                     .delete(
                         conversation_id(&params.conversation_id)?,
@@ -526,6 +549,7 @@ pub(super) async fn read_view(
 /// The list `conversation.list` answers; a list subscription's frame is this
 /// same read. Its callers have asked `read_access::admit_list`.
 pub(super) async fn read_list(
+    state: &ProductRouteState,
     service: &ConversationService,
     session: &AuthenticatedSession,
     archived: bool,
@@ -537,7 +561,9 @@ pub(super) async fn read_list(
     // The desktop's index asks this list first. An incomplete list continues
     // as conversation.observe. The subject tells a list from a read.
     trace_conversation_index(listed.as_ref().err());
-    Ok(list_result(listed?))
+    let listed = list_result(listed?);
+    super::read_access::admit_index_rows(state, session, &listed.conversations).await?;
+    Ok(listed)
 }
 
 pub(super) fn caller(session: &AuthenticatedSession, request_id: String) -> ConversationCaller {

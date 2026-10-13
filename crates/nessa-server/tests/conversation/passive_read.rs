@@ -24,9 +24,7 @@ use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     conversation_catalogue_stream, ConversationApprovalMode, ConversationId, ConversationModelId,
 };
-use nessa_protocol::conversation::read_scope::{
-    CatalogueReadScope, ReadRefusal, ReceiverReadScope,
-};
+use nessa_protocol::conversation::read_scope::{ReadRefusal, ReceiverReadScope};
 use nessa_sync::replication::catalogue::{
     CataloguePass, EntryKey, ManifestEntry, ManifestPage, ManifestRequest, ResolvedEntry,
 };
@@ -128,7 +126,12 @@ async fn record_use_case_admits_before_metadata_and_rechecks_each_request() {
     let source = RecordSpy::default();
     let read = ReadRecords {
         admission: AdmitPassiveRead {
-            access_policy: crate::conversation_test_support::access_policy_ref(),
+            access_policy: crate::conversation_test_support::access_policy(),
+            owner_phone_purposes: &OrdinaryPurposeFixture,
+            owner_phone_receivers: None,
+            owner_phone_policy: std::sync::Arc::new(
+                crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new().unwrap(),
+            ),
             authorization: AuthorizeAction {
                 access: &access,
                 clock: &clock,
@@ -337,7 +340,12 @@ async fn passive_admission_preserves_unverifiable_authority_failures() {
     ] {
         let failing = FailingAccess(error);
         let admit = AdmitPassiveRead {
-            access_policy: crate::conversation_test_support::access_policy_ref(),
+            access_policy: crate::conversation_test_support::access_policy(),
+            owner_phone_purposes: &OrdinaryPurposeFixture,
+            owner_phone_receivers: None,
+            owner_phone_policy: std::sync::Arc::new(
+                crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new().unwrap(),
+            ),
             authorization: AuthorizeAction {
                 access: &failing,
                 clock: &clock,
@@ -489,7 +497,12 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
     .await
     .unwrap();
     let admit = AdmitPassiveRead {
-        access_policy: crate::conversation_test_support::access_policy_ref(),
+        access_policy: crate::conversation_test_support::access_policy(),
+        owner_phone_purposes: &OrdinaryPurposeFixture,
+        owner_phone_receivers: None,
+        owner_phone_policy: std::sync::Arc::new(
+            crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new().unwrap(),
+        ),
         authorization: AuthorizeAction {
             access: &access,
             clock: &clock,
@@ -774,7 +787,7 @@ struct CatalogueSpy {
 impl CatalogueReadSource for CatalogueSpy {
     fn read(
         &self,
-        _: CatalogueReadScope,
+        _: crate::conversation::application::AdmittedCatalogueRead,
         _: PrincipalId,
         _: CatalogueReadOperation,
         lease: RecordReadLease,
@@ -822,7 +835,12 @@ async fn catalogue_use_case_correlates_admitted_selector_and_operation_before_re
     };
     let read = ReadCatalogue {
         admission: AdmitPassiveRead {
-            access_policy: crate::conversation_test_support::access_policy_ref(),
+            access_policy: crate::conversation_test_support::access_policy(),
+            owner_phone_purposes: &OrdinaryPurposeFixture,
+            owner_phone_receivers: None,
+            owner_phone_policy: std::sync::Arc::new(
+                crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new().unwrap(),
+            ),
             authorization: AuthorizeAction {
                 access: &access,
                 clock: &clock,
@@ -1041,7 +1059,12 @@ async fn each_operation_asks_for_its_own_grant() {
     .await
     .unwrap();
     let admission = AdmitPassiveRead {
-        access_policy: crate::conversation_test_support::access_policy_ref(),
+        access_policy: crate::conversation_test_support::access_policy(),
+        owner_phone_purposes: &OrdinaryPurposeFixture,
+        owner_phone_receivers: None,
+        owner_phone_policy: std::sync::Arc::new(
+            crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new().unwrap(),
+        ),
         authorization: AuthorizeAction {
             access: &access,
             clock: &clock,
@@ -1103,7 +1126,12 @@ async fn each_operation_asks_for_its_own_grant() {
         reply: Mutex::new(None),
     };
     let admission = AdmitPassiveRead {
-        access_policy: crate::conversation_test_support::access_policy_ref(),
+        access_policy: crate::conversation_test_support::access_policy(),
+        owner_phone_purposes: &OrdinaryPurposeFixture,
+        owner_phone_receivers: None,
+        owner_phone_policy: std::sync::Arc::new(
+            crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new().unwrap(),
+        ),
         authorization: AuthorizeAction {
             access: &access,
             clock: &clock,
@@ -1299,7 +1327,12 @@ async fn an_ungranted_conversation_is_refused_before_its_source() {
     );
     let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
     let admit = AdmitPassiveRead {
-        access_policy: crate::conversation_test_support::access_policy_ref(),
+        access_policy: crate::conversation_test_support::access_policy(),
+        owner_phone_purposes: &OrdinaryPurposeFixture,
+        owner_phone_receivers: None,
+        owner_phone_policy: std::sync::Arc::new(
+            crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new().unwrap(),
+        ),
         authorization: AuthorizeAction {
             access: &access,
             clock: &FixedClock,
@@ -1356,7 +1389,12 @@ async fn a_comment_or_drive_grant_reads_records_as_read_does() {
         );
         let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
         let admit = AdmitPassiveRead {
-            access_policy: crate::conversation_test_support::access_policy_ref(),
+            access_policy: crate::conversation_test_support::access_policy(),
+            owner_phone_purposes: &OrdinaryPurposeFixture,
+            owner_phone_receivers: None,
+            owner_phone_policy: std::sync::Arc::new(
+                crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new().unwrap(),
+            ),
             authorization: AuthorizeAction {
                 access: &access,
                 clock: &FixedClock,
@@ -1413,7 +1451,12 @@ async fn a_revoke_ends_the_next_read_and_lets_an_admitted_one_finish() {
     );
     let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
     let admit = AdmitPassiveRead {
-        access_policy: crate::conversation_test_support::access_policy_ref(),
+        access_policy: crate::conversation_test_support::access_policy(),
+        owner_phone_purposes: &OrdinaryPurposeFixture,
+        owner_phone_receivers: None,
+        owner_phone_policy: std::sync::Arc::new(
+            crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new().unwrap(),
+        ),
         authorization: AuthorizeAction {
             access: &access,
             clock: &FixedClock,
@@ -1501,7 +1544,12 @@ async fn metadata_query_target_fences_passive_admission_and_shares() {
     );
     let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
     let admit = AdmitPassiveRead {
-        access_policy: crate::conversation_test_support::access_policy_ref(),
+        access_policy: crate::conversation_test_support::access_policy(),
+        owner_phone_purposes: &OrdinaryPurposeFixture,
+        owner_phone_receivers: None,
+        owner_phone_policy: std::sync::Arc::new(
+            crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new().unwrap(),
+        ),
         authorization: AuthorizeAction {
             access: &access,
             clock: &FixedClock,
@@ -1583,7 +1631,7 @@ async fn a_paired_read_the_access_policy_cannot_decide_is_unverifiable() {
     );
     let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
     let session = device_session().await;
-    let scope = CatalogueReadScope {
+    let scope = nessa_protocol::conversation::read_scope::CatalogueReadScope {
         receiver_id: "receiver".into(),
         organization_id: OrganizationId::new("org").unwrap(),
         owner_id: PrincipalId::new("owner").unwrap(),
@@ -1601,9 +1649,14 @@ async fn a_paired_read_the_access_policy_cannot_decide_is_unverifiable() {
             ReadRefusal::Forbidden,
         ),
     ] {
-        let answers = Answers(denial);
+        let answers = std::sync::Arc::new(Answers(denial));
         let admit = AdmitPassiveRead {
-            access_policy: &answers,
+            access_policy: answers.clone(),
+            owner_phone_purposes: &OrdinaryPurposeFixture,
+            owner_phone_receivers: None,
+            owner_phone_policy: std::sync::Arc::new(
+                crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new().unwrap(),
+            ),
             authorization: AuthorizeAction {
                 access: &access,
                 clock: &FixedClock,
@@ -1635,5 +1688,21 @@ async fn a_paired_read_the_access_policy_cannot_decide_is_unverifiable() {
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0, "no source was touched");
         assert_eq!(admit.catalogue_watch(&session, &scope), Err(watch_refusal));
+    }
+}
+
+// These existing fixtures contain ordinary credentials only. New owner-phone
+// fixtures must supply the actual canonical registry purpose source and holding port.
+struct OrdinaryPurposeFixture;
+impl nessa_auth::application::pairing::OwnerPhonePurposeSource for OrdinaryPurposeFixture {
+    fn owner_phone_purpose<'a>(
+        &'a self,
+        _: &'a nessa_auth::application::session::AuthenticatedSession,
+        _: &'a dyn nessa_auth::application::ports::Clock,
+    ) -> nessa_auth::application::ports::PortFuture<
+        'a,
+        Option<nessa_auth::application::pairing::OwnerPhonePurpose>,
+    > {
+        Box::pin(async { Ok(None) })
     }
 }

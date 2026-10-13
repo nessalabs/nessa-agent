@@ -53,6 +53,12 @@ async fn serve(fixture: &Fixture, pairing: bool) -> SocketAddr {
         OrganizationId::new("org").unwrap(),
         AudienceId::new("gateway").unwrap(),
         ProductDependencies {
+            owner_phone_purpose: fixture.registry.clone(),
+            owner_phone_policy: Arc::new(
+                nessa_server::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new()
+                    .unwrap(),
+            ),
+            owner_phone_receivers: None,
             verifier: fixture.registry.clone(),
             access: fixture.registry.clone(),
             clock: Arc::new(Time),

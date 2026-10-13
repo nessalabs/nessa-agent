@@ -14,12 +14,15 @@
 mod activation;
 mod cleanup;
 mod owner;
+mod owner_phone;
 mod read_status;
 mod receivers;
 mod recurrence;
 pub use activation::{ActivationError, Approval, FreshStage};
 pub use cleanup::{CleanupError, SettleCleanup};
 pub use owner::{OwnerError, PairingOwner, PreparedInvitation};
-pub use read_status::{DeviceStatusError, ReadDevicePairing};
-pub use receivers::{PairingReceivers, ReceiverError, ReceiverRequest, ReceiverDispatch};
+pub use owner_phone::FreshOwnerPhone;
+pub(crate) use read_status::claimed_status;
+pub use read_status::{DeviceStatusError, ReadDevicePairing, ReadOwnerPhoneRecovery};
+pub use receivers::{PairingReceivers, ReceiverDispatch, ReceiverError, ReceiverRequest};
 pub use recurrence::{access_error_recurs, receiver_error_recurs, store_error_recurs};

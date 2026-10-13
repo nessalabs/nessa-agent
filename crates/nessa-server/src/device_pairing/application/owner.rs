@@ -204,7 +204,7 @@ impl PairingOwner<'_> {
     /// enrollment it ends after staging has its receiver settled here, by the
     /// path that ended it (design row A13); if that cannot complete now, the
     /// record keeps `cleanup_pending` for the next path or reconciliation.
-    async fn expire(&self, id: InvitationId) -> Result<PairingRecord, OwnerError> {
+    pub(super) async fn expire(&self, id: InvitationId) -> Result<PairingRecord, OwnerError> {
         let record = self
             .enrollments
             .expire_pairing_if_due(id, self.clock)

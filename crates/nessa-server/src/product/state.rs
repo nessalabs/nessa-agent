@@ -9,8 +9,9 @@ use crate::attachments::{
 };
 use crate::conversation::application::{
     CatalogueReadSource, ConversationAccessPolicyEvaluator, ConversationRepository,
-    ConversationService, McpAppAudit, ReceiverAuthority, RecordReadSource, ShareGrants,
-    WatchCatalogue, WatchNamespaces, WatchRecords,
+    ConversationService, McpAppAudit, OwnerPhonePolicyEvaluator, OwnerPhoneReceiverAuthority,
+    ReceiverAuthority, RecordReadSource, ShareGrants, WatchCatalogue, WatchNamespaces,
+    WatchRecords,
 };
 use crate::conversation::infrastructure::UuidWatchNamespaces;
 pub(crate) use crate::core::limit_log::note_limit;
@@ -24,6 +25,7 @@ use axum::extract::FromRef;
 use nessa_auth::{
     application::{
         credential_admin::CredentialAdmin,
+        pairing::OwnerPhonePurposeSource,
         ports::{AccessReader, Clock, CredentialVerifier, PolicyEvaluator},
     },
     domain::{AudienceId, OrganizationId, Resource, ResourceId},
@@ -114,6 +116,9 @@ pub struct ProductRouteState {
     pub(crate) access: Arc<dyn AccessReader>,
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) policy: Arc<dyn PolicyEvaluator>,
+    pub(crate) owner_phone_purpose: Arc<dyn OwnerPhonePurposeSource>,
+    pub(crate) owner_phone_policy: Arc<dyn OwnerPhonePolicyEvaluator>,
+    pub(crate) owner_phone_receivers: Option<Arc<dyn OwnerPhoneReceiverAuthority>>,
     pub(crate) conversations: Option<Arc<ConversationService>>,
     /// Passive reads use these independent authorities without opening an Agent.
     /// The read grants are also what every socket read asks for a paired
@@ -212,6 +217,14 @@ pub struct ProductDependencies {
     pub clock: Arc<dyn Clock>,
     /// Embedded policy engine constructed and validated once at startup.
     pub policy: Arc<dyn PolicyEvaluator>,
+    /// Canonical current proof classification, independent of native listener configuration.
+    /// Unavailable evidence is a refusal; it cannot become an ordinary owner.
+    pub owner_phone_purpose: Arc<dyn OwnerPhonePurposeSource>,
+    /// Additional first-party phone method/target policy, constructed before serving.
+    pub owner_phone_policy: Arc<dyn OwnerPhonePolicyEvaluator>,
+    /// Original receiver holding, independently composed from optional read services.
+    /// None is unavailable for a genuine phone purpose, never ordinary owner access.
+    pub owner_phone_receivers: Option<Arc<dyn OwnerPhoneReceiverAuthority>>,
     /// Existing server clock used only to report health uptime.
     pub uptime_clock: Arc<dyn UptimeClock>,
     /// Asks this host which agents could start here. Chosen in composition so
@@ -281,6 +294,9 @@ impl ProductRouteState {
             access: dependencies.access,
             clock: dependencies.clock,
             policy: dependencies.policy,
+            owner_phone_purpose: dependencies.owner_phone_purpose,
+            owner_phone_policy: dependencies.owner_phone_policy,
+            owner_phone_receivers: dependencies.owner_phone_receivers,
             admin: None,
             mcp_server_settings: None,
             mcp_authorization: None,

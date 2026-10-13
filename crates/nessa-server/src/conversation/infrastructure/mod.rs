@@ -67,6 +67,9 @@
 //! `DurableDriveToolAudit` keeps each of the tool policy's decisions on the
 //! gateway's own tools for a Drive turn, one immutable file per conversation,
 //! call, tool and outcome.
+//! `CedarOwnerPhonePolicyEvaluator` owns first-party method and input restrictions.
+pub mod owner_phone_policy;
+pub use owner_phone_policy::CedarOwnerPhonePolicyEvaluator;
 mod change_watch;
 pub use change_watch::{NessaRecordWatches, UuidWatchNamespaces};
 // Composed only by the Unix gateway (`composition/local_auth.rs`), as

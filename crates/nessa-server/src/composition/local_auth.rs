@@ -190,6 +190,10 @@ pub(super) async fn product_state(
         )?;
     }
     let policy = Arc::new(CedarPolicyEvaluator::new().map_err(setup_error)?);
+    let owner_phone_policy = Arc::new(
+        crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new()
+            .map_err(setup_error)?,
+    );
     let store = Arc::new(super::credential_registry::open(
         directory,
         settings.registry,
@@ -222,7 +226,10 @@ pub(super) async fn product_state(
         Some(receiver_access(
             namespace,
             &store,
-            &CedarPolicyEvaluator::profile_digest(),
+            &crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::receiver_profile_digest(
+                &CedarPolicyEvaluator::profile_digest(),
+                &CedarConversationAccessPolicy::profile_sources(),
+            ),
         )?)
     } else {
         None
@@ -276,7 +283,7 @@ pub(super) async fn product_state(
     let access_policy: Arc<dyn ConversationAccessPolicyEvaluator> =
         Arc::new(CedarConversationAccessPolicy::new().map_err(RunError::Agent)?);
     let (conversations, agent_probe, warm_ups, mcp, environment_peers) =
-        match (&settings.agents, receivers) {
+        match (&settings.agents, receivers.clone()) {
             (Some(agents), Some(receivers)) => {
                 let mut built = conversations(
                     agents,
@@ -338,6 +345,12 @@ pub(super) async fn product_state(
         audience,
         ProductDependencies {
             verifier: store.clone(),
+            owner_phone_purpose: store.clone(),
+            owner_phone_policy,
+            owner_phone_receivers: receivers.as_ref().map(|authority| {
+                authority.clone()
+                    as Arc<dyn crate::conversation::application::OwnerPhoneReceiverAuthority>
+            }),
             access: store,
             clock: Arc::new(SystemClock),
             policy,

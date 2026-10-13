@@ -14,7 +14,7 @@ Existing device pairing deliberately delegates one read capability and requires 
 
 ## Decision
 
-Auth owns a separate OwnerPhoneReadWrite class, its complete ordered capability set, signed exact device request and durable original-request ledger. The exact original bootstrap credential admits creation, replay, staging and publication. The issued device uses its private native key with its public credential ID for protected product and native read connections. Canonical Auth enrollment and its remembered receiver receipt durably own purpose once; current delegated Auth and current receiver agreement establish the distinct OwnerPhone reader. A generated default-deny method/resource classification narrows this capability to owned conversation operations, bound attachments/artifacts and configured runtime discovery. Existing peer/device share roles, tool approval and revocation remain separate authorities.
+Auth owns a separate OwnerPhoneReadWrite class, its complete ordered capability set, signed exact device request and durable original-request ledger. The exact original bootstrap credential admits creation, replay, staging and publication. The issued device uses its private native key with its public credential ID for protected product and native read connections. Canonical Auth enrollment and its remembered receiver receipt durably own purpose once; current delegated Auth and current receiver agreement establish the distinct OwnerPhone reader. The purpose Cedar policy consumes published method/action facts and default-denies ancillary administration; it also preserves configured Ask approval and refuses owner-local path links. Current signed purpose and original receiver holding admit a first-party reader only after the canonical linkage policy passes. The shared ConversationAccessPolicyEvaluator then decides actual conversation Read/Act/Locate and catalogue List from current metadata, including deletion. Device and peer readers remain separate paired subjects with their existing share roles. Existing peer/device share roles, tool approval and revocation remain separate authorities.
 
 ## Alternatives considered
 
@@ -26,3 +26,27 @@ Auth owns a separate OwnerPhoneReadWrite class, its complete ordered capability 
 ## Consequences
 
 The gateway must publish authenticated actual native discovery and support exact original-request recovery. Native preparation must be durable before mutation, and protected product must have a separate bounded physical child whose close drains before parent disposal. Active delegated access depends on current device/member/receiver authority, while the original bootstrap remains historical linkage after retirement. Current receiver epochs may advance beyond the original Pair receipt; historical equality cannot stand in for current progress. Completion requires a genuine signed enrollment, no-share creation, positive native empty projection, first Send/reply and current revocation/close proofs. No grants-only subset is a completed implementation.
+
+
+## Current integration and verification boundaries
+
+`phone.endpoint` returns the authenticated source and actual bound numeric native
+endpoint/public pin. `phone.authorize` and `phone.status` consume the complete
+original signed request through the canonical Auth ledger; original TLS recovery
+uses the saved UUID/digest and actual device proof without restoring a PAKE
+attempt. Mutating resume owns expiry and late receiver Pair/fence settlement;
+read-only recovery never expires or issues.
+
+The receiver policy fingerprint includes the Auth profile, purpose bundle and
+all shared conversation-access schema/policy sources through one length-delimited
+hash owner. The actual receiver journal advances its policy epoch before saved
+progress is reused. Ordinary paired catalogue filtering retains its continuation;
+a first-party candidate contradiction refuses the complete pass without a new
+cursor or a disclosed denied ID.
+
+Current development contracts are used directly. There are no schema aliases or
+old-format fallback paths for this feature; any stale development data migration
+must preserve existing chats and drafts and cannot manufacture authorization.
+The server source/fixture proofs do not establish Apple package adoption or a
+connected phone. Actual protected-product composition, positive fresh-empty
+native projection and first Send/reply remain required before completion.

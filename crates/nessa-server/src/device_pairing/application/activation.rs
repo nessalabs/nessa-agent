@@ -93,6 +93,18 @@ impl PairingOwner<'_> {
         let decided = self
             .decide(session, id, OwnerDecision::Approve(key))
             .await?;
+        self.activate_approved(session, decided, fresh).await
+    }
+
+    /// Continue a canonical approval already committed by signed owner-phone consent.
+    /// This adds no second approval decision and keeps the existing physical stage owner.
+    pub(super) async fn activate_approved(
+        &self,
+        session: &AuthenticatedSession,
+        decided: PairingRecord,
+        fresh: FreshStage,
+    ) -> Result<Approval, OwnerError> {
+        let id = decided.id();
         if !matches!(
             decided.phase(),
             PairingPhase::Approved | PairingPhase::Staging

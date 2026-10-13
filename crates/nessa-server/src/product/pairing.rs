@@ -145,7 +145,7 @@ pub(super) async fn dispatch(
 
 /// The owner's view of one record. Every field is read from the record; the
 /// cleanup flag is the record's own `cleanup_pending`, never stored here.
-fn owner_status(record: &PairingRecord) -> PairingOwnerStatus {
+pub(super) fn owner_status(record: &PairingRecord) -> PairingOwnerStatus {
     let intent = record.intent();
     let grant = intent.grant();
     PairingOwnerStatus {
@@ -215,7 +215,7 @@ fn initiator_kind(kind: PairingInitiatorKind) -> WireInitiator {
 
 /// The wire code for a refused owner command. Total over every runtime
 /// failure, so a new failure does not compile until it is given a code.
-fn refusal(error: PairingRuntimeError) -> &'static str {
+pub(super) fn refusal(error: PairingRuntimeError) -> &'static str {
     let code = match error {
         PairingRuntimeError::Owner(OwnerError::Authorization(error)) => {
             return match error {

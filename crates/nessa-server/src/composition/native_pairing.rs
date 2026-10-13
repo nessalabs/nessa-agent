@@ -181,6 +181,7 @@ pub(super) async fn prepare(
     let gateway = Arc::new(
         GatewayPairing::open(PairingRuntimeDependencies {
             enrollments: registry.clone(),
+            originals: registry.clone(),
             access: registry.clone(),
             policy: inputs.policy,
             receivers: Arc::new(ConversationReceivers::new(inputs.receivers)),
@@ -277,6 +278,9 @@ pub(super) async fn bind(
     let bind_failed = |source| RunError::Native(NativeFailure::Bind { address, source });
     let socket = TcpEnrollmentAccept::new(TcpListener::bind(address).await.map_err(bind_failed)?);
     let bound = socket.local_address().map_err(bind_failed)?;
+    gateway
+        .publish_native_endpoint(bound)
+        .map_err(|error| RunError::Native(NativeFailure::Open(error)))?;
     let sessions = NativeSessions::new(product, Arc::new(RegistryDevices(registry)));
     let connections = NativeEnrollmentConnections::new(gateway.clone(), clock.clone())
         .with_protected_sessions(Arc::new(sessions));

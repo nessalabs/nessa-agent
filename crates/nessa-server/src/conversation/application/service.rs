@@ -969,6 +969,11 @@ fn reviews_this_process_holds(
 }
 
 impl ConversationService {
+    /// Canonical approval selection when creation supplies no override.
+    pub fn default_creation_approval_mode() -> ConversationApprovalMode {
+        ConversationApprovalMode::Ask
+    }
+
     /// Own every configured agent, and the one a caller gets by default. No
     /// MCP call shows a UI: see [`Self::with_tool_uis`].
     pub fn new(
@@ -1182,7 +1187,7 @@ impl ConversationService {
         let agent = service.inner.agents.select(agent_request)?;
         let approval_mode = requested
             .approval_mode
-            .unwrap_or(ConversationApprovalMode::Ask);
+            .unwrap_or_else(Self::default_creation_approval_mode);
         let configured = match requested.model.as_deref() {
             Some(model) => {
                 service

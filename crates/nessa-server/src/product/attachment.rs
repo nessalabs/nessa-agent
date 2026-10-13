@@ -44,6 +44,13 @@ pub(super) async fn dispatch(
     let Ok(params) = serde_json::from_value::<AttachmentBeginParams>(frame.params) else {
         return failure(&frame.id, error_code(BeginError::InvalidRequest).as_str());
     };
+    let Ok(conversation) = ConversationId::new(&params.conversation_id) else {
+        return failure(&frame.id, error_code(BeginError::InvalidRequest).as_str());
+    };
+    if let Err(code) = super::read_access::admit_command_target(state, session, &conversation).await
+    {
+        return failure(&frame.id, code);
+    }
     let context = session.context();
     // As for conversations: the credential is the verified surface, and client
     // metadata attributes nothing.

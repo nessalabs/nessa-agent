@@ -1,9 +1,11 @@
 //! One volatile setup slot around canonical invitation and authentication owners.
+#[path = "owner_phone.rs"]
+mod owner_phone;
 use super::owner_admission::{OwnerAdmission, OwnerAdmissionRefusal, OwnerLease};
 use super::{RegistrationError, RegistrationWorker};
 use crate::device_pairing::application::{
     Approval, CleanupError, DeviceStatusError, FreshStage, OwnerError, PairingOwner,
-    PairingReceivers, ReadDevicePairing, ReceiverError, SettleCleanup,
+    PairingReceivers, ReadDevicePairing, ReadOwnerPhoneRecovery, ReceiverError, SettleCleanup,
 };
 use nessa_auth::{
     adapters::pairing::{
@@ -12,8 +14,8 @@ use nessa_auth::{
     },
     application::{
         pairing::{
-            AttemptReservation, AuthorizePairing, GatewayKeyStore, OwnerDecision, PairingStore,
-            PairingStoreError, PairingWorkerFault, RuntimeEnd,
+            AttemptReservation, AuthorizePairing, GatewayKeyStore, OwnerDecision, OwnerPhoneStore,
+            PairingStore, PairingStoreError, PairingWorkerFault, RuntimeEnd,
         },
         ports::{AccessReader, Clock, PolicyEvaluator},
         session::AuthenticatedSession,
@@ -21,16 +23,19 @@ use nessa_auth::{
     domain::{
         pairing::{
             AttemptFailure, AttemptId, ConsentClass, ConsentIntentId, DeviceKey, InvitationId,
-            PairingPhase, PairingPolicy, PairingRecord, PublicIntent,
+            OwnerPhoneRequest, OwnerPhoneRequestId, PairingPhase, PairingPolicy, PairingRecord,
+            PublicIntent,
         },
         CredentialId, Resource,
     },
 };
 use nessa_protocol::pairing::socket::worker_fault;
 use nessa_protocol::pairing::DevicePairingStatus;
+pub use owner_phone::PhoneAuthorization;
 use std::{
     io::{Read, Write},
-    sync::Arc,
+    net::SocketAddr,
+    sync::{Arc, OnceLock},
 };
 use tokio::{
     runtime::Handle,
@@ -77,6 +82,8 @@ pub struct PairingRuntimeDependencies {
     /// Enrollment store (the credential registry in real composition). Every
     /// enrollment decision is Auth's, made through this port.
     pub enrollments: Arc<dyn PairingStore>,
+    /// Canonical same-entry signed original recovery, independent of legacy attempts.
+    pub originals: Arc<dyn OwnerPhoneStore>,
     /// Current credential and membership reader for owner admission.
     pub access: Arc<dyn AccessReader>,
     /// Existing current policy evaluator (Cedar in real composition).
@@ -147,6 +154,7 @@ pub struct GatewayPairing {
     creating: Arc<Semaphore>,
     owners: OwnerAdmission,
     available: Arc<Mutex<Option<AvailableSetup>>>,
+    native_endpoint: OnceLock<SocketAddr>,
 }
 impl GatewayPairing {
     /// Settle this gateway's unfinished records before serving. Every one is
@@ -179,7 +187,29 @@ impl GatewayPairing {
             creating: Arc::new(Semaphore::new(1)),
             owners: OwnerAdmission::new(),
             available: Arc::new(Mutex::new(None)),
+            native_endpoint: OnceLock::new(),
         })
+    }
+    /// Public metadata for the actual listener, never a guessed product host or
+    /// configured port before bind. Unusable wildcard/zero endpoints disclose none.
+    pub fn native_endpoint(&self) -> Option<(SocketAddr, [u8; 44])> {
+        let endpoint = *self.native_endpoint.get()?;
+        OwnerPhoneRequest::validate_endpoint(endpoint).ok()?;
+        Some((endpoint, self.dependencies.identity.public_spki()))
+    }
+    /// The physical composition owner publishes exactly its bound address once.
+    /// Repeated publication of that same binding is factual idempotency.
+    pub(crate) fn publish_native_endpoint(
+        &self,
+        endpoint: SocketAddr,
+    ) -> Result<(), PairingRuntimeError> {
+        match self.native_endpoint.set(endpoint) {
+            Ok(()) => Ok(()),
+            Err(_) if self.native_endpoint.get() == Some(&endpoint) => Ok(()),
+            Err(_) => Err(PairingRuntimeError::Crypto(
+                PairingCryptoError::InvalidContext,
+            )),
+        }
     }
     fn owner_from(dependencies: &PairingRuntimeDependencies) -> PairingOwner<'_> {
         PairingOwner {
@@ -497,6 +527,25 @@ impl GatewayPairing {
         discard_ended(&mut *self.available.lock().await, &self.dependencies);
         self.settle_if_ended(public.invitation()).await;
         Ok(status)
+    }
+    /// Read-only exact original recovery on the actual pinned TLS worker. No
+    /// expiry, settlement, setup-slot ownership or publication occurs here.
+    pub fn recover_owner_phone<S: Read + Write>(
+        &self,
+        channel: &NativeTransport<S>,
+        request: OwnerPhoneRequestId,
+        digest: &[u8; 32],
+    ) -> Result<(PublicIntent, DevicePairingStatus), PairingRuntimeError> {
+        self.verify_channel(channel)?;
+        ReadOwnerPhoneRecovery {
+            originals: self.dependencies.originals.as_ref(),
+            receivers: self.dependencies.receivers.as_ref(),
+        }
+        .execute(request, digest, channel.device_proof())
+        .map_err(|error| match error {
+            DeviceStatusError::Enrollment(error) => PairingRuntimeError::Enrollment(error),
+            DeviceStatusError::Receiver(error) => PairingRuntimeError::Receiver(error),
+        })
     }
     /// Current protected owner status; historical Active is not read authority.
     pub async fn owner_status(
