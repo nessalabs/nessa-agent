@@ -4,8 +4,8 @@
 use super::tools::corrupt;
 use crate::application::agent_execution::sessions::StorageError;
 use crate::domain::agent_execution::executions::{
-    GrantInitiator, GrantRole as DomainGrantRole, Initiation as DomainInitiation,
-    Initiator as DomainInitiator, ToolChecking as DomainToolChecking,
+    GrantInitiator, Initiation as DomainInitiation, Initiator as DomainInitiator,
+    ToolChecking as DomainToolChecking,
 };
 use serde::{Deserialize, Serialize};
 
@@ -19,17 +19,7 @@ pub(super) struct Initiation {
 #[serde(deny_unknown_fields)]
 enum Initiator {
     Owner,
-    Grant {
-        grant: String,
-        role: GrantRole,
-        policy_revision: u64,
-    },
-}
-#[derive(Serialize, Deserialize)]
-enum GrantRole {
-    Read,
-    Comment,
-    Drive,
+    Grant { grant: String, policy_revision: u64 },
 }
 #[derive(Serialize, Deserialize)]
 enum ToolChecking {
@@ -42,11 +32,6 @@ impl From<&DomainInitiation> for Initiation {
                 DomainInitiator::Owner => Initiator::Owner,
                 DomainInitiator::Grant(grant) => Initiator::Grant {
                     grant: grant.grant().into(),
-                    role: match grant.role() {
-                        DomainGrantRole::Read => GrantRole::Read,
-                        DomainGrantRole::Comment => GrantRole::Comment,
-                        DomainGrantRole::Drive => GrantRole::Drive,
-                    },
                     policy_revision: grant.policy_revision(),
                 },
             },
@@ -64,19 +49,9 @@ impl Initiation {
             Initiator::Owner => DomainInitiation::owner(),
             Initiator::Grant {
                 grant,
-                role,
                 policy_revision,
             } => DomainInitiation::grant(
-                GrantInitiator::new(
-                    grant,
-                    match role {
-                        GrantRole::Read => DomainGrantRole::Read,
-                        GrantRole::Comment => DomainGrantRole::Comment,
-                        GrantRole::Drive => DomainGrantRole::Drive,
-                    },
-                    policy_revision,
-                )
-                .map_err(corrupt)?,
+                GrantInitiator::new(grant, policy_revision).map_err(corrupt)?,
             ),
         })
     }

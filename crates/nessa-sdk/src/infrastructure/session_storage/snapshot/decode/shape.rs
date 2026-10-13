@@ -207,7 +207,6 @@ impl Shape {
             (Initiation, "tools") => Text(KEY_BYTES),
             (Initiator, "Grant") => Grant,
             (Grant, "grant") => Text(GrantInitiator::MAX_GRANT_BYTES),
-            (Grant, "role") => Text(KEY_BYTES),
             (Grant, "policy_revision") => Number,
             (_, "projection") => FinalizedComponents,
             (FinalizedComponent, "Operation") => Error,
@@ -316,7 +315,7 @@ impl Shape {
             FailedAcknowledgement => matches!(key, "audit" | "storage"),
             Initiation => matches!(key, "initiator" | "tools"),
             Initiator => key == "Grant",
-            Grant => matches!(key, "grant" | "role" | "policy_revision"),
+            Grant => matches!(key, "grant" | "policy_revision"),
             StorageError => matches!(
                 key,
                 "Io" | "Corrupt" | "ChangesRequired" | "Unresolved" | "ShutdownFailures"
