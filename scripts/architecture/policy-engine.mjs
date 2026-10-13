@@ -8,7 +8,8 @@ import { maskRustNonCode, normalizedPath } from "./rust-boundaries.mjs"
  * port the application owns, named `…PolicyEvaluator`, and implemented by an
  * adapter in a module directory named `cedar`. This holds the part a text
  * check can see: where the engine is. It refuses the `cedar_policy` crate
- * anywhere outside a `cedar` directory, test code included, so the engine
+ * anywhere in a crate's `src/` outside a `cedar` directory, test modules
+ * included, so the engine
  * cannot leak past its adapter. It refuses an implementation of a
  * `…PolicyEvaluator` port outside one, so a port meant for Cedar cannot be
  * answered by hand-written Rust instead; only test code may substitute it.
@@ -18,10 +19,11 @@ import { maskRustNonCode, normalizedPath } from "./rust-boundaries.mjs"
  * that half of the gate.
  *
  * Test code is what the compiler says it is: the body of a `#[cfg(test)]`
- * module, and the files an out-of-line `#[cfg(test)] mod name;` loads, with
- * everything below them. [`testModuleFiles`] finds those files from the
- * declaration, so no file name is taken as a sign of test code. A file pulled
- * in with `include!` is read as product code. Pure text on purpose:
+ * module, and the files an out-of-line `#[cfg(test)] mod name;` loads and the
+ * modules they declare in turn. [`testCodeFiles`] follows those declarations
+ * the way rustc resolves them, so no file name is taken as a sign of test
+ * code. A file pulled in with `include!` is read as product code. Only a
+ * crate's `src/` is read; tests, benches and examples outside it are not. Pure text on purpose:
  * `check-architecture.mjs` runs with bare Node.
  */
 
@@ -38,8 +40,11 @@ const ENGINE = /\bcedar_policy\b/
 const IMPLEMENTS =
   /\bimpl\s*(?:<[^{;]*?>\s*)?(?:[\w:]*::)?\w*PolicyEvaluator\s*(?:<[^{;]*?>\s*)?\s+for\b/
 
-/** `#[cfg(test)]`, or a `cfg(all(test, …))`, then any further attributes. */
-const TEST_ATTRIBUTES = String.raw`#\[cfg\((?:test|all\(\s*test\b[^\]]*)\)\]\s*((?:#\[[^\]]*\]\s*)*)`
+/** `#[cfg(test)]`, or a `cfg(all(test, …))`. */
+const TEST_CFG = String.raw`#\[cfg\((?:test|all\(\s*test\b[^\]]*)\)\]`
+
+/** A test cfg, then any further attributes. */
+const TEST_ATTRIBUTES = String.raw`${TEST_CFG}\s*((?:#\[[^\]]*\]\s*)*)`
 
 /** The `mod` keyword after a visibility, if any. */
 const MOD = String.raw`(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*`
@@ -62,44 +67,76 @@ function withoutTestModules(text) {
   return out.join("")
 }
 
+/** Any out-of-line `mod name;`, its attributes captured. */
+const DECLARATION = new RegExp(String.raw`((?:#\[[^\]]*\]\s*)*)${MOD};`, "g")
+
+/** Whether a declaration's attributes put it behind a test cfg. */
+const IS_TEST = new RegExp(TEST_CFG)
+
 /**
- * Where the out-of-line test modules `path` declares live: each module's
- * candidate files (`name.rs`, `name/mod.rs`, or its `#[path]`), and the
- * directory everything below it lives in. Paths are repository-relative.
+ * The out-of-line modules `path` declares, as the files rustc would load:
+ * `name.rs` or `name/mod.rs` in the directory `path` owns, or a `#[path]`
+ * relative to `path`'s own directory. A `mod.rs`, `lib.rs` or `main.rs` owns
+ * its directory, and so does a file loaded through `#[path]`
+ * (`ownsDirectory`); any other `foo.rs` owns `foo/`. `testOnly` keeps only
+ * `cfg(test)` declarations. Paths are repository-relative.
  */
-export function testModuleFiles(path, source) {
+export function moduleDeclarations(
+  path,
+  source,
+  { ownsDirectory = false, testOnly = false } = {},
+) {
   const file = normalizedPath(path)
   const masked = maskRustNonCode(source)
   const dir = posix.dirname(file)
   const stem = posix.basename(file, ".rs")
-  const owns = ["mod", "lib", "main"].includes(stem) ? dir : posix.join(dir, stem)
-  const files = []
-  const below = []
-  const declaration = new RegExp(`${TEST_ATTRIBUTES}${MOD};`, "g")
-  for (let match; (match = declaration.exec(source)); ) {
-    if (masked[match.index] !== "#") continue
-    const name = match[2]
+  const owns =
+    ownsDirectory || ["mod", "lib", "main"].includes(stem) ? dir : posix.join(dir, stem)
+  const modules = []
+  for (const match of source.matchAll(DECLARATION)) {
+    const at = match.index + match[0].search(/\S/)
+    if (masked[at] !== source[at]) continue
+    if (testOnly && !IS_TEST.test(match[1])) continue
     const pathAttribute = /#\[path\s*=\s*"([^"]+)"\s*\]/.exec(match[1])
-    if (pathAttribute) {
-      const target = posix.normalize(posix.join(dir, pathAttribute[1]))
-      files.push(target)
-      below.push(
-        posix.basename(target) === "mod.rs"
-          ? `${posix.dirname(target)}/`
-          : `${posix.join(posix.dirname(target), posix.basename(target, ".rs"))}/`,
-      )
-    } else {
-      files.push(posix.join(owns, `${name}.rs`), posix.join(owns, name, "mod.rs"))
-      below.push(`${posix.join(owns, name)}/`)
-    }
+    modules.push(
+      pathAttribute
+        ? [{ path: posix.normalize(posix.join(dir, pathAttribute[1])), byPath: true }]
+        : [
+            { path: posix.join(owns, `${match[2]}.rs`), byPath: false },
+            { path: posix.join(owns, match[2], "mod.rs"), byPath: false },
+          ],
+    )
   }
-  return { files, below }
+  return modules
 }
 
-/** Whether `file` is test code, given every crate's `testModuleFiles`. */
-export function isTestCode(path, tests) {
-  const file = normalizedPath(path)
-  return tests.files.has(file) || tests.below.some((prefix) => file.startsWith(prefix))
+/**
+ * Every file under `sources` (a map of repository-relative path to text) that
+ * only test code loads: what a `cfg(test)` declaration loads, and every module
+ * those files declare in turn.
+ */
+export function testCodeFiles(sources) {
+  const tests = new Set()
+  const queue = []
+  const load = (modules) => {
+    for (const candidates of modules)
+      for (const candidate of candidates)
+        if (sources.has(candidate.path) && !tests.has(candidate.path)) {
+          tests.add(candidate.path)
+          queue.push(candidate)
+        }
+  }
+  for (const [path, source] of sources)
+    load(moduleDeclarations(path, source, { testOnly: true }))
+  while (queue.length) {
+    const next = queue.shift()
+    load(
+      moduleDeclarations(next.path, sources.get(next.path), {
+        ownsDirectory: next.byPath,
+      }),
+    )
+  }
+  return tests
 }
 
 /**

@@ -15,11 +15,7 @@ import { overlayPlacementViolations } from "./architecture/overlay-placement.mjs
 import { setupGatePlacementViolations } from "./architecture/setup-gate-placement.mjs"
 import { standDownPlacementViolations } from "./architecture/stand-down-placement.mjs"
 import { environmentPortViolations } from "./architecture/environment-port.mjs"
-import {
-  isTestCode,
-  policyEngineViolations,
-  testModuleFiles,
-} from "./architecture/policy-engine.mjs"
+import { policyEngineViolations, testCodeFiles } from "./architecture/policy-engine.mjs"
 import { composerBudgetViolations } from "./architecture/composer-budget.mjs"
 import { wholeWorkspaceViolations } from "./architecture/whole-workspace.mjs"
 import { importedPaths } from "./architecture/imported-paths.mjs"
@@ -73,16 +69,14 @@ const metadata = JSON.parse(
 )
 // Test code is what `#[cfg(test)]` declarations load, read before any rule
 // that exempts it (the policy engine's placement, ADR 803).
-const rustTests = { files: new Set(), below: [] }
+const rustSources = new Map()
 for (const rustRoot of workspaceRustSourceRoots(root, metadata)) {
   const source = join(rustRoot, "src")
   if (!existsSync(source)) continue
-  for (const file of rustFiles(source)) {
-    const declared = testModuleFiles(rel(file), readFileSync(file, "utf8"))
-    for (const test of declared.files) rustTests.files.add(test)
-    rustTests.below.push(...declared.below)
-  }
+  for (const file of rustFiles(source))
+    rustSources.set(rel(file), readFileSync(file, "utf8"))
 }
+const rustTests = testCodeFiles(rustSources)
 for (const rustRoot of workspaceRustSourceRoots(root, metadata)) {
   const source = join(rustRoot, "src")
   if (!existsSync(source)) continue
@@ -97,7 +91,7 @@ for (const rustRoot of workspaceRustSourceRoots(root, metadata)) {
     for (const violation of policyEngineViolations(
       rel(file),
       text,
-      isTestCode(rel(file), rustTests),
+      rustTests.has(rel(file)),
     )) {
       fail(file, violation)
     }

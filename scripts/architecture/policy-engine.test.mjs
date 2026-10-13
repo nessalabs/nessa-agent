@@ -1,6 +1,10 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { isTestCode, policyEngineViolations, testModuleFiles } from "./policy-engine.mjs"
+import {
+  moduleDeclarations,
+  policyEngineViolations,
+  testCodeFiles,
+} from "./policy-engine.mjs"
 
 const adapter = "crates/nessa-auth/src/adapters/cedar/evaluator.rs"
 const product = "crates/nessa-server/src/product/read_access.rs"
@@ -106,73 +110,96 @@ test("comments and strings that name the engine are not code", () => {
   )
 })
 
-test("out-of-line test modules resolve the way the compiler loads them", () => {
+const paths = (modules) => modules.map((candidates) => candidates.map((c) => c.path))
+
+test("out-of-line modules resolve the way rustc loads them", () => {
   assert.deepEqual(
-    testModuleFiles(
-      "crates/nessa-server/src/conversation/service.rs",
-      "#[cfg(test)]\nmod test_support;",
+    paths(
+      moduleDeclarations(
+        "crates/nessa-server/src/conversation/service.rs",
+        "#[cfg(test)]\nmod test_support;",
+      ),
     ),
-    {
-      files: [
+    [
+      [
         "crates/nessa-server/src/conversation/service/test_support.rs",
         "crates/nessa-server/src/conversation/service/test_support/mod.rs",
       ],
-      below: ["crates/nessa-server/src/conversation/service/test_support/"],
-    },
+    ],
   )
   assert.deepEqual(
-    testModuleFiles(
-      "crates/nessa-server/src/browser_session/mod.rs",
-      "#[cfg(test)]\nmod tests;",
+    paths(
+      moduleDeclarations("crates/nessa-server/src/browser_session/mod.rs", "mod tests;"),
     ),
-    {
-      files: [
+    [
+      [
         "crates/nessa-server/src/browser_session/tests.rs",
         "crates/nessa-server/src/browser_session/tests/mod.rs",
       ],
-      below: ["crates/nessa-server/src/browser_session/tests/"],
-    },
+    ],
   )
   assert.deepEqual(
-    testModuleFiles(
-      "crates/nessa-auth/src/adapters/cedar/evaluator.rs",
-      '#[cfg(test)]\n#[path = "evaluator_tests.rs"]\nmod tests;',
+    paths(
+      moduleDeclarations(
+        "crates/nessa-auth/src/adapters/cedar/evaluator.rs",
+        '#[cfg(test)]\n#[path = "../../../tests/cedar.rs"]\nmod tests;',
+      ),
     ),
-    {
-      files: ["crates/nessa-auth/src/adapters/cedar/evaluator_tests.rs"],
-      below: ["crates/nessa-auth/src/adapters/cedar/evaluator_tests/"],
-    },
+    [["crates/nessa-auth/tests/cedar.rs"]],
+  )
+  // A file loaded through #[path] owns its own directory, like a mod.rs.
+  assert.deepEqual(
+    paths(
+      moduleDeclarations(
+        "crates/nessa-auth/src/adapters/cedar/evaluator_tests.rs",
+        "mod helpers;",
+        {
+          ownsDirectory: true,
+        },
+      ),
+    ),
+    [
+      [
+        "crates/nessa-auth/src/adapters/cedar/helpers.rs",
+        "crates/nessa-auth/src/adapters/cedar/helpers/mod.rs",
+      ],
+    ],
   )
 })
 
-test("a module that is not cfg(test), or a declaration in a comment, is product code", () => {
+test("only test cfgs count when asked, and a declaration in a comment is not one", () => {
   for (const source of [
     "mod helpers;",
     "// #[cfg(test)]\n// mod tests;",
     "#[cfg(unix)]\nmod unix;",
+    "#[cfg(not(test))]\nmod real;",
   ])
-    assert.deepEqual(testModuleFiles(product, source), { files: [], below: [] }, source)
+    assert.deepEqual(moduleDeclarations(product, source, { testOnly: true }), [], source)
+  for (const source of [
+    "#[cfg(test)]\nmod tests;",
+    "#[cfg(test)]\n#[allow(dead_code)]\nmod tests;",
+    "#[cfg(all(test, unix))]\npub(crate) mod tests;",
+  ])
+    assert.equal(
+      moduleDeclarations(product, source, { testOnly: true }).length,
+      1,
+      source,
+    )
 })
 
-test("everything below a test module is test code", () => {
-  const tests = testModuleFiles(
-    "crates/nessa-server/src/conversation/service.rs",
-    "#[cfg(test)]\nmod test_support;",
-  )
-  const known = { files: new Set(tests.files), below: tests.below }
-  assert.equal(
-    isTestCode("crates/nessa-server/src/conversation/service/test_support.rs", known),
-    true,
-  )
-  assert.equal(
-    isTestCode(
-      "crates/nessa-server/src/conversation/service/test_support/fakes.rs",
-      known,
-    ),
-    true,
-  )
-  assert.equal(
-    isTestCode("crates/nessa-server/src/conversation/service/other.rs", known),
-    false,
-  )
+test("test code is what cfg(test) loads, and everything that declares in turn", () => {
+  const sources = new Map([
+    ["crates/x/src/lib.rs", "mod service;\n#[cfg(test)]\nmod test_support;"],
+    ["crates/x/src/service.rs", '#[cfg(test)]\n#[path = "service_tests.rs"]\nmod tests;'],
+    ["crates/x/src/service_tests.rs", "mod fakes;"],
+    ["crates/x/src/fakes.rs", ""],
+    ["crates/x/src/test_support/mod.rs", "mod doubles;"],
+    ["crates/x/src/test_support/doubles.rs", ""],
+  ])
+  assert.deepEqual([...testCodeFiles(sources)].sort(), [
+    "crates/x/src/fakes.rs",
+    "crates/x/src/service_tests.rs",
+    "crates/x/src/test_support/doubles.rs",
+    "crates/x/src/test_support/mod.rs",
+  ])
 })
