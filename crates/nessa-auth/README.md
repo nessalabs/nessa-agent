@@ -135,6 +135,21 @@ withdrawn; their source contracts remain with the shared storage owner. Supporte
 platform consumer gates are required independently of shared storage tests.
 
 Target and current producer disposition: [device pairing](../../docs/design/auth/device-pairing.md).
+
+The separate [owner-phone decision](../../docs/adr/todo/811-owner-phone-authorization.md)
+adds a complete canonical consent set and a signed original request. The domain
+`value_objects/owner_phone.rs` retains exact public source/request/key/pin/endpoint
+correlation. `adapters/pairing/owner_phone.rs` alone verifies its device signature;
+`VerifiedOwnerPhoneDeviceProof` is distinct from PAKE and TLS possession.
+`application/pairing/owner_phone.rs` declares original receipt and proof-bound
+read-only recovery ports. The local registry's `pairing/owner_phone.rs` commits
+that original and the signed owner approval event in one registry entry;
+`owner_phone_original.rs` validates the retained full-input fingerprint. Fresh
+canonical admission evaluates management and every delegated capability together.
+Later stage/publication checks retain the exact original issuer; another valid
+owner credential cannot substitute. This Auth slice does not implement endpoint
+or product/native phone transport, and does not change legacy per-chat policies.
+
 Native listener and protected product activation remain subsequent consumers;
 this producer alone establishes no protected connection or resource acceptance.
 

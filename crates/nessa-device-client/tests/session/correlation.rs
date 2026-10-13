@@ -19,12 +19,12 @@ fn intent(class: ConsentClass, attempt: u8) -> PublicIntent {
 }
 fn consent(public: PublicIntent) -> Box<DisclosedConsent> {
     Box::new(
-        DisclosedConsent::new(
+        DisclosedConsent::with_grants(
             public,
             AudienceId::new("gateway").unwrap(),
             public
                 .class()
-                .grant(Resource::new(
+                .grants(Resource::new(
                     OrganizationId::new("org").unwrap(),
                     ResourceId::new("gateway").unwrap(),
                 ))
@@ -69,6 +69,7 @@ fn receipt_public_correlation_preserves_all_fields_for_every_phase_and_class() {
                 ConsentClass::DeviceRead => NativeConsentClass::DeviceRead,
                 ConsentClass::PeerRead => NativeConsentClass::PeerRead,
                 ConsentClass::PeerEnvironment => NativeConsentClass::PeerEnvironment,
+                ConsentClass::OwnerPhoneReadWrite => NativeConsentClass::OwnerPhoneReadWrite,
             };
             assert_eq!(mapped.consent_class(), expected);
             // Compare the original owner publication byte-for-byte. Enum debug

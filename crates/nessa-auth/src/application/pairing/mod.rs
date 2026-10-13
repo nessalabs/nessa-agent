@@ -6,17 +6,19 @@
 //! ```
 #![deny(missing_docs)]
 mod admission;
+mod owner_phone;
 mod ports;
 mod private_state;
 mod proof;
 mod receiver;
 mod stage;
 pub use admission::{AuthorizePairing, PairingAdmission};
+pub use owner_phone::OwnerPhoneStore;
 pub use ports::{
     AttemptReservation, OwnerDecision, PairingStore, PairingStoreError, PairingWorkerFault,
     RuntimeEnd,
 };
-pub use proof::{ConfirmedClaim, DeviceConnectionProof};
+pub use proof::{ConfirmedClaim, DeviceConnectionProof, VerifiedOwnerPhoneDeviceProof};
 pub use receiver::ReceiverOutcome;
 
 pub(crate) use stage::StageGate;

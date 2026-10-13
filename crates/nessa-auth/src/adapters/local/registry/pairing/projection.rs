@@ -1,13 +1,16 @@
 //! Pairing history lives inside the existing registry, with one replay owner.
+use super::owner_phone_original::StoredOwnerPhoneOriginal;
 use crate::application::dto::{
     CredentialMetadataDto, CredentialTransitionDto, InitiatorDto, IssuanceCauseDto,
     TransitionCauseDto,
 };
+use crate::application::pairing::VerifiedOwnerPhoneDeviceProof;
 use crate::domain::{
     pairing::{
         AttemptFailure, AttemptId, ConsentClass, ConsentIntent, ConsentIntentId, DeviceKey, Event,
-        InvitationId, PairingError, PairingEvent, PairingInitiator, PairingPhase, PairingPolicy,
-        PairingRecord, PairingTransition, TerminalCause,
+        InvitationId, OwnerPhoneRequest, OwnerPhoneRequestId, PairingError, PairingEvent,
+        PairingInitiator, PairingPhase, PairingPolicy, PairingRecord, PairingTransition,
+        TerminalCause,
     },
     AudienceId, CredentialId, CredentialTransition, MembershipId, OrganizationId, PrincipalId,
     Resource, ResourceId,
@@ -36,6 +39,8 @@ pub(crate) struct StoredPairing {
     #[serde(default, skip_serializing_if = "StoredClass::is_device")]
     class: StoredClass,
     history: Vec<StoredStep>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    owner_phone_original: Option<StoredOwnerPhoneOriginal>,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +50,7 @@ enum StoredClass {
     Device,
     Peer,
     Environment,
+    OwnerPhone,
 }
 impl StoredClass {
     fn is_device(&self) -> bool {
@@ -55,6 +61,7 @@ impl StoredClass {
             ConsentClass::DeviceRead => Self::Device,
             ConsentClass::PeerRead => Self::Peer,
             ConsentClass::PeerEnvironment => Self::Environment,
+            ConsentClass::OwnerPhoneReadWrite => Self::OwnerPhone,
         }
     }
     fn domain(self) -> ConsentClass {
@@ -62,6 +69,7 @@ impl StoredClass {
             Self::Device => ConsentClass::DeviceRead,
             Self::Peer => ConsentClass::PeerRead,
             Self::Environment => ConsentClass::PeerEnvironment,
+            Self::OwnerPhone => ConsentClass::OwnerPhoneReadWrite,
         }
     }
 }
@@ -86,6 +94,11 @@ enum StoredActor {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", deny_unknown_fields, rename_all = "camelCase")]
 enum StoredEvent {
+    OwnerPhoneApproved {
+        request: [u8; 16],
+        key: [u8; 32],
+        digest: [u8; 32],
+    },
     CredentialRevoked {
         sequence: u64,
     },
@@ -175,7 +188,25 @@ impl StoredPairing {
             attempts: record.policy().attempts(),
             class: StoredClass::from_domain(intent.class()),
             history: Vec::new(),
+            owner_phone_original: None,
         })
+    }
+    pub(super) fn new_owner_phone(
+        record: &PairingRecord,
+        proof: &VerifiedOwnerPhoneDeviceProof,
+    ) -> Result<Self, PairingError> {
+        if record.intent().class() != ConsentClass::OwnerPhoneReadWrite {
+            return Err(PairingError::Invalid);
+        }
+        let mut stored = Self::new(record)?;
+        stored.owner_phone_original = Some(StoredOwnerPhoneOriginal::from_proof(proof));
+        Ok(stored)
+    }
+    pub(crate) fn owner_phone_request(&self) -> Result<Option<OwnerPhoneRequest>, PairingError> {
+        self.owner_phone_original
+            .as_ref()
+            .map(StoredOwnerPhoneOriginal::restore)
+            .transpose()
     }
     /// Who this enrollment enrolls, as stored.
     pub(crate) fn class(&self) -> ConsentClass {
@@ -226,9 +257,12 @@ impl StoredPairing {
                 && credential.organization_id() == intent.resource().organization_id()
                 && metadata.audience_id == intent.audience().as_str()
                 && metadata.expires_at.is_none()
-                && metadata.grants.len() == 1
-                && metadata.grants[0].action == intent.grant().action().as_str()
-                && metadata.grants[0].resource.id == intent.resource().id().as_str()
+                && metadata.grants.len() == intent.grants().count()
+                && metadata.grants.iter().zip(intent.grants()).all(|(stored, grant)| {
+                    stored.action == grant.action().as_str()
+                        && stored.resource.organization_id == grant.resource().organization_id().as_str()
+                        && stored.resource.id == grant.resource().id().as_str()
+                })
         })
     }
     pub(crate) fn consume_revocation(
@@ -273,7 +307,12 @@ impl StoredPairing {
             ),
             self.class.domain(),
         )?;
-        let mut record = PairingRecord::new(
+        let constructor = if self.class.domain().uses_pake() {
+            PairingRecord::new
+        } else {
+            PairingRecord::new_owner_phone
+        };
+        let mut record = constructor(
             self.id(),
             intent,
             self.created_at_ms,
@@ -297,6 +336,28 @@ impl StoredPairing {
                 .map_err(invalid)?;
             transition.verify_cancellation_revocation(revocation.as_ref())?;
             record = transition.after().clone();
+        }
+        match (&self.owner_phone_original, self.class.domain()) {
+            (Some(original), ConsentClass::OwnerPhoneReadWrite) => {
+                let request = original.restore()?;
+                let source = request.source();
+                let intent = record.intent();
+                if source.owner() != intent.owner()
+                    || source.membership() != intent.membership()
+                    || source.audience() != intent.audience()
+                    || source.resource() != intent.resource()
+                {
+                    return Err(PairingError::Conflict);
+                }
+                if !self.history.is_empty()
+                    && record.owner_phone_approval()
+                        != Some((request.id(), request.device_key(), original.digest()))
+                {
+                    return Err(PairingError::Conflict);
+                }
+            }
+            (None, class) if class.uses_pake() => {}
+            _ => return Err(PairingError::Conflict),
         }
         Ok(record)
     }
@@ -380,6 +441,11 @@ impl StoredEvent {
         canonical: &[CredentialTransitionDto],
     ) -> Result<Self, PairingError> {
         Ok(match event.kind() {
+            Event::OwnerPhoneApproved(request, key, digest) => Self::OwnerPhoneApproved {
+                request: *request.bytes(),
+                key: *key.bytes(),
+                digest: *digest,
+            },
             Event::CredentialRevoked(transition) => Self::CredentialRevoked {
                 sequence: canonical
                     .iter()
@@ -444,6 +510,15 @@ impl StoredEvent {
             |id: &String| CredentialId::new(id.clone()).map_err(|_| PairingError::Invalid);
         let receiver = |id: &String| ResourceId::new(id.clone()).map_err(|_| PairingError::Invalid);
         Ok(match self {
+            Self::OwnerPhoneApproved {
+                request,
+                key,
+                digest,
+            } => PairingEvent::owner_phone_approved(
+                OwnerPhoneRequestId::new(*request)?,
+                DeviceKey::new(*key),
+                *digest,
+            ),
             Self::CredentialRevoked { sequence } => PairingEvent::credential_revoked(
                 CredentialTransition::try_from(
                     canonical

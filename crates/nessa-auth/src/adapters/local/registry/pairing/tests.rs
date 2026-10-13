@@ -3933,3 +3933,6 @@ fn the_gateway_id_prefix_belongs_to_gateway_principals_alone() {
     std::fs::write(&path, &original_bytes).unwrap();
     assert!(open_store(&path).is_ok());
 }
+
+#[path = "owner_phone_registry_tests.rs"]
+mod owner_phone_registry_tests;
