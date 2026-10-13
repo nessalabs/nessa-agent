@@ -5,14 +5,17 @@
 #![deny(missing_docs)]
 mod failures;
 mod infrastructure;
+mod native_product;
 mod native_session;
 mod saved;
+mod serialization;
 mod session;
 #[cfg(test)]
 #[path = "../tests/support/private_directory.rs"]
 mod test_support;
 uniffi::setup_scaffolding!();
 pub use failures::*;
+pub use native_product::*;
 pub use native_session::*;
 pub use saved::{
     NativeSavedCache, NativeScope, NativeTranscript, NativeTranscriptState, NativeViewError,
@@ -20,5 +23,5 @@ pub use saved::{
 pub use session::{
     EnrollmentConnector, EnrollmentEntropy, EnrollmentEntropyFactory, FollowedConversation,
     LocalEnrollment, LocalIssuedEnrollment, NativeSession, SessionFailure, SessionFollow,
-    SessionRead, SessionRefresh,
+    SessionProduct, SessionRead, SessionRefresh,
 };

@@ -2001,6 +2001,18 @@ injected; `src/native_session.rs` and `src/failures.rs` own immutable foreign
 representations. Public intent fields delegate to Auth's immutable historical
 correlation, and saved cursor restoration delegates Id validation to sync;
 neither creates authority. Admission/failure/correlation tests live in `tests/session`.
+`src/native_product.rs` owns immutable actual product Ready/ticket/completion/event
+views, delegating wire bounds, request IDs, pump lifecycle and permit accounting to
+core. `src/session.rs` registers the original product child before start and joins
+it before private-state disposal, including teardown-only poisoned-lock recovery.
+The pure `SessionProduct` holder keeps the injected native clock independently of
+the parent; the foreign relative wait captures one absolute deadline for core.
+`src/serialization.rs` owns the shared capped saved/product JSON-copy writer;
+`tests/product/serialization.rs` covers exact limits and canonical growth without
+changing captured native facts.
+`tests/product/parent.rs` and `tests/product/fixtures.rs` exercise actual pinned TLS,
+private-scope retention and escaped foreign facts/permits. These additions do not
+compose Swift product waiting or implement OwnerPhone enrollment/adoption.
 The admitted `local_enrollment` publication transfers an owned private-record seed to
 the Auth native identity adapter and returns only public key/pin/intent and optional
 issued selectors. `tests/session/local_enrollment.rs` covers records, failures,
