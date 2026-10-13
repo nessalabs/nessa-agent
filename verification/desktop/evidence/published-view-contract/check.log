@@ -1,0 +1,10 @@
+Base:5d254cd45f14603e6a381e3be446c7f4309217a6
+lease-details:108/108 held; Chromium/WebKit widths360/600/1440
+mode-publication:2/2 held; actual latest-main native5d baseline, both engines
+verification library:167/167 passed
+types/lint/format/architecture passed
+Required serverNowMs removed: TypeScript rejects incomplete lease view
+Obsolete feature variant restored: TypeScript rejects unsupported_not_implemented
+Observation clock included in semantic comparison: Node regression fails
+Own-key guard removed: prototype request reports Invalid conversation lease state; browser check fails
+Byte-identical restored source: lease-details108/108 held, types pass
