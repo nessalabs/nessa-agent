@@ -777,9 +777,9 @@ export function gatewayEffects(
         throw controlFailure(error)
       }
     },
-    async answer(conversationId, executionId, permissionId, optionId) {
+    async answer(target, optionId) {
       try {
-        await api().answer(conversationId, executionId, permissionId, optionId)
+        await api().answer(target, optionId)
       } catch (error) {
         throw controlFailure(error)
       }
@@ -802,14 +802,9 @@ export function gatewayEffects(
         throw controlFailure(error)
       }
     },
-    async cancel(conversationId, executionId, permissionId) {
+    async cancel(target) {
       try {
-        await api().cancel(
-          conversationId,
-          executionId,
-          permissionId,
-          "Dismissed from the conversation panel",
-        )
+        await api().cancel(target, "Dismissed from the conversation panel")
       } catch (error) {
         throw controlFailure(error)
       }

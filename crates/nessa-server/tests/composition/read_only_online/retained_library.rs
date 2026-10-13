@@ -320,7 +320,10 @@ fn a_reader_whose_direct_dial_is_refused_reads_through_the_relay() {
     let profile: Value =
         serde_json::from_slice(&std::fs::read(root.join("profile.json")).unwrap()).unwrap();
     let address: SocketAddr = profile["gatewayAddress"].as_str().unwrap().parse().unwrap();
-    let relay = std::fs::read_to_string(root.join("relay-address")).unwrap();
+    let relay = nessa_protocol::relay::RelayAddress::try_from(
+        std::fs::read_to_string(root.join("relay-address")).unwrap(),
+    )
+    .unwrap();
     let state = Arc::new(
         FilePairingState::open(
             Path::new(profile["stateRoot"].as_str().unwrap()),
@@ -355,7 +358,9 @@ fn a_reader_whose_direct_dial_is_refused_reads_through_the_relay() {
     let identity = NativeIdentity::restore(key).unwrap();
     // Port 0 is never a listener's: the direct dial is refused at once.
     let refused = SocketAddr::from(([127, 0, 0, 1], 0));
-    let read = |cache: &mut RetainedCache, address: SocketAddr, relay: Option<&str>| {
+    let read = |cache: &mut RetainedCache,
+                address: SocketAddr,
+                relay: Option<&nessa_protocol::relay::RelayAddress>| {
         cache.read(
             ReaderAccess {
                 role: ReaderRole::DeviceOwner,

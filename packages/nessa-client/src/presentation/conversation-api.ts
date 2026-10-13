@@ -42,6 +42,10 @@ import {
   conversationApprovalMode,
 } from "../protocol/conversation-validate.js"
 import { decimal } from "../protocol/passive-read-validate.js"
+import {
+  permissionFields,
+  type PermissionTarget,
+} from "../application/permission-target.js"
 
 /** Which of the caller's conversations `list()` returns. */
 export type ConversationListOptions = {
@@ -194,9 +198,7 @@ export type ConversationApi = {
   ) => Promise<ConversationReorderResult>
   /** Select an exact offered option for the identified pending review. */
   answer: (
-    conversationId: string,
-    executionId: string,
-    permissionId: string,
+    target: PermissionTarget,
     optionId: string,
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
@@ -218,9 +220,7 @@ export type ConversationApi = {
   ) => Promise<ConversationMutationResult>
   /** Withdraw the identified review with a human-readable reason recorded by the gateway. */
   cancel: (
-    conversationId: string,
-    executionId: string,
-    permissionId: string,
+    target: PermissionTarget,
     reason: string,
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
@@ -539,21 +539,28 @@ export function createConversationApi(
         false,
       )
     },
-    answer: (id, executionId, permissionId, optionId, options) =>
-      action(
+    answer: (target, optionId, options) => {
+      const { conversationId, executionId, permissionId } = permissionFields(
+        target,
+        optionId,
+      )
+      return action(
         ProductMethod.ConversationAnswer,
-        id,
+        conversationId,
         { executionId, permissionId, optionId },
         options,
         true,
-      ),
-    cancel: (id, executionId, permissionId, reason, options) =>
-      action(
+      )
+    },
+    cancel: (target, reason, options) => {
+      const { conversationId, executionId, permissionId } = permissionFields(target)
+      return action(
         ProductMethod.ConversationCancel,
-        id,
+        conversationId,
         { executionId, permissionId, reason },
         options,
-      ),
+      )
+    },
     close: (id, options) => action(ProductMethod.ConversationClose, id, {}, options),
     stop: (id, executionId, options = {}) => {
       validConversationId(id)

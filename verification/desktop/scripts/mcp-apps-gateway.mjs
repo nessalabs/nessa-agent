@@ -214,6 +214,7 @@ async function startStack(options) {
  * once leaves the steps nothing unambiguous to read: both are "could not run".
  */
 async function appToolTurn(client, conversationId, agent) {
+  const { permissionTargets } = await import("@nessa/client")
   const once = (calls) =>
     new CannotRun(
       `${agent} called ${APP_TOOL} more than once (${calls}); the check admits exactly one call`,
@@ -239,9 +240,7 @@ async function appToolTurn(client, conversationId, agent) {
           admitted = allow.call
           answered.add(permissionKey(allow.permission))
           await client.conversation.answer(
-            conversationId,
-            allow.permission.executionId,
-            allow.permission.permissionId,
+            permissionTargets(view)[view.permissions.indexOf(allow.permission)],
             allow.option.id,
           )
         }

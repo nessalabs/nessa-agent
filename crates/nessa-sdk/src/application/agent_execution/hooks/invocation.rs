@@ -6,7 +6,9 @@ use crate::application::agent_execution::executions::ExecutionRequest;
 use crate::application::agent_execution::permissions::cap_hook_reason;
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::{
-    executions::ExecutionOutcome, permissions::RefusalOutcome, sessions::ExecutionSessionId,
+    executions::{ExecutionOutcome, Initiation},
+    permissions::RefusalOutcome,
+    sessions::ExecutionSessionId,
     tools::ToolCallId,
 };
 use std::{
@@ -356,9 +358,10 @@ impl InvocationHooks {
         &self,
         tool_id: &ToolCallId,
         input: &ToolReviewInput,
+        initiation: &Initiation,
         evaluation: &EvaluationSuffix,
     ) -> PermissionReviewDecision {
-        let call = ProposedToolCall::new(tool_id, input);
+        let call = ProposedToolCall::new(tool_id, input, initiation);
         let observations = evaluation.window();
         let reviewing = self
             .handlers

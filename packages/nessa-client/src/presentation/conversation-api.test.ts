@@ -1,5 +1,6 @@
 import { NessaRpcError } from "../application/rpc-error.js"
 import { expect, it, vi } from "vitest"
+import { permissionTargets } from "../application/permission-target.js"
 import { createConversationApi } from "./conversation-api.js"
 import { conversationDeleteTimeoutMs } from "../application/agent-budgets.js"
 import {
@@ -59,6 +60,19 @@ const view: ConversationView = {
   queueComplete: true,
   transcriptState: "complete",
 }
+function reviewTarget(permissionId = "permission") {
+  return permissionTargets({
+    conversationId,
+    permissions: [
+      {
+        executionId: "execution",
+        permissionId,
+        options: [{ id: "allow" }, { id: "option" }],
+      },
+    ],
+  })[0]!
+}
+
 it("passes a fixed model and initial mode only on creation", async () => {
   const request = vi.fn().mockResolvedValue({ conversationId })
   const api = createConversationApi({ request }, () => "generated")
@@ -318,8 +332,8 @@ it("routes every control with stable action and target identities", async () => 
   }))
   const api = createConversationApi({ request }, () => "action")
   await api.remove(conversationId, "execution")
-  await api.answer(conversationId, "execution", "review", "allow")
-  await api.cancel(conversationId, "execution", "review", "user withdrew")
+  await api.answer(reviewTarget("review"), "allow")
+  await api.cancel(reviewTarget("review"), "user withdrew")
   await api.close(conversationId)
   await api.archive(conversationId)
   await api.unarchive(conversationId)
@@ -611,8 +625,8 @@ it("never offers a replay for controls whose acknowledgement was lost", async ()
   const controls = [
     () => api.close(conversationId),
     () => api.remove(conversationId, "execution"),
-    () => api.answer(conversationId, "execution", "permission", "allow"),
-    () => api.cancel(conversationId, "execution", "permission", "withdrawn"),
+    () => api.answer(reviewTarget(), "allow"),
+    () => api.cancel(reviewTarget(), "withdrawn"),
   ]
   for (const control of controls) {
     const error = await control().catch((error: unknown) => error)
@@ -751,7 +765,7 @@ it("preserves every typed permission selection state independently of its diagno
       }),
     )
     const error = await api
-      .answer(conversationId, "execution", "permission", "allow")
+      .answer(reviewTarget(), "allow")
       .catch((error: unknown) => error)
     expect(error).toBeInstanceOf(NessaConversationControlError)
     expect(error).toMatchObject({
@@ -779,7 +793,7 @@ it("does not infer permission selection from an error code or malformed details"
   const api = createConversationApi({ request }, () => "action")
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const error = await api
-      .answer(conversationId, "execution", "permission", "allow")
+      .answer(reviewTarget(), "allow")
       .catch((error: unknown) => error)
     expect(error).toMatchObject({ permissionSelection: undefined })
   }
@@ -854,13 +868,9 @@ it.each([
     const api = createConversationApi({ request }, () => "identity")
     for (const failed of [
       await api.close(conversationId).catch((error) => error),
-      await api
-        .cancel(conversationId, "execution", "permission", "no longer needed")
-        .catch((error) => error),
+      await api.cancel(reviewTarget(), "no longer needed").catch((error) => error),
       await api.remove(conversationId, "execution").catch((error) => error),
-      await api
-        .answer(conversationId, "execution", "permission", "option")
-        .catch((error) => error),
+      await api.answer(reviewTarget(), "option").catch((error) => error),
     ]) {
       expect(failed).toBeInstanceOf(NessaConversationControlError)
       expect(failed.message).toContain(said)

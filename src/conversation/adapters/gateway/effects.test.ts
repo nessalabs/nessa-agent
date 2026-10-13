@@ -1,3 +1,4 @@
+import { permissionTargets } from "@nessa/client"
 import {
   IMAGE_ATTACHMENT_TYPES,
   linkedFileProblem,
@@ -875,8 +876,8 @@ it.each([
     const controls = [
       () => effects.close("server"),
       () => effects.remove("server", "execution"),
-      () => effects.answer("server", "execution", "permission", "option"),
-      () => effects.cancel("server", "execution", "permission"),
+      () => effects.answer(reviewTarget(), "option"),
+      () => effects.cancel(reviewTarget()),
       () => effects.reorder("server", ["execution"]),
     ]
     for (const control of controls) {
@@ -920,7 +921,7 @@ const answering = (error: unknown) =>
       ({
         conversation: { answer: () => Promise.reject(error) },
       }) as unknown as NessaClient,
-  ).answer("server", "execution", "permission", "option")
+  ).answer(reviewTarget(), "option")
 
 it.each([
   // The gateway sends an ordinary diagnostic code beside a pending review; the
@@ -1571,3 +1572,16 @@ it("reads a held file back through the client's verified fetch", async () => {
     effectsOf(() => null).readHeldFile("server", file, signal),
   ).rejects.toMatchObject({ reason: "unavailable" })
 })
+
+function reviewTarget() {
+  return permissionTargets({
+    conversationId: "server",
+    permissions: [
+      {
+        executionId: "execution",
+        permissionId: "permission",
+        options: [{ id: "option" }],
+      },
+    ],
+  })[0]!
+}

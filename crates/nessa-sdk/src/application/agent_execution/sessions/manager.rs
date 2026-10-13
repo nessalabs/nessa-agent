@@ -1547,6 +1547,17 @@ impl SessionManager {
         index: usize,
         body: impl FnOnce(&[ExecutionEvent]) -> R + Send,
     ) -> Result<R, StorageError> {
+        self.with_invocation(index, |record| body(&record.events))
+            .await
+    }
+
+    /// Borrow one saved invocation record while `body` runs, under the same
+    /// lock and rules as [`Self::with_invocation_events`].
+    pub(crate) async fn with_invocation<R>(
+        &self,
+        index: usize,
+        body: impl FnOnce(&InvocationRecord) -> R + Send,
+    ) -> Result<R, StorageError> {
         let evidence = self.evidence.lock().await;
         let record = evidence
             .observed
@@ -1557,7 +1568,7 @@ impl SessionManager {
             .ok_or_else(|| {
                 StorageError::Corrupt("invocation observations have no submitted invocation".into())
             })?;
-        Ok(body(&record.events))
+        Ok(body(record))
     }
     /// The notes the saved turn at `index` took, as the model is given them,
     /// in the order it took them. A taken note the conversation does not hold

@@ -105,6 +105,13 @@ must apply these merge gates together with [AGENTS.md](AGENTS.md),
     scope of [browser verification](#browser-verification-for-ui) merges only
     with the scripts that section requires and their numbers in the PR. A number
     that does not meet its contract is a failed gate, not a note.
+18. **Cedar decides policy.** Whether someone may do something to something —
+    a person, a paired device, a peer gateway, an environment peer, or the turn
+    an agent runs for — is a Cedar policy, evaluated behind a port. Rust
+    gathers the facts and acts on the answer; it does not compare roles,
+    scan grants, or match names to reach the answer itself. What counts as
+    policy, what does not, and what enforces this are in
+    [policy goes through Cedar](#policy-goes-through-cedar).
 
 If a gate fails, fix it in the same PR.
 
@@ -679,6 +686,66 @@ Be honest about the limit. A seam makes the decision testable, not the adapter.
 The real implementation still needs its own boundary test — parsing,
 translation, failure mapping — or an explicit statement of what is unverified
 and why, in the module and in the change's report. Behind a trait is not tested.
+
+## Policy goes through Cedar
+
+[Gate 18](#gates) in full. The decision record is
+[ADR 803](docs/adr/todo/803-policy-goes-through-cedar.md); it holds the audit of
+what is not yet in Cedar and the order it moves in.
+
+A policy decision answers one question: may this principal take this action on
+this resource, now? Whenever code answers that question, the answer comes from
+Cedar.
+
+- **One port per question, one adapter behind it.** The application owns a
+  narrow port, a trait named `…PolicyEvaluator`, that takes Nessa's typed facts
+  and returns a typed decision. The adapter that implements it lives in a
+  module directory named `cedar`, holds its schema and policies as checked-in
+  files, validates them strictly when composition builds it, and fails closed
+  on any error or diagnostic. `crates/nessa-auth/src/adapters/cedar/` is the
+  shape to copy for those parts: its grants are an entity attribute, the
+  issuing path is a context fact, and it refuses a bundle holding a policy
+  without an `@id`. Its ports still answer a bare Allow or Deny, so the
+  policy ids that decided a refusal are logged rather than returned. No code under a crate's
+  `src/` outside a `cedar` directory names the `cedar_policy` crate, test
+  modules included, and neither the dependency nor a port is renamed, so both
+  stay findable by name.
+- **Cedar sees the facts, not a verdict.** Entities and context carry what is
+  true — the role, the grants held, the owner, the principal's kind, the tool's
+  name — and the policy draws the conclusion. A context value such as
+  `grantAllows: true`, worked out in Rust, is the policy written twice: Cedar
+  is then only repeating what Rust decided.
+- **A refusal names its rule.** Policies carry an `@id`, and the decision
+  carries the ids that decided it, so a refusal can be audited and explained
+  without re-deriving it. When no policy matched, the refusal says so — Cedar's
+  default deny is a reason too, not a missing one.
+- **Policy data is a fact, not a rule.** A share grant's role, a person's tool
+  rules, or an environment's grants file are stored data. Turning them into
+  Cedar policies or entities happens in the adapter, built as Cedar JSON, never
+  by formatting policy text.
+
+What is not policy, and stays in Rust:
+
+- proving who someone is — sessions, credentials, TLS pins, signatures;
+- keeping stored records valid — registry and pairing invariants;
+- capacity — permits, budgets, counts, size limits;
+- a person answering a prompt;
+- terms attached to a yes — a timeout clamp, a lease deadline;
+- matching capabilities — a sandbox profile, a model feature;
+- the operating system's trust — who can write the data directory, and the
+  desktop host's own window and app sandbox rules, which belong to Tauri's
+  capabilities.
+
+A list filtered in a database query for speed is an index, not a second
+authority: every item it returns is still admitted by Cedar, and an item Cedar
+refuses is dropped.
+
+`scripts/architecture/policy-engine.mjs`, run by
+`node scripts/check-architecture.mjs`, enforces where Cedar lives: it refuses
+the `cedar_policy` crate outside a `cedar` directory, and an implementation of
+a `…PolicyEvaluator` port outside one except in test code. It finds ports by
+that name, and it cannot tell a hand-written policy decision from other Rust,
+so review holds the rest of this gate.
 
 ## Audit evidence is part of the behavior
 

@@ -1,3 +1,4 @@
+import { permissionTargets } from "@nessa/client"
 import {
   ConversationErrorCode,
   NessaConversationControlError,
@@ -218,8 +219,7 @@ it.each([
         id: "c0",
         control: {
           kind: "answer",
-          executionId: "execution",
-          permissionId: "permission",
+          target: reviewTarget("server"),
           optionId: "deny",
         },
       }),
@@ -318,3 +318,16 @@ it("does not tell a refused retry its message is back in the draft, because it i
   expect(tab.turns[0]).toMatchObject({ receipt: "unknown" })
   expect(conversationNotice(tab)).toMatchObject({ title: "Delivery unknown" })
 })
+
+function reviewTarget(conversationId: string) {
+  return permissionTargets({
+    conversationId,
+    permissions: [
+      {
+        executionId: "execution",
+        permissionId: "permission",
+        options: [{ id: "deny" }],
+      },
+    ],
+  })[0]!
+}
