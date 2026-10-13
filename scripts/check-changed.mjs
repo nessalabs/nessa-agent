@@ -74,6 +74,7 @@ const GROUPS = [
       "crates/nessa-server/",
       "crates/nessa-protocol/",
       "crates/nessa-client-core/",
+      "crates/nessa-device-client/",
     ],
     commands: ["server:fmt:check", "server:clippy", "server:test"],
   },

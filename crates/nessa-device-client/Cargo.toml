@@ -1,0 +1,29 @@
+[package]
+name = "nessa-device-client"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.89"
+publish = false
+description = "Generated native bindings for the shared retained device client"
+[lib]
+crate-type = ["rlib", "cdylib", "staticlib"]
+[features]
+bindgen = ["uniffi/cli"]
+[[bin]]
+name = "nessa-device-bindgen"
+path = "src/bindgen.rs"
+required-features = ["bindgen"]
+[dependencies]
+nessa-client-core = { path = "../nessa-client-core", default-features = false }
+nessa-auth = { path = "../nessa-auth" }
+nessa-protocol = { path = "../nessa-protocol" }
+nessa-local-storage = { path = "../nessa-local-storage" }
+nessa-sync = { workspace = true }
+uuid = "1"
+serde = "1"
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "sync", "time", "net"] }
+uniffi = { version = "=0.32.2", default-features = false }
+zeroize = "=1.9.0"
+[dev-dependencies]
+tempfile = "3"

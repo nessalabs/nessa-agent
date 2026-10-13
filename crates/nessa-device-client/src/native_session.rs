@@ -1,0 +1,799 @@
+//! Synchronous generated session bindings. UI composition owns worker dispatch
+//! and bounded pre-queue admission; this adapter owns no second authority rule.
+use crate::{
+    failures::{NativeCallError, NativeEnrollmentFailure, NativeReadFailure},
+    saved::{NativeScope, NativeTranscript},
+    session::{
+        LocalEnrollment, LocalIssuedEnrollment, NativeSession, SessionFailure, SessionRead,
+        SessionRefresh,
+    },
+};
+use nessa_auth::{
+    adapters::pairing::ManualCode,
+    domain::pairing::{AttemptFailure, AttemptOutcome, ConsentClass, PublicIntent, TerminalCause},
+};
+use nessa_client_core::{
+    pairing::{NativeClientError, NativeRetryOutcome},
+    retained::{
+        ReadStop, RetainedCatalogueEntry, RetainedCataloguePage, RetainedEnrollmentStatus,
+        RetainedPurge,
+    },
+};
+use nessa_protocol::{conversation::domain::ConversationId, pairing::wire::NativePairingStatus};
+use nessa_sync::replication::{catalogue::EntryKey, domain::Id};
+use std::{net::SocketAddr, path::Path, sync::Arc};
+use uuid::Uuid;
+use zeroize::Zeroizing;
+
+/// A caller-owned stop latch. Creating/stopping this object performs no enrollment.
+#[derive(uniffi::Object)]
+pub struct NativeReadStop {
+    value: Arc<ReadStop>,
+}
+#[uniffi::export]
+impl NativeReadStop {
+    /// Reserve the stop before dispatch so a pre-dispatch stop is retained.
+    #[uniffi::constructor]
+    pub fn new() -> Self {
+        Self {
+            value: ReadStop::new(),
+        }
+    }
+    /// Ask the existing core to stop socket reads; OS connect remains bounded by HANDSHAKE.
+    pub fn stop(&self) {
+        self.value.stop();
+    }
+    /// Whether this caller-owned latch has been stopped.
+    pub fn is_stopped(&self) -> bool {
+        self.value.is_stopped()
+    }
+}
+impl Default for NativeReadStop {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Existing enrollment phases; this representation does not grant product access.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, uniffi::Enum)]
+pub enum NativeEnrollmentPhase {
+    /// Original attempt may claim.
+    Pending,
+    /// Original attempt failed or was superseded.
+    Unclaimed,
+    /// Key claimed before explicit approval.
+    Claimed,
+    /// Owner approved; physical publication may remain.
+    Approved,
+    /// Durable physical stage exists.
+    Staging,
+    /// Historical enrollment completion, checked afresh for each product read.
+    Active,
+    /// Authenticated enrollment ended.
+    Terminal,
+}
+/// Original terminal enrollment cause.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, uniffi::Enum)]
+pub enum NativeTerminalCause {
+    /// Published device credential revoked.
+    CredentialRevoked,
+    /// Owner denied this enrollment.
+    Denied,
+    /// Owner canceled it.
+    Cancelled,
+    /// Invitation expired.
+    Expired,
+    /// Gateway lost the volatile pre-claim setup.
+    Restarted,
+}
+impl From<TerminalCause> for NativeTerminalCause {
+    fn from(value: TerminalCause) -> Self {
+        match value {
+            TerminalCause::CredentialRevoked => Self::CredentialRevoked,
+            TerminalCause::Denied => Self::Denied,
+            TerminalCause::Cancelled => Self::Cancelled,
+            TerminalCause::Expired => Self::Expired,
+            TerminalCause::Restarted => Self::Restarted,
+        }
+    }
+}
+/// Exact original failed-attempt cause.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, uniffi::Enum)]
+pub enum NativeAttemptFailure {
+    /// Crypto refused proof.
+    InvalidProof,
+    /// Original connection closed.
+    ConnectionClosed,
+    /// Handshake deadline ended the attempt.
+    HandshakeDeadline,
+    /// Verifier could not authenticate the claim.
+    VerifierUnavailable,
+}
+impl From<AttemptFailure> for NativeAttemptFailure {
+    fn from(value: AttemptFailure) -> Self {
+        match value {
+            AttemptFailure::InvalidProof => Self::InvalidProof,
+            AttemptFailure::ConnectionClosed => Self::ConnectionClosed,
+            AttemptFailure::HandshakeDeadline => Self::HandshakeDeadline,
+            AttemptFailure::VerifierUnavailable => Self::VerifierUnavailable,
+        }
+    }
+}
+/// Original attempt state, separate from invitation terminal cause.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, uniffi::Enum)]
+pub enum NativeAttemptState {
+    /// Original attempt remains pending.
+    Pending,
+    /// Failed with its original cause.
+    Failed,
+    /// Winning key claim belongs to this attempt.
+    Claimed,
+    /// Another attempt or terminal invitation superseded it.
+    Superseded,
+}
+/// An immutable status receipt, used for enrollment and retry results as well
+/// as completed pinned status. Caller mutation cannot supply Active to the driver.
+#[derive(uniffi::Object)]
+pub struct NativeEnrollmentReceipt {
+    value: NativePairingStatus,
+}
+#[uniffi::export]
+impl NativeEnrollmentReceipt {
+    /// Exact historical public correlation; this is not claim or read authority.
+    pub fn public_intent(&self) -> Arc<NativePublicIntent> {
+        Arc::new(NativePublicIntent {
+            value: self.value.public(),
+        })
+    }
+    /// Original phase.
+    pub fn phase(&self) -> NativeEnrollmentPhase {
+        match self.value {
+            NativePairingStatus::Pending(_) => NativeEnrollmentPhase::Pending,
+            NativePairingStatus::Unclaimed { .. } => NativeEnrollmentPhase::Unclaimed,
+            NativePairingStatus::Claimed(_) => NativeEnrollmentPhase::Claimed,
+            NativePairingStatus::Approved(_) => NativeEnrollmentPhase::Approved,
+            NativePairingStatus::Staging(_) => NativeEnrollmentPhase::Staging,
+            NativePairingStatus::Active { .. } => NativeEnrollmentPhase::Active,
+            NativePairingStatus::Terminal { .. } => NativeEnrollmentPhase::Terminal,
+        }
+    }
+    /// Exact opaque intent equality across owned historical receipts.
+    pub fn same_intent(&self, other: Arc<Self>) -> bool {
+        self.value.public() == other.value.public()
+    }
+    /// Issued receiver only when Active was reported.
+    pub fn receiver(&self) -> Option<String> {
+        match &self.value {
+            NativePairingStatus::Active { receiver, .. } => Some(receiver.as_str().to_owned()),
+            _ => None,
+        }
+    }
+    /// Current epoch in the original Active receipt, preserved as UInt64.
+    pub fn access_epoch(&self) -> Option<u64> {
+        match self.value {
+            NativePairingStatus::Active { access_epoch, .. } => Some(access_epoch),
+            _ => None,
+        }
+    }
+    /// Original issued credential identity; not a bearer secret.
+    pub fn credential(&self) -> Option<String> {
+        match &self.value {
+            NativePairingStatus::Active { credential, .. } => Some(credential.as_str().to_owned()),
+            _ => None,
+        }
+    }
+    /// Authenticated disclosed gateway audience when that scope was available.
+    pub fn audience(&self) -> Option<String> {
+        self.value
+            .consent()
+            .map(|value| value.audience().as_str().to_owned())
+    }
+    /// Disclosed grant organization when available; no socket-derived scope.
+    pub fn organization(&self) -> Option<String> {
+        self.value.consent().map(|value| {
+            value
+                .grant()
+                .resource()
+                .organization_id()
+                .as_str()
+                .to_owned()
+        })
+    }
+    /// Disclosed grant resource identity when available; not a local grant.
+    pub fn resource(&self) -> Option<String> {
+        self.value
+            .consent()
+            .map(|value| value.grant().resource().id().as_str().to_owned())
+    }
+    /// Original terminal cause, independently of private-state cleanup success.
+    pub fn terminal_cause(&self) -> Option<NativeTerminalCause> {
+        match self.value {
+            NativePairingStatus::Terminal { cause, .. } => Some(cause.into()),
+            NativePairingStatus::Unclaimed { terminal, .. } => terminal.map(Into::into),
+            _ => None,
+        }
+    }
+    /// Original Unclaimed attempt outcome, without inferring a terminal cause.
+    pub fn attempt_state(&self) -> Option<NativeAttemptState> {
+        let NativePairingStatus::Unclaimed { outcome, .. } = self.value else {
+            return None;
+        };
+        Some(match outcome {
+            AttemptOutcome::Pending => NativeAttemptState::Pending,
+            AttemptOutcome::Failed(_) => NativeAttemptState::Failed,
+            AttemptOutcome::Claimed => NativeAttemptState::Claimed,
+            AttemptOutcome::Superseded => NativeAttemptState::Superseded,
+        })
+    }
+    /// Original typed failed-attempt payload.
+    pub fn attempt_failure(&self) -> Option<NativeAttemptFailure> {
+        match self.value {
+            NativePairingStatus::Unclaimed {
+                outcome: AttemptOutcome::Failed(value),
+                ..
+            } => Some(value.into()),
+            _ => None,
+        }
+    }
+}
+/// Existing public consent classes, without manufacturing an enrollment grant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, uniffi::Enum)]
+pub enum NativeConsentClass {
+    /// One owner's reading device.
+    DeviceRead,
+    /// A peer gateway's reading identity.
+    PeerRead,
+    /// A peer environment-serving identity.
+    PeerEnvironment,
+}
+impl From<ConsentClass> for NativeConsentClass {
+    fn from(value: ConsentClass) -> Self {
+        match value {
+            ConsentClass::DeviceRead => Self::DeviceRead,
+            ConsentClass::PeerRead => Self::PeerRead,
+            ConsentClass::PeerEnvironment => Self::PeerEnvironment,
+        }
+    }
+}
+/// Immutable public correlation from the original native receipt, not private state.
+#[derive(uniffi::Object)]
+pub struct NativePublicIntent {
+    value: PublicIntent,
+}
+#[uniffi::export]
+impl NativePublicIntent {
+    /// Exact public invitation bytes, with the owner's fixed identity width.
+    pub fn invitation(&self) -> Vec<u8> {
+        self.value.invitation().bytes().to_vec()
+    }
+    /// Exact admitted attempt bytes; retries may select another attempt.
+    pub fn attempt(&self) -> Vec<u8> {
+        self.value.attempt().bytes().to_vec()
+    }
+    /// Exact immutable public consent bytes.
+    pub fn consent(&self) -> Vec<u8> {
+        self.value.consent().bytes().to_vec()
+    }
+    /// Original immutable consent generation, without integer narrowing.
+    pub fn generation(&self) -> u64 {
+        self.value.generation()
+    }
+    /// Original exclusive invitation expiry in Unix milliseconds.
+    pub fn expiry_ms(&self) -> u64 {
+        self.value.expiry_ms()
+    }
+    /// Auth-owned wire class name for receipt/status correlation, delegated to
+    /// [`ConsentClass::as_str`] without foreign spelling or normalization policy.
+    pub fn consent_class_name(&self) -> String {
+        self.value.class().as_str().to_owned()
+    }
+    /// Original owner-selected public consent class.
+    pub fn consent_class(&self) -> NativeConsentClass {
+        self.value.class().into()
+    }
+}
+/// Immutable original/retried receipt pair from one completed retry operation.
+#[derive(uniffi::Object)]
+pub struct NativeRetry {
+    value: NativeRetryOutcome,
+}
+#[uniffi::export]
+impl NativeRetry {
+    /// Original NOT-CLAIMED receipt, returned only when the whole retry succeeds.
+    pub fn original(&self) -> Arc<NativeEnrollmentReceipt> {
+        Arc::new(NativeEnrollmentReceipt {
+            value: self.value.original().clone(),
+        })
+    }
+    /// New same-enrollment attempt's historical receipt.
+    pub fn retried(&self) -> Arc<NativeEnrollmentReceipt> {
+        Arc::new(NativeEnrollmentReceipt {
+            value: self.value.retried().clone(),
+        })
+    }
+}
+/// Original durable receiver purge; historical lookup does not repeat deletion.
+#[derive(uniffi::Object)]
+pub struct NativePurge {
+    value: RetainedPurge,
+}
+#[uniffi::export]
+impl NativePurge {
+    /// Receiver originally purged and fenced.
+    pub fn receiver(&self) -> String {
+        self.value.receiver().as_str().to_owned()
+    }
+    /// Original transcript count.
+    pub fn transcripts(&self) -> u64 {
+        self.value.transcripts()
+    }
+    /// Original physical record count.
+    pub fn records(&self) -> u64 {
+        self.value.records()
+    }
+    /// Original catalogue entry count.
+    pub fn catalogue_entries(&self) -> u64 {
+        self.value.catalogue_entries()
+    }
+    /// Original injected-clock observation, not the time of this getter call.
+    pub fn observed_at_ms(&self) -> u64 {
+        self.value.observed_at_ms()
+    }
+}
+/// Immutable compound pinned status, preserving outer completion uncertainty.
+#[derive(uniffi::Object)]
+pub struct NativeStatus {
+    value: Result<RetainedEnrollmentStatus, NativeClientError>,
+}
+#[uniffi::export]
+impl NativeStatus {
+    /// Whether an admitted physical completion captured its purge effect.
+    pub fn completion_captured(&self) -> bool {
+        self.value.is_ok()
+    }
+    /// Original successful pinned receipt; failed private removal does not invent one.
+    pub fn receipt(&self) -> Option<Arc<NativeEnrollmentReceipt>> {
+        self.value
+            .as_ref()
+            .ok()?
+            .enrollment()
+            .as_ref()
+            .ok()
+            .map(|value| {
+                Arc::new(NativeEnrollmentReceipt {
+                    value: value.clone(),
+                })
+            })
+    }
+    /// Original outer or completed enrollment failure, without discarding purge.
+    pub fn failure(&self) -> Option<Arc<NativeEnrollmentFailure>> {
+        let value = match &self.value {
+            Err(value) => Some(*value),
+            Ok(value) => value.enrollment().as_ref().err().copied(),
+        };
+        value.map(|value| Arc::new(NativeEnrollmentFailure { value }))
+    }
+    /// Whether this captured physical completion attempted a purge. False with
+    /// no captured completion does not establish no physical cleanup.
+    pub fn purge_attempted(&self) -> bool {
+        self.value
+            .as_ref()
+            .ok()
+            .and_then(|value| value.purge())
+            .is_some()
+    }
+    /// Original successful purge, independent of enrollment-removal acknowledgement.
+    pub fn purge(&self) -> Option<Arc<NativePurge>> {
+        self.value
+            .as_ref()
+            .ok()?
+            .purge()?
+            .as_ref()
+            .ok()
+            .map(|value| {
+                Arc::new(NativePurge {
+                    value: value.clone(),
+                })
+            })
+    }
+    /// Original purge refusal that kept the private enrollment record.
+    pub fn purge_failure(&self) -> Option<NativeReadFailure> {
+        self.value
+            .as_ref()
+            .ok()?
+            .purge()?
+            .as_ref()
+            .err()
+            .copied()
+            .map(Into::into)
+    }
+}
+/// One immutable retained read outcome, including withdrawals on failure.
+#[derive(uniffi::Object)]
+pub struct NativeRead {
+    value: SessionRead,
+}
+#[uniffi::export]
+impl NativeRead {
+    /// Original failure, absent when the bounded read completed a report.
+    pub fn failure(&self) -> Option<NativeReadFailure> {
+        self.value.result().as_ref().err().copied().map(Into::into)
+    }
+    /// Whether actual records/catalogue/withdrawals moved, if a report exists.
+    pub fn moved(&self) -> Option<bool> {
+        self.value.result().as_ref().ok().map(|value| value.moved)
+    }
+    /// Whether that bounded pass completed, separately from progress having moved.
+    pub fn complete(&self) -> Option<bool> {
+        self.value
+            .result()
+            .as_ref()
+            .ok()
+            .map(|value| value.complete)
+    }
+    /// Core's conversation count; checked conversion preserves the integer value.
+    pub fn conversations(&self) -> Option<u64> {
+        self.value
+            .result()
+            .as_ref()
+            .ok()
+            .and_then(|value| u64::try_from(value.conversations).ok())
+    }
+    /// Actual withdrawal identities from the same admitted read.
+    pub fn withdrawn(&self) -> Vec<String> {
+        self.value.withdrawn().to_vec()
+    }
+}
+/// Initial status, selection, read and optional refusal recheck stay one owned outcome.
+#[derive(uniffi::Object)]
+pub struct NativeRefresh {
+    value: SessionRefresh,
+}
+#[uniffi::export]
+impl NativeRefresh {
+    /// Original initial status and purge.
+    pub fn initial(&self) -> Arc<NativeStatus> {
+        Arc::new(NativeStatus {
+            value: self.value.initial().clone(),
+        })
+    }
+    /// Exact current binding refusal before product/cache selection.
+    pub fn selection_failure(&self) -> Option<Arc<NativeEnrollmentFailure>> {
+        self.value
+            .selection_failure()
+            .map(|value| Arc::new(NativeEnrollmentFailure { value }))
+    }
+    /// Original read report, absent if no reader was selected.
+    pub fn read(&self) -> Option<Arc<NativeRead>> {
+        self.value.read().map(|value| {
+            Arc::new(NativeRead {
+                value: value.clone(),
+            })
+        })
+    }
+    /// Original refusal recheck, independently of its initial status/purge.
+    pub fn recheck(&self) -> Option<Arc<NativeStatus>> {
+        self.value.recheck().map(|value| {
+            Arc::new(NativeStatus {
+                value: value.clone(),
+            })
+        })
+    }
+}
+/// Immutable saved entry cursor. Restoration selects order, not read authority.
+#[derive(uniffi::Object)]
+pub struct NativeEntryKey {
+    value: EntryKey,
+}
+#[uniffi::export]
+impl NativeEntryKey {
+    /// Restore one saved ordering selector through the existing Id owner.
+    /// Current issued receiver/scope selection still belongs to the native session.
+    #[uniffi::constructor]
+    pub fn new(creation: u64, id: String) -> Result<Self, NativeCallError> {
+        let id = Id::new(id).map_err(|_| NativeCallError::InvalidArgument)?;
+        Ok(Self {
+            value: EntryKey { creation, id },
+        })
+    }
+    /// Original creation revision.
+    pub fn creation(&self) -> u64 {
+        self.value.creation
+    }
+    /// Original stable conversation identity.
+    pub fn id(&self) -> String {
+        self.value.id.as_str().to_owned()
+    }
+}
+/// One immutable core catalogue row including tombstone and validated metadata.
+#[derive(uniffi::Object)]
+pub struct NativeCatalogueEntry {
+    value: RetainedCatalogueEntry,
+}
+#[uniffi::export]
+impl NativeCatalogueEntry {
+    /// Physical key from the same manifest.
+    pub fn key(&self) -> Arc<NativeEntryKey> {
+        Arc::new(NativeEntryKey {
+            value: self.value.manifest().key.clone(),
+        })
+    }
+    /// Original committed revision.
+    pub fn revision(&self) -> u64 {
+        self.value.manifest().revision
+    }
+    /// Retained deletion descriptor, independently of metadata absence.
+    pub fn deleted(&self) -> bool {
+        self.value.manifest().deleted
+    }
+    /// Validated agent identifier, absent when metadata is unavailable.
+    pub fn agent(&self) -> Option<String> {
+        self.value
+            .metadata()?
+            .agent()
+            .map(|value| value.name().to_owned())
+    }
+    /// Validated selected model.
+    pub fn model(&self) -> Option<String> {
+        self.value
+            .metadata()
+            .map(|value| value.model().as_str().to_owned())
+    }
+    /// Validated title from the saved summary.
+    pub fn title(&self) -> Option<String> {
+        self.value
+            .metadata()?
+            .summary()?
+            .title()
+            .map(|value| value.as_str().to_owned())
+    }
+    /// Validated preview from the saved summary.
+    pub fn preview(&self) -> Option<String> {
+        self.value
+            .metadata()?
+            .summary()?
+            .preview()
+            .map(|value| value.as_str().to_owned())
+    }
+    /// Actual saved creation timestamp.
+    pub fn created_at_ms(&self) -> Option<u64> {
+        self.value.metadata().map(|value| value.created_at_ms())
+    }
+    /// Actual saved summary update timestamp.
+    pub fn updated_at_ms(&self) -> Option<u64> {
+        self.value
+            .metadata()?
+            .summary()
+            .map(|value| value.updated_at_ms())
+    }
+    /// Saved archive attribute, independent of deletion/read authority.
+    pub fn archived(&self) -> Option<bool> {
+        self.value
+            .metadata()?
+            .summary()
+            .map(|value| value.archived())
+    }
+}
+/// One immutable catalogue page from one physical database snapshot.
+#[derive(uniffi::Object)]
+pub struct NativeCataloguePage {
+    value: RetainedCataloguePage,
+}
+#[uniffi::export]
+impl NativeCataloguePage {
+    /// Actual saved scope, unrelated to hostname metadata.
+    pub fn scope(&self) -> Arc<NativeScope> {
+        Arc::new(NativeScope {
+            value: self.value.progress().scope.clone(),
+        })
+    }
+    /// Original durable catalogue generation.
+    pub fn generation(&self) -> u64 {
+        self.value.progress().generation
+    }
+    /// Original fully completed revision; an active pass can be partial.
+    pub fn completed(&self) -> u64 {
+        self.value.progress().completed
+    }
+    /// Captured boundary when a pass remains active.
+    pub fn active_boundary(&self) -> Option<u64> {
+        self.value
+            .progress()
+            .active
+            .as_ref()
+            .map(|value| value.boundary)
+    }
+    /// Actual retained continuation key of an active pass.
+    pub fn active_cursor(&self) -> Option<Arc<NativeEntryKey>> {
+        self.value
+            .progress()
+            .active
+            .as_ref()?
+            .cursor
+            .as_ref()
+            .map(|value| {
+                Arc::new(NativeEntryKey {
+                    value: value.clone(),
+                })
+            })
+    }
+    /// Owned rows, including deletion descriptors.
+    pub fn entries(&self) -> Vec<Arc<NativeCatalogueEntry>> {
+        self.value
+            .entries()
+            .iter()
+            .cloned()
+            .map(|value| Arc::new(NativeCatalogueEntry { value }))
+            .collect()
+    }
+    /// Original next page cursor from this database snapshot.
+    pub fn next(&self) -> Option<Arc<NativeEntryKey>> {
+        self.value
+            .next()
+            .cloned()
+            .map(|value| Arc::new(NativeEntryKey { value }))
+    }
+}
+/// Locally saved issued selectors. This historical pair is not read authority.
+#[derive(uniffi::Object)]
+pub struct NativeLocalIssuedEnrollment {
+    value: LocalIssuedEnrollment,
+}
+#[uniffi::export]
+impl NativeLocalIssuedEnrollment {
+    /// Original saved issued credential identity.
+    pub fn credential(&self) -> String {
+        self.value.credential().as_str().to_owned()
+    }
+    /// Original saved receiver associated with that credential.
+    pub fn receiver(&self) -> String {
+        self.value.receiver().as_str().to_owned()
+    }
+}
+/// Locally saved public correlation, to be checked against authenticated owner status.
+#[derive(uniffi::Object)]
+pub struct NativeLocalEnrollment {
+    value: LocalEnrollment,
+}
+#[uniffi::export]
+impl NativeLocalEnrollment {
+    /// Saved invitation/attempt/consent metadata, not an approval claim.
+    pub fn public_intent(&self) -> Arc<NativePublicIntent> {
+        Arc::new(NativePublicIntent {
+            value: self.value.intent(),
+        })
+    }
+    /// Public DeviceKey bytes in the existing pairing owner's representation.
+    pub fn device_key(&self) -> Vec<u8> {
+        self.value.device_key().bytes().to_vec()
+    }
+    /// Saved gateway SPKI authenticated by enrollment.
+    pub fn gateway_pin(&self) -> Vec<u8> {
+        self.value.gateway_pin().to_vec()
+    }
+    /// Issued selectors together, absent while the private record is pending.
+    pub fn issued(&self) -> Option<Arc<NativeLocalIssuedEnrollment>> {
+        self.value.issued().map(|value| {
+            Arc::new(NativeLocalIssuedEnrollment {
+                value: value.clone(),
+            })
+        })
+    }
+}
+
+/// The generated native session handle. Blocking calls run on the caller's
+/// dedicated worker; close must drain there before releasing/replacing scope.
+#[derive(uniffi::Object)]
+pub struct NativeDeviceSession {
+    value: NativeSession,
+}
+#[uniffi::export]
+impl NativeDeviceSession {
+    /// Compose numeric address and an existing private directory. No port offset,
+    /// hostname-derived origin, socket connect or enrollment is performed.
+    #[uniffi::constructor]
+    pub fn open(root: String, directory: String, address: String) -> Result<Self, NativeCallError> {
+        let address: SocketAddr = address
+            .parse()
+            .map_err(|_| NativeCallError::InvalidArgument)?;
+        NativeSession::open(Path::new(&root), Path::new(&directory), address)
+            .map(|value| Self { value })
+            .map_err(Into::into)
+    }
+    /// Pair using the existing code decoder and physical enrollment worker.
+    pub fn enroll(&self, code: String) -> Result<Arc<NativeEnrollmentReceipt>, NativeCallError> {
+        // Erase the Rust-owned argument copy. Swift may retain its own input.
+        let input = Zeroizing::new(code);
+        let code = ManualCode::parse(input.as_bytes()).map_err(|value| {
+            NativeCallError::from(SessionFailure::Enrollment(NativeClientError::Crypto(value)))
+        })?;
+        self.value
+            .enroll(code)
+            .map(|value| Arc::new(NativeEnrollmentReceipt { value }))
+            .map_err(Into::into)
+    }
+    /// Existing exact-operation retry; errors do not claim an original receipt.
+    pub fn retry(&self, code: String) -> Result<Arc<NativeRetry>, NativeCallError> {
+        let input = Zeroizing::new(code);
+        let code = ManualCode::parse(input.as_bytes()).map_err(|value| {
+            NativeCallError::from(SessionFailure::Enrollment(NativeClientError::Crypto(value)))
+        })?;
+        self.value
+            .retry(code)
+            .map(|value| Arc::new(NativeRetry { value }))
+            .map_err(Into::into)
+    }
+    /// Fresh pinned status retains operation purge and physical worker uncertainty.
+    pub fn status(&self) -> Result<Arc<NativeStatus>, NativeCallError> {
+        self.value
+            .status()
+            .map(|value| Arc::new(NativeStatus { value }))
+            .map_err(Into::into)
+    }
+    /// Capture current local public correlation under the same physical admission.
+    pub fn local_enrollment(&self) -> Result<Option<Arc<NativeLocalEnrollment>>, NativeCallError> {
+        self.value
+            .local_enrollment()
+            .map(|value| value.map(|value| Arc::new(NativeLocalEnrollment { value })))
+            .map_err(Into::into)
+    }
+    /// Run status, binding, bounded read and refusal recheck under one admission.
+    pub fn refresh(
+        &self,
+        stop: Arc<NativeReadStop>,
+    ) -> Result<Arc<NativeRefresh>, NativeCallError> {
+        self.value
+            .refresh(stop.value.clone())
+            .map(|value| Arc::new(NativeRefresh { value }))
+            .map_err(Into::into)
+    }
+    /// Saved page derives receiver and scope from actual issued/cache evidence.
+    /// Core owns entry bounds; foreign u32 conversion is checked before its call.
+    pub fn catalogue_page(
+        &self,
+        after: Option<Arc<NativeEntryKey>>,
+        maximum: u32,
+    ) -> Result<Option<Arc<NativeCataloguePage>>, NativeCallError> {
+        let maximum = usize::try_from(maximum).map_err(|_| NativeCallError::InvalidArgument)?;
+        self.value
+            .catalogue_page(after.as_ref().map(|value| &value.value), maximum)
+            .map(|value| value.map(|value| Arc::new(NativeCataloguePage { value })))
+            .map_err(Into::into)
+    }
+    /// Passive saved transcript. The view revision is presentation identity only.
+    pub fn transcript(
+        &self,
+        conversation: String,
+        revision: String,
+    ) -> Result<Arc<NativeTranscript>, NativeCallError> {
+        let conversation =
+            ConversationId::new(&conversation).map_err(|_| NativeCallError::InvalidArgument)?;
+        let revision = Uuid::parse_str(&revision).map_err(|_| NativeCallError::InvalidArgument)?;
+        self.value
+            .transcript(&conversation, revision)
+            .map(|value| Arc::new(NativeTranscript { value }))
+            .map_err(Into::into)
+    }
+    /// Historical receipt recovery can select the prior receiver after key removal.
+    pub fn purge_receipt(
+        &self,
+        receiver: String,
+    ) -> Result<Option<Arc<NativePurge>>, NativeCallError> {
+        self.value
+            .purge_receipt(&receiver)
+            .map(|value| value.map(|value| Arc::new(NativePurge { value })))
+            .map_err(Into::into)
+    }
+    /// Signal closure before queueing drain; stop current core sockets.
+    pub fn request_close(&self) -> Result<(), NativeCallError> {
+        self.value.request_close().map_err(Into::into)
+    }
+    /// Await physical work and release private scope on the dedicated worker.
+    pub fn close(&self) -> Result<(), NativeCallError> {
+        self.value.close().map_err(Into::into)
+    }
+}
+
+#[cfg(test)]
+#[path = "../tests/session/correlation.rs"]
+mod tests;

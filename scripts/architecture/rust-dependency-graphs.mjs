@@ -9,6 +9,7 @@ export const PORTABLE_RUST_PACKAGES = Object.freeze([
   "nessa-server",
   "nessa-protocol",
   "nessa-client-core",
+  "nessa-device-client",
   "nessa-sdk",
   "nessa-auth",
   "nessa-local-storage",

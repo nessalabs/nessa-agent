@@ -56,7 +56,7 @@ impl RetainedPurge {
 ///     status.purge = None;
 /// }
 /// ```
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct RetainedEnrollmentStatus {
     enrollment: Result<NativePairingStatus, NativeClientError>,
     purge: Option<Result<RetainedPurge, ReadFailure>>,
@@ -170,6 +170,12 @@ impl RetainedEnrollmentClient {
     /// First shutdown's wake result, distinct from physical worker completion.
     pub fn wake_report(&self) -> Option<NativeWakeReport> {
         self.client.wake_report()
+    }
+
+    /// Close enrollment admission and wake its current sockets. This is a
+    /// signal, not physical completion; await `shutdown()` before replacement.
+    pub fn request_shutdown(&self) {
+        self.client.request_shutdown();
     }
 
     /// Exclude new work, wake current sockets and await actual worker drain.
