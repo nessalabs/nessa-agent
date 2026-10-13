@@ -128,7 +128,9 @@ async function attachStored(
   file: FileAttachment,
 ) {
   store.dispatch(attachFiles({ files: [file], conversationId: "c0" }))
-  store.dispatch(uploadChanged({ fileId: file.id, to: "uploading" }))
+  store.dispatch(
+    uploadChanged({ conversationId: "c0", fileId: file.id, to: "uploading" }),
+  )
   await store.dispatch(
     stageAttachment({ id: "c0", fileId: file.id, file: described(file), bytes }),
   )
@@ -722,7 +724,9 @@ it("does not bring back a tile removed while its upload was in flight", async ()
   })
   const file = image("a")
   context.store.dispatch(attachFiles({ files: [file], conversationId: "c0" }))
-  context.store.dispatch(uploadChanged({ fileId: "a", to: "uploading" }))
+  context.store.dispatch(
+    uploadChanged({ conversationId: "c0", fileId: "a", to: "uploading" }),
+  )
   const staging = context.store.dispatch(
     stageAttachment({ id: "c0", fileId: "a", file: described(file), bytes }),
   )
