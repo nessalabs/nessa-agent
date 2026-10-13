@@ -219,8 +219,13 @@ request, `Part of #803`, because each pull request costs a full CI run (Saurav,
 - Policies are data a reviewer reads in one file per area, instead of logic
   spread over thirty functions.
 - Cost: each migration step rebuilds entity mapping and tests for its area, and
-  per-request evaluation costs more than an inline comparison. Not measured
-  yet; step 3 measures the catalogue page, where each item is re-admitted.
+  per-request evaluation costs more than an inline comparison. Measured for
+  step 3 (`examples/catalogue_admission_bench.rs`, release build, 4 vCPUs): one
+  evaluation takes about 34 µs at p50 and 93 µs at p99. Asked row by row, a
+  500-row list would add about 16 ms, several times its SQL. So a list or a
+  catalogue page asks once per kind of row (organization, owner, deleted, role
+  held), which costs well under a millisecond: a 256-entry page reads in 1.4 ms
+  against 1.1 ms with no check.
 - Known limit: moving a check into Cedar does not change when it runs. A
   grant revoked after a note or a Drive turn was admitted, but before the turn
   is saved, does not stop that turn: a revoke stops the next turn, not one

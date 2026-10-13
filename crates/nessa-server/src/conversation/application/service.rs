@@ -3137,21 +3137,23 @@ impl ConversationService {
         OwnerAccess::new(self.inner.access_policy.as_ref())
     }
     /// The listed conversations `caller` may act on, in order: a listing is
-    /// an index, and each row it found is admitted again here. A policy
-    /// that cannot decide fails the list rather than shortening it.
+    /// an index, and each row it found is admitted again here, rows that
+    /// differ only in what the policy never sees sharing one decision
+    /// ([`OwnerAccess::admits_each`]). A policy that cannot decide fails the
+    /// list rather than shortening it.
     fn admitted(
         &self,
         listed: Vec<ListedConversation>,
         caller: &ConversationCaller,
     ) -> Result<Vec<ListedConversation>, ConversationError> {
-        let access = self.access();
-        let mut owned = Vec::with_capacity(listed.len());
-        for row in listed {
-            if access.admits(&row.conversation, caller)? {
-                owned.push(row);
-            }
-        }
-        Ok(owned)
+        let admitted = self
+            .access()
+            .admits_each(listed.iter().map(|row| &row.conversation), caller)?;
+        Ok(listed
+            .into_iter()
+            .zip(admitted)
+            .filter_map(|(row, admitted)| admitted.then_some(row))
+            .collect())
     }
     /// Which of `owned` are open here with a turn under way.
     ///

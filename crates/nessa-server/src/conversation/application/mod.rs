@@ -164,8 +164,9 @@ pub use access_policy::{
     ConversationAccessPolicyEvaluator, OwnerAccess, RequestShape, ShareTarget,
 };
 pub use catalogue::{
-    CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage, CataloguePageRequest,
-    CatalogueValue, ConversationCatalogue,
+    CatalogueDescriptor, CatalogueEntryAccess, CatalogueEntryAdmission, CatalogueEntryAnswer,
+    CatalogueHead, CatalogueKey, CataloguePage, CataloguePageRequest, CatalogueValue,
+    ConversationCatalogue,
 };
 pub use catalogue_read::{
     CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadResponse,

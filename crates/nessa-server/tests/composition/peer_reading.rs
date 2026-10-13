@@ -241,6 +241,7 @@ impl Peer {
         )))
         .with_catalogue_source(Arc::new(NessaCatalogueReadSource::new(
             metadata.clone(),
+            crate::conversation_test_support::access_policy(),
             Id::new(&gateway).unwrap(),
         )));
         let bound = bind(prepared, RuntimeDependencies::default().clock, state)

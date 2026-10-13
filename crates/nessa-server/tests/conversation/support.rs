@@ -1979,3 +1979,47 @@ pub(crate) fn access_policy_ref(
 ) -> &'static dyn crate::conversation::application::ConversationAccessPolicyEvaluator {
     checked_in_access_policy().as_ref()
 }
+
+/// The checked-in access policy, counting what it is asked, until
+/// [`Self::undecide`]: from then on it cannot decide anything, as an
+/// evaluator whose bundle or entities failed answers.
+#[derive(Default)]
+pub(crate) struct ObservedPolicy {
+    undecided: AtomicBool,
+    asked: AtomicUsize,
+}
+impl ObservedPolicy {
+    /// Answer every later ask `Deny(Unavailable)`.
+    pub(crate) fn undecide(&self) {
+        self.undecided.store(true, Ordering::SeqCst);
+    }
+    /// How many asks it has answered.
+    pub(crate) fn asked(&self) -> usize {
+        self.asked.load(Ordering::SeqCst)
+    }
+}
+impl crate::conversation::application::ConversationAccessPolicyEvaluator for ObservedPolicy {
+    fn evaluate(
+        &self,
+        ask: &crate::conversation::application::AccessAsk<'_>,
+    ) -> crate::conversation::application::AccessDecision {
+        self.asked.fetch_add(1, Ordering::SeqCst);
+        if self.undecided.load(Ordering::SeqCst) {
+            return crate::conversation::application::AccessDecision::Deny(
+                crate::conversation::application::AccessDenial::Unavailable,
+            );
+        }
+        access_policy_ref().evaluate(ask)
+    }
+}
+
+/// A paired catalogue reader signed in as `signed_in_as`, its entries
+/// admitted by the checked-in access policy.
+pub(crate) fn catalogue_entries(
+    signed_in_as: &str,
+) -> crate::conversation::application::CatalogueEntryAccess {
+    crate::conversation::application::CatalogueEntryAccess::new(
+        access_policy(),
+        PrincipalId::new(signed_in_as).unwrap(),
+    )
+}

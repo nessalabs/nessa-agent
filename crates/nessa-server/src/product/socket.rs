@@ -3952,6 +3952,7 @@ mod tests {
         fn read(
             &self,
             _: CatalogueReadScope,
+            _: nessa_auth::domain::PrincipalId,
             _: CatalogueReadOperation,
             _: RecordReadLease,
         ) -> CatalogueReadFuture<'_> {

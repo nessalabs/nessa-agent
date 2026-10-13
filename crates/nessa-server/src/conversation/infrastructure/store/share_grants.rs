@@ -6,7 +6,8 @@
 //! revision from the same row for one conversation, and
 //! the catalogue page and resolve ask it for a paired device's rows
 //! (`store.rs`), so a device's list and its reads cannot disagree about what
-//! it may see.
+//! it may see. They read the role from that row too ([`held_role`]), for
+//! the access policy to admit each entry they return.
 //!
 //! A grant's role and policy are stored as this adapter spells them: the
 //! role as `read`, `comment` or `drive`, and a Drive grant's policy as JSON
@@ -44,6 +45,24 @@ pub(super) fn granted(conversation: &str, receiver: &str) -> String {
         "EXISTS (SELECT 1 FROM {})",
         grant_row(conversation, receiver)
     )
+}
+
+/// SQL naming the role the receiver bound to parameter `receiver` holds on
+/// the conversation whose id is `conversation`, as stored, or NULL when it
+/// holds none: the row [`granted`] asks about. Read back by [`stored_role`].
+pub(super) fn held_role(conversation: &str, receiver: &str) -> String {
+    format!("(SELECT g.role FROM {})", grant_row(conversation, receiver))
+}
+
+/// The role [`held_role`] read for row `id`; a spelling this adapter never
+/// writes is that row's damage.
+pub(super) fn stored_role(
+    stored: Option<String>,
+    id: &str,
+) -> Result<Option<ShareRole>, ConversationError> {
+    stored
+        .map(|name| role_named(&name).ok_or_else(|| unreadable("share_grants", id)))
+        .transpose()
 }
 
 /// What a party holds on a conversation, as stored: the role, or [`NONE`],

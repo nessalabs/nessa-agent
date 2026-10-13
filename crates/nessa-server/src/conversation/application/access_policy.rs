@@ -29,6 +29,7 @@
 use super::ConversationCaller;
 use crate::conversation::domain::{Conversation, ConversationRefusal, ShareRole};
 use nessa_auth::domain::{Grant, OrganizationId, PrincipalId, Resource};
+use std::collections::HashMap;
 
 /// Who is asking.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,7 +135,7 @@ impl AccessAction {
 }
 
 /// What the subject asks about.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AccessResource<'a> {
     /// One conversation.
     Conversation {
@@ -355,6 +356,34 @@ impl<'a> OwnerAccess<'a> {
             Answer::Refused => Ok(false),
             Answer::Unavailable => Err(ConversationRefusal::Unavailable),
         }
+    }
+
+    /// Which of `conversations` `caller` may act on, in order, each as
+    /// [`Self::admits`] answers it. Within one call the ask varies by row
+    /// only in the conversation's organization, owner and deletion, so each
+    /// distinct three is asked once: a list of one owner's rows costs a
+    /// couple of evaluations however long it is.
+    ///
+    /// # Errors
+    /// `Unavailable` when the policy could not decide any one of them.
+    pub fn admits_each<'c>(
+        &self,
+        conversations: impl IntoIterator<Item = &'c Conversation>,
+        caller: &ConversationCaller,
+    ) -> Result<Vec<bool>, ConversationRefusal> {
+        let mut decided: HashMap<AccessResource<'c>, bool> = HashMap::new();
+        conversations
+            .into_iter()
+            .map(|conversation| {
+                let resource = AccessResource::of(conversation);
+                if let Some(admitted) = decided.get(&resource) {
+                    return Ok(*admitted);
+                }
+                let admitted = self.admits(conversation, caller)?;
+                decided.insert(resource, admitted);
+                Ok(admitted)
+            })
+            .collect()
     }
 
     /// Whether `principal` in `organization` may be told about

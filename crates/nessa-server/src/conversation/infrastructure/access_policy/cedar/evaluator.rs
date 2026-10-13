@@ -6,7 +6,7 @@ use crate::conversation::application::{
 };
 use crate::conversation::domain::ShareRole;
 use cedar_policy::{
-    Authorizer, Context, Decision, Entities, Entity, EntityId, EntityTypeName, EntityUid,
+    Authorizer, Context, Decision, Entities, Entity, EntityId, EntityTypeName, EntityUid, PolicyId,
     PolicySet, Request, RestrictedExpression, Schema, ValidationMode, Validator,
 };
 use std::{
@@ -45,7 +45,8 @@ impl CedarConversationAccessPolicy {
     ///
     /// # Errors
     /// The bundle does not parse, does not validate without warnings, or
-    /// holds a policy without an `@id`; the message says which.
+    /// holds a policy without an `@id` or two under the same one; the
+    /// message says which.
     pub fn new() -> Result<Self, String> {
         Self::from_sources(SCHEMA, &POLICIES.join("\n"))
     }
@@ -54,16 +55,23 @@ impl CedarConversationAccessPolicy {
         let schema = Schema::from_json_str(schema).map_err(|error| {
             format!("the conversation access policy schema does not parse: {error}")
         })?;
-        let policies = PolicySet::from_str(policies)
+        let parsed = PolicySet::from_str(policies)
             .map_err(|error| format!("the conversation access policies do not parse: {error}"))?;
-        if let Some(unnamed) = policies
-            .policies()
-            .find(|policy| policy.annotation("id").is_none_or(str::is_empty))
-        {
-            return Err(format!(
-                "a conversation access policy has no @id: {}",
-                unnamed.id()
-            ));
+        // Each policy is re-identified by its `@id`, so a decision's reasons
+        // are the names the bundle gives and a repeated name fails `add`.
+        let mut policies = PolicySet::new();
+        for policy in parsed.policies() {
+            let Some(id) = policy.annotation("id").filter(|id| !id.is_empty()) else {
+                return Err(format!(
+                    "a conversation access policy has no @id: {}",
+                    policy.id()
+                ));
+            };
+            policies
+                .add(policy.new_id(PolicyId::new(id)))
+                .map_err(|error| {
+                    format!("the conversation access policy @id {id:?} is not unique: {error}")
+                })?;
         }
         let validation = Validator::new(schema.clone()).validate(&policies, ValidationMode::Strict);
         if !validation.validation_passed_without_warnings() {

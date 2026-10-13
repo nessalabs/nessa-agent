@@ -1311,51 +1311,54 @@ impl ConversationListing for Answering {
     }
 }
 
-#[tokio::test]
-async fn a_list_shows_only_what_the_domain_lets_the_caller_see() {
-    let conversation = |organization: &str, principal: &str| {
-        Conversation::new(
-            id(),
-            OrganizationId::new(organization).unwrap(),
-            PrincipalId::new(principal).unwrap(),
-            "panel".into(),
-            "create".into(),
-            1,
-            AgentId::Claude,
-            ConversationModelId::new("test-model").unwrap(),
-            ConversationApprovalMode::Ask,
-        )
-        .unwrap()
-    };
-    let mine = conversation("org", "person");
-    let deleted = conversation("org", "person")
+/// A conversation of `principal` in `organization`, deleted by them when
+/// `deleted`.
+fn listed_record(organization: &str, principal: &str, deleted: bool) -> Conversation {
+    let record = Conversation::new(
+        id(),
+        OrganizationId::new(organization).unwrap(),
+        PrincipalId::new(principal).unwrap(),
+        "panel".into(),
+        "create".into(),
+        1,
+        AgentId::Claude,
+        ConversationModelId::new("test-model").unwrap(),
+        ConversationApprovalMode::Ask,
+    )
+    .unwrap();
+    if !deleted {
+        return record;
+    }
+    record
         .deleted(
             ConversationDeletion::new(
-                OrganizationId::new("org").unwrap(),
-                PrincipalId::new("person").unwrap(),
+                OrganizationId::new(organization).unwrap(),
+                PrincipalId::new(principal).unwrap(),
                 "panel".into(),
                 "delete".into(),
                 2,
             )
             .unwrap(),
         )
-        .unwrap();
+        .unwrap()
+}
+
+/// A service whose listing answers `rows` whoever asks, admitted by `policy`.
+fn answering(
+    rows: &[Conversation],
+    policy: Arc<dyn crate::conversation::application::ConversationAccessPolicyEvaluator>,
+) -> ConversationService {
     let summary = ConversationSummary::after_message(None, "said", None, 3);
-    let answered = [
-        mine.clone(),
-        deleted,
-        conversation("org", "Person"),
-        conversation("elsewhere", "person"),
-    ]
-    .into_iter()
-    .map(|conversation| ListedConversation {
-        conversation,
-        summary: summary.clone(),
-    })
-    .collect();
-    let service = ConversationService::new(
+    let answered = rows
+        .iter()
+        .map(|conversation| ListedConversation {
+            conversation: conversation.clone(),
+            summary: summary.clone(),
+        })
+        .collect();
+    ConversationService::new(
         ConversationDependencies {
-            access_policy: crate::conversation_test_support::access_policy(),
+            access_policy: policy,
             agents: only(Arc::new(Provider::new(
                 Arc::new(ProviderFactory::default()),
             ))),
@@ -1380,9 +1383,74 @@ async fn a_list_shows_only_what_the_domain_lets_the_caller_see() {
         ConversationLimits::default(),
         None,
     )
-    .unwrap();
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_list_shows_only_what_the_domain_lets_the_caller_see() {
+    let mine = listed_record("org", "person", false);
+    let rows = [
+        mine.clone(),
+        listed_record("org", "person", true),
+        listed_record("org", "Person", false),
+        listed_record("elsewhere", "person", false),
+    ];
+    let service = answering(&rows, crate::conversation_test_support::access_policy());
     let listed = service.list(owner(), false).await.unwrap();
     assert_eq!(ids(&listed.conversations), [mine.id().to_string()]);
+}
+
+/// A mixed list keeps the caller's live rows in order and drops the rest,
+/// as asking row by row did, while the policy is asked once for each kind
+/// of row (organization, owner, deletion), not once per row.
+#[tokio::test]
+async fn a_list_asks_the_policy_once_per_kind_of_row() {
+    let mine = [
+        listed_record("org", "person", false),
+        listed_record("org", "person", false),
+        listed_record("org", "person", false),
+    ];
+    let rows = [
+        mine[0].clone(),
+        listed_record("org", "person", true),
+        listed_record("org", "Person", false),
+        mine[1].clone(),
+        listed_record("elsewhere", "person", false),
+        listed_record("org", "person", true),
+        listed_record("org", "Person", false),
+        mine[2].clone(),
+    ];
+    let expected: Vec<String> = mine.iter().map(|row| row.id().to_string()).collect();
+    let policy = Arc::new(crate::conversation_test_support::ObservedPolicy::default());
+    let service = answering(&rows, policy.clone());
+    let listed = service.list(owner(), false).await.unwrap();
+    assert_eq!(ids(&listed.conversations), expected);
+    // Own live, own deleted, another owner, another organization.
+    assert_eq!(policy.asked(), 4);
+    let observed = service.observe(owner(), false, None).await.unwrap();
+    assert_eq!(ids(&observed.conversations), expected);
+    assert_eq!(policy.asked(), 8, "each call decides afresh");
+}
+
+/// A policy that cannot decide fails a list and an observation, as storage
+/// trouble, rather than shortening either.
+#[tokio::test]
+async fn a_list_the_policy_cannot_decide_fails() {
+    let rows = [
+        listed_record("org", "person", false),
+        listed_record("org", "person", true),
+    ];
+    let policy = Arc::new(crate::conversation_test_support::ObservedPolicy::default());
+    policy.undecide();
+    let service = answering(&rows, policy);
+    assert!(matches!(
+        service.list(owner(), false).await,
+        Err(ConversationError::Metadata)
+    ));
+    assert!(matches!(
+        service.observe(owner(), false, None).await,
+        Err(ConversationError::Metadata)
+    ));
 }
 
 #[tokio::test]

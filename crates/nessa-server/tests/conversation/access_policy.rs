@@ -597,8 +597,8 @@ fn a_paired_reader_writes_nothing_else() {
 
 // The bundle as built.
 
-/// A bundle that does not parse, does not validate strictly, or holds a
-/// policy without an `@id` is refused when it is built.
+/// A bundle that does not parse, does not validate strictly, holds a
+/// policy without an `@id`, or repeats an `@id` is refused when it is built.
 #[test]
 fn a_malformed_bundle_fails_construction() {
     let policies = POLICIES.join("\n");
@@ -612,6 +612,12 @@ fn a_malformed_bundle_fails_construction() {
     assert!(missing.is_err_and(|error| error.contains("no @id")));
     let blank = r#"@id("") permit (principal is NessaConversation::Person, action == NessaConversation::Action::"conversation.act", resource is NessaConversation::Conversation);"#;
     assert!(CedarConversationAccessPolicy::from_sources(SCHEMA, blank).is_err());
+    let twice = r#"
+        @id("owner.act") permit (principal is NessaConversation::Person, action == NessaConversation::Action::"conversation.act", resource is NessaConversation::Conversation);
+        @id("owner.act") forbid (principal is NessaConversation::Person, action == NessaConversation::Action::"conversation.act", resource is NessaConversation::Conversation);
+    "#;
+    let duplicate = CedarConversationAccessPolicy::from_sources(SCHEMA, twice);
+    assert!(duplicate.is_err_and(|error| error.contains("not unique")));
 }
 
 /// Entities the schema does not accept are refused as unavailable, never

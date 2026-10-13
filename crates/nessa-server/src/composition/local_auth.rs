@@ -1089,6 +1089,7 @@ async fn conversations(
     );
     let catalogue_reader = Arc::new(NessaCatalogueReadSource::new(
         metadata.clone(),
+        access_policy.clone(),
         record_origin,
     ));
     let creation_audit = Arc::new(

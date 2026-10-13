@@ -180,6 +180,7 @@ fn sessions_on(
     )
     .with_catalogue_source(Arc::new(NessaCatalogueReadSource::new(
         metadata,
+        access_policy(),
         Id::new("gateway").unwrap(),
     )))
     .with_record_source(Arc::new(PrunedRecords));

@@ -597,24 +597,27 @@ fn catalogue_incarnation(connection: &Connection, expected: &str) -> Result<(), 
     Ok(())
 }
 
-fn catalogue_descriptor(row: &Row<'_>) -> rusqlite::Result<(StoredConversation, i64, i64, bool)> {
+/// A catalogue row's conversation, revisions, deletion and the role held by
+/// the reader the page is narrowed to, as stored.
+type StoredDescriptor = (StoredConversation, i64, i64, bool, Option<String>);
+
+fn catalogue_descriptor(row: &Row<'_>) -> rusqlite::Result<StoredDescriptor> {
     Ok((
         StoredConversation::from_row(row)?,
         row.get(9)?,
         row.get(10)?,
         row.get(11)?,
+        row.get(12)?,
     ))
 }
 
 fn checked_descriptor(
-    stored: StoredConversation,
-    creation: i64,
-    change: i64,
-    deleted: bool,
+    (stored, creation, change, deleted, held): StoredDescriptor,
     organization: &OrganizationId,
     owner: &PrincipalId,
 ) -> Result<CatalogueDescriptor, ConversationError> {
     let id = stored.id.clone();
+    let held = share_grants::stored_role(held, &id)?;
     let conversation = stored
         .read()
         .ok_or_else(|| unreadable("conversations", &id))?;
@@ -636,6 +639,7 @@ fn checked_descriptor(
         },
         revision,
         deleted,
+        held,
     })
 }
 
@@ -1501,15 +1505,20 @@ impl ConversationCatalogue for LocalConversationStore {
             if boundary > head {
                 return Err(ConversationError::CatalogueInvalidRequest);
             }
+            // The grant narrows a paired reader's rows here, as an index;
+            // the role it holds is returned with each row for the access
+            // policy, which admits each entry the reader is shown.
             let mut statement = transaction.prepare(&format!(
                 "SELECT {}, creation_revision, change_revision,
-                        EXISTS (SELECT 1 FROM deletions AS d WHERE d.conversation_id = conversations.id)
+                        EXISTS (SELECT 1 FROM deletions AS d WHERE d.conversation_id = conversations.id),
+                        {}
                  FROM conversations WHERE organization = ?1 AND owner = ?2
                    AND creation_revision <= ?3 AND change_revision > ?4
                    AND (creation_revision > ?5 OR (creation_revision = ?5 AND id > ?6))
                    AND (?8 IS NULL OR {})
                  ORDER BY creation_revision, id LIMIT ?7",
                 acquisition::conversation(""),
+                share_grants::held_role("conversations.id", "?8"),
                 share_grants::granted("conversations.id", "?8"),
             )).map_err(failed)?;
             let mut rows = statement.query(params![
@@ -1518,9 +1527,9 @@ impl ConversationCatalogue for LocalConversationStore {
             ]).map_err(failed)?;
             let mut entries = Vec::with_capacity(limit + 1);
             while let Some(row) = rows.next().map_err(failed)? {
-                let (stored, creation, change, deleted) = cells(catalogue_descriptor(row))?
+                let stored = cells(catalogue_descriptor(row))?
                     .ok_or_else(|| unreadable("conversations", "unreadable"))?;
-                entries.push(checked_descriptor(stored, creation, change, deleted, &organization, &owner)?);
+                entries.push(checked_descriptor(stored, &organization, &owner)?);
             }
             let has_more = entries.len() > limit;
             entries.truncate(limit);
@@ -1551,9 +1560,11 @@ impl ConversationCatalogue for LocalConversationStore {
                 .query_row(
                     &format!(
                         "SELECT creation_revision, change_revision,
-                        EXISTS (SELECT 1 FROM deletions WHERE conversation_id = ?1)
+                        EXISTS (SELECT 1 FROM deletions WHERE conversation_id = ?1),
+                        {}
                  FROM conversations WHERE id = ?1 AND organization = ?2 AND owner = ?3
                    AND (?4 IS NULL OR {})",
+                        share_grants::held_role("conversations.id", "?4"),
                         share_grants::granted("conversations.id", "?4")
                     ),
                     params![
@@ -1567,14 +1578,16 @@ impl ConversationCatalogue for LocalConversationStore {
                             row.get::<_, i64>(0)?,
                             row.get::<_, i64>(1)?,
                             row.get::<_, bool>(2)?,
+                            row.get::<_, Option<String>>(3)?,
                         ))
                     },
                 )
                 .optional()
                 .map_err(failed)?;
-            let Some((creation, revision, deleted)) = row else {
+            let Some((creation, revision, deleted, held)) = row else {
                 return Ok(None);
             };
+            let held = share_grants::stored_role(held, &id.to_string())?;
             let conversation = read(&transaction, &id)?
                 .ok_or_else(|| unreadable("conversations", &id.to_string()))?;
             // Record integrity, not access: the row was selected by these
@@ -1591,6 +1604,7 @@ impl ConversationCatalogue for LocalConversationStore {
                 },
                 revision: u64::try_from(revision).map_err(|_| ConversationError::Metadata)?,
                 deleted,
+                held,
             };
             if descriptor.key.creation == 0 || descriptor.revision < descriptor.key.creation {
                 return Err(unreadable("conversations", &id.to_string()));

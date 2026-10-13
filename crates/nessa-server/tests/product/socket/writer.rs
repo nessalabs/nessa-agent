@@ -931,6 +931,7 @@ impl CatalogueReadSource for HeldPhysicalRead {
     fn read(
         &self,
         _: CatalogueReadScope,
+        _: nessa_auth::domain::PrincipalId,
         _: CatalogueReadOperation,
         lease: RecordReadLease,
     ) -> CatalogueReadFuture<'_> {

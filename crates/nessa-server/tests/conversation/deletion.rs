@@ -15,8 +15,8 @@ use crate::conversation::{
 };
 use crate::conversation_test_support::{
     claude_erasers, only, AcceptingCreationAudit, MemoryAttachments, MemoryListing,
-    MemoryRepository, MemorySummaries, Provider, ProviderFactory, RecordingDeletionAudit,
-    RecordingFileLinkAudit, TestClock, Unlisted, DELETION_BUDGETS,
+    MemoryRepository, MemorySummaries, ObservedPolicy, Provider, ProviderFactory,
+    RecordingDeletionAudit, RecordingFileLinkAudit, TestClock, Unlisted, DELETION_BUDGETS,
 };
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
 use nessa_protocol::conversation::view::ConversationMessageStatus;
@@ -113,12 +113,15 @@ struct Deleting {
     /// The agent's own store, registered for the one agent when `handled`.
     store: Arc<AgentStore>,
     handled: bool,
+    /// The access policy every admission asks, which a test may make
+    /// unable to decide.
+    policy: Arc<ObservedPolicy>,
 }
 impl Deleting {
     /// A service over this one's stores, as a gateway started again over the
     /// same data directory would build it.
     fn restarted(&self) -> ConversationService {
-        service_over(
+        service_admitted_by(
             self.provider.clone(),
             self.repository.clone(),
             self.storage.clone(),
@@ -127,6 +130,7 @@ impl Deleting {
             self.attachments.clone(),
             self.handled
                 .then(|| self.store.clone() as Arc<dyn ProviderSessionEraser>),
+            self.policy.clone(),
         )
     }
 }
@@ -139,13 +143,36 @@ fn service_over(
     attachments: Arc<MemoryAttachments>,
     store: Option<Arc<dyn ProviderSessionEraser>>,
 ) -> ConversationService {
+    service_admitted_by(
+        provider,
+        repository,
+        storage,
+        summaries,
+        audit,
+        attachments,
+        store,
+        crate::conversation_test_support::access_policy(),
+    )
+}
+/// [`service_over`], admitted by `policy`.
+#[allow(clippy::too_many_arguments)]
+fn service_admitted_by(
+    provider: Arc<ProviderFactory>,
+    repository: Arc<MemoryRepository>,
+    storage: Arc<InMemoryStorage>,
+    summaries: Arc<MemorySummaries>,
+    audit: Arc<RecordingDeletionAudit>,
+    attachments: Arc<MemoryAttachments>,
+    store: Option<Arc<dyn ProviderSessionEraser>>,
+    policy: Arc<dyn crate::conversation::application::ConversationAccessPolicyEvaluator>,
+) -> ConversationService {
     let mut provider_sessions = ProviderSessionErasers::default();
     if let Some(store) = store {
         provider_sessions.register(AgentId::Claude, store);
     }
     ConversationService::new(
         ConversationDependencies {
-            access_policy: crate::conversation_test_support::access_policy(),
+            access_policy: policy,
             agents: only(Arc::new(Provider::new(provider))),
             storage,
             metadata: repository.clone(),
@@ -187,7 +214,8 @@ fn deleting_with(handled: bool) -> Deleting {
     let attachments = Arc::new(MemoryAttachments::default());
     let store = Arc::new(AgentStore::default());
     *store.watching.lock().unwrap() = Some((provider.clone(), audit.clone(), summaries.clone()));
-    let service = service_over(
+    let policy = Arc::new(ObservedPolicy::default());
+    let service = service_admitted_by(
         provider.clone(),
         repository.clone(),
         storage.clone(),
@@ -195,6 +223,7 @@ fn deleting_with(handled: bool) -> Deleting {
         audit.clone(),
         attachments.clone(),
         handled.then(|| store.clone() as Arc<dyn ProviderSessionEraser>),
+        policy.clone(),
     );
     Deleting {
         service,
@@ -206,6 +235,7 @@ fn deleting_with(handled: bool) -> Deleting {
         attachments,
         store,
         handled,
+        policy,
     }
 }
 fn new_id() -> ConversationId {
@@ -463,6 +493,25 @@ async fn a_deleted_conversation_refuses_every_command_on_it() {
         .unwrap()
         .erased());
     service.shutdown().await.unwrap();
+}
+
+/// A delete whose ownership the policy cannot decide is refused as storage
+/// trouble before its fence: no tombstone, no record, nothing erased.
+#[tokio::test]
+async fn a_delete_the_policy_cannot_decide_is_refused_before_its_fence() {
+    let fixture = deleting();
+    let id = talked_in(&fixture).await;
+    fixture.policy.undecide();
+    let result = fixture.service.delete(id.clone(), caller("delete")).await;
+    assert!(
+        matches!(result, Err(ConversationError::Metadata)),
+        "expected storage trouble, got {result:?}"
+    );
+    assert!(fixture.repository.records.lock().unwrap()[&id]
+        .deletion()
+        .is_none());
+    assert!(fixture.audit.records.lock().unwrap().is_empty());
+    assert!(summary(&fixture, &id).is_some());
 }
 
 #[tokio::test]

@@ -308,6 +308,7 @@ async fn gateway_child() {
     });
     let source = Arc::new(NessaCatalogueReadSource::new(
         catalogue,
+        crate::conversation_test_support::access_policy(),
         sid("gateway-resource"),
     ));
     let provider = Arc::new(ProviderFactory::default());

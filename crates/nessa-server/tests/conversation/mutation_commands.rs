@@ -83,6 +83,25 @@ fn fixture_in(
     Arc<RecordStorage>,
     Arc<LocalConversationStore>,
 ) {
+    fixture_admitted_by(
+        root,
+        provider,
+        environment,
+        crate::conversation_test_support::access_policy(),
+    )
+}
+
+/// [`fixture_in`], its service admitted by `policy`.
+fn fixture_admitted_by(
+    root: &Path,
+    provider: Arc<ProviderFactory>,
+    environment: crate::conversation::application::Environments,
+    policy: Arc<dyn crate::conversation::application::ConversationAccessPolicyEvaluator>,
+) -> (
+    ConversationService,
+    Arc<RecordStorage>,
+    Arc<LocalConversationStore>,
+) {
     nessa_local_storage::create_directory(root).unwrap();
     let storage = Arc::new(RecordStorage::new(root.join("records")).unwrap());
     let metadata = Arc::new(
@@ -92,7 +111,7 @@ fn fixture_in(
     );
     let service = ConversationService::new(
         ConversationDependencies {
-            access_policy: crate::conversation_test_support::access_policy(),
+            access_policy: policy,
             agents: only(Arc::new(Provider::new(provider))),
             storage: storage.clone(),
             metadata: metadata.clone(),
@@ -698,6 +717,51 @@ async fn deletion_refuses_submit_lookup_after_reopen() {
             )
             .await,
         Err(MutationFailure::Target(ConversationError::Deleted))
+    ));
+    assert!(provider.executions.lock().unwrap().is_empty());
+    assert_eq!(command_rows(&root), rows);
+    retire(service, storage, metadata).await;
+}
+
+/// A submit or a stop whose target the policy cannot decide is refused as
+/// storage trouble before any stage: nothing is recorded or sent, rather
+/// than a deleted conversation being let through as one it could not tell
+/// about.
+#[tokio::test]
+async fn a_command_the_policy_cannot_decide_is_refused_before_any_stage() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let policy = Arc::new(crate::conversation_test_support::ObservedPolicy::default());
+    let (service, storage, metadata) = fixture_admitted_by(
+        &root,
+        provider.clone(),
+        crate::conversation::infrastructure::in_process_environment().into(),
+        policy.clone(),
+    );
+    let target = id();
+    opened(&service, &provider, &target).await;
+    let rows = command_rows(&root);
+    policy.undecide();
+    assert!(matches!(
+        service
+            .submit_command(
+                storage.clone(),
+                target.clone(),
+                caller("submit"),
+                Initiation::owner(),
+                "turn".into(),
+                message("hello"),
+                SubmissionMode::Queue,
+            )
+            .await,
+        Err(MutationFailure::Target(ConversationError::Metadata))
+    ));
+    assert!(matches!(
+        service
+            .stop_command(storage.clone(), target, caller("stop"), "turn".into())
+            .await,
+        Err(MutationFailure::Target(ConversationError::Metadata))
     ));
     assert!(provider.executions.lock().unwrap().is_empty());
     assert_eq!(command_rows(&root), rows);
