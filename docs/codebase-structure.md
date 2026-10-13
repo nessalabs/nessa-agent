@@ -1716,6 +1716,14 @@ tests enable it as a dev-dependency (ADR 483, amended). The portable package
 gate refuses any client dependency path to `nessa-server`, including renamed
 and transitive edges. Both ends depend on `nessa-protocol` for shared rules.
 
+The public `retained` library selects owner-device or granted-peer catalogue reads
+through the existing source authorizer. `retained/saved.rs` maps saved scope,
+catalogue pages and transcript/progress/deletion values through the existing
+private cache and passive projection, with no CLI, second fold or receiver.
+Scope discovery and each page have separate snapshots; pages carry their actual
+scope/progress/generation for consumers to compare. Native phone binding and
+enrollment/purge composition remain subsequent slices of ADR 782.
+
 ### Retained read-only example
 
 `crates/nessa-client-core/examples/read_only_sync.rs` starts the standalone example

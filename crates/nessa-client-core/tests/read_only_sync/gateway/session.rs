@@ -5,7 +5,9 @@ use super::super::sources::{CatalogueReader, GatewayConnection};
 use crate::read_only_sync::application::{
     Cancellation, GatewayConnector, GatewayError, GatewayPolicy, GatewayStream,
 };
+use crate::retained::{ReadFailure, ReadStop, ReaderAccess, ReaderRole, RetainedCache};
 use nessa_auth::adapters::pairing::{NativeIdentity, NativeTransport, OsEntropy};
+use nessa_auth::application::ports::Clock as WallClock;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::clock::Clock;
 use nessa_protocol::conversation::domain::{
@@ -45,6 +47,12 @@ struct Time(Instant);
 impl Clock for Time {
     fn elapsed_ms(&self) -> u64 {
         self.0.elapsed().as_millis() as u64
+    }
+}
+struct Wall;
+impl WallClock for Wall {
+    fn unix_milliseconds(&self) -> u64 {
+        123_000
     }
 }
 struct Never;
@@ -1089,6 +1097,105 @@ fn a_catalogue_scope_is_checked_as_its_reader_can() {
         }
         drop(source);
         drop(connection);
+        peer.join().unwrap();
+    }
+}
+
+/// Exercises selector wiring through the public library read, not its private source alone.
+#[test]
+fn public_retained_read_enforces_owner_scope_and_preserves_granted_peer_mode() {
+    for (role, owner, accepted) in [
+        (ReaderRole::DeviceOwner, "owner", true),
+        (ReaderRole::DeviceOwner, "someone-else", false),
+        (ReaderRole::GrantedPeer, "someone-else", true),
+    ] {
+        let scope = Scope::new(
+            Id::new("receiver").unwrap(),
+            Id::new("gateway").unwrap(),
+            conversation_catalogue_stream(
+                &OrganizationId::new("org").unwrap(),
+                &PrincipalId::new(owner).unwrap(),
+            ),
+            Id::new("incarnation").unwrap(),
+            conversation_catalogue_schema(),
+            Id::new("epoch-3").unwrap(),
+        );
+        let actual = scope.clone();
+        let (endpoint, peer) = peer(move |socket| {
+            while let Some(text) = socket.read_text() {
+                let request = RequestFrame::decode(&text).unwrap();
+                let payload = match request.method.as_str() {
+                    product_method::CONVERSATION_CATALOGUE_HEAD => {
+                        json!({"scope":wire_scope(&actual), "head":"0"})
+                    }
+                    product_method::CONVERSATION_CATALOGUE_MANIFEST => {
+                        json!({"request": request.params["request"], "entries":[], "hasMore":false})
+                    }
+                    method => panic!("unexpected retained operation {method}"),
+                };
+                send(
+                    socket,
+                    OutgoingMessage::Response(
+                        ResponseFrame::success(&request.id, &payload).unwrap(),
+                    ),
+                );
+            }
+        });
+        let root = tempfile::tempdir().unwrap();
+        let private = root.path().join("cache");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let mut cache = RetainedCache::open(
+            &private.join("cache.sqlite3"),
+            Arc::new(Wall),
+            Arc::new(Time(Instant::now())),
+        )
+        .unwrap();
+        let result = cache.read(
+            ReaderAccess {
+                role,
+                address: endpoint.address,
+                identity: &endpoint.device,
+                pin: endpoint.pin,
+                credential: "credential",
+                receiver: "receiver",
+                access_epoch: 3,
+                client_id: "example",
+            },
+            &ReadStop::new(),
+            Duration::from_secs(2),
+            8,
+            &mut Vec::new(),
+        );
+        if accepted {
+            let report = result.unwrap();
+            assert!(report.complete);
+            assert_eq!(report.conversations, 0);
+            let page = cache
+                .catalogue_page(
+                    "receiver",
+                    scope.origin().as_str(),
+                    scope.stream().as_str(),
+                    None,
+                    1,
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!(page.progress().scope, scope);
+            assert!(page.entries().is_empty());
+        } else {
+            assert_eq!(result, Err(ReadFailure::Protocol));
+            assert!(cache
+                .catalogue_page(
+                    "receiver",
+                    scope.origin().as_str(),
+                    scope.stream().as_str(),
+                    None,
+                    1
+                )
+                .unwrap()
+                .is_none());
+        }
+        drop(cache);
         peer.join().unwrap();
     }
 }

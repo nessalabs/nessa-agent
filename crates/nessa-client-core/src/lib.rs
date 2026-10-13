@@ -1,6 +1,6 @@
 //! Device-side enrollment and retained sync, independent of the gateway runtime.
-//! `pairing` owns native enrollment; `retained` reads what a paired reader was
-//! granted into its retained cache; `composition` owns the example command API.
+//! `pairing` owns native enrollment; `retained` reads an owner's or granted
+//! peer's records and projects saved evidence; `composition` owns the example API.
 //! Retained sync/cache/reset implementations and their typed causes stay internal.
 //! The `cli` feature (on by default) carries the example's command line and
 //! its presentation; a gateway linking this crate as a peer's client builds
