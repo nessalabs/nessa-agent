@@ -140,7 +140,7 @@ impl AdmittedPolicies {
         held.push_back((grant.to_owned(), revision, policy));
     }
 
-    fn policy(&self, grant: &str, revision: u64) -> Option<ToolPolicy> {
+    pub(crate) fn policy(&self, grant: &str, revision: u64) -> Option<ToolPolicy> {
         let held = self
             .held
             .lock()

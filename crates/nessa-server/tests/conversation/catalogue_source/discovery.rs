@@ -96,6 +96,7 @@ fn discover(metadata: Arc<Metadata>) -> Result<(NessaCatalogueSource, u64), Cata
     NessaCatalogueSource::discover(
         metadata,
         caller(),
+        crate::conversation_test_support::catalogue_entries("owner"),
         id("receiver"),
         id("origin"),
         id("epoch-7"),
@@ -141,6 +142,7 @@ fn initialization_failures_join_and_preserve_source_or_worker_meaning() {
     let result = NessaCatalogueSource::start_with_identity(
         Arc::new(Metadata::new()),
         caller(),
+        crate::conversation_test_support::catalogue_entries("owner"),
         SourceScope::Discover {
             receiver: id("receiver"),
             origin: id("origin"),
@@ -159,6 +161,7 @@ fn readiness_receiver_loss_joins_actual_worker_before_return() {
     let result = NessaCatalogueSource::start_with_readiness(
         Arc::new(Metadata::new()),
         caller(),
+        crate::conversation_test_support::catalogue_entries("owner"),
         SourceScope::Discover {
             receiver: id("receiver"),
             origin: id("origin"),
@@ -229,6 +232,7 @@ async fn production_catalogue_owner_retains_lease_after_cancel_and_late_initiali
     *metadata.gate.lock().unwrap() = Some((entered, wait));
     let source = Arc::new(NessaCatalogueReadSource::new(
         metadata.clone(),
+        crate::conversation_test_support::access_policy(),
         id("origin"),
     ));
     let capacity = Arc::new(Semaphore::new(1));
@@ -244,6 +248,7 @@ async fn production_catalogue_owner_retains_lease_after_cancel_and_late_initiali
                         owner_id: caller().principal_id,
                         access_epoch: 7,
                     },
+                    caller().principal_id,
                     CatalogueReadOperation::Head,
                     lease,
                 )
@@ -293,7 +298,13 @@ fn published_pass_request_owner_refuses_before_metadata_and_valid_requests_reach
         conversation_catalogue_schema(),
         id("epoch-7"),
     );
-    let mut source = NessaCatalogueSource::new(metadata.clone(), caller, scope.clone()).unwrap();
+    let mut source = NessaCatalogueSource::new(
+        metadata.clone(),
+        caller,
+        crate::conversation_test_support::catalogue_entries("owner"),
+        scope.clone(),
+    )
+    .unwrap();
     let valid = CataloguePass {
         scope,
         completed: 0,

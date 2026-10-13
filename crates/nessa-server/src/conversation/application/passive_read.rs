@@ -1,7 +1,10 @@
 //! Admission for bounded passive reads, before a record or catalogue source is touched.
 
 use super::metadata_target::load_conversation;
-use super::{admit_read, ConversationRepository, Reader, ShareGrants};
+use super::{
+    AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
+    ConversationAccessPolicyEvaluator, ConversationRepository, RequestShape, ShareGrants,
+};
 use crate::conversation::domain::ReceiverBinding;
 use nessa_auth::{
     application::{
@@ -55,6 +58,9 @@ pub struct AdmitPassiveRead<'a> {
     pub grants: &'a dyn PassiveReadGrants,
     /// Which conversations each paired device was granted (`share_grants`).
     pub share_grants: &'a dyn ShareGrants,
+    /// Decides, from the binding, the conversation and the grant held,
+    /// whether the paired party may read it.
+    pub access_policy: &'a dyn ConversationAccessPolicyEvaluator,
 }
 
 impl AdmitPassiveRead<'_> {
@@ -74,6 +80,34 @@ impl AdmitPassiveRead<'_> {
             owner_id: binding.owner_id,
             access_epoch: binding.access_epoch,
         })
+    }
+
+    /// Whether `session`, admitted to `scope`, may watch its owner's
+    /// catalogue: a watch fires on every change to it, granted or not, so
+    /// the policy decides from whom the session signed in as
+    /// (`catalogue.watch`). Refused, it is `Forbidden`.
+    pub fn catalogue_watch(
+        &self,
+        session: &AuthenticatedSession,
+        scope: &CatalogueReadScope,
+    ) -> Result<(), ReadRefusal> {
+        let ask = AccessAsk {
+            subject: AccessSubject::PairedReader {
+                organization: &scope.organization_id,
+                signed_in_as: session.context().principal_id(),
+                binding_owner: &scope.owner_id,
+                receiver: &scope.receiver_id,
+            },
+            action: AccessAction::CatalogueWatch,
+            resource: AccessResource::Catalogue {
+                organization: &scope.organization_id,
+                owner: &scope.owner_id,
+            },
+            held: None,
+            request: RequestShape::default(),
+            target: None,
+        };
+        paired_refusal(self.access_policy.evaluate(&ask), ReadRefusal::Forbidden)
     }
 
     pub async fn catalogue_with<T, E, F, Fut>(
@@ -130,20 +164,29 @@ impl AdmitPassiveRead<'_> {
             .await
             .map_err(|_| ReadRefusal::Unverifiable)?
             .ok_or(ReadRefusal::WrongOwner)?;
-        if conversation
-            .check_access(&binding.organization_id, &binding.owner_id)
-            .is_err()
-        {
-            return Err(ReadRefusal::WrongOwner);
-        }
         // Only pairing makes a receiver binding, so this reader is a paired
-        // device and reads only what it was granted (rows G1, G3, G4).
-        admit_read(
-            self.share_grants,
-            &Reader::of(Some(&binding)),
-            conversation_id,
-        )
-        .await?;
+        // party, and the policy reads it with the grant it holds there, of
+        // any role, on its grantor's conversation, not deleted (rows G1, G3,
+        // G4). Refused, it is told what a missing conversation is told.
+        let held = self
+            .share_grants
+            .held_role(conversation_id, &binding.receiver_id)
+            .await
+            .map_err(|_| ReadRefusal::Unverifiable)?;
+        let ask = AccessAsk {
+            subject: AccessSubject::PairedReader {
+                organization: &binding.organization_id,
+                signed_in_as: session.context().principal_id(),
+                binding_owner: &binding.owner_id,
+                receiver: &binding.receiver_id,
+            },
+            action: AccessAction::Read,
+            resource: AccessResource::of(&conversation),
+            held,
+            request: RequestShape::default(),
+            target: None,
+        };
+        paired_refusal(self.access_policy.evaluate(&ask), ReadRefusal::WrongOwner)?;
         Ok(ReceiverReadScope {
             receiver_id: binding.receiver_id,
             organization_id: binding.organization_id,
@@ -212,6 +255,19 @@ impl AdmitPassiveRead<'_> {
             return Err(ReadRefusal::StaleEpoch);
         }
         Ok(binding)
+    }
+}
+
+/// A paired party's access decision as a read refusal: `refused` when the
+/// policy refused, `Unverifiable` when it could not decide.
+fn paired_refusal(decision: AccessDecision, refused: ReadRefusal) -> Result<(), ReadRefusal> {
+    match decision {
+        AccessDecision::Allow { .. } => Ok(()),
+        AccessDecision::Deny(AccessDenial::Unavailable) => Err(ReadRefusal::Unverifiable),
+        AccessDecision::Deny(denial) => {
+            tracing::debug!(?denial, "a paired party's conversation access was refused");
+            Err(refused)
+        }
     }
 }
 

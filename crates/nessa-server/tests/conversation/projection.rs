@@ -67,6 +67,7 @@ async fn prepared_empty_history_is_complete_before_provider_attachment_in_both_s
         *provider.open_gate.lock().unwrap() = Some(gate);
         let service = ConversationService::new(
             ConversationDependencies {
+                access_policy: crate::conversation_test_support::access_policy(),
                 agents: only(Arc::new(Provider::new(provider))),
                 storage,
                 metadata: Arc::new(MemoryRepository::default()),
@@ -152,6 +153,7 @@ async fn gateway_record_view_waits_for_message_commit() {
     let repository = Arc::new(MemoryRepository::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
             metadata: repository,
@@ -463,6 +465,7 @@ async fn assert_terminal_failure_round_trip(
     tokio::task::yield_now().await;
     let restored = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage,
             metadata: repository,
@@ -712,6 +715,7 @@ fn service_with_cached_tool_uis(
 ) -> ConversationService {
     ConversationService::with_tool_uis(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider))),
             storage,
             metadata: repository,

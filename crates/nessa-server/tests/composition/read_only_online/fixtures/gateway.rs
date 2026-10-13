@@ -306,7 +306,11 @@ async fn gateway_child() {
     )
     .await
     .unwrap();
-    let metadata = Arc::new(LocalConversationStore::open(&root.join("metadata.sqlite3")).unwrap());
+    let metadata = Arc::new(
+        LocalConversationStore::open(&root.join("metadata.sqlite3"))
+            .unwrap()
+            .with_access_policy(crate::conversation_test_support::access_policy()),
+    );
     let storage = Arc::new(RecordStorage::new(root.join("source")).unwrap());
     storage.initialize().await.unwrap();
     let record = Arc::new(NessaRecordReadSource::new(
@@ -331,7 +335,12 @@ async fn gateway_child() {
             agent_probe: Arc::new(NoAgents),
         },
     )
-    .with_passive_read(receivers.clone(), metadata.clone(), metadata.clone())
+    .with_passive_read(
+        receivers.clone(),
+        metadata.clone(),
+        metadata.clone(),
+        crate::conversation_test_support::access_policy(),
+    )
     // The same producers `composition::local_auth` composes, over the same
     // storage and metadata owners the reads use.
     .with_change_watches(
@@ -350,6 +359,7 @@ async fn gateway_child() {
     }))
     .with_catalogue_source(Arc::new(NessaCatalogueReadSource::new(
         metadata.clone(),
+        crate::conversation_test_support::access_policy(),
         Id::new(&gateway).unwrap(),
     )));
     let bound = bind(prepared, RuntimeDependencies::default().clock, state)

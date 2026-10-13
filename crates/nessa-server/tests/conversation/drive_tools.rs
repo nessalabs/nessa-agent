@@ -22,7 +22,7 @@ impl ToolPolicyEvaluator for Listed {
         let ToolInitiator::Grant { policy, .. } = initiator else {
             panic!("the owner is never asked about");
         };
-        if *policy != ToolPolicy::Preset(ToolPreset::ReadOnlyTools) || call.name() == "broken" {
+        if *policy != ToolPolicy::preset(ToolPreset::ReadOnlyTools) || call.name() == "broken" {
             return Err(ToolPolicyUnavailable);
         }
         Ok(if self.refused.contains(&call.name()) {
@@ -94,7 +94,7 @@ fn grant(revision: u64) -> Initiation {
 }
 
 fn read_only() -> ToolPolicy {
-    ToolPolicy::Preset(ToolPreset::ReadOnlyTools)
+    ToolPolicy::preset(ToolPreset::ReadOnlyTools)
 }
 
 fn call(name: &str) -> ToolCall<'_> {
@@ -155,7 +155,7 @@ fn a_grants_call_nothing_can_check_is_refused() {
     assert!(refusal(&OnceLock::new(), &admitted, &grant(3), call("Read")).is_some());
     let drive = bound();
     assert!(refusal(&drive, &admitted, &grant(3), call("broken")).is_some());
-    admitted.admit("phone", 5, ToolPolicy::Preset(ToolPreset::All));
+    admitted.admit("phone", 5, ToolPolicy::preset(ToolPreset::All));
     assert!(refusal(&drive, &admitted, &grant(5), call("Read"))
         .is_some_and(|reason| reason.contains("unavailable")));
 }

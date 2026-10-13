@@ -6,7 +6,8 @@
 //! revision from the same row for one conversation, and
 //! the catalogue page and resolve ask it for a paired device's rows
 //! (`store.rs`), so a device's list and its reads cannot disagree about what
-//! it may see.
+//! it may see. They read the role from that row too ([`held_role`]), for
+//! the access policy to admit each entry they return.
 //!
 //! A grant's role and policy are stored as this adapter spells them: the
 //! role as `read`, `comment` or `drive`, and a Drive grant's policy as JSON
@@ -15,15 +16,17 @@ use super::{
     cells, failed, next_revision, read, stored_time, time, unreadable, LocalConversationStore,
 };
 use crate::conversation::application::{
-    ConversationError, ConversationFuture, HeldGrant, ShareGrant, ShareGrantChange,
-    ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
+    AccessAction, ConversationError, ConversationFuture, HeldGrant, OwnerAccess, ShareGrant,
+    ShareGrantChange, ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
     MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
-use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy, ToolPreset, ToolRules};
+use crate::conversation::domain::{
+    CommandHosts, ShareAccess, ShareRole, ToolChoice, ToolPolicy, ToolPreset, ToolRules,
+};
 use nessa_auth::domain::{CredentialId, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use nessa_protocol::conversation::domain::ConversationId;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 /// SQL naming the one grant row the receiver bound to parameter `receiver`
 /// holds on the conversation whose id is `conversation`, as `g`. Both are
@@ -44,6 +47,24 @@ pub(super) fn granted(conversation: &str, receiver: &str) -> String {
         "EXISTS (SELECT 1 FROM {})",
         grant_row(conversation, receiver)
     )
+}
+
+/// SQL naming the role the receiver bound to parameter `receiver` holds on
+/// the conversation whose id is `conversation`, as stored, or NULL when it
+/// holds none: the row [`granted`] asks about. Read back by [`stored_role`].
+pub(super) fn held_role(conversation: &str, receiver: &str) -> String {
+    format!("(SELECT g.role FROM {})", grant_row(conversation, receiver))
+}
+
+/// The role [`held_role`] read for row `id`; a spelling this adapter never
+/// writes is that row's damage.
+pub(super) fn stored_role(
+    stored: Option<String>,
+    id: &str,
+) -> Result<Option<ShareRole>, ConversationError> {
+    stored
+        .map(|name| role_named(&name).ok_or_else(|| unreadable("share_grants", id)))
+        .transpose()
 }
 
 /// What a party holds on a conversation, as stored: the role, or [`NONE`],
@@ -90,44 +111,64 @@ fn preset_named(name: &str) -> Option<ToolPreset> {
 }
 
 /// A policy as its stored JSON: `{"preset": …}` or `{"allow": […], "deny":
-/// […]}`. One policy has one spelling, so two are the same policy exactly
-/// when their texts are equal, which is how a change and a retry compare them.
+/// […]}`, with `"commandHosts": […]` beside either when it names any. One
+/// policy has one spelling, so two are the same policy exactly when their
+/// texts are equal, which is how a change and a retry compare them. A policy
+/// stored before command hosts were has no `commandHosts`, and names none.
 fn policy_text(policy: &ToolPolicy) -> String {
-    match policy {
-        ToolPolicy::Preset(preset) => json!({ "preset": preset_name(*preset) }),
-        ToolPolicy::Rules(rules) => json!({ "allow": rules.allow(), "deny": rules.deny() }),
+    let mut text = match policy.tools() {
+        ToolChoice::Preset(preset) => json!({ "preset": preset_name(*preset) }),
+        ToolChoice::Rules(rules) => json!({ "allow": rules.allow(), "deny": rules.deny() }),
+    };
+    let hosts = policy.command_hosts();
+    if let (false, Value::Object(fields)) = (hosts.is_empty(), &mut text) {
+        fields.insert(COMMAND_HOSTS.to_owned(), json!(hosts.names()));
     }
-    .to_string()
+    text.to_string()
 }
 
+/// The field a policy's command hosts are stored under.
+const COMMAND_HOSTS: &str = "commandHosts";
+
 fn policy_from(text: &str) -> Option<ToolPolicy> {
-    let Value::Object(fields) = serde_json::from_str::<Value>(text).ok()? else {
+    let Value::Object(mut fields) = serde_json::from_str::<Value>(text).ok()? else {
         return None;
     };
-    let patterns = |fields: &Map<String, Value>, name: &str| -> Option<Vec<String>> {
-        fields
-            .get(name)?
+    let strings = |value: &Value| -> Option<Vec<String>> {
+        value
             .as_array()?
             .iter()
-            .map(|rule| rule.as_str().map(str::to_owned))
+            .map(|item| item.as_str().map(str::to_owned))
             .collect()
     };
-    match fields.len() {
-        1 => preset_named(fields.get("preset")?.as_str()?).map(ToolPolicy::Preset),
-        2 => ToolRules::new(patterns(&fields, "allow")?, patterns(&fields, "deny")?)
-            .ok()
-            .map(ToolPolicy::Rules),
+    // Stored only when it names a host: an empty list is not its spelling.
+    let hosts = match fields.remove(COMMAND_HOSTS) {
+        None => CommandHosts::none(),
+        Some(value) => {
+            Some(CommandHosts::new(strings(&value)?).ok()?).filter(|hosts| !hosts.is_empty())?
+        }
+    };
+    let tools = match fields.len() {
+        1 => preset_named(fields.get("preset")?.as_str()?).map(ToolPolicy::preset),
+        2 => ToolRules::new(
+            strings(fields.get("allow")?)?,
+            strings(fields.get("deny")?)?,
+        )
+        .ok()
+        .map(ToolPolicy::rules),
         _ => None,
-    }
+    }?;
+    tools.with_command_hosts(hosts).ok()
 }
 
 /// The longest policy text a valid policy writes: every pattern at its
 /// longest and every byte of it a quote or backslash, which JSON writes in two
 /// (a control character, which it writes in six, is refused by `ToolRules`),
-/// and the object around them. A stored
-/// text past it is read as damage before it is parsed.
+/// a command host in place of any pattern (a host has nothing JSON escapes,
+/// so at its longest it is written in no more than a pattern), and the object
+/// around them. A stored text past it is read as damage before it is parsed.
 const MAX_POLICY_TEXT_BYTES: usize =
-    2 * ToolRules::MAX_RULES * (2 * ToolRules::MAX_RULE_BYTES + 3) + 32;
+    ToolPolicy::MAX_ENTRIES * (2 * ToolRules::MAX_RULE_BYTES + 3) + 64;
 
 /// A stored journal sequence, which SQLite numbers from 1.
 fn sequence(value: i64) -> Option<u64> {
@@ -185,6 +226,7 @@ impl ShareGrants for LocalConversationStore {
 
     fn change(&self, change: ShareGrantChange) -> ConversationFuture<'_, bool> {
         let changes = self.changes.clone();
+        let access = self.access.clone();
         self.run(move |connection| {
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -193,22 +235,27 @@ impl ShareGrants for LocalConversationStore {
             let conversation =
                 read(&transaction, &change.conversation_id)?.ok_or(ConversationError::NotFound)?;
             // Asked inside the transaction that writes the grant, so a delete
-            // cannot land between the check and the write: a grant needs a
-            // conversation that is the initiator's and not deleted, a revoke
-            // only that it is the initiator's (row G8).
+            // cannot land between the question and the write (row G8). A
+            // grant acts on the conversation: the policy wants it the
+            // initiator's and not deleted. The party it grants to was
+            // admitted before this transaction, by the caller. A revoke is
+            // `conversation.unshare`, which a deleted conversation's owner
+            // may still do.
             let (organization, principal) = (
                 &change.initiator.organization_id,
                 &change.initiator.principal_id,
             );
-            match change.transition {
-                ShareGrantTransition::Grant(_) => {
-                    conversation.check_access(organization, principal)?
-                }
-                ShareGrantTransition::Revoke if !conversation.allows(organization, principal) => {
-                    return Err(ConversationError::NotFound);
-                }
-                ShareGrantTransition::Revoke => {}
-            }
+            let action = match change.transition {
+                ShareGrantTransition::Grant(_) => AccessAction::Act,
+                ShareGrantTransition::Revoke => AccessAction::Unshare,
+            };
+            let Some(access) = access.as_deref() else {
+                tracing::error!(
+                    "the conversation store holds no access policy; the share change is refused"
+                );
+                return Err(ConversationError::Metadata);
+            };
+            OwnerAccess::new(access).admit_to(action, &conversation, organization, principal)?;
             let after = wanted(&change.transition);
             // A retried request answers what it answered the first time, so
             // a share whose reply was lost cannot, retried after a later

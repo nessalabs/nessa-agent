@@ -11,7 +11,7 @@ use crate::conversation::application::{
     MAX_ADMITTED_POLICIES, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
     PUBLISH_CALL_WAIT,
 };
-use crate::conversation::domain::ToolRules;
+use crate::conversation::domain::{CommandHosts, ToolRules};
 use crate::conversation::infrastructure::{DISCOVERY_STEPS_PER_READ, MAX_CATALOGUE_CHANGE_WATCHES};
 use crate::mcp_servers::infrastructure::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_BYTES};
 use crate::peer_gateways::infrastructure::{
@@ -269,6 +269,18 @@ fn catalogue() -> &'static [Limit] {
             tier: "fixed",
             owner: "ToolRules::MAX_RULE_BYTES in crates/nessa-server/src/conversation/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
             meaning: "the longest tool policy pattern, in UTF-8 bytes; a conversation.share with a longer one is refused invalid_request",
+        },
+        Limit {
+            id: "conversation.tool_policy_command_hosts",
+            tier: "fixed",
+            owner: "CommandHosts::MAX_HOSTS in crates/nessa-server/src/conversation/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
+            meaning: "the hosts a drive grant's policy names for its turns' commands, which with its patterns are at most 32, so a policy whose allow and deny already hold 32 patterns names none; a conversation.share with more is refused invalid_request, and a grant naming none runs commands nowhere",
+        },
+        Limit {
+            id: "conversation.tool_policy_command_host_bytes",
+            tier: "fixed",
+            owner: "CommandHosts::MAX_HOST_BYTES in crates/nessa-server/src/conversation/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
+            meaning: "the longest command host a drive grant's policy names, in bytes, so a host is never longer on the wire than a pattern; a conversation.share with a longer one is refused invalid_request, so an SSH destination longer than this cannot be granted until conversation.shares pages (issue #832)",
         },
         Limit {
             id: "record.read_work_budget",
@@ -600,6 +612,14 @@ pub(crate) fn effective_json(
     put(
         "conversation.tool_policy_rule_bytes",
         count(ToolRules::MAX_RULE_BYTES),
+    );
+    put(
+        "conversation.tool_policy_command_hosts",
+        count(CommandHosts::MAX_HOSTS),
+    );
+    put(
+        "conversation.tool_policy_command_host_bytes",
+        count(CommandHosts::MAX_HOST_BYTES),
     );
     put("record.read_work_budget", millis(limits.read_work_budget()));
     put("record.discovery_steps", count(DISCOVERY_STEPS_PER_READ));

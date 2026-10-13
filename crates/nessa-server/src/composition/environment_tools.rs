@@ -39,7 +39,7 @@ use tokio::sync::watch;
 /// The server's name, as the harness sees it.
 pub(super) const SERVER_NAME: &str = "nessa-environments";
 /// What changes when the tools' names, arguments or meaning do.
-const TOOLS_REVISION: &str = "environment-tools/3";
+const TOOLS_REVISION: &str = "environment-tools/4";
 
 /// `environments_list`, `run`, `artifacts_publish` and `artifacts_fetch`,
 /// served over a conversation service.
@@ -80,7 +80,7 @@ impl BuiltInServer for EnvironmentTools {
             json!({
                 "name": "environments_list",
                 "title": "List environments",
-                "description": "List where this conversation could work: `here`, this gateway's own machine, and each SSH host it is configured with. Says which one the agent runs in, which ones `run` may run commands on, and whether a connection to each is open now. Reaches nothing to answer.",
+                "description": "List where this conversation could work: `here`, this gateway's own machine, and each SSH host or paired environment this turn may use. Says which one the agent runs in, which ones `run` may run commands on for whoever started this turn, and whether a connection to each is open now. Reaches nothing to answer.",
                 "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false},
                 "annotations": {"readOnlyHint": true, "openWorldHint": false},
             }),

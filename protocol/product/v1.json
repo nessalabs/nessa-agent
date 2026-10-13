@@ -2363,7 +2363,7 @@
     "ConversationShareRole": {
       "type": "string",
       "enum": ["read", "comment", "drive"],
-      "description": "What a share grant lets its holder do. read: list, read and watch the conversation's records. comment and drive name what later releases let the holder do (leave notes the agent sees on the owner's next turn; start, steer and stop turns under a tool policy); today both read exactly as read does, and every command that changes the conversation is still refused to a paired party whatever its role."
+      "description": "What a share grant lets its holder do; each role allows everything the roles before it do. read: list, read and watch the conversation's records. comment: also leave notes with conversation.message and ask where its own note stands with conversation.messageStatus. drive: also start, steer and stop turns, answer or cancel their permission requests, answer their questions and look up those commands' receipts (conversation.send, steer, stop, answer, answerQuestion, cancel, receipt), with text only and under the grant's tool policy. A paired peer gateway neither comments nor drives whatever its role, and no role deletes, archives, exports, re-shares or changes the model: those stay the owner's."
     },
     "ConversationToolPreset": {
       "type": "string",
@@ -2373,7 +2373,7 @@
     "ConversationToolPolicy": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The tool policy a drive grant's turns run under: either preset alone, or allow and deny together. Allow and deny each hold at most 16 patterns, and at least one of the two holds one (both empty is refused); each pattern is 1 to 48 UTF-8 bytes with no surrounding whitespace and no control character; anything else is refused invalid_request. A pattern's * matches any run of characters and every other character is itself; a pattern matches a tool's name as the agent or the gateway names it (Read, read, run), and a deny wins over an allow. Every tool call a drive turn's agent asks permission for, and the gateway's own run, artifacts_publish and artifacts_fetch, is checked against the policy at the revision the turn was admitted under; a refused call is answered as refused and the turn goes on. Two things a policy does not limit: what the agent does in the ask approval mode without asking (Claude reads files; Codex runs commands in its read-only, offline sandbox), so a deny pattern naming a read tool does not stop those reads; and where an allowed run goes, which is any environment the gateway grants commands on.",
+      "description": "The tool policy a drive grant's turns run under: either preset alone, or allow and deny together. Allow and deny each hold at most 16 patterns, and at least one of the two holds one (both empty is refused); each pattern is 1 to 48 UTF-8 bytes with no surrounding whitespace and no control character; anything else is refused invalid_request. A pattern's * matches any run of characters and every other character is itself; a pattern matches a tool's name as the agent or the gateway names it (Read, read, run), and a deny wins over an allow. Every tool call a drive turn's agent asks permission for, and the gateway's own run, artifacts_publish and artifacts_fetch, is checked against the policy at the revision the turn was admitted under; a refused call is answered as refused and the turn goes on. An allowed run goes only to a host commandHosts names and the gateway grants commands on, and runs only a program the gateway allows. One thing a policy does not limit: what the agent does in the ask approval mode without asking (Claude reads files; Codex runs commands in its read-only, offline sandbox), so a deny pattern naming a read tool does not stop those reads.",
       "properties": {
         "preset": {
           "$ref": "#/$defs/ConversationToolPreset",
@@ -2400,6 +2400,17 @@
             "x-utf8MaxBytes": 48
           },
           "description": "Tools the holder's turns may never call. Present with allow, without preset."
+        },
+        "commandHosts": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96,
+            "x-utf8MaxBytes": 96
+          },
+          "description": "The hosts the holder's turns may run commands on with run, by the name environments_list gives them: an SSH destination or a paired environment's peer: name, never here, each named once and at most 96 bytes. Beside either preset or allow and deny; a policy's hosts and patterns together are at most 32. A host is used only where the gateway also grants commands on it. Absent or empty, the holder's turns run commands nowhere: a drive grant never inherits the owner's hosts. A host that is no such name, one named twice, more than 16, or more than the patterns leave room for is refused invalid_request: a policy whose allow and deny already hold 32 patterns can name no hosts, and an SSH destination longer than 96 bytes cannot be granted (paging conversation.shares to lift both is issue #832). Listed only when it names a host."
         }
       },
       "required": []

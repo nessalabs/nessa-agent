@@ -1,11 +1,20 @@
 use super::*;
-use crate::conversation::application::{CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, WatchCatalogue, WatchRecords};
-use nessa_protocol::conversation::read_scope::ReceiverReadScope;
+use crate::conversation::application::{
+    CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, WatchCatalogue, WatchRecords,
+};
 use crate::conversation::infrastructure::NessaRecordWatches;
-use crate::product::{change_watch::{watch_principal, ProductWatchPermit, WatchOwners, WatchPrincipal, WatchSelector}, WatchTaskFault};
-use nessa_protocol::product::generated::{MAX_CONNECTION_RECORD_WATCHES, MAX_GLOBAL_CHANGE_WATCHES, MAX_PRINCIPAL_CHANGE_WATCHES};
-use nessa_protocol::product_contract::generated::ChangeWatchErrorCode;
+use crate::product::{
+    change_watch::{
+        watch_principal, ProductWatchPermit, WatchOwners, WatchPrincipal, WatchSelector,
+    },
+    WatchTaskFault,
+};
 use futures_util::poll;
+use nessa_protocol::conversation::read_scope::ReceiverReadScope;
+use nessa_protocol::product::generated::{
+    MAX_CONNECTION_RECORD_WATCHES, MAX_GLOBAL_CHANGE_WATCHES, MAX_PRINCIPAL_CHANGE_WATCHES,
+};
+use nessa_protocol::product_contract::generated::ChangeWatchErrorCode;
 use nessa_sdk::application::agent_execution::sessions::{ChangeWatchError, CommittedChangeWatch};
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use nessa_sync::replication::domain::Id;
@@ -56,10 +65,14 @@ impl ReceiverAuthority for CountingReceiver {
         Box::pin(async move {
             // Revocation keeps the binding but marks it inactive, as
             // `LocalReceiverAuthority::change` does.
-            Ok(self.actual.resolve(credential).await?.map(|binding| ReceiverBinding {
-                active: !revoked,
-                ..binding
-            }))
+            Ok(self
+                .actual
+                .resolve(credential)
+                .await?
+                .map(|binding| ReceiverBinding {
+                    active: !revoked,
+                    ..binding
+                }))
         })
     }
 }
@@ -86,8 +99,11 @@ impl WatchFixture {
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().join("conversations");
         nessa_local_storage::create_directory(&private).unwrap();
-        let metadata =
-            Arc::new(LocalConversationStore::open(&private.join("metadata.sqlite3")).unwrap());
+        let metadata = Arc::new(
+            LocalConversationStore::open(&private.join("metadata.sqlite3"))
+                .unwrap()
+                .with_access_policy(crate::conversation_test_support::access_policy()),
+        );
         let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
         metadata
             .create(
@@ -148,7 +164,12 @@ impl WatchFixture {
             .unwrap();
         }
         let state = state
-            .with_passive_read(receiver.clone(), metadata.clone(), metadata.clone())
+            .with_passive_read(
+                receiver.clone(),
+                metadata.clone(),
+                metadata.clone(),
+                crate::conversation_test_support::access_policy(),
+            )
             .with_change_watches(records.clone(), metadata)
             .with_record_source(reads.clone());
         let session = authenticate(&state).await;
@@ -322,7 +343,10 @@ async fn a_comment_or_drive_grant_watches_records_as_read_does() {
         fixture.watch(&peer, "install");
         let acknowledgement = text(peer.message().await);
         assert_eq!(acknowledgement["ok"], true, "{access:?}: {acknowledgement}");
-        let watch = acknowledgement["payload"]["watchId"].as_str().unwrap().to_owned();
+        let watch = acknowledgement["payload"]["watchId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         fixture.commit().await;
         let notice = text(peer.message().await);
         assert_eq!(notice["event"], "conversation.changed", "{access:?}");
@@ -470,6 +494,7 @@ async fn watch_admission_worker_loss_retains_original_owner_while_other_read_and
         }),
         metadata,
         grants,
+        crate::conversation_test_support::access_policy(),
     );
     let reader = Arc::new(NessaRecordReadSource::new(
         fixture.storage.clone(),
@@ -576,7 +601,12 @@ async fn gateway_capacity_counts_every_principal_and_both_kinds_until_release() 
     assert_eq!(acknowledged["ok"], true, "{acknowledged}");
     assert_eq!(fixture.state.change_watches.available_permits(), 0);
     let catalogue = json!({"receiverId": "receiver", "accessEpoch": "3"});
-    fixture.send(&peer, "catalogue-refused", "conversation.watchCatalogue", catalogue.clone());
+    fixture.send(
+        &peer,
+        "catalogue-refused",
+        "conversation.watchCatalogue",
+        catalogue.clone(),
+    );
     let refused = text(peer.message().await);
     assert_eq!(refused["error"]["code"], "watch_capacity", "{refused}");
     assert_eq!(fixture.state.record_reads.available_permits(), 4);
@@ -609,7 +639,12 @@ async fn one_principal_cannot_hold_more_than_its_watch_limit_across_connections(
         assert_eq!(text(peer.message().await)["ok"], true);
         held += 1;
         if held < MAX_PRINCIPAL_CHANGE_WATCHES {
-            fixture.send(&peer, "catalogue", "conversation.watchCatalogue", catalogue.clone());
+            fixture.send(
+                &peer,
+                "catalogue",
+                "conversation.watchCatalogue",
+                catalogue.clone(),
+            );
             assert_eq!(text(peer.message().await)["ok"], true);
             held += 1;
         }
@@ -810,6 +845,7 @@ async fn lost_socket_observer_cannot_erase_fault_after_original_authority_worker
         })),
         metadata,
         grants,
+        crate::conversation_test_support::access_policy(),
     );
     let (socket, peer) = test_socket(None);
     let socket = tokio::spawn(run_authenticated(
@@ -860,10 +896,12 @@ async fn unwatch_ack_retains_original_authority_target_until_actual_join() {
     });
     let metadata = fixture.state.passive_read.as_ref().unwrap().1.clone();
     let grants = fixture.state.passive_read.as_ref().unwrap().2.clone();
-    fixture.state = fixture
-        .state
-        .clone()
-        .with_passive_read(authority.clone(), metadata, grants);
+    fixture.state = fixture.state.clone().with_passive_read(
+        authority.clone(),
+        metadata,
+        grants,
+        crate::conversation_test_support::access_policy(),
+    );
     let (socket, mut peer) = test_socket(None);
     let socket = tokio::spawn(run_authenticated(
         socket,
@@ -1360,10 +1398,12 @@ async fn actual_actor_replaces_unsent_dirty_after_observing_source_terminal_befo
     });
     let metadata = fixture.state.passive_read.as_ref().unwrap().1.clone();
     let grants = fixture.state.passive_read.as_ref().unwrap().2.clone();
-    fixture.state = fixture
-        .state
-        .clone()
-        .with_passive_read(authority.clone(), metadata, grants);
+    fixture.state = fixture.state.clone().with_passive_read(
+        authority.clone(),
+        metadata,
+        grants,
+        crate::conversation_test_support::access_policy(),
+    );
     let mut watches = ConnectionWatches::new(&fixture.state);
     let slot = Arc::new(Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap());
     let request = RequestFrame::new("actor-registration", "conversation.watchRecords", &json!({"conversationId": fixture.id.to_string(), "receiverId": "receiver", "accessEpoch": "3"})).unwrap();
@@ -1564,7 +1604,10 @@ async fn notice_is_not_held_behind_a_running_periodic_check() {
     fixture.watch(&peer, "install");
     let acknowledged = text(peer.message().await);
     assert_eq!(acknowledged["ok"], true);
-    let watch = acknowledged["payload"]["watchId"].as_str().unwrap().to_owned();
+    let watch = acknowledged["payload"]["watchId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     authority.first.store(true, Ordering::SeqCst); // Hold the next periodic check.
     tokio::time::timeout(Duration::from_secs(5), work.entered.notified())
         .await
@@ -1617,7 +1660,12 @@ async fn held_receiver_fixture(
     fixture.state = fixture
         .state
         .clone()
-        .with_passive_read(authority.clone(), metadata, grants)
+        .with_passive_read(
+            authority.clone(),
+            metadata,
+            grants,
+            crate::conversation_test_support::access_policy(),
+        )
         .with_settings(checked_every(interval));
     (fixture, work, authority)
 }
@@ -1637,13 +1685,21 @@ async fn written_unwatch_reply_stops_bounding_the_writer_while_a_notice_check_is
     ));
     fixture.watch(&peer, "install");
     let acknowledged = text(peer.message().await);
-    let watch = acknowledged["payload"]["watchId"].as_str().unwrap().to_owned();
+    let watch = acknowledged["payload"]["watchId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     authority.first.store(true, Ordering::SeqCst); // Hold the notice's check.
     fixture.commit().await;
     tokio::time::timeout(Duration::from_secs(5), work.entered.notified())
         .await
         .unwrap();
-    fixture.send(&peer, "unwatch", "conversation.unwatch", json!({ "watchId": watch }));
+    fixture.send(
+        &peer,
+        "unwatch",
+        "conversation.unwatch",
+        json!({ "watchId": watch }),
+    );
     let removed = text(peer.message().await);
     assert_eq!(removed["id"], "unwatch");
     assert_eq!(removed["ok"], true, "{removed}");
@@ -1683,7 +1739,10 @@ async fn repeated_unwatch_after_the_first_reply_deadline_is_still_answered() {
     ));
     fixture.watch(&peer, "install");
     let acknowledged = text(peer.message().await);
-    let watch = acknowledged["payload"]["watchId"].as_str().unwrap().to_owned();
+    let watch = acknowledged["payload"]["watchId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     authority.first.store(true, Ordering::SeqCst); // Hold the notice's check.
     fixture.commit().await;
     tokio::time::timeout(Duration::from_secs(5), work.entered.notified())
@@ -1691,12 +1750,20 @@ async fn repeated_unwatch_after_the_first_reply_deadline_is_still_answered() {
         .unwrap();
     for (request, advance) in [
         ("unwatch", Duration::ZERO),
-        ("unwatch-again", RECORD_SEND_TIMEOUT + Duration::from_secs(1)),
+        (
+            "unwatch-again",
+            RECORD_SEND_TIMEOUT + Duration::from_secs(1),
+        ),
     ] {
         tokio::time::pause();
         tokio::time::advance(advance).await;
         tokio::time::resume(); // Wait on the real clock, as above.
-        fixture.send(&peer, request, "conversation.unwatch", json!({ "watchId": watch }));
+        fixture.send(
+            &peer,
+            request,
+            "conversation.unwatch",
+            json!({ "watchId": watch }),
+        );
         let removed = text(peer.message().await);
         assert_eq!(removed["id"], request);
         assert_eq!(removed["ok"], true, "{removed}");
@@ -1736,8 +1803,7 @@ async fn periodic_check_overdue_closes_the_connection_and_keeps_owners_until_it_
         .await
         .unwrap();
     tokio::time::pause();
-    tokio::time::advance(fixture.state.settings.handshake_timeout() + Duration::from_secs(1))
-        .await;
+    tokio::time::advance(fixture.state.settings.handshake_timeout() + Duration::from_secs(1)).await;
     // Paused time does not auto-advance while the held adapter's blocking
     // worker runs, so wait for the frame on the real clock.
     tokio::time::resume();
@@ -1780,16 +1846,23 @@ async fn periodic_check_overdue_closes_even_after_its_watches_are_unwatched() {
     ));
     fixture.watch(&peer, "install");
     let acknowledged = text(peer.message().await);
-    let watch = acknowledged["payload"]["watchId"].as_str().unwrap().to_owned();
+    let watch = acknowledged["payload"]["watchId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     authority.first.store(true, Ordering::SeqCst); // Hold the next periodic check.
     tokio::time::timeout(Duration::from_secs(5), work.entered.notified())
         .await
         .unwrap();
-    fixture.send(&peer, "unwatch", "conversation.unwatch", json!({ "watchId": watch }));
+    fixture.send(
+        &peer,
+        "unwatch",
+        "conversation.unwatch",
+        json!({ "watchId": watch }),
+    );
     assert_eq!(text(peer.message().await)["ok"], true);
     tokio::time::pause();
-    tokio::time::advance(fixture.state.settings.handshake_timeout() + Duration::from_secs(1))
-        .await;
+    tokio::time::advance(fixture.state.settings.handshake_timeout() + Duration::from_secs(1)).await;
     tokio::time::resume(); // Wait on the real clock, as in the test above.
     let Message::Close(Some(close)) = peer.message().await else {
         panic!("an overdue periodic check must close the connection");
@@ -1907,7 +1980,10 @@ async fn refusal_for_an_unwatched_target_is_ignored_on_both_paths() {
         ));
         fixture.watch(&peer, "install");
         let acknowledged = text(peer.message().await);
-        let watch = acknowledged["payload"]["watchId"].as_str().unwrap().to_owned();
+        let watch = acknowledged["payload"]["watchId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         // Arm the hold before revoking, so no check already running refuses
         // the watch while it is still live.
         authority.first.store(true, Ordering::SeqCst); // Hold the next check.
@@ -1925,11 +2001,16 @@ async fn refusal_for_an_unwatched_target_is_ignored_on_both_paths() {
                 .await
                 .unwrap();
         }
-        fixture.send(&peer, "unwatch", "conversation.unwatch", json!({ "watchId": watch }));
+        fixture.send(
+            &peer,
+            "unwatch",
+            "conversation.unwatch",
+            json!({ "watchId": watch }),
+        );
         assert_eq!(text(peer.message().await)["ok"], true);
         work.release(); // The held check now returns its refusal.
-        // The watch's owner returns only once the refused check's task has
-        // ended and the connection has handled its result (or closed).
+                        // The watch's owner returns only once the refused check's task has
+                        // ended and the connection has handled its result (or closed).
         tokio::time::timeout(Duration::from_secs(5), async {
             while fixture.state.change_watches.available_permits() != MAX_GLOBAL_CHANGE_WATCHES {
                 tokio::task::yield_now().await;
@@ -1940,7 +2021,10 @@ async fn refusal_for_an_unwatched_target_is_ignored_on_both_paths() {
         for _ in 0..50 {
             tokio::task::yield_now().await;
         }
-        assert!(peer.output.try_recv().is_err(), "no close for a retired watch");
+        assert!(
+            peer.output.try_recv().is_err(),
+            "no close for a retired watch"
+        );
         peer.request("after-refusal");
         assert_success(peer.message().await, "after-refusal");
         drop(peer);
@@ -2050,9 +2134,15 @@ async fn periodic_recheck_asks_admission_once_per_distinct_target_without_identi
     assert_eq!(results.len(), 3);
     let periodic_resolves = fixture.receiver.admitted.load(Ordering::SeqCst) - resolves;
     let periodic_reads = access.reads.swap(0, Ordering::SeqCst);
-    assert_eq!(periodic_resolves, 2, "one binding resolve per distinct target");
+    assert_eq!(
+        periodic_resolves, 2,
+        "one binding resolve per distinct target"
+    );
     let resolves = fixture.receiver.admitted.load(Ordering::SeqCst);
-    records.authorize(&fixture.state, &fixture.session).await.unwrap();
+    records
+        .authorize(&fixture.state, &fixture.session)
+        .await
+        .unwrap();
     let notice_resolves = fixture.receiver.admitted.load(Ordering::SeqCst) - resolves;
     let notice_reads = access.reads.load(Ordering::SeqCst);
     assert_eq!(notice_resolves, 1);
@@ -2231,7 +2321,12 @@ impl HostWatchFixture {
         };
         let metadata = inner.state.passive_read.as_ref().unwrap().1.clone();
         let grants = inner.state.passive_read.as_ref().unwrap().2.clone();
-        inner.state = inner.state.clone().with_passive_read(receiver, metadata, grants);
+        inner.state = inner.state.clone().with_passive_read(
+            receiver,
+            metadata,
+            grants,
+            crate::conversation_test_support::access_policy(),
+        );
         let (socket, peer) = test_socket(None);
         let socket = tokio::spawn(run_authenticated(
             socket,

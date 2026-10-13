@@ -135,9 +135,12 @@ pub(crate) mod catalogue_watch;
 pub use catalogue_watch::{
     CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, WatchCatalogue,
 };
+mod access_policy;
+mod app_call_policy;
 mod artifacts;
 mod catalogue_read;
 mod command_environment;
+mod command_policy;
 mod drive_tools;
 mod environment;
 mod error;
@@ -157,9 +160,15 @@ mod session_key;
 mod share_grants;
 mod tool_policy;
 pub use crate::conversation::domain::ReceiverBinding;
+pub use access_policy::{
+    AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
+    ConversationAccessPolicyEvaluator, OwnerAccess, PairedAccess, PairedParty, PairedRefusal,
+    RequestShape, ShareTarget,
+};
 pub use catalogue::{
-    CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage, CataloguePageRequest,
-    CatalogueValue, ConversationCatalogue,
+    CatalogueDescriptor, CatalogueEntryAccess, CatalogueEntryAdmission, CatalogueEntryAnswer,
+    CatalogueHead, CatalogueKey, CataloguePage, CataloguePageRequest, CatalogueValue,
+    ConversationCatalogue,
 };
 pub use catalogue_read::{
     CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadResponse,
@@ -202,6 +211,10 @@ pub use mcp_apps::{
 pub(crate) use passive_read::access_refusal;
 pub use passive_read::{AdmitPassiveRead, PassiveRead, PassiveReadGrants, ReceiverAuthority};
 // Composed only by the Unix gateway (`composition/local_auth.rs`).
+pub use app_call_policy::{admit_app_question, AppCallPolicyEvaluator, AppQuestion};
+pub use command_policy::{
+    admit_command, CommandInitiator, CommandPolicyEvaluator, CommandQuestion,
+};
 #[cfg(any(unix, test))]
 pub(crate) use placement::Environments;
 #[cfg(any(unix, test))]
@@ -246,9 +259,9 @@ pub use service::{
 };
 pub(crate) use session_key::conversation_session;
 pub use share_grants::{
-    admit_read, admit_role, binding_of, note_candidates, reader_of, HeldGrant, Reader, RoleRefusal,
-    ShareConversation, ShareGrant, ShareGrantChange, ShareGrantTransition, ShareGrants,
-    MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
+    binding_of, note_candidates, paired_facts, HeldGrant, Reader, ShareConversation, ShareGrant,
+    ShareGrantChange, ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
+    MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 pub use tool_policy::{ToolDecision, ToolInitiator, ToolPolicyEvaluator, ToolPolicyUnavailable};
 
