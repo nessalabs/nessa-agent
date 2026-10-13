@@ -38,7 +38,8 @@ pub(super) async fn execute(listen: &str) -> Result<(), RunError> {
         Arc::new(Ed25519Proofs),
         RelayLimits::default(),
     );
-    writeln!(io::stderr(), "Relay listening on {address}")?;
+    // Best effort: a closed or broken stderr must not stop a bound relay.
+    let _ = writeln!(io::stderr(), "Relay listening on {address}");
     serve_tcp(listener, relay, timer, stopped()).await;
     Ok(())
 }
