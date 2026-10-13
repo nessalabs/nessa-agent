@@ -13,7 +13,10 @@ use sha2::{Digest, Sha256};
 #[cfg(test)]
 use std::{
     cell::RefCell,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 use std::{
@@ -24,7 +27,7 @@ use std::{
     os::fd::AsRawFd,
     os::unix::fs::{symlink, DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
-    sync::{mpsc, Arc, Condvar, Mutex},
+    sync::{mpsc, Condvar, Mutex},
     thread,
 };
 
@@ -294,13 +297,6 @@ macro_rules! note_link {
     }};
 }
 
-macro_rules! note_copied {
-    ($cloned:expr, $bytes:expr) => {{
-        #[cfg(test)]
-        note_file($cloned, $bytes);
-    }};
-}
-
 /// Files already sealed, waiting for `sync_all`. The bound keeps a large tree
 /// from holding one open file per entry.
 struct FileQueue {
@@ -473,8 +469,14 @@ fn mutex_lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 #[cfg(test)]
+type CopyHookFn = dyn FnMut(&Path);
+
+#[cfg(test)]
+type CopyHook = Box<CopyHookFn>;
+
+#[cfg(test)]
 thread_local! {
-    static COPY_HOOK: RefCell<Option<Box<dyn FnMut(&Path)>>> = const { RefCell::new(None) };
+    static COPY_HOOK: RefCell<Option<CopyHook>> = const { RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -776,15 +778,14 @@ fn copy_file(
                 .map_err(|error| error.to_string())
         )?;
     }
-    let mode = opened.permissions().mode();
-    let bytes = opened.len();
-    seal_file(&file, mode)?;
+    seal_file(&file, opened.permissions().mode())?;
     // Drop the source descriptor before a test hook can move the bundle.
     drop(input);
     let queued = SyncQueued::arm(syncs);
     queue.push(file)?;
     queued.queued();
-    note_copied!(cloned, bytes);
+    #[cfg(test)]
+    note_file(cloned, opened.len());
     note_file_queued(path);
     Ok(())
 }
@@ -798,6 +799,13 @@ fn seal_file(file: &fs::File, source_mode: u32) -> Result<(), String> {
     phase!(Phase::Xattr, normalize_extended_attributes(file))
 }
 
+/// Permissions, extended attributes, and `sync_all`, as one step.
+///
+/// A copy seals the file on the copying thread and runs `sync_all` on the
+/// pool. This is those same two steps for the clone test, which does not use
+/// the pool. It is test-only: the shipping build has no other caller, and a
+/// function only tests call is dead code in the build `-D warnings` checks.
+#[cfg(test)]
 fn finalize_file(file: &fs::File, source_mode: u32) -> Result<(), String> {
     seal_file(file, source_mode)?;
     // copyfile clones still create a new directory entry whose file state must
