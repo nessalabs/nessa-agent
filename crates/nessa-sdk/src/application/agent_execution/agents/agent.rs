@@ -163,6 +163,11 @@ async fn run_pre_tool_hook<Execution>(
 where
     Execution: Future<Output = (ProviderExecutionReply, Option<InvocationCancellationEvent>)>,
 {
+    // A stop signaled while nothing polled the notice still wins, before any
+    // hook thread can start. A closed notice counts as a stop, as below.
+    if !*wait.stop_observed && !matches!(wait.stop_notice.has_changed(), Ok(false)) {
+        *wait.stop_observed = true;
+    }
     if *wait.stop_observed {
         return PermissionReviewDecision {
             index: None,
@@ -2053,6 +2058,19 @@ impl Agent {
                 closed: None,
                 failure: delivery_failure,
             },
+            // The reply arrived while the cancel ran, so the cancel found no
+            // turn and sent nothing. A cancel that reached the provider keeps
+            // its failure.
+            Err(failure)
+                if wait.provider_settled()
+                    && matches!(failure.error(), AgentError::Unsupported(_))
+                    && matches!(failure.session_state(), ProviderSessionState::Usable) =>
+            {
+                AppliedVerdict {
+                    closed: None,
+                    failure: delivery_failure,
+                }
+            }
             Err(failure) => {
                 let cancel_failure = failure.into_error();
                 let failure = match delivery_failure {
@@ -2472,5 +2490,64 @@ impl AgentEvents {
             Err(broadcast::error::RecvError::Closed) => Ok(None),
             Err(broadcast::error::RecvError::Lagged(_)) => Err(AgentError::Backpressure),
         }
+    }
+}
+
+#[cfg(test)]
+mod hook_wait_tests {
+    use super::*;
+    use crate::application::agent_execution::hooks::{
+        HookError, InvocationObservationWindow, ProposedToolCall,
+    };
+
+    struct EnteredHook(Arc<AtomicBool>);
+
+    impl InvocationHook for EnteredHook {
+        fn before_permission_review(
+            &self,
+            _call: &ProposedToolCall<'_>,
+            _observations: &InvocationObservationWindow<'_>,
+        ) -> Result<ToolVerdict, HookError> {
+            self.0.store(true, Ordering::SeqCst);
+            Ok(ToolVerdict::Allow)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stop_nothing_polled_yet_wins_before_the_hook_starts() {
+        let entered = Arc::new(AtomicBool::new(false));
+        let hooks = InvocationHooks::new(vec![Arc::new(EnteredHook(entered.clone()))]);
+        let (stop, mut stop_notice) = watch::channel(None);
+        // Signaled while the supervisor was not polling the notice.
+        stop.send_replace(None);
+        let mut stop_observed = false;
+        let mut pending_provider_outcome = None;
+        let execution =
+            std::future::pending::<(ProviderExecutionReply, Option<InvocationCancellationEvent>)>();
+        tokio::pin!(execution);
+        let decision = run_pre_tool_hook(
+            hooks,
+            ToolCallId::new("bash").unwrap(),
+            ToolReviewInput {
+                name: "bash".into(),
+                arguments_json: "{}".into(),
+            },
+            EvaluationSuffix::incomplete(),
+            &Arc::new(AtomicBool::new(false)),
+            Box::pin(std::future::pending()),
+            &mut SupervisedWait {
+                execution: execution.as_mut(),
+                stop_notice: &mut stop_notice,
+                stop_observed: &mut stop_observed,
+                pending_provider_outcome: &mut pending_provider_outcome,
+                result_known: false,
+            },
+        )
+        .await;
+        assert!(matches!(decision.verdict, ToolVerdict::Stopped));
+        assert!(stop_observed);
+        // A hook thread, had one started, enters well within this.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(!entered.load(Ordering::SeqCst), "no hook thread started");
     }
 }

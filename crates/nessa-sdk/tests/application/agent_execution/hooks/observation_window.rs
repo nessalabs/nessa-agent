@@ -60,6 +60,8 @@ impl ExecutionEventStream for ScriptedEvents {
 #[derive(Default)]
 struct Handshake {
     required: AtomicBool,
+    /// A successful withdrawal also lets the execution settle.
+    settles_execution: AtomicBool,
     request: tokio::sync::Notify,
     reply: tokio::sync::Notify,
 }
@@ -179,6 +181,11 @@ impl ProviderSessionBackend for ScriptedBackend {
                     _ = handshake.request.notified() => handshake.reply.notify_one(),
                 }
             }
+            if handshake.settles_execution.load(Ordering::SeqCst) {
+                // The reply is ready one poll after the release, as when a
+                // provider hands it over through its own task.
+                tokio::task::yield_now().await;
+            }
             ProviderExecutionReply::Finished(ExecutionReport::new(
                 Some(Ok(ExecutionOutcome::Completed)),
                 None,
@@ -267,11 +274,17 @@ impl ProviderSessionBackend for ScriptedBackend {
                     failure_state,
                 ));
             }
-            controller
+            let withdrawn = controller
                 .lock()
                 .expect("fixture controller")
                 .cancel_review(input)
-                .map_err(|error| ProviderOperationFailure::new(error, ProviderSessionState::Usable))
+                .map_err(|error| {
+                    ProviderOperationFailure::new(error, ProviderSessionState::Usable)
+                });
+            if handshake.settles_execution.load(Ordering::SeqCst) {
+                release.notify_waiters();
+            }
+            withdrawn
         })
     }
     fn cancel_turn(&self, turn: ExecutionId) -> ProviderOperationFuture<'_, ()> {
@@ -1942,6 +1955,38 @@ async fn a_caller_cannot_record_a_terminal_hook_withdrawal() {
         .cancel_permission(withdrawal("hook-refusal.continue"))
         .await;
     assert_eq!(fixture.cancelled.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_reply_seen_while_cancelling_keeps_the_session() {
+    let fixture = agent_with(
+        script(),
+        vec![Arc::new(ReviewHook {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            verdict: ToolVerdict::refuse("stop the turn", RefusalOutcome::EndTurn),
+        })],
+    )
+    .await;
+    // The withdrawal settles the execution, but its reply is first polled
+    // while the turn cancel runs.
+    fixture
+        .handshake
+        .settles_execution
+        .store(true, Ordering::SeqCst);
+    fixture
+        .agent
+        .invoke(request(), close_action())
+        .await
+        .expect("a turn that settled on its own is not a cancel failure");
+    assert_eq!(
+        fixture.turn_cancels.load(Ordering::SeqCst),
+        0,
+        "the cancel was refused before reaching the provider"
+    );
+    assert!(
+        fixture.closes.lock().unwrap().is_empty(),
+        "the session was kept"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
