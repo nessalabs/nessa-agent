@@ -1,5 +1,10 @@
 import { expect, it, vi } from "vitest"
-import { captureQuestionChoices, questionTargets, type QuestionTarget } from "../index.js"
+import {
+  captureQuestionChoices,
+  questionTargets,
+  type QuestionTarget,
+  type QuestionChoice,
+} from "../index.js"
 import {
   createConversationApi,
   type ConversationApi,
@@ -387,5 +392,110 @@ it("QT12: inherited data getters are captured without inheriting source behavior
   await api.answerQuestion(target!, [new Choice()])
   expect(JSON.parse(JSON.stringify(request.mock.calls[0]![1]))).toMatchObject({
     choices: [{ key: "field-a", values: ["value-a"] }],
+  })
+})
+
+it("QT14: mutable own-words serialization is refused before queued RPC", async () => {
+  const [target] = questionTargets(source())
+  const words = {
+    value: "Original",
+    toJSON() {
+      return this.value
+    },
+  }
+  let release!: () => void
+  const gate = new Promise<void>((done) => {
+    release = done
+  })
+  const request = vi.fn(async () => {
+    await gate
+    return { requestId: "action", applied: true }
+  })
+  const api = createConversationApi({ request }, () => "action")
+  let outcome: unknown
+  try {
+    const pending = api.answerQuestion(target!, [
+      { key: "field-a", values: ["value-a"], ownWords: words },
+    ] as unknown as QuestionChoice[])
+    words.value = "Changed"
+    release()
+    outcome = await pending
+  } catch (error) {
+    release()
+    outcome = error
+  }
+  expect(outcome).toBeInstanceOf(TypeError)
+  expect(request).not.toHaveBeenCalled()
+})
+
+it("QT14: choice capture rejects boxed scalars and preserves primitive/null reply data", () => {
+  const mutable = { toJSON: () => "changed" }
+  for (const choice of [
+    { key: mutable, values: ["value-a"] },
+    { key: "field-a", values: [mutable] },
+    { key: "field-a", values: [], ownWords: mutable },
+  ])
+    expect(() => captureQuestionChoices([choice] as unknown as QuestionChoice[])).toThrow(
+      TypeError,
+    )
+  expect(
+    captureQuestionChoices([
+      { key: "unoffered", values: ["SDK checks"], ownWords: null },
+      { key: "field-a", values: [], ownWords: "Primitive" },
+    ]),
+  ).toEqual([
+    { key: "unoffered", values: ["SDK checks"], ownWords: null },
+    { key: "field-a", values: [], ownWords: "Primitive" },
+  ])
+})
+
+it.each([
+  "conversationId",
+  "executionId",
+  "questionId",
+  "message",
+  "key",
+  "prompt",
+  "header",
+  "multiSelect",
+  "freeText",
+  "required",
+  "value",
+  "label",
+  "description",
+])(
+  "QT14: target capture rejects mutable %s representation rather than retaining its reference",
+  (field) => {
+    const view = source()
+    const mutable = { toJSON: () => "changed" }
+    const ask = view.questions[0]!
+    const question = ask.questions[0]!
+    const option = question.options[0]!
+    if (field === "conversationId") Object.assign(view, { [field]: mutable })
+    else if (["executionId", "questionId", "message"].includes(field))
+      Object.assign(ask, { [field]: mutable })
+    else if (["value", "label", "description"].includes(field))
+      Object.assign(option, { [field]: mutable })
+    else Object.assign(question, { [field]: mutable })
+    expect(() => questionTargets(view)).toThrow(TypeError)
+  },
+)
+
+it("QT14: nullable published display text retains primitive flag meanings", () => {
+  const view = source()
+  Object.assign(view.questions[0]!.questions[0]!, {
+    header: null,
+    multiSelect: false,
+    freeText: true,
+    required: false,
+  })
+  Object.assign(view.questions[0]!.questions[0]!.options[0]!, { description: null })
+  const [target] = questionTargets(view)
+  expect(target!.questions[0]).toMatchObject({
+    header: null,
+    multiSelect: false,
+    freeText: true,
+    required: false,
+    options: [{ description: null }],
   })
 })

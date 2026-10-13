@@ -27,9 +27,18 @@ type QuestionView = {
 }
 const issued = new WeakSet<QuestionTarget>()
 
+function primitiveText(value: unknown): asserts value is string {
+  if (typeof value !== "string")
+    throw new TypeError("Captured question text must be a primitive string")
+}
+function optionalPrimitiveText(value: unknown): void {
+  if (value !== undefined && value !== null) primitiveText(value)
+}
+
 /** Capture a validated view or trusted projection; this does not authenticate its source. */
 export function questionTargets(view: QuestionView): readonly QuestionTarget[] {
   const conversationId = view.conversationId
+  primitiveText(conversationId)
   const asks = view.questions
   const targets: QuestionTarget[] = []
   const askCount = asks.length
@@ -37,6 +46,9 @@ export function questionTargets(view: QuestionView): readonly QuestionTarget[] {
     const sourceAsk = asks[askIndex]
     if (sourceAsk === undefined) throw new TypeError("A captured ask must be present")
     const { executionId, questionId, message, questions: fields } = sourceAsk
+    primitiveText(executionId)
+    primitiveText(questionId)
+    primitiveText(message)
     const questions: CapturedQuestion[] = []
     const fieldCount = fields.length
     for (let fieldIndex = 0; fieldIndex < fieldCount; fieldIndex += 1) {
@@ -52,19 +64,26 @@ export function questionTargets(view: QuestionView): readonly QuestionTarget[] {
         required,
         options: sourceOptions,
       } = sourceField
+      primitiveText(key)
+      primitiveText(prompt)
+      optionalPrimitiveText(header)
+      if (
+        typeof multiSelect !== "boolean" ||
+        typeof freeText !== "boolean" ||
+        typeof required !== "boolean"
+      )
+        throw new TypeError("Captured question flags must be primitive booleans")
       const options: Readonly<Asked["options"][number]>[] = []
       const optionCount = sourceOptions.length
       for (let optionIndex = 0; optionIndex < optionCount; optionIndex += 1) {
         const option = sourceOptions[optionIndex]
         if (option === undefined)
           throw new TypeError("A captured question option must be present")
-        options.push(
-          Object.freeze({
-            value: option.value,
-            label: option.label,
-            description: option.description,
-          }),
-        )
+        const { value, label, description } = option
+        primitiveText(value)
+        primitiveText(label)
+        optionalPrimitiveText(description)
+        options.push(Object.freeze({ value, label, description }))
       }
       questions.push(
         Object.freeze({
@@ -139,12 +158,15 @@ export function captureQuestionChoices(
     if (sourceChoice === undefined)
       throw new TypeError("A captured question choice must be present")
     const { key, ownWords, values: sourceValues } = sourceChoice
+    primitiveText(key)
+    optionalPrimitiveText(ownWords)
     const values: string[] = []
     const valueCount = sourceValues.length
     for (let valueIndex = 0; valueIndex < valueCount; valueIndex += 1) {
       const value = sourceValues[valueIndex]
       if (value === undefined)
         throw new TypeError("A captured question value must be present")
+      primitiveText(value)
       values.push(value)
     }
     captured.push(Object.freeze({ key, ownWords, values: Object.freeze(values) }))

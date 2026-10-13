@@ -20,3 +20,6 @@ FAIL QT12: array subclass hooks cannot keep caller-owned answer values behind ca
 FAIL QT12: overridden projection map cannot retain mutable offered options
 FAIL QT12: serialization hooks on source records do not replace captured choice data
 FAIL QT13: a pending answer retains its original target and choices when the caller replaces the command
+Source-asserted reverts: primitive scalar capture guards
+FAIL QT14: mutable own-words serialization is refused before queued RPC
+FAIL QT14: target capture rejects mutable required representation rather than retaining its reference
