@@ -15,7 +15,7 @@ mod proof;
 mod receiver;
 mod stage;
 pub use admission::{AuthorizePairing, PairingAdmission};
-pub use owner_phone::OwnerPhoneStore;
+pub use owner_phone::{OwnerPhoneOriginalReceipt, OwnerPhoneStore};
 pub use ports::{
     AttemptReservation, OwnerDecision, PairingStore, PairingStoreError, PairingWorkerFault,
     RuntimeEnd,

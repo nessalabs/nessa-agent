@@ -5,8 +5,8 @@ use super::{
 use crate::{
     application::{
         pairing::{
-            DeviceConnectionProof, OwnerPhoneStore, PairingAdmission, PairingStoreError,
-            VerifiedOwnerPhoneDeviceProof,
+            DeviceConnectionProof, OwnerPhoneOriginalReceipt, OwnerPhoneStore, PairingAdmission,
+            PairingStoreError, VerifiedOwnerPhoneDeviceProof,
         },
         ports::{Clock, PortFuture},
     },
@@ -150,32 +150,34 @@ impl OwnerPhoneStore for LocalCredentialStore {
             Ok(record)
         })
     }
-    fn find_owner_phone(
+    fn find_owner_phone_original(
         &self,
         source: &OwnerPhoneSource,
         id: OwnerPhoneRequestId,
-    ) -> Result<PairingRecord, PairingStoreError> {
+    ) -> Result<OwnerPhoneOriginalReceipt, PairingStoreError> {
         let slot = self
             .registry()
             .map_err(|_| PairingStoreError::Unavailable)?;
         let current = slot.as_ref().ok_or(PairingStoreError::Unavailable)?;
         let index = original(&current.pairings, source, id)?.ok_or(PairingStoreError::NotFound)?;
         current.pairings[index]
-            .restore(&current.transitions)
+            .owner_phone_receipt(&current.transitions)
             .map_err(PairingStoreError::Domain)
     }
-    fn read_owner_phone(
+    fn read_owner_phone_original(
         &self,
         request: &OwnerPhoneRequest,
         admission: &PairingAdmission,
         clock: &dyn Clock,
-    ) -> Result<PairingRecord, PairingStoreError> {
+    ) -> Result<OwnerPhoneOriginalReceipt, PairingStoreError> {
         let slot = self
             .registry()
             .map_err(|_| PairingStoreError::Unavailable)?;
         let current = slot.as_ref().ok_or(PairingStoreError::Unavailable)?;
         validate_pairing_admission(current, admission, clock.unix_milliseconds())?;
-        binding(request, admission)?;
+        // Existing-original issuer belongs to validate_pairing_admission. The
+        // supplied request must equal its stored original, whose restoration
+        // binds source to intent; the receipt's intent is compared below.
         let index = original(&current.pairings, request.source(), request.id())?
             .ok_or(PairingStoreError::NotFound)?;
         let entry = &current.pairings[index];
@@ -187,20 +189,20 @@ impl OwnerPhoneStore for LocalCredentialStore {
         {
             return Err(PairingStoreError::Domain(PairingError::Conflict));
         }
-        let record = entry
-            .restore(&current.transitions)
+        let receipt = entry
+            .owner_phone_receipt(&current.transitions)
             .map_err(PairingStoreError::Domain)?;
-        if record.intent() != admission.intent() {
+        if receipt.record().intent() != admission.intent() {
             return Err(PairingStoreError::Domain(PairingError::Conflict));
         }
-        Ok(record)
+        Ok(receipt)
     }
-    fn recover_owner_phone(
+    fn recover_owner_phone_original(
         &self,
         id: OwnerPhoneRequestId,
         fingerprint: &[u8; 32],
         proof: &DeviceConnectionProof,
-    ) -> Result<PairingRecord, PairingStoreError> {
+    ) -> Result<OwnerPhoneOriginalReceipt, PairingStoreError> {
         let slot = self
             .registry()
             .map_err(|_| PairingStoreError::Unavailable)?;
@@ -212,17 +214,14 @@ impl OwnerPhoneStore for LocalCredentialStore {
                 .map_err(PairingStoreError::Domain)?
             {
                 if request.id() == id && request.device_key() == proof.key() {
-                    let record = entry
-                        .restore(&current.transitions)
+                    let receipt = entry
+                        .owner_phone_receipt(&current.transitions)
                         .map_err(PairingStoreError::Domain)?;
-                    if record
-                        .owner_phone_approval()
-                        .is_some_and(|(_, _, digest)| &digest == fingerprint)
-                    {
+                    if receipt.digest() == fingerprint {
                         if found.is_some() {
                             return Err(PairingStoreError::Domain(PairingError::Conflict));
                         }
-                        found = Some(record);
+                        found = Some(receipt);
                     }
                 }
             }

@@ -249,3 +249,6 @@ fn purpose_refuses_revision_changed_after_current_session_snapshot() {
         Err(AccessError::CredentialRevoked)
     ));
 }
+
+#[path = "owner_phone_original_tests.rs"]
+mod original_projection;
