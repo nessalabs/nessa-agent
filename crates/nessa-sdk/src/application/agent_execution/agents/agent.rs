@@ -2137,8 +2137,13 @@ impl Agent {
         explanation: String,
         outcome: RefusalOutcome,
     ) -> Result<(), AgentError> {
-        let custom = CustomPermissionCancellationReason::hook_refusal(&id, outcome, explanation)
-            .map_err(|error| AgentError::InvalidInput(error.to_string()))?;
+        let custom = CustomPermissionCancellationReason::hook_refusal(
+            event.execution_id(),
+            &id,
+            outcome,
+            explanation,
+        )
+        .map_err(|error| AgentError::InvalidInput(error.to_string()))?;
         self.cancel_permission(PermissionCancellationRequest {
             execution_id: event.execution_id().clone(),
             id,
@@ -2319,8 +2324,8 @@ impl Agent {
     /// a panic from it is logged and does not affect the operation. See
     /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     ///
-    /// A hook-refusal code withdraws only the review the runner issued it
-    /// for, so a copy of a recorded one is [`AgentError::InvalidInput`].
+    /// A hook-refusal code withdraws only the review, in the turn, the runner
+    /// issued it for, so a copy of a recorded one is [`AgentError::InvalidInput`].
     pub fn cancel_permission(
         &self,
         request: PermissionCancellationRequest,

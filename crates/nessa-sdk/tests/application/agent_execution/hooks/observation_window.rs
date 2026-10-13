@@ -1758,6 +1758,87 @@ async fn a_continue_without_a_deny_option_stays_open_when_the_binding_cannot_can
 }
 
 #[tokio::test]
+async fn a_recorded_hook_withdrawal_cannot_withdraw_another_review() {
+    let mut events = script();
+    events.pop();
+    events.push(allow_only_review());
+    let fixture = open_fixture(
+        events,
+        vec![Arc::new(ReviewHook {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            verdict: ToolVerdict::refuse("no", RefusalOutcome::Continue),
+        })],
+        FixtureKnobs {
+            turn_cancel: false,
+            fail_delivery: false,
+            fail_turn_cancel: false,
+        },
+    )
+    .await;
+    fixture
+        .agent
+        .invoke(request(), Submitter::owner(close_action()))
+        .await
+        .unwrap();
+    // The recorded reason is a value any adapter can copy from the evidence.
+    let copied = fixture.withdrawals.lock().unwrap()[0].reason.clone();
+    let execution = ExecutionId::new("turn").unwrap();
+    let other = PermissionId::new("other").unwrap();
+    let mut controller = ExecutionController::new(ExecutionSessionId::new("other").unwrap());
+    controller.begin_execution(execution.clone()).unwrap();
+    let tool = ToolCallUpdate::new(
+        ToolCallId::new("tool").unwrap(),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    controller.tool_event(&execution, tool.clone()).unwrap();
+    let deny = PermissionOption::new(
+        PermissionOptionId::new("deny").unwrap(),
+        "Deny",
+        PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request()),
+    )
+    .unwrap();
+    controller
+        .request_permission(
+            &execution,
+            other.clone(),
+            tool,
+            ToolReviewInput {
+                name: "Bash".into(),
+                arguments_json: "{}".into(),
+            },
+            PermissionOptions::new(vec![deny], &PermissionOfferPolicy::once_only()).unwrap(),
+        )
+        .unwrap();
+    let as_the_hook = CancellationOrigin::Client(
+        ActionContext::new("permission-review-hook", "0", "other").unwrap(),
+    );
+    assert!(matches!(
+        controller.cancel_permission(&execution, &other, copied.clone(), as_the_hook.clone()),
+        Err(AgentError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        controller.cancel_permissions(&execution, copied, as_the_hook),
+        Err(AgentError::InvalidInput(_))
+    ));
+    // The review stayed pending, so a caller's own reason still withdraws it.
+    assert!(controller
+        .cancel_permission(
+            &execution,
+            &other,
+            PermissionCancellationReason::custom(
+                CustomPermissionCancellationReason::new("guard", "guard withdrew").unwrap(),
+            ),
+            CancellationOrigin::Client(close_action()),
+        )
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
 async fn a_failed_hook_denial_ends_the_turn_and_leaves_no_review_pending() {
     let fixture = open_fixture(
         script(),

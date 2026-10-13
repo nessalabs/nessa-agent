@@ -568,7 +568,7 @@ impl ExecutionSession {
     ) -> Result<Option<PermissionRequest>, ExecutionError> {
         self.check_execution(execution)?;
         self.check_permission_cancellation_reason(&reason)?;
-        if !reason.may_withdraw(Some(id)) {
+        if !reason.may_withdraw(Some((execution, id))) {
             return Err(ExecutionError::ReservedCancellationCode);
         }
         let Some(mut request) = self

@@ -1455,6 +1455,7 @@ mod tests {
         let reason = || {
             PermissionCancellationReason::custom(
                 CustomPermissionCancellationReason::hook_refusal(
+                    &execution,
                     &review,
                     RefusalOutcome::EndTurn,
                     "hook refused",
