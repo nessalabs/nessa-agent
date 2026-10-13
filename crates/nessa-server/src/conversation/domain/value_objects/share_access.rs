@@ -1,10 +1,9 @@
 //! What a share grant lets its holder do (issue 707): a role, and for Drive
 //! the tool policy that holder's turns will run under.
 //!
-//! This value checks shape and size only. Nothing evaluates a policy yet: a
-//! Comment or Drive grant reads exactly as a Read grant, and every write is
-//! still refused to a paired session. Later slices admit Drive's commands and
-//! enforce its policy; they read the role and policy from here.
+//! This value checks shape and size only. What a policy allows is decided
+//! by the application's `ToolPolicyEvaluator`, which Cedar answers; this
+//! value never matches a pattern itself.
 //!
 //! ```text
 //! ShareAccess ──role──▶ ShareRole (Read < Comment < Drive)

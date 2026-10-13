@@ -21,7 +21,8 @@ pub use receiver::{
 };
 pub use value_objects::{
     ConversationDeletion, DeletionContradiction, ProviderSessionErasure, ProviderSessionLink,
-    ShareAccess, ShareAccessError, ShareRole, ToolPolicy, ToolPolicyError, ToolPreset, ToolRules,
+    ShareAccess, ShareAccessError, ShareRole, ToolCall, ToolPolicy, ToolPolicyError, ToolPreset,
+    ToolRules, ToolSource,
 };
 
 #[cfg(test)]
