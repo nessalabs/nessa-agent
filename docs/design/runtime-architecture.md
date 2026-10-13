@@ -1017,12 +1017,16 @@ initiator. Nothing is granted by conversation list, by folder or by
 default; a peer with no grant on an id cannot tell it exists.
 
 Where it stands: grants per conversation id are built (slice G,
-[read grants](read-grants.md)), and each grant now has its role and, for
-Drive, its tool policy and policy revision (slice J1 of #707). Those are
-stored, journaled and listed only: every role reads exactly as Read, and
-every command that changes a conversation is still refused to a paired
-party. Admitting Drive's commands, Comment's notes and enforcing the policy
-are the later slices of #707.
+[read grants](read-grants.md)), and each grant has its role and, for Drive,
+its tool policy and policy revision (#707). Each role allows everything the
+roles before it do: Read lists, reads and watches; Comment also leaves notes
+(`conversation.message`) and asks where its own note stands
+(`conversation.messageStatus`); Drive also starts, steers and stops turns,
+answers or cancels their permission requests and questions, and looks up
+those commands' receipts, with text only and every tool call checked against
+the grant's policy at the revision the turn was admitted under. A paired peer
+gateway neither comments nor drives, and every other command that changes a
+conversation is still refused to a paired party.
 
 - **Role** is Read, Comment or Drive, as in situation 7. Drive never
   includes delete, export, re-share or changing the model; those stay the

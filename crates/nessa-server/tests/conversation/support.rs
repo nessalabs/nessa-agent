@@ -1,6 +1,7 @@
 //! Test-only provider and metadata ports; all scheduling runs through the real SDK Agent.
 use crate::conversation::application::{
-    ArtifactKept, AttachmentRelease, ConversationAgent, ConversationAgentFuture,
+    AccessAsk, AccessDecision, AccessDenial, ArtifactKept, AttachmentRelease, CatalogueEntryAccess,
+    ConversationAccessPolicyEvaluator, ConversationAgent, ConversationAgentFuture,
     ConversationAgentSource, ConversationAgents, ConversationAttachments, ConversationCreation,
     ConversationCreationAudit, ConversationCreationAuditRecord, ConversationCreationDisposition,
     ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionBudgets,
@@ -12,6 +13,7 @@ use crate::conversation::application::{
     ProviderSessionErasers, PublishedArtifact, UnfinishedDeletions,
 };
 use crate::conversation::domain::{Conversation, ConversationDeletion, ProviderSessionErasure};
+use crate::conversation::infrastructure::CedarConversationAccessPolicy;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::ConversationApprovalMode;
@@ -1983,28 +1985,24 @@ fn mode_panic(payload_drop: bool, message: &'static str) -> ! {
 /// The checked-in conversation access policy, as composition builds it:
 /// every service, store and passive read these tests build asks it, so they
 /// exercise the rules the gateway runs. Validated once per test process.
-fn checked_in_access_policy(
-) -> &'static Arc<crate::conversation::infrastructure::CedarConversationAccessPolicy> {
-    static POLICY: std::sync::OnceLock<
-        Arc<crate::conversation::infrastructure::CedarConversationAccessPolicy>,
-    > = std::sync::OnceLock::new();
+fn checked_in_access_policy() -> &'static Arc<CedarConversationAccessPolicy> {
+    static POLICY: std::sync::OnceLock<Arc<CedarConversationAccessPolicy>> =
+        std::sync::OnceLock::new();
     POLICY.get_or_init(|| {
         Arc::new(
-            crate::conversation::infrastructure::CedarConversationAccessPolicy::new()
+            CedarConversationAccessPolicy::new()
                 .expect("the checked-in conversation access policy validates"),
         )
     })
 }
 
 /// [`checked_in_access_policy`], as a dependency is injected.
-pub(crate) fn access_policy(
-) -> Arc<dyn crate::conversation::application::ConversationAccessPolicyEvaluator> {
+pub(crate) fn access_policy() -> Arc<dyn ConversationAccessPolicyEvaluator> {
     checked_in_access_policy().clone()
 }
 
 /// [`checked_in_access_policy`], borrowed for as long as the test runs.
-pub(crate) fn access_policy_ref(
-) -> &'static dyn crate::conversation::application::ConversationAccessPolicyEvaluator {
+pub(crate) fn access_policy_ref() -> &'static dyn ConversationAccessPolicyEvaluator {
     checked_in_access_policy().as_ref()
 }
 
@@ -2026,16 +2024,11 @@ impl ObservedPolicy {
         self.asked.load(Ordering::SeqCst)
     }
 }
-impl crate::conversation::application::ConversationAccessPolicyEvaluator for ObservedPolicy {
-    fn evaluate(
-        &self,
-        ask: &crate::conversation::application::AccessAsk<'_>,
-    ) -> crate::conversation::application::AccessDecision {
+impl ConversationAccessPolicyEvaluator for ObservedPolicy {
+    fn evaluate(&self, ask: &AccessAsk<'_>) -> AccessDecision {
         self.asked.fetch_add(1, Ordering::SeqCst);
         if self.undecided.load(Ordering::SeqCst) {
-            return crate::conversation::application::AccessDecision::Deny(
-                crate::conversation::application::AccessDenial::Unavailable,
-            );
+            return AccessDecision::Deny(AccessDenial::Unavailable);
         }
         access_policy_ref().evaluate(ask)
     }
@@ -2043,11 +2036,6 @@ impl crate::conversation::application::ConversationAccessPolicyEvaluator for Obs
 
 /// A paired catalogue reader signed in as `signed_in_as`, its entries
 /// admitted by the checked-in access policy.
-pub(crate) fn catalogue_entries(
-    signed_in_as: &str,
-) -> crate::conversation::application::CatalogueEntryAccess {
-    crate::conversation::application::CatalogueEntryAccess::new(
-        access_policy(),
-        PrincipalId::new(signed_in_as).unwrap(),
-    )
+pub(crate) fn catalogue_entries(signed_in_as: &str) -> CatalogueEntryAccess {
+    CatalogueEntryAccess::new(access_policy(), PrincipalId::new(signed_in_as).unwrap())
 }

@@ -937,7 +937,7 @@ export interface ConversationDeleteParams {
   /** Stable action identifier retained for retries of one logical command. */
   requestId: string
 }
-/** What a share grant lets its holder do. read: list, read and watch the conversation's records. comment and drive name what later releases let the holder do (leave notes the agent sees on the owner's next turn; start, steer and stop turns under a tool policy); today both read exactly as read does, and every command that changes the conversation is still refused to a paired party whatever its role. */
+/** What a share grant lets its holder do; each role allows everything the roles before it do. read: list, read and watch the conversation's records. comment: also leave notes with conversation.message and ask where its own note stands with conversation.messageStatus. drive: also start, steer and stop turns, answer or cancel their permission requests, answer their questions and look up those commands' receipts (conversation.send, steer, stop, answer, answerQuestion, cancel, receipt), with text only and under the grant's tool policy. A paired peer gateway neither comments nor drives whatever its role, and no role deletes, archives, exports, re-shares or changes the model: those stay the owner's. */
 export const ConversationShareRole = {
   Read: "read",
   Comment: "comment",

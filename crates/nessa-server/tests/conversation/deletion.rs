@@ -4,9 +4,10 @@
 use super::*;
 use crate::conversation::{
     application::{
-        AttachmentReleaseCause, ConversationCreation, ConversationCreationAuditRecord,
-        ConversationCreationCause, ConversationDeletionBudgets, ConversationDeletionCause,
-        ConversationFuture, ProviderSessionEraser, SubmittedFile, UnfinishedDeletions,
+        AttachmentReleaseCause, ConversationAccessPolicyEvaluator, ConversationCreation,
+        ConversationCreationAuditRecord, ConversationCreationCause, ConversationDeletionBudgets,
+        ConversationDeletionCause, ConversationFuture, ProviderSessionEraser, SubmittedFile,
+        UnfinishedDeletions,
     },
     infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
@@ -164,7 +165,7 @@ fn service_admitted_by(
     audit: Arc<RecordingDeletionAudit>,
     attachments: Arc<MemoryAttachments>,
     store: Option<Arc<dyn ProviderSessionEraser>>,
-    policy: Arc<dyn crate::conversation::application::ConversationAccessPolicyEvaluator>,
+    policy: Arc<dyn ConversationAccessPolicyEvaluator>,
 ) -> ConversationService {
     let mut provider_sessions = ProviderSessionErasers::default();
     if let Some(store) = store {

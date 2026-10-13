@@ -2,7 +2,7 @@
 //! MCP session, the resources held for it behind a ticket, and the audit of
 //! every step. The rules are `mcp_servers::domain`'s; the flow is the
 //! conversation service's.
-use super::ConversationFuture;
+use super::{AppCallPolicyEvaluator, ConversationFuture};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::product_contract::generated::{ConversationErrorCode, MCP_RESOURCE_TICKET_MS};
@@ -435,5 +435,5 @@ pub struct McpAppPorts {
     pub audit: Arc<dyn McpAppAudit>,
     pub tickets: Arc<dyn ResourceTickets>,
     pub dropped: Arc<dyn DroppedContexts>,
-    pub policy: Arc<dyn super::AppCallPolicyEvaluator>,
+    pub policy: Arc<dyn AppCallPolicyEvaluator>,
 }

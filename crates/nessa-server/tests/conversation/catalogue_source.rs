@@ -1,13 +1,23 @@
+use super::super::store::LocalConversationStore;
 use super::*;
 use crate::conversation::{
-    application::ConversationRepository,
-    domain::{Conversation, ConversationDeletion},
+    application::{
+        AccessAction, AccessAsk, AccessDecision, AccessDenial, CatalogueEntryAccess, CatalogueHead,
+        CataloguePageRequest, ConversationAccessPolicyEvaluator, ConversationCatalogue,
+        ConversationRepository, Reader,
+    },
+    domain::{
+        Conversation, ConversationDeletion, ShareAccess, ShareRole,
+        ShareRole::{Comment, Read},
+        ToolPolicy, ToolPreset,
+    },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::{
     agents::AgentId,
     conversation::domain::{ConversationApprovalMode, ConversationModelId},
 };
+use std::sync::atomic::{AtomicUsize, Ordering};
 use uuid::Uuid;
 
 #[tokio::test]
@@ -381,30 +391,26 @@ async fn source_resolves_deletion_after_manifest_and_keeps_newer_revision() {
 /// for a grant of `refused`, or decides nothing when `undecided`; it counts
 /// the entries it is asked about.
 struct EntryPolicy {
-    refused: Option<crate::conversation::domain::ShareRole>,
+    refused: Option<ShareRole>,
     undecided: bool,
-    asked: std::sync::atomic::AtomicUsize,
+    asked: AtomicUsize,
 }
 impl EntryPolicy {
-    fn new(refused: Option<crate::conversation::domain::ShareRole>, undecided: bool) -> Arc<Self> {
+    fn new(refused: Option<ShareRole>, undecided: bool) -> Arc<Self> {
         Arc::new(Self {
             refused,
             undecided,
-            asked: std::sync::atomic::AtomicUsize::new(0),
+            asked: AtomicUsize::new(0),
         })
     }
     fn asked(&self) -> usize {
-        self.asked.load(std::sync::atomic::Ordering::SeqCst)
+        self.asked.load(Ordering::SeqCst)
     }
 }
-impl crate::conversation::application::ConversationAccessPolicyEvaluator for EntryPolicy {
-    fn evaluate(
-        &self,
-        ask: &crate::conversation::application::AccessAsk<'_>,
-    ) -> crate::conversation::application::AccessDecision {
-        use crate::conversation::application::{AccessAction, AccessDecision, AccessDenial};
+impl ConversationAccessPolicyEvaluator for EntryPolicy {
+    fn evaluate(&self, ask: &AccessAsk<'_>) -> AccessDecision {
         if ask.action == AccessAction::CatalogueEntry {
-            self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.asked.fetch_add(1, Ordering::SeqCst);
             if self.undecided {
                 return AccessDecision::Deny(AccessDenial::Unavailable);
             }
@@ -419,19 +425,18 @@ impl crate::conversation::application::ConversationAccessPolicyEvaluator for Ent
 /// Alice's conversations, created in order and granted to "receiver" with
 /// the roles given, and the receiver's head over them.
 async fn granted_catalogue(
-    roles: &[crate::conversation::domain::ShareRole],
+    roles: &[ShareRole],
 ) -> (
     tempfile::TempDir,
-    Arc<super::super::store::LocalConversationStore>,
+    Arc<LocalConversationStore>,
     Vec<ConversationId>,
-    crate::conversation::application::CatalogueHead,
+    CatalogueHead,
 ) {
-    use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy, ToolPreset};
     let directory = tempfile::tempdir().unwrap();
     let private = directory.path().join("conversations");
     nessa_local_storage::create_directory(&private).unwrap();
     let store = Arc::new(
-        super::super::store::LocalConversationStore::open(&private.join("metadata.sqlite3"))
+        LocalConversationStore::open(&private.join("metadata.sqlite3"))
             .unwrap()
             .with_access_policy(crate::conversation_test_support::access_policy()),
     );
@@ -456,7 +461,7 @@ async fn granted_catalogue(
         .head(
             &caller().organization_id,
             &caller().principal_id,
-            &crate::conversation::application::Reader::PairedDevice {
+            &Reader::PairedDevice {
                 receiver_id: "receiver".into(),
             },
         )
@@ -466,14 +471,14 @@ async fn granted_catalogue(
 }
 
 fn admitted_by(
-    store: &Arc<super::super::store::LocalConversationStore>,
+    store: &Arc<LocalConversationStore>,
     policy: Arc<EntryPolicy>,
     incarnation: &str,
 ) -> NessaCatalogueSource {
     NessaCatalogueSource::new(
         store.clone(),
         caller(),
-        crate::conversation::application::CatalogueEntryAccess::new(policy, caller().principal_id),
+        CatalogueEntryAccess::new(policy, caller().principal_id),
         scope(incarnation),
     )
     .unwrap()
@@ -506,8 +511,6 @@ async fn resolve(
 /// finds, the role its grant holds; the owner's rows hold none.
 #[tokio::test]
 async fn a_catalogue_row_carries_the_role_its_reader_holds() {
-    use crate::conversation::application::{CataloguePageRequest, ConversationCatalogue, Reader};
-    use crate::conversation::domain::ShareRole;
     let roles = [ShareRole::Read, ShareRole::Comment, ShareRole::Drive];
     let (_directory, store, ids, head) = granted_catalogue(&roles).await;
     let request = |reader: Reader| CataloguePageRequest {
@@ -552,7 +555,6 @@ async fn a_catalogue_row_carries_the_role_its_reader_holds() {
 /// is asked about once per page.
 #[tokio::test]
 async fn a_manifest_leaves_out_what_the_policy_refuses_and_reads_on_to_fill_the_page() {
-    use crate::conversation::domain::ShareRole::{Comment, Read};
     let roles = [Read, Read, Comment, Read, Read, Read, Comment, Read];
     let (_directory, store, ids, head) = granted_catalogue(&roles).await;
     let policy = EntryPolicy::new(Some(Read), false);
@@ -602,7 +604,6 @@ async fn a_manifest_leaves_out_what_the_policy_refuses_and_reads_on_to_fill_the_
 /// is; one it admits resolves.
 #[tokio::test]
 async fn a_resolve_the_policy_refuses_is_missing() {
-    use crate::conversation::domain::ShareRole::{Comment, Read};
     let (_directory, store, ids, head) = granted_catalogue(&[Read, Comment]).await;
     let source = admitted_by(
         &store,
@@ -622,7 +623,6 @@ async fn a_resolve_the_policy_refuses_is_missing() {
 /// never shorter or missing.
 #[tokio::test]
 async fn a_catalogue_read_the_policy_cannot_decide_is_unavailable() {
-    use crate::conversation::domain::ShareRole::Read;
     let (_directory, store, ids, head) = granted_catalogue(&[Read]).await;
     let source = admitted_by(&store, EntryPolicy::new(None, true), &head.incarnation);
     let request = ManifestRequest {

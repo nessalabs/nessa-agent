@@ -2,15 +2,15 @@
 use super::*;
 use crate::conversation::{
     application::{
-        ConversationDependencies, ConversationLimits, ConversationRepository,
-        ProviderSessionErasers, RequestedConversation,
+        ConversationAccessPolicyEvaluator, ConversationDependencies, ConversationLimits,
+        ConversationRepository, ProviderSessionErasers, RequestedConversation,
     },
     domain::ConversationDeletion,
     infrastructure::LocalConversationStore,
 };
 use crate::conversation_test_support::{
-    only, AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit, Provider,
-    ProviderFactory, RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
+    only, AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit, ObservedPolicy,
+    Provider, ProviderFactory, RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::application::agent_execution::{
@@ -96,7 +96,7 @@ fn fixture_admitted_by(
     root: &Path,
     provider: Arc<ProviderFactory>,
     environment: crate::conversation::application::Environments,
-    policy: Arc<dyn crate::conversation::application::ConversationAccessPolicyEvaluator>,
+    policy: Arc<dyn ConversationAccessPolicyEvaluator>,
 ) -> (
     ConversationService,
     Arc<RecordStorage>,
@@ -732,7 +732,7 @@ async fn a_command_the_policy_cannot_decide_is_refused_before_any_stage() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
-    let policy = Arc::new(crate::conversation_test_support::ObservedPolicy::default());
+    let policy = Arc::new(ObservedPolicy::default());
     let (service, storage, metadata) = fixture_admitted_by(
         &root,
         provider.clone(),

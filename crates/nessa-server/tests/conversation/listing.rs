@@ -8,16 +8,17 @@ use super::{
 use crate::{
     conversation::{
         application::{
-            ConversationFuture, ConversationListing, ConversationRepository, ConversationSummaries,
-            ListedConversation, ListedConversations, ObservationCursor, ObservedConversations,
+            ConversationAccessPolicyEvaluator, ConversationFuture, ConversationListing,
+            ConversationRepository, ConversationSummaries, ListedConversation, ListedConversations,
+            ObservationCursor, ObservedConversations,
         },
         domain::{Conversation, ConversationDeletion},
         infrastructure::LocalConversationStore,
     },
     conversation_test_support::{
         only, AcceptingCreationAudit, AcceptingDeletionAudit, MemoryListing, MemoryRepository,
-        MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit, TestClock,
-        DELETION_BUDGETS,
+        MemorySummaries, ObservedPolicy, Provider, ProviderFactory, RecordingFileLinkAudit,
+        TestClock, DELETION_BUDGETS,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -1346,7 +1347,7 @@ fn listed_record(organization: &str, principal: &str, deleted: bool) -> Conversa
 /// A service whose listing answers `rows` whoever asks, admitted by `policy`.
 fn answering(
     rows: &[Conversation],
-    policy: Arc<dyn crate::conversation::application::ConversationAccessPolicyEvaluator>,
+    policy: Arc<dyn ConversationAccessPolicyEvaluator>,
 ) -> ConversationService {
     let summary = ConversationSummary::after_message(None, "said", None, 3);
     let answered = rows
@@ -1421,7 +1422,7 @@ async fn a_list_asks_the_policy_once_per_kind_of_row() {
         mine[2].clone(),
     ];
     let expected: Vec<String> = mine.iter().map(|row| row.id().to_string()).collect();
-    let policy = Arc::new(crate::conversation_test_support::ObservedPolicy::default());
+    let policy = Arc::new(ObservedPolicy::default());
     let service = answering(&rows, policy.clone());
     let listed = service.list(owner(), false).await.unwrap();
     assert_eq!(ids(&listed.conversations), expected);
@@ -1440,7 +1441,7 @@ async fn a_list_the_policy_cannot_decide_fails() {
         listed_record("org", "person", false),
         listed_record("org", "person", true),
     ];
-    let policy = Arc::new(crate::conversation_test_support::ObservedPolicy::default());
+    let policy = Arc::new(ObservedPolicy::default());
     policy.undecide();
     let service = answering(&rows, policy);
     assert!(matches!(

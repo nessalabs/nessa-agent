@@ -3,6 +3,7 @@ use crate::conversation::application::{
     CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadSource,
     RecordHead, RecordReadValue,
 };
+use crate::conversation_test_support::EveryConversationGranted;
 use crate::product::change_watch::{watch_principal, Notice, WatchOwners};
 use nessa_protocol::conversation::read_scope::CatalogueReadScope;
 use nessa_sync::replication::domain::{Id, Scope};
@@ -523,7 +524,7 @@ async fn successful_read_during_held_authority(input: HeldAuthorityInput, stalle
         .with_passive_read(
             Arc::new(RecordBinding),
             repository,
-            Arc::new(crate::conversation_test_support::EveryConversationGranted),
+            Arc::new(EveryConversationGranted),
             crate::conversation_test_support::access_policy(),
         )
         .with_record_source(source.clone());
@@ -931,7 +932,7 @@ impl CatalogueReadSource for HeldPhysicalRead {
     fn read(
         &self,
         _: CatalogueReadScope,
-        _: nessa_auth::domain::PrincipalId,
+        _: PrincipalId,
         _: CatalogueReadOperation,
         lease: RecordReadLease,
     ) -> CatalogueReadFuture<'_> {
@@ -1009,7 +1010,7 @@ async fn held_physical_session() -> (
         .with_passive_read(
             Arc::new(RecordBinding),
             repository,
-            Arc::new(crate::conversation_test_support::EveryConversationGranted),
+            Arc::new(EveryConversationGranted),
             crate::conversation_test_support::access_policy(),
         )
         .with_record_source(source.clone())

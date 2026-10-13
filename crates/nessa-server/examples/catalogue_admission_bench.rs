@@ -51,9 +51,12 @@ use nessa_sync::replication::catalogue::{
 };
 use nessa_sync::replication::domain::{Id, Scope};
 use std::error::Error;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tracing_subscriber::EnvFilter;
 
 const ORGANIZATION: &str = "org";
 const OWNER: &str = "alice";
@@ -63,9 +66,7 @@ fn main() {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_ansi(false)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
-        )
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()))
         .init();
     if let Err(error) = run() {
         eprintln!("catalogue admission benchmark failed: {error}");
@@ -158,7 +159,6 @@ fn bench_size(
     std::fs::create_dir(&private)?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700))?;
     }
     let store = Arc::new(

@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::conversation::application::{
-    ConversationDependencies, ConversationLimits, ConversationModeRequest,
+    AccessAction, AccessAsk, AccessDecision, AccessDenial, ConversationAccessPolicyEvaluator, ConversationDependencies, ConversationLimits, ConversationModeRequest,
     ConversationModeRequestState, ConversationRepository, ConversationService, SubmissionMode,
     SubmittedMessage,
 };
@@ -12,7 +12,7 @@ use crate::conversation::infrastructure::NessaRecordWatches;
 use crate::product::conversation::caller;
 use conversation_support::{
     claude_erasers, mode_agents, AcceptingCreationAudit, AcceptingDeletionAudit,
-    AcceptingModeAudit, ProviderFactory, RecordingFileLinkAudit, RecordingModeExecutionAudit,
+    AcceptingModeAudit, ObservedPolicy, ProviderFactory, RecordingFileLinkAudit, RecordingModeExecutionAudit,
     TestClock, DELETION_BUDGETS,
 };
 use nessa_protocol::product::generated::{
@@ -1970,7 +1970,7 @@ impl SubscriptionFixture {
     fn with_devices_asking(
         mut self,
         devices: Arc<Devices>,
-        policy: Arc<dyn crate::conversation::application::ConversationAccessPolicyEvaluator>,
+        policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     ) -> Self {
         let metadata = self.metadata.clone();
         self.state =
@@ -2772,7 +2772,6 @@ async fn a_peer_gateway_learns_no_more_from_a_refused_command_than_from_a_read()
 #[tokio::test]
 async fn a_paired_party_the_policy_cannot_decide_is_told_temporarily_unavailable() {
     use crate::conversation::application::ShareGrantTransition;
-    use crate::conversation_test_support::ObservedPolicy;
     let fixture = SubscriptionFixture::new().await;
     fixture.turn("first").await;
     let policy = Arc::new(ObservedPolicy::default());
@@ -2857,15 +2856,15 @@ async fn a_paired_device_shares_nothing_whatever_id_it_names() {
 }
 
 /// The checked-in policy, except that it cannot decide `action`.
-struct UndecidedOn(crate::conversation::application::AccessAction);
-impl crate::conversation::application::ConversationAccessPolicyEvaluator for UndecidedOn {
+struct UndecidedOn(AccessAction);
+impl ConversationAccessPolicyEvaluator for UndecidedOn {
     fn evaluate(
         &self,
-        ask: &crate::conversation::application::AccessAsk<'_>,
-    ) -> crate::conversation::application::AccessDecision {
+        ask: &AccessAsk<'_>,
+    ) -> AccessDecision {
         if ask.action == self.0 {
-            return crate::conversation::application::AccessDecision::Deny(
-                crate::conversation::application::AccessDenial::Unavailable,
+            return AccessDecision::Deny(
+                AccessDenial::Unavailable,
             );
         }
         crate::conversation_test_support::access_policy_ref().evaluate(ask)
@@ -2879,7 +2878,7 @@ async fn a_share_the_policy_cannot_decide_is_unavailable() {
     let fixture = SubscriptionFixture::new().await.with_devices_asking(
         Devices::new(&[("phone", "phone", "principal", true)]),
         Arc::new(UndecidedOn(
-            crate::conversation::application::AccessAction::Share,
+            AccessAction::Share,
         )),
     );
     *fixture.authority.snapshot.lock().unwrap() =

@@ -1290,7 +1290,7 @@ fn environments(
             DurableEnvironmentAudit, HostInstaller, OpenSshConnector, PeerEnvironments,
             SshEnvironment, SshTimings,
         },
-        FilePlacements,
+        CedarCommandPolicyEvaluator, FilePlacements,
     };
     let placements = FilePlacements::new(root.join("placements"))
         .map_err(|error| RunError::Agent(error.to_string()))?;
@@ -1345,11 +1345,8 @@ fn environments(
     // Who may run which commands where is the command policy's, answered by
     // Cedar over the configured hosts and programs (ADR 803 step 4).
     if let Some(policy) = commands {
-        let evaluator =
-            crate::conversation::infrastructure::CedarCommandPolicyEvaluator::new(&policy)
-                .map_err(|_| {
-                    RunError::Agent("the command policy bundle does not validate".into())
-                })?;
+        let evaluator = CedarCommandPolicyEvaluator::new(&policy)
+            .map_err(|_| RunError::Agent("the command policy bundle does not validate".into()))?;
         environments = environments.with_commands(Arc::new(evaluator));
     }
     let paired = peers.map(|peers| {

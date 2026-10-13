@@ -12,6 +12,7 @@ use crate::conversation::application::{
 use crate::conversation::application::{
     ConversationAgent, ConversationAgents, ConversationDeletionBudgets,
 };
+use crate::conversation::infrastructure::CedarAppCallPolicyEvaluator;
 use crate::conversation_test_support::{
     AcceptingCreationAudit, AcceptingDeletionAudit, MemoryRepository, MemorySummaries, Provider,
     ProviderFactory, RecordingFileLinkAudit, RecordingModeAudit, TestClock, Unlisted,
@@ -540,8 +541,7 @@ impl Fixture {
                 tickets: tickets.clone(),
                 dropped: dropped.unwrap_or_else(|| drops.clone()),
                 policy: Arc::new(
-                    crate::conversation::infrastructure::CedarAppCallPolicyEvaluator::new()
-                        .expect("the checked-in bundle validates"),
+                    CedarAppCallPolicyEvaluator::new().expect("the checked-in bundle validates"),
                 ),
             },
         )
