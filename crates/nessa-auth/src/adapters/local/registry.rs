@@ -422,6 +422,24 @@ impl LocalCredentialStore {
             .clone())
     }
 
+    /// The kind stored for `id`. An uninitialized registry and an unknown
+    /// principal are `Ok(None)`. A stored principal whose kind does not parse
+    /// is `Conflict`.
+    pub fn principal_kind(&self, id: &str) -> Result<Option<PrincipalKind>, LocalStoreError> {
+        let slot = self.slot()?;
+        let Some(registry) = slot.as_ref() else {
+            return Ok(None);
+        };
+        let Some(principal) = registry
+            .principals
+            .iter()
+            .find(|principal| principal.id == id)
+        else {
+            return Ok(None);
+        };
+        principal_kind(principal).map(Some)
+    }
+
     pub fn identity(&self) -> Result<LocalIdentity, LocalStoreError> {
         let registry = self.registry()?;
         let registry = registry.as_ref().ok_or(LocalStoreError::NotInitialized)?;

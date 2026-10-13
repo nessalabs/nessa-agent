@@ -84,12 +84,20 @@ pub(super) struct RecordingAudit {
     pub(super) answered_questions: Mutex<Vec<QuestionAnswerRecord>>,
     pub(super) refused_questions: Mutex<Vec<QuestionRefusalRecord>>,
     pub(super) late_results: Mutex<Vec<LateProviderResultRecord>>,
+    pub(super) launches: Mutex<Vec<NativeHooksLaunchRecord>>,
     pub(super) reject: bool,
     pub(super) stall: bool,
 }
 impl ExecutionAudit for RecordingAudit {
     fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
         Box::pin(async move {
+            // Recorded at process start, before the audit this fixture is
+            // aimed at. Rejecting or stalling it fails or hangs startup on a
+            // clock the test has not started moving.
+            if let ExecutionAuditRecord::NativeHooksLaunch(launch) = record {
+                self.launches.lock().unwrap().push(launch);
+                return Ok(());
+            }
             if self.stall {
                 return std::future::pending().await;
             }
@@ -127,6 +135,7 @@ impl ExecutionAudit for RecordingAudit {
                 ExecutionAuditRecord::QuestionRefused(record) => {
                     self.refused_questions.lock().unwrap().push(record)
                 }
+                ExecutionAuditRecord::NativeHooksLaunch(_) => {}
             }
             Ok(())
         })

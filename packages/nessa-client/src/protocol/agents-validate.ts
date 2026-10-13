@@ -1,8 +1,9 @@
-import { InstallableAgent, bounds } from "../generated/product.js"
+import { InstallableAgent, NativeHooksAgent, bounds } from "../generated/product.js"
 import type {
   AgentInstallOptionsResult,
   AgentInstallResult,
   AgentsListResult,
+  AgentsSetNativeHooksResult,
   ApprovalModeChoice,
 } from "../generated/product.js"
 import { wellFormedText } from "./unicode.js"
@@ -46,10 +47,19 @@ export function approvalModeChoices(value: unknown): ApprovalModeChoice[] {
   return value as ApprovalModeChoice[]
 }
 
+function hooksChoice(value: unknown): "off" | "on" {
+  if (value !== "off" && value !== "on") throw new Error("Invalid native hooks choice")
+  return value
+}
+
 /** Validate one authenticated gateway catalog before it reaches a picker. */
 export function agentsList(value: unknown): AgentsListResult {
   const result = object(value)
-  exact(result, ["agents", "environments"])
+  exact(result, ["agents", "environments", "nativeHooks"])
+  const hooks = object(result.nativeHooks)
+  exact(hooks, ["claude", "codex"])
+  hooksChoice(hooks.claude)
+  hooksChoice(hooks.codex)
   // The places a new conversation may run on: at most 16 SSH destinations
   // and 8 connected paired environments, each named once.
   if (!Array.isArray(result.environments) || result.environments.length > 24)
@@ -143,6 +153,39 @@ export function agentInstallResult(value: unknown): AgentInstallResult {
   )
     throw new Error("Invalid installation result")
   return value as AgentInstallResult
+}
+
+const hookAgents = new Set<string>(Object.values(NativeHooksAgent))
+
+/** Validate a hooks result, and that it answers the command that was sent:
+ * the same request ID and harness. */
+export function agentsSetNativeHooks(
+  value: unknown,
+  sent: { readonly agent: string; readonly requestId: string },
+): AgentsSetNativeHooksResult {
+  const result = object(value)
+  exact(result, ["requestId", "agent", "enabled"])
+  const agent = text(result, "agent", 32)
+  if (!hookAgents.has(agent)) throw new Error("Invalid native hooks agent")
+  const requestId = nativeHooksRequestId(
+    text(result, "requestId", bounds.maxNativeHooksRequestIdBytes),
+  )
+  if (typeof result.enabled !== "boolean") throw new Error("Invalid native hooks choice")
+  if (requestId !== sent.requestId || agent !== sent.agent)
+    throw new Error("Native hooks result answers a different command")
+  return value as AgentsSetNativeHooksResult
+}
+
+/** Validate the schema-owned invocation bound before sending a hooks command. */
+export function nativeHooksRequestId(value: string): string {
+  if (
+    typeof value !== "string" ||
+    !wellFormedText(value) ||
+    Array.from(value).length < bounds.minNativeHooksRequestIdCharacters ||
+    utf8.encode(value).byteLength > bounds.maxNativeHooksRequestIdBytes
+  )
+    throw new Error("Invalid native hooks request ID")
+  return value
 }
 
 /** Validate the schema-owned invocation bound before sending a download command. */

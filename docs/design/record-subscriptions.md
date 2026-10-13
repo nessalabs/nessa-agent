@@ -47,9 +47,10 @@ The agent catalog is followed the same way (issue 706, part I-3; row I10 in
 
 - `agents.subscribe {}` sends `agents.listed` frames: `{subscriptionId,
   catalog}`, where `catalog` is exactly what `agents.list` returns, read
-  again each time a paired environment connects, disconnects or is revoked.
-  Its one wake source is `PeerEnvironments::connections`; it reads no
-  conversation and registers no conversation source.
+  again each time a paired environment connects, disconnects or is revoked,
+  and after each native hooks command. Its wake sources are
+  `PeerEnvironments::connections` and `NativeHooksPreferences::changes`; it
+  reads no conversation and registers no conversation source.
 - `agents.unsubscribe {subscriptionId}` stops it. It asks `server.read`, the
   grant `agents.subscribe` and `agents.list` ask, where
   `conversation.unsubscribe` asks `conversation.write`; so each stops only
@@ -267,6 +268,7 @@ otherwise.
 | AC6 | A session without `server.read` subscribes, a paired reader's credential among them; the grant is lost while it follows | Refused `forbidden`, as `agents.list` is; ended `refused` with `forbidden` before the next read | `following_the_agent_catalog_is_admitted_as_reading_it_is` |
 | AC7 | `conversation.unsubscribe` of the catalog's subscription, `agents.unsubscribe` of a list's; `agents.unsubscribe` by a session holding only `server.read` | `unknown_subscription` for the other's; its own is stopped, and nothing of it follows the reply | `each_unsubscribe_stops_only_its_own_kind` |
 | AC8 | The paired environments' change source closes | Ended `source_closed` | `the_environments_source_closing_ends_the_catalog_subscription` |
+| AC9 | A native hooks command | A frame with the catalog as `agents.list` answers it then, carrying the choice in effect | `the_agent_catalog_is_sent_again_when_the_hooks_choice_changes` |
 
 Desktop rows (`src/desktop/workspace/adapters/gateway/gateway-source.test.ts`;
 the test names begin with the row id). The adapter subscribes only: it sends

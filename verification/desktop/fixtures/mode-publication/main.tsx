@@ -168,7 +168,14 @@ function Panel() {
         canChoosePaths={false}
         digest={async () => "unused"}
         followConversationChoices={(show) => {
-          show({ chosenAgent: undefined, catalog: { agents: [], environments: [] } })
+          show({
+            chosenAgent: undefined,
+            catalog: {
+              agents: [],
+              environments: [],
+              nativeHooks: { claude: "off", codex: "off" },
+            },
+          })
           return () => undefined
         }}
       />

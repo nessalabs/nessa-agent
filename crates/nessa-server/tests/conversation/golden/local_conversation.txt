@@ -54,6 +54,7 @@ invocations: [
                         text: "Response: read this",
                     },
                 ),
+                native_hooks: None,
             },
             ExecutionEvent {
                 execution_id: ExecutionId(
@@ -62,6 +63,7 @@ invocations: [
                 update: Finished(
                     Completed,
                 ),
+                native_hooks: None,
             },
         ],
         scheduling: [
