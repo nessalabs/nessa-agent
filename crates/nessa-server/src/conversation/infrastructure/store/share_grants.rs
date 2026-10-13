@@ -16,9 +16,9 @@ use super::{
     cells, failed, next_revision, read, stored_time, time, unreadable, LocalConversationStore,
 };
 use crate::conversation::application::{
-    AccessAction, ConversationError, ConversationFuture, HeldGrant, OwnerAccess, ShareGrant,
-    ShareGrantChange, ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
-    MAX_SHARE_GRANTS_PER_CONVERSATION,
+    AccessAction, ConversationError, ConversationFuture, HeldGrant, OwnerAccess, RevisionHold,
+    ShareGrant, ShareGrantChange, ShareGrantTransition, ShareGrants,
+    MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 use crate::conversation::domain::{
     CommandHosts, ShareAccess, ShareRole, ToolChoice, ToolPolicy, ToolPreset, ToolRules,
@@ -53,9 +53,9 @@ type OwnedWait = Pin<Box<dyn Future<Output = tokio::sync::OwnedMutexGuard<()>> +
 
 /// The permit `hold_revision` keeps until the turn's save has been decided.
 struct GrantPermit {
-    key: (String, String),
+    key: GrantKey,
     gates: Arc<GrantGates>,
-    gate: Arc<tokio::sync::Mutex<()>>,
+    gate: GrantGate,
     guard: Option<tokio::sync::OwnedMutexGuard<()>>,
 }
 
@@ -406,16 +406,14 @@ impl ShareGrants for LocalConversationStore {
         id: &'a ConversationId,
         receiver_id: &'a str,
         policy_revision: u64,
-    ) -> ConversationFuture<'a, crate::conversation::application::RevisionHold> {
+    ) -> ConversationFuture<'a, RevisionHold> {
         let gates = Arc::clone(&self.grant_gates);
         let key = (id.to_string(), receiver_id.to_owned());
         let read = self.live_revision(id, receiver_id);
         Box::pin(async move {
             let permit = gates.lock(key.0, key.1).await;
             match read.await? {
-                Some(live) if live == policy_revision => {
-                    Ok(crate::conversation::application::RevisionHold::held(permit))
-                }
+                Some(live) if live == policy_revision => Ok(RevisionHold::held(permit)),
                 _ => Err(ConversationError::Revoked),
             }
         })
