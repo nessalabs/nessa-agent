@@ -11,7 +11,7 @@
 //! `WatchInbox` whenever they arrive, so an operation waiting for its own
 //! response never counts them as unexpected events (committed change watches,
 //! rows W6, W10, W15).
-use super::deadline_stream::{io_cause, DeadlineStream};
+use crate::protected::{io_cause, Channel, DeadlineStream};
 use crate::read_only_sync::application::{
     held_file::busy, watch::Wait, Cancellation, GatewayConnector, GatewayError, GatewayOutcome,
     GatewayPolicy, GatewayStream, HeldFileRefusal,
@@ -19,11 +19,10 @@ use crate::read_only_sync::application::{
 use nessa_auth::adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport};
 use nessa_protocol::clock::Clock;
 use nessa_protocol::pairing::{
-    encode_frame,
     wire::{
         decode_reply, encode_request as encode_envelope, NativePairingReply, NativePairingRequest,
     },
-    EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES, MAX_PROTECTED_RESPONSE_BYTES,
+    EnrollmentChannel, FrameReader, MAX_PROTECTED_RESPONSE_BYTES,
 };
 use nessa_protocol::product::generated::{
     product_event, product_method, wire_shape_product_session_ready,
@@ -44,8 +43,9 @@ use nessa_protocol::protocol::{EventFrame, OutgoingMessage, ResponseFrame};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
-use std::io::{ErrorKind, Read, Result as IoResult, Write};
+use std::io::{Read, Result as IoResult, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -89,53 +89,6 @@ pub(crate) struct DeviceEvidence<'a> {
     pub(crate) identity: &'a NativeIdentity,
     pub(crate) pin: [u8; 44],
     pub(crate) credential: &'a str,
-}
-
-/// Product frames over the pinned TLS connection.
-struct Channel {
-    transport: NativeTransport<DeadlineStream>,
-    frames: FrameReader,
-}
-impl Channel {
-    fn send(&mut self, text: &str) -> Result<(), GatewayError> {
-        let frame = encode_frame(MAX_PROTECTED_REQUEST_BYTES, text.as_bytes())
-            .map_err(|_| GatewayError::RequestTooLarge)?;
-        let result = self
-            .transport
-            .write_all(&frame)
-            .and_then(|()| self.transport.flush());
-        result.map_err(|error| self.io_failure(&error))
-    }
-    fn receive(&mut self) -> Result<String, GatewayError> {
-        loop {
-            let buffer = self
-                .frames
-                .unfilled()
-                .map_err(|_| GatewayError::ResponseTooLarge)?;
-            let count = match self.transport.read(buffer) {
-                Ok(0) => return Err(GatewayError::Closed(None)),
-                Ok(count) => count,
-                Err(error) if error.kind() == ErrorKind::Interrupted => continue,
-                Err(error) => return Err(self.io_failure(&error)),
-            };
-            if let Some(body) = self
-                .frames
-                .filled(count)
-                .map_err(|_| GatewayError::ResponseTooLarge)?
-            {
-                return String::from_utf8(body).map_err(|_| GatewayError::Protocol);
-            }
-        }
-    }
-    /// The cause the stream recorded comes first (a deadline, cancellation,
-    /// or physical error it saw); otherwise the error TLS returned, such as
-    /// an end without TLS close, by the same classification.
-    fn io_failure(&mut self, error: &std::io::Error) -> GatewayError {
-        self.transport
-            .stream_mut()
-            .take_failure()
-            .unwrap_or_else(|| io_cause(error))
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -227,14 +180,36 @@ impl Session {
         cancellation: Arc<dyn Cancellation>,
         policy: GatewayPolicy,
     ) -> Result<Self, GatewayError> {
-        // Refuse oversized borrowed fields before allocating their owned DTO copies.
-        // The surface instance is this client id, so it has to fit that ceiling too.
+        Self::connect_surface(
+            address,
+            device,
+            client_id,
+            ProductSurfaceKind::Cli,
+            client_id,
+            connector,
+            clock,
+            cancellation,
+            policy,
+        )
+    }
+    /// The shared canonical handshake with caller-owned public surface metadata.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn connect_surface(
+        address: SocketAddr,
+        device: DeviceEvidence<'_>,
+        client_id: &str,
+        surface_kind: ProductSurfaceKind,
+        instance: &str,
+        connector: &dyn GatewayConnector,
+        clock: Arc<dyn Clock>,
+        cancellation: Arc<dyn Cancellation>,
+        policy: GatewayPolicy,
+    ) -> Result<Self, GatewayError> {
+        // Refuse oversized borrowed fields before allocating owned DTO copies.
         for (value, ceiling) in [
             (device.credential, MAX_AUTH_CREDENTIAL_CHARACTERS),
-            (
-                client_id,
-                MAX_PRODUCT_CLIENT_ID_CHARACTERS.min(MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS),
-            ),
+            (client_id, MAX_PRODUCT_CLIENT_ID_CHARACTERS),
+            (instance, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS),
         ] {
             if value.chars().take(ceiling + 1).count() > ceiling {
                 return Err(GatewayError::InvalidCredential);
@@ -265,12 +240,17 @@ impl Session {
                 GatewayError::TimedOut if cut.is_some() => GatewayError::Cancelled,
                 cause => cause,
             })?;
+        let observer = cancellation.clone();
         let stream = DeadlineStream::new(stream, clock.clone(), cancellation, deadline);
         stream.remaining()?;
         let failure = stream.failure_owner();
-        let transport =
-            NativeTransport::connect(stream, device.identity, GatewayTrust::Pinned(device.pin))
-                .map_err(|_| failure.take().unwrap_or(GatewayError::NativeHandshake))?;
+        let transport = NativeTransport::connect_observed(
+            stream,
+            device.identity,
+            GatewayTrust::Pinned(device.pin),
+            |_| observer.record_failure(failure.get().unwrap_or(GatewayError::NativeHandshake)),
+        )
+        .map_err(|_| failure.take().unwrap_or(GatewayError::NativeHandshake))?;
         let mut selector = EnrollmentChannel::new(transport);
         let envelope = encode_envelope(&NativePairingRequest::OpenProduct)
             .map_err(|_| GatewayError::Protocol)?;
@@ -281,51 +261,67 @@ impl Session {
             transport: selector.into_transport(),
             frames: FrameReader::new(MAX_PROTECTED_RESPONSE_BYTES),
         };
-        let mut events = Events::new(policy);
-        let mut message = read_opening_frame(&mut socket)?;
-        let challenge = loop {
-            match message {
-                OutgoingMessage::Event(event)
-                    if event.event == product_event::SESSION_CHALLENGE =>
-                {
-                    break shape_decode::<SessionChallenge>(
-                        event.payload,
-                        wire_shape_session_challenge,
-                    )?;
+        // Keep the physical channel outside the result/panic scope. Publish a
+        // known typed opening refusal before its socket cleanup can block.
+        let opened = catch_unwind(AssertUnwindSafe(|| {
+            let mut events = Events::new(policy);
+            let mut message = read_opening_frame(&mut socket)?;
+            let challenge = loop {
+                match message {
+                    OutgoingMessage::Event(event)
+                        if event.event == product_event::SESSION_CHALLENGE =>
+                    {
+                        break shape_decode::<SessionChallenge>(
+                            event.payload,
+                            wire_shape_session_challenge,
+                        )?;
+                    }
+                    OutgoingMessage::Response(_) => return Err(GatewayError::Correlation),
+                    OutgoingMessage::Event(event) => events.observe(event)?,
                 }
-                OutgoingMessage::Response(_) => return Err(GatewayError::Correlation),
-                OutgoingMessage::Event(event) => events.observe(event)?,
+                message = read_frame(&mut socket)?;
+            };
+            if !supports_product_version(challenge.min_version, challenge.max_version) {
+                return Err(GatewayError::Protocol);
             }
-            message = read_frame(&mut socket)?;
+            let params = SessionAuthenticateParams {
+                min_version: PRODUCT_VERSION,
+                max_version: PRODUCT_VERSION,
+                nonce: challenge.nonce,
+                credential: device.credential.to_owned(),
+                client: ProductClientMetadata {
+                    id: client_id.to_owned(),
+                },
+                surface: ProductSurface {
+                    kind: surface_kind,
+                    instance: instance.to_owned(),
+                },
+            };
+            if !wire_shape_session_authenticate_params(
+                &serde_json::to_value(&params).map_err(|_| GatewayError::Protocol)?,
+            ) {
+                return Err(GatewayError::InvalidCredential);
+            }
+            let request_id = "0";
+            send_request(&mut socket, request_id, PRODUCT_HANDSHAKE_METHOD, &params)?;
+            let response = read_response(&mut socket, request_id, &mut events)?;
+            let ready = shape_decode::<ProductSessionReady>(
+                response_payload(response, RpcKind::Authentication)?,
+                wire_shape_product_session_ready,
+            )?;
+            if ready.credential_id.as_bytes() != device.credential.as_bytes() {
+                return Err(GatewayError::Correlation);
+            }
+            Ok(ready)
+        }))
+        .unwrap_or(Err(GatewayError::DriverPanicked));
+        let ready = match opened {
+            Ok(ready) => ready,
+            Err(error) => {
+                socket.transport.stream_mut().record_failure(error);
+                return Err(error);
+            }
         };
-        if !supports_product_version(challenge.min_version, challenge.max_version) {
-            return Err(GatewayError::Protocol);
-        }
-        let params = SessionAuthenticateParams {
-            min_version: PRODUCT_VERSION,
-            max_version: PRODUCT_VERSION,
-            nonce: challenge.nonce,
-            credential: device.credential.to_owned(),
-            client: ProductClientMetadata {
-                id: client_id.to_owned(),
-            },
-            surface: ProductSurface {
-                kind: ProductSurfaceKind::Cli,
-                instance: client_id.to_owned(),
-            },
-        };
-        if !wire_shape_session_authenticate_params(
-            &serde_json::to_value(&params).map_err(|_| GatewayError::Protocol)?,
-        ) {
-            return Err(GatewayError::InvalidCredential);
-        }
-        let request_id = "0";
-        send_request(&mut socket, request_id, PRODUCT_HANDSHAKE_METHOD, &params)?;
-        let response = read_response(&mut socket, request_id, &mut events)?;
-        let ready = shape_decode::<ProductSessionReady>(
-            response_payload(response, RpcKind::Authentication)?,
-            wire_shape_product_session_ready,
-        )?;
         Ok(Self {
             socket: Some(socket),
             clock,
@@ -336,6 +332,9 @@ impl Session {
             ready,
             events: Events::new(policy),
         })
+    }
+    pub(crate) fn into_product_channel(mut self) -> (Channel, ProductSessionReady) {
+        (self.socket.take().expect("connected channel"), self.ready)
     }
     pub(crate) fn ready(&self) -> &ProductSessionReady {
         &self.ready

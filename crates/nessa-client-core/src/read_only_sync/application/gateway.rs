@@ -15,6 +15,9 @@ pub(crate) trait Cancellation: Send + Sync {
     fn until_ms(&self) -> Option<u64> {
         None
     }
+    /// Publish the socket's first typed physical cause before cleanup can block.
+    /// Retained runs keep it locally; product owners also fence racing close.
+    fn record_failure(&self, _error: GatewayError) {}
 }
 
 /// The synchronous connection owner supplies socket I/O and timeout controls.

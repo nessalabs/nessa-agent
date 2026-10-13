@@ -9,15 +9,17 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub(super) struct DeadlineStream {
+pub(crate) struct DeadlineStream {
     stream: Box<dyn GatewayStream>,
     clock: Arc<dyn Clock>,
     cancellation: Arc<dyn Cancellation>,
     deadline: u64,
     failure: Rc<Cell<Option<GatewayError>>>,
+    poll: Option<(u64, u64)>,
+    partial_deadline: Option<u64>,
 }
 impl DeadlineStream {
-    pub(super) fn new(
+    pub(crate) fn new(
         stream: Box<dyn GatewayStream>,
         clock: Arc<dyn Clock>,
         cancellation: Arc<dyn Cancellation>,
@@ -29,19 +31,34 @@ impl DeadlineStream {
             cancellation,
             deadline,
             failure: Rc::new(Cell::new(None)),
+            poll: None,
+            partial_deadline: None,
         }
     }
-    pub(super) fn remaining(&self) -> Result<Duration, GatewayError> {
+    pub(crate) fn remaining(&self) -> Result<Duration, GatewayError> {
+        let result = self.budget();
+        if let Err(error) = result {
+            self.record_failure(error);
+        }
+        result
+    }
+    fn budget(&self) -> Result<Duration, GatewayError> {
+        if let Some(error) = self.failure.get() {
+            return Err(error);
+        }
         if self.cancellation.cancelled() {
             return Err(GatewayError::Cancelled);
         }
         let now = self.clock.elapsed_ms();
+        let deadline = self
+            .partial_deadline
+            .map_or(self.deadline, |partial| partial.min(self.deadline));
         // A cancellation time before the operation's deadline bounds the wait;
         // reaching it is a cancellation, not the operation timing out.
         if let Some(until) = self
             .cancellation
             .until_ms()
-            .filter(|until| *until < self.deadline)
+            .filter(|until| *until < deadline)
         {
             let remaining = until
                 .checked_sub(now)
@@ -49,28 +66,72 @@ impl DeadlineStream {
                 .ok_or(GatewayError::Cancelled)?;
             return Ok(Duration::from_millis(remaining));
         }
-        let remaining = self
-            .deadline
+        let remaining = deadline
             .checked_sub(now)
             .filter(|value| *value > 0)
             .ok_or(GatewayError::TimedOut)?;
         Ok(Duration::from_millis(remaining))
     }
-    pub(super) fn begin_operation(&mut self, deadline: u64) {
+    pub(crate) fn begin_operation(&mut self, deadline: u64) {
         self.deadline = deadline;
+        self.poll = None;
     }
-    pub(super) fn take_failure(&mut self) -> Option<GatewayError> {
+    /// Polling bounds each physical wait without treating an idle tick as failure.
+    /// Channel plaintext progress starts the total partial product-frame deadline;
+    /// raw TLS control bytes do not. Later ticks do not reset that deadline.
+    pub(crate) fn begin_poll(&mut self, deadline: Option<u64>, slice_ms: u64, frame_ms: u64) {
+        self.deadline = deadline.unwrap_or(u64::MAX);
+        self.poll = Some((self.clock.elapsed_ms().saturating_add(slice_ms), frame_ms));
+    }
+    pub(crate) fn complete_frame(&mut self) {
+        self.partial_deadline = None;
+    }
+    pub(crate) fn note_partial(&mut self) -> Result<(), GatewayError> {
+        if self.partial_deadline.is_none() {
+            if let Some((_, frame_ms)) = self.poll {
+                self.partial_deadline = Some(
+                    self.clock
+                        .elapsed_ms()
+                        .checked_add(frame_ms)
+                        .ok_or(GatewayError::TimedOut)?,
+                );
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn take_failure(&mut self) -> Option<GatewayError> {
         self.failure.take()
     }
-    pub(super) fn failure_owner(&self) -> Rc<Cell<Option<GatewayError>>> {
+    pub(crate) fn failure_owner(&self) -> Rc<Cell<Option<GatewayError>>> {
         self.failure.clone()
     }
-    fn record_failure(&self, error: GatewayError) {
+    pub(crate) fn record_failure(&self, error: GatewayError) {
         if self.failure.get().is_none() {
             self.failure.set(Some(error));
+            self.cancellation.record_failure(error);
         }
     }
+    fn wait_budget(&mut self) -> IoResult<Duration> {
+        let remaining = self.remaining().map_err(|error| self.refused(error))?;
+        let poll_left = self
+            .poll
+            .map(|(until, _)| until.saturating_sub(self.clock.elapsed_ms()));
+        if poll_left == Some(0) {
+            return Err(ErrorKind::WouldBlock.into());
+        }
+        Ok(poll_left.map_or(remaining, |left| remaining.min(Duration::from_millis(left))))
+    }
     fn physical<T>(&mut self, result: IoResult<T>) -> IoResult<T> {
+        // Rustls may write a control reply during a read. Both directions of a
+        // poll share its finite tick; buffers remain rustls-owned on WouldBlock.
+        if self.poll.is_some()
+            && result.as_ref().is_err_and(|error| {
+                matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock)
+            })
+        {
+            self.remaining().map_err(|error| self.refused(error))?;
+            return Err(ErrorKind::WouldBlock.into());
+        }
         result.inspect_err(|error| {
             // A wait the cancellation time cut short was cancelled, not timed out.
             let cause = match io_cause(error) {
@@ -97,7 +158,7 @@ impl Read for DeadlineStream {
         if bytes.is_empty() {
             return Ok(0);
         }
-        let timeout = self.remaining().map_err(|error| self.refused(error))?;
+        let timeout = self.wait_budget()?;
         let result = self.stream.read_timeout(timeout);
         self.physical(result)?;
         let result = self.stream.read(bytes);
@@ -108,7 +169,7 @@ impl Read for DeadlineStream {
 }
 impl Write for DeadlineStream {
     fn write(&mut self, bytes: &[u8]) -> IoResult<usize> {
-        let timeout = self.remaining().map_err(|error| self.refused(error))?;
+        let timeout = self.wait_budget()?;
         let result = self.stream.write_timeout(timeout);
         self.physical(result)?;
         let result = self.stream.write(bytes);
@@ -117,7 +178,7 @@ impl Write for DeadlineStream {
         Ok(written)
     }
     fn flush(&mut self) -> IoResult<()> {
-        let timeout = self.remaining().map_err(|error| self.refused(error))?;
+        let timeout = self.wait_budget()?;
         let result = self.stream.write_timeout(timeout);
         self.physical(result)?;
         let result = self.stream.flush();
@@ -136,7 +197,7 @@ impl Drop for DeadlineStream {
 /// connection is an untyped close (row W11) however the platform reports it:
 /// a clean end of stream on one, a reset or abort (`WSAECONNRESET`,
 /// `WSAECONNABORTED`) on Windows.
-pub(super) fn io_cause(error: &Error) -> GatewayError {
+pub(crate) fn io_cause(error: &Error) -> GatewayError {
     match error.kind() {
         ErrorKind::TimedOut | ErrorKind::WouldBlock => GatewayError::TimedOut,
         ErrorKind::UnexpectedEof

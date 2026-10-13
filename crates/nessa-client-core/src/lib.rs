@@ -11,6 +11,8 @@
 #[cfg(feature = "cli")]
 pub mod composition;
 pub mod pairing;
+pub mod product;
+mod protected;
 mod read_only_sync;
 pub mod retained;
 #[cfg(feature = "cli")]
