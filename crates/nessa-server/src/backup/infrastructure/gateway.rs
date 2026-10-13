@@ -503,7 +503,20 @@ impl PinnedStore for CanonicalPin {
             SessionView::Absent => absent(StoreKind::CanonicalRecords),
             SessionView::Unreadable => skipped_file(StoreKind::CanonicalRecords, "records.sqlite3"),
             SessionView::Bytes(bytes) => {
-                let record = public(StoreKind::CanonicalRecords, "records.sqlite3", bytes)?;
+                // The file is one record. A private key or a secret JSON key
+                // inside it cannot be stripped per event, so the whole file
+                // is fingerprinted and the bytes are not published.
+                let record = if bytes_hold_secret(&bytes) {
+                    CapturedRecord::new(
+                        StoreKind::CanonicalRecords,
+                        "records.sqlite3",
+                        Sensitivity::Secret,
+                        bytes,
+                    )
+                    .map_err(|_| ())?
+                } else {
+                    public(StoreKind::CanonicalRecords, "records.sqlite3", bytes)?
+                };
                 finish(StoreKind::CanonicalRecords, "file", vec![record], vec![])
             }
         }
@@ -671,11 +684,7 @@ impl DirectoryStore {
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("file");
-            if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
-                push_jsonl(self.kind, path, &mut records, &mut skipped);
-            } else {
-                push_path(self.kind, identity, path, &mut records, &mut skipped);
-            }
+            push_store_file(self.kind, identity, path, &mut records, &mut skipped);
         }
         if !present {
             return absent(self.kind);
@@ -1167,6 +1176,22 @@ fn walk(
     }
 }
 
+fn push_store_file(
+    kind: StoreKind,
+    identity: &str,
+    path: &Path,
+    records: &mut Vec<CapturedRecord>,
+    skipped: &mut Vec<SkippedRecord>,
+) {
+    if path_sensitivity(path) == Sensitivity::Secret
+        || path.extension().and_then(|ext| ext.to_str()) != Some("jsonl")
+    {
+        push_path(kind, identity, path, records, skipped);
+    } else {
+        push_jsonl(kind, path, records, skipped);
+    }
+}
+
 fn push_jsonl(
     kind: StoreKind,
     path: &Path,
@@ -1224,6 +1249,10 @@ fn push_path(
     }
 }
 
+const SECRET_JSON_KEYS: &[&str] = &["verifier", "privateKey", "private_key", "token", "secret"];
+
+const PRIVATE_KEY_MARKERS: &[&str] = &["BEGIN PRIVATE KEY", "BEGIN OPENSSH PRIVATE KEY"];
+
 fn json_has_secret(bytes: &[u8]) -> bool {
     let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
         return false;
@@ -1231,18 +1260,32 @@ fn json_has_secret(bytes: &[u8]) -> bool {
     secret_key(&value)
 }
 
+/// A raw store file, including a session database, that holds key material.
+/// The markers are the same keys and private-key text [`json_has_secret`]
+/// refuses in a JSON value.
+fn bytes_hold_secret(bytes: &[u8]) -> bool {
+    PRIVATE_KEY_MARKERS
+        .iter()
+        .any(|marker| contains_bytes(bytes, marker.as_bytes()))
+        || SECRET_JSON_KEYS.iter().any(|key| {
+            let quoted = format!("\"{key}\"");
+            contains_bytes(bytes, quoted.as_bytes())
+        })
+}
+
+fn contains_bytes(bytes: &[u8], marker: &[u8]) -> bool {
+    !marker.is_empty() && bytes.windows(marker.len()).any(|window| window == marker)
+}
+
 fn secret_key(value: &Value) -> bool {
     match value {
-        Value::Object(map) => map.iter().any(|(key, child)| {
-            matches!(
-                key.as_str(),
-                "verifier" | "privateKey" | "private_key" | "token" | "secret"
-            ) || secret_key(child)
-        }),
+        Value::Object(map) => map
+            .iter()
+            .any(|(key, child)| SECRET_JSON_KEYS.contains(&key.as_str()) || secret_key(child)),
         Value::Array(items) => items.iter().any(secret_key),
-        Value::String(text) => {
-            text.contains("BEGIN PRIVATE KEY") || text.contains("BEGIN OPENSSH PRIVATE KEY")
-        }
+        Value::String(text) => PRIVATE_KEY_MARKERS
+            .iter()
+            .any(|marker| text.contains(marker)),
         _ => false,
     }
 }

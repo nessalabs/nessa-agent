@@ -44,6 +44,18 @@ fn a_secret_path_is_not_public() {
         path_sensitivity(Path::new("environment/leases.jsonl")),
         Sensitivity::Public
     );
+    assert_eq!(
+        path_sensitivity(Path::new("environment/grants.json")),
+        Sensitivity::Public
+    );
+    assert_eq!(
+        path_sensitivity(Path::new("environment/pairing/gateway-key-intent.json")),
+        Sensitivity::Secret
+    );
+    assert_eq!(
+        path_sensitivity(Path::new("environment/pairing/not-a-store")),
+        Sensitivity::Secret
+    );
 }
 
 #[tokio::test]
@@ -130,6 +142,110 @@ async fn a_secret_is_fingerprinted_and_left_out_of_the_bundle() {
 }
 
 #[tokio::test]
+async fn an_unknown_gateway_file_is_not_copied() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    fs::create_dir_all(root.join("environment/pairing")).unwrap();
+    let secret = b"UNKNOWN-FILE-MUST-NOT-BE-COPIED";
+    fs::write(root.join("environment/pairing/not-a-store"), secret).unwrap();
+    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let manifest = capture_namespace(
+        root,
+        &OpenAdmission,
+        &inventory,
+        &DirectoryPublisher::new(bundle.path().join("cut")),
+        &Clock(8),
+        &inventory.key(),
+    )
+    .await
+    .unwrap();
+    let bundle_bytes = read_tree(&bundle.path().join("cut"));
+    assert!(!bundle_bytes
+        .windows(secret.len())
+        .any(|window| window == secret));
+    let text = fs::read_to_string(bundle.path().join("cut/manifest.txt")).unwrap();
+    assert!(text.contains("redacted environment-peer-pairings not-a-store"));
+    let pairing = manifest
+        .manifest()
+        .store(StoreKind::EnvironmentPeerPairings);
+    assert!(pairing.records()[0].public_bytes().is_none());
+}
+
+#[tokio::test]
+async fn a_session_database_without_secret_material_is_copied() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let sessions = root.join("conversations/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let database =
+        nessa_local_database::rusqlite::Connection::open(sessions.join("records.sqlite3")).unwrap();
+    database
+        .execute_batch("CREATE TABLE note(body TEXT); INSERT INTO note VALUES ('hello-note');")
+        .unwrap();
+    drop(database);
+    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let manifest = capture_namespace(
+        root,
+        &OpenAdmission,
+        &inventory,
+        &DirectoryPublisher::new(bundle.path().join("cut")),
+        &Clock(8),
+        &inventory.key(),
+    )
+    .await
+    .unwrap();
+    let canonical = manifest.manifest().store(StoreKind::CanonicalRecords);
+    let body = canonical.records()[0].public_bytes().unwrap();
+    assert!(body
+        .windows(b"hello-note".len())
+        .any(|window| window == b"hello-note"));
+}
+
+#[tokio::test]
+async fn a_session_database_holding_a_private_key_is_not_copied() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let sessions = root.join("conversations/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let secret = b"BEGIN OPENSSH PRIVATE KEY";
+    let database =
+        nessa_local_database::rusqlite::Connection::open(sessions.join("records.sqlite3")).unwrap();
+    database
+        .execute("CREATE TABLE payload(body BLOB)", [])
+        .unwrap();
+    database
+        .execute("INSERT INTO payload(body) VALUES (?1)", [secret])
+        .unwrap();
+    drop(database);
+    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let manifest = capture_namespace(
+        root,
+        &OpenAdmission,
+        &inventory,
+        &DirectoryPublisher::new(bundle.path().join("cut")),
+        &Clock(8),
+        &inventory.key(),
+    )
+    .await
+    .unwrap();
+    let bundle_bytes = read_tree(&bundle.path().join("cut"));
+    assert!(!bundle_bytes
+        .windows(secret.len())
+        .any(|window| window == secret));
+    let text = fs::read_to_string(bundle.path().join("cut/manifest.txt")).unwrap();
+    assert!(text.contains("redacted canonical-records records.sqlite3"));
+    assert!(manifest
+        .manifest()
+        .store(StoreKind::CanonicalRecords)
+        .records()[0]
+        .public_bytes()
+        .is_none());
+}
+
+#[tokio::test]
 async fn a_failed_export_releases_admission_and_publishes_nothing() {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("blocked"), b"x").unwrap();
@@ -191,6 +307,7 @@ fn a_sqlite_snapshot_excludes_a_later_write() {
     drop(connection);
 
     let snapshot = SqliteSnapshot::open(&path).unwrap();
+    let watch = TempCreateWatch::arm();
     let writer_path = path.clone();
     let writer = std::thread::spawn(move || {
         let connection = Connection::open(&writer_path).unwrap();
@@ -198,6 +315,7 @@ fn a_sqlite_snapshot_excludes_a_later_write() {
         connection.execute("UPDATE t SET v = 2", []).unwrap();
     });
     let bytes = snapshot.backup_bytes().unwrap();
+    watch.assert_no_export_file();
     drop(snapshot);
     writer.join().unwrap();
 
@@ -213,6 +331,107 @@ fn a_sqlite_snapshot_excludes_a_later_write() {
         .query_row("SELECT v FROM t", [], |row| row.get(0))
         .unwrap();
     assert_eq!(current, 2);
+}
+
+/// Sees a `nessa-export-*` file created in the process temp directory.
+///
+/// On Linux the watch is inotify, so a file created and removed during
+/// [`SqliteSnapshot::backup_bytes`] is still reported. Other hosts only
+/// check that no such file remains.
+struct TempCreateWatch {
+    #[cfg(target_os = "linux")]
+    fd: i32,
+}
+
+impl TempCreateWatch {
+    fn arm() -> Self {
+        #[cfg(target_os = "linux")]
+        {
+            unsafe {
+                let fd = inotify_init1(0x800);
+                assert!(fd >= 0, "inotify_init1");
+                let directory = std::ffi::CString::new(
+                    std::env::temp_dir().to_str().expect("temp dir is utf-8"),
+                )
+                .unwrap();
+                assert!(
+                    inotify_add_watch(fd, directory.as_ptr(), 0x100) >= 0,
+                    "inotify_add_watch"
+                );
+                let mut buf = [0u8; 4096];
+                while read(fd, buf.as_mut_ptr().cast(), buf.len()) > 0 {}
+                Self { fd }
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        Self {}
+    }
+
+    fn assert_no_export_file(self) {
+        #[cfg(target_os = "linux")]
+        {
+            let mut buf = vec![0u8; 16 * 1024];
+            loop {
+                let read_bytes = unsafe { read(self.fd, buf.as_mut_ptr().cast(), buf.len()) };
+                if read_bytes < 0 {
+                    assert_eq!(
+                        std::io::Error::last_os_error().kind(),
+                        std::io::ErrorKind::WouldBlock
+                    );
+                    break;
+                }
+                let mut offset = 0usize;
+                let read_bytes = read_bytes as usize;
+                while offset + 16 <= read_bytes {
+                    let len = u32::from_ne_bytes(buf[offset + 12..offset + 16].try_into().unwrap())
+                        as usize;
+                    let end = offset + 16 + len;
+                    assert!(end <= read_bytes);
+                    let name = buf[offset + 16..end]
+                        .split(|byte| *byte == 0)
+                        .next()
+                        .unwrap_or(&[]);
+                    let name = String::from_utf8_lossy(name);
+                    assert!(
+                        !name.starts_with("nessa-export-"),
+                        "snapshot wrote {name} into the shared temp directory"
+                    );
+                    offset = end;
+                }
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let left = std::env::temp_dir()
+                .read_dir()
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|entry| {
+                    entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| name.starts_with("nessa-export-"))
+                });
+            assert!(!left);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for TempCreateWatch {
+    fn drop(&mut self) {
+        unsafe {
+            close(self.fd);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+extern "C" {
+    fn inotify_init1(flags: i32) -> i32;
+    fn inotify_add_watch(fd: i32, pathname: *const i8, mask: u32) -> i32;
+    fn read(fd: i32, buf: *mut std::ffi::c_void, count: usize) -> isize;
+    fn close(fd: i32) -> i32;
 }
 
 fn read_tree(root: &Path) -> Vec<u8> {

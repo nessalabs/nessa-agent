@@ -1,10 +1,9 @@
 //! A SQLite read snapshot. Opened while admission is held; copied afterwards.
 
-use std::fs;
 use std::path::Path;
 
+use nessa_local_database::rusqlite::backup::{Backup, StepResult};
 use nessa_local_database::rusqlite::{Connection, OpenFlags};
-use uuid::Uuid;
 
 /// A read transaction on one database file.
 ///
@@ -33,19 +32,21 @@ impl SqliteSnapshot {
         Ok(Self { connection })
     }
 
-    /// Copy this snapshot to bytes. The live file is not read again.
+    /// Copy this snapshot into memory. The live file is not read again.
+    ///
+    /// The copy is one `Vec<u8>`: the published record is the whole file, and
+    /// the publisher takes those bytes together. Nothing is written to a
+    /// shared temp directory. The in-memory connection is dropped on every
+    /// return, including a panic while the bytes are being built.
     pub fn backup_bytes(&self) -> Result<Vec<u8>, ()> {
-        let path = std::env::temp_dir().join(format!(
-            "nessa-export-{}-{}.sqlite3",
-            std::process::id(),
-            Uuid::new_v4()
-        ));
-        let copied = self.connection.backup("main", &path, None);
-        let bytes = match copied {
-            Ok(()) => fs::read(&path).map_err(|_| ()),
-            Err(_) => Err(()),
-        };
-        let _ = fs::remove_file(&path);
-        bytes
+        let mut memory = Connection::open_in_memory().map_err(|_| ())?;
+        {
+            let backup = Backup::new(&self.connection, &mut memory).map_err(|_| ())?;
+            if !matches!(backup.step(-1).map_err(|_| ())?, StepResult::Done) {
+                return Err(());
+            }
+        }
+        let data = memory.serialize("main").map_err(|_| ())?;
+        Ok(data.to_vec())
     }
 }

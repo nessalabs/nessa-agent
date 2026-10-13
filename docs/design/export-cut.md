@@ -44,7 +44,7 @@ environment's ephemeral outbox are not backup state.
 
 | Store | What the cut keeps |
 | --- | --- |
-| Canonical records | The quiescent session database, one record for the file |
+| Canonical records | The quiescent session database, one record for the file. The snapshot is copied in memory, not into a shared temp directory. The published record is that whole file as one `Vec<u8>` when the bytes hold no private key and no secret JSON key; the publisher takes those bytes together, so this cut does not stream the file. A session file grows with its records. A private key or a secret JSON key inside the file fingerprints the whole file instead |
 | Conversation metadata | Ownership, summaries, tombstones, catalogue heads |
 | Share grants | Role, tool policy, and policy revision |
 | Notes | Note records the canonical stream holds, named on their own |
@@ -87,7 +87,7 @@ nothing and releases the hold too. A later attempt starts from Idle.
 | Deletion during the hold | Same admission as any command | The cut shows the conversation either still present or already fenced, never half-erased. `a_deletion_during_the_hold_is_entirely_in_or_entirely_out` |
 | Unreadable record | Other records in that store read | That record is skipped and named. The cut is still published. `an_unreadable_record_is_skipped_and_named` |
 | Unreadable store | The source cannot list | The store is skipped and named. Other stores are still cut. `an_unavailable_store_is_skipped_and_the_cut_continues` |
-| Secret material | A record is marked secret, or a secret-bearing path is read | The manifest keeps a fingerprint. The bytes are not in the bundle. `a_secret_is_fingerprinted_and_left_out_of_the_bundle` |
+| Secret material | A record is marked secret, a path is not one of the named public store files, or the session database bytes hold a private key or a secret JSON key | The manifest keeps a fingerprint. The bytes are not in the bundle. `a_secret_is_fingerprinted_and_left_out_of_the_bundle`, `an_unknown_gateway_file_is_not_copied`, `a_session_database_holding_a_private_key_is_not_copied` |
 | Export publish fails | After the hold | The hold is released and nothing is published. `a_failed_export_releases_admission_and_publishes_nothing` |
 | Retirement before the hold | The service is already retired | Explicit abort, no manifest. `retirement_before_the_hold_aborts` |
 | Retirement during the hold | The fence is set, cleanup is waiting on the same lock | Explicit abort, no manifest, then the hold drops so retirement can finish. `retirement_during_the_hold_aborts_and_releases` |
