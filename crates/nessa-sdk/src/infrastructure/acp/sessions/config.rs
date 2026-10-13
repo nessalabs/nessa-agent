@@ -4,7 +4,7 @@
 use super::StandInSessions;
 use crate::application::agent_execution::{
     agents::AgentError,
-    permissions::ConfiguredRefusal,
+    permissions::{ConfiguredRefusal, PermissionRules, ReviewNotices},
     providers::{ExecutableUseSnapshot, UserImageSource},
 };
 use crate::domain::agent_execution::permissions::{
@@ -468,6 +468,15 @@ pub struct AcpConfig {
     /// outside tests. It is called off the worker's task and given up on after
     /// a short bound, so a stuck mount makes the review the deny class.
     pub workspace_paths: Arc<dyn WorkspacePaths>,
+    /// Scoped allow and deny rules for this workspace. Idle rules ask every
+    /// time. Claude and Codex composition installs the gateway's store;
+    /// OpenCode keeps the idle one. Not part of the restoration fingerprint:
+    /// a rule is the owner's decision about a tool, not which provider context
+    /// a saved session restores.
+    pub permission_rules: Arc<dyn PermissionRules>,
+    /// Where a review that is left waiting is announced, and cleared when it
+    /// ends. Idle notices announce nothing.
+    pub review_notices: Arc<dyn ReviewNotices>,
 }
 impl AcpConfig {
     /// This configuration for a harness a host starts, working in `workspace`

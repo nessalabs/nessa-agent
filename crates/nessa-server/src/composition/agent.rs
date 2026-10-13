@@ -660,12 +660,20 @@ pub(super) fn providers(
     let mut erasers = ProviderSessionErasers::default();
     let native_hooks = NativeHooksPreferences::open(directory.to_owned(), clock.clone())
         .map_err(|error| RunError::Agent(error.to_string()))?;
+    let rules_path = directory.join("permission-rules.sqlite3");
+    let permission_memory = Arc::new(
+        crate::conversation::infrastructure::PermissionMemory::open(&rules_path).map_err(
+            |cause| RunError::opening(crate::core::Dataset::PermissionRules, &rules_path, cause),
+        )?,
+    );
     let dependencies = ProviderDependencies {
         directory: directory.to_owned(),
         clock,
         images,
         credentials,
         native_hooks: native_hooks.clone(),
+        permission_rules: permission_memory.clone(),
+        review_notices: permission_memory.clone(),
     };
     for (agent, runtime) in config.agents() {
         if agent == AgentId::Opencode || deferred.contains(&agent) {
@@ -736,6 +744,7 @@ pub(super) fn providers(
         unavailable,
         erasers,
         native_hooks,
+        permission_memory,
     })
 }
 
@@ -900,6 +909,8 @@ pub(super) struct ConfiguredAgents {
     /// The choice Claude and Codex launches read. The same value is given to
     /// later provider builds and to the product command that changes it.
     pub native_hooks: Arc<NativeHooksPreferences>,
+    /// Rules Claude and Codex remember, and the notices a waiting review raises.
+    pub permission_memory: Arc<crate::conversation::infrastructure::PermissionMemory>,
 }
 
 /// Effects shared by every provider generation built for one conversation root.
@@ -911,6 +922,33 @@ pub(super) struct ProviderDependencies {
     pub(super) images: Arc<dyn UserImageSource>,
     pub(super) credentials: Arc<dyn AgentCredentialSource>,
     pub(super) native_hooks: Arc<NativeHooksPreferences>,
+    /// Rules offered to Claude and Codex. OpenCode is given none.
+    pub(super) permission_rules:
+        Arc<dyn nessa_sdk::application::agent_execution::permissions::PermissionRules>,
+    pub(super) review_notices:
+        Arc<dyn nessa_sdk::application::agent_execution::permissions::ReviewNotices>,
+}
+
+/// Claude and Codex keep the composed rules. OpenCode is given none, so it
+/// neither offers a remember choice nor answers a review from one.
+#[cfg(unix)]
+pub(super) fn remembered_rules(
+    agent: AgentId,
+    dependencies: &ProviderDependencies,
+) -> (
+    Arc<dyn nessa_sdk::application::agent_execution::permissions::PermissionRules>,
+    Arc<dyn nessa_sdk::application::agent_execution::permissions::ReviewNotices>,
+) {
+    use nessa_sdk::application::agent_execution::permissions::{
+        IdlePermissionRules, IdleReviewNotices,
+    };
+    match agent {
+        AgentId::Claude | AgentId::Codex => (
+            dependencies.permission_rules.clone(),
+            dependencies.review_notices.clone(),
+        ),
+        AgentId::Opencode => (Arc::new(IdlePermissionRules), Arc::new(IdleReviewNotices)),
+    }
 }
 #[cfg(unix)]
 pub(super) mod build {
@@ -1130,6 +1168,8 @@ pub(super) mod build {
             images,
             clock: Arc::new(RuntimeClock::new()),
             workspace_paths: Arc::new(nessa_sdk::infrastructure::workspace_paths::FilesystemPaths),
+            permission_rules: std::sync::Arc::new(nessa_sdk::application::agent_execution::permissions::IdlePermissionRules),
+            review_notices: std::sync::Arc::new(nessa_sdk::application::agent_execution::permissions::IdleReviewNotices),
         }
     }
 
@@ -1189,7 +1229,7 @@ pub(super) mod build {
             )
             .map_err(invalid)?,
         );
-        let acp = launch_configuration(
+        let mut acp = launch_configuration(
             config,
             runtime,
             workspace,
@@ -1197,6 +1237,9 @@ pub(super) mod build {
             environment.credentials,
             Some(dependencies.images.clone()),
         );
+        let (permission_rules, review_notices) = super::remembered_rules(agent, dependencies);
+        acp.permission_rules = permission_rules;
+        acp.review_notices = review_notices;
         let prompt = system_prompt()?;
         let failed = |e: AgentError| RunError::Agent(format!("{}: {e}", agent.name()));
         // One entry per agent: its provider, and the same binding as the way

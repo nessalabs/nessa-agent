@@ -150,6 +150,7 @@ mod locks;
 mod mcp_apps;
 mod metadata_target;
 mod passive_read;
+mod permission_rules;
 mod placement;
 mod ports;
 mod provider_sessions;
@@ -222,6 +223,11 @@ pub(crate) use placement::{ConversationPlacements, PlacementError};
 // For the paired environment adapter, which lives with the Unix-only SSH one.
 pub(crate) use drive_tools::MAX_ADMITTED_POLICIES;
 pub use drive_tools::{DriveToolAudit, DriveToolAuditRecord, DriveTools};
+pub use permission_rules::{
+    ListedPermissionRule, PermissionRuleCatalog, PermissionRulePolicyEvaluator,
+    PermissionRuleUnavailable, RuleCatalogError, RuleChange, RulePrincipal, RuleSettlement,
+    StoredPermissionRule,
+};
 #[cfg(unix)]
 pub(crate) use placement::PairedEnvironments;
 pub use placement::{FETCH_CALL_WAIT, PUBLISH_CALL_WAIT};

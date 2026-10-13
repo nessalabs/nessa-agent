@@ -5,9 +5,10 @@ use super::{
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    error_code, ConversationCaller, ConversationError, ConversationService, QuestionChoiceInput,
-    ReadOpening, RequestedAgent, RequestedConversation, SubmissionMode, SubmittedFile,
-    SubmittedImage, SubmittedMessage,
+    error_code, ConversationCaller, ConversationError, ConversationService, ListedPermissionRule,
+    PermissionRuleCatalog, QuestionChoiceInput, ReadOpening, RequestedAgent, RequestedConversation,
+    RuleCatalogError, RulePrincipal, SubmissionMode, SubmittedFile, SubmittedImage,
+    SubmittedMessage,
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::conversation::projection::CommittedCursor;
@@ -23,10 +24,13 @@ use nessa_protocol::product::generated::{
     ConversationDeleteParams, ConversationListParams, ConversationListResult,
     ConversationMutationResult, ConversationObserveCursor, ConversationObserveParams,
     ConversationObserveResult, ConversationPermissionAnswerErrorDetails,
+    ConversationPermissionRulesParams, ConversationPermissionRulesResult,
     ConversationPermissionSelectionState, ConversationReadParams, ConversationReceiptParams,
     ConversationReceiptResult, ConversationRemoveParams, ConversationReorderParams,
+    ConversationRevokePermissionRuleParams, ConversationRevokePermissionRuleResult,
     ConversationSendParams, ConversationSetApprovalModeParams, ConversationSetApprovalModeResult,
     ConversationStopParams, ConversationSummary, ConversationView as WireConversationView,
+    PermissionRule, PermissionRuleEffect,
 };
 use nessa_protocol::product::generated::{
     ConversationMessageDelivery, ConversationMessageParams, ConversationMessageReceipt,
@@ -46,10 +50,10 @@ use nessa_sdk::application::agent_execution::{
         CreationFailure, CreationReceipt, CreationStage, CreationStorageError, MutationFailure,
         MutationOutcome, MutationReceipt, MutationStage,
     },
-    permissions::PermissionSelectionState,
+    permissions::{is_remember_option, PermissionSelectionState},
     sessions::{NoteDelivery, NoteRetirementReason, NoteState},
 };
-use nessa_sdk::domain::agent_execution::executions::Initiation;
+use nessa_sdk::domain::agent_execution::executions::{Initiation, Initiator};
 use serde_json::{json, Value};
 
 /// `initiation` is who a turn this request starts is saved as started by,
@@ -397,6 +401,13 @@ pub(super) async fn dispatch(
             }
             "conversation.answer" => {
                 let params = params!(ConversationAnswerParams);
+                // A remembered rule is the owner's. A share grant may answer
+                // this once; it may not store a rule for later reviews.
+                if is_remember_option(&params.option_id)
+                    && !matches!(initiation.initiator(), Initiator::Owner)
+                {
+                    return Ok(failure(&frame.id, "forbidden"));
+                }
                 service
                     .answer(
                         conversation_id(&params.conversation_id)?,
@@ -466,6 +477,40 @@ pub(super) async fn dispatch(
                     },
                 ))
             }
+            "conversation.permissionRules" => {
+                let params = params!(ConversationPermissionRulesParams);
+                let rules = match remembered_rules(state, &frame.id, &initiation) {
+                    Ok(rules) => rules,
+                    Err(response) => return Ok(response),
+                };
+                match rules.list(RulePrincipal::Owner) {
+                    Ok(listed) => Ok(success(
+                        &frame.id,
+                        &ConversationPermissionRulesResult {
+                            request_id: params.request_id,
+                            rules: listed.into_iter().filter_map(listed_rule).collect(),
+                        },
+                    )),
+                    Err(error) => Ok(failure(&frame.id, catalog_code(error))),
+                }
+            }
+            "conversation.revokePermissionRule" => {
+                let params = params!(ConversationRevokePermissionRuleParams);
+                let rules = match remembered_rules(state, &frame.id, &initiation) {
+                    Ok(rules) => rules,
+                    Err(response) => return Ok(response),
+                };
+                match rules.revoke(&params.rule_id, RulePrincipal::Owner) {
+                    Ok(applied) => Ok(success(
+                        &frame.id,
+                        &ConversationRevokePermissionRuleResult {
+                            request_id: params.request_id,
+                            applied,
+                        },
+                    )),
+                    Err(error) => Ok(failure(&frame.id, catalog_code(error))),
+                }
+            }
             "conversation.delete" => {
                 let params = params!(ConversationDeleteParams);
                 let applied = service
@@ -496,6 +541,46 @@ pub(super) async fn dispatch(
         }
         Err(error) => failure(&frame.id, error_code(&error).as_str()),
     }
+}
+
+/// The owner's remembered rules, or the refusal a caller is told.
+fn remembered_rules<'a>(
+    state: &'a ProductRouteState,
+    request_id: &str,
+    initiation: &Initiation,
+) -> Result<&'a crate::conversation::infrastructure::PermissionMemory, OutgoingMessage> {
+    if !matches!(initiation.initiator(), Initiator::Owner) {
+        return Err(failure(request_id, "forbidden"));
+    }
+    state.permission_rules.as_deref().ok_or_else(|| {
+        failure(
+            request_id,
+            ConversationErrorCode::ConversationsNotConfigured.as_str(),
+        )
+    })
+}
+
+fn catalog_code(error: RuleCatalogError) -> &'static str {
+    match error {
+        RuleCatalogError::Refused => "forbidden",
+        RuleCatalogError::Unavailable => "temporarily_unavailable",
+    }
+}
+
+fn listed_rule(rule: ListedPermissionRule) -> Option<PermissionRule> {
+    let effect = match rule.effect {
+        "allow" => PermissionRuleEffect::Allow,
+        "deny" => PermissionRuleEffect::Deny,
+        _ => return None,
+    };
+    Some(PermissionRule {
+        id: rule.id,
+        revision: rule.revision,
+        workspace: rule.workspace,
+        source: rule.source,
+        tool: rule.tool,
+        effect,
+    })
 }
 
 /// Who sends a conversation command: the credential's verified identity.

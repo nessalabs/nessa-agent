@@ -216,7 +216,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 68,
+          "maxItems": 70,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -726,7 +726,11 @@
     "PermissionDeferralSupport": {
       "type": "string",
       "description": "Whether a review can be deferred for a later answer. unsupported means this provider cannot defer. unsupported_not_implemented means Nessa has not built deferral for a provider that might.",
-      "enum": ["unsupported_not_implemented", "unsupported", "supported_with_nonterminal_outcome"]
+      "enum": [
+        "unsupported_not_implemented",
+        "unsupported",
+        "supported_with_nonterminal_outcome"
+      ]
     },
     "ElicitationForwardingSupport": {
       "type": "string",
@@ -5707,7 +5711,14 @@
           "description": "Who left it."
         }
       },
-      "required": ["messageId", "text", "acceptedAtMs", "delivery", "deliveryState", "author"]
+      "required": [
+        "messageId",
+        "text",
+        "acceptedAtMs",
+        "delivery",
+        "deliveryState",
+        "author"
+      ]
     },
     "ConversationNoteAuthorKind": {
       "type": "string",
@@ -5877,6 +5888,183 @@
         }
       },
       "required": ["found", "requestId"]
+    },
+    "PermissionRuleEffect": {
+      "type": "string",
+      "enum": ["allow", "deny"],
+      "description": "Whether a remembered rule allows or denies the tool."
+    },
+    "PermissionRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One remembered rule: a tool in one workspace, granted by the owner.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable rule id. A replacement keeps it."
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Revision of this rule. The audit records the one that answered."
+        },
+        "workspace": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "x-utf8MaxBytes": 4096,
+          "description": "Workspace path the rule is scoped to."
+        },
+        "source": {
+          "type": "string",
+          "enum": ["claude", "codex"],
+          "description": "Harness the rule applies to."
+        },
+        "tool": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Tool name the rule answers."
+        },
+        "effect": {
+          "$ref": "#/$defs/PermissionRuleEffect",
+          "description": "Allow or deny."
+        }
+      },
+      "required": ["id", "revision", "workspace", "source", "tool", "effect"]
+    },
+    "ConversationPermissionRulesParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "List the owner's remembered permission rules.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        }
+      },
+      "required": ["requestId"]
+    },
+    "ConversationPermissionRulesResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The valid remembered rules, in the order they were stored.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Original action identifier."
+        },
+        "rules": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/PermissionRule" },
+          "description": "Rules the owner can revoke."
+        }
+      },
+      "required": ["requestId", "rules"]
+    },
+    "ConversationRevokePermissionRuleParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Revoke one remembered permission rule.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "ruleId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The rule to delete."
+        }
+      },
+      "required": ["requestId", "ruleId"]
+    },
+    "ConversationRevokePermissionRuleResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Whether a rule with that id was deleted.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Original action identifier."
+        },
+        "applied": {
+          "type": "boolean",
+          "description": "True when a rule was deleted. False when none had this id."
+        }
+      },
+      "required": ["requestId", "applied"]
+    },
+    "PermissionReviewNotice": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One review waiting on a person.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Conversation the review belongs to."
+        },
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Execution that owns the review."
+        },
+        "permissionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Pending permission identity."
+        },
+        "tool": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Tool the review named."
+        }
+      },
+      "required": ["conversationId", "executionId", "permissionId", "tool"]
+    },
+    "PermissionReviewWaiting": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The reviews still waiting. A later event replaces this one; an empty list means none are waiting.",
+      "properties": {
+        "reviews": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/PermissionReviewNotice" },
+          "description": "Waiting reviews, oldest first, at most 32."
+        }
+      },
+      "required": ["reviews"]
     }
   }
 }

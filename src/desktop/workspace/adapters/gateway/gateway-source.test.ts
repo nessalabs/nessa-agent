@@ -1797,6 +1797,35 @@ describe("writes", () => {
     expect(gateway.calls).toEqual([])
   })
 
+  it("W3: approving the project allow sends that option", async () => {
+    const { gateway, source } = started()
+    const asked = permission({
+      options: [
+        { id: "opt-a", label: "Allow", effect: "allow" },
+        {
+          id: "nessa.remember.allow",
+          label: "Always allow in this project",
+          effect: "allow",
+        },
+      ],
+    })
+    gateway.views.set(
+      "a",
+      view("a", { revision: "1", messages: [running()], permissions: [asked] }),
+    )
+    await source.transcript("a")
+    await source.approve(
+      "a",
+      approvalId(asked),
+      "always",
+      "person",
+      "nessa.remember.allow",
+    )
+    expect(gateway.calls.find((call) => call.method === "answer")?.args[1]).toBe(
+      "nessa.remember.allow",
+    )
+  })
+
   it("W4: denying answers the option the gateway says denies; none offered is not supported", async () => {
     const { gateway, source } = started()
     const asked = permission()

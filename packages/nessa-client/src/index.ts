@@ -328,6 +328,12 @@ export type {
   ConversationCreateResult,
   ConversationReceipt,
   ConversationPermissionSelectionState,
+  PermissionRule,
+  PermissionRuleEffect,
+  ConversationPermissionRulesResult,
+  ConversationRevokePermissionRuleResult,
+  PermissionReviewNotice,
+  PermissionReviewWaiting,
 } from "./generated/product.js"
 export { ConversationErrorCode } from "./generated/product.js"
 export { conversationErrorCode } from "./application/conversation-error-code.js"

@@ -115,6 +115,8 @@ pub struct ProductRouteState {
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) policy: Arc<dyn PolicyEvaluator>,
     pub(crate) conversations: Option<Arc<ConversationService>>,
+    /// Remembered permission rules, and the board a waiting review notifies.
+    pub(crate) permission_rules: Option<Arc<crate::conversation::infrastructure::PermissionMemory>>,
     /// Passive reads use these independent authorities without opening an Agent.
     /// The read grants are also what every socket read asks for a paired
     /// device (`read_access`).
@@ -287,6 +289,7 @@ impl ProductRouteState {
             pairing: None,
             peers: None,
             conversations: None,
+            permission_rules: None,
             passive_read: None,
             conversation_access: None,
             record_source: None,
@@ -371,6 +374,15 @@ impl ProductRouteState {
     /// Share server-owned Agents across authenticated sockets. No socket owns cleanup.
     pub fn with_conversations(mut self, service: Arc<ConversationService>) -> Self {
         self.conversations = Some(service);
+        self
+    }
+
+    /// Bind the remembered permission rules and the waiting-review notices.
+    pub fn with_permission_rules(
+        mut self,
+        rules: Arc<crate::conversation::infrastructure::PermissionMemory>,
+    ) -> Self {
+        self.permission_rules = Some(rules);
         self
     }
 

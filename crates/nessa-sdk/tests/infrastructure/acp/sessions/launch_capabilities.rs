@@ -152,6 +152,12 @@ fn config() -> AcpConfig {
         images: None,
         clock: Arc::new(crate::infrastructure::clock::RuntimeClock::new()),
         workspace_paths: Arc::new(crate::infrastructure::workspace_paths::UnresolvedPaths),
+        permission_rules: std::sync::Arc::new(
+            crate::application::agent_execution::permissions::IdlePermissionRules,
+        ),
+        review_notices: std::sync::Arc::new(
+            crate::application::agent_execution::permissions::IdleReviewNotices,
+        ),
     }
 }
 

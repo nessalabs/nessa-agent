@@ -57,7 +57,7 @@ use nessa_sdk::application::agent_execution::{
     executions::{ExecutionAudit, ExecutionRequest, ExecutionUpdate, Submitter},
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
-        PermissionCancellationRequest, QuestionAnswer,
+        PermissionCancellationRequest, PermissionRules, QuestionAnswer,
     },
     providers::{
         AgentProvider, ApprovalMode as ProviderApprovalMode, CloseOutcome, OperationCapabilities,
@@ -754,6 +754,9 @@ struct Inner {
     /// What checks a Drive grant's tools. Composition binds it; until then
     /// no Drive turn is admitted (`drive_policy_unenforceable`).
     drive: Arc<OnceLock<DriveTools>>,
+    /// Remembered permission rules. Unbound, no turn is offered a remember
+    /// choice and no review is answered by a rule.
+    permission_rules: Arc<OnceLock<Arc<dyn PermissionRules>>>,
 }
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
@@ -1074,6 +1077,7 @@ impl ConversationService {
                 commands: Arc::new(OnceLock::new()),
                 note_authors: Arc::new(OnceLock::new()),
                 drive: Arc::new(OnceLock::new()),
+                permission_rules: Arc::new(OnceLock::new()),
             }),
         })
     }
@@ -2698,6 +2702,12 @@ impl ConversationService {
         let _ = self.inner.drive.set(drive);
     }
 
+    /// Bind the remembered permission rules. A second bind is ignored.
+    /// Unbound, reviews are asked and no remember choice is offered.
+    pub fn bind_permission_rules(&self, rules: Arc<dyn PermissionRules>) {
+        let _ = self.inner.permission_rules.set(rules);
+    }
+
     pub(super) async fn submit_as(
         &self,
         id: ConversationId,
@@ -2957,6 +2967,12 @@ impl ConversationService {
                 .sent_by(writer.sender())
                 .with_app_model_context(carried)
                 .map_err(|_| ConversationError::InvalidInput)?;
+            if let Some(rules) = service.inner.permission_rules.get() {
+                rules.arm(
+                    &execution,
+                    matches!(initiation.initiator(), Initiator::Owner),
+                );
+            }
             let request = ExecutionRequest {
                 execution_id: execution,
                 user_message: message.clone(),

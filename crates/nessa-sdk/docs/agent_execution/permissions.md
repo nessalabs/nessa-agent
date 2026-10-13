@@ -198,14 +198,23 @@ control failures remain ordered in `MultipleOperationFailures`; they are distinc
 from resource cleanup failures. Confirmed process termination cannot erase audit
 failure or make an independent transport error imply uncertain cleanup.
 
-The current Claude profile requires `PermissionOfferPolicy::once_only()` or a subset
-of its exact-request choices. It rejects session/application configuration before
-spawning. ACP persistent choices are validated structurally then omitted because
-this binding has no structured scope or rule enforcement for them; it never infers
-a scope from a provider label or downgrades a persistent choice to request scope.
-Domain values describe scoped intent; enabling reuse requires host authorization,
-domain target/scope evaluation, and application-owned storage/revocation effects.
-There is no stored grant or automatic rule engine in this binding.
+The current Claude and Codex profiles require `PermissionOfferPolicy::once_only()`
+or a subset of its exact-request choices. They reject session and application
+configuration before spawning. A harness `allow_always` or `reject_always` is
+kept as its own option id with request scope, and selecting it sends that id
+back. The binding does not infer a session or application scope from the
+provider's label, and it does not store a Nessa rule for that choice. OpenCode
+still drops those kinds.
+
+Beside them, an owner turn is offered `nessa.remember.allow` and
+`nessa.remember.deny` when a once option of the same effect survived. Selecting
+one asks the host `PermissionRules` to store a rule for that tool in that
+workspace, then answers the current review with the once option. The audit
+basis is `ApprovalBasis::Rule`, naming the rule id, revision, and grantor. A
+later review of that tool in that workspace is answered the same way, without
+a card or a deadline, when a once option still exists. A shared user's turn is
+not offered the remember options. The host stores, lists, and revokes the
+rules; this binding does not.
 
 Regression coverage lives under `tests/infrastructure/acp/`, compiled internally for private adapter access:
 [permission answers](../../tests/infrastructure/acp/contracts/permissions/answers.rs)

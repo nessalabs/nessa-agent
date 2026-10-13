@@ -171,6 +171,7 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                     permission_authority: PermissionAuthoritySource::default(),
                     operation_capabilities,
                     permissions: HashMap::new(),
+                    permission_context: HashMap::new(),
                     armed_permissions: HashMap::new(),
                     path_classification: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
                     startup_advisory_session: None,

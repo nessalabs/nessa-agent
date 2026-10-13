@@ -122,7 +122,8 @@ export interface WorkspaceSource {
    * so a refused or failed one is on record too. The gateway's source records
    * nothing itself: what it sends is the gateway's to record, as this
    * window's authenticated caller (not person or agent), and what it refuses
-   * without sending — an "always" answer, a pin, a session taken out — is on
+   * without sending — an "always" answer other than the review's project
+   * allow, a pin, a session taken out — is on
    * no record.
    * Resolves once the source has taken the answer; the conversation that no
    * longer asks reaches

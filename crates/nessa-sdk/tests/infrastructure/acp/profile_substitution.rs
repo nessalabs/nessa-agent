@@ -666,6 +666,12 @@ pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabil
         images: None,
         clock: Arc::new(crate::infrastructure::clock::RuntimeClock::new()),
         workspace_paths: Arc::new(crate::infrastructure::workspace_paths::FilesystemPaths),
+        permission_rules: std::sync::Arc::new(
+            crate::application::agent_execution::permissions::IdlePermissionRules,
+        ),
+        review_notices: std::sync::Arc::new(
+            crate::application::agent_execution::permissions::IdleReviewNotices,
+        ),
     };
     config.validate().unwrap();
     (root, config, capabilities)

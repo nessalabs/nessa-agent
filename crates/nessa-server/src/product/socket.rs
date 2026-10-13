@@ -34,10 +34,11 @@ use nessa_auth::domain::{Action, AudienceId, CredentialId};
 #[cfg(test)]
 use nessa_protocol::product::generated::wire_shape_product_session_ready;
 use nessa_protocol::product::generated::{
-    action_for_method, CredentialIssueParams, CredentialListParams, CredentialListResult,
-    CredentialRevokeParams, CredentialRevokeResult, ExistingCredentialResult,
-    IssuedCredentialResult, ProductSessionReady, SessionAuthenticateParams, SessionChallenge,
-    SessionTermination, MAX_NATIVE_HOOKS_REQUEST_ID_BYTES, MAX_PRODUCT_CLIENT_ID_CHARACTERS,
+    action_for_method, product_event, CredentialIssueParams, CredentialListParams,
+    CredentialListResult, CredentialRevokeParams, CredentialRevokeResult, ExistingCredentialResult,
+    IssuedCredentialResult, PermissionReviewNotice, PermissionReviewWaiting, ProductSessionReady,
+    SessionAuthenticateParams, SessionChallenge, SessionTermination,
+    MAX_NATIVE_HOOKS_REQUEST_ID_BYTES, MAX_PRODUCT_CLIENT_ID_CHARACTERS,
     MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS, MAX_RECORD_RESPONSE_BYTES,
     MIN_NATIVE_HOOKS_REQUEST_ID_CHARACTERS, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS,
     PRODUCT_VERSION,
@@ -586,8 +587,16 @@ struct QueuedResponse {
 
 enum WireResponse {
     Ordinary(Box<OutgoingMessage>),
-    Record { text: String },
+    Record {
+        text: String,
+    },
     Watch(Box<QueuedWatch>),
+    /// A waiting-review snapshot. Its sequence number is taken when the
+    /// writer sends it, so it follows the same order as a watch notice.
+    ReviewWaiting {
+        payload: PermissionReviewWaiting,
+        generation: u64,
+    },
 }
 
 struct QueuedWatch {
@@ -720,6 +729,9 @@ async fn write_authenticated<S>(
                         _record_work,
                         _mount,
                     } = *response;
+                    let Some(message) = number_review_notice(message, &watches) else {
+                        return true;
+                    };
                     send_queued(write_timeout, &mut sink, message).await.is_ok()
                 }
                 Some(Ok(WriterResponse::Watch(frame))) => {
@@ -919,6 +931,14 @@ where
     ));
     let control_slots = Arc::new(Semaphore::new(limits.control_slots()));
     let ordinary_slots = Arc::new(Semaphore::new(limits.ordinary_slots()));
+    // A waiting review is a snapshot on the ordinary lane. Abort this before
+    // the lane's sender is dropped: the task holds one, and the writer
+    // finishes only when every sender is gone.
+    let notice_task = state.permission_rules.clone().map(|board| {
+        let send = ordinary_send.clone();
+        let slots = Arc::clone(&ordinary_slots);
+        tokio::spawn(forward_review_notices(board, send, slots))
+    });
     let record_slots = Arc::new(Semaphore::new(RECORD_SLOT));
     let app_slots = Arc::new(Semaphore::new(limits.app_calls_per_socket()));
     let app_mounts = Arc::new(Mutex::new(HashMap::new()));
@@ -1357,11 +1377,83 @@ where
     drop(subscriptions);
     drop(control_send);
     drop(refusal_send);
+    if let Some(task) = notice_task {
+        task.abort();
+        let _ = task.await;
+    }
     drop(ordinary_send);
     drop(record_send);
     if !writer_finished {
         let _ = writer.await;
     }
+}
+
+/// Publish the reviews still waiting, then wait for the next change.
+///
+/// Each frame is the whole set, so a missed one is repaired by the next and
+/// a surface that connects while a review is up sees it. The writer takes
+/// the frame's sequence number as it sends, with the socket's other events.
+async fn forward_review_notices(
+    board: Arc<crate::conversation::infrastructure::PermissionMemory>,
+    send: mpsc::Sender<QueuedResponse>,
+    slots: Arc<Semaphore>,
+) {
+    let mut seen = 0;
+    loop {
+        let (generation, reviews) = board.current();
+        if generation != seen {
+            let payload = PermissionReviewWaiting {
+                reviews: reviews
+                    .into_iter()
+                    .map(|review| PermissionReviewNotice {
+                        conversation_id: review.conversation_id,
+                        execution_id: review.execution_id,
+                        permission_id: review.permission_id,
+                        tool: review.tool,
+                    })
+                    .collect(),
+            };
+            let Ok(permit) = slots.clone().acquire_owned().await else {
+                break;
+            };
+            let queued = QueuedResponse {
+                message: WireResponse::ReviewWaiting {
+                    payload,
+                    generation,
+                },
+                _slot: Arc::new(permit),
+                _record_work: None,
+                _mount: None,
+            };
+            if send.send(queued).await.is_err() {
+                break;
+            }
+            seen = generation;
+        }
+        board.wait_after(seen).await;
+    }
+}
+
+/// Give a waiting-review snapshot the next event number. Any other message
+/// is unchanged. `None` when the numbering is spent: the socket keeps going,
+/// and a later change of the set is sent with a number if one remains.
+fn number_review_notice(message: WireResponse, watches: &WatchDeliveries) -> Option<WireResponse> {
+    let WireResponse::ReviewWaiting {
+        payload,
+        generation,
+    } = message
+    else {
+        return Some(message);
+    };
+    let seq = watches.sequence().next()?;
+    let frame = EventFrame::push(
+        product_event::PERMISSION_REVIEW_WAITING,
+        &payload,
+        seq,
+        generation,
+    )
+    .ok()?;
+    Some(WireResponse::ordinary(OutgoingMessage::Event(frame)))
 }
 
 fn queued_watch(reply: WatchReply) -> QueuedResponse {
@@ -2115,6 +2207,9 @@ async fn send_queued<S: Sink<Message> + Unpin>(
                 .await
                 .map_err(|_| ())
         }
+        // Numbered before it reaches here. A snapshot that was not is not a
+        // record and is not sent on this path.
+        WireResponse::ReviewWaiting { .. } => Err(()),
     }
 }
 
@@ -2155,7 +2250,7 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
         // watch replies go through `ConnectionWatches` on the ordinary lane, so
         // this arm is never reached. It is still delivered as `send_queued`
         // would, under this response's deadline, rather than dropped.
-        message @ WireResponse::Watch(_) => {
+        message @ (WireResponse::Watch(_) | WireResponse::ReviewWaiting { .. }) => {
             drop((slot, record_work, mount));
             return missed_record_deadline(
                 within_deadline(deadline, send_queued(write_timeout, socket, message)).await,

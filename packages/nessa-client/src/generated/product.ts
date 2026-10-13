@@ -2480,6 +2480,67 @@ export interface ConversationMessageStatusResult {
   /** Why the note was retired; present exactly when deliveryState is retired. */
   retiredReason?: ConversationMessageRetiredReason
 }
+/** Whether a remembered rule allows or denies the tool. */
+export const PermissionRuleEffect = { Allow: "allow", Deny: "deny" } as const
+export type PermissionRuleEffect =
+  (typeof PermissionRuleEffect)[keyof typeof PermissionRuleEffect]
+/** One remembered rule: a tool in one workspace, granted by the owner. */
+export interface PermissionRule {
+  /** Stable rule id. A replacement keeps it. */
+  id: string
+  /** Revision of this rule. The audit records the one that answered. */
+  revision: string
+  /** Workspace path the rule is scoped to. */
+  workspace: string
+  /** Harness the rule applies to. */
+  source: "claude" | "codex"
+  /** Tool name the rule answers. */
+  tool: string
+  /** Allow or deny. */
+  effect: PermissionRuleEffect
+}
+/** List the owner's remembered permission rules. */
+export interface ConversationPermissionRulesParams {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+}
+/** The valid remembered rules, in the order they were stored. */
+export interface ConversationPermissionRulesResult {
+  /** Original action identifier. */
+  requestId: string
+  /** Rules the owner can revoke. */
+  rules: PermissionRule[]
+}
+/** Revoke one remembered permission rule. */
+export interface ConversationRevokePermissionRuleParams {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The rule to delete. */
+  ruleId: string
+}
+/** Whether a rule with that id was deleted. */
+export interface ConversationRevokePermissionRuleResult {
+  /** Original action identifier. */
+  requestId: string
+  /** True when a rule was deleted. False when none had this id. */
+  applied: boolean
+}
+/** One review waiting on a person. */
+export interface PermissionReviewNotice {
+  /** Conversation the review belongs to. */
+  conversationId: string
+  /** Execution that owns the review. */
+  executionId: string
+  /** Pending permission identity. */
+  permissionId: string
+  /** Tool the review named. */
+  tool: string
+}
+/** The reviews still waiting. A later event replaces this one; an empty list means none are waiting. */
+export interface PermissionReviewWaiting {
+  /** Waiting reviews, oldest first, at most 32. */
+  reviews: PermissionReviewNotice[]
+}
 export const maxChangeWatchIdBytes = 57 as const
 export const changeWatchIdPattern =
   "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,19}$" as const
@@ -2532,7 +2593,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 68,
+  maxReadyMethods: 70,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -2661,6 +2722,8 @@ export const ProductMethod = {
   ConversationShare: "conversation.share",
   ConversationUnshare: "conversation.unshare",
   ConversationShares: "conversation.shares",
+  ConversationPermissionRules: "conversation.permissionRules",
+  ConversationRevokePermissionRule: "conversation.revokePermissionRule",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
@@ -2670,6 +2733,7 @@ export const ProductEvent = {
   ConversationListed: "conversation.listed",
   AgentsListed: "agents.listed",
   ConversationSubscriptionEnded: "conversation.subscriptionEnded",
+  PermissionReviewWaiting: "permission.reviewWaiting",
 } as const
 export const ProductHandshakeMethod = "session.authenticate" as const
 export const productReadyMethods = [
@@ -2741,6 +2805,8 @@ export const productReadyMethods = [
   "conversation.share",
   "conversation.unshare",
   "conversation.shares",
+  "conversation.permissionRules",
+  "conversation.revokePermissionRule",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake, auth.session, or a watch. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
@@ -2813,6 +2879,8 @@ export const productMethodGrants = {
   "conversation.share": "credential.manage",
   "conversation.unshare": "credential.manage",
   "conversation.shares": "credential.manage",
+  "conversation.permissionRules": "conversation.write",
+  "conversation.revokePermissionRule": "conversation.write",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {

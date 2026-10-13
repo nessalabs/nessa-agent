@@ -157,12 +157,20 @@ const approvalChoices: {
   deny: "deny",
 }
 
+/**
+ * The option id of Nessa's project allow rule. The card's always choice is
+ * this option. A harness `allow_always` keeps its own id and stays a once
+ * choice, so selecting it sends that id back and stores no Nessa rule.
+ */
+export const REMEMBER_ALLOW_OPTION = "nessa.remember.allow"
+
 /** The answers a review offers, in the order the view lists them. */
 function approvalOptions(permission: ConversationPermission): readonly ApprovalOption[] {
   return permission.options.map((option) => ({
     id: option.id,
     label: option.label,
-    choice: approvalChoices[option.effect],
+    choice:
+      option.id === REMEMBER_ALLOW_OPTION ? "always" : approvalChoices[option.effect],
   }))
 }
 

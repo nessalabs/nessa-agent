@@ -294,6 +294,7 @@ async fn worker_with_ready_frames_boundary(
             permission_authority: PermissionAuthoritySource::default(),
             operation_capabilities,
             permissions: HashMap::new(),
+            permission_context: HashMap::new(),
             armed_permissions: HashMap::new(),
             path_classification: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
             startup_advisory_session: None,

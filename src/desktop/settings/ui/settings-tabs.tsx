@@ -50,6 +50,7 @@ import {
 import { IntegrationsTab } from "./integrations-tab"
 import { LinkedDevicesTab } from "./linked-devices-tab"
 import { NativeHooksRows } from "./native-hooks-rows"
+import { PermissionRuleRows } from "./permission-rule-rows"
 
 /**
  * What each tab shows. Every setting the window owns is real and
@@ -516,6 +517,7 @@ function AccessTab() {
           <Toggle checked={remember} onChange={setRemember} />
         </Row>
       </Group>
+      <PermissionRuleRows />
       <NativeHooksRows />
     </>
   )

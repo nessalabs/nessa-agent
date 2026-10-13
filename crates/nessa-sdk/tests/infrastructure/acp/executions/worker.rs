@@ -236,6 +236,7 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             permission_authority: PermissionAuthoritySource::default(),
             operation_capabilities,
             permissions: HashMap::new(),
+            permission_context: HashMap::new(),
             armed_permissions: HashMap::new(),
             path_classification: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
             startup_advisory_session: None,

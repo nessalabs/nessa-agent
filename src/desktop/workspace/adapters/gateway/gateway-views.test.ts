@@ -713,6 +713,50 @@ describe("who asks for an approval (#436)", () => {
     // The fixture lists only allow. A deny the view does not carry is not invented,
     // and neither is always.
     expect(approval?.options).toEqual([{ id: "allow", label: "Allow", choice: "once" }])
+    const remembered = transcriptFrom(
+      view("c", {
+        messages: [turn({ status: "completed" })],
+        permissions: [
+          {
+            executionId: "e1",
+            permissionId: "p",
+            toolId: "t1",
+            title: "Run it",
+            options: [
+              { id: "allow-once", label: "Allow", effect: "allow" },
+              { id: "allow_always", label: "Always allow", effect: "allow" },
+              {
+                id: "nessa.remember.allow",
+                label: "Always allow in this project",
+                effect: "allow",
+              },
+              {
+                id: "nessa.remember.deny",
+                label: "Always deny in this project",
+                effect: "deny",
+              },
+            ],
+            toolName: "bash",
+            origin: { kind: "harness" },
+            ask: "tool",
+            argumentsJson: "{}",
+          },
+        ],
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    ).approval
+    expect(remembered?.options).toEqual([
+      { id: "allow-once", label: "Allow", choice: "once" },
+      { id: "allow_always", label: "Always allow", choice: "once" },
+      {
+        id: "nessa.remember.allow",
+        label: "Always allow in this project",
+        choice: "always",
+      },
+      { id: "nessa.remember.deny", label: "Always deny in this project", choice: "deny" },
+    ])
     const both = transcriptFrom(
       view("c", {
         messages: [turn({ status: "completed" })],

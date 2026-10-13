@@ -380,6 +380,14 @@ export const settingsEntries = [
     keywords: "allow",
   },
   {
+    id: "remembered-rules",
+    tab: "access",
+    label: "Remembered rules",
+    detail:
+      "A tool you always allow or always deny in one project. Revoke one to be asked again.",
+    keywords: "allow deny permission rule revoke project",
+  },
+  {
     id: "claude-native-hooks",
     tab: "access",
     label: "Claude Code hooks",
