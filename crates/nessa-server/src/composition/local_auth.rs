@@ -1204,6 +1204,9 @@ async fn conversations(
     };
     let service = service.map_err(|error| RunError::Agent(error.to_string()))?;
     service.bind_commands(storage.clone());
+    // A note's author is checked against the same grant table the socket
+    // admits it by (row J23).
+    service.bind_note_authors(metadata.clone());
     if let Some(tools) = &environment_tools {
         tools.attach(service.clone());
     }

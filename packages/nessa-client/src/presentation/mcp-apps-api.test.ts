@@ -254,6 +254,7 @@ function viewWithAppReview(argumentsJson: string) {
     queueComplete: true,
     transcriptState: "complete",
     artifacts: [],
+    notes: [],
     messages: [
       {
         executionId: app.executionId,

@@ -49,6 +49,7 @@ function view(
     questions: [],
     conversationId,
     artifacts: [],
+    notes: [],
     approvalMode: "ask",
     approvalModes: [
       { id: "ask", name: "Provider asks", description: "Provider asks where required." },

@@ -1537,3 +1537,38 @@ WebKit and is dev-only in run-all.
     asserted on real files by `cargo test -p nessa-app -- saving`.
 - [ ] **A conversation with no turn, only a file published while none ran,
   shows that file and not the empty welcome.** _Check:_ `--only empty`.
+
+## Transcript notes
+
+`transcript-notes.mjs` loads `fixtures/transcript-notes/`, a dev-server page
+that mounts the production transcript in the desktop window over a fake
+gateway and in a 420 px panel; the panel applies the same view as its follow
+does. The view has the gateway's shape: two turns, and two inputs still
+waiting, each listed both as a queued turn and as pending. It has seven
+notes: one in each state, from the owner and from someone the conversation
+is shared with, one left before any turn, one after a turn the bounded view
+left out (older than every turn it keeps), one left between the two waiting
+inputs, and one whose text is a single word of over 300 characters. The script runs
+in Chromium and WebKit and is dev-only in run-all. The rule it holds is
+`placeNotes` and `TranscriptNote` (`src/conversation`), which both surfaces
+use.
+
+- [ ] **A note is a row of its own, right after the turn it followed.**
+  _Check:_ `transcript-notes.mjs --only placement`. On both surfaces, notes
+  and what the turns say read, top to bottom: the note left before any turn
+  and the note after the dropped turn, the first turn, its two notes in the
+  order left, the second turn, its two notes, the first waiting input, the
+  note left after it, and the second waiting input. No note is inside a chat
+  bubble or a turn's reply.
+- [ ] **Each note says who left it, from where, and where it stands, in the
+  same words on both surfaces.** _Check:_ `--only labels`. "Note left by the
+  owner, from desktop" or "Note left by someone it is shared with, from
+  phone"; no state for a recorded note, then "Waiting for the next turn",
+  "Given to a turn", "Not delivered: expired" and "Not delivered:
+  sharing changed".
+- [ ] **A long note wraps inside its row and nothing scrolls sideways.**
+  _Check:_ `--only wrap --shots <dir>`. Every note's left and right edges are
+  within 0.5 px of its column, and its `scrollWidth` is at most its
+  `clientWidth` + 1. The long note's text runs over more than two lines. The
+  columns and the page have no horizontal overflow. The screenshots show both
+  transcripts.

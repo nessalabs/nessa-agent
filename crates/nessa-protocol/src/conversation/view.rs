@@ -9,7 +9,10 @@ use nessa_sdk::{
             PermissionDenialCapability, PolicyCloseSessionCapability, PolicyEndTurnCapability,
             PreToolPolicyCapability,
         },
-        sessions::{ArtifactRecord, CommittedViewState},
+        sessions::{
+            ArtifactRecord, CommittedViewState, NoteDelivery, NoteRecord, NoteRetirementReason,
+            NoteState, SessionSnapshot,
+        },
     },
     domain::agent_execution::{
         permissions::PermissionEffect,
@@ -70,6 +73,10 @@ pub struct ConversationView {
     /// conversation does, and whether the bytes are still held is asked
     /// when they are fetched.
     pub artifacts: Vec<ConversationArtifact>,
+    /// Notes left in the conversation, the newest
+    /// [`MAX_VIEW_NOTES`](super::projection::MAX_VIEW_NOTES) in the order
+    /// they were left. Empty before any was left.
+    pub notes: Vec<ConversationNote>,
 }
 /// Product status of the last physical committed read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -824,6 +831,114 @@ impl From<&ArtifactRecord> for ConversationArtifact {
             size: record.file.size(),
         }
     }
+}
+
+/// One note left in the conversation, as everyone who reads it sees it: who
+/// left it, what it says, and where it stands.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationNote {
+    pub message_id: String,
+    pub text: String,
+    pub accepted_at_ms: u64,
+    pub delivery: ConversationNoteDelivery,
+    pub delivery_state: ConversationNoteState,
+    /// The turn that took it, when one did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
+    /// Why it was retired, when it was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retired_reason: Option<ConversationNoteRetiredReason>,
+    /// The last turn accepted before it, which it is shown after.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_execution_id: Option<String>,
+    pub author: ConversationNoteAuthor,
+}
+impl ConversationNote {
+    /// `note` as `snapshot`, which holds it, says it stands.
+    pub fn of(snapshot: &SessionSnapshot, note: &NoteRecord) -> Self {
+        let state = snapshot.note_state(note);
+        Self {
+            message_id: note.id.as_str().into(),
+            text: note.text.as_str().into(),
+            accepted_at_ms: note.accepted_at_ms,
+            delivery: match note.delivery {
+                NoteDelivery::RecordOnly => ConversationNoteDelivery::RecordOnly,
+                NoteDelivery::NextTurn => ConversationNoteDelivery::NextTurn,
+            },
+            delivery_state: match &state {
+                NoteState::Recorded => ConversationNoteState::Recorded,
+                NoteState::Pending => ConversationNoteState::Pending,
+                NoteState::Assigned(_) => ConversationNoteState::Assigned,
+                NoteState::Retired(_) => ConversationNoteState::Retired,
+            },
+            execution_id: match &state {
+                NoteState::Assigned(turn) => Some(turn.as_str().into()),
+                _ => None,
+            },
+            retired_reason: match &state {
+                NoteState::Retired(retirement) => Some(match retirement.reason {
+                    NoteRetirementReason::Expired => ConversationNoteRetiredReason::Expired,
+                    NoteRetirementReason::PermissionLost => {
+                        ConversationNoteRetiredReason::PermissionLost
+                    }
+                }),
+                _ => None,
+            },
+            after_execution_id: note
+                .after_execution
+                .as_ref()
+                .map(|turn| turn.as_str().into()),
+            author: ConversationNoteAuthor {
+                kind: match note.author {
+                    nessa_sdk::domain::agent_execution::executions::Initiator::Owner => {
+                        ConversationNoteAuthorKind::Owner
+                    }
+                    nessa_sdk::domain::agent_execution::executions::Initiator::Grant(_) => {
+                        ConversationNoteAuthorKind::Grant
+                    }
+                },
+                surface: note.actor.surface_id().into(),
+            },
+        }
+    }
+}
+/// What a note was left for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationNoteDelivery {
+    RecordOnly,
+    NextTurn,
+}
+/// Where a note stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationNoteState {
+    Recorded,
+    Pending,
+    Assigned,
+    Retired,
+}
+/// Why a note was retired.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationNoteRetiredReason {
+    Expired,
+    PermissionLost,
+}
+/// Who left a note: under which authority, from which surface.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationNoteAuthor {
+    pub kind: ConversationNoteAuthorKind,
+    pub surface: String,
+}
+/// Under which authority a note was left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationNoteAuthorKind {
+    Owner,
+    Grant,
 }
 
 /// Non-secret runtime facts selected by server composition.
