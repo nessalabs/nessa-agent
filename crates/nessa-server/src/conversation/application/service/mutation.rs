@@ -36,9 +36,11 @@ impl ConversationService {
     /// saved turn without enqueueing again.
     ///
     /// `initiation` is who the turn is saved as started by: the owner, or the
-    /// share grant that admitted it. A retry is answered from the first
-    /// attempt's receipt and record, so the turn keeps the initiation it was
-    /// first admitted with.
+    /// share grant that admitted it. A retry of the same request is answered
+    /// from its saved receipt, so the turn keeps the initiation it was first
+    /// admitted with. The same turn sent again as a new request under another
+    /// initiation (the grant's revision moved) is a conflict, as any other
+    /// message under that turn's id is.
     #[allow(clippy::too_many_arguments)]
     pub async fn submit_command(
         &self,

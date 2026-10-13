@@ -1658,9 +1658,10 @@ mod tests {
         let initiation =
             Initiation::grant(GrantInitiator::new("receiver", GrantRole::Drive, 7).unwrap());
         let mut input = accepted_input("driven");
-        if let SessionChange::InputAccepted(record) = &mut input {
-            record.initiation = initiation.clone();
-        }
+        let SessionChange::InputAccepted(record) = &mut input else {
+            panic!("an accepted input")
+        };
+        record.initiation = initiation.clone();
         fold.apply(&records(&scope, 3, &save_frames(input, 2, 1)))
             .unwrap();
         let checkpoint = fold.checkpoint().unwrap();

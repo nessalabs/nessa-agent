@@ -2,8 +2,8 @@
 //! the conversations and the catalogue revisions a grant change moves.
 //!
 //! [`granted`] is the one statement of "this receiver holds a grant on this
-//! conversation", of any role. `held_role` reads the role from the same row
-//! for one conversation, and
+//! conversation", of any role. `held_grant` reads the role and policy
+//! revision from the same row for one conversation, and
 //! the catalogue page and resolve ask it for a paired device's rows
 //! (`store.rs`), so a device's list and its reads cannot disagree about what
 //! it may see.
@@ -28,7 +28,8 @@ use serde_json::{json, Map, Value};
 /// SQL naming the one grant row the receiver bound to parameter `receiver`
 /// holds on the conversation whose id is `conversation`, as `g`. Both are
 /// names this adapter writes, never a caller's text. [`granted`] asks whether
-/// it exists and `held_role` reads its role, so the two cannot disagree.
+/// it exists and `held_grant` reads its role and revision, so the two cannot
+/// disagree.
 fn grant_row(conversation: &str, receiver: &str) -> String {
     format!(
         "share_grants AS g

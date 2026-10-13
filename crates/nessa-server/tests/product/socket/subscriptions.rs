@@ -2477,11 +2477,12 @@ async fn a_driver_sends_text_and_names_nothing_of_the_owners() {
 }
 
 /// Row J15: a turn is saved with who started it. The owner's turn says the
-/// owner, from its own surface and while devices are paired. A driver's
-/// says the Drive grant that admitted it, with the role and the policy
-/// revision read for that command, and each says its tools ran unchecked.
-/// The stamp is per turn: a policy changed later stamps the next turn and
-/// leaves the one already saved as it was.
+/// owner, from its own surface and while devices are paired. A driver's,
+/// sent or steered, says the Drive grant that admitted it, with the role and
+/// the policy revision read for that command, and each says its tools ran
+/// unchecked. The stamp is per turn: a policy changed later stamps the next
+/// turn, and a retry of the same request keeps the revision it was admitted
+/// with.
 #[tokio::test]
 async fn a_turn_is_saved_with_who_started_it() {
     use crate::conversation::application::{ShareGrantTransition, ShareGrants};
@@ -2502,6 +2503,13 @@ async fn a_turn_is_saved_with_who_started_it() {
     let granted = revision().await;
     grants(&fixture.authority, &["conversation.read", "server.read"]);
     fixture.turn("driven").await;
+    let steered = fixture
+        .call(
+            "conversation.steer",
+            drive_params("conversation.steer", &fixture.id, "steered"),
+        )
+        .await;
+    assert_eq!(steered["ok"], true, "{steered}");
     fixture
         .grant_to(ShareGrantTransition::Grant(
             ShareAccess::new(
@@ -2513,6 +2521,8 @@ async fn a_turn_is_saved_with_who_started_it() {
         .await;
     let changed = revision().await;
     assert!(changed > granted);
+    // The same request again, answered from its receipt.
+    fixture.turn("driven").await;
     fixture.turn("again").await;
     grants(
         &fixture.authority,
@@ -2525,6 +2535,7 @@ async fn a_turn_is_saved_with_who_started_it() {
     for (execution, expected) in [
         ("first", Initiation::owner()),
         ("driven", driver(granted)),
+        ("steered", driver(granted)),
         ("again", driver(changed)),
         ("owner", Initiation::owner()),
     ] {
@@ -2532,6 +2543,12 @@ async fn a_turn_is_saved_with_who_started_it() {
         assert_eq!(saved, expected, "{execution}");
         assert_eq!(saved.tools(), ToolChecking::NotChecked, "{execution}");
     }
+    // The owner's own surface, unbound, on a gateway that pairs a device.
+    let owner = SubscriptionFixture::new()
+        .await
+        .with_devices(Devices::new(&[("phone", "phone", "principal", true)]));
+    owner.turn("paired").await;
+    assert_eq!(owner.initiation_of("paired").await, Initiation::owner());
 }
 
 /// The owner's share fixture: a paired device `phone` and `tablet`, and the

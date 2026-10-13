@@ -160,9 +160,11 @@ pub(super) async fn admit_request(
             DriveRefusal::BelowDrive => "forbidden",
             DriveRefusal::Unverifiable => refusal_code(ReadRefusal::Unverifiable),
         })?
+        // Only the owner holds no grant, and this reader is a paired device.
         .ok_or("forbidden")?;
     drives_only_text(frame)?;
-    // A receiver id is at most 128 bytes, inside what a record keeps.
+    // A receiver id is at most 128 bytes, inside what a record keeps; one of
+    // only blanks, which no pairing mints, is refused as unverifiable.
     GrantInitiator::new(
         binding.receiver_id,
         grant_role(held.role),
