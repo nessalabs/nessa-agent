@@ -40,7 +40,11 @@ use super::{SessionSnapshot, StorageError};
 use crate::application::agent_execution::permissions::ActionContext;
 use crate::domain::agent_execution::executions::{ExecutionId, Initiator};
 use crate::domain::agent_execution::prompts::{NoteAuthor, NoteContext, UserMessage};
-use std::{collections::{HashMap, HashSet}, error::Error, fmt};
+use std::{
+    collections::{HashMap, HashSet},
+    error::Error,
+    fmt,
+};
 use uuid::Uuid;
 
 /// A value of a note is outside what one may hold.
