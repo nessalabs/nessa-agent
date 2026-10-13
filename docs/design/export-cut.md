@@ -9,15 +9,32 @@ quarantine, and upload are not this cut: they wait on the cut landing.
 ```text
 caller ── hold ──▶ conversation admission (write)
                       │
-                      ├── each writer below, while the hold lasts
-                      ├── deletion inventory append (fences already committed)
-                      └── manifest + mac, or abort with nothing published
+                      ├── pin each writer below: watermark, sqlite read
+                      │   snapshot or a copy of a small file
+                      └── deletion inventory append (fences already committed)
                    release (drop), including failure and retirement
+                      │
+                      ├── read records from those snapshots
+                      └── manifest + mac + publish, or abort with nothing published
 ```
 
 Arrows are the order one capture runs. The hold is the conversation
 service's existing admission lock, taken for write so admitted commands
-finish first. It is not a second lock.
+finish first. It is not a second lock. It lasts only for the pin. Reading
+records, taking the mac, and publishing happen after it is released, from
+the snapshots, so a later write is not in the cut. A command takes its
+read permit then. The snapshot keeps SQLite's shared lock until that
+store's records have been copied, so a writer of that same file waits for
+the copy and not for the mac or the publish.
+
+## Lock order
+
+Admission is taken before any per-(conversation, receiver) grant gate. PR
+#843 adds those gates on the command path: a command takes admission's read
+guard, then the gate for that conversation and receiver. The export cut
+takes admission's write guard and never takes a grant gate. It does not
+call into a command, and a command does not call into the cut while it
+holds a grant gate.
 
 ## Writer inventory
 
@@ -57,14 +74,16 @@ until the registry stores them apart.
 
 ## Export lease
 
-States: **Idle**, **Joining**, **Held**, **Captured**, **Aborted**,
-**Released**. Released follows Captured or Aborted. A later attempt starts
-from Idle.
+States: **Idle**, **Joining**, **Held**, **Released**, **Captured**,
+**Aborted**. Held is the pin. Released follows Held, and the read, mac, and
+publish run after that. Captured is the published manifest. Aborted publishes
+nothing and releases the hold too. A later attempt starts from Idle.
 
 | Row | Order | Decision |
 | --- | --- | --- |
 | Admitted mutation, then export | The mutation holds a read permit | The cut includes the mutation. `an_admitted_mutation_is_in_the_cut` |
-| Export, then mutation | The export holds the write permit | The mutation waits, and is absent from the cut. `a_mutation_during_the_hold_waits_until_release` |
+| Export, then mutation | The export holds the write permit for the pin | The mutation waits for that pin, and is absent from the cut. It can finish while records are read. `a_mutation_during_the_hold_waits_until_release` |
+| Read and send during the read | Admission has been released; a snapshot read or the publisher is still running | `read_at` and a send on another conversation both finish. `a_read_and_a_send_finish_while_the_export_is_still_reading` |
 | Deletion during the hold | Same admission as any command | The cut shows the conversation either still present or already fenced, never half-erased. `a_deletion_during_the_hold_is_entirely_in_or_entirely_out` |
 | Unreadable record | Other records in that store read | That record is skipped and named. The cut is still published. `an_unreadable_record_is_skipped_and_named` |
 | Unreadable store | The source cannot list | The store is skipped and named. Other stores are still cut. `an_unavailable_store_is_skipped_and_the_cut_continues` |
@@ -88,4 +107,4 @@ fence as they were.
 | Revoked device, peer, environment-serve, or worker credential | After the registry fence | The entry names the kind and a fingerprint, never a verifier or private key. `revoked_credentials_are_inventoried_without_secrets` |
 | Same fence again | A later capture | The original sequence is kept. `a_repeated_fence_does_not_advance_the_sequence` |
 | Append fails | The fence is already committed | The failure is returned. The previous inventory and the fence stay. `a_failed_inventory_append_leaves_the_fence_and_the_log` |
-| Capture during export | While the hold lasts | The manifest's deletion-inventory watermark is the log after that append. `the_cut_includes_the_deletion_inventory` |
+| Capture during export | During the brief hold, after the append | The manifest's deletion-inventory watermark is the log after that append. `the_cut_includes_the_deletion_inventory` |

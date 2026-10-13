@@ -91,6 +91,7 @@ mod store;
 pub use catalogue_changes::MAX_CATALOGUE_CHANGE_WATCHES;
 pub use receiver_authority::{
     export_receivers, ExportedReceiver, LocalReceiverAuthority, ReceiverChangeError,
+    ReceiverSnapshot,
 };
 mod record_scope;
 pub use record_scope::{exact_record_scope, record_scope_from_identity};
@@ -99,7 +100,10 @@ mod record_read;
 pub use catalogue_read::NessaCatalogueReadSource;
 pub use record_read::{InvalidReadWorkBudget, NessaRecordReadSource};
 pub(crate) use record_read::{DISCOVERY_STEPS_PER_READ, READ_WORK_BUDGET};
-pub use store::{ExportFacts, ExportSkip, LocalConversationStore, NamedRecord, RevocationFact};
+pub use store::{
+    ExportFacts, ExportFences, ExportSkip, LocalConversationStore, MetadataSnapshot, NamedRecord,
+    RevocationFact,
+};
 
 mod catalogue_source;
 pub use catalogue_source::{CatalogueWorkerError, NessaCatalogueSource};

@@ -1,9 +1,11 @@
 //! Rows the export cut keeps from this database. The journal is read here
 //! because this store owns it.
 
+use std::path::Path;
+
 use super::failed;
 use crate::conversation::application::ConversationError;
-use nessa_local_database::rusqlite::{Connection, Error, Row};
+use nessa_local_database::rusqlite::{Connection, Error, OpenFlags, Row};
 use serde_json::{json, Value};
 
 /// One grant whose latest journal row took the role away.
@@ -30,6 +32,57 @@ pub struct NamedRecord {
     pub bytes: Vec<u8>,
 }
 
+/// Tombstones and revocations from one metadata snapshot, the fences an
+/// export appends while admission is still held.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExportFences {
+    pub tombstones: Vec<NamedRecord>,
+    pub revocations: Vec<RevocationFact>,
+}
+
+/// A read transaction on the metadata database.
+///
+/// [`Self::open`] records `head:journal` and keeps that snapshot. [`Self::facts`]
+/// reads rows from it after admission has been released.
+pub struct MetadataSnapshot {
+    connection: Connection,
+    watermark: String,
+}
+
+impl MetadataSnapshot {
+    /// Begin a read transaction. A missing or unreadable file is `Err`.
+    /// The file is not created.
+    pub fn open(path: &Path) -> Result<Self, ()> {
+        let connection = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|_| ())?;
+        connection.execute_batch("BEGIN").map_err(|_| ())?;
+        let watermark = watermark(&connection).map_err(|_| ())?;
+        Ok(Self {
+            connection,
+            watermark,
+        })
+    }
+
+    pub fn fences(&self) -> Result<ExportFences, ConversationError> {
+        let mut skipped = Vec::new();
+        let tombstones = tombstones(&self.connection, &mut skipped)?;
+        let revocations = revocation_rows(&self.connection, &mut skipped)?;
+        Ok(ExportFences {
+            tombstones,
+            revocations,
+        })
+    }
+
+    pub fn facts(&self) -> Result<ExportFacts, ConversationError> {
+        let mut facts = read(&self.connection)?;
+        facts.watermark = self.watermark.clone();
+        Ok(facts)
+    }
+}
+
 /// The metadata database at one read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExportFacts {
@@ -43,7 +96,7 @@ pub struct ExportFacts {
     pub skipped: Vec<ExportSkip>,
 }
 
-pub(super) fn read(connection: &mut Connection) -> Result<ExportFacts, ConversationError> {
+fn watermark(connection: &Connection) -> Result<String, ConversationError> {
     let head: i64 = connection
         .query_row(
             "SELECT COALESCE(MAX(head), 0) FROM catalogue_owners",
@@ -58,6 +111,11 @@ pub(super) fn read(connection: &mut Connection) -> Result<ExportFacts, Conversat
             |row| row.get(0),
         )
         .map_err(failed)?;
+    Ok(format!("{head}:{journal}"))
+}
+
+pub(super) fn read(connection: &Connection) -> Result<ExportFacts, ConversationError> {
+    let watermark = watermark(connection)?;
     let mut skipped = Vec::new();
     let conversations = json_rows(
         connection,
@@ -78,14 +136,7 @@ pub(super) fn read(connection: &mut Connection) -> Result<ExportFacts, Conversat
         summary_row,
         "summary",
     )?;
-    let tombstones = json_rows(
-        connection,
-        "SELECT conversation_id, erased FROM deletions ORDER BY conversation_id",
-        &mut skipped,
-        metadata_skip,
-        tombstone_row,
-        "tombstone",
-    )?;
+    let tombstones = tombstones(connection, &mut skipped)?;
     let grants = json_rows(
         connection,
         "SELECT conversation_id, receiver_id, credential_id, role, policy, policy_revision
@@ -97,7 +148,7 @@ pub(super) fn read(connection: &mut Connection) -> Result<ExportFacts, Conversat
     )?;
     let revocations = revocation_rows(connection, &mut skipped)?;
     Ok(ExportFacts {
-        watermark: format!("{head}:{journal}"),
+        watermark,
         conversations,
         summaries,
         tombstones,
@@ -105,6 +156,20 @@ pub(super) fn read(connection: &mut Connection) -> Result<ExportFacts, Conversat
         revocations,
         skipped,
     })
+}
+
+fn tombstones(
+    connection: &Connection,
+    skipped: &mut Vec<ExportSkip>,
+) -> Result<Vec<NamedRecord>, ConversationError> {
+    json_rows(
+        connection,
+        "SELECT conversation_id, erased FROM deletions ORDER BY conversation_id",
+        skipped,
+        metadata_skip,
+        tombstone_row,
+        "tombstone",
+    )
 }
 
 fn conversation_row(row: &Row<'_>) -> Result<Value, Error> {

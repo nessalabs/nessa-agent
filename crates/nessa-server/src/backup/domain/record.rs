@@ -192,7 +192,7 @@ impl SkippedRecord {
     }
 }
 
-/// What one store contributed while the hold lasted.
+/// What one store contributed from the snapshot taken while admission was held.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceCut {
     store: StoreKind,

@@ -9,7 +9,7 @@ use tokio::sync::{OwnedRwLockWriteGuard, RwLock};
 
 use crate::backup::application::{
     capture_export, AdmissionFailure, AdmissionLease, Authenticator, DeletionLogStore, ExportClock,
-    ExportFailure, ExportRequest, ExportSource, ManifestPublisher, MutationAdmission,
+    ExportFailure, ExportRequest, ExportSource, ManifestPublisher, MutationAdmission, PinnedStore,
     PublishedRecord,
 };
 use crate::backup::domain::{
@@ -58,7 +58,9 @@ async fn a_mutation_during_the_hold_waits_until_release() {
     let lock = Arc::new(RwLock::new(()));
     let value = Arc::new(AtomicU64::new(1));
     let inside = Arc::new(AtomicBool::new(false));
-    let release = Arc::new(AtomicBool::new(false));
+    let release_pin = Arc::new(AtomicBool::new(false));
+    let reading = Arc::new(AtomicBool::new(false));
+    let release_read = Arc::new(AtomicBool::new(false));
     let admission = LockAdmission::new(lock.clone());
     let publisher = MemoryPublisher::default();
     let sources = sources_replacing(
@@ -67,7 +69,9 @@ async fn a_mutation_during_the_hold_waits_until_release() {
             kind: StoreKind::ConversationMetadata,
             value: value.clone(),
             inside: inside.clone(),
-            release: release.clone(),
+            release_pin: release_pin.clone(),
+            reading: reading.clone(),
+            release_read: release_read.clone(),
         }),
     );
     let capture = tokio::spawn(run(sources, admission, publisher));
@@ -75,7 +79,7 @@ async fn a_mutation_during_the_hold_waits_until_release() {
     while !inside.load(Ordering::SeqCst) {
         assert!(
             tokio::time::Instant::now() < deadline,
-            "the cut did not reach its read"
+            "the cut did not reach its pin"
         );
         tokio::task::yield_now().await;
     }
@@ -89,9 +93,27 @@ async fn a_mutation_during_the_hold_waits_until_release() {
     assert_eq!(
         value.load(Ordering::SeqCst),
         1,
-        "the mutation waits out the hold"
+        "the mutation waits out the brief hold"
     );
-    release.store(true, Ordering::SeqCst);
+    release_pin.store(true, Ordering::SeqCst);
+    while !reading.load(Ordering::SeqCst) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the cut did not release admission before reading"
+        );
+        tokio::task::yield_now().await;
+    }
+    let finished = tokio::time::timeout(std::time::Duration::from_secs(2), mutation).await;
+    assert!(
+        finished.is_ok(),
+        "the mutation finishes while the snapshot is still being read"
+    );
+    assert_eq!(value.load(Ordering::SeqCst), 2);
+    assert!(
+        !release_read.load(Ordering::SeqCst),
+        "the read was still running when the mutation finished"
+    );
+    release_read.store(true, Ordering::SeqCst);
     let manifest = capture.await.unwrap().unwrap();
     assert_eq!(
         manifest
@@ -101,8 +123,118 @@ async fn a_mutation_during_the_hold_waits_until_release() {
             .public_bytes(),
         Some(b"1".as_slice())
     );
-    mutation.await.unwrap();
-    assert_eq!(value.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn a_read_and_a_send_finish_while_the_export_is_still_reading() {
+    use std::time::Duration;
+
+    use nessa_auth::domain::{OrganizationId, PrincipalId};
+    use nessa_protocol::conversation::domain::ConversationId;
+
+    use crate::backup::infrastructure::ConversationAdmission;
+    use crate::conversation::application::ConversationCaller;
+    use crate::conversation::application::{
+        ReadOpening, RequestedConversation, SubmissionMode, SubmittedMessage,
+    };
+    use crate::conversation_test_support::image_fixture;
+
+    fn caller(action: &str) -> ConversationCaller {
+        ConversationCaller {
+            organization_id: OrganizationId::new("org").unwrap(),
+            principal_id: PrincipalId::new("alice").unwrap(),
+            surface_id: "desktop".into(),
+            action_id: action.into(),
+        }
+    }
+
+    let (service, _, _, _) = image_fixture(false, None);
+    let read_id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    let send_id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(
+            read_id.clone(),
+            caller("create-read"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    service
+        .create(
+            send_id.clone(),
+            caller("create-send"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+
+    let entered = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    let sources = sources_replacing(
+        StoreKind::CanonicalRecords,
+        Box::new(Slow {
+            kind: StoreKind::CanonicalRecords,
+            entered: entered.clone(),
+            release: release.clone(),
+        }),
+    );
+    let admission = ConversationAdmission::new(service.clone());
+    let publisher = MemoryPublisher::default();
+    let capture = tokio::spawn(run(sources, admission, publisher));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !entered.load(Ordering::SeqCst) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the export did not reach the read that runs after admission is released"
+        );
+        tokio::task::yield_now().await;
+    }
+    let reading = service.clone();
+    let sending = service.clone();
+    let read_target = read_id.clone();
+    let send_target = send_id.clone();
+    let (read_at, send) = tokio::join!(
+        tokio::time::timeout(Duration::from_secs(5), async move {
+            reading
+                .read_at(read_target, caller("read-during"), ReadOpening::LiveOnly)
+                .await
+        }),
+        tokio::time::timeout(Duration::from_secs(5), async move {
+            sending
+                .submit(
+                    send_target,
+                    caller("send-during"),
+                    "send-during".into(),
+                    SubmittedMessage {
+                        text: "hello".into(),
+                        ..SubmittedMessage::default()
+                    },
+                    SubmissionMode::Queue,
+                )
+                .await
+        }),
+    );
+    release.store(true, Ordering::SeqCst);
+    let manifest = capture.await.unwrap().unwrap();
+    assert!(
+        read_at
+            .expect("read_at timed out while the export was still reading")
+            .is_ok(),
+        "read_at completes while the export is still reading"
+    );
+    assert!(
+        send.expect("send timed out while the export was still reading")
+            .is_ok(),
+        "a send on another conversation completes while the export is still reading"
+    );
+    assert_eq!(
+        manifest
+            .manifest()
+            .store(StoreKind::CanonicalRecords)
+            .watermark()
+            .as_str(),
+        "absent"
+    );
 }
 
 #[tokio::test]
@@ -435,11 +567,51 @@ fn sources_replacing(
         .collect()
 }
 
+struct Slow {
+    kind: StoreKind,
+    entered: Arc<AtomicBool>,
+    release: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl ExportSource for Slow {
+    fn kind(&self) -> StoreKind {
+        self.kind
+    }
+
+    async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
+        Ok(Box::new(SlowRead {
+            kind: self.kind,
+            entered: self.entered.clone(),
+            release: self.release.clone(),
+        }))
+    }
+}
+
+struct SlowRead {
+    kind: StoreKind,
+    entered: Arc<AtomicBool>,
+    release: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl PinnedStore for SlowRead {
+    async fn read(&mut self) -> Result<SourceCut, ()> {
+        self.entered.store(true, Ordering::SeqCst);
+        while !self.release.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+        Ok(empty(self.kind))
+    }
+}
+
 struct Gated {
     kind: StoreKind,
     value: Arc<AtomicU64>,
     inside: Arc<AtomicBool>,
-    release: Arc<AtomicBool>,
+    release_pin: Arc<AtomicBool>,
+    reading: Arc<AtomicBool>,
+    release_read: Arc<AtomicBool>,
 }
 
 #[async_trait]
@@ -448,13 +620,36 @@ impl ExportSource for Gated {
         self.kind
     }
 
-    async fn capture(&self) -> Result<SourceCut, ()> {
+    async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
         let body = self.value.load(Ordering::SeqCst).to_string().into_bytes();
         self.inside.store(true, Ordering::SeqCst);
-        while !self.release.load(Ordering::SeqCst) {
+        while !self.release_pin.load(Ordering::SeqCst) {
             tokio::task::yield_now().await;
         }
-        Ok(with_body(self.kind, body))
+        Ok(Box::new(GatedRead {
+            kind: self.kind,
+            body,
+            reading: self.reading.clone(),
+            release_read: self.release_read.clone(),
+        }))
+    }
+}
+
+struct GatedRead {
+    kind: StoreKind,
+    body: Vec<u8>,
+    reading: Arc<AtomicBool>,
+    release_read: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl PinnedStore for GatedRead {
+    async fn read(&mut self) -> Result<SourceCut, ()> {
+        self.reading.store(true, Ordering::SeqCst);
+        while !self.release_read.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+        Ok(with_body(self.kind, self.body.clone()))
     }
 }
 
@@ -607,14 +802,16 @@ impl ExportSource for Fixed {
         self.kind
     }
 
-    async fn capture(&self) -> Result<SourceCut, ()> {
+    async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
         if self.fail {
             return Err(());
         }
-        if let Some(build) = &self.build {
-            return Ok(build());
-        }
-        self.cut.lock().unwrap().take().ok_or(())
+        let cut = if let Some(build) = &self.build {
+            build()
+        } else {
+            self.cut.lock().unwrap().take().ok_or(())?
+        };
+        Ok(Box::new(crate::backup::application::CopiedStore::new(cut)))
     }
 }
 

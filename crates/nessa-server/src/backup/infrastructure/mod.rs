@@ -7,6 +7,7 @@ mod gateway;
 mod jsonl;
 mod log;
 mod sensitivity;
+pub(crate) mod snapshot;
 
 pub use admission::ConversationAdmission;
 pub use bundle::DirectoryPublisher;

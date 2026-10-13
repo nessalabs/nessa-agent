@@ -175,6 +175,47 @@ impl ExportClock for Clock {
     }
 }
 
+#[test]
+fn a_sqlite_snapshot_excludes_a_later_write() {
+    use std::time::Duration;
+
+    use nessa_local_database::rusqlite::Connection;
+
+    use crate::backup::infrastructure::snapshot::SqliteSnapshot;
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("records.sqlite3");
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch("CREATE TABLE t(v INTEGER); INSERT INTO t VALUES (1);")
+        .unwrap();
+    drop(connection);
+
+    let snapshot = SqliteSnapshot::open(&path).unwrap();
+    let writer_path = path.clone();
+    let writer = std::thread::spawn(move || {
+        let connection = Connection::open(&writer_path).unwrap();
+        connection.busy_timeout(Duration::from_secs(5)).unwrap();
+        connection.execute("UPDATE t SET v = 2", []).unwrap();
+    });
+    let bytes = snapshot.backup_bytes().unwrap();
+    drop(snapshot);
+    writer.join().unwrap();
+
+    let copy = directory.path().join("snapshot.sqlite3");
+    fs::write(&copy, bytes).unwrap();
+    let copied = Connection::open(&copy).unwrap();
+    let snapshotted: i64 = copied
+        .query_row("SELECT v FROM t", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(snapshotted, 1);
+    let live = Connection::open(&path).unwrap();
+    let current: i64 = live
+        .query_row("SELECT v FROM t", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(current, 2);
+}
+
 fn read_tree(root: &Path) -> Vec<u8> {
     let mut bytes = Vec::new();
     let mut pending = vec![root.to_path_buf()];

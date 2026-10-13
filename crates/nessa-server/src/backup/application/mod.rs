@@ -1,5 +1,5 @@
-//! Run one cut: join admission, read every store, append fences, publish
-//! the mac, and release admission on every path.
+//! Run one cut: hold admission while each store is pinned and fences are
+//! appended, then release it and read, mac, and publish from those snapshots.
 
 mod deletion_inventory;
 mod export;
@@ -8,6 +8,7 @@ mod ports;
 pub use deletion_inventory::{capture_fences, InventoryFailure};
 pub use export::{capture_export, ExportFailure, ExportRequest};
 pub use ports::{
-    AdmissionFailure, AdmissionLease, Authenticator, DeletionLogStore, ExportClock, ExportSource,
-    FenceSource, MacKey, ManifestPublisher, MutationAdmission, PublishedRecord,
+    AdmissionFailure, AdmissionLease, Authenticator, CopiedStore, DeletionLogStore, ExportClock,
+    ExportSource, FenceSource, MacKey, ManifestPublisher, MutationAdmission, PinnedStore,
+    PublishedRecord,
 };

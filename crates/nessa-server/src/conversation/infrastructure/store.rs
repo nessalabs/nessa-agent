@@ -2,7 +2,9 @@ mod acquisition;
 mod export;
 mod share_grants;
 
-pub use export::{ExportFacts, ExportSkip, NamedRecord, RevocationFact};
+pub use export::{
+    ExportFacts, ExportFences, ExportSkip, MetadataSnapshot, NamedRecord, RevocationFact,
+};
 
 use super::catalogue_changes::CatalogueChanges;
 
@@ -199,7 +201,7 @@ impl LocalConversationStore {
     /// journal row is a revoke. A row whose identity this cut cannot name is
     /// skipped. The database itself failing to read is the error.
     pub fn export_facts(&self) -> ConversationFuture<'_, ExportFacts> {
-        self.run(export::read)
+        self.run(|connection| export::read(connection))
     }
     #[cfg(test)]
     pub(super) fn hold_mutation(&self) -> MutexGuard<'_, Connection> {

@@ -1,7 +1,10 @@
-//! Read one namespace into the writer inventory while admission is held.
+//! Read one namespace into the writer inventory.
 //!
-//! A local outbox is not read. Secret paths are fingerprinted. The credential
-//! registry contributes public facts only.
+//! Admission is held only while each store is pinned: a SQLite read snapshot
+//! for a database, a copy for a small file. Records are read from those
+//! snapshots after admission is released. A local outbox is not read. Secret
+//! paths are fingerprinted. The credential registry contributes public facts
+//! only.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,16 +16,17 @@ use serde_json::Value;
 use super::credentials::{read_credentials, CredentialRead};
 use super::jsonl::jsonl_cut;
 use super::sensitivity::path_sensitivity;
+use super::snapshot::SqliteSnapshot;
 use crate::backup::application::{
-    capture_export, Authenticator, DeletionLogStore, ExportClock, ExportFailure, ExportRequest,
-    ExportSource, FenceSource, ManifestPublisher, MutationAdmission,
+    capture_export, Authenticator, CopiedStore, DeletionLogStore, ExportClock, ExportFailure,
+    ExportRequest, ExportSource, FenceSource, ManifestPublisher, MutationAdmission, PinnedStore,
 };
 use crate::backup::domain::{
     CapturedRecord, CredentialKind, DeletionFence, GrantRole, Sensitivity, SkipReason,
     SkippedRecord, SourceCut, StoreKind,
 };
 use crate::conversation::infrastructure::{
-    export_receivers, ExportFacts, ExportSkip, LocalConversationStore, NamedRecord,
+    ExportFences, ExportSkip, MetadataSnapshot, NamedRecord, ReceiverSnapshot,
 };
 
 /// Hold admission, read `namespace`, and publish the cut.
@@ -40,7 +44,7 @@ pub async fn capture_namespace(
     let facts = Arc::new(FactsCache::new(
         namespace.join("conversations").join("metadata.sqlite3"),
     ));
-    let canonical = Arc::new(FileCache::new(
+    let canonical = Arc::new(SessionFiles::new(
         namespace
             .join("conversations")
             .join("sessions")
@@ -176,11 +180,11 @@ pub async fn capture_namespace(
             credentials: credentials.clone(),
             wanted: None,
         }),
-        Box::new(Receivers {
-            path: namespace
+        Box::new(Receivers::new(
+            namespace
                 .join("receiver-access")
                 .join("receiver-access.sqlite3"),
-        }),
+        )),
         Box::new(inventory_cut),
     ];
     let source_refs: Vec<&dyn ExportSource> =
@@ -200,72 +204,228 @@ pub async fn capture_namespace(
 
 struct FactsCache {
     path: PathBuf,
-    slot: Mutex<Option<Result<Option<ExportFacts>, ()>>>,
+    state: Mutex<FactsState>,
+}
+
+enum FactsState {
+    Cold,
+    Absent,
+    Open(MetadataSnapshot),
+    Ready(crate::conversation::infrastructure::ExportFacts),
+    Failed,
 }
 
 impl FactsCache {
     fn new(path: PathBuf) -> Self {
         Self {
             path,
-            slot: Mutex::new(None),
+            state: Mutex::new(FactsState::Cold),
         }
     }
 
-    async fn load(&self) -> Result<Option<ExportFacts>, ()> {
-        if let Some(cached) = self.slot.lock().map_err(|_| ())?.clone() {
-            return cached;
+    /// Open a read snapshot and record `head:journal`. Idempotent.
+    async fn pin(&self) -> Result<(), ()> {
+        {
+            let guard = self.state.lock().map_err(|_| ())?;
+            match &*guard {
+                FactsState::Cold => {}
+                FactsState::Failed => return Err(()),
+                _ => return Ok(()),
+            }
         }
         if !self.path.is_file() {
-            *self.slot.lock().map_err(|_| ())? = Some(Ok(None));
-            return Ok(None);
+            *self.state.lock().map_err(|_| ())? = FactsState::Absent;
+            return Ok(());
         }
         let path = self.path.clone();
-        let store = tokio::task::spawn_blocking(move || LocalConversationStore::open(&path))
+        let opened = tokio::task::spawn_blocking(move || MetadataSnapshot::open(&path))
+            .await
+            .map_err(|_| ())?;
+        let mut guard = self.state.lock().map_err(|_| ())?;
+        if !matches!(*guard, FactsState::Cold) {
+            return match &*guard {
+                FactsState::Failed => Err(()),
+                _ => Ok(()),
+            };
+        }
+        match opened {
+            Ok(snapshot) => {
+                *guard = FactsState::Open(snapshot);
+                Ok(())
+            }
+            Err(()) => {
+                *guard = FactsState::Failed;
+                Err(())
+            }
+        }
+    }
+
+    /// Tombstones and revocations from the snapshot [`Self::pin`] opened.
+    async fn fence_facts(&self) -> Result<Option<ExportFences>, ()> {
+        let snapshot = {
+            let mut guard = self.state.lock().map_err(|_| ())?;
+            match std::mem::replace(&mut *guard, FactsState::Cold) {
+                FactsState::Absent => {
+                    *guard = FactsState::Absent;
+                    return Ok(None);
+                }
+                FactsState::Open(snapshot) => snapshot,
+                FactsState::Ready(facts) => {
+                    let fences = ExportFences {
+                        tombstones: facts.tombstones.clone(),
+                        revocations: facts.revocations.clone(),
+                    };
+                    *guard = FactsState::Ready(facts);
+                    return Ok(Some(fences));
+                }
+                other => {
+                    *guard = other;
+                    return Err(());
+                }
+            }
+        };
+        let (snapshot, fences) = tokio::task::spawn_blocking(move || {
+            let fences = snapshot.fences();
+            (snapshot, fences)
+        })
+        .await
+        .map_err(|_| ())?;
+        match fences {
+            Ok(fences) => {
+                *self.state.lock().map_err(|_| ())? = FactsState::Open(snapshot);
+                Ok(Some(fences))
+            }
+            Err(_) => {
+                *self.state.lock().map_err(|_| ())? = FactsState::Failed;
+                Err(())
+            }
+        }
+    }
+
+    /// Every metadata and grant row from the snapshot [`Self::pin`] opened.
+    async fn load(&self) -> Result<Option<crate::conversation::infrastructure::ExportFacts>, ()> {
+        let snapshot = {
+            let mut guard = self.state.lock().map_err(|_| ())?;
+            match std::mem::replace(&mut *guard, FactsState::Cold) {
+                FactsState::Absent => {
+                    *guard = FactsState::Absent;
+                    return Ok(None);
+                }
+                FactsState::Ready(facts) => {
+                    *guard = FactsState::Ready(facts.clone());
+                    return Ok(Some(facts));
+                }
+                FactsState::Open(snapshot) => snapshot,
+                other => {
+                    *guard = other;
+                    return Err(());
+                }
+            }
+        };
+        let facts = tokio::task::spawn_blocking(move || snapshot.facts())
             .await
             .map_err(|_| ())?
             .map_err(|_| ())?;
-        let facts = store.export_facts().await.map_err(|_| ())?;
-        *self.slot.lock().map_err(|_| ())? = Some(Ok(Some(facts.clone())));
+        *self.state.lock().map_err(|_| ())? = FactsState::Ready(facts.clone());
         Ok(Some(facts))
     }
 }
 
-struct FileCache {
+struct SessionFiles {
     path: PathBuf,
-    slot: Mutex<Option<FileState>>,
+    state: Mutex<SessionState>,
 }
 
-#[derive(Clone)]
-enum FileState {
+enum SessionState {
+    Cold,
     Absent,
-    Bytes(Vec<u8>),
     Unreadable,
+    Open(SqliteSnapshot),
+    Bytes(Vec<u8>),
 }
 
-impl FileCache {
+enum SessionView {
+    Absent,
+    Unreadable,
+    Bytes(Vec<u8>),
+}
+
+impl SessionFiles {
     fn new(path: PathBuf) -> Self {
         Self {
             path,
-            slot: Mutex::new(None),
+            state: Mutex::new(SessionState::Cold),
         }
     }
 
-    fn load(&self) -> FileState {
-        if let Some(cached) = self.slot.lock().ok().and_then(|slot| slot.clone()) {
-            return cached;
+    /// Open a read snapshot when the file is a database. A missing file is
+    /// absent. A file that is not a database is copied here, while admission
+    /// is held, which is the same cut a raw read used to take.
+    async fn pin(&self) -> Result<(), ()> {
+        {
+            let guard = self.state.lock().map_err(|_| ())?;
+            if !matches!(*guard, SessionState::Cold) {
+                return Ok(());
+            }
         }
-        let state = if !self.path.exists() {
-            FileState::Absent
-        } else {
-            match fs::read(&self.path) {
-                Ok(bytes) => FileState::Bytes(bytes),
-                Err(_) => FileState::Unreadable,
+        if !self.path.exists() {
+            *self.state.lock().map_err(|_| ())? = SessionState::Absent;
+            return Ok(());
+        }
+        let path = self.path.clone();
+        let opened = tokio::task::spawn_blocking(move || match SqliteSnapshot::open(&path) {
+            Ok(snapshot) => SessionState::Open(snapshot),
+            Err(()) => match fs::read(&path) {
+                Ok(bytes) => SessionState::Bytes(bytes),
+                Err(_) => SessionState::Unreadable,
+            },
+        })
+        .await
+        .map_err(|_| ())?;
+        let mut guard = self.state.lock().map_err(|_| ())?;
+        if matches!(*guard, SessionState::Cold) {
+            *guard = opened;
+        }
+        Ok(())
+    }
+
+    /// Bytes of the snapshot. The live file is not read again.
+    async fn view(&self) -> Result<SessionView, ()> {
+        let snapshot = {
+            let mut guard = self.state.lock().map_err(|_| ())?;
+            match std::mem::replace(&mut *guard, SessionState::Cold) {
+                SessionState::Absent => {
+                    *guard = SessionState::Absent;
+                    return Ok(SessionView::Absent);
+                }
+                SessionState::Unreadable => {
+                    *guard = SessionState::Unreadable;
+                    return Ok(SessionView::Unreadable);
+                }
+                SessionState::Bytes(bytes) => {
+                    *guard = SessionState::Bytes(bytes.clone());
+                    return Ok(SessionView::Bytes(bytes));
+                }
+                SessionState::Open(snapshot) => snapshot,
+                other => {
+                    *guard = other;
+                    return Err(());
+                }
             }
         };
-        if let Ok(mut slot) = self.slot.lock() {
-            *slot = Some(state.clone());
+        let copied = tokio::task::spawn_blocking(move || snapshot.backup_bytes())
+            .await
+            .map_err(|_| ())?;
+        match copied {
+            Ok(bytes) => {
+                *self.state.lock().map_err(|_| ())? = SessionState::Bytes(bytes.clone());
+                Ok(SessionView::Bytes(bytes))
+            }
+            Err(()) => {
+                *self.state.lock().map_err(|_| ())? = SessionState::Unreadable;
+                Ok(SessionView::Unreadable)
+            }
         }
-        state
     }
 }
 
@@ -312,7 +472,7 @@ impl CredentialCache {
 }
 
 struct CanonicalFile {
-    files: Arc<FileCache>,
+    files: Arc<SessionFiles>,
 }
 
 #[async_trait]
@@ -321,11 +481,25 @@ impl ExportSource for CanonicalFile {
         StoreKind::CanonicalRecords
     }
 
-    async fn capture(&self) -> Result<SourceCut, ()> {
-        match self.files.load() {
-            FileState::Absent => absent(StoreKind::CanonicalRecords),
-            FileState::Unreadable => skipped_file(StoreKind::CanonicalRecords, "records.sqlite3"),
-            FileState::Bytes(bytes) => {
+    async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
+        self.files.pin().await?;
+        Ok(Box::new(CanonicalPin {
+            files: self.files.clone(),
+        }))
+    }
+}
+
+struct CanonicalPin {
+    files: Arc<SessionFiles>,
+}
+
+#[async_trait]
+impl PinnedStore for CanonicalPin {
+    async fn read(&mut self) -> Result<SourceCut, ()> {
+        match self.files.view().await? {
+            SessionView::Absent => absent(StoreKind::CanonicalRecords),
+            SessionView::Unreadable => skipped_file(StoreKind::CanonicalRecords, "records.sqlite3"),
+            SessionView::Bytes(bytes) => {
                 let record = public(StoreKind::CanonicalRecords, "records.sqlite3", bytes)?;
                 finish(StoreKind::CanonicalRecords, "file", vec![record], vec![])
             }
@@ -334,7 +508,7 @@ impl ExportSource for CanonicalFile {
 }
 
 struct NotesFile {
-    files: Arc<FileCache>,
+    files: Arc<SessionFiles>,
 }
 
 #[async_trait]
@@ -343,14 +517,28 @@ impl ExportSource for NotesFile {
         StoreKind::Notes
     }
 
-    async fn capture(&self) -> Result<SourceCut, ()> {
+    async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
+        self.files.pin().await?;
+        Ok(Box::new(NotesPin {
+            files: self.files.clone(),
+        }))
+    }
+}
+
+struct NotesPin {
+    files: Arc<SessionFiles>,
+}
+
+#[async_trait]
+impl PinnedStore for NotesPin {
+    async fn read(&mut self) -> Result<SourceCut, ()> {
         // Notes live in the canonical session file. Naming each one waits on
-        // an event-stream export. The watermark is that file's fingerprint
-        // when it could be read, so the cut shows they were taken together.
-        match self.files.load() {
-            FileState::Absent => absent(StoreKind::Notes),
-            FileState::Unreadable => skipped_file(StoreKind::Notes, "records.sqlite3"),
-            FileState::Bytes(bytes) => {
+        // an event-stream export. The watermark is that snapshot's fingerprint,
+        // so the cut shows they were taken together.
+        match self.files.view().await? {
+            SessionView::Absent => absent(StoreKind::Notes),
+            SessionView::Unreadable => skipped_file(StoreKind::Notes, "records.sqlite3"),
+            SessionView::Bytes(bytes) => {
                 let fingerprint = crate::backup::domain::Fingerprint::of(&bytes);
                 finish(StoreKind::Notes, &fingerprint.hex(), vec![], vec![])
             }
@@ -368,7 +556,21 @@ impl ExportSource for MetadataRows {
         StoreKind::ConversationMetadata
     }
 
-    async fn capture(&self) -> Result<SourceCut, ()> {
+    async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
+        self.facts.pin().await?;
+        Ok(Box::new(MetadataPin {
+            facts: self.facts.clone(),
+        }))
+    }
+}
+
+struct MetadataPin {
+    facts: Arc<FactsCache>,
+}
+
+#[async_trait]
+impl PinnedStore for MetadataPin {
+    async fn read(&mut self) -> Result<SourceCut, ()> {
         let Some(facts) = self.facts.load().await? else {
             return absent(StoreKind::ConversationMetadata);
         };
@@ -398,7 +600,21 @@ impl ExportSource for GrantRows {
         StoreKind::ShareGrants
     }
 
-    async fn capture(&self) -> Result<SourceCut, ()> {
+    async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
+        self.facts.pin().await?;
+        Ok(Box::new(GrantPin {
+            facts: self.facts.clone(),
+        }))
+    }
+}
+
+struct GrantPin {
+    facts: Arc<FactsCache>,
+}
+
+#[async_trait]
+impl PinnedStore for GrantPin {
+    async fn read(&mut self) -> Result<SourceCut, ()> {
         let Some(facts) = self.facts.load().await? else {
             return absent(StoreKind::ShareGrants);
         };
@@ -426,7 +642,13 @@ impl ExportSource for DirectoryStore {
         self.kind
     }
 
-    async fn capture(&self) -> Result<SourceCut, ()> {
+    async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
+        copied(self.cut())
+    }
+}
+
+impl DirectoryStore {
+    fn cut(&self) -> Result<SourceCut, ()> {
         let mut records = Vec::new();
         let mut skipped = Vec::new();
         let mut present = false;
@@ -475,7 +697,13 @@ impl ExportSource for JsonFile {
         self.kind
     }
 
-    async fn capture(&self) -> Result<SourceCut, ()> {
+    async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
+        copied(self.cut())
+    }
+}
+
+impl JsonFile {
+    fn cut(&self) -> Result<SourceCut, ()> {
         if !self.path.exists() {
             return absent(self.kind);
         }
@@ -503,7 +731,13 @@ impl ExportSource for JsonlFile {
         self.kind
     }
 
-    async fn capture(&self) -> Result<SourceCut, ()> {
+    async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
+        copied(self.cut())
+    }
+}
+
+impl JsonlFile {
+    fn cut(&self) -> Result<SourceCut, ()> {
         if !self.path.exists() {
             return absent(self.kind);
         }
@@ -522,7 +756,13 @@ impl ExportSource for RelayStore {
         StoreKind::RelayConfiguration
     }
 
-    async fn capture(&self) -> Result<SourceCut, ()> {
+    async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
+        copied(self.cut())
+    }
+}
+
+impl RelayStore {
+    fn cut(&self) -> Result<SourceCut, ()> {
         let mut records = Vec::new();
         let mut skipped = Vec::new();
         let config = self.namespace.join("config.json");
@@ -599,7 +839,15 @@ impl ExportSource for CredentialStore {
         self.kind
     }
 
-    async fn capture(&self) -> Result<SourceCut, ()> {
+    async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
+        // The registry file is small. Copying it here, while admission is
+        // held, is what a later read of this pin returns.
+        copied(self.cut())
+    }
+}
+
+impl CredentialStore {
+    fn cut(&self) -> Result<SourceCut, ()> {
         // The registry does not store a worker apart from an environment
         // peer. This store stays empty unless that changes; an unreadable
         // registry is still reported.
@@ -640,6 +888,23 @@ impl ExportSource for CredentialStore {
 
 struct Receivers {
     path: PathBuf,
+    state: Arc<Mutex<ReceiverState>>,
+}
+
+enum ReceiverState {
+    Cold,
+    Absent,
+    Open(ReceiverSnapshot),
+    Failed,
+}
+
+impl Receivers {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            state: Arc::new(Mutex::new(ReceiverState::Cold)),
+        }
+    }
 }
 
 #[async_trait]
@@ -648,11 +913,62 @@ impl ExportSource for Receivers {
         StoreKind::ReceiverAccess
     }
 
-    async fn capture(&self) -> Result<SourceCut, ()> {
-        if !self.path.is_file() {
-            return absent(StoreKind::ReceiverAccess);
+    async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
+        {
+            let guard = self.state.lock().map_err(|_| ())?;
+            if !matches!(*guard, ReceiverState::Cold) {
+                return Ok(Box::new(ReceiverPin {
+                    state: self.state.clone(),
+                }));
+            }
         }
-        let (watermark, rows, skipped_ids) = export_receivers(&self.path)?;
+        if !self.path.is_file() {
+            *self.state.lock().map_err(|_| ())? = ReceiverState::Absent;
+        } else {
+            let path = self.path.clone();
+            let opened = tokio::task::spawn_blocking(move || ReceiverSnapshot::open(&path))
+                .await
+                .map_err(|_| ())?;
+            let mut guard = self.state.lock().map_err(|_| ())?;
+            if matches!(*guard, ReceiverState::Cold) {
+                *guard = match opened {
+                    Ok(snapshot) => ReceiverState::Open(snapshot),
+                    Err(()) => ReceiverState::Failed,
+                };
+            }
+        }
+        Ok(Box::new(ReceiverPin {
+            state: self.state.clone(),
+        }))
+    }
+}
+
+struct ReceiverPin {
+    state: Arc<Mutex<ReceiverState>>,
+}
+
+#[async_trait]
+impl PinnedStore for ReceiverPin {
+    async fn read(&mut self) -> Result<SourceCut, ()> {
+        let snapshot = {
+            let mut guard = self.state.lock().map_err(|_| ())?;
+            match std::mem::replace(&mut *guard, ReceiverState::Cold) {
+                ReceiverState::Absent => {
+                    *guard = ReceiverState::Absent;
+                    return absent(StoreKind::ReceiverAccess);
+                }
+                ReceiverState::Failed => {
+                    *guard = ReceiverState::Failed;
+                    return Err(());
+                }
+                ReceiverState::Open(snapshot) => snapshot,
+                ReceiverState::Cold => return Err(()),
+            }
+        };
+        let read = tokio::task::spawn_blocking(move || snapshot.read())
+            .await
+            .map_err(|_| ())?;
+        let (watermark, rows, skipped_ids) = read?;
         let mut records = Vec::new();
         let mut skipped = Vec::new();
         for row in rows {
@@ -682,7 +998,15 @@ impl ExportSource for InventoryCut<'_> {
         StoreKind::DeletionInventory
     }
 
-    async fn capture(&self) -> Result<SourceCut, ()> {
+    async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
+        // The log is small, and this pin runs after the fence append, still
+        // inside the admission hold. The bytes below are that log.
+        copied(self.cut().await)
+    }
+}
+
+impl InventoryCut<'_> {
+    async fn cut(&self) -> Result<SourceCut, ()> {
         let log = self.log.load().await?;
         let bytes = log.canonical().into_bytes();
         let record = public(StoreKind::DeletionInventory, "log", bytes)?;
@@ -705,7 +1029,7 @@ impl FenceSource for NamespaceFences {
     async fn fences(&self) -> Result<Vec<DeletionFence>, ()> {
         let mut fences = Vec::new();
         let mut failed = false;
-        match self.facts.load().await {
+        match self.facts.fence_facts().await {
             Ok(Some(facts)) => {
                 fences.extend(fences_from_facts(&facts));
             }
@@ -738,7 +1062,7 @@ impl FenceSource for NamespaceFences {
     }
 }
 
-fn fences_from_facts(facts: &ExportFacts) -> Vec<DeletionFence> {
+fn fences_from_facts(facts: &ExportFences) -> Vec<DeletionFence> {
     let mut fences = Vec::new();
     for tombstone in &facts.tombstones {
         let Ok(value) = serde_json::from_slice::<Value>(&tombstone.bytes) else {
@@ -927,6 +1251,10 @@ fn file_identity(root: &Path, path: &Path) -> String {
         .map(|component| component.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/")
+}
+
+fn copied(cut: Result<SourceCut, ()>) -> Result<Box<dyn PinnedStore>, ()> {
+    Ok(Box::new(CopiedStore::new(cut?)))
 }
 
 fn public(kind: StoreKind, identity: &str, bytes: Vec<u8>) -> Result<CapturedRecord, ()> {

@@ -692,6 +692,51 @@ pub struct ExportedReceiver {
     pub active: bool,
 }
 
+/// A read transaction on the receiver-access database.
+///
+/// [`Self::open`] records the transition head. [`Self::read`] lists receivers
+/// from that snapshot after admission has been released. Opening this does
+/// not go through [`LocalReceiverAuthority::open`], which would advance the
+/// policy row.
+pub struct ReceiverSnapshot {
+    connection: Connection,
+    watermark: String,
+}
+
+impl ReceiverSnapshot {
+    /// Begin a read transaction. A missing or unreadable file is `Err`.
+    /// The file is not created.
+    pub fn open(path: &std::path::Path) -> Result<Self, ()> {
+        let connection = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|_| ())?;
+        connection.execute_batch("BEGIN").map_err(|_| ())?;
+        let head: i64 = connection
+            .query_row(
+                "SELECT COALESCE(MAX(sequence), 0) FROM receiver_transitions",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|_| ())?;
+        let watermark = head.to_string();
+        if watermark.is_empty() {
+            return Err(());
+        }
+        Ok(Self {
+            connection,
+            watermark,
+        })
+    }
+
+    /// Receivers visible to this snapshot. The watermark is the one [`Self::open`]
+    /// recorded. A row that cannot be named is skipped.
+    pub fn read(&self) -> Result<(String, Vec<ExportedReceiver>, Vec<String>), ()> {
+        read_receivers(&self.connection, &self.watermark)
+    }
+}
+
 /// Read `path` without opening it through [`LocalReceiverAuthority::open`],
 /// which would advance the policy row. A row that cannot be named is omitted
 /// from the returned list and counted in the `Err` only when the file itself
@@ -699,15 +744,13 @@ pub struct ExportedReceiver {
 pub fn export_receivers(
     path: &std::path::Path,
 ) -> Result<(String, Vec<ExportedReceiver>, Vec<String>), ()> {
-    let connection =
-        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|_| ())?;
-    let head: i64 = connection
-        .query_row(
-            "SELECT COALESCE(MAX(sequence), 0) FROM receiver_transitions",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|_| ())?;
+    ReceiverSnapshot::open(path)?.read()
+}
+
+fn read_receivers(
+    connection: &Connection,
+    watermark: &str,
+) -> Result<(String, Vec<ExportedReceiver>, Vec<String>), ()> {
     let mut statement = connection
         .prepare(
             "SELECT receiver_id, credential_id, access_epoch, active
@@ -763,11 +806,7 @@ pub fn export_receivers(
             active: active == 1,
         });
     }
-    let watermark = head.to_string();
-    if watermark.is_empty() {
-        return Err(());
-    }
-    Ok((watermark, receivers, skipped))
+    Ok((watermark.to_owned(), receivers, skipped))
 }
 
 fn nameable(value: &str) -> bool {

@@ -14,7 +14,7 @@ pub trait MutationAdmission: Send + Sync {
 
 /// The held admission. Dropping it releases the lock.
 ///
-/// `Sync` so the future that checks it before and after each read can move
+/// `Sync` so the task that checks it before and after the pin can move
 /// between threads. The check itself stays on the task that holds it.
 pub trait AdmissionLease: Send + Sync {
     /// Whether retirement was signaled while this hold is still in force.
@@ -33,8 +33,39 @@ pub enum AdmissionFailure {
 pub trait ExportSource: Send + Sync {
     fn kind(&self) -> StoreKind;
 
-    /// Read the store. `Err` means the store could not be listed at all.
-    async fn capture(&self) -> Result<SourceCut, ()>;
+    /// While admission is held: record the watermark and keep a snapshot.
+    ///
+    /// A database store opens a SQLite read transaction. A small file store
+    /// copies its bytes. `Err` means the store could not be pinned at all.
+    /// Reading every record waits until [`PinnedStore::read`], after
+    /// admission has been released.
+    async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()>;
+}
+
+/// A store frozen at the cut. Reading it does not take admission.
+#[async_trait]
+pub trait PinnedStore: Send {
+    /// Records from the snapshot [`ExportSource::pin`] opened. A later write
+    /// to the live store is not part of this cut.
+    async fn read(&mut self) -> Result<SourceCut, ()>;
+}
+
+/// A cut whose bytes were copied while admission was held.
+pub struct CopiedStore {
+    cut: SourceCut,
+}
+
+impl CopiedStore {
+    pub fn new(cut: SourceCut) -> Self {
+        Self { cut }
+    }
+}
+
+#[async_trait]
+impl PinnedStore for CopiedStore {
+    async fn read(&mut self) -> Result<SourceCut, ()> {
+        Ok(self.cut.clone())
+    }
 }
 
 /// Fences already committed, read while the hold lasts.

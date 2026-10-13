@@ -6,7 +6,8 @@ publish = false
 
 [dependencies]
 nessa-local-storage = { path = "../nessa-local-storage" }
-rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
+# `backup` copies an export read snapshot after admission has been released.
+rusqlite = { version = "0.40", default-features = false, features = ["bundled", "backup"] }
 
 [dev-dependencies]
 tempfile = "3"
