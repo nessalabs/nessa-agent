@@ -119,7 +119,18 @@ impl CompositionRoot {
                 super::env_dial_command::enroll(&address, &code).await
             }
             #[cfg(unix)]
-            Command::EnvDial { address } => super::env_dial_command::dial_in(&address).await,
+            Command::EnvDial {
+                address,
+                drain_deadline_ms,
+                enroll_code_file,
+            } => {
+                super::env_dial_command::dial_in(
+                    &address,
+                    drain_deadline_ms.map(std::time::Duration::from_millis),
+                    enroll_code_file.as_deref(),
+                )
+                .await
+            }
             #[cfg(not(unix))]
             Command::EnvEnroll { .. } | Command::EnvDial { .. } => Err(RunError::Agent(
                 "a paired environment requires Unix process supervision".into(),
@@ -129,7 +140,16 @@ impl CompositionRoot {
                 peer,
                 agents,
                 max_timeout_ms,
-            } => super::env_grant_command::grant(peer.as_deref(), agents, max_timeout_ms).await,
+                max_lease_ms,
+            } => {
+                super::env_grant_command::grant(
+                    peer.as_deref(),
+                    agents,
+                    max_timeout_ms,
+                    max_lease_ms,
+                )
+                .await
+            }
             #[cfg(unix)]
             Command::EnvUngrant { peer, what } => {
                 super::env_grant_command::ungrant(peer.as_deref(), what).await
@@ -180,6 +200,7 @@ impl CompositionRoot {
             Command::McpRelay { .. } => {
                 Err(RunError::Agent("MCP stand-ins require Unix sockets".into()))
             }
+            Command::RelayServe { listen } => super::relay_command::execute(&listen).await,
         }
     }
 

@@ -66,6 +66,7 @@ function gatewayView(): ConversationView {
       agentFeatures: {
         permissionDenial: "supported_for_offered_permission_reviews",
         nativeHookSuppression: "unknown",
+        nativeHooks: "off",
         compactionReporting: "unsupported_not_implemented",
         modelSwitchReporting: "unsupported_not_implemented",
         permissionDeferral: "unsupported_not_implemented",

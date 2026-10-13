@@ -39,6 +39,7 @@
 import {
   NessaMcpAppError,
   NessaRpcError,
+  type AgentsApi,
   type AttachmentApi,
   type AuthApi,
   type ConversationMessage,
@@ -131,6 +132,7 @@ function viewWith(revision: number, review?: ConversationPermission): Conversati
         status: "completed",
         details: "",
         input: "{}",
+        nativeHooks: "off",
         mcp: { server, tool: appTool, resourceUri: "ui://mcptest/rows.html" },
       },
     ],
@@ -303,6 +305,7 @@ const mcpApps = {
 } as unknown as McpAppsApi
 
 // Settings' servers: this fixture never opens Settings, so nothing asks them.
+const unused = () => Promise.reject(new Error("this fixture does not open Settings"))
 const settingsParts = {
   mcpServers: {} as McpServersApi,
   pairing: {} as PairingApi,
@@ -310,6 +313,12 @@ const settingsParts = {
   auth: {} as AuthApi,
   // Read back only for a file a view names; none here does.
   attachments: {} as AttachmentApi,
+  agents: {
+    list: unused,
+    installOptions: unused,
+    install: unused,
+    setNativeHooks: unused,
+  } as AgentsApi,
 }
 
 const dependencies = createDesktopDependencies({

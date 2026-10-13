@@ -128,6 +128,7 @@ impl Environment for Substitute {
         let granted = self.granted.lock().unwrap().unwrap_or(GrantedTerms {
             sandbox: grant.sandbox,
             timeout_ms: None,
+            lease_ms: None,
         });
         let released = self.released.clone();
         Box::pin(async move {
@@ -150,7 +151,7 @@ impl Environment for Substitute {
 /// dropped.
 struct CountedHold(Arc<AtomicUsize>);
 impl LeaseHold for CountedHold {
-    fn lost(&self) -> Option<EnvironmentFuture<'static, ()>> {
+    fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>> {
         None
     }
     fn end(&self, _cause: LeaseEndCause) -> EnvironmentFuture<'_, LeaseRelease> {
@@ -169,11 +170,13 @@ pub(super) type FailingRecords = Arc<Mutex<Option<fn(&LeaseRecord) -> bool>>>;
 /// The record store, refusing the next save that issues or refuses a lease
 /// while `fail_issue` is set, as a disk that went away for a moment would,
 /// and every save holding a record `failing` names while it is set, as a disk
-/// that stays away would.
+/// that stays away would; and stalling, never to return, the next save
+/// holding a record `stall_once` names, as a disk that hangs would.
 struct Records {
     inner: RecordStorage,
     fail_issue: Arc<AtomicBool>,
     failing: FailingRecords,
+    stall_once: FailingRecords,
     /// Every lease record handed to a save, in order.
     saved: SavedRecords,
 }
@@ -190,6 +193,7 @@ impl SessionStorage for Records {
     fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
         let fail_issue = self.fail_issue.clone();
         let failing = self.failing.clone();
+        let stall_once = self.stall_once.clone();
         let saved = self.saved.clone();
         Box::pin(async move {
             let inner = self.inner.open(id).await?;
@@ -197,6 +201,7 @@ impl SessionStorage for Records {
                 inner,
                 fail_issue,
                 failing,
+                stall_once,
                 saved,
             }) as Box<dyn SessionStorageLease>)
         })
@@ -207,6 +212,7 @@ impl SessionStorage for Records {
     ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
         let fail_issue = self.fail_issue.clone();
         let failing = self.failing.clone();
+        let stall_once = self.stall_once.clone();
         let saved = self.saved.clone();
         Box::pin(async move {
             Ok(self.inner.open_existing(id).await?.map(|inner| {
@@ -214,6 +220,7 @@ impl SessionStorage for Records {
                     inner,
                     fail_issue,
                     failing,
+                    stall_once,
                     saved,
                 }) as Box<dyn SessionStorageLease>
             }))
@@ -224,6 +231,7 @@ pub(super) struct RecordsLease {
     inner: Box<dyn SessionStorageLease>,
     fail_issue: Arc<AtomicBool>,
     failing: FailingRecords,
+    stall_once: FailingRecords,
     saved: SavedRecords,
 }
 impl RecordsLease {
@@ -234,6 +242,7 @@ impl RecordsLease {
             inner,
             fail_issue: Arc::new(AtomicBool::new(false)),
             failing,
+            stall_once: FailingRecords::default(),
             saved: SavedRecords::default(),
         }
     }
@@ -264,6 +273,22 @@ impl SessionStorageLease for RecordsLease {
                 .flat_map(SessionSaveUnit::changes)
                 .any(|change| matches!(change, SessionChange::Lease(record) if failing(record)))
         });
+        let stalled = {
+            let mut stall = self.stall_once.lock().unwrap();
+            let matched = stall.is_some_and(|stall| {
+                units
+                    .iter()
+                    .flat_map(SessionSaveUnit::changes)
+                    .any(|change| matches!(change, SessionChange::Lease(record) if stall(record)))
+            });
+            if matched {
+                *stall = None;
+            }
+            matched
+        };
+        if stalled {
+            return Box::pin(std::future::pending());
+        }
         if refused || (issues && self.fail_issue.swap(false, Ordering::SeqCst)) {
             return Box::pin(async { Err(StorageError::Io("the disk went away".into())) });
         }
@@ -346,6 +371,7 @@ fn harness_working_in(
         inner: RecordStorage::new(root.join("sessions")).unwrap(),
         fail_issue: Arc::new(AtomicBool::new(false)),
         failing: Arc::new(Mutex::new(None)),
+        stall_once: Arc::new(Mutex::new(None)),
         saved: SavedRecords::default(),
     });
     let service = ConversationService::new(
@@ -484,6 +510,8 @@ fn kinds(lease: &CurrentLease) -> Vec<&'static str> {
             LeaseRecord::CommandIssued { .. } => "command_issued",
             LeaseRecord::CommandRefused { .. } => "command_refused",
             LeaseRecord::CommandEnded { .. } => "command_ended",
+            LeaseRecord::FetchAsked { .. } => "fetch_asked",
+            LeaseRecord::FetchEnded { .. } => "fetch_ended",
         })
         .collect()
 }
@@ -1422,7 +1450,10 @@ async fn the_view_of_an_ended_lease_says_why_it_ended() {
 /// What crosses the wire is the SSH adapter's own tests'.
 struct Host {
     opened: AtomicUsize,
-    lose: tokio::sync::watch::Sender<bool>,
+    /// Ends its leases for the cause sent: lost, or expired there.
+    lose: tokio::sync::watch::Sender<Option<LeaseEndCause>>,
+    /// The duration it grants each lease, if any.
+    lease_ms: Mutex<Option<u64>>,
     release: Mutex<Option<LeaseCleanup>>,
     /// What the first lease opened here publishes.
     offers: Mutex<Option<tokio::sync::mpsc::Receiver<ArtifactOffer>>>,
@@ -1430,6 +1461,51 @@ struct Host {
     ending: Arc<tokio::sync::Notify>,
     /// How a publish the gateway asks is answered, and where its offer goes.
     asked: Arc<Asked>,
+    /// How a fetch the gateway asks is answered.
+    fetching: Arc<Fetching>,
+}
+
+/// How a host answers the gateway's fetches (slice D3b): each is noted,
+/// its bytes read from its source range by range as the SSH adapter writes
+/// them, and answered as `script` says.
+#[derive(Default)]
+struct Fetching {
+    /// Each fetch asked: its request and destination.
+    asks: Mutex<Vec<(String, String)>>,
+    script: Mutex<FetchScript>,
+    /// The bytes each fetch read, by request.
+    read: Mutex<HashMap<String, Vec<u8>>>,
+    /// Said once a fetch is asked.
+    noted: tokio::sync::Notify,
+    /// Set, and said, once a lease's end is asked here.
+    ended: AtomicBool,
+    ending: tokio::sync::Notify,
+    /// The store's saved records, when a test watches them: each fetch asked
+    /// notes whether its asking was saved before it was asked here.
+    saved: Mutex<Option<SavedRecords>>,
+    /// For each fetch asked while `saved` is set, its request and whether
+    /// its asking was saved first.
+    saved_first: Mutex<Vec<(String, bool)>>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+enum FetchScript {
+    /// Its bytes read whole and checked, then placed at the destination.
+    #[default]
+    Place,
+    /// The destination already is the file: nothing is read.
+    AlreadyPlaced,
+    /// Refused for this reason before anything is read.
+    Refuse(FetchRefusal),
+    /// Not answered until the lease ends here, then as the host says of a
+    /// lease ended under a fetch. Nothing is delivered.
+    Silent,
+    /// Every byte delivered, then not answered until the lease ends here.
+    DeliveredSilent,
+    /// The connection lost once every byte was delivered, before the host
+    /// answered: whether it is placed is not known. (What is written is the
+    /// SSH adapter's tests'.)
+    Lost,
 }
 
 /// How a host answers the gateway's publishes (slice D3a): each is noted,
@@ -1477,11 +1553,13 @@ impl Host {
     fn new() -> Self {
         Self {
             opened: AtomicUsize::new(0),
-            lose: tokio::sync::watch::channel(false).0,
+            lose: tokio::sync::watch::channel(None).0,
+            lease_ms: Mutex::new(None),
             release: Mutex::new(Some(LeaseCleanup::Confirmed { forced: false })),
             offers: Mutex::new(None),
             ending: Arc::default(),
             asked: Arc::default(),
+            fetching: Arc::default(),
         }
     }
 
@@ -1509,12 +1587,14 @@ impl Environment for Host {
         binding: Arc<dyn AgentProvider>,
     ) -> EnvironmentFuture<'a, Result<EnvironmentLease, LeaseRefusal>> {
         self.opened.fetch_add(1, Ordering::SeqCst);
+        let lease_ms = *self.lease_ms.lock().unwrap();
         let hold = Arc::new(HostHold {
             lost: self.lose.subscribe(),
             release: *self.release.lock().unwrap(),
             offers: Mutex::new(self.offers.lock().unwrap().take()),
             ending: self.ending.clone(),
             asked: self.asked.clone(),
+            fetching: self.fetching.clone(),
         });
         Box::pin(async move {
             Ok(EnvironmentLease {
@@ -1523,6 +1603,7 @@ impl Environment for Host {
                 granted: GrantedTerms {
                     sandbox: SandboxProfile::HarnessDefault,
                     timeout_ms: None,
+                    lease_ms,
                 },
                 workspace: Some("/srv/work".into()),
             })
@@ -1533,13 +1614,88 @@ impl Environment for Host {
     }
 }
 struct HostHold {
-    lost: tokio::sync::watch::Receiver<bool>,
+    lost: tokio::sync::watch::Receiver<Option<LeaseEndCause>>,
     release: Option<LeaseCleanup>,
     offers: Mutex<Option<tokio::sync::mpsc::Receiver<ArtifactOffer>>>,
     ending: Arc<tokio::sync::Notify>,
     asked: Arc<Asked>,
+    fetching: Arc<Fetching>,
 }
 impl LeaseHold for HostHold {
+    fn fetch(
+        &self,
+        ask: FetchAsk,
+    ) -> Option<EnvironmentFuture<'static, Result<FetchPlaced, FetchFailure>>> {
+        let fetching = self.fetching.clone();
+        Some(Box::pin(async move {
+            fetching
+                .asks
+                .lock()
+                .unwrap()
+                .push((ask.request.clone(), ask.destination.clone()));
+            let saved = fetching.saved.lock().unwrap().clone();
+            if let Some(saved) = saved {
+                let first = saved.lock().unwrap().iter().any(|record| {
+                    matches!(record, LeaseRecord::FetchAsked { request, .. } if request == &ask.request)
+                });
+                fetching
+                    .saved_first
+                    .lock()
+                    .unwrap()
+                    .push((ask.request.clone(), first));
+            }
+            fetching.noted.notify_one();
+            let path = format!("/srv/work/{}", ask.destination);
+            let script = *fetching.script.lock().unwrap();
+            match script {
+                FetchScript::AlreadyPlaced => return Ok(FetchPlaced::AlreadyPlaced { path }),
+                FetchScript::Refuse(reason) => return Err(FetchFailure::Refused(reason)),
+                FetchScript::Silent | FetchScript::DeliveredSilent => {
+                    if let FetchScript::DeliveredSilent = script {
+                        ask.delivered.store(true, Ordering::SeqCst);
+                    }
+                    loop {
+                        let ending = fetching.ending.notified();
+                        if fetching.ended.load(Ordering::SeqCst) {
+                            return Err(FetchFailure::Refused(FetchRefusal::LeaseEnded));
+                        }
+                        ending.await;
+                    }
+                }
+                FetchScript::Lost => {
+                    ask.delivered.store(true, Ordering::SeqCst);
+                    return Err(FetchFailure::Unanswered);
+                }
+                FetchScript::Place => {}
+            }
+            let size = ask.file.size();
+            let mut bytes = Vec::new();
+            while (bytes.len() as u64) < size {
+                let max = (size - bytes.len() as u64).min(32 * 1024) as usize;
+                match ask.source.read(bytes.len() as u64, max).await {
+                    Ok(range) => bytes.extend(range),
+                    Err(HeldSourceFailure::NotHeld) => return Err(FetchFailure::NotHeld),
+                    Err(HeldSourceFailure::Unavailable) => {
+                        return Err(FetchFailure::SourceUnavailable)
+                    }
+                }
+            }
+            fetching
+                .read
+                .lock()
+                .unwrap()
+                .insert(ask.request.clone(), bytes.clone());
+            let digest: String = sha2::Sha256::digest(&bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            ask.delivered.store(true, Ordering::SeqCst);
+            if digest != ask.file.digest().to_hex() {
+                return Err(FetchFailure::Refused(FetchRefusal::Mismatch));
+            }
+            Ok(FetchPlaced::Placed { path })
+        }))
+    }
     fn publish(
         &self,
         ask: PublishAsk,
@@ -1608,16 +1764,23 @@ impl LeaseHold for HostHold {
     fn artifacts(&self) -> Option<tokio::sync::mpsc::Receiver<ArtifactOffer>> {
         self.offers.lock().unwrap().take()
     }
-    fn lost(&self) -> Option<EnvironmentFuture<'static, ()>> {
+    fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>> {
         let mut lost = self.lost.clone();
         Some(Box::pin(async move {
-            let _ = lost.wait_for(|lost| *lost).await;
+            let cause = lost
+                .wait_for(Option::is_some)
+                .await
+                .ok()
+                .and_then(|cause| *cause);
+            cause.unwrap_or(LeaseEndCause::Lost)
         }))
     }
     fn end(&self, _cause: LeaseEndCause) -> EnvironmentFuture<'_, LeaseRelease> {
         self.ending.notify_one();
         self.asked.ended.store(true, Ordering::SeqCst);
         self.asked.ending.notify_waiters();
+        self.fetching.ended.store(true, Ordering::SeqCst);
+        self.fetching.ending.notify_waiters();
         let release = self.release;
         Box::pin(async move {
             match release {
@@ -1677,7 +1840,8 @@ fn with_publishing_host_waiting(
             hosts,
             placements,
         )
-        .with_publish_wait(wait),
+        .with_publish_wait(wait)
+        .with_fetch_wait(wait),
         DELETION_BUDGETS.stop,
         provider,
         binding,
@@ -2191,7 +2355,7 @@ async fn b_gate2_a_lost_connection_stops_the_conversation_and_ends_its_lease_as_
         let harness = with_host(root.path(), here, Some(host.clone()));
         harness.create_on("devbox").await.unwrap();
         harness.turn("turn-1").await;
-        host.lose.send_replace(true);
+        host.lose.send_replace(Some(LeaseEndCause::Lost));
         let lease = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let lease = harness.lease().await;
@@ -2209,6 +2373,158 @@ async fn b_gate2_a_lost_connection_stops_the_conversation_and_ends_its_lease_as_
         assert!(actor.is_some_and(|actor| actor.starts_with("lost-")));
         assert_eq!(harness.provider.close_calls.load(Ordering::SeqCst), 1);
     }
+}
+
+/// Row I7 through the service: a duration the environment grants is
+/// recorded on the issued lease as its deadline, from the service's clock
+/// (`a_granted_duration_is_recorded_as_the_deadline` shows that clock is
+/// read before the lease is asked for).
+#[tokio::test]
+async fn a_granted_duration_is_recorded_on_the_issued_lease() {
+    let root = tempfile::tempdir().unwrap();
+    let here = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+    let host = Arc::new(Host::new());
+    *host.lease_ms.lock().unwrap() = Some(3_600_000);
+    let harness = with_host(root.path(), here, Some(host.clone()));
+    harness.create_on("devbox").await.unwrap();
+    harness.turn("turn-1").await;
+    // Read once the conversation lets its stream go.
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    let lease = harness.lease().await;
+    assert_eq!(kinds(&lease), ["issued", "ending", "ended"]);
+    let LeaseRecord::Issued { terms, .. } = &lease.records()[0] else {
+        panic!("issued first");
+    };
+    assert_eq!(
+        terms.deadline,
+        LeaseDeadline::At(TestClock.unix_milliseconds() + 3_600_000)
+    );
+}
+
+/// Row I7: the environment ending a lease past its granted duration stops
+/// the conversation as the system, never a person: the lease is recorded
+/// ending (expired), its End asked, and ended with the environment's
+/// cleanup, or interrupted when no answer comes.
+async fn an_environment_expiry_ends_the_lease(
+    release: Option<LeaseCleanup>,
+) -> (CurrentLease, Vec<&'static str>) {
+    an_environment_ends_the_lease(LeaseEndCause::Expired, release).await
+}
+
+/// The environment's hold ending the lease for `cause` stops the
+/// conversation as the system, never a person: the lease is recorded ending
+/// for that cause, by the system's actor for it, its End asked, and ended
+/// with the environment's cleanup, or interrupted when no answer comes.
+async fn an_environment_ends_the_lease(
+    cause: LeaseEndCause,
+    release: Option<LeaseCleanup>,
+) -> (CurrentLease, Vec<&'static str>) {
+    let (prefix, surface) = match cause {
+        LeaseEndCause::Expired => ("expired-", "environment_expired"),
+        LeaseEndCause::Revoked => ("revoked-", "environment_revoked"),
+        LeaseEndCause::Stopped => ("drained-", "environment_drained"),
+        other => panic!("not an environment's own end: {other:?}"),
+    };
+    let root = tempfile::tempdir().unwrap();
+    let here = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+    let host = Arc::new(Host::new());
+    *host.release.lock().unwrap() = release;
+    *host.lease_ms.lock().unwrap() = Some(60_000);
+    let harness = with_host(root.path(), here, Some(host.clone()));
+    harness.create_on("devbox").await.unwrap();
+    harness.turn("turn-1").await;
+    host.lose.send_replace(Some(cause));
+    let lease = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let lease = harness.lease().await;
+            if kinds(&lease).len() == 3 {
+                break lease;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the lease ends");
+    let (recorded, actor) = ending_cause(&lease).unwrap();
+    assert_eq!(recorded, cause);
+    assert!(actor.is_some_and(|actor| actor.starts_with(prefix)));
+    let ending = lease.records().iter().find_map(|record| match record {
+        LeaseRecord::Ending { actor, .. } => actor.clone(),
+        _ => None,
+    });
+    let ending = ending.unwrap();
+    assert_eq!(
+        (ending.principal_id(), ending.surface_id()),
+        ("gateway", surface)
+    );
+    assert_eq!(harness.provider.close_calls.load(Ordering::SeqCst), 1);
+    let kinds = kinds(&lease);
+    (lease, kinds)
+}
+
+#[tokio::test]
+async fn an_environment_expiry_is_recorded_ending_then_ended_with_its_cleanup() {
+    let (lease, kinds) =
+        an_environment_expiry_ends_the_lease(Some(LeaseCleanup::Confirmed { forced: false })).await;
+    assert_eq!(kinds, ["issued", "ending", "ended"]);
+    let view = nessa_protocol::conversation::projection::lease_view(&lease);
+    assert_eq!(view.state, ConversationLeaseState::Ended);
+    assert_eq!(view.cause, Some(ConversationLeaseCause::Expired));
+    assert_eq!(view.cleanup, Some(ConversationLeaseCleanup::Confirmed));
+}
+
+#[tokio::test]
+async fn an_expiry_whose_end_goes_unanswered_is_interrupted() {
+    let (lease, kinds) = an_environment_expiry_ends_the_lease(None).await;
+    assert_eq!(kinds, ["issued", "ending", "interrupted"]);
+    let view = nessa_protocol::conversation::projection::lease_view(&lease);
+    assert_eq!(view.cause, Some(ConversationLeaseCause::Expired));
+}
+
+/// Row I8: a paired environment revoked while its lease runs is ended as
+/// revoked, by the system, and ended with the environment's cleanup, or
+/// interrupted when no answer comes.
+#[tokio::test]
+async fn an_environment_revocation_is_recorded_ending_then_ended_with_its_cleanup() {
+    let (lease, kinds) = an_environment_ends_the_lease(
+        LeaseEndCause::Revoked,
+        Some(LeaseCleanup::Confirmed { forced: false }),
+    )
+    .await;
+    assert_eq!(kinds, ["issued", "ending", "ended"]);
+    let view = nessa_protocol::conversation::projection::lease_view(&lease);
+    assert_eq!(view.state, ConversationLeaseState::Ended);
+    assert_eq!(view.cause, Some(ConversationLeaseCause::Revoked));
+    assert_eq!(view.cleanup, Some(ConversationLeaseCleanup::Confirmed));
+}
+
+#[tokio::test]
+async fn a_revocation_whose_end_goes_unanswered_is_interrupted() {
+    let (lease, kinds) = an_environment_ends_the_lease(LeaseEndCause::Revoked, None).await;
+    assert_eq!(kinds, ["issued", "ending", "interrupted"]);
+    let view = nessa_protocol::conversation::projection::lease_view(&lease);
+    assert_eq!(view.cause, Some(ConversationLeaseCause::Revoked));
+}
+
+/// Row K1: a paired environment draining before it stops ends its lease as a
+/// system stop by `environment_drained`, never a person and never lost, and
+/// ended with the environment's cleanup.
+#[tokio::test]
+async fn k1_an_environment_drain_is_recorded_stopped_by_the_system_then_ended() {
+    let (lease, kinds) = an_environment_ends_the_lease(
+        LeaseEndCause::Stopped,
+        Some(LeaseCleanup::Confirmed { forced: false }),
+    )
+    .await;
+    assert_eq!(kinds, ["issued", "ending", "ended"]);
+    let view = nessa_protocol::conversation::projection::lease_view(&lease);
+    assert_eq!(view.state, ConversationLeaseState::Ended);
+    assert_eq!(view.cause, Some(ConversationLeaseCause::Stopped));
+    assert_eq!(view.cleanup, Some(ConversationLeaseCleanup::Confirmed));
 }
 
 // Command leases (rows L14, L15; issue #700): the agent's `run` through the
@@ -2273,6 +2589,7 @@ impl CommandEnvironment for CommandHost {
         let granted = self.terms.lock().unwrap().unwrap_or(GrantedTerms {
             sandbox: SandboxProfile::None,
             timeout_ms: Some(command.timeout_ms()),
+            lease_ms: None,
         });
         Box::pin(async move {
             if let Some(refusal) = refusal {
@@ -3481,6 +3798,7 @@ async fn l1_an_environment_granting_other_terms_than_asked_is_refused_and_nothin
     *substitute.granted.lock().unwrap() = Some(GrantedTerms {
         sandbox: SandboxProfile::None,
         timeout_ms: None,
+        lease_ms: None,
     });
     let binding = Arc::new(Provider::new(provider.clone()));
     let harness = harness(
@@ -3518,8 +3836,8 @@ async fn l1_an_environment_granting_other_terms_than_asked_is_refused_and_nothin
 
 /// Row I5 on the gateway: a command whose environment narrowed its timeout
 /// is recorded issued with the timeout granted, never the one asked, and
-/// runs under it; an answer granting longer than asked, or another sandbox,
-/// is recorded refused and never runs.
+/// runs under it; an answer granting longer than asked, another sandbox, or
+/// a lease duration, is recorded refused and never runs.
 #[tokio::test]
 async fn i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused() {
     let root = tempfile::tempdir().unwrap();
@@ -3532,6 +3850,7 @@ async fn i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused
     *host.terms.lock().unwrap() = Some(GrantedTerms {
         sandbox: SandboxProfile::None,
         timeout_ms: Some(2_000),
+        lease_ms: None,
     });
     let answer = harness
         .run(command("devbox", &["echo", "hi"], "narrowed"))
@@ -3549,14 +3868,23 @@ async fn i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused
         GrantedTerms {
             sandbox: SandboxProfile::None,
             timeout_ms: Some(20_000),
+            lease_ms: None,
         },
         GrantedTerms {
             sandbox: SandboxProfile::HarnessDefault,
             timeout_ms: Some(10_000),
+            lease_ms: None,
         },
         GrantedTerms {
             sandbox: SandboxProfile::None,
             timeout_ms: None,
+            lease_ms: None,
+        },
+        // A lease duration nobody asked for: a command has its timeout.
+        GrantedTerms {
+            sandbox: SandboxProfile::None,
+            timeout_ms: Some(2_000),
+            lease_ms: Some(60_000),
         },
     ]
     .into_iter()
@@ -3587,5 +3915,1317 @@ async fn i5_a_narrowed_command_is_recorded_as_granted_and_a_wider_one_is_refused
     }
     // Only the narrowed one ran.
     assert_eq!(*host.timeouts.lock().unwrap(), [2_000]);
+    go.send(()).unwrap();
+}
+
+// Slice D3b: `artifacts_fetch` through the service, on a configured host
+// whose fetches a fake answers by reading the source as the SSH adapter
+// does; the frames and the sftp writes are the SSH adapter's tests'.
+
+use crate::conversation::application::{
+    ArtifactBudget, FetchAnswer, FetchAsk, FetchCall, FetchCallRefusal, FetchFailure, FetchPlaced,
+    HeldRangeError, HeldSourceFailure, FETCH_CALL_WAIT,
+};
+use nessa_protocol::lease::FetchRefusal;
+use nessa_sdk::application::agent_execution::sessions::{
+    EnvironmentFetchRefusal, EnvironmentPath, FetchOutcome, FetchRefusalReason, PublishedFile,
+};
+use sha2::Digest as _;
+
+fn digest_hex(bytes: &[u8]) -> String {
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn fetch_call(environment: &str, bytes: &[u8], destination: &str, call: &str) -> FetchCall {
+    FetchCall {
+        environment: environment.into(),
+        digest: digest_hex(bytes),
+        media_type: "application/octet-stream".into(),
+        size: bytes.len() as u64,
+        destination: destination.into(),
+        call: call.into(),
+    }
+}
+
+impl Harness {
+    /// Every fetch record the store was handed to save, in order.
+    fn saved_fetches(&self) -> Vec<LeaseRecord> {
+        self.storage
+            .saved
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|record| {
+                matches!(
+                    record,
+                    LeaseRecord::FetchAsked { .. } | LeaseRecord::FetchEnded { .. }
+                )
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Each fetch's end the store was handed to save: its request and
+    /// outcome, in order.
+    fn saved_fetch_ends(&self) -> Vec<(String, FetchOutcome)> {
+        self.saved_fetches()
+            .into_iter()
+            .filter_map(|record| match record {
+                LeaseRecord::FetchEnded {
+                    request, outcome, ..
+                } => Some((request, outcome)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    async fn fetch_file(&self, call: FetchCall) -> FetchAnswer {
+        let (_caller, stop) = tokio::sync::watch::channel(false);
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            self.service.fetch_artifact(&self.id, call, stop),
+        )
+        .await
+        .expect("the fetch is answered in time")
+    }
+}
+
+/// A fetch wait short enough to time out quickly, and long enough for a
+/// call that is answered to save its asking first, under a loaded machine.
+const FETCH_SAVE_WAIT: Duration = Duration::from_secs(1);
+
+/// A host's harness with its conversation created there, a turn running
+/// that `go` lets finish, and `bytes` held by the conversation.
+async fn fetching_turn(
+    root: &Path,
+    bytes: &[u8],
+    wait: Duration,
+) -> (
+    Harness,
+    Arc<Host>,
+    Arc<MemoryAttachments>,
+    oneshot::Sender<()>,
+) {
+    let (host, _publisher) = Host::publishing();
+    let host = Arc::new(host);
+    let attachments = Arc::new(MemoryAttachments::default());
+    let (harness, go) = publishing_turn(root, host.clone(), attachments.clone(), wait).await;
+    attachments
+        .files
+        .lock()
+        .unwrap()
+        .push((harness.id.clone(), digest_hex(bytes), bytes.to_vec()));
+    (harness, host, attachments, go)
+}
+
+/// A file the conversation holds is placed for the turn's person: every
+/// range is read for them, and the answer says where it is.
+#[tokio::test]
+async fn a_held_file_is_fetched_for_the_turns_person_and_placed() {
+    let root = tempfile::tempdir().unwrap();
+    let bytes: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
+    let (harness, host, attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_CALL_WAIT).await;
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "assets/a.bin", "call-1"))
+            .await,
+        FetchAnswer::Placed {
+            already_placed: false,
+            path: "/srv/work/assets/a.bin".into(),
+            digest: digest_hex(&bytes),
+            size: bytes.len() as u64,
+            recorded: true,
+        }
+    );
+    assert_eq!(
+        *host.fetching.asks.lock().unwrap(),
+        [("call-1".to_owned(), "assets/a.bin".to_owned())]
+    );
+    assert_eq!(host.fetching.read.lock().unwrap()["call-1"], bytes);
+    // Read for the turn's person, from the start, before the host was
+    // asked, and then range by range.
+    let ranges = attachments.ranges.lock().unwrap().clone();
+    assert!(ranges.iter().all(|(person, _)| person == "person"));
+    assert_eq!(ranges[0].1, 0);
+    assert!(ranges.len() >= 5, "{ranges:?}");
+    // Already there: said so.
+    *host.fetching.script.lock().unwrap() = FetchScript::AlreadyPlaced;
+    assert!(matches!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "assets/a.bin", "call-2"))
+            .await,
+        FetchAnswer::Placed {
+            already_placed: true,
+            ..
+        }
+    ));
+    // A host's refusal is said by its reason.
+    *host.fetching.script.lock().unwrap() = FetchScript::Refuse(FetchRefusal::Occupied);
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "notes.txt", "call-3"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::NotPlaced(FetchRefusal::Occupied))
+    );
+    go.send(()).unwrap();
+}
+
+/// Only where the agent runs, under its Live lease, for a running turn:
+/// anything else is refused before the host is asked.
+#[tokio::test]
+async fn a_fetch_without_this_conversations_lease_or_turn_is_refused_typed() {
+    let root = tempfile::tempdir().unwrap();
+    let bytes = b"a picture".to_vec();
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_CALL_WAIT).await;
+    for elsewhere in [HERE, "otherbox", "peer:nobody", ""] {
+        assert_eq!(
+            harness
+                .fetch_file(fetch_call(elsewhere, &bytes, "a.bin", "call-1"))
+                .await,
+            FetchAnswer::Refused(FetchCallRefusal::EnvironmentNotLeased),
+            "{elsewhere:?}"
+        );
+    }
+    // A file no one could hold is no file.
+    let mut unreadable = fetch_call("devbox", &bytes, "a.bin", "call-1");
+    unreadable.digest = "AB".repeat(32);
+    let mut empty = fetch_call("devbox", &bytes, "a.bin", "call-1");
+    empty.size = 0;
+    let mut untyped = fetch_call("devbox", &bytes, "a.bin", "call-1");
+    untyped.media_type = "image".into();
+    // Nor is a place no environment reads.
+    let nowhere = fetch_call("devbox", &bytes, "", "call-1");
+    let too_long = fetch_call(
+        "devbox",
+        &bytes,
+        &"a".repeat(EnvironmentPath::MAX_BYTES + 1),
+        "call-1",
+    );
+    for invalid in [unreadable, empty, untyped, nowhere, too_long] {
+        assert_eq!(
+            harness.fetch_file(invalid).await,
+            FetchAnswer::Refused(FetchCallRefusal::Invalid)
+        );
+    }
+    assert!(host.fetching.asks.lock().unwrap().is_empty());
+    // Refused before it was decided: nothing is recorded.
+    assert!(harness.saved_fetches().is_empty());
+    go.send(()).unwrap();
+
+    let root = tempfile::tempdir().unwrap();
+    let (host, _publisher) = Host::publishing();
+    let host = Arc::new(host);
+    let attachments = Arc::new(MemoryAttachments::default());
+    let harness = with_publishing_host(root.path(), host.clone(), attachments);
+    harness.create_on("devbox").await.unwrap();
+    harness.turn("turn-1").await;
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-1"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::NoTurn)
+    );
+    assert!(host.fetching.asks.lock().unwrap().is_empty());
+    assert!(harness.saved_fetches().is_empty());
+}
+
+/// Here takes no files: a conversation running on this gateway's own
+/// machine is told so by name, whatever it holds.
+#[tokio::test]
+async fn a_fetch_where_the_agent_runs_here_is_refused_unavailable() {
+    let root = tempfile::tempdir().unwrap();
+    let here = Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT));
+    let harness = with_host(root.path(), here, None);
+    harness.create().await;
+    let go = harness.running_turn().await;
+    for _ in 0..2 {
+        assert_eq!(
+            harness
+                .fetch_file(fetch_call(HERE, b"x", "a.bin", "call-1"))
+                .await,
+            FetchAnswer::Refused(FetchCallRefusal::FetchUnavailable)
+        );
+    }
+    go.send(()).unwrap();
+}
+
+/// A file the conversation does not hold for the turn's person is refused
+/// before the host is asked; one let go while it is written stops there.
+#[tokio::test]
+async fn a_file_not_held_or_let_go_mid_fetch_is_refused_not_held_and_nothing_is_placed() {
+    let root = tempfile::tempdir().unwrap();
+    let bytes: Vec<u8> = (0..100_000u32).map(|i| (i % 13) as u8).collect();
+    let (harness, host, attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_CALL_WAIT).await;
+    let other = b"never attached".to_vec();
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &other, "a.bin", "call-1"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::NotHeld)
+    );
+    assert!(host.fetching.asks.lock().unwrap().is_empty());
+    // The store cannot say: unavailable, and nothing asked.
+    attachments
+        .range_errors
+        .lock()
+        .unwrap()
+        .push_back(HeldRangeError::Unavailable);
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-2"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::SourceUnavailable)
+    );
+    assert!(host.fetching.asks.lock().unwrap().is_empty());
+    // A busy store is asked again, after a pause each time: the fetch goes
+    // on, and never rejoins the store's queue at once.
+    attachments
+        .range_errors
+        .lock()
+        .unwrap()
+        .extend([HeldRangeError::Busy, HeldRangeError::Busy]);
+    let started = std::time::Instant::now();
+    assert!(matches!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-3"))
+            .await,
+        FetchAnswer::Placed { .. }
+    ));
+    let paused: Duration = crate::conversation::application::FETCH_BUSY_BACKOFF[..2]
+        .iter()
+        .sum();
+    assert!(started.elapsed() >= paused, "{:?}", started.elapsed());
+    // Let go after its first range is written: stopped there.
+    let read = attachments.ranges.lock().unwrap().len();
+    *attachments.let_go_after.lock().unwrap() = Some(read + 2);
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "b.bin", "call-4"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::NotHeld)
+    );
+    assert!(!host.fetching.read.lock().unwrap().contains_key("call-4"));
+    go.send(()).unwrap();
+}
+
+/// One call fetches once at a time; cancelled, it may be asked again.
+#[tokio::test]
+async fn a_fetch_for_a_call_already_fetching_is_refused_and_a_cancelled_one_lets_its_call_go() {
+    let root = tempfile::tempdir().unwrap();
+    let bytes = b"a picture".to_vec();
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_CALL_WAIT).await;
+    *host.fetching.script.lock().unwrap() = FetchScript::Silent;
+    let (caller_gone, stop) = tokio::sync::watch::channel(false);
+    let first = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        let call = fetch_call("devbox", &bytes, "a.bin", "call-1");
+        tokio::spawn(async move { service.fetch_artifact(&id, call, stop).await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), host.fetching.noted.notified())
+        .await
+        .expect("the host was asked");
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-1"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::DuplicateRequest)
+    );
+    caller_gone.send(true).unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), first)
+            .await
+            .unwrap()
+            .unwrap(),
+        FetchAnswer::Refused(FetchCallRefusal::Cancelled { delivered: false })
+    );
+    *host.fetching.script.lock().unwrap() = FetchScript::Place;
+    assert!(matches!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-1"))
+            .await,
+        FetchAnswer::Placed { .. }
+    ));
+    go.send(()).unwrap();
+}
+
+/// What a lease's fetches may write is reserved before the host is asked
+/// and given back only when the answer says nothing was placed: an answer
+/// that never came stays counted.
+#[tokio::test]
+async fn a_fetch_past_the_leases_budget_is_refused_before_the_host_is_asked() {
+    let root = tempfile::tempdir().unwrap();
+    let largest = PublishedFile::MAX_BYTES as usize;
+    let bytes = vec![7u8; largest];
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_CALL_WAIT).await;
+    let fits = (ArtifactBudget::LEASE.fetch_bytes / PublishedFile::MAX_BYTES) as usize;
+    // Lost after every byte: may be placed, so counted.
+    *host.fetching.script.lock().unwrap() = FetchScript::Lost;
+    for n in 0..fits - 1 {
+        assert_eq!(
+            harness
+                .fetch_file(fetch_call("devbox", &bytes, "a.bin", &format!("lost-{n}")))
+                .await,
+            FetchAnswer::Refused(FetchCallRefusal::Unanswered { delivered: true })
+        );
+    }
+    // Refused: nothing placed, so given back, however often.
+    *host.fetching.script.lock().unwrap() = FetchScript::Refuse(FetchRefusal::Occupied);
+    for n in 0..3 {
+        assert!(matches!(
+            harness
+                .fetch_file(fetch_call(
+                    "devbox",
+                    &bytes,
+                    "a.bin",
+                    &format!("refused-{n}")
+                ))
+                .await,
+            FetchAnswer::Refused(FetchCallRefusal::NotPlaced(FetchRefusal::Occupied))
+        ));
+    }
+    *host.fetching.script.lock().unwrap() = FetchScript::AlreadyPlaced;
+    assert!(matches!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "already"))
+            .await,
+        FetchAnswer::Placed {
+            already_placed: true,
+            ..
+        }
+    ));
+    *host.fetching.script.lock().unwrap() = FetchScript::Lost;
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "last"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::Unanswered { delivered: true })
+    );
+    let asked = host.fetching.asks.lock().unwrap().len();
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "over"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::BudgetExceeded)
+    );
+    assert_eq!(host.fetching.asks.lock().unwrap().len(), asked);
+    go.send(()).unwrap();
+}
+
+/// The agent's lease ending while a file is written: refused as the lease
+/// ended, and the call told so.
+#[tokio::test]
+async fn a_fetch_whose_lease_ends_mid_transfer_is_refused_lease_ended() {
+    let root = tempfile::tempdir().unwrap();
+    let bytes = b"a picture".to_vec();
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_CALL_WAIT).await;
+    *host.fetching.script.lock().unwrap() = FetchScript::Silent;
+    let fetching = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        let call = fetch_call("devbox", &bytes, "a.bin", "call-1");
+        tokio::spawn(async move {
+            let (_caller, stop) = tokio::sync::watch::channel(false);
+            service.fetch_artifact(&id, call, stop).await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), host.fetching.noted.notified())
+        .await
+        .expect("the host was asked");
+    let closing = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        tokio::spawn(async move { service.close(id, caller("close")).await })
+    };
+    drop(go);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), fetching)
+            .await
+            .unwrap()
+            .unwrap(),
+        FetchAnswer::Refused(FetchCallRefusal::NotPlaced(FetchRefusal::LeaseEnded))
+    );
+    tokio::time::timeout(Duration::from_secs(5), closing)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+/// A placement store that stalls holds the call no longer than its wait,
+/// and no longer than its caller stays: every step that can wait is inside
+/// both, the store's read included. A pipe is what stalls it here.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_fetch_whose_placement_read_stalls_is_timed_out_or_cancelled() {
+    use std::os::unix::ffi::OsStrExt as _;
+    let root = tempfile::tempdir().unwrap();
+    let bytes = b"a picture".to_vec();
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, Duration::from_millis(200)).await;
+    // The placement becomes a pipe nobody writes: reading it waits.
+    let placement = placement_file(root.path());
+    let kept = std::fs::read(&placement).unwrap();
+    std::fs::remove_file(&placement).unwrap();
+    let fifo = std::ffi::CString::new(placement.as_os_str().as_bytes()).unwrap();
+    // SAFETY: mkfifo reads the NUL-terminated path only.
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-1"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::TimedOut { delivered: false })
+    );
+    let (caller_gone, stop) = tokio::sync::watch::channel(false);
+    let cancelled = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        let call = fetch_call("devbox", &bytes, "a.bin", "call-2");
+        tokio::spawn(async move { service.fetch_artifact(&id, call, stop).await })
+    };
+    caller_gone.send(true).unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), cancelled)
+            .await
+            .unwrap()
+            .unwrap(),
+        FetchAnswer::Refused(FetchCallRefusal::Cancelled { delivered: false })
+    );
+    assert!(host.fetching.asks.lock().unwrap().is_empty());
+    // Let the stalled reads go, so nothing is left waiting: a writer on the
+    // pipe ends their wait. It opens for reading too, so it does not itself
+    // wait for a reader: on a slow machine a call can time out before its
+    // read ever opens the pipe, and then no reader comes. It stays open
+    // until the placement is back, so a read that reaches the pipe after it
+    // opened finds a writer too.
+    let writer = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&placement)
+        .unwrap();
+    std::fs::remove_file(&placement).unwrap();
+    std::fs::write(&placement, &kept).unwrap();
+    drop(writer);
+    go.send(()).unwrap();
+}
+
+/// Not answered within its wait: timed out, and it may still be placed.
+#[tokio::test]
+async fn a_fetch_not_answered_within_its_wait_answers_timed_out() {
+    let root = tempfile::tempdir().unwrap();
+    let bytes = b"a picture".to_vec();
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, Duration::from_millis(100)).await;
+    *host.fetching.script.lock().unwrap() = FetchScript::Silent;
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-1"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::TimedOut { delivered: false })
+    );
+    go.send(()).unwrap();
+}
+
+/// A store that stays busy before the host is asked holds the call no
+/// longer than its wait or its caller: it answers timed out, or cancelled,
+/// with the host never asked and the call let go.
+#[tokio::test]
+async fn a_fetch_whose_store_stays_busy_still_ends_on_its_wait_or_its_stop() {
+    let root = tempfile::tempdir().unwrap();
+    let bytes = b"a picture".to_vec();
+    let (harness, host, attachments, go) =
+        fetching_turn(root.path(), &bytes, Duration::from_millis(100)).await;
+    attachments
+        .range_errors
+        .lock()
+        .unwrap()
+        .extend(std::iter::repeat_n(HeldRangeError::Busy, 64));
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-1"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::TimedOut { delivered: false })
+    );
+    let (caller_gone, stop) = tokio::sync::watch::channel(false);
+    let stopped = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        let call = fetch_call("devbox", &bytes, "a.bin", "call-1");
+        tokio::spawn(async move { service.fetch_artifact(&id, call, stop).await })
+    };
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    caller_gone.send(true).unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), stopped)
+            .await
+            .unwrap()
+            .unwrap(),
+        FetchAnswer::Refused(FetchCallRefusal::Cancelled { delivered: false })
+    );
+    assert!(host.fetching.asks.lock().unwrap().is_empty());
+    go.send(()).unwrap();
+}
+
+/// What a call reserved is given back when it stops waiting before every
+/// byte was delivered, since nothing can be placed then; one that stops
+/// after stays counted, since the host may still place it.
+#[tokio::test]
+async fn a_fetch_stopped_before_delivery_gives_its_size_back_and_one_after_does_not() {
+    let root = tempfile::tempdir().unwrap();
+    let largest = PublishedFile::MAX_BYTES as usize;
+    let bytes = vec![3u8; largest];
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_SAVE_WAIT).await;
+    let fits = (ArtifactBudget::LEASE.fetch_bytes / PublishedFile::MAX_BYTES) as usize;
+    let script = |script| *host.fetching.script.lock().unwrap() = script;
+    script(FetchScript::Lost);
+    for n in 0..fits - 1 {
+        assert_eq!(
+            harness
+                .fetch_file(fetch_call("devbox", &bytes, "a.bin", &format!("lost-{n}")))
+                .await,
+            FetchAnswer::Refused(FetchCallRefusal::Unanswered { delivered: true })
+        );
+    }
+    // Timed out and cancelled with nothing delivered: given back.
+    script(FetchScript::Silent);
+    for n in 0..2 {
+        assert_eq!(
+            harness
+                .fetch_file(fetch_call("devbox", &bytes, "a.bin", &format!("late-{n}")))
+                .await,
+            FetchAnswer::Refused(FetchCallRefusal::TimedOut { delivered: false })
+        );
+    }
+    let (caller_gone, stop) = tokio::sync::watch::channel(false);
+    let cancelled = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        let call = fetch_call("devbox", &bytes, "a.bin", "cancelled");
+        tokio::spawn(async move { service.fetch_artifact(&id, call, stop).await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !host
+            .fetching
+            .asks
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(request, _)| request == "cancelled")
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the host was asked");
+    caller_gone.send(true).unwrap();
+    assert_eq!(
+        cancelled.await.unwrap(),
+        FetchAnswer::Refused(FetchCallRefusal::Cancelled { delivered: false })
+    );
+    // Timed out once every byte was delivered: counted, and now full.
+    script(FetchScript::DeliveredSilent);
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "delivered"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::TimedOut { delivered: true })
+    );
+    script(FetchScript::Place);
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "over"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::BudgetExceeded)
+    );
+    go.send(()).unwrap();
+}
+
+/// However many fetches run at once, across conversations' calls, the
+/// gateway reads at most `server.fetch_reads` held ranges at a time.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_fetches_never_read_more_than_the_gateways_bound_at_once() {
+    let root = tempfile::tempdir().unwrap();
+    let bytes: Vec<u8> = (0..100_000u32).map(|i| (i % 17) as u8).collect();
+    let (harness, _host, attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_CALL_WAIT).await;
+    // Long enough that each fetch is still reading when the next one, its
+    // asking saved after the one before's, starts to read.
+    *attachments.range_delay.lock().unwrap() = Some(Duration::from_millis(50));
+    // As many as one lease may have under way, more than read at once.
+    let fetches: Vec<_> = (0..CurrentLease::MAX_ASKED_FETCHES)
+        .map(|n| {
+            let service = harness.service.clone();
+            let id = harness.id.clone();
+            let call = fetch_call("devbox", &bytes, &format!("{n}.bin"), &format!("call-{n}"));
+            tokio::spawn(async move {
+                let (_caller, stop) = tokio::sync::watch::channel(false);
+                service.fetch_artifact(&id, call, stop).await
+            })
+        })
+        .collect();
+    for fetch in fetches {
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(20), fetch)
+                .await
+                .unwrap()
+                .unwrap(),
+            FetchAnswer::Placed { .. }
+        ));
+    }
+    let most = attachments.most_reading.load(Ordering::SeqCst);
+    assert_eq!(
+        most,
+        crate::conversation::application::FETCH_READS,
+        "the bound was reached, never passed"
+    );
+
+    go.send(()).unwrap();
+}
+
+fn placed_at(path: &str) -> FetchOutcome {
+    FetchOutcome::Placed {
+        path: EnvironmentPath::new(path).unwrap(),
+    }
+}
+
+/// Before the host is asked, the fetch is recorded asked for the turn's
+/// person with the call as their request; whatever it comes to, its end is
+/// recorded once, after it.
+#[tokio::test]
+async fn a_fetch_is_recorded_asked_for_the_turns_person_before_the_host_is_asked_and_ended_once() {
+    let root = tempfile::tempdir().unwrap();
+    let bytes = b"a picture".to_vec();
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_CALL_WAIT).await;
+    *host.fetching.saved.lock().unwrap() = Some(harness.storage.saved.clone());
+    let script = |script| *host.fetching.script.lock().unwrap() = script;
+    assert!(matches!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-1"))
+            .await,
+        FetchAnswer::Placed {
+            already_placed: false,
+            recorded: true,
+            ..
+        }
+    ));
+    script(FetchScript::AlreadyPlaced);
+    assert!(matches!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-2"))
+            .await,
+        FetchAnswer::Placed {
+            already_placed: true,
+            recorded: true,
+            ..
+        }
+    ));
+    script(FetchScript::Refuse(FetchRefusal::Occupied));
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "b.bin", "call-3"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::NotPlaced(FetchRefusal::Occupied))
+    );
+    // Not held: refused on its first read, after it was recorded asked and
+    // before the host was asked.
+    script(FetchScript::Place);
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", b"never attached", "c.bin", "call-4"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::NotHeld)
+    );
+    assert_eq!(
+        *host.fetching.saved_first.lock().unwrap(),
+        [
+            ("call-1".to_owned(), true),
+            ("call-2".to_owned(), true),
+            ("call-3".to_owned(), true)
+        ]
+    );
+
+    let saved = harness.saved_fetches();
+    let asked: Vec<(String, String, String, String)> = saved
+        .iter()
+        .filter_map(|record| match record {
+            LeaseRecord::FetchAsked {
+                request,
+                file,
+                destination,
+                actor,
+                ..
+            } => {
+                assert_eq!(actor.request_id(), request);
+                Some((
+                    request.clone(),
+                    actor.principal_id().to_owned(),
+                    destination.as_str().to_owned(),
+                    file.media_type().as_str().to_owned(),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    let octets = "application/octet-stream".to_owned();
+    assert_eq!(
+        asked,
+        [
+            (
+                "call-1".into(),
+                "person".into(),
+                "a.bin".into(),
+                octets.clone()
+            ),
+            (
+                "call-2".into(),
+                "person".into(),
+                "a.bin".into(),
+                octets.clone()
+            ),
+            (
+                "call-3".into(),
+                "person".into(),
+                "b.bin".into(),
+                octets.clone()
+            ),
+            ("call-4".into(), "person".into(), "c.bin".into(), octets),
+        ]
+    );
+    assert_eq!(
+        harness.saved_fetch_ends(),
+        [
+            ("call-1".into(), placed_at("/srv/work/a.bin")),
+            (
+                "call-2".into(),
+                FetchOutcome::AlreadyPlaced {
+                    path: EnvironmentPath::new("/srv/work/a.bin").unwrap()
+                }
+            ),
+            (
+                "call-3".into(),
+                FetchOutcome::Refused(FetchRefusalReason::Environment(
+                    EnvironmentFetchRefusal::Occupied
+                ))
+            ),
+            (
+                "call-4".into(),
+                FetchOutcome::Refused(FetchRefusalReason::NotHeld)
+            ),
+        ]
+    );
+    // Each end follows its own asking.
+    for request in ["call-1", "call-2", "call-3", "call-4"] {
+        let at = |ended: bool| {
+            saved.iter().position(|record| match record {
+                LeaseRecord::FetchAsked { request: asked, .. } => !ended && asked == request,
+                LeaseRecord::FetchEnded { request: asked, .. } => ended && asked == request,
+                _ => false,
+            })
+        };
+        assert!(at(false) < at(true), "{request}");
+    }
+    go.send(()).unwrap();
+}
+
+/// A fetch whose asking cannot be saved is refused `audit_unavailable`:
+/// the host is never asked, its size is given back, and its end is kept
+/// beside its asking, so both are saved once the store recovers.
+#[tokio::test]
+async fn a_fetch_that_cannot_be_recorded_asked_is_refused_audit_unavailable_and_never_asked() {
+    let root = tempfile::tempdir().unwrap();
+    let largest = PublishedFile::MAX_BYTES as usize;
+    let bytes = vec![5u8; largest];
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_CALL_WAIT).await;
+    let fits = (ArtifactBudget::LEASE.fetch_bytes / PublishedFile::MAX_BYTES) as usize;
+    *harness.storage.failing.lock().unwrap() =
+        Some(|record| matches!(record, LeaseRecord::FetchAsked { .. }));
+    // More than the budget holds and more than may be under way at once:
+    // none of them is counted, nor left under way.
+    for n in 0..=fits.max(CurrentLease::MAX_ASKED_FETCHES) {
+        assert_eq!(
+            harness
+                .fetch_file(fetch_call("devbox", &bytes, "a.bin", &format!("audit-{n}")))
+                .await,
+            // Its end goes unsaved with its asking: said so as well.
+            FetchAnswer::RefusedUnrecorded(FetchCallRefusal::AuditUnavailable)
+        );
+    }
+    assert!(host.fetching.asks.lock().unwrap().is_empty());
+    assert!(harness.saved_fetches().is_empty());
+    *harness.storage.failing.lock().unwrap() = None;
+    // Every byte of the budget is still there to fetch.
+    *host.fetching.script.lock().unwrap() = FetchScript::Lost;
+    for n in 0..fits {
+        assert_eq!(
+            harness
+                .fetch_file(fetch_call("devbox", &bytes, "a.bin", &format!("lost-{n}")))
+                .await,
+            FetchAnswer::Refused(FetchCallRefusal::Unanswered { delivered: true })
+        );
+    }
+    // The first asking is saved now, with the end that says it was never
+    // asked of the host.
+    let saved = harness.saved_fetches();
+    assert!(saved.iter().any(|record| matches!(
+        record,
+        LeaseRecord::FetchAsked { request, .. } if request == "audit-0"
+    )));
+    assert!(harness.saved_fetch_ends().contains(&(
+        "audit-0".into(),
+        FetchOutcome::Refused(FetchRefusalReason::AuditUnavailable)
+    )));
+    go.send(()).unwrap();
+}
+
+/// A fetch the wait or the stop gives up on is recorded ended so, after the
+/// call let go of it.
+#[tokio::test]
+async fn a_fetch_timed_out_or_cancelled_is_recorded_ended_timed_out_or_cancelled() {
+    let root = tempfile::tempdir().unwrap();
+    let bytes = b"a picture".to_vec();
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_SAVE_WAIT).await;
+    *host.fetching.script.lock().unwrap() = FetchScript::Silent;
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-1"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::TimedOut { delivered: false })
+    );
+    let (caller_gone, stop) = tokio::sync::watch::channel(false);
+    let cancelled = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        let call = fetch_call("devbox", &bytes, "a.bin", "call-2");
+        tokio::spawn(async move { service.fetch_artifact(&id, call, stop).await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while host.fetching.asks.lock().unwrap().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the host was asked");
+    caller_gone.send(true).unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), cancelled)
+            .await
+            .unwrap()
+            .unwrap(),
+        FetchAnswer::Refused(FetchCallRefusal::Cancelled { delivered: false })
+    );
+    assert_eq!(
+        harness.saved_fetch_ends(),
+        [
+            (
+                "call-1".into(),
+                FetchOutcome::Refused(FetchRefusalReason::TimedOut { delivered: false })
+            ),
+            (
+                "call-2".into(),
+                FetchOutcome::Refused(FetchRefusalReason::Cancelled { delivered: false })
+            ),
+        ]
+    );
+    go.send(()).unwrap();
+}
+
+/// A fetch whose end cannot be saved, even once more, says so, placed or
+/// refused: a refusal stays that refusal, said unrecorded. The end stays
+/// retained and goes with the next save.
+#[tokio::test]
+async fn a_fetch_whose_end_cannot_be_saved_is_answered_unrecorded() {
+    let root = tempfile::tempdir().unwrap();
+    let bytes = b"a picture".to_vec();
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_CALL_WAIT).await;
+    let failing = || {
+        *harness.storage.failing.lock().unwrap() =
+            Some(|record| matches!(record, LeaseRecord::FetchEnded { .. }));
+    };
+    let recovered = || *harness.storage.failing.lock().unwrap() = None;
+    failing();
+    *host.fetching.script.lock().unwrap() = FetchScript::Refuse(FetchRefusal::Occupied);
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "refused"))
+            .await,
+        FetchAnswer::RefusedUnrecorded(FetchCallRefusal::NotPlaced(FetchRefusal::Occupied))
+    );
+    assert!(harness.saved_fetch_ends().is_empty());
+    recovered();
+    *host.fetching.script.lock().unwrap() = FetchScript::Place;
+    assert!(matches!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "saved"))
+            .await,
+        FetchAnswer::Placed { recorded: true, .. }
+    ));
+    failing();
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "b.bin", "unsaved"))
+            .await,
+        FetchAnswer::Placed {
+            already_placed: false,
+            path: "/srv/work/b.bin".into(),
+            digest: digest_hex(&bytes),
+            size: bytes.len() as u64,
+            recorded: false,
+        }
+    );
+    recovered();
+    assert!(matches!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "c.bin", "after"))
+            .await,
+        FetchAnswer::Placed { recorded: true, .. }
+    ));
+    let ends = harness.saved_fetch_ends();
+    for (request, outcome) in [
+        (
+            "refused",
+            FetchOutcome::Refused(FetchRefusalReason::Environment(
+                EnvironmentFetchRefusal::Occupied,
+            )),
+        ),
+        ("saved", placed_at("/srv/work/a.bin")),
+        ("unsaved", placed_at("/srv/work/b.bin")),
+        ("after", placed_at("/srv/work/c.bin")),
+    ] {
+        assert_eq!(
+            ends.iter()
+                .filter(|(ended, _)| ended == request)
+                .collect::<Vec<_>>(),
+            [&(request.to_owned(), outcome)]
+        );
+    }
+    go.send(()).unwrap();
+}
+
+/// A lease has at most as many fetches under way as an environment takes
+/// in flight; another is refused `busy`, with nothing recorded and the host
+/// never asked, until one ends.
+#[tokio::test]
+async fn a_fetch_past_what_a_lease_may_have_under_way_is_refused_busy_and_never_asked() {
+    let root = tempfile::tempdir().unwrap();
+    let bytes = b"a picture".to_vec();
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_CALL_WAIT).await;
+    *host.fetching.script.lock().unwrap() = FetchScript::Silent;
+    let (caller_gone, stop) = tokio::sync::watch::channel(false);
+    let under_way: Vec<_> = (0..CurrentLease::MAX_ASKED_FETCHES)
+        .map(|n| {
+            let service = harness.service.clone();
+            let id = harness.id.clone();
+            let call = fetch_call("devbox", &bytes, "a.bin", &format!("call-{n}"));
+            let stop = stop.clone();
+            tokio::spawn(async move { service.fetch_artifact(&id, call, stop).await })
+        })
+        .collect();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while host.fetching.asks.lock().unwrap().len() < CurrentLease::MAX_ASKED_FETCHES {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the host was asked for each");
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "extra"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::Busy)
+    );
+    assert_eq!(
+        host.fetching.asks.lock().unwrap().len(),
+        CurrentLease::MAX_ASKED_FETCHES
+    );
+    assert!(!harness.saved_fetches().iter().any(|record| matches!(
+        record,
+        LeaseRecord::FetchAsked { request, .. } if request == "extra"
+    )));
+    caller_gone.send(true).unwrap();
+    for fetch in under_way {
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), fetch)
+                .await
+                .unwrap()
+                .unwrap(),
+            FetchAnswer::Refused(FetchCallRefusal::Cancelled { delivered: false })
+        );
+    }
+    *host.fetching.script.lock().unwrap() = FetchScript::Place;
+    assert!(matches!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "extra"))
+            .await,
+        FetchAnswer::Placed { recorded: true, .. }
+    ));
+    go.send(()).unwrap();
+}
+
+/// A fetch whose asking's save outlasts the call's wait is answered timed
+/// out with nothing delivered: the host was never asked, its size is given
+/// back, and its end says so rather than that it may still be placed.
+#[tokio::test]
+async fn a_fetch_timed_out_while_its_asking_is_saved_ends_undelivered_and_never_asked() {
+    let root = tempfile::tempdir().unwrap();
+    let largest = PublishedFile::MAX_BYTES as usize;
+    let bytes = vec![9u8; largest];
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_SAVE_WAIT).await;
+    let fits = (ArtifactBudget::LEASE.fetch_bytes / PublishedFile::MAX_BYTES) as usize;
+    *harness.storage.stall_once.lock().unwrap() =
+        Some(|record| matches!(record, LeaseRecord::FetchAsked { .. }));
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "stalled"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::TimedOut { delivered: false })
+    );
+    assert!(host.fetching.asks.lock().unwrap().is_empty());
+    // Its asking, kept while its save stalled, is saved with its end.
+    let saved = harness.saved_fetches();
+    assert!(saved.iter().any(|record| matches!(
+        record,
+        LeaseRecord::FetchAsked { request, .. } if request == "stalled"
+    )));
+    assert_eq!(
+        harness.saved_fetch_ends(),
+        [(
+            "stalled".into(),
+            FetchOutcome::Refused(FetchRefusalReason::TimedOut { delivered: false })
+        )]
+    );
+    // Its size was given back: the whole budget can still be fetched.
+    *host.fetching.script.lock().unwrap() = FetchScript::Lost;
+    for n in 0..fits {
+        assert_eq!(
+            harness
+                .fetch_file(fetch_call("devbox", &bytes, "a.bin", &format!("lost-{n}")))
+                .await,
+            FetchAnswer::Refused(FetchCallRefusal::Unanswered { delivered: true })
+        );
+    }
+    go.send(()).unwrap();
+}
+
+/// Row K3's gateway: its own worker W connected, as `w_host`; every other
+/// key, X's included, answered by the production paired-environment
+/// registry, which has never seen it. Paired environments are Unix-only,
+/// as the registry is.
+#[cfg(unix)]
+fn k3_own_worker(
+    root: &Path,
+    w: nessa_sdk::domain::agent_execution::leases::PeerEnvironment,
+    w_host: Arc<dyn Environment>,
+) -> Arc<dyn crate::conversation::application::PairedEnvironments> {
+    use crate::conversation::application::PairedEnvironments;
+    use crate::conversation::infrastructure::ssh_environment::{
+        DurableEnvironmentAudit, PeerEnvironments, ServingCredentials, SshTimings,
+    };
+    use nessa_auth::application::pairing::DeviceConnectionProof;
+    use nessa_auth::application::ports::AccessError;
+    use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
+
+    /// Every key serves: the registry's refusal then comes from its having
+    /// no connection for the key, never from a credential.
+    struct Serving;
+    impl ServingCredentials for Serving {
+        fn serves<'a>(
+            &'a self,
+            _proof: &'a DeviceConnectionProof,
+        ) -> EnvironmentFuture<'a, Result<bool, AccessError>> {
+            Box::pin(async { Ok(true) })
+        }
+    }
+    struct OwnWorker {
+        w: PeerEnvironment,
+        host: Arc<dyn Environment>,
+        registry: PeerEnvironments,
+    }
+    impl PairedEnvironments for OwnWorker {
+        fn environment(&self, peer: &PeerEnvironment) -> Arc<dyn Environment> {
+            if *peer == self.w {
+                self.host.clone()
+            } else {
+                self.registry.environment(peer)
+            }
+        }
+        fn connected(&self) -> Vec<PeerEnvironment> {
+            let mut connected = vec![self.w];
+            connected.extend(self.registry.connected());
+            connected
+        }
+    }
+    Arc::new(OwnWorker {
+        w,
+        host: w_host,
+        registry: PeerEnvironments::new(
+            Arc::new(Serving),
+            DurableEnvironmentAudit::new(root.join("environments"), Arc::new(TestClock)).unwrap(),
+            SshTimings::default(),
+        ),
+    })
+}
+
+/// Row K3 through the agent's tools: on a gateway whose own worker W is
+/// connected, the tools reach W and nothing of another organization's
+/// worker X. `environments_list` lists W alone, and `run` runs on W and is
+/// refused `environmentUnreachable` on X's name by the gateway's own
+/// paired environments, though this gateway's policy names both.
+#[cfg(unix)]
+#[tokio::test]
+async fn k3_the_agents_tools_reach_only_this_gateways_own_worker() {
+    use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
+
+    let root = tempfile::tempdir().unwrap();
+    let (w, x) = (PeerEnvironment::new([1; 32]), PeerEnvironment::new([2; 32]));
+    let host = CommandHost::new();
+    let placements = Arc::new(
+        FilePlacements::new(root.path().join("conversations").join("placements")).unwrap(),
+    );
+    let provider = Arc::new(ProviderFactory::default());
+    let binding = Arc::new(Provider::new(provider.clone()));
+    let environments = Environments::new(in_process_environment(), BTreeMap::new(), placements)
+        .with_peers(k3_own_worker(root.path(), w, host.clone()))
+        .with_commands(CommandPolicy::new([w.name(), x.name()], None, Vec::new()));
+    let harness = harness_in(
+        root.path(),
+        environments,
+        DELETION_BUDGETS.stop,
+        provider,
+        binding,
+    );
+    harness.create().await;
+
+    let listed: Vec<String> = harness
+        .service
+        .list_environments(&harness.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|listing| listing.name)
+        .collect();
+    assert_eq!(listed, [HERE.to_owned(), w.name()]);
+
+    let go = harness.running_turn().await;
+    let mine = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        let name = w.name();
+        tokio::spawn(async move {
+            let (_caller, stop) = tokio::sync::watch::channel(false);
+            service
+                .run_command(&id, command(&name, &["echo", "mine"], "call-1"), stop)
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while host.granted.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("W is asked to run it");
+    host.finish
+        .send_replace(Some(CommandExit::Exited { code: 0 }));
+    let mine = tokio::time::timeout(Duration::from_secs(5), mine)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(mine, Ok(CommandAnswer::Ran { .. })), "{mine:?}");
+    let theirs = harness
+        .run(command(&x.name(), &["echo", "theirs"], "call-2"))
+        .await;
+    assert!(
+        matches!(
+            theirs,
+            Ok(CommandAnswer::Refused(CommandRefusal::Environment(
+                LeaseRefusal::EnvironmentUnreachable
+            )))
+        ),
+        "{theirs:?}"
+    );
+    assert_eq!(host.granted.load(Ordering::SeqCst), 1);
+    go.send(()).unwrap();
+}
+
+/// Row K3 for artifacts: with the agent leased on this gateway's own worker
+/// W, `artifacts_publish` keeps a file from W, and on another organization's
+/// worker X's name both `artifacts_publish` and `artifacts_fetch` are
+/// refused before anything is asked of anyone.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn k3_artifacts_move_only_on_this_gateways_own_worker() {
+    use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
+
+    let root = tempfile::tempdir().unwrap();
+    let (w, x) = (PeerEnvironment::new([1; 32]), PeerEnvironment::new([2; 32]));
+    let (host, _publisher) = Host::publishing();
+    host.asked
+        .settled_before_return
+        .store(true, Ordering::SeqCst);
+    let host = Arc::new(host);
+    let attachments = Arc::new(MemoryAttachments::default());
+    let placements = Arc::new(
+        FilePlacements::new(root.path().join("conversations").join("placements")).unwrap(),
+    );
+    let provider = Arc::new(ProviderFactory::default());
+    let binding = Arc::new(Provider::new(provider.clone()));
+    let harness = harness_working_in(
+        root.path(),
+        Environments::new(
+            Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT)),
+            BTreeMap::new(),
+            placements,
+        )
+        .with_peers(k3_own_worker(root.path(), w, host.clone()))
+        .with_publish_wait(PUBLISH_CALL_WAIT)
+        .with_fetch_wait(PUBLISH_CALL_WAIT),
+        DELETION_BUDGETS.stop,
+        provider,
+        binding,
+        None,
+        Some(attachments),
+    );
+    harness.create_on(&w.name()).await.unwrap();
+    let go = harness.running_turn().await;
+
+    let mine = tokio::time::timeout(
+        Duration::from_secs(10),
+        harness.publish_file(publish_call(&w.name(), "out/report.txt", "call-1")),
+    )
+    .await
+    .expect("W's file is kept");
+    assert!(matches!(mine, PublishAnswer::Kept { .. }), "{mine:?}");
+    assert_eq!(host.asked.asks.lock().unwrap().len(), 1);
+    assert_eq!(
+        harness
+            .publish_file(publish_call(&x.name(), "out/report.txt", "call-2"))
+            .await,
+        PublishAnswer::Refused(PublishCallRefusal::EnvironmentNotLeased)
+    );
+    assert_eq!(
+        harness
+            .fetch_file(fetch_call(&x.name(), b"bytes", "report.txt", "call-3"))
+            .await,
+        FetchAnswer::Refused(FetchCallRefusal::EnvironmentNotLeased)
+    );
+    // X's refusals asked W for nothing more.
+    assert_eq!(host.asked.asks.lock().unwrap().len(), 1);
+    assert!(host.fetching.asks.lock().unwrap().is_empty());
     go.send(()).unwrap();
 }

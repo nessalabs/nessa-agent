@@ -113,7 +113,7 @@ function BrowserSession({
           attachmentResources={scope.dependencies.attachments}
           canChoosePaths={scope.dependencies.canChoosePaths}
           digest={scope.dependencies.digest}
-          loadConversationChoices={scope.dependencies.loadConversationChoices}
+          followConversationChoices={scope.dependencies.followConversationChoices}
           onSignOut={onDisconnect}
           sessionError={error}
         />

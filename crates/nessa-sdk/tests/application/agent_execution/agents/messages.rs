@@ -12,10 +12,22 @@ async fn submit(
     operation: usize,
 ) -> Result<ExecutionOutcome, AgentError> {
     match operation {
-        0 => agent.invoke(input, actor()).await,
-        1 => agent.enqueue(input, actor()).await?.wait().await,
-        2 => agent.enqueue_steering(input, actor()).await?.wait().await,
-        _ => match agent.steer(input, actor()).await? {
+        0 => agent.invoke(input, Submitter::owner(actor())).await,
+        1 => {
+            agent
+                .enqueue(input, Submitter::owner(actor()))
+                .await?
+                .wait()
+                .await
+        }
+        2 => {
+            agent
+                .enqueue_steering(input, Submitter::owner(actor()))
+                .await?
+                .wait()
+                .await
+        }
+        _ => match agent.steer(input, Submitter::owner(actor())).await? {
             SteeringDelivery::Queued(receipt) => receipt.wait().await,
             SteeringDelivery::Injected { .. } => panic!("idle fixture cannot inject"),
         },
@@ -69,7 +81,10 @@ async fn custom_storage_cannot_restore_oversized_input_before_provider_open() {
     let agent = attached_agent(TestProvider::new(), storage.manager().await)
         .await
         .unwrap();
-    agent.invoke(request("saved"), actor()).await.unwrap();
+    agent
+        .invoke(request("saved"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     agent.close(actor()).await.unwrap();
     drop(agent);
     storage
@@ -332,6 +347,7 @@ const AGENT_TAKES_IMAGES: ProviderOperationCapabilities = ProviderOperationCapab
     image_input: true,
     permission_denial: PermissionDenialCapability::Unknown,
     native_hook_suppression: NativeHookSuppressionCapability::Unknown,
+    native_hooks_allowed: false,
     compaction_reporting: ProviderCompactionReportingCapability::Unknown,
     model_switch_reporting: ProviderModelSwitchReportingCapability::Unknown,
     permission_deferral: ProviderPermissionDeferralCapability::Unknown,
@@ -606,7 +622,10 @@ async fn agent_with_a_drawn_app(storage: &MemoryStorage, provider: Arc<ImageProv
     )
     .await
     .unwrap();
-    agent.invoke(request("drawing"), actor()).await.unwrap();
+    agent
+        .invoke(request("drawing"), Submitter::owner(actor()))
+        .await
+        .unwrap();
     agent.close(actor()).await.unwrap();
     drop(agent);
     {

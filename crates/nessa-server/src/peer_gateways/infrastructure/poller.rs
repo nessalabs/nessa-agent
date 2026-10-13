@@ -55,7 +55,9 @@ use nessa_auth::{
     domain::pairing::DeviceKey,
 };
 use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
-use nessa_client_core::retained::{ReadFailure, ReadReport, ReaderAccess, RetainedCache};
+use nessa_client_core::retained::{
+    ReadFailure, ReadReport, ReaderAccess, ReaderRole, RetainedCache,
+};
 use nessa_protocol::pairing::socket::WAKE_TICK;
 use nessa_protocol::pairing::wire::NativePairingStatus;
 use std::{
@@ -500,6 +502,7 @@ impl Poller {
             let mut cache = RetainedCache::open(&records.cache_path(&key), wall, clock)?;
             cache.read(
                 ReaderAccess {
+                    role: ReaderRole::GrantedPeer,
                     address,
                     identity: &identity,
                     pin,

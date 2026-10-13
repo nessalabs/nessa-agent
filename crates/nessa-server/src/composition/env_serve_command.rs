@@ -8,6 +8,7 @@
 //! <data>/environment/leases.jsonl ──▶ FileLedger
 //! <data>/environment/grants.json ──▶ FileGrants (read at every lease)
 //! <data>/environment/outbox/, a private temporary directory ──▶ FileOutbox
+//! config.json "envServe.artifactsIn" ──▶ <data>/environment/inbox/ ──▶ FileInbox, or none
 //! TokioTimer ──▶ what serving's waits are measured on
 //! stdin, stdout ──▶ serve(Peer::Ssh, ...) until the gateway's stream ends
 //! ```
@@ -21,14 +22,16 @@ use crate::{
     env::{Environment, LEASE_PROTOCOL, VERSION},
     env_serve::{
         application::{
-            refuse, serve, CommandRunner, HarnessLauncher, Runners, ServeTimings, Serving, Timer,
+            refuse, serve, ArtifactInbox, CommandRunner, HarnessLauncher, Runners, ServeTimings,
+            Serving,
         },
         domain::Peer,
         infrastructure::{
-            ConfiguredLauncher, FileGrants, FileLedger, FileOutbox, LaunchSpec, ServeLock,
-            ServeLockError, ShepherdCommands, TokioTimer, COMMAND_VARIABLES,
+            ConfiguredLauncher, FileGrants, FileInbox, FileLedger, FileOutbox, LaunchSpec,
+            ServeLock, ServeLockError, ShepherdCommands, COMMAND_VARIABLES,
         },
     },
+    timer::{Timer, TokioTimer},
 };
 use nessa_protocol::{
     agents::AgentId,
@@ -36,7 +39,10 @@ use nessa_protocol::{
 };
 use shepherd::{ProcessSupervisor, SupervisorBuilder};
 use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    sync::watch,
+};
 
 /// How long a new serving process waits for the previous one to finish
 /// ending its leases.
@@ -61,8 +67,14 @@ pub(super) async fn execute() -> Result<(), RunError> {
         }
     };
     // Over standard input and output: whoever logged in over SSH.
+    // Over SSH the session's own end is the stop: nothing asks a drain.
     composed
-        .serve(Peer::Ssh, tokio::io::stdin(), tokio::io::stdout())
+        .serve(
+            Peer::Ssh,
+            tokio::io::stdin(),
+            tokio::io::stdout(),
+            watch::channel(false).1,
+        )
         .await;
     composed.finish().await;
     Ok(())
@@ -80,6 +92,8 @@ pub(super) struct Composed {
     /// What this host's owner grants each peer.
     grants: Arc<FileGrants>,
     outbox: Arc<FileOutbox>,
+    /// Where fetched files arrive; `None` when this host takes none.
+    inbox: Option<Arc<FileInbox>>,
     /// The publish points' directory, removed when serving ends.
     sockets: std::path::PathBuf,
     lock: ServeLock,
@@ -88,9 +102,14 @@ pub(super) struct Composed {
 
 impl Composed {
     /// Serve one gateway's leases, `peer`'s, on `input` and `output` until
-    /// that stream ends.
-    pub(super) async fn serve<R, W>(&self, peer: Peer, input: R, output: W)
-    where
+    /// that stream ends, or until `drain` has ended every lease.
+    pub(super) async fn serve<R, W>(
+        &self,
+        peer: Peer,
+        input: R,
+        output: W,
+        drain: watch::Receiver<bool>,
+    ) where
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
     {
@@ -113,8 +132,12 @@ impl Composed {
             },
             self.ledger.clone(),
             self.outbox.clone(),
+            self.inbox
+                .clone()
+                .map(|inbox| inbox as Arc<dyn ArtifactInbox>),
             ServeTimings::default(),
             self.timer.clone(),
+            drain,
         )
         .await;
     }
@@ -182,12 +205,20 @@ pub(super) async fn compose() -> Result<Composed, (Unavailability, RunError)> {
         Path::new(launcher.workspace()),
     )
     .map_err(|error| not_configured(RunError::Agent(error.to_string())))?;
+    let inbox = match config.env_serve.artifacts_in {
+        true => Some(Arc::new(
+            FileInbox::open(directory.join("inbox"), Path::new(launcher.workspace()))
+                .map_err(|error| not_configured(RunError::Agent(error.to_string())))?,
+        )),
+        false => None,
+    };
     Ok(Composed {
         launcher: Arc::new(launcher),
         commands,
         ledger: Arc::new(ledger),
         grants: Arc::new(FileGrants::new(&directory)),
         outbox: Arc::new(outbox),
+        inbox,
         sockets,
         lock,
         timer: Arc::new(TokioTimer::new()),

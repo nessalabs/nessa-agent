@@ -212,6 +212,40 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
         parse(&args(&["env", "dial", "10.0.0.2:7443"])).unwrap(),
         Command::EnvDial {
             address: "10.0.0.2:7443".into(),
+            drain_deadline_ms: None,
+            enroll_code_file: None,
+        }
+    );
+    assert_eq!(
+        parse(&args(&[
+            "env",
+            "dial",
+            "10.0.0.2:7443",
+            "--drain-deadline",
+            "20s"
+        ]))
+        .unwrap(),
+        Command::EnvDial {
+            address: "10.0.0.2:7443".into(),
+            drain_deadline_ms: Some(20_000),
+            enroll_code_file: None,
+        }
+    );
+    assert_eq!(
+        parse(&args(&[
+            "env",
+            "dial",
+            "gw.example:7443",
+            "--enroll-code-file",
+            "/run/secrets/nessa_code",
+            "--drain-deadline",
+            "20s",
+        ]))
+        .unwrap(),
+        Command::EnvDial {
+            address: "gw.example:7443".into(),
+            drain_deadline_ms: Some(20_000),
+            enroll_code_file: Some("/run/secrets/nessa_code".into()),
         }
     );
     for refused in [
@@ -222,11 +256,61 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
         vec!["env", "dial"],
         vec!["env", "dial", "gw:1", "extra"],
         vec!["env", "dial", "--help"],
+        vec!["env", "dial", "gw:1", "--drain-deadline"],
+        vec!["env", "dial", "gw:1", "--drain-deadline", "soon"],
+        vec!["env", "dial", "--drain-deadline", "20s", "gw:1"],
+        vec!["env", "dial", "gw:1", "--enroll-code-file"],
+        vec![
+            "env",
+            "dial",
+            "gw:1",
+            "--enroll-code-file",
+            "--drain-deadline",
+        ],
+        vec![
+            "env",
+            "dial",
+            "gw:1",
+            "--enroll-code-file",
+            "a",
+            "--enroll-code-file",
+            "b",
+        ],
+        vec![
+            "env",
+            "dial",
+            "gw:1",
+            "--drain-deadline",
+            "1s",
+            "--drain-deadline",
+            "2s",
+        ],
     ] {
         assert!(parse(&args(&refused)).is_err(), "{refused:?}");
     }
     assert!(crate::cli::entrypoint::HELP.contains("nessa env enroll ADDRESS CODE"));
     assert!(crate::cli::entrypoint::HELP.contains("nessa env dial ADDRESS"));
+}
+
+#[test]
+fn relay_serve_names_the_address_it_listens_on() {
+    assert_eq!(
+        parse(&args(&["relay", "serve", "--listen", "0.0.0.0:7444"])).unwrap(),
+        Command::RelayServe {
+            listen: "0.0.0.0:7444".into(),
+        }
+    );
+    for refused in [
+        vec!["relay"],
+        vec!["relay", "serve"],
+        vec!["relay", "serve", "0.0.0.0:7444"],
+        vec!["relay", "serve", "--listen"],
+        vec!["relay", "serve", "--listen", "--help"],
+        vec!["relay", "serve", "--listen", "a:1", "extra"],
+    ] {
+        assert!(parse(&args(&refused)).is_err(), "{refused:?}");
+    }
+    assert!(crate::cli::entrypoint::HELP.contains("nessa relay serve --listen HOST:PORT"));
 }
 
 #[test]
@@ -240,6 +324,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
             peer: None,
             agents: Some(GrantedAgents::Named(vec!["claude".into(), "codex".into()])),
             max_timeout_ms: None,
+            max_lease_ms: None,
         }
     );
     assert_eq!(
@@ -258,6 +343,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
             peer: Some("ssh".into()),
             agents: Some(GrantedAgents::All),
             max_timeout_ms: Some(600_000),
+            max_lease_ms: None,
         }
     );
     assert_eq!(
@@ -273,6 +359,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
             peer: None,
             agents: None,
             max_timeout_ms: Some(90_000),
+            max_lease_ms: None,
         }
     );
     assert_eq!(
@@ -288,10 +375,41 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
             peer: None,
             agents: None,
             max_timeout_ms: Some(3_600_000),
+            max_lease_ms: None,
+        }
+    );
+    assert_eq!(
+        parse(&args(&["env", "grant", "--max-lease", "8h"])).unwrap(),
+        Command::EnvGrant {
+            peer: None,
+            agents: None,
+            max_timeout_ms: None,
+            max_lease_ms: Some(28_800_000),
+        }
+    );
+    assert_eq!(
+        parse(&args(&[
+            "env",
+            "grant",
+            "--agent",
+            "claude",
+            "--max-lease",
+            "30m"
+        ]))
+        .unwrap(),
+        Command::EnvGrant {
+            peer: None,
+            agents: Some(GrantedAgents::Named(vec!["claude".into()])),
+            max_timeout_ms: None,
+            max_lease_ms: Some(1_800_000),
         }
     );
     for refused in [
         vec!["env", "grant"],
+        vec!["env", "grant", "--max-lease"],
+        vec!["env", "grant", "--max-lease", "0s"],
+        vec!["env", "grant", "--max-lease", "8"],
+        vec!["env", "grant", "--max-lease", "1h", "--max-lease", "2h"],
         vec!["env", "grant", "--agent"],
         vec!["env", "grant", "--agent", "--all-agents"],
         vec!["env", "grant", "--agent", "claude", "--all-agents"],
@@ -316,7 +434,7 @@ fn env_grant_names_agents_or_every_agent_and_commands_with_their_longest_run() {
         assert!(parse(&args(&refused)).is_err(), "{refused:?}");
     }
     assert!(crate::cli::entrypoint::HELP.contains(
-        "nessa env grant [--peer ssh|PIN] [--agent NAME... | --all-agents] [--commands --max-timeout 10m]"
+        "nessa env grant [--peer ssh|PIN] [--agent NAME... | --all-agents] [--commands --max-timeout 10m] [--max-lease 8h]"
     ));
 }
 

@@ -41,20 +41,28 @@ async fn queued_provider_panic_settles_receipts_and_allows_explicit_recovery() {
             *backend.execution_gate.lock().unwrap() = Some(gate);
             let first = if boundary {
                 agent
-                    .enqueue_steering(input("panicked"), actor())
+                    .enqueue_steering(input("panicked"), Submitter::owner(actor()))
                     .await
                     .unwrap()
             } else {
-                agent.enqueue(input("panicked"), actor()).await.unwrap()
+                agent
+                    .enqueue(input("panicked"), Submitter::owner(actor()))
+                    .await
+                    .unwrap()
             };
             backend.executing.notified().await;
-            let pending = agent.enqueue(input("pending"), actor()).await.unwrap();
+            let pending = agent
+                .enqueue(input("pending"), Submitter::owner(actor()))
+                .await
+                .unwrap();
             let (release_cleanup, gate) = oneshot::channel();
             *backend.close_gate.lock().unwrap() = Some(gate);
             drop(panic); // Probe panics while polling the admitted provider execution.
             backend.closing.notified().await;
             assert_eq!(
-                agent.invoke(input("overlap"), actor()).await,
+                agent
+                    .invoke(input("overlap"), Submitter::owner(actor()))
+                    .await,
                 Err(AgentError::Busy)
             );
             assert!(storage.snapshot().invocations[0].result.is_none());
@@ -64,11 +72,14 @@ async fn queued_provider_panic_settles_receipts_and_allows_explicit_recovery() {
             assert_eq!(pending.wait().await, Err(AgentError::Closed));
             let retry = if boundary {
                 agent
-                    .enqueue_steering(input("panicked"), actor())
+                    .enqueue_steering(input("panicked"), Submitter::owner(actor()))
                     .await
                     .unwrap()
             } else {
-                agent.enqueue(input("panicked"), actor()).await.unwrap()
+                agent
+                    .enqueue(input("panicked"), Submitter::owner(actor()))
+                    .await
+                    .unwrap()
             };
             assert_eq!(retry.wait().await, result);
             assert_eq!(backend.executions.load(Ordering::SeqCst), 1);
@@ -91,7 +102,9 @@ async fn queued_provider_panic_settles_receipts_and_allows_explicit_recovery() {
             // The scheduling supervisor caught this panic, so local evidence
             // recovery still needs explicit close even after provider cleanup.
             assert!(matches!(
-                agent.enqueue(input("blocked"), actor()).await,
+                agent
+                    .enqueue(input("blocked"), Submitter::owner(actor()))
+                    .await,
                 Err(AgentError::Closed)
             ));
             *backend.cleanup_report.lock().unwrap() = None;
@@ -101,7 +114,9 @@ async fn queued_provider_panic_settles_receipts_and_allows_explicit_recovery() {
                     for _ in 0..3 {
                         assert_eq!(agent.close(actor()).await, Err(error.clone()));
                         assert!(matches!(
-                            agent.enqueue(input("still-blocked"), actor()).await,
+                            agent
+                                .enqueue(input("still-blocked"), Submitter::owner(actor()))
+                                .await,
                             Err(AgentError::Closed)
                         ));
                     }
@@ -111,7 +126,10 @@ async fn queued_provider_panic_settles_receipts_and_allows_explicit_recovery() {
             }
             agent.close(actor()).await.unwrap();
             reattach_after_explicit_close(&agent).await;
-            let recovered = agent.enqueue(input("recovered"), actor()).await.unwrap();
+            let recovered = agent
+                .enqueue(input("recovered"), Submitter::owner(actor()))
+                .await
+                .unwrap();
             assert_eq!(
                 timeout(Duration::from_secs(2), recovered.wait())
                     .await
@@ -146,15 +164,26 @@ async fn native_steering_panic_is_retained_even_after_caller_loss_and_prior_clos
             *backend.execution_gate.lock().unwrap() = Some(gate);
             let active = tokio::spawn({
                 let agent = agent.clone();
-                async move { agent.invoke(input("active"), actor()).await }
+                async move {
+                    agent
+                        .invoke(input("active"), Submitter::owner(actor()))
+                        .await
+                }
             });
             backend.executing.notified().await;
-            let pending = agent.enqueue(input("pending"), actor()).await.unwrap();
+            let pending = agent
+                .enqueue(input("pending"), Submitter::owner(actor()))
+                .await
+                .unwrap();
             let (panic, gate) = oneshot::channel();
             *backend.control_gate.lock().unwrap() = Some(gate);
             let caller = tokio::spawn({
                 let agent = agent.clone();
-                async move { agent.steer(input("panicked-steer"), actor()).await }
+                async move {
+                    agent
+                        .steer(input("panicked-steer"), Submitter::owner(actor()))
+                        .await
+                }
             });
             backend.control_entered.notified().await;
             let caller = if abandon_caller {
@@ -170,7 +199,9 @@ async fn native_steering_panic_is_retained_even_after_caller_loss_and_prior_clos
             drop(panic); // Probe panics in native delivery, after admission was saved.
             backend.closing.notified().await;
             assert_eq!(
-                agent.invoke(input("overlap"), actor()).await,
+                agent
+                    .invoke(input("overlap"), Submitter::owner(actor()))
+                    .await,
                 Err(AgentError::Busy)
             );
             assert!(matches!(
@@ -181,7 +212,7 @@ async fn native_steering_panic_is_retained_even_after_caller_loss_and_prior_clos
             release_cleanup.send(()).unwrap();
             let recovered = timeout(
                 Duration::from_secs(2),
-                agent.steer(input("panicked-steer"), actor()),
+                agent.steer(input("panicked-steer"), Submitter::owner(actor())),
             )
             .await
             .unwrap();
@@ -220,7 +251,7 @@ async fn native_steering_panic_is_retained_even_after_caller_loss_and_prior_clos
                     AgentError::Closed
                 };
                 assert!(matches!(
-                    agent.enqueue(input("blocked"), actor()).await,
+                    agent.enqueue(input("blocked"), Submitter::owner(actor())).await,
                     Err(actual) if actual == expected
                 ));
             }
@@ -231,7 +262,9 @@ async fn native_steering_panic_is_retained_even_after_caller_loss_and_prior_clos
                     for _ in 0..3 {
                         assert_eq!(agent.close(actor()).await, Err(error.clone()));
                         assert!(matches!(
-                            agent.enqueue(input("still-blocked"), actor()).await,
+                            agent
+                                .enqueue(input("still-blocked"), Submitter::owner(actor()))
+                                .await,
                             Err(AgentError::Closed)
                         ));
                     }
@@ -247,7 +280,7 @@ async fn native_steering_panic_is_retained_even_after_caller_loss_and_prior_clos
             }
             assert_eq!(
                 agent
-                    .enqueue(input("recovered"), actor())
+                    .enqueue(input("recovered"), Submitter::owner(actor()))
                     .await
                     .unwrap()
                     .wait()
@@ -347,12 +380,25 @@ async fn queued_storage_panics_retain_current_and_pending_receipts() {
             *backend.execution_gate.lock().unwrap() = Some(gate);
             let active = tokio::spawn({
                 let agent = agent.clone();
-                async move { agent.invoke(input("active"), actor()).await }
+                async move {
+                    agent
+                        .invoke(input("active"), Submitter::owner(actor()))
+                        .await
+                }
             });
             backend.executing.notified().await;
-            let queued = agent.enqueue(input("queued"), actor()).await.unwrap();
-            let one = agent.enqueue(input("pending-one"), actor()).await.unwrap();
-            let two = agent.enqueue(input("pending-two"), actor()).await.unwrap();
+            let queued = agent
+                .enqueue(input("queued"), Submitter::owner(actor()))
+                .await
+                .unwrap();
+            let one = agent
+                .enqueue(input("pending-one"), Submitter::owner(actor()))
+                .await
+                .unwrap();
+            let two = agent
+                .enqueue(input("pending-two"), Submitter::owner(actor()))
+                .await
+                .unwrap();
             let prepare_release = if stage == InvocationStage::Cancelled {
                 backend.preparing.notified().await;
                 let (release, gate) = oneshot::channel();
@@ -395,7 +441,7 @@ async fn queued_storage_panics_retain_current_and_pending_receipts() {
             );
             assert_eq!(
                 agent
-                    .enqueue(input("queued"), actor())
+                    .enqueue(input("queued"), Submitter::owner(actor()))
                     .await
                     .unwrap()
                     .wait()
@@ -420,7 +466,9 @@ async fn queued_storage_panics_retain_current_and_pending_receipts() {
                 assert!(pending.scheduling.last().unwrap().actor.is_none());
             }
             assert!(matches!(
-                agent.enqueue(input("blocked"), actor()).await,
+                agent
+                    .enqueue(input("blocked"), Submitter::owner(actor()))
+                    .await,
                 Err(AgentError::Closed)
             ));
             *backend.execution_error.lock().unwrap() = None;
@@ -430,7 +478,7 @@ async fn queued_storage_panics_retain_current_and_pending_receipts() {
             reattach_after_explicit_close(&agent).await;
             assert_eq!(
                 agent
-                    .enqueue(input("recovered"), actor())
+                    .enqueue(input("recovered"), Submitter::owner(actor()))
                     .await
                     .unwrap()
                     .wait()
@@ -502,20 +550,30 @@ async fn dispatch_save_panic_does_not_inherit_previous_close_actor() {
     }));
     let first = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.invoke(input("before-provider"), actor()).await }
+        async move {
+            agent
+                .invoke(input("before-provider"), Submitter::owner(actor()))
+                .await
+        }
     });
     timeout(bound, waiting)
         .await
         .expect("the direct invoke never reached its before hook")
         .unwrap();
-    let queued = timeout(bound, agent.enqueue(input("queued"), actor()))
-        .await
-        .expect("queued admission stalled")
-        .unwrap();
-    let tail = timeout(bound, agent.enqueue(input("tail"), actor()))
-        .await
-        .expect("tail admission stalled")
-        .unwrap();
+    let queued = timeout(
+        bound,
+        agent.enqueue(input("queued"), Submitter::owner(actor())),
+    )
+    .await
+    .expect("queued admission stalled")
+    .unwrap();
+    let tail = timeout(
+        bound,
+        agent.enqueue(input("tail"), Submitter::owner(actor())),
+    )
+    .await
+    .expect("tail admission stalled")
+    .unwrap();
     release.send(()).unwrap();
     let first = timeout(bound, first)
         .await
@@ -569,16 +627,23 @@ async fn withdrawal_save_panics_keep_receipts_and_attribution_owned() {
             *backend.execution_gate.lock().unwrap() = Some(gate);
             let active = tokio::spawn({
                 let agent = agent.clone();
-                async move { agent.invoke(input("active"), actor()).await }
+                async move {
+                    agent
+                        .invoke(input("active"), Submitter::owner(actor()))
+                        .await
+                }
             });
             backend.executing.notified().await;
             let receipt = if boundary {
                 agent
-                    .enqueue_steering(input("pending-one"), actor())
+                    .enqueue_steering(input("pending-one"), Submitter::owner(actor()))
                     .await
                     .unwrap()
             } else {
-                agent.enqueue(input("pending-one"), actor()).await.unwrap()
+                agent
+                    .enqueue(input("pending-one"), Submitter::owner(actor()))
+                    .await
+                    .unwrap()
             };
             let withdrawer = ActionContext::new("owner", "phone", "withdraw").unwrap();
             let paused = caller_lost.then(|| storage.pause_next_save());
@@ -610,11 +675,14 @@ async fn withdrawal_save_panics_keep_receipts_and_attribution_owned() {
             }
             let retry = if boundary {
                 agent
-                    .enqueue_steering(input("pending-one"), actor())
+                    .enqueue_steering(input("pending-one"), Submitter::owner(actor()))
                     .await
                     .unwrap()
             } else {
-                agent.enqueue(input("pending-one"), actor()).await.unwrap()
+                agent
+                    .enqueue(input("pending-one"), Submitter::owner(actor()))
+                    .await
+                    .unwrap()
             };
             assert_eq!(retry.wait().await, Err(error));
             assert_eq!(

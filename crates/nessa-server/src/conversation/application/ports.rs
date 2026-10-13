@@ -6,6 +6,7 @@ use nessa_protocol::conversation::domain::{
 };
 use nessa_protocol::lease::{CollectionRefusal, StagedArtifact};
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
+use nessa_sdk::application::agent_execution::sessions::PublishedFile;
 use nessa_sdk::domain::agent_execution::{prompts::ImageReference, sessions::ExecutionSessionId};
 use std::{future::Future, pin::Pin};
 
@@ -581,6 +582,43 @@ pub trait ConversationAttachments: Send + Sync {
         &self,
         published: PublishedArtifact,
     ) -> Pin<Box<dyn Future<Output = Result<ArtifactKept, CollectionRefusal>> + Send + '_>>;
+    /// One range of a file the conversation holds, read for the person a
+    /// fetch is for (issue #701, slice D3b): at most `range.max_bytes` and at
+    /// most one of the store's own ranges, from `range.offset`, and only
+    /// while the conversation is that person's and still holds exactly that
+    /// file — asked again for every range, so a hold let go between two
+    /// ranges stops the read there.
+    fn read_held(
+        &self,
+        range: HeldRange,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, HeldRangeError>> + Send + '_>>;
+}
+
+/// One range of a held file, asked for a person.
+#[derive(Clone, Debug)]
+pub struct HeldRange {
+    pub organization_id: OrganizationId,
+    /// Whose read it is: the conversation must be theirs.
+    pub principal_id: String,
+    pub conversation_id: ConversationId,
+    /// Exactly which file: its digest, media type and size together.
+    pub file: PublishedFile,
+    pub offset: u64,
+    pub max_bytes: usize,
+}
+
+/// Why a range of a held file was not read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeldRangeError {
+    /// The conversation is not that person's, or no longer holds exactly
+    /// that file.
+    NotHeld,
+    /// The store's one read slot stayed taken by reads ahead of this one;
+    /// the same range may be asked again.
+    Busy,
+    /// The store could not say, or could not read the bytes, or the range
+    /// is not one of the file's.
+    Unavailable,
 }
 
 /// A file published under a lease, to be kept by its conversation.

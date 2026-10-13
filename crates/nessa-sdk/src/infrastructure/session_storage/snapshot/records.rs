@@ -1,6 +1,7 @@
 use super::{
     cancellation::Cancellation as InvocationCancellation,
     errors::{decode_result, Outcome, SavedError, StorageFailure},
+    initiation::Initiation,
     permissions::{self, Actor, Cancellation, Choice, Input},
     settlement::Settlement,
     tools::{corrupt, Tool},
@@ -183,6 +184,8 @@ pub(super) struct Metadata {
     pub(super) estimated_input_tokens: u64,
     pub(super) reserved_output_tokens: u32,
     pub(super) actor: Actor,
+    /// Who started the turn and whether its tools were checked.
+    pub(super) initiation: Initiation,
     pub(super) acknowledgement: Acknowledgement,
     pub(super) provider_report: Option<Settlement>,
     pub(super) local_cancellation: Option<InvocationCancellation>,
@@ -232,6 +235,10 @@ pub(super) struct Event<T = String> {
     pub(super) message_id: Option<String>,
     pub(super) execution_id: String,
     pub(super) update: Update<T>,
+    /// The hooks choice of the process start that produced the event. Absent
+    /// for a start without one, and on events saved before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) native_hooks: Option<bool>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -341,6 +348,7 @@ impl From<&InvocationRecord> for Metadata {
             estimated_input_tokens: value.request.estimated_input_tokens,
             reserved_output_tokens: value.request.reserved_output_tokens,
             actor: (&value.actor).into(),
+            initiation: (&value.initiation).into(),
             acknowledgement: (&value.acknowledgement).into(),
             provider_report: value.provider_report.clone().map(Into::into),
             local_cancellation: value.local_cancellation.as_ref().map(Into::into),
@@ -361,6 +369,7 @@ impl<'a> From<&'a ExecutionEvent> for Event<&'a str> {
                 _ => None,
             },
             execution_id: event.execution_id().as_str().into(),
+            native_hooks: event.native_hooks(),
             update: match event.update() {
                 ExecutionUpdate::Finished(outcome) => Update::Finished((*outcome).into()),
                 ExecutionUpdate::Message(chunk) => match chunk.kind() {
@@ -480,6 +489,7 @@ impl Metadata {
                 reserved_output_tokens: self.reserved_output_tokens,
             },
             actor: self.actor.decode()?,
+            initiation: self.initiation.decode()?,
             acknowledgement: self.acknowledgement.try_into()?,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -623,7 +633,11 @@ impl Event {
             (update, None) => update,
             (_, Some(_)) => return Err(corrupt("message identity on a non-message observation")),
         };
-        Ok(ExecutionEvent::new(execution_id.clone(), update))
+        let event = ExecutionEvent::new(execution_id.clone(), update);
+        Ok(match self.native_hooks {
+            Some(allowed) => event.with_native_hooks(allowed),
+            None => event,
+        })
     }
 }
 
@@ -690,5 +704,45 @@ mod borrowed_event_tests {
                 .unwrap();
             assert_eq!(decoded, event);
         }
+    }
+
+    fn tool_event() -> ExecutionEvent {
+        ExecutionEvent::new(
+            ExecutionId::new("output").unwrap(),
+            ExecutionUpdate::Tool(crate::domain::agent_execution::tools::ToolCallUpdate::new(
+                crate::domain::agent_execution::tools::ToolCallId::new("tool-1").unwrap(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )),
+        )
+    }
+
+    fn round_trip(event: &ExecutionEvent) -> (Vec<u8>, ExecutionEvent) {
+        let bytes = serde_json::to_vec(&Event::from(event)).unwrap();
+        let owned: Event = serde_json::from_slice(&bytes).unwrap();
+        let decoded = owned
+            .decode(
+                &crate::domain::agent_execution::sessions::ExecutionSessionId::new("remote")
+                    .unwrap(),
+                event.execution_id(),
+            )
+            .unwrap();
+        (bytes, decoded)
+    }
+
+    #[test]
+    fn a_tool_event_keeps_the_hooks_choice_it_was_launched_with() {
+        for allowed in [false, true] {
+            let event = tool_event().with_native_hooks(allowed);
+            let (_, decoded) = round_trip(&event);
+            assert_eq!(decoded.native_hooks(), Some(allowed));
+            assert_eq!(decoded, event);
+        }
+        let (bytes, decoded) = round_trip(&tool_event());
+        assert!(!String::from_utf8(bytes).unwrap().contains("native_hooks"));
+        assert_eq!(decoded.native_hooks(), None);
     }
 }

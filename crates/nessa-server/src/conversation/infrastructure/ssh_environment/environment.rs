@@ -19,10 +19,17 @@
 //!   connection lost? ──▶ a new connection ──▶ Account ──▶ what the host recorded
 //! account(lease) ──▶ Account ──▶ Accounted{cleanup}
 //! Published{lease, artifact, request, file} ──▶ LeaseHold::artifacts ──▶ ArtifactOffer
-//!   its bytes ──▶ SftpBytes, over an artifact channel, only when pulled
+//!   its bytes ──▶ SftpBytes, over an artifact channel, only when pulled; on a
+//!   paired connection, FrameBytes, over the lease frames themselves
 //!   its answer ──▶ Collected{lease, artifact, outcome}
 //! LeaseHold::publish(ask) ──▶ Publish{lease, request, path} ──▶ offered on the
 //!   same offers as above, naming `request` | NotPublished{reason}
+//! LeaseHold::fetch(ask) ──▶ Fetch{lease, request, destination, file}
+//!   ──▶ FetchAccepted{part} ──▶ its bytes written to `part` over sftp, read
+//!   from the held file range by range ──▶ Delivered ──▶ Fetched{outcome}
+//!   | FetchRefused{reason}; given up before Delivered ──▶ Undelivered
+//! LeaseHold::publish / fetch on a connection that carries no files (a
+//!   paired one) ──▶ None, before any frame
 //! a command: grant ──▶ link.grant_command ──▶ SshCommand, the terms the host granted
 //!   SshCommand::run ──▶ Run ──▶ Ran{end, output, cleanup}
 //!   stop said ──▶ End (not waited for) ──▶ Ran{Stopped} ──▶ Ended
@@ -37,19 +44,20 @@
 //! fenced by the lease as any provider's events are.
 use super::{
     audit::EnvironmentAudit,
-    connector::{LeaseConnection, LeaseConnector},
+    connector::{ArtifactTransport, LeaseConnection, LeaseConnector},
     install::HostInstaller,
     link::{
         AdmissionRefused, CommandAnswer, Granted, HostLink, Liveness, Opening, Published,
         StartError,
     },
     peer::ServingCredentials,
-    transfer::SftpBytes,
+    transfer::{FrameBytes, SftpBytes},
 };
 use crate::conversation::application::{
-    ArtifactAnswer, ArtifactOffer, CommandEnvironment, CommandHold, CommandResult, Environment,
-    EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, GrantedCommand, GrantedTerms,
-    LeaseHold, LeaseRelease, PublishAsk, PublishFailure,
+    ArtifactAnswer, ArtifactBytes, ArtifactOffer, CommandEnvironment, CommandHold, CommandResult,
+    Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, FetchAsk,
+    FetchFailure, FetchPlaced, GrantedCommand, GrantedTerms, LeaseHold, LeaseRelease, PublishAsk,
+    PublishFailure,
 };
 use nessa_auth::application::pairing::DeviceConnectionProof;
 use nessa_protocol::lease::{
@@ -131,6 +139,10 @@ enum Reach {
         /// together. Never held across an await, so whether it is connected
         /// is read without waiting.
         serving: std::sync::Mutex<Option<Served>>,
+        /// [`super::PeerEnvironments`]' count of changes to which of them
+        /// are connected, moved here as this one's connection is admitted,
+        /// ends, or is revoked.
+        connections: watch::Sender<u64>,
     },
 }
 
@@ -140,6 +152,13 @@ enum Reach {
 struct Served {
     link: Arc<HostLink>,
     proof: Arc<DeviceConnectionProof>,
+}
+
+/// Say that which paired environments are connected has changed. Whoever
+/// waits on `connections` wakes once for however many changes came since
+/// it last looked, and reads the list again.
+fn moved(connections: &watch::Sender<u64>) {
+    connections.send_modify(|count| *count = count.wrapping_add(1));
 }
 
 /// The paired environment's current connection, if it holds one.
@@ -169,18 +188,21 @@ impl SshEnvironment {
         )
     }
 
-    /// The paired environment `peer`, with no connection until it dials in.
+    /// The paired environment `peer`, with no connection until it dials in,
+    /// moving `connections` each time it is connected or no longer.
     pub(super) fn peer(
         peer: PeerEnvironment,
         credentials: Arc<dyn ServingCredentials>,
         audit: Arc<dyn EnvironmentAudit>,
         timings: SshTimings,
+        connections: watch::Sender<u64>,
     ) -> Self {
         Self::reached(
             Reach::Peer {
                 peer,
                 credentials,
                 serving: std::sync::Mutex::new(None),
+                connections,
             },
             audit,
             timings,
@@ -201,9 +223,20 @@ impl SshEnvironment {
     /// Serve this paired environment's leases over `connection`, which
     /// proved `proof`, in place of any connection it had: that one is
     /// closed, and its leases are lost. Answers once the new connection
-    /// ends, or at once when its hello is refused.
+    /// ends, or at once when its hello is refused. While it lasts, whether
+    /// the key still serves is asked again every keepalive interval, and a
+    /// key that no longer does has its connection revoked. The connected
+    /// list changes when the connection is admitted and again when it ends,
+    /// and each is said on `connections` once the change is made, so whoever
+    /// it wakes reads the list as it is after it.
     pub(super) async fn serve(&self, proof: DeviceConnectionProof, connection: LeaseConnection) {
-        let Reach::Peer { serving, .. } = &self.inner.reach else {
+        let Reach::Peer {
+            serving,
+            credentials,
+            connections,
+            ..
+        } = &self.inner.reach
+        else {
             return;
         };
         let opened = HostLink::over(
@@ -217,20 +250,39 @@ impl SshEnvironment {
         let Ok(link) = opened else {
             return;
         };
+        let proof = Arc::new(proof);
         let replaced = serving
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .replace(Served {
                 link: link.clone(),
-                proof: Arc::new(proof),
+                proof: proof.clone(),
             });
         if let Some(replaced) = replaced {
             replaced.link.close();
         }
-        link.ended().await;
+        moved(connections);
+        tokio::select! {
+            () = link.ended() => {}
+            () = self.inner.until_revoked(credentials.as_ref(), &proof) => {
+                self.inner.revoke(&link);
+                link.ended().await;
+            }
+        }
+        moved(connections);
     }
 
-    /// Whether a connection to it is open now.
+    /// Revoke the connection it holds now, as a paired environment's is
+    /// revoked: for tests of what a revocation does to leases on it.
+    #[cfg(test)]
+    pub(super) async fn revoke_connection(&self) {
+        let held = self.inner.link.lock().await.clone();
+        if let Some(link) = held {
+            self.inner.revoke(&link);
+        }
+    }
+
+    /// Whether a connection to it serves leases now.
     pub(super) fn is_connected(&self) -> bool {
         self.reachable() == Some(true)
     }
@@ -337,21 +389,17 @@ impl Inner {
         serving: &std::sync::Mutex<Option<Served>>,
     ) -> Result<Arc<HostLink>, LeaseRefusal> {
         let Served { link, proof } = served(serving)
-            .filter(|served| served.link.is_open())
+            .filter(|served| served.link.is_serving())
             .ok_or(LeaseRefusal::EnvironmentUnreachable)?;
         match credentials.serves(&proof).await {
             Ok(true) => served(serving)
                 .map(|current| current.link)
-                .filter(|current| current.is_open())
+                .filter(|current| current.is_serving())
                 .ok_or(LeaseRefusal::EnvironmentUnreachable),
             Ok(false) => {
-                tracing::warn!(
-                    host = self.name(),
-                    "a paired environment no longer holds a credential to serve; its connection is closed"
-                );
-                link.close();
+                self.revoke(&link);
                 if let Some(current) = served(serving) {
-                    current.link.close();
+                    self.revoke(&current.link);
                 }
                 Err(LeaseRefusal::EnvironmentUnreachable)
             }
@@ -359,6 +407,41 @@ impl Inner {
                 tracing::warn!(host = self.name(), %error, "whether a paired environment still serves could not be read");
                 Err(LeaseRefusal::EnvironmentUnreachable)
             }
+        }
+    }
+
+    /// Answers once the key `proof` carries no longer serves, asked again
+    /// every keepalive interval: the admission's answer held only for its
+    /// moment, and a credential revoked, expired or whose membership was
+    /// disabled since then says nothing to this connection by itself. An
+    /// answer that cannot be read is not a revocation: the next one is
+    /// asked, and the next lease asks for itself.
+    async fn until_revoked(
+        &self,
+        credentials: &dyn ServingCredentials,
+        proof: &DeviceConnectionProof,
+    ) {
+        loop {
+            tokio::time::sleep(self.timings.keepalive).await;
+            match credentials.serves(proof).await {
+                Ok(true) => {}
+                Ok(false) => return,
+                Err(error) => {
+                    tracing::warn!(host = self.name(), %error, "whether a paired environment still serves could not be read");
+                }
+            }
+        }
+    }
+
+    /// Revoke a paired environment's connection: its leases end as revoked
+    /// on both sides, and it closes once they are let go, or past the
+    /// silence bound, the longest a connection is believed without a frame.
+    /// A revoked connection serves no more leases, so it leaves the
+    /// connected list now, and that is said once it has.
+    fn revoke(&self, link: &Arc<HostLink>) {
+        let revoked = link.revoke(self.timings.silence);
+        if let (true, Reach::Peer { connections, .. }) = (revoked, &self.reach) {
+            moved(connections);
         }
     }
 
@@ -410,6 +493,7 @@ impl Environment for SshEnvironment {
             let Granted {
                 terms,
                 gone,
+                ending,
                 published,
             } = link
                 .grant(
@@ -429,6 +513,7 @@ impl Environment for SshEnvironment {
                     link,
                     lease: lease.as_str().into(),
                     gone,
+                    ending,
                     published: std::sync::Mutex::new(Some(published)),
                 }),
             })
@@ -448,7 +533,7 @@ impl CommandEnvironment for SshEnvironment {
     fn reachable(&self) -> Option<bool> {
         if let Reach::Peer { serving, .. } = &self.inner.reach {
             return served(serving)
-                .is_some_and(|served| served.link.is_open())
+                .is_some_and(|served| served.link.is_serving())
                 .then_some(true);
         }
         let held = self.inner.link.try_lock().ok()?;
@@ -501,6 +586,7 @@ fn granted(terms: lease::GrantedTerms) -> GrantedTerms {
     GrantedTerms {
         sandbox: terms.sandbox.into(),
         timeout_ms: terms.timeout_ms,
+        lease_ms: terms.lease_ms,
     }
 }
 
@@ -527,7 +613,9 @@ fn command_refusal(host: &str, refused: AdmissionRefused) -> CommandRefusal {
         AdmissionRefused::Host(
             GrantRefusal::AgentUnavailable
             | GrantRefusal::Duplicate
-            | GrantRefusal::AuditUnavailable,
+            | GrantRefusal::AuditUnavailable
+            | GrantRefusal::Revoked
+            | GrantRefusal::Draining,
         )
         | AdmissionRefused::Unreachable => {
             CommandRefusal::Environment(LeaseRefusal::EnvironmentUnreachable)
@@ -586,13 +674,21 @@ impl CommandHold for SshCommand {
             .await
             .ok()
             .flatten();
-            match answer {
+            // The host stops a command itself once told it is revoked.
+            let stopped = stopped.or(self.link.revoked().then_some(LeaseEndCause::Revoked));
+            let mut result = match answer {
                 Some(answer) => command_result(answer, stopped),
                 None => CommandResult {
                     cleanup: self.inner.account(&self.lease).await,
                     ..CommandResult::unanswered()
                 },
+            };
+            // A transition of its lease that went unrecorded (its
+            // revocation, its connection's loss) settles nothing.
+            if self.link.unaudited(&self.lease) {
+                result.cleanup = None;
             }
+            result
         })
     }
 }
@@ -614,6 +710,10 @@ fn command_result(answer: CommandAnswer, stopped: Option<LeaseEndCause>) -> Comm
         CommandEnd::Stopped => CommandExit::Stopped {
             cause: stopped.unwrap_or(LeaseEndCause::Lost),
         },
+        // The host stopping is a system stop, as a drained lease is.
+        CommandEnd::Drained => CommandExit::Stopped {
+            cause: LeaseEndCause::Stopped,
+        },
         CommandEnd::NotStarted => CommandExit::NotStarted,
         CommandEnd::Unknown => CommandExit::Unanswered,
     };
@@ -634,18 +734,25 @@ struct SshHold {
     /// Closed once the lease is no longer routed on its connection: taken
     /// at its grant, so a loss before anyone asks is still seen.
     gone: watch::Receiver<()>,
+    /// Why it is ending unasked, once known: the host said so, or this
+    /// gateway revoked the host.
+    ending: watch::Receiver<Option<LeaseEndCause>>,
     /// The files published under it, until [`LeaseHold::artifacts`] takes
     /// them.
     published: std::sync::Mutex<Option<mpsc::Receiver<Published>>>,
 }
 
 impl LeaseHold for SshHold {
-    fn lost(&self) -> Option<EnvironmentFuture<'static, ()>> {
-        let mut gone = self.gone.clone();
+    fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>> {
+        let mut ending = self.ending.clone();
         Some(Box::pin(async move {
-            // Only the route's end is waited for: it is never sent to, and
-            // a route already gone answers at once.
-            while gone.changed().await.is_ok() {}
+            // The host saying it is ending the lease, this gateway revoking
+            // the host, or the route's end; a route already gone answers at
+            // once. A cause known before the route went is still what
+            // ended it.
+            let _ = ending.wait_for(Option::is_some).await;
+            let known = *ending.borrow();
+            known.unwrap_or(LeaseEndCause::Lost)
         }))
     }
 
@@ -670,13 +777,22 @@ impl LeaseHold for SshHold {
             {
                 let answering = link.clone();
                 let answered = lease.clone();
-                let offer = ArtifactOffer {
-                    bytes: Box::new(SftpBytes::new(
-                        link.artifact_channels(),
+                let bytes: Box<dyn ArtifactBytes> = match link.artifact_transport() {
+                    ArtifactTransport::Channels(channels) => Box::new(SftpBytes::new(
+                        channels,
                         file.path.clone(),
                         file.size,
                         gone.clone(),
                     )),
+                    ArtifactTransport::Frames => Box::new(FrameBytes::new(
+                        link.clone(),
+                        lease.clone(),
+                        artifact,
+                        file.size,
+                    )),
+                };
+                let offer = ArtifactOffer {
+                    bytes,
                     file,
                     answer: ArtifactAnswer::new(move |outcome| {
                         answering.collected(&answered, artifact, outcome, unanswered)
@@ -704,6 +820,23 @@ impl LeaseHold for SshHold {
             link.publish(&lease, ask.request, ask.path, ask.media_type)
                 .await
         }))
+    }
+
+    /// Asked over the lease's own connection; its bytes go over an artifact
+    /// channel of that connection, never its control channel. `None` on a
+    /// connection that carries no files, as a paired one.
+    fn fetch(
+        &self,
+        ask: FetchAsk,
+    ) -> Option<EnvironmentFuture<'static, Result<FetchPlaced, FetchFailure>>> {
+        // Bytes that could never be written are never asked for.
+        if !self.link.writes_files() {
+            return None;
+        }
+        let link = self.link.clone();
+        let lease = self.lease.clone();
+        let gone = self.gone.clone();
+        Some(Box::pin(async move { link.fetch(&lease, ask, gone).await }))
     }
 
     fn end(&self, _cause: LeaseEndCause) -> EnvironmentFuture<'_, LeaseRelease> {

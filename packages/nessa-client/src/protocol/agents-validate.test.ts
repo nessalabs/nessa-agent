@@ -29,13 +29,21 @@ describe("the agent catalog's places", () => {
 
   it("accepts the SSH hosts and connected paired environments together", () => {
     expect(
-      agentsList({ agents: [], environments: places(24) }).environments,
+      agentsList({
+        agents: [],
+        environments: places(24),
+        nativeHooks: { claude: "off", codex: "off" },
+      }).environments,
     ).toHaveLength(24)
   })
 
   it("refuses more places than both kinds can name", () => {
-    expect(() => agentsList({ agents: [], environments: places(25) })).toThrow(
-      "Invalid agent catalog environments",
-    )
+    expect(() =>
+      agentsList({
+        agents: [],
+        environments: places(25),
+        nativeHooks: { claude: "off", codex: "off" },
+      }),
+    ).toThrow("Invalid agent catalog environments")
   })
 })

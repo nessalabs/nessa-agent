@@ -27,17 +27,20 @@ pub(crate) mod limits;
 mod permission_authority;
 mod question;
 mod request;
+mod submitter;
 pub use audit::{
     AdmissionAuditCause, AdmissionAuditStage, AttachmentAuditCause, AttachmentAuditRecord,
     AttachmentAuditStage, EffortChangeOutcome, EffortChangeStage, EffortLevelChange,
     EffortLevelChangeRecord, ExecutionAudit, ExecutionAuditRecord, LateProviderResultRecord,
-    QueueAdmissionRecord, QueueOrderCause, QueueOrderRecord, QueueSettlementRecord,
-    SessionClosureRecord, SteeringAcknowledgementRecord, SteeringAuditCause, SteeringAuditStage,
+    NativeHooksLaunchCause, NativeHooksLaunchRecord, QueueAdmissionRecord, QueueOrderCause,
+    QueueOrderRecord, QueueSettlementRecord, SessionClosureRecord, SteeringAcknowledgementRecord,
+    SteeringAuditCause, SteeringAuditStage,
 };
 pub use controller::ExecutionController;
 pub use events::{ExecutionEvent, ExecutionUpdate};
 pub use permission_authority::PermissionAuthoritySource;
 pub use question::AdmittedQuestion;
 pub use request::ExecutionRequest;
+pub use submitter::Submitter;
 
 pub use crate::domain::agent_execution::executions::SubmissionMode;

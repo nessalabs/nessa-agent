@@ -219,11 +219,14 @@ async fn failed_attachment_settlement_panics_do_not_discard_the_queue_tail() {
     let _invocation = agent.inner.invocation.lock().await;
     let first_id = ExecutionId::new("failed-attachment-first").unwrap();
     let first = agent
-        .enqueue(request(first_id.as_str()), actor())
+        .enqueue(request(first_id.as_str()), Submitter::owner(actor()))
         .await
         .unwrap();
     let second = agent
-        .enqueue(request("failed-attachment-second"), actor())
+        .enqueue(
+            request("failed-attachment-second"),
+            Submitter::owner(actor()),
+        )
         .await
         .unwrap();
     mutation.lock().unwrap().replace(QueueMutation::Removed {
@@ -260,7 +263,7 @@ async fn automatic_failure_claim_precedes_close_while_settlement_audit_waits() {
     let agent = prepared(Arc::new(InMemoryStorage::new()), audit.clone()).await;
     let _invocation = agent.inner.invocation.lock().await;
     let queued = agent
-        .enqueue(request("failure-before-close"), actor())
+        .enqueue(request("failure-before-close"), Submitter::owner(actor()))
         .await
         .unwrap();
     let failure = AgentError::Protocol("automatic attachment failed".into());
@@ -300,7 +303,10 @@ async fn explicit_close_precedes_unclaimed_automatic_failure_settlement() {
     let _invocation = agent.inner.invocation.lock().await;
     let submitted_by = actor();
     let queued = agent
-        .enqueue(request("close-before-failure"), submitted_by.clone())
+        .enqueue(
+            request("close-before-failure"),
+            Submitter::owner(submitted_by.clone()),
+        )
         .await
         .unwrap();
     let closer = ActionContext::new("closer", "test", "close-before-claim").unwrap();
@@ -363,7 +369,10 @@ async fn an_idle_queue_runner_leaves_the_invocation_slot_to_a_direct_invoke() {
 
     let invoked = tokio::time::timeout(
         bound,
-        agent.invoke(request("direct-beside-idle-runner"), actor()),
+        agent.invoke(
+            request("direct-beside-idle-runner"),
+            Submitter::owner(actor()),
+        ),
     )
     .await
     .expect("direct invoke stalled beside an idle runner");
@@ -393,7 +402,10 @@ async fn an_admission_while_no_runner_is_running_starts_one() {
     assert!(!agent.inner.scheduler.lock().await.running);
     tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        agent.enqueue(request("admitted-with-no-runner"), actor()),
+        agent.enqueue(
+            request("admitted-with-no-runner"),
+            Submitter::owner(actor()),
+        ),
     )
     .await
     .expect("admission stalled")
@@ -421,10 +433,13 @@ async fn a_runner_whose_queue_empties_while_it_waits_releases_the_slot_and_stops
     let direct = agent.inner.invocation.clone().lock_owned().await;
     agent.inner.scheduler.lock().await.running = true;
     let removed_id = ExecutionId::new("removed-while-the-runner-waits").unwrap();
-    let removed = tokio::time::timeout(bound, agent.enqueue(request(removed_id.as_str()), actor()))
-        .await
-        .expect("admission stalled")
-        .unwrap();
+    let removed = tokio::time::timeout(
+        bound,
+        agent.enqueue(request(removed_id.as_str()), Submitter::owner(actor())),
+    )
+    .await
+    .expect("admission stalled")
+    .unwrap();
     let mut runner = Box::pin(agent.run_queue());
     assert!(
         poll_once(&mut runner).await.is_pending(),
@@ -447,7 +462,10 @@ async fn a_runner_whose_queue_empties_while_it_waits_releases_the_slot_and_stops
     drop(direct);
     assert_eq!(
         agent
-            .invoke(request("direct-before-the-runner-exits"), actor())
+            .invoke(
+                request("direct-before-the-runner-exits"),
+                Submitter::owner(actor())
+            )
             .await,
         Err(AgentError::Busy),
         "the released slot went to the waiting runner"
@@ -458,7 +476,10 @@ async fn a_runner_whose_queue_empties_while_it_waits_releases_the_slot_and_stops
     assert!(!agent.inner.scheduler.lock().await.running);
     assert!(matches!(
         agent
-            .invoke(request("direct-after-the-runner-exits"), actor())
+            .invoke(
+                request("direct-after-the-runner-exits"),
+                Submitter::owner(actor())
+            )
             .await,
         Err(AgentError::AttachmentUnavailable(_))
     ));
@@ -484,11 +505,13 @@ async fn a_runner_settles_a_stopped_owner_that_is_no_longer_queued() {
     let direct = agent.inner.invocation.clone().lock_owned().await;
     agent.inner.scheduler.lock().await.running = true;
     let stranded_id = ExecutionId::new("owner-without-a-queue-entry").unwrap();
-    let stranded =
-        tokio::time::timeout(bound, agent.enqueue(request(stranded_id.as_str()), actor()))
-            .await
-            .expect("admission stalled")
-            .unwrap();
+    let stranded = tokio::time::timeout(
+        bound,
+        agent.enqueue(request(stranded_id.as_str()), Submitter::owner(actor())),
+    )
+    .await
+    .expect("admission stalled")
+    .unwrap();
     let mut runner = Box::pin(agent.run_queue());
     assert!(poll_once(&mut runner).await.is_pending());
     assert!(agent
@@ -502,7 +525,10 @@ async fn a_runner_settles_a_stopped_owner_that_is_no_longer_queued() {
     drop(direct);
     assert_eq!(
         agent
-            .invoke(request("direct-beside-the-stranded-owner"), actor())
+            .invoke(
+                request("direct-beside-the-stranded-owner"),
+                Submitter::owner(actor())
+            )
             .await,
         Err(AgentError::Busy),
         "the released slot went to the runner the stranded owner keeps"
@@ -531,7 +557,10 @@ async fn a_runner_settles_a_stopped_owner_that_is_no_longer_queued() {
     drop(direct);
     assert_eq!(
         agent
-            .invoke(request("direct-beside-an-unstopped-owner"), actor())
+            .invoke(
+                request("direct-beside-an-unstopped-owner"),
+                Submitter::owner(actor())
+            )
             .await,
         Err(AgentError::Busy),
         "a runner with only an unstopped owner did not take the slot"
@@ -566,7 +595,10 @@ async fn a_runner_settles_a_stopped_owner_that_is_no_longer_queued() {
     drop(direct);
     assert_eq!(
         agent
-            .invoke(request("direct-beside-a-stopped-owner"), actor())
+            .invoke(
+                request("direct-beside-a-stopped-owner"),
+                Submitter::owner(actor())
+            )
             .await,
         Err(AgentError::Busy),
         "a runner with a stopped owner to settle did not take the slot"
@@ -605,7 +637,10 @@ async fn close_while_a_runner_waits_leaves_it_nothing_to_run_and_both_finish() {
     agent.inner.scheduler.lock().await.running = true;
     let closed = tokio::time::timeout(
         bound,
-        agent.enqueue(request("closed-while-the-runner-waits"), actor()),
+        agent.enqueue(
+            request("closed-while-the-runner-waits"),
+            Submitter::owner(actor()),
+        ),
     )
     .await
     .expect("admission stalled")
@@ -631,7 +666,10 @@ async fn close_while_a_runner_waits_leaves_it_nothing_to_run_and_both_finish() {
     drop(direct);
     assert_eq!(
         agent
-            .invoke(request("direct-while-the-runner-holds-the-slot"), actor())
+            .invoke(
+                request("direct-while-the-runner-holds-the-slot"),
+                Submitter::owner(actor())
+            )
             .await,
         Err(AgentError::Busy),
         "the released slot went to the waiting runner"

@@ -3,6 +3,7 @@
 //! (design row PC3). SDK-produced physical records and the real cache.
 use super::{fixtures::*, ReadOnlyCache};
 use crate::read_only_sync::application::device::{CachePurges, PurgeReceipt};
+use nessa_auth::domain::{ResourceId, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::params;
 use nessa_sdk::infrastructure::session_storage::physical_record_schema;
 use nessa_sync::replication::{
@@ -67,11 +68,13 @@ async fn purge_is_atomic_audited_and_fences_the_receiver() {
     assert!(rows(&cache, "receiver") > 0);
     let others = rows(&cache, "other-receiver");
 
-    let receipt = cache.purge_receiver(&id("receiver")).unwrap();
+    let receipt = cache
+        .purge_receiver(&ResourceId::new("receiver").unwrap())
+        .unwrap();
     assert_eq!(
         receipt,
         PurgeReceipt {
-            receiver: id("receiver"),
+            receiver: ResourceId::new("receiver").unwrap(),
             transcripts: 1,
             records: 2,
             catalogue_entries: 0,
@@ -101,7 +104,12 @@ async fn purge_is_atomic_audited_and_fences_the_receiver() {
         ("TerminalEnrollment", "GatewayStatus")
     );
     // Repeating returns the original receipt and changes nothing.
-    assert_eq!(cache.purge_receiver(&id("receiver")).unwrap(), receipt);
+    assert_eq!(
+        cache
+            .purge_receiver(&ResourceId::new("receiver").unwrap())
+            .unwrap(),
+        receipt
+    );
 
     // The receipt fences the receiver: no transcript or catalogue apply may
     // put rows back, here or through another handle.
@@ -160,8 +168,31 @@ fn a_walk_marker_is_kept_per_catalogue_and_goes_with_a_purge() {
     assert_eq!(walk(&cache), Some((4, 1)));
     cache.note_walk(&scope, 9, 2).unwrap();
     assert_eq!(walk(&cache), Some((9, 2)));
-    let purged = cache.purge_receiver(&id("receiver")).unwrap();
-    assert_eq!(purged.receiver, id("receiver"));
+    let purged = cache
+        .purge_receiver(&ResourceId::new("receiver").unwrap())
+        .unwrap();
+    assert_eq!(purged.receiver, ResourceId::new("receiver").unwrap());
     assert_eq!(walk(&cache), None);
     assert_eq!(rows(&cache, "receiver"), 0);
+}
+
+#[test]
+fn purge_receipt_persists_the_full_pairing_receiver_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let path = cache_path(root.path(), "cache.sqlite3");
+    let receiver = ResourceId::new("é".repeat(MAX_IDENTIFIER_BYTES / 2)).unwrap();
+    let mut first = cache(&path);
+    let purged = first.purge_receiver(&receiver).unwrap();
+    assert_eq!(purged.receiver, receiver);
+    assert_eq!(
+        (purged.transcripts, purged.records, purged.catalogue_entries),
+        (0, 0, 0)
+    );
+    drop(first);
+    let mut reopened = cache(&path);
+    assert_eq!(
+        reopened.purge_receipt(&receiver).unwrap(),
+        Some(purged.clone())
+    );
+    assert_eq!(reopened.purge_receiver(&receiver).unwrap(), purged);
 }

@@ -28,7 +28,8 @@ by admission under the SDK lock, not by timestamps from different devices.
 | `reorder_queued` | Replaces the complete pending order within each priority | Accepted command continues | Unchanged order retries any outstanding evidence write |
 | `close` | Stops waiting work and cleans up dispatched work | Supervised cleanup continues | Repeated close does not delete or replay history |
 
-Submitted input and actor are saved before dispatch. Queued operations also retain
+Submitted input, actor, and initiation (whether the owner or a share grant
+started the turn, and whether its tools were checked) are saved before dispatch. Queued operations also retain
 scheduling evidence and final receipt results. Immediate invocation has no queue
 receipt; dropping its waiting future does not cancel SDK-owned work. A never-polled
 future has no effects. Close joins settlement independently of whether the caller
@@ -54,14 +55,16 @@ injected records cannot contain their own provider output before dispatch.
 ## Calling the SDK
 
 ```rust,ignore
-let first = agent.enqueue(first_request, verified_actor.clone()).await?;
-let next = agent.enqueue(next_request, verified_actor.clone()).await?;
+let first = agent.enqueue(first_request, Submitter::owner(verified_actor.clone())).await?;
+let next = agent.enqueue(next_request, Submitter::owner(verified_actor.clone())).await?;
 // Both are accepted and saved; execution proceeds even if these receipts drop.
 let first_outcome = first.wait().await?;
 let next_outcome = next.wait().await?;
 
 // Explicitly wait for the next invocation boundary, ahead of ordinary follow-ups.
-let correction = agent.enqueue_steering(correction_request, verified_actor).await?;
+let correction = agent
+    .enqueue_steering(correction_request, Submitter::owner(verified_actor))
+    .await?;
 let outcome = correction.wait().await?;
 ```
 
@@ -69,7 +72,7 @@ let outcome = correction.wait().await?;
 `enqueue` when a busy Agent must accept a follow-up. There are at most 64 pending
 inputs, excluding the active invocation. Admission validates capability limits
 and the actual 4 MiB UTF-8 message limit independently of token estimates, then
-saves exact input, actor, operation, and initial state before returning a receipt.
+saves exact input, submitter, operation, and initial state before returning a receipt.
 Admission is supervised once polled: losing the caller during a save does not
 interrupt admission. A failed admission is not dispatched. A storage error may
 arrive after the snapshot was replaced; the manager reads storage to reconcile
@@ -183,7 +186,8 @@ publishes the result. How a panic from it is contained, and its tests, are in
 ## Idempotent submission retries
 
 Retry `enqueue`, `enqueue_steering`, or `steer` with the same execution ID, exact
-request, verified actor, and operation. The SDK joins the original live receipt or
+request, submitter (verified actor and initiation), and operation. A retry
+under a different initiation is a conflict, as one from a different actor is. The SDK joins the original live receipt or
 returns the retained delivery/result. Concurrent retries do not repeat admission,
 hooks, or provider dispatch. This also works after withdrawal or failure: retries
 recover the original outcome, rather than creating new work. Native steering
@@ -225,7 +229,7 @@ support. This is a support snapshot, not a guarantee that the target is still
 active; [operation capabilities](agent.md#model-capabilities-and-provider-operations)
 are refreshed during restoration.
 
-`steer(request, actor)` attempts the provider's native steering operation when an
+`steer(request, submitter)` attempts the provider's native steering operation when an
 invocation is active. `SteeringDelivery::Injected { target, evidence }` means the provider
 acknowledged the additional input for that execution. Its `SteeringEvidence`
 separately reports whether mandatory audit and durable delivery evidence were

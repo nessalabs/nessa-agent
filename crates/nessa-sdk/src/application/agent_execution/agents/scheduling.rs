@@ -11,7 +11,7 @@ use crate::application::agent_execution::{
     caller_wake::{contain_caller_wake, CallerWaiter},
     executions::{
         ExecutionAuditRecord, ExecutionRequest, QueueAdmissionRecord, QueueOrderRecord,
-        QueueSettlementRecord, SteeringAcknowledgementRecord, SubmissionMode,
+        QueueSettlementRecord, SteeringAcknowledgementRecord, SubmissionMode, Submitter,
     },
     permissions::ActionContext,
     providers::{
@@ -221,7 +221,7 @@ pub(super) struct Scheduler {
 }
 struct Pending {
     input: ExecutionRequest,
-    actor: ActionContext,
+    submitter: Submitter,
     index: usize,
     kind: InvocationKind,
     target: Option<ExecutionId>,
@@ -380,12 +380,13 @@ impl Agent {
         failure
     }
 
-    /// Saves `input` and its verified `actor`, then schedules a sequential invocation.
+    /// Saves `input` with its `submitter` (the verified caller and how the turn
+    /// was started), then schedules a sequential invocation.
     ///
     /// Ordinary inputs default to FIFO across all Agent clones; explicit
     /// reorder_queued calls may replace order within a priority class. At
     /// most 64 inputs may wait; a full queue returns a Scheduling error. Retrying
-    /// the same execution ID, input, actor, and operation joins its original receipt,
+    /// the same execution ID, input, submitter, and operation joins its original receipt,
     /// even after settlement. Changed intent returns SubmissionConflict. Restored
     /// unresolved delivery returns SubmissionUnresolved without resending it.
     /// WorkStatus is supervised once polled, including while saving input.
@@ -396,10 +397,10 @@ impl Agent {
     /// # Examples
     /// ```
     /// use nessa_sdk::{Agent, application::agent_execution::{
-    ///     agents::AgentError, executions::{ExecutionRequest, SubmissionMode}, permissions::ActionContext,
+    ///     agents::AgentError, executions::{ExecutionRequest, Submitter}, permissions::ActionContext,
     /// }};
     /// # async fn submit(agent: &Agent, input: ExecutionRequest, actor: ActionContext) -> Result<(), AgentError> {
-    /// let receipt = agent.enqueue(input, actor).await?;
+    /// let receipt = agent.enqueue(input, Submitter::owner(actor)).await?;
     /// let outcome = receipt.wait().await?;
     /// # let _ = outcome;
     /// # Ok(())
@@ -412,13 +413,13 @@ impl Agent {
     pub async fn enqueue(
         &self,
         input: ExecutionRequest,
-        actor: ActionContext,
+        submitter: Submitter,
     ) -> Result<QueueAdmission, AgentError> {
-        self.enqueue_kind(input, actor, InvocationKind::Queued)
+        self.enqueue_kind(input, submitter, InvocationKind::Queued)
             .await
     }
 
-    /// Saves `input` from verified `actor` for the next invocation boundary, ahead
+    /// Saves `input` from verified `submitter` for the next invocation boundary, ahead
     /// of ordinary queued inputs. Steering inputs preserve their own FIFO order.
     /// This explicit boundary operation does not interrupt or inject into a turn.
     /// WorkStatus and failure guarantees are the same as [`Self::enqueue`].
@@ -429,9 +430,9 @@ impl Agent {
     pub async fn enqueue_steering(
         &self,
         input: ExecutionRequest,
-        actor: ActionContext,
+        submitter: Submitter,
     ) -> Result<QueueAdmission, AgentError> {
-        self.enqueue_kind(input, actor, InvocationKind::Steering)
+        self.enqueue_kind(input, submitter, InvocationKind::Steering)
             .await
     }
 
@@ -774,14 +775,14 @@ impl Agent {
     async fn enqueue_kind(
         &self,
         input: ExecutionRequest,
-        actor: ActionContext,
+        submitter: Submitter,
         kind: InvocationKind,
     ) -> Result<QueueAdmission, AgentError> {
         let agent = self.clone();
         let waiter = CallerWaiter::Admission(input.execution_id.clone());
         contain_caller_wake(
             waiter,
-            tokio::spawn(async move { agent.accept_work(input, actor, kind).await }),
+            tokio::spawn(async move { agent.accept_work(input, submitter, kind).await }),
         )
         .await
         .map_err(|_| AgentError::SubmissionUnresolved)?
@@ -790,7 +791,7 @@ impl Agent {
     async fn accept_work(
         &self,
         input: ExecutionRequest,
-        actor: ActionContext,
+        submitter: Submitter,
         kind: InvocationKind,
     ) -> Result<QueueAdmission, AgentError> {
         validate_configured_input(self.capabilities(), &input)?;
@@ -803,7 +804,7 @@ impl Agent {
             &self.inner.manager,
             &scheduler.receipts,
             &input,
-            &actor,
+            &submitter,
             mode,
         )
         .await
@@ -827,14 +828,14 @@ impl Agent {
             .manager
             .begin_with_scheduling(
                 input.clone(),
-                actor.clone(),
+                submitter.clone(),
                 event(
                     kind,
                     None,
                     None,
                     InvocationStage::Queued,
                     SchedulingCause::Submitted,
-                    Some(actor.clone()),
+                    Some(submitter.context.clone()),
                 ),
                 mode,
             )
@@ -846,11 +847,12 @@ impl Agent {
             .enqueue(input.execution_id.clone(), kind)
             .expect("admission checked under scheduler lock");
         let id = input.execution_id.clone();
-        let audit_actor = actor.clone();
+        let audit_actor = submitter.context.clone();
         let admission_generation =
             format!("{}:{}", self.inner.instance_id, work.provider_generation());
         let effort_level = self.effort_level();
-        let receipt = Self::accept_pending(&mut scheduler, input, actor, index, kind, None, work);
+        let receipt =
+            Self::accept_pending(&mut scheduler, input, submitter, index, kind, None, work);
         let audit_record = ExecutionAuditRecord::QueueAdmitted(
             QueueAdmissionRecord::submitted(
                 self.inner.manager.id().clone(),
@@ -929,7 +931,7 @@ impl Agent {
     fn accept_pending(
         scheduler: &mut Scheduler,
         input: ExecutionRequest,
-        actor: ActionContext,
+        submitter: Submitter,
         index: usize,
         kind: InvocationKind,
         target: Option<ExecutionId>,
@@ -948,7 +950,7 @@ impl Agent {
             id.clone(),
             Pending {
                 input,
-                actor,
+                submitter,
                 index,
                 kind,
                 target,
@@ -1134,7 +1136,7 @@ impl Agent {
             Ok(()) => {
                 self.supervise_invocation(
                     pending.input.clone(),
-                    pending.actor.clone(),
+                    pending.submitter.clone(),
                     Some(pending.index),
                     &pending._work,
                 )
@@ -1355,7 +1357,7 @@ impl Agent {
     }
 
     /// Attempts native steering of the active execution using `input` and verified
-    /// `actor`. Idle inputs run at the next invocation boundary. Unsupported native
+    /// `submitter`. Idle inputs run at the next invocation boundary. Unsupported native
     /// steering returns Unsupported; callers can explicitly choose enqueue_steering.
     ///
     /// A message the selected model cannot take is refused before anything is
@@ -1376,7 +1378,7 @@ impl Agent {
     pub async fn steer(
         &self,
         input: ExecutionRequest,
-        actor: ActionContext,
+        submitter: Submitter,
     ) -> Result<SteeringDelivery, AgentError> {
         let agent = self.clone();
         let waiter = CallerWaiter::Steering(input.execution_id.clone());
@@ -1387,7 +1389,11 @@ impl Agent {
                 let close_notice = agent.inner.lifecycle.close_notice();
                 let mut work_owner = None;
                 match agent
-                    .catch_scheduling_panic(agent.deliver_steering(input, actor, &mut work_owner))
+                    .catch_scheduling_panic(agent.deliver_steering(
+                        input,
+                        submitter,
+                        &mut work_owner,
+                    ))
                     .await
                 {
                     Ok(delivery) => delivery,
@@ -1417,7 +1423,7 @@ impl Agent {
     async fn deliver_steering(
         &self,
         input: ExecutionRequest,
-        actor: ActionContext,
+        submitter: Submitter,
         work_owner: &mut Option<WorkPermit>,
     ) -> Result<SteeringDelivery, AgentError> {
         // The same check `invoke` and `accept_work` run before a save. A
@@ -1429,7 +1435,7 @@ impl Agent {
             &self.inner.manager,
             &scheduler.receipts,
             &input,
-            &actor,
+            &submitter,
             SubmissionMode::Steering,
         )
         .await
@@ -1454,14 +1460,14 @@ impl Agent {
             .manager
             .begin_with_scheduling(
                 input.clone(),
-                actor.clone(),
+                submitter.clone(),
                 event(
                     InvocationKind::Steering,
                     target.clone(),
                     None,
                     InvocationStage::Queued,
                     SchedulingCause::Submitted,
-                    Some(actor.clone()),
+                    Some(submitter.context.clone()),
                 ),
                 SubmissionMode::Steering,
             )
@@ -1503,7 +1509,7 @@ impl Agent {
                         self.inner.manager.id().clone(),
                         id.clone(),
                         target.clone(),
-                        actor.clone(),
+                        submitter.context.clone(),
                     ),
                 );
                 let audit = match self
@@ -1563,7 +1569,7 @@ impl Agent {
                     .queue
                     .enqueue(input.execution_id.clone(), InvocationKind::Steering)
                     .expect("admission checked under scheduler lock");
-                let audit_actor = actor.clone();
+                let audit_actor = submitter.context.clone();
                 let admission_generation = format!(
                     "{}:{}",
                     self.inner.instance_id,
@@ -1576,7 +1582,7 @@ impl Agent {
                 let receipt = Self::accept_pending(
                     &mut scheduler,
                     input,
-                    actor,
+                    submitter,
                     index,
                     InvocationKind::Steering,
                     target,
@@ -1913,7 +1919,7 @@ impl Agent {
                     id.clone(),
                     pending.kind,
                     pending.target.clone(),
-                    pending.actor.clone(),
+                    pending.submitter.context.clone(),
                 )
                 .expect("admitted pending scheduling transition"),
             );
@@ -2072,7 +2078,7 @@ impl Agent {
                     pending.kind,
                     pending.target.clone(),
                     cause,
-                    pending.actor.clone(),
+                    pending.submitter.context.clone(),
                     actor.clone(),
                 )
                 .expect("admitted pending cancellation transition"),

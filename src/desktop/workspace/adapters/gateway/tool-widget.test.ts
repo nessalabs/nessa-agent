@@ -13,6 +13,7 @@ const tool: ConversationTool = {
   status: "completed",
   details: "Chart of two rows.",
   input: "",
+  nativeHooks: "off",
 }
 
 describe("a gateway tool call as a widget part", () => {

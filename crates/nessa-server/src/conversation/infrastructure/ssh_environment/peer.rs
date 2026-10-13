@@ -9,23 +9,42 @@
 //!         ──▶ the key's environment ──▶ HostLink::over(peer:<key>, stream)
 //!               hello, this build? ──▶ replaces the connection it had
 //!               (that one closed: its leases lost) ──▶ held until it ends
+//!               every keepalive interval: ServingCredentials::serves(proof)?
+//!                 no ──▶ HostLink::revoke
+//! admitted, ended, or HostLink::revoke ──▶ connections moved
+//!   ──▶ every PeerEnvironments::connections receiver wakes once
 //! open / grant / account ──▶ that environment's current connection
 //!   ──▶ ServingCredentials::serves(the proof it was opened with)?
-//!         no ──▶ the connection closed, the lease refused unreachable
+//!         no ──▶ HostLink::revoke, the lease refused unreachable
+//! HostLink::revoke ──▶ no lease admitted ──▶ Revoked queued to the host first
+//!   ──▶ then each lease ending as revoked (so its End goes after Revoked)
+//!   ──▶ each End answered ──▶ the connection closed
 //! ```
 //!
 //! Arrows are calls, in order. A paired environment is one key: its name is
 //! `peer:` and the key in hex ([`PeerEnvironment`]), whichever connection it
 //! last made. Whether that key may serve is the registry's and the policy's
 //! answer, never a copy kept here: it is asked when the connection is
-//! admitted and again before every lease on it. Only the connection differs
+//! admitted, again before every lease on it, and again every keepalive
+//! interval while it is open, so a credential revoked, expired or whose
+//! membership was disabled ends an idle connection too, and the leases
+//! running on it as revoked, on both sides. Only the connection differs
 //! from an SSH host's; the leases on it, their frames and their audit are
-//! the same [`SshEnvironment`]'s. A file the host publishes is not fetched
-//! over a paired connection yet: it has no artifact channel, so its
-//! collection is refused.
+//! the same [`SshEnvironment`]'s. A file the host publishes is read over
+//! the lease frames themselves ([`ArtifactTransport::Frames`]), since a
+//! paired connection carries nothing beside them.
+//! Nothing is fetched into a paired host: with no file channel, the agent's
+//! fetch is refused unavailable before the host is asked.
+//!
+//! Which environments are connected is read from their connections, never
+//! kept here as a list; what is kept is a count of the changes to it
+//! ([`PeerEnvironments::connections`]), moved where each change is made, so
+//! the agent catalogue's subscribers (`agents.subscribe`) read the list
+//! again when it may differ. It is its own change source: the conversation
+//! catalogue's head does not move for it.
 use super::{
     audit::EnvironmentAudit,
-    connector::{ArtifactChannel, ArtifactChannels, LeaseConnection},
+    connector::{ArtifactTransport, LeaseConnection},
     environment::{SshEnvironment, SshTimings},
 };
 use crate::conversation::application::{Environment, EnvironmentFuture, PairedEnvironments};
@@ -33,10 +52,12 @@ use nessa_auth::application::{pairing::DeviceConnectionProof, ports::AccessError
 use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
 use std::{
     collections::BTreeMap,
-    io,
     sync::{Arc, Mutex, PoisonError},
 };
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    sync::watch,
+};
 
 /// Whether a key holds a credential to serve this gateway's leases now.
 /// Implemented over the registry and the policy in composition.
@@ -56,6 +77,10 @@ pub(crate) struct PeerEnvironments {
     audit: Arc<dyn EnvironmentAudit>,
     timings: SshTimings,
     peers: Mutex<BTreeMap<PeerEnvironment, Arc<SshEnvironment>>>,
+    /// How many times which of them are connected has changed. Each
+    /// environment moves it as its connection is admitted, ends, or is
+    /// revoked.
+    connections: watch::Sender<u64>,
 }
 
 impl PeerEnvironments {
@@ -69,7 +94,18 @@ impl PeerEnvironments {
             audit,
             timings,
             peers: Mutex::new(BTreeMap::new()),
+            connections: watch::Sender::new(0),
         }
+    }
+
+    /// Wakes each time which paired environments are connected may have
+    /// changed: one connected, one's connection ended, or one was revoked.
+    /// A receiver that has fallen behind wakes once, not once per change,
+    /// and reads [`PairedEnvironments::connected`] for the list as it is
+    /// then. The count is a wake-up and nothing more: it is not a position
+    /// anything resumes from.
+    pub(crate) fn connections(&self) -> watch::Receiver<u64> {
+        self.connections.subscribe()
     }
 
     /// Whether the key `proof` carries may serve now: asked before its
@@ -93,7 +129,7 @@ impl PeerEnvironments {
             from_environment,
             to_environment,
             keep,
-            artifacts: Arc::new(NoArtifactChannels),
+            artifacts: ArtifactTransport::Frames,
         };
         environment.serve(proof, connection).await;
     }
@@ -109,6 +145,7 @@ impl PeerEnvironments {
                     self.credentials.clone(),
                     self.audit.clone(),
                     self.timings,
+                    self.connections.clone(),
                 ))
             })
             .clone()
@@ -133,6 +170,7 @@ impl PairedEnvironments for PeerEnvironments {
                 self.credentials.clone(),
                 self.audit.clone(),
                 self.timings,
+                self.connections.clone(),
             )),
         }
     }
@@ -145,17 +183,5 @@ impl PairedEnvironments for PeerEnvironments {
             .filter(|(_, environment)| environment.is_connected())
             .map(|(peer, _)| *peer)
             .collect()
-    }
-}
-
-/// A paired connection carries no artifact channel yet.
-struct NoArtifactChannels;
-
-impl ArtifactChannels for NoArtifactChannels {
-    fn open(&self) -> io::Result<ArtifactChannel> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "a paired environment's files are not fetched yet",
-        ))
     }
 }

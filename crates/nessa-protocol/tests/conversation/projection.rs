@@ -15,7 +15,7 @@ use crate::conversation::{
     view::{
         ConversationAgentFeatures, ConversationAttachmentEvidenceFailure,
         ConversationAttachmentEvidenceFailureCode, ConversationCapabilities, ConversationLifecycle,
-        ConversationLifecyclePhase, ConversationMessageStatus, ConversationView,
+        ConversationLifecyclePhase, ConversationMessageStatus, ConversationView, NativeHooksChoice,
         PermissionDenialSupport, MAX_STRUCTURED_CONTENT_BYTES,
     },
 };
@@ -35,8 +35,8 @@ use nessa_sdk::application::agent_execution::sessions::{
 };
 use nessa_sdk::application::agent_execution::tools::ToolReviewInput;
 use nessa_sdk::domain::agent_execution::executions::{
-    ExecutionId, ExecutionOutcome, InvocationKind, InvocationStage, MessageChunk, MessageId,
-    QueueMutation, SchedulingCause,
+    ExecutionId, ExecutionOutcome, Initiation, InvocationKind, InvocationStage, MessageChunk,
+    MessageId, QueueMutation, SchedulingCause,
 };
 use nessa_sdk::domain::agent_execution::permissions::{
     PermissionApplicationId, PermissionCancellationReason, PermissionDecision, PermissionEffect,
@@ -168,6 +168,7 @@ fn application_absences_project_as_not_implemented() {
     .unwrap();
     assert_eq!(value["permissionDenial"], "unknown");
     assert_eq!(value["nativeHookSuppression"], "unknown");
+    assert_eq!(value["nativeHooks"], "off");
     assert_eq!(value["compactionReporting"], "unsupported_not_implemented");
     assert_eq!(value["modelSwitchReporting"], "unsupported_not_implemented");
     assert_eq!(value["permissionDeferral"], "unsupported_not_implemented");
@@ -270,6 +271,7 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
                 reserved_output_tokens: 10,
             },
             actor: ActionContext::new("person", "panel", "send").unwrap(),
+            initiation: Initiation::owner(),
             acknowledgement: SubmissionAcknowledgement::Acknowledged,
             events,
             scheduling: vec![],
@@ -596,6 +598,118 @@ fn arguments_on_a_later_update_join_the_identity_that_update_does_not_repeat() {
         .with_mcp_arguments(McpCallArguments::new("{}").unwrap()),
     ))]);
     assert!(bare.tools[0].mcp.is_none());
+}
+
+fn tool_named(name: &str) -> ExecutionUpdate {
+    ExecutionUpdate::Tool(ToolCallUpdate::new(
+        ToolCallId::new(name).unwrap(),
+        None,
+        None,
+        None,
+        None,
+        None,
+    ))
+}
+
+#[test]
+fn a_restored_tool_shows_the_hooks_choice_saved_with_it_not_the_one_in_effect_now() {
+    // After a restart with the switch turned on, the saved calls still say
+    // what their process start used.
+    let saved = completed_snapshot(
+        "execution",
+        vec![
+            event(tool_named("read")).with_native_hooks(false),
+            event(tool_named("edit")).with_native_hooks(false),
+            event(tool_named("older")),
+        ],
+    );
+    let mut capabilities = ConversationCapabilities {
+        queue: true,
+        steer: true,
+        resume: false,
+        permissions: true,
+        image_input: false,
+        agent_features: OperationCapabilities::default().into(),
+    };
+    capabilities.agent_features.native_hooks = NativeHooksChoice::On;
+    let mut projection = Projection::new("conversation".into(), capabilities.clone(), None);
+    assert!(projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&saved)),
+        &[],
+        None,
+    ));
+    let tools = &projection.view().tools;
+    let mark = |id: &str| {
+        tools
+            .iter()
+            .find(|tool| tool.tool_id == id)
+            .unwrap()
+            .native_hooks
+    };
+    assert_eq!(mark("read"), Some(NativeHooksChoice::Off));
+    assert_eq!(mark("edit"), Some(NativeHooksChoice::Off));
+    // Saved without a choice: nothing is claimed for it.
+    assert_eq!(mark("older"), None);
+    assert_eq!(projection.view().capabilities, capabilities);
+}
+
+#[test]
+fn a_later_update_of_an_unmarked_tool_fills_in_its_hooks_choice() {
+    let saved = completed_snapshot(
+        "execution",
+        vec![
+            event(tool_named("read")),
+            event(tool_named("read")).with_native_hooks(false),
+        ],
+    );
+    let projection = Projection::new(
+        "conversation".into(),
+        ConversationCapabilities {
+            queue: true,
+            steer: true,
+            resume: false,
+            permissions: true,
+            image_input: false,
+            agent_features: OperationCapabilities::default().into(),
+        },
+        Some(&saved),
+    );
+    assert_eq!(
+        projection.view().tools[0].native_hooks,
+        Some(NativeHooksChoice::Off)
+    );
+}
+
+#[test]
+fn saved_hooks_choices_that_disagree_within_one_execution_show_none() {
+    // One execution runs on one process start, so these stamps cannot both be
+    // true. The view skips the choice rather than show whichever came last.
+    let saved = completed_snapshot(
+        "execution",
+        vec![
+            event(tool_named("read")).with_native_hooks(true),
+            event(tool_named("write")).with_native_hooks(false),
+            event(tool_named("read")).with_native_hooks(true),
+        ],
+    );
+    let projection = Projection::new(
+        "conversation".into(),
+        ConversationCapabilities {
+            queue: true,
+            steer: true,
+            resume: false,
+            permissions: true,
+            image_input: false,
+            agent_features: OperationCapabilities::default().into(),
+        },
+        Some(&saved),
+    );
+    assert_eq!(projection.view().tools.len(), 2);
+    assert!(projection
+        .view()
+        .tools
+        .iter()
+        .all(|tool| tool.native_hooks.is_none()));
 }
 
 #[test]

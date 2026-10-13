@@ -28,7 +28,7 @@ use nessa_auth::application::ports::Clock;
 use nessa_auth::application::session::{AuthenticateSession, AuthenticatedSession};
 use nessa_auth::domain::pairing::ConsentClass;
 use nessa_auth::domain::{AudienceId, OrganizationId, PrincipalId, Resource, ResourceId};
-use nessa_client_core::pairing::NativeEnrollmentClient;
+use nessa_client_core::retained::RetainedEnrollmentClient;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId,
@@ -605,7 +605,13 @@ async fn pair_device(
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
     nessa_local_storage::create_directory_beneath(root, Path::new(directory)).unwrap();
     let device = Arc::new(FilePairingState::open(root, Path::new(directory)).unwrap());
-    let client = NativeEnrollmentClient::new(device.clone(), RuntimeDependencies::default().clock);
+    let client = RetainedEnrollmentClient::new(
+        device.clone(),
+        root.join(directory).join("retained.sqlite3"),
+        Arc::new(SystemClock),
+        RuntimeDependencies::default().clock,
+    )
+    .unwrap();
     let claimed = client
         .enroll(TcpStream::connect(native).unwrap(), code, OsEntropy)
         .await
@@ -621,7 +627,11 @@ async fn pair_device(
         .status(TcpStream::connect(native).unwrap(), None)
         .await
         .unwrap();
-    assert!(matches!(active, NativePairingStatus::Active { .. }));
+    assert!(matches!(
+        active.enrollment(),
+        Ok(NativePairingStatus::Active { .. })
+    ));
+    assert!(active.purge().is_none());
     client.shutdown().await;
     (receiver.as_str().to_owned(), epoch, credential)
 }
@@ -641,10 +651,12 @@ pub(super) async fn share_with_devices(
             .zip(setup.second_credential.clone()),
     ];
     for (receiver, credential) in devices.into_iter().flatten() {
-        crate::conversation::application::ReadGrants::change(
+        crate::conversation::application::ShareGrants::change(
             metadata,
-            crate::conversation::application::ReadGrantChange {
-                transition: crate::conversation::application::ReadGrantTransition::Grant,
+            crate::conversation::application::ShareGrantChange {
+                transition: crate::conversation::application::ShareGrantTransition::Grant(
+                    crate::conversation::domain::ShareAccess::read(),
+                ),
                 conversation_id: id.clone(),
                 receiver_id: Some(receiver),
                 credential_id: nessa_auth::domain::CredentialId::new(credential).unwrap(),

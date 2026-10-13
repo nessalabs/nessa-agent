@@ -9,6 +9,7 @@ Implementation decisions and unfinished work are tracked in the ADR folders.
 | [Scoped authentication design](scoped-authentication.md) | Original detailed plan and acceptance criteria, with current status and superseded assumptions identified |
 | [Identity, tenancy, and cloud](identity-tenancy-and-cloud.md) | Proposed identity/provider direction and supporting research; broader integrations remain unimplemented |
 | [Peer gateways](peer-gateways.md) | A paired gateway as a principal of kind `gateway`: the same enrollment, a credential that names the peer and holds only reads (slice H of ADR 252) |
+| [Forwarding relay](relay.md) | A relay a gateway and its readers both dial out to: it joins them and copies TLS it cannot read, and its `Offline` answer is how a reader tells a gateway that is away (issue 266) |
 | [Credential transition audit](credential-transition-audit.md) | Why every credential lifecycle change is committed with its before/after, cause, and initiator, and the decisions behind that design |
 
 ## Decisions and work tracking

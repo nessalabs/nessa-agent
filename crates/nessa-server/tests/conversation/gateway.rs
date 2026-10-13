@@ -143,7 +143,8 @@ mod gateway {
                             "description": "The provider requests approval where required."
                         }]
                     }]
-                }]
+                }],
+                "nativeHooks": {"claude": "off", "codex": "off"}
             }))
             .unwrap(),
         )
@@ -262,9 +263,10 @@ mod gateway {
     async fn the_agent_catalog_lists_the_paired_environments_connected_when_asked() {
         let connected = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let listed = connected.clone();
-        let state = chat_state().with_connected_environments(Arc::new(move || {
-            listed.lock().unwrap().clone()
-        }));
+        let state = chat_state().with_connected_environments(crate::product::ConnectedEnvironments {
+            names: Arc::new(move || listed.lock().unwrap().clone()),
+            changes: tokio::sync::watch::Sender::new(0).subscribe(),
+        });
         let session = chat_session(&state, "owner-phone").await;
         let places = |response: ResponseFrame| {
             response.payload.unwrap()["environments"].clone()

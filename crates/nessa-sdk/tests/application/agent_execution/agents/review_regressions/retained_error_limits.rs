@@ -21,13 +21,15 @@ async fn oversized_provider_errors_are_bounded_for_direct_and_queued_receipts() 
         });
         let result = if queued {
             agent
-                .enqueue(input("oversized"), close_action())
+                .enqueue(input("oversized"), Submitter::owner(close_action()))
                 .await
                 .unwrap()
                 .wait()
                 .await
         } else {
-            agent.invoke(input("oversized"), close_action()).await
+            agent
+                .invoke(input("oversized"), Submitter::owner(close_action()))
+                .await
         };
         assert_eq!(
             result,
@@ -48,7 +50,9 @@ async fn oversized_error_cannot_erase_uncertain_cleanup_and_reopen_admission() {
         operation_error: Box::new(AgentError::Protocol("x".repeat(1024 * 1024))),
         cleanup_error: Box::new(AgentError::AuditAndCleanupFailure),
     });
-    let result = agent.invoke(input("uncertain"), close_action()).await;
+    let result = agent
+        .invoke(input("uncertain"), Submitter::owner(close_action()))
+        .await;
     assert_eq!(
         result,
         Err(AgentError::ExecutionObservation {
@@ -58,7 +62,9 @@ async fn oversized_error_cannot_erase_uncertain_cleanup_and_reopen_admission() {
     );
     assert_eq!(storage.snapshot().invocations[0].result, Some(result));
     assert_eq!(
-        agent.invoke(input("blocked"), close_action()).await,
+        agent
+            .invoke(input("blocked"), Submitter::owner(close_action()))
+            .await,
         Err(AgentError::Closed)
     );
     assert_eq!(backend.executions.load(Ordering::SeqCst), 1);

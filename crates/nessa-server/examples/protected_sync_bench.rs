@@ -48,7 +48,7 @@ use nessa_sdk::application::agent_execution::{
     },
 };
 use nessa_sdk::domain::agent_execution::{
-    executions::{ExecutionId, ExecutionOutcome, MessageChunk, SubmissionMode},
+    executions::{ExecutionId, ExecutionOutcome, Initiation, MessageChunk, SubmissionMode},
     prompts::{PromptText, UserMessage},
     sessions::{ExecutionSessionId, ProviderContext, SessionId},
 };
@@ -1156,6 +1156,7 @@ fn turn_record(turn: usize) -> (InvocationRecord, String, String) {
             reserved_output_tokens: 1,
         },
         actor: ActionContext::new("bench", "bench", format!("turn-{turn}")).unwrap(),
+        initiation: Initiation::owner(),
         acknowledgement: SubmissionAcknowledgement::Pending,
         events: vec![
             ExecutionEvent::new(

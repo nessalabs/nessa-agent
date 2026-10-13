@@ -25,7 +25,8 @@ pub enum McpError {
     /// upstream; the connection stays.
     Timeout,
     /// The server's process ended, or its pipes closed, before an answer.
-    /// A custom HTTP adapter that panics its writer is the same loss,
+    /// A custom HTTP adapter that panics the writer, a reply reader, the
+    /// legacy stream, the server stream, or recovery is the same loss,
     /// observed on this side of the connection rather than from the remote process.
     ServerGone,
     /// DNS, TCP, TLS, or `initialize` failed before a session existed.

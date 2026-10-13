@@ -20,7 +20,9 @@ impl ProviderSessionDeleter for ClaudeAcpProvider {
             let answer = acp_deletion::delete_session(
                 self.process_factory(),
                 self.config().clone(),
-                &self.profile(),
+                // Deleting is Nessa's housekeeping, not a run of the agent, so
+                // it keeps hooks suppressed whatever the switch says.
+                &self.profile_allowing(false),
                 &session,
                 self.deletions(),
             )

@@ -51,7 +51,7 @@ async fn agent_persists_and_resumes_acp_without_a_ui_reader_or_prompt_replay() {
     for id in ["first", "second"] {
         assert_eq!(
             agent
-                .enqueue(prompt(id), close_action())
+                .enqueue(prompt(id), Submitter::owner(close_action()))
                 .await
                 .unwrap()
                 .wait()
@@ -66,7 +66,9 @@ async fn agent_persists_and_resumes_acp_without_a_ui_reader_or_prompt_replay() {
         .await
         .unwrap();
     assert_eq!(
-        agent.invoke(prompt("third"), close_action()).await,
+        agent
+            .invoke(prompt("third"), Submitter::owner(close_action()))
+            .await,
         Ok(ExecutionOutcome::Completed)
     );
     assert_eq!(hook_calls.load(Ordering::SeqCst), 3);
@@ -96,7 +98,7 @@ async fn agent_persists_and_resumes_acp_without_a_ui_reader_or_prompt_replay() {
         provider_id
     );
     let recovered = restored
-        .enqueue(prompt("first"), close_action())
+        .enqueue(prompt("first"), Submitter::owner(close_action()))
         .await
         .unwrap();
     assert_eq!(recovered.wait().await, Ok(ExecutionOutcome::Completed));
@@ -111,7 +113,9 @@ async fn agent_persists_and_resumes_acp_without_a_ui_reader_or_prompt_replay() {
         3
     );
     assert_eq!(
-        restored.invoke(prompt("fourth"), close_action()).await,
+        restored
+            .invoke(prompt("fourth"), Submitter::owner(close_action()))
+            .await,
         Ok(ExecutionOutcome::Completed)
     );
     let saved = restored.session_manager().snapshot().await.unwrap();
@@ -153,7 +157,7 @@ async fn agent_queue_and_native_steering_share_one_acp_execution_at_a_time() {
     let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
     let mut events = agent.subscribe();
     let first = agent
-        .enqueue(prompt("first"), close_action())
+        .enqueue(prompt("first"), Submitter::owner(close_action()))
         .await
         .unwrap();
     assert_eq!(
@@ -167,11 +171,11 @@ async fn agent_queue_and_native_steering_share_one_acp_execution_at_a_time() {
         "first"
     );
     let second = agent
-        .enqueue(prompt("second"), close_action())
+        .enqueue(prompt("second"), Submitter::owner(close_action()))
         .await
         .unwrap();
     assert!(
-        matches!(agent.steer(prompt("adjust-first"), close_action()).await.unwrap(),
+        matches!(agent.steer(prompt("adjust-first"), Submitter::owner(close_action())).await.unwrap(),
         SteeringDelivery::Injected { target, .. } if target.as_str() == "first")
     );
     assert_eq!(first.wait().await.unwrap(), ExecutionOutcome::Completed);
@@ -182,7 +186,7 @@ async fn agent_queue_and_native_steering_share_one_acp_execution_at_a_time() {
         }
     }
     assert!(
-        matches!(agent.steer(prompt("adjust-second"), close_action()).await.unwrap(),
+        matches!(agent.steer(prompt("adjust-second"), Submitter::owner(close_action())).await.unwrap(),
         SteeringDelivery::Injected { target, .. } if target.as_str() == "second")
     );
     assert_eq!(second.wait().await.unwrap(), ExecutionOutcome::Completed);
@@ -219,7 +223,9 @@ async fn idle_generation_failure_is_reported_before_restoration_can_send_a_promp
     .unwrap();
     let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
     wait_until_gone(&root, "pid").await;
-    let result = agent.invoke(prompt("must-not-send"), close_action()).await;
+    let result = agent
+        .invoke(prompt("must-not-send"), Submitter::owner(close_action()))
+        .await;
     assert!(matches!(result, Err(AgentError::Protocol(_))));
     let launches: Vec<u32> =
         serde_json::from_slice(&std::fs::read(root.path().join("launches")).unwrap()).unwrap();
@@ -247,7 +253,10 @@ async fn idle_generation_failure_is_reported_before_restoration_can_send_a_promp
         .unwrap();
     assert_eq!(
         agent
-            .invoke(prompt("safe-after-observed-failure"), close_action())
+            .invoke(
+                prompt("safe-after-observed-failure"),
+                Submitter::owner(close_action())
+            )
             .await,
         Ok(ExecutionOutcome::Completed)
     );
@@ -327,7 +336,7 @@ async fn explicit_turn_cancel_finishes_that_turn_and_keeps_the_provider_process(
     assert!(agent.supports_turn_cancel());
     let mut events = agent.subscribe();
     let first = agent
-        .enqueue(prompt("first"), close_action())
+        .enqueue(prompt("first"), Submitter::owner(close_action()))
         .await
         .unwrap();
     timeout(Duration::from_secs(5), async {
@@ -347,7 +356,7 @@ async fn explicit_turn_cancel_finishes_that_turn_and_keeps_the_provider_process(
     assert_eq!(first.wait().await, Ok(ExecutionOutcome::Cancelled));
     assert_eq!(
         agent
-            .enqueue(prompt("second"), close_action())
+            .enqueue(prompt("second"), Submitter::owner(close_action()))
             .await
             .unwrap()
             .wait()
@@ -415,12 +424,12 @@ async fn queued_followup_resumes_after_provider_cancellation_without_losing_admi
     .unwrap();
     let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
     let first = agent
-        .enqueue(prompt("cancelled-first"), close_action())
+        .enqueue(prompt("cancelled-first"), Submitter::owner(close_action()))
         .await
         .unwrap();
     waiting.await.unwrap();
     let second = agent
-        .enqueue(prompt("queued-followup"), close_action())
+        .enqueue(prompt("queued-followup"), Submitter::owner(close_action()))
         .await
         .unwrap();
     release.send(()).unwrap();
@@ -511,7 +520,10 @@ async fn observation_storage_failure_audits_execution_failure_without_fabricated
     let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
     assert!(matches!(
         agent
-            .invoke(prompt("fails-to-save-review"), close_action())
+            .invoke(
+                prompt("fails-to-save-review"),
+                Submitter::owner(close_action())
+            )
             .await,
         Err(AgentError::StorageAfterExecution { .. })
     ));
@@ -679,7 +691,10 @@ async fn declined_review_survives_selected_save_failure_and_caller_loss() {
         let agent = agent.clone();
         async move {
             agent
-                .invoke(prompt("decline-storage-caller-loss"), close_action())
+                .invoke(
+                    prompt("decline-storage-caller-loss"),
+                    Submitter::owner(close_action()),
+                )
                 .await
         }
     });
@@ -787,7 +802,10 @@ async fn dropping_agent_retains_reader_and_lease_until_handles_dropped_cleanup()
                 .unwrap();
             assert_eq!(
                 agent
-                    .invoke(prompt("resumed-before-drop"), close_action())
+                    .invoke(
+                        prompt("resumed-before-drop"),
+                        Submitter::owner(close_action())
+                    )
                     .await,
                 Ok(ExecutionOutcome::Completed)
             );
@@ -852,7 +870,7 @@ async fn repeated_oversized_prompts_leave_the_same_context_ready_for_valid_input
         };
         assert!(
             matches!(
-                agent.invoke(request, close_action()).await,
+                agent.invoke(request, Submitter::owner(close_action())).await,
                 Err(AgentError::MessageTooLarge { max_bytes, .. }) if max_bytes == 8192
             ),
             "rejection {index}"
@@ -868,7 +886,10 @@ async fn repeated_oversized_prompts_leave_the_same_context_ready_for_valid_input
     assert!(!root.path().join("cancel-observed").exists());
     assert_eq!(
         agent
-            .invoke(prompt("valid-after-rejections"), close_action())
+            .invoke(
+                prompt("valid-after-rejections"),
+                Submitter::owner(close_action())
+            )
             .await,
         Ok(ExecutionOutcome::Completed)
     );
@@ -938,7 +959,9 @@ async fn repeated_failed_restoration_recovers_on_the_same_agent() {
         .await
         .unwrap();
     assert_eq!(
-        agent.invoke(prompt("after-recovery"), close_action()).await,
+        agent
+            .invoke(prompt("after-recovery"), Submitter::owner(close_action()))
+            .await,
         Ok(ExecutionOutcome::Completed)
     );
     agent.close(close_action()).await.unwrap();
@@ -988,7 +1011,9 @@ async fn authentication_and_generic_provider_failures_keep_their_meaning_after_s
             .unwrap();
         let provider: Arc<dyn AgentProvider> = Arc::new(provider);
         let agent = attached_agent(provider.clone(), manager).await.unwrap();
-        let final_result = agent.invoke(prompt("first"), close_action()).await;
+        let final_result = agent
+            .invoke(prompt("first"), Submitter::owner(close_action()))
+            .await;
         let expected_final = if expected.authentication_required() {
             Err(expected.clone())
         } else {
@@ -1045,7 +1070,7 @@ async fn unsigned_codex_startup_settles_queued_input_without_provider_report_and
     .await
     .unwrap();
     let queued = agent
-        .enqueue(prompt("unsigned-input"), close_action())
+        .enqueue(prompt("unsigned-input"), Submitter::owner(close_action()))
         .await
         .unwrap();
     let result = attach_agent(&agent, AttachmentRequest::CallerRequested(close_action())).await;
@@ -1081,7 +1106,7 @@ async fn unsigned_codex_startup_settles_queued_input_without_provider_report_and
     );
     assert_eq!(
         restored
-            .enqueue(prompt("unsigned-input"), close_action())
+            .enqueue(prompt("unsigned-input"), Submitter::owner(close_action()))
             .await
             .unwrap()
             .wait()

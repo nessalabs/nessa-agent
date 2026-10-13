@@ -10,10 +10,13 @@ import * as React from "react"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import type { ConversationSelection } from "../../conversation"
-import { useBindCatalogFallback } from "./use-agent-choices"
+import type { ConversationChoices } from "../adapters/agent-choices"
+import { useBindCatalogFallback, useConversationChoices } from "./use-agent-choices"
 
 let container: HTMLElement
 let root: Root
+const OFF = { claude: "off", codex: "off" } as const
+
 const setSelection = vi.fn()
 
 function Draft(props: {
@@ -92,4 +95,64 @@ it("binds the catalog's default to a draft with no selection", () => {
     model: "sonnet",
     approvalMode: "ask",
   })
+})
+
+/** The choices the hook holds, rendered where the test can read them. */
+function Choices(props: {
+  available: boolean
+  follow: (show: (choices: ConversationChoices) => void) => () => void
+}) {
+  const choices = useConversationChoices(props.available, props.follow)
+  return React.createElement("p", null, choices?.catalog.environments.join(",") ?? "none")
+}
+
+it("replaces the choices with each catalog the follow sends, and stops it on unmount", () => {
+  let show: ((choices: ConversationChoices) => void) | undefined
+  const stop = vi.fn()
+  const follow = vi.fn((told: (choices: ConversationChoices) => void) => {
+    show = told
+    return stop
+  })
+  act(() => root.render(React.createElement(Choices, { available: true, follow })))
+  expect(container.textContent).toBe("none")
+  act(() =>
+    show?.({
+      catalog: { agents: [], environments: ["devbox"], nativeHooks: OFF },
+      chosenAgent: undefined,
+    }),
+  )
+  expect(container.textContent).toBe("devbox")
+  const peer = `peer:${"ab".repeat(32)}`
+  act(() =>
+    show?.({
+      catalog: { agents: [], environments: ["devbox", peer], nativeHooks: OFF },
+      chosenAgent: undefined,
+    }),
+  )
+  expect(container.textContent).toBe(`devbox,${peer}`)
+  expect(follow).toHaveBeenCalledOnce()
+  expect(stop).not.toHaveBeenCalled()
+  act(() => root.unmount())
+  expect(stop).toHaveBeenCalledOnce()
+  // `afterEach` unmounts again; a fresh root keeps that harmless.
+  root = createRoot(container)
+})
+
+it("stops the follow and offers nothing while the gateway is unavailable", () => {
+  let show: ((choices: ConversationChoices) => void) | undefined
+  const stop = vi.fn()
+  const follow = (told: (choices: ConversationChoices) => void) => {
+    show = told
+    return stop
+  }
+  act(() => root.render(React.createElement(Choices, { available: true, follow })))
+  act(() =>
+    show?.({
+      catalog: { agents: [], environments: ["devbox"], nativeHooks: OFF },
+      chosenAgent: undefined,
+    }),
+  )
+  act(() => root.render(React.createElement(Choices, { available: false, follow })))
+  expect(stop).toHaveBeenCalledOnce()
+  expect(container.textContent).toBe("none")
 })

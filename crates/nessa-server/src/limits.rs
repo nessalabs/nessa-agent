@@ -7,8 +7,10 @@
 //! test beside this module refuses a copy that has drifted.
 use crate::attachments::application::{AttachmentLimits, HeldReads};
 use crate::conversation::application::{
-    ArtifactBudget, ARTIFACT_READ_RESUMES, MAX_READ_GRANTS_PER_CONVERSATION, PUBLISH_CALL_WAIT,
+    ArtifactBudget, ARTIFACT_READ_RESUMES, FETCH_BUSY_BACKOFF, FETCH_CALL_WAIT, FETCH_READS,
+    MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION, PUBLISH_CALL_WAIT,
 };
+use crate::conversation::domain::ToolRules;
 use crate::conversation::infrastructure::{DISCOVERY_STEPS_PER_READ, MAX_CATALOGUE_CHANGE_WATCHES};
 use crate::mcp_servers::infrastructure::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_BYTES};
 use crate::peer_gateways::infrastructure::{
@@ -17,8 +19,8 @@ use crate::peer_gateways::infrastructure::{
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
 use crate::product::{OperationalLimits, SessionSettings, RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
 use nessa_protocol::lease::{
-    COMMAND_STOP_WAIT, MAX_ARTIFACTS_IN_FLIGHT, MAX_ARTIFACT_BYTES, MAX_DATA_BYTES,
-    MAX_OPEN_PUBLISHERS,
+    COMMAND_STOP_WAIT, MAX_ARTIFACTS_IN_FLIGHT, MAX_ARTIFACT_BYTES, MAX_ARTIFACT_READS_IN_FLIGHT,
+    MAX_DATA_BYTES, MAX_FETCHES_IN_FLIGHT, MAX_OPEN_PUBLISHERS,
 };
 use nessa_protocol::product::generated::{
     MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_CONNECTION_LIST_SUBSCRIPTIONS,
@@ -202,10 +204,28 @@ fn catalogue() -> &'static [Limit] {
             meaning: "the catalogue watches every socket shares; a list subscription holds one beside its record watch, as a device's catalogue watch does; past this one is refused subscription_capacity",
         },
         Limit {
-            id: "conversation.read_grants",
+            id: "conversation.share_grants",
             tier: "fixed",
-            owner: "MAX_READ_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/read_grants.rs, the schema's ConversationSharesResult maxItems",
-            meaning: "the paired devices one conversation is shared with; one more conversation.share is refused invalid_request, so a conversation.shares answer always fits one frame",
+            owner: "MAX_SHARE_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/share_grants.rs, the schema's ConversationSharesResult maxItems",
+            meaning: "the paired parties one conversation is shared with, any role; one more conversation.share is refused invalid_request, so a conversation.shares answer always fits one frame",
+        },
+        Limit {
+            id: "conversation.drive_grants",
+            tier: "fixed",
+            owner: "MAX_DRIVE_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/share_grants.rs",
+            meaning: "the drive grants one conversation holds; one more conversation.share naming drive is refused invalid_request, so a conversation.shares answer with every policy at its largest still fits one frame",
+        },
+        Limit {
+            id: "conversation.tool_policy_rules",
+            tier: "fixed",
+            owner: "ToolRules::MAX_RULES in crates/nessa-server/src/conversation/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
+            meaning: "the patterns each of a drive grant's allow and deny lists holds; a conversation.share with more in either is refused invalid_request",
+        },
+        Limit {
+            id: "conversation.tool_policy_rule_bytes",
+            tier: "fixed",
+            owner: "ToolRules::MAX_RULE_BYTES in crates/nessa-server/src/conversation/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
+            meaning: "the longest tool policy pattern, in UTF-8 bytes; a conversation.share with a longer one is refused invalid_request",
         },
         Limit {
             id: "record.read_work_budget",
@@ -224,6 +244,12 @@ fn catalogue() -> &'static [Limit] {
             tier: "fixed",
             owner: "nessa_protocol::lease MAX_ARTIFACTS_IN_FLIGHT",
             meaning: "a publish past this many unanswered under one lease is answered busy",
+        },
+        Limit {
+            id: "artifact.paired_reads_in_flight",
+            tier: "fixed",
+            owner: "nessa_protocol::lease MAX_ARTIFACT_READS_IN_FLIGHT",
+            meaning: "the reads of one published file an environment holds over a paired connection until each answer is handed to its writer; one more is refused busy",
         },
         Limit {
             id: "artifact.host_open_publishers",
@@ -253,7 +279,7 @@ fn catalogue() -> &'static [Limit] {
             id: "artifact.read_resumes",
             tier: "fixed",
             owner: "conversation ARTIFACT_READ_RESUMES",
-            meaning: "a read whose channel fails more often than this is refused channelUnavailable",
+            meaning: "a published file's read, or a fetched file's write, whose channel fails more often than this is refused channelUnavailable; each resumes from the offset acknowledged",
         },
         Limit {
             id: "artifact.read_range_bytes",
@@ -284,6 +310,36 @@ fn catalogue() -> &'static [Limit] {
             tier: "fixed",
             owner: "conversation PUBLISH_CALL_WAIT",
             meaning: "an artifacts_publish call whose file is not kept this long after it asked answers timed_out; counted from the ask, so it covers staging and any wait behind files already offered under the lease as well as the read; a timed_out file may still be kept, named for the call's person",
+        },
+        Limit {
+            id: "artifact.fetch_bytes",
+            tier: "fixed",
+            owner: "conversation ArtifactBudget::LEASE.fetch_bytes",
+            meaning: "an artifacts_fetch that would take one lease's fetched bytes past this is refused budget_exceeded before the environment is asked; a fetch's size is given back when its answer says it placed nothing, or when no answer came and every byte was never said delivered",
+        },
+        Limit {
+            id: "artifact.fetch_call_wait",
+            tier: "fixed",
+            owner: "conversation FETCH_CALL_WAIT",
+            meaning: "an artifacts_fetch call not answered this long after it asked answers timed_out; stopped before every byte was written, the environment places nothing, and after, it may still place the file",
+        },
+        Limit {
+            id: "server.fetch_reads",
+            tier: "fixed",
+            owner: "conversation FETCH_READS",
+            meaning: "held-file ranges artifacts_fetch reads at once across the gateway, apart from server.artifact_reads so fetches never lock a surface out; one more waits for a permit, within its call's wait",
+        },
+        Limit {
+            id: "artifact.fetch_busy_backoff",
+            tier: "fixed",
+            owner: "conversation FETCH_BUSY_BACKOFF",
+            meaning: "the longest a fetch's range waits, its read permit let go, before asking again after the store answered busy; it waits 250 then 500 ms, then this each time, within its call's wait",
+        },
+        Limit {
+            id: "artifact.host_fetches_in_flight",
+            tier: "fixed",
+            owner: "CurrentLease::MAX_ASKED_FETCHES (the gateway), nessa_protocol::lease MAX_FETCHES_IN_FLIGHT (the host)",
+            meaning: "a fetch past this many under way under one lease is refused busy by the gateway before the host is asked, with nothing recorded; the host refuses busy past this many unanswered as well, for any gateway",
         },
         Limit {
             id: "record.discovery_steps",
@@ -468,13 +524,29 @@ pub(crate) fn effective_json(
         count(MAX_CATALOGUE_CHANGE_WATCHES),
     );
     put(
-        "conversation.read_grants",
-        MAX_READ_GRANTS_PER_CONVERSATION.unsigned_abs(),
+        "conversation.share_grants",
+        MAX_SHARE_GRANTS_PER_CONVERSATION.unsigned_abs(),
+    );
+    put(
+        "conversation.drive_grants",
+        MAX_DRIVE_GRANTS_PER_CONVERSATION.unsigned_abs(),
+    );
+    put(
+        "conversation.tool_policy_rules",
+        count(ToolRules::MAX_RULES),
+    );
+    put(
+        "conversation.tool_policy_rule_bytes",
+        count(ToolRules::MAX_RULE_BYTES),
     );
     put("record.read_work_budget", millis(limits.read_work_budget()));
     put("record.discovery_steps", count(DISCOVERY_STEPS_PER_READ));
     put("artifact.max_file_bytes", MAX_ARTIFACT_BYTES);
     put("artifact.host_in_flight", count(MAX_ARTIFACTS_IN_FLIGHT));
+    put(
+        "artifact.paired_reads_in_flight",
+        count(MAX_ARTIFACT_READS_IN_FLIGHT),
+    );
     put("artifact.host_open_publishers", count(MAX_OPEN_PUBLISHERS));
     put(
         "artifact.environment_files",
@@ -497,6 +569,17 @@ pub(crate) fn effective_json(
         millis(AttachmentLimits::default().publish_deadline),
     );
     put("artifact.publish_call_wait", millis(PUBLISH_CALL_WAIT));
+    put("artifact.fetch_bytes", ArtifactBudget::LEASE.fetch_bytes);
+    put("artifact.fetch_call_wait", millis(FETCH_CALL_WAIT));
+    put("server.fetch_reads", count(FETCH_READS));
+    put(
+        "artifact.fetch_busy_backoff",
+        millis(FETCH_BUSY_BACKOFF[FETCH_BUSY_BACKOFF.len() - 1]),
+    );
+    put(
+        "artifact.host_fetches_in_flight",
+        count(MAX_FETCHES_IN_FLIGHT),
+    );
     put("peer.poll_interval", millis(POLL_INTERVAL));
     put("peer.poll_backoff_cap", millis(POLL_BACKOFF_CAP));
     put("peer.read_budget", millis(READ_BUDGET));

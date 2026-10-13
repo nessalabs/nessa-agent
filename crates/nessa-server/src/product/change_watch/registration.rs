@@ -162,7 +162,7 @@ impl WatchSelector {
         state: &ProductRouteState,
         session: &AuthenticatedSession,
     ) -> Result<Admitted, WatchRefusal> {
-        let (receivers, conversations, read_grants) = state
+        let (receivers, conversations, share_grants) = state
             .passive_read
             .as_ref()
             .ok_or(WatchRefusal::Unavailable)?;
@@ -179,7 +179,7 @@ impl WatchSelector {
             receivers: receivers.as_ref(),
             conversations: conversations.as_ref(),
             grants: &PUBLISHED_PASSIVE_READ_GRANTS,
-            read_grants: read_grants.as_ref(),
+            share_grants: share_grants.as_ref(),
         };
         let admitted = match self {
             Self::Records {

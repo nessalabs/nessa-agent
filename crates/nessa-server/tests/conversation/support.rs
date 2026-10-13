@@ -953,10 +953,88 @@ pub(crate) struct MemoryAttachments {
     /// the bytes are read and waits for this before it asks for the record.
     pub(crate) hold_record: Mutex<Option<oneshot::Receiver<()>>>,
     pub(crate) record_entered: Notify,
+    /// The files a fetch reads back, by their SHA-256 in lowercase hex, and
+    /// whose conversation each is.
+    pub(crate) files: Mutex<Vec<(ConversationId, String, Vec<u8>)>>,
+    /// Answers the next ranges give before any is read, in order.
+    pub(crate) range_errors: Mutex<VecDeque<crate::conversation::application::HeldRangeError>>,
+    /// Every range read: whose, and from where.
+    pub(crate) ranges: Mutex<Vec<(String, u64)>>,
+    /// When set, every file is let go once this many ranges were read.
+    pub(crate) let_go_after: Mutex<Option<usize>>,
+    /// When set, every range takes this long to read.
+    pub(crate) range_delay: Mutex<Option<std::time::Duration>>,
+    /// Ranges being read now, and the most ever read at once.
+    pub(crate) reading: AtomicUsize,
+    pub(crate) most_reading: AtomicUsize,
+}
+impl MemoryAttachments {
+    fn read_range(
+        &self,
+        range: crate::conversation::application::HeldRange,
+    ) -> Result<Vec<u8>, crate::conversation::application::HeldRangeError> {
+        use crate::conversation::application::HeldRangeError;
+        {
+            if let Some(error) = self.range_errors.lock().unwrap().pop_front() {
+                return Err(error);
+            }
+            {
+                let mut ranges = self.ranges.lock().unwrap();
+                if self
+                    .let_go_after
+                    .lock()
+                    .unwrap()
+                    .is_some_and(|after| ranges.len() >= after)
+                {
+                    self.files.lock().unwrap().clear();
+                }
+                ranges.push((range.principal_id.clone(), range.offset));
+            }
+            let digest = range.file.digest().to_hex();
+            let files = self.files.lock().unwrap();
+            let (_, _, bytes) = files
+                .iter()
+                .find(|(conversation, held, bytes)| {
+                    *conversation == range.conversation_id
+                        && *held == digest
+                        && bytes.len() as u64 == range.file.size()
+                })
+                .ok_or(HeldRangeError::NotHeld)?;
+            let start = usize::try_from(range.offset).map_err(|_| HeldRangeError::Unavailable)?;
+            if start >= bytes.len() || range.max_bytes == 0 {
+                return Err(HeldRangeError::Unavailable);
+            }
+            let end = bytes.len().min(start + range.max_bytes.min(32 * 1024));
+            Ok(bytes[start..end].to_vec())
+        }
+    }
 }
 impl ConversationAttachments for MemoryAttachments {
     fn offers_images(&self) -> bool {
         true
+    }
+    fn read_held(
+        &self,
+        range: crate::conversation::application::HeldRange,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<Vec<u8>, crate::conversation::application::HeldRangeError>,
+                > + Send
+                + '_,
+        >,
+    > {
+        Box::pin(async move {
+            let now = self.reading.fetch_add(1, Ordering::SeqCst) + 1;
+            self.most_reading.fetch_max(now, Ordering::SeqCst);
+            let delay = *self.range_delay.lock().unwrap();
+            if let Some(delay) = delay {
+                tokio::time::sleep(delay).await;
+            }
+            let read = self.read_range(range);
+            self.reading.fetch_sub(1, Ordering::SeqCst);
+            read
+        })
     }
     fn holds<'a>(
         &'a self,
@@ -1761,23 +1839,32 @@ pub(crate) fn capabilities(image_input: bool) -> EffectiveCapabilities {
 }
 
 /// Read grants for tests about something else: every paired device holds a
-/// grant on every conversation it asks about. It lists no set and takes no
-/// change; a test of read grants uses the store's own table.
+/// Read grant on every conversation it asks about. It lists no set and takes
+/// no change; a test of share grants uses the store's own table.
 pub(crate) struct EveryConversationGranted;
-impl crate::conversation::application::ReadGrants for EveryConversationGranted {
-    fn is_granted<'a>(&'a self, _: &'a ConversationId, _: &'a str) -> ConversationFuture<'a, bool> {
-        Box::pin(async { Ok(true) })
+impl crate::conversation::application::ShareGrants for EveryConversationGranted {
+    fn held_grant<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+    ) -> ConversationFuture<'a, Option<crate::conversation::application::HeldGrant>> {
+        Box::pin(async {
+            Ok(Some(crate::conversation::application::HeldGrant {
+                role: crate::conversation::domain::ShareRole::Read,
+                policy_revision: 1,
+            }))
+        })
     }
     fn change(
         &self,
-        _: crate::conversation::application::ReadGrantChange,
+        _: crate::conversation::application::ShareGrantChange,
     ) -> ConversationFuture<'_, bool> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
     fn grants<'a>(
         &'a self,
         _: &'a ConversationId,
-    ) -> ConversationFuture<'a, Vec<crate::conversation::application::ReadGrant>> {
+    ) -> ConversationFuture<'a, Vec<crate::conversation::application::ShareGrant>> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
 }
@@ -1790,14 +1877,31 @@ pub(crate) async fn grant_read(
     id: &ConversationId,
     receiver: &str,
 ) {
+    grant_as(
+        store,
+        id,
+        receiver,
+        crate::conversation::domain::ShareAccess::read(),
+    )
+    .await;
+}
+
+/// Grant `receiver` `access` on `id` in a real grant table, as the owner's
+/// `conversation.share` would.
+pub(crate) async fn grant_as(
+    store: &crate::conversation::infrastructure::LocalConversationStore,
+    id: &ConversationId,
+    receiver: &str,
+    access: crate::conversation::domain::ShareAccess,
+) {
     let conversation = ConversationRepository::load(store, id)
         .await
         .unwrap()
         .expect("a conversation to share");
-    crate::conversation::application::ReadGrants::change(
+    crate::conversation::application::ShareGrants::change(
         store,
-        crate::conversation::application::ReadGrantChange {
-            transition: crate::conversation::application::ReadGrantTransition::Grant,
+        crate::conversation::application::ShareGrantChange {
+            transition: crate::conversation::application::ShareGrantTransition::Grant(access),
             conversation_id: id.clone(),
             receiver_id: Some(receiver.to_owned()),
             credential_id: nessa_auth::domain::CredentialId::new(format!("{receiver}-credential"))
@@ -1813,6 +1917,20 @@ pub(crate) async fn grant_read(
     )
     .await
     .unwrap();
+}
+
+/// A Comment grant and a Drive grant under a preset policy: every role
+/// besides Read, for tests that each reads exactly as Read does (row J1).
+pub(crate) fn roles_beyond_read() -> [crate::conversation::domain::ShareAccess; 2] {
+    use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy, ToolPreset};
+    [
+        ShareAccess::new(ShareRole::Comment, None).unwrap(),
+        ShareAccess::new(
+            ShareRole::Drive,
+            Some(ToolPolicy::Preset(ToolPreset::NoShell)),
+        )
+        .unwrap(),
+    ]
 }
 
 // Custom repository payload deliberately violates safe destructor behavior.

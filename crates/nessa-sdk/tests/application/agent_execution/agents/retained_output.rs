@@ -176,7 +176,7 @@ async fn drained_output_limit_preserves_evidence_and_reuses_only_after_acknowled
         .unwrap();
         let result = timeout(
             Duration::from_secs(3),
-            agent.invoke(request("large"), actor()),
+            agent.invoke(request("large"), Submitter::owner(actor())),
         )
         .await
         .expect("retention cutoff must settle the producing invocation");
@@ -207,7 +207,9 @@ async fn drained_output_limit_preserves_evidence_and_reuses_only_after_acknowled
         );
         if reject_closure_audit {
             assert_eq!(
-                agent.invoke(request("next"), actor()).await,
+                agent
+                    .invoke(request("next"), Submitter::owner(actor()))
+                    .await,
                 Err(AgentError::AuditFailure)
             );
             assert_eq!(state.calls.load(Ordering::SeqCst), 1);
@@ -223,7 +225,9 @@ async fn drained_output_limit_preserves_evidence_and_reuses_only_after_acknowled
                 .await
                 .unwrap();
             assert_eq!(
-                agent.invoke(request("next"), actor()).await,
+                agent
+                    .invoke(request("next"), Submitter::owner(actor()))
+                    .await,
                 Ok(ExecutionOutcome::Completed)
             );
             assert_eq!(state.calls.load(Ordering::SeqCst), 2);
@@ -254,7 +258,11 @@ async fn explicit_close_racing_output_cutoff_keeps_its_barrier_after_audit_failu
     .unwrap();
     let running = tokio::spawn({
         let agent = agent.clone();
-        async move { agent.invoke(request("large"), actor()).await }
+        async move {
+            agent
+                .invoke(request("large"), Submitter::owner(actor()))
+                .await
+        }
     });
     state.closing.notified().await;
     let mut closing = agent.close(actor());
@@ -270,13 +278,17 @@ async fn explicit_close_racing_output_cutoff_keeps_its_barrier_after_audit_failu
     ));
     assert_eq!(closing.await, Err(AgentError::AuditFailure));
     assert_eq!(
-        agent.invoke(request("blocked"), actor()).await,
+        agent
+            .invoke(request("blocked"), Submitter::owner(actor()))
+            .await,
         Err(AgentError::Closed)
     );
     for _ in 0..3 {
         assert_eq!(agent.close(actor()).await, Err(AgentError::AuditFailure));
         assert_eq!(
-            agent.invoke(request("still-blocked"), actor()).await,
+            agent
+                .invoke(request("still-blocked"), Submitter::owner(actor()))
+                .await,
             Err(AgentError::Closed)
         );
     }

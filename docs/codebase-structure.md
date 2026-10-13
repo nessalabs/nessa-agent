@@ -679,7 +679,7 @@ Named record-read owners: `conversation/application/record_read/read.rs` owns pa
 `product/change_watch/` owns live change hints on the product socket: `registration.rs` the watch identity and the one current-admission call (through `AdmitPassiveRead`), `connection.rs` a connection's two target positions and their authority tasks, `delivery.rs` the pending/in-flight notice positions the single writer in `socket.rs` takes from, and `owner.rs` the gateway-wide watch permits and first task fault. Producers are injected through `conversation/application/change_watch.rs` (`WatchRecords`, `WatchNamespaces`) with adapters in `conversation/infrastructure/change_watch.rs`; a watch never reads a head or takes a passive-read permit. The client side is `packages/nessa-client/src/presentation/change-watch-api.ts` and `protocol/change-watch-validate.ts`, through the existing dispatcher. The state and order table is in [committed change watches](design/committed-change-watches.md#298b-authorized-live-hints-over-the-product-socket); socket tests are `tests/product/socket/watches.rs`.
 `product/subscription/` owns replay-to-live view and list subscriptions on the product socket ([record subscriptions](design/record-subscriptions.md)): `connection.rs` a connection's subscriptions and their limits, `target.rs` one task per subscription — wake sources registered before each read, every batch admitted in `authorize_batch`, read through the same fold as `conversation.read` and `conversation.list`, `lagging` when a frame is not taken in time — and `delivery.rs` the frames the single writer in `socket.rs` takes, one in flight per subscription. `conversation/application/live_changes.rs` wakes a reader on live facts that are not records. The client side is `packages/nessa-client/src/presentation/subscription-api.ts` and `protocol/subscription-validate.ts`; socket tests are `tests/product/socket/subscriptions.rs`. The desktop workspace's gateway source (`src/desktop/workspace/adapters/gateway/gateway-source.ts`) follows these subscriptions and polls nothing.
 
-Read grants ([read grants](design/read-grants.md)): `conversation/application/read_grants.rs` owns whether a reader may read a conversation — a session with a receiver binding is a paired device and reads only what it was granted — and the owner's share commands; `conversation/infrastructure/store/read_grants.rs` keeps the grant table and its journal in the metadata database and states the one SQL predicate the catalogue pages with; `product/read_access.rs` asks it for `conversation.read` and every view subscription batch, refuses the owner's lists to a paired device, and serves `conversation.share`, `.unshare` and `.shares`.
+Share grants ([share grants](design/read-grants.md)): `conversation/domain/value_objects/share_access.rs` is what a grant lets its holder do — a role (Read, Comment, Drive) and, for Drive, a tool policy checked for shape and size; `conversation/application/share_grants.rs` owns whether a reader may read a conversation — a session with a receiver binding is a paired device and reads only what it was granted, whatever the role — and the owner's share commands; `conversation/infrastructure/store/share_grants.rs` keeps the grant table and its journal in the metadata database and states the one SQL predicate the catalogue pages with; `product/read_access.rs` asks it for `conversation.read` and every view subscription batch, refuses the owner's lists to a paired device, and serves `conversation.share`, `.unshare` and `.shares`, mapping a role and policy between the wire and the domain.
 The live slot owns a prepared SDK `Agent` before provider attachment. It captures
 caller-attributed attachment authority, returns create/read/queue commands without
 waiting for runtime readiness, and retains one bounded task that joins readiness
@@ -817,7 +817,9 @@ bounded FIFO with ordinary admission permits and reserved HTTP control capacity;
 `http` owns provisional/validated binding claims
 and the modern POST authorization/status policy shared by startup and recovery;
 [ADR 392](adr/todo/392-remote-mcp-servers.md) maps its orderings to
-`http_progress`, the owning `http_shutdown` close-fence tests, `connection_end`
+`http_progress`, `http_task_panic` (a custom-adapter panic in a reply reader,
+legacy stream, server stream, or recovery), the owning `http_shutdown`
+close-fence tests, `connection_end`
 for the Connection-private State/watch admission snapshot, `post_streams`
 and their shared `post_body` test fixture, tested in
 `tests/infrastructure/mcp/` against in-process and process fixtures. The
@@ -1149,13 +1151,19 @@ reusing an earlier startup error.
 
 ### Automated dependency guard
 
-`pnpm architecture` checks frontend vertical imports and explicit Rust imports in
-SDK, auth, server, MCP, and desktop gateway domain/application modules. Domain imports cannot reach
-application DTOs, adapters, runtime libraries, or OS effects; application modules
-cannot import concrete infrastructure/composition. The guard and its negative
-fixtures run in CI. It is a source-level import check, not a Rust module resolver:
-macros, fully qualified expressions, transitive re-exports, lifecycle ownership,
-and semantic DTO relationships still require compilation and review.
+`pnpm architecture` checks frontend vertical imports and explicit Rust imports and
+qualified references in SDK, auth, server, MCP, and desktop gateway
+domain/application modules. Domain references cannot reach application DTOs,
+adapters, runtime libraries, or OS effects; application modules
+cannot reference concrete infrastructure/composition. Imports, expressions, types,
+and attributes use the same boundary policy; comments and literals are masked.
+The guard and its negative fixtures run in CI with bare Node. Standalone Tauri
+discovery excludes local agent worktree copies. The retirement-refusal protocol
+agreement test lives in `src-tauri/tests/gateway/infrastructure/retirement_refusal.rs`,
+outside its domain value. This is a source-level path check, not a Rust module
+resolver: macro expansion, names reached through aliases or transitive re-exports,
+lifecycle ownership, and semantic DTO relationships still require compilation
+and review.
 
 `scripts/check-runtime-dependencies.mjs` separately follows Cargo's resolved
 package IDs from the server, SDK, auth, local-storage, local-database, images, and MCP packages.
@@ -1707,6 +1715,16 @@ example's command line and the retained-sync composition behind it; gateway
 tests enable it as a dev-dependency (ADR 483, amended). The portable package
 gate refuses any client dependency path to `nessa-server`, including renamed
 and transitive edges. Both ends depend on `nessa-protocol` for shared rules.
+
+The public `retained` library selects owner-device or granted-peer catalogue reads
+through the existing source authorizer. `retained/saved.rs` maps saved scope,
+catalogue pages and transcript/progress/deletion values through the existing
+private cache and passive projection, with no CLI, second fold or receiver.
+Scope discovery and each page have separate snapshots; pages carry their actual
+scope/progress/generation for consumers to compare. `retained/device.rs` composes
+the existing enrollment worker and purge policy, collecting status/purge effects
+inside physical admission and exposing original durable purge receipts separately.
+Native phone binding and linked runtime integration remain later ADR 782 slices.
 
 ### Retained read-only example
 

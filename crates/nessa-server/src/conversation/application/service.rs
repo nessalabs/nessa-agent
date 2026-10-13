@@ -18,7 +18,7 @@ use super::{
     ConversationFileLinkState, ConversationListing, ConversationModeApplication,
     ConversationModeAudit, ConversationModeAuditPhase, ConversationModeRequest,
     ConversationModeRequestState, ConversationOwnershipState, ConversationRepository,
-    ConversationSummaries, DeletionFailures, ListedConversation, ObservationCursor,
+    ConversationSummaries, DeletionFailures, FetchRequests, ListedConversation, ObservationCursor,
     ObservedConversations, PublishRequests, RuntimeReadiness, StopFailure, SubmittedMessage,
     UnfinishedDeletions,
 };
@@ -53,7 +53,7 @@ use nessa_sdk::application::agent_execution::{
         QueueReorder, SteeringDelivery, SteeringEvidence,
     },
     commands::{CreationStorage, CreationTaskFault},
-    executions::{ExecutionAudit, ExecutionRequest, ExecutionUpdate},
+    executions::{ExecutionAudit, ExecutionRequest, ExecutionUpdate, Submitter},
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
         PermissionCancellationRequest, QuestionAnswer,
@@ -67,7 +67,7 @@ use nessa_sdk::application::agent_execution::{
     },
 };
 use nessa_sdk::domain::agent_execution::{
-    executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
+    executions::{ExecutionId, ExecutionOutcome, Initiation, InvocationStage, MessageKind},
     leases::{AgentWork, LeaseEndCause, SandboxProfile, SandboxProfiles},
     permissions::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionId,
@@ -523,7 +523,9 @@ pub enum SubmissionMode {
 /// opening of the conversation for one mount.
 #[derive(Clone)]
 pub(super) enum Writer {
-    Person,
+    /// The person, with who their turn is saved as started by: the owner, or
+    /// the share grant that admitted it.
+    Person(Initiation),
     App {
         sender: McpAppSource,
         apps: Arc<AppReviews>,
@@ -535,9 +537,19 @@ impl Writer {
     fn is_app(&self) -> bool {
         matches!(self, Self::App { .. })
     }
+    /// Who the turn is saved as started by. An app's call asks for
+    /// `conversation.write`, which no paired session is admitted for
+    /// (`read_access::admit_request`), so an app's message is always from the
+    /// owner's own surface.
+    fn initiation(&self) -> Initiation {
+        match self {
+            Self::Person(initiation) => initiation.clone(),
+            Self::App { .. } => Initiation::owner(),
+        }
+    }
     fn sender(&self) -> MessageSender {
         match self {
-            Self::Person => MessageSender::Person,
+            Self::Person(_) => MessageSender::Person,
             Self::App { sender, .. } => MessageSender::App(sender.clone()),
         }
     }
@@ -558,7 +570,7 @@ impl Writer {
     /// admitted in ended or its mount was released. Never the person's.
     fn opening_ended(&self) -> bool {
         match self {
-            Self::Person => false,
+            Self::Person(_) => false,
             Self::App {
                 apps, epoch, mount, ..
             } => apps.admit(*epoch, mount).is_err(),
@@ -587,6 +599,10 @@ struct LiveConversation {
     /// The publishes its agent asked for under its lease and not yet
     /// offered (`artifacts_publish`), shared with its lease's collector.
     publishes: Arc<PublishRequests>,
+    /// The fetches its agent asked for under its lease (`artifacts_fetch`).
+    fetches: Arc<FetchRequests>,
+    /// Whose organization the conversation is, as its record says.
+    organization_id: OrganizationId,
 }
 enum AttachmentOwner {
     Running(JoinHandle<()>),
@@ -712,6 +728,10 @@ struct Inner {
     /// on its own task until that task ends, so a caller that goes and comes
     /// back cannot leave calls running past the bound.
     app_calls: Arc<Semaphore>,
+    /// Held-file ranges `artifacts_fetch` reads at once, across every
+    /// conversation: apart from the product socket's own reads, so fetches
+    /// never lock a surface out of reading.
+    fetch_reads: Arc<Semaphore>,
     /// Principal command receipts. Composition binds the shared record runtime.
     /// Absent storage refuses command admission rather than skipping the receipt.
     commands: Arc<OnceLock<Arc<dyn CreationStorage>>>,
@@ -999,6 +1019,7 @@ impl ConversationService {
                 apps: std::sync::Mutex::default(),
                 live_changes: Arc::default(),
                 app_calls: Arc::new(Semaphore::new(app_calls::MAX_APP_CALLS)),
+                fetch_reads: Arc::new(Semaphore::new(artifact_fetch::FETCH_READS)),
                 commands: Arc::new(OnceLock::new()),
             }),
         })
@@ -1451,6 +1472,7 @@ impl ConversationService {
                                     binding: configured.sandbox,
                                 },
                                 configured.provider.clone(),
+                                service.inner.clock.as_ref(),
                             )
                             .await;
                             let agent = Agent::prepare(
@@ -1664,6 +1686,8 @@ impl ConversationService {
                                 app_reviews,
                                 app_epoch,
                                 publishes: Arc::default(),
+                                fetches: Arc::default(),
+                                organization_id: record.organization().clone(),
                             });
                             // What the host publishes under the lease is
                             // kept for as long as the lease is held.
@@ -1708,8 +1732,8 @@ impl ConversationService {
                 // Opened or not, a view's lifecycle says so now.
                 service.inner.live_changes.publish(&id);
                 if let Ok(live) = result {
-                    if let Some(lost) = live.lease.lost() {
-                        service.stop_when_lost(id, Arc::downgrade(&owner), lost);
+                    if let Some(ends) = live.lease.ends() {
+                        service.stop_when_environment_ends(id, Arc::downgrade(&owner), ends);
                     }
                 }
             });
@@ -1717,21 +1741,25 @@ impl ConversationService {
     }
 
     /// Stop the opening `slot` holds once its environment can no longer run
-    /// anything for its lease, such as its SSH connection being lost (row
-    /// L10): the lease ends as lost, the system's stop, recorded first like
-    /// any other end. There is no reconnect budget: a connection lost is the
-    /// lease lost. Nothing is stopped once the slot is let go, stopping, or
-    /// holds another opening; `lost` also resolves when the lease ends, so
-    /// this never outlives the opening.
-    fn stop_when_lost(
+    /// anything for its lease: its SSH connection lost (row L10), the
+    /// environment ending it past the duration it granted (row I7), or a
+    /// paired environment's credential revoked while it runs (row I8). The
+    /// lease ends for that cause, the system's stop and never a person's,
+    /// recorded first like any other end; its End is still asked, and the
+    /// environment answers it with what its own end took. There is no
+    /// reconnect budget: a connection lost is the lease lost. Nothing is
+    /// stopped once the slot is let go, stopping, or holds another opening;
+    /// `ends` also resolves when the lease ends, so this never outlives the
+    /// opening.
+    fn stop_when_environment_ends(
         &self,
         id: ConversationId,
         slot: std::sync::Weak<Slot>,
-        lost: super::EnvironmentFuture<'static, ()>,
+        ends: super::EnvironmentFuture<'static, LeaseEndCause>,
     ) {
         let service = self.clone();
         tokio::spawn(async move {
-            lost.await;
+            let cause = ends.await;
             let Some(slot) = slot.upgrade() else {
                 return;
             };
@@ -1741,25 +1769,23 @@ impl ConversationService {
             {
                 return;
             }
-            let Ok(actor) = ActionContext::new(
-                "gateway",
-                "environment_lost",
-                format!("lost-{}", Uuid::new_v4()),
-            ) else {
+            let (operation, prefix) = match cause {
+                LeaseEndCause::Expired => ("environment_expired", "expired"),
+                LeaseEndCause::Revoked => ("environment_revoked", "revoked"),
+                LeaseEndCause::Stopped => ("environment_drained", "drained"),
+                _ => ("environment_lost", "lost"),
+            };
+            let Ok(actor) =
+                ActionContext::new("gateway", operation, format!("{prefix}-{}", Uuid::new_v4()))
+            else {
                 return;
             };
-            tracing::warn!(conversation_id = %id, "the environment lost this conversation's lease; stopping it");
+            tracing::warn!(conversation_id = %id, ?cause, "the environment ended this conversation's lease; stopping it");
             if let Err(stop) = service
-                .stop_and_release(
-                    &id,
-                    slot,
-                    &actor,
-                    &McpAppInitiator::System,
-                    LeaseEndCause::Lost,
-                )
+                .stop_and_release(&id, slot, &actor, &McpAppInitiator::System, cause)
                 .await
             {
-                tracing::warn!(conversation_id = %id, ?stop, "a lost lease's stop did not confirm cleanup");
+                tracing::warn!(conversation_id = %id, ?stop, "an environment-ended lease's stop did not confirm cleanup");
             }
         });
     }
@@ -2502,9 +2528,16 @@ impl ConversationService {
         message: SubmittedMessage,
         mode: SubmissionMode,
     ) -> Result<SubmissionReceipt, ConversationError> {
-        self.submit_as(id, caller, execution_id, message, mode, Writer::Person)
-            .await
-            .map_err(SubmitFailure::into_error)
+        self.submit_as(
+            id,
+            caller,
+            execution_id,
+            message,
+            mode,
+            Writer::Person(Initiation::owner()),
+        )
+        .await
+        .map_err(SubmitFailure::into_error)
     }
     /// [`Self::submit`], written by `writer`. A message admitted while the
     /// conversation is idle — nothing runs, nothing waits — takes the
@@ -2787,21 +2820,28 @@ impl ConversationService {
                 took.asking();
             }
             asking.store(true, Ordering::SeqCst);
+            // Saved as started by whom it was admitted for: the owner, or
+            // the Drive grant as it stood at admission, its tools unchecked
+            // (row J15).
+            let submitter = Submitter {
+                context: actor,
+                initiation: writer.initiation(),
+            };
             let delivery = match mode {
                 SubmissionMode::Queue => live
                     .agent
-                    .enqueue(request, actor)
+                    .enqueue(request, submitter)
                     .await
                     .map(SubmissionDelivery::Queued),
                 SubmissionMode::Steer if !live.agent.operation_capabilities().native_steering() => {
                     live.agent
-                        .enqueue_steering(request, actor)
+                        .enqueue_steering(request, submitter)
                         .await
                         .map(SubmissionDelivery::Queued)
                 }
                 SubmissionMode::Steer => {
                     live.agent
-                        .steer(request, actor)
+                        .steer(request, submitter)
                         .await
                         .map(|delivery| match delivery {
                             SteeringDelivery::Queued(receipt) => {
@@ -5420,6 +5460,10 @@ fn awaits_images(snapshot: Option<&SessionSnapshot>) -> bool {
     })
 }
 
+mod artifact_fetch;
+pub use artifact_fetch::{
+    FetchAnswer, FetchCall, FetchCallRefusal, FETCH_BUSY_BACKOFF, FETCH_READS,
+};
 mod artifact_publish;
 pub use artifact_publish::{PublishAnswer, PublishCall, PublishCallRefusal};
 mod environment_tools;

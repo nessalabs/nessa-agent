@@ -1,15 +1,15 @@
 //! Conservatively account owned continuation allocations, using payload owners' byte accounting.
 use super::{
-    ArtifactRecord, CurrentLease, CurrentLeaseState, InvocationCancellationEvent, InvocationRecord,
-    InvocationSchedulingEvent, LeaseRecord, QueueHistoryRecord, SessionChange, SessionSnapshot,
-    StorageError, SubmissionAcknowledgement,
+    ArtifactRecord, CurrentLease, CurrentLeaseState, FetchOutcome, InvocationCancellationEvent,
+    InvocationRecord, InvocationSchedulingEvent, LeaseRecord, QueueHistoryRecord, SessionChange,
+    SessionSnapshot, StorageError, SubmissionAcknowledgement,
 };
 use crate::{
     application::agent_execution::{
         agents::AgentError, executions::ExecutionEvent, permissions::ActionContext,
     },
     domain::agent_execution::{
-        executions::{ExecutionId, ExecutionOutcome, QueueMutation},
+        executions::{ExecutionId, ExecutionOutcome, Initiation, Initiator, QueueMutation},
         leases::{CommandTerms, EnvironmentRef, LeaseTerms, LeaseWork, PeerEnvironment},
         prompts::{AppModelContext, MessageSender},
     },
@@ -28,6 +28,13 @@ fn actor(value: &ActionContext) -> usize {
         .len()
         .saturating_add(value.surface_id().len())
         .saturating_add(value.request_id().len())
+}
+/// The grant's identity text; an owner holds no text of its own.
+fn initiation(value: &Initiation) -> usize {
+    match value.initiator() {
+        Initiator::Owner => 0,
+        Initiator::Grant(grant) => grant.grant().len(),
+    }
 }
 pub(super) fn stop(value: &InvocationCancellationEvent) -> usize {
     value.actor.as_ref().map_or(0, actor)
@@ -145,6 +152,33 @@ fn lease_record(record: &LeaseRecord) -> usize {
             .saturating_add(parent.as_str().len())
             .saturating_add(output.stdout_tail().len())
             .saturating_add(output.stderr_tail().len()),
+        LeaseRecord::FetchAsked {
+            lease,
+            request,
+            file,
+            destination,
+            actor: who,
+        } => lease
+            .as_str()
+            .len()
+            .saturating_add(request.len())
+            .saturating_add(file.media_type().as_str().len())
+            .saturating_add(destination.as_str().len())
+            .saturating_add(actor(who)),
+        LeaseRecord::FetchEnded {
+            lease,
+            request,
+            outcome,
+        } => lease
+            .as_str()
+            .len()
+            .saturating_add(request.len())
+            .saturating_add(match outcome {
+                FetchOutcome::Placed { path } | FetchOutcome::AlreadyPlaced { path } => {
+                    path.as_str().len()
+                }
+                FetchOutcome::Refused(_) => 0,
+            }),
         LeaseRecord::Unreadable { kind, body } => kind.len().saturating_add(body.len()),
     })
 }
@@ -260,6 +294,7 @@ pub(super) fn invocation(record: &InvocationRecord) -> usize {
         .saturating_add(scheduling)
         .saturating_add(record.request.execution_id.as_str().len())
         .saturating_add(actor(&record.actor))
+        .saturating_add(initiation(&record.initiation))
         .saturating_add(record.cancellation.as_ref().map_or(0, stop))
         .saturating_add(record.local_cancellation.as_ref().map_or(0, stop))
         .saturating_add(acknowledgment)

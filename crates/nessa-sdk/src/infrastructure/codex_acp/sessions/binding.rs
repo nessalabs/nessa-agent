@@ -4,8 +4,8 @@ use super::profile::{native_mode, CodexProfile};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionAudit;
 use crate::application::agent_execution::providers::{
-    AgentProvider, ApprovalMode, HarnessHost, HarnessLaunch, ProviderIdentity, ProviderOpenFuture,
-    ProviderOpenRequest,
+    AgentProvider, ApprovalMode, HarnessHost, HarnessLaunch, NativeHooksSwitch, ProviderIdentity,
+    ProviderOpenFuture, ProviderOpenRequest,
 };
 use crate::domain::agent_execution::permissions::PermissionScope;
 use crate::domain::agent_execution::prompts::SystemPrompt;
@@ -22,7 +22,14 @@ use crate::infrastructure::acp::sessions::{
 };
 use crate::infrastructure::process::ProcessScope;
 use serde_json::json;
-use std::{collections::BTreeMap, ffi::OsString, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    ffi::OsString,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 use tokio::process::Command;
 
 /// Immutable composition factory; opening twice creates independent process scopes.
@@ -33,6 +40,9 @@ pub struct CodexAcpProvider {
     system_prompt: Option<SystemPrompt>,
     approval_mode: ApprovalMode,
     effort_level: Option<EffortLevel>,
+    /// Read when `CODEX_CONFIG` is built for a launch. Off sends today's
+    /// suppression keys.
+    native_hooks: NativeHooksSwitch,
     audit: Arc<dyn ExecutionAudit>,
     /// Deletions this binding started that are still stopping their process.
     deletions: DeletionCleanups,
@@ -76,8 +86,10 @@ impl CodexAcpProvider {
     /// beforehand. Configuring a binding with tools disabled is refused rather
     /// than accepted as a text-only Codex that does not exist.
     ///
-    /// Every launch also requests Codex's user-configured hooks and its legacy
-    /// notify command off (`features.hooks` false, `notify` empty). That request
+    /// By default every launch also requests Codex's user-configured hooks and
+    /// its legacy notify command off (`features.hooks` false, `notify` empty).
+    /// A launch whose [`Self::with_native_hooks`] switch is on omits both keys
+    /// and so does not make that request. The request
     /// does not outrank legacy managed configuration, and ACP cannot show the
     /// effective setting, so a negotiated session reports native hook suppression
     /// as unsupported. The open still completes, and so does restoration.
@@ -141,6 +153,7 @@ impl CodexAcpProvider {
             system_prompt: None,
             approval_mode: ApprovalMode::Ask,
             effort_level: None,
+            native_hooks: NativeHooksSwitch::off(),
             audit,
             deletions: DeletionCleanups::default(),
             host: None,
@@ -168,6 +181,18 @@ impl CodexAcpProvider {
         }
         self.approval_mode = mode;
         Ok(self)
+    }
+    /// Let Codex run its own hooks when a process this factory starts reads the switch on.
+    ///
+    /// Off keeps `features.hooks: false` and `notify: []` in `CODEX_CONFIG`.
+    /// On omits both keys, so the user's configuration is not overridden.
+    /// The model and instructions stay. Each process start reads the switch
+    /// once and uses that bool for both the profile and `CODEX_CONFIG`,
+    /// including the next start of a conversation already open. The negotiated
+    /// suppression fact stays unsupported either way.
+    pub fn with_native_hooks(mut self, native_hooks: NativeHooksSwitch) -> Self {
+        self.native_hooks = native_hooks;
+        self
     }
     /// Select one reasoning effort level for every session this factory opens.
     /// Without one, no level is sent and the agent keeps its own default.
@@ -200,20 +225,24 @@ impl CodexAcpProvider {
     /// `CODEX_CONFIG` as JSON and sends it as the `thread/start` config
     /// override, which the pinned loader applies as a session layer. The model
     /// and the instructions are supplied here and the model is read back over
-    /// the protocol. `features.hooks` and `notify` are not read back: legacy
-    /// managed configuration and MDM are applied after the session layer, and
-    /// ACP exposes no effective value, so the profile reports native hook
-    /// suppression as unsupported.
-    fn session_config(&self) -> String {
+    /// the protocol. By default `features.hooks` is false and `notify` is
+    /// empty. Those keys are not read back: legacy managed configuration and
+    /// MDM are applied after the session layer, and ACP exposes no effective
+    /// value, so the profile reports native hook suppression as unsupported.
+    /// When the caller has allowed native hooks, both keys are omitted and
+    /// the fact stays unsupported.
+    fn session_config(&self, allowed: bool) -> String {
         let mut config = json!({
             "model": self.capabilities.model().model_id(),
+        });
+        if !allowed {
             // Ordinary configured handlers stop when the feature is false.
             // Provider builtin cleanup is a separate lifecycle path and is
             // not disabled here. Legacy notify is constructed independently
             // of the feature bit, so it is cleared on its own.
-            "features": {"hooks": false},
-            "notify": [],
-        });
+            config["features"] = json!({"hooks": false});
+            config["notify"] = json!([]);
+        }
         if let Some(prompt) = &self.system_prompt {
             config["instructions"] = json!(prompt.text().as_str());
         }
@@ -222,9 +251,9 @@ impl CodexAcpProvider {
     /// What this binding sets for every launch of its harness, wherever it
     /// runs: its session configuration, the preset it starts in, and no
     /// browser sign-in. Never a credential or a path.
-    fn launch_environment(&self) -> BTreeMap<OsString, OsString> {
+    fn launch_environment(&self, allowed: bool) -> BTreeMap<OsString, OsString> {
         [
-            ("CODEX_CONFIG", self.session_config()),
+            ("CODEX_CONFIG", self.session_config(allowed)),
             // The preset every session is then explicitly selected into. Setting
             // it here as well means the session is never briefly open in a more
             // permissive one.
@@ -241,7 +270,7 @@ impl CodexAcpProvider {
         .map(|(key, value)| (key.into(), value.into()))
         .collect()
     }
-    fn launch_command(&self) -> Command {
+    fn launch_command(&self, allowed: bool) -> Command {
         let mut command = Command::new(self.config.executable.executable());
         command
             .args(&self.config.arguments)
@@ -249,13 +278,16 @@ impl CodexAcpProvider {
             .env_clear()
             .envs(&self.config.environment)
             .envs(&self.config.credential_environment)
-            .envs(self.launch_environment());
+            .envs(self.launch_environment(allowed));
         command
     }
 }
 impl AgentProvider for CodexAcpProvider {
     fn approval_mode(&self) -> Option<ApprovalMode> {
         Some(self.approval_mode)
+    }
+    fn native_hooks_allowed(&self) -> bool {
+        self.native_hooks.allowed()
     }
     fn effort_level(&self) -> Option<EffortLevel> {
         self.effort_level.clone()
@@ -285,12 +317,17 @@ impl AgentProvider for CodexAcpProvider {
         }))
     }
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
+        // The process start reads the switch once into `launch`. The profile
+        // and the process factory share that cell, so they cannot diverge.
+        let launch = Arc::new(AtomicBool::new(false));
+        let profile = self.launch_profile(launch.clone());
+        let process = self.process_factory_following(launch);
         Box::pin(async move {
             acp_binding::open(
-                self.process_factory(),
+                process,
                 self.config.clone(),
                 self.capabilities.clone(),
-                self.profile(),
+                profile,
                 self.audit.clone(),
                 request,
             )
@@ -307,30 +344,73 @@ impl CodexAcpProvider {
     pub(super) fn deletions(&self) -> &DeletionCleanups {
         &self.deletions
     }
-    /// The profile every connection this provider opens speaks.
-    pub(super) fn profile(&self) -> CodexProfile {
+    /// The profile a process start captures from the live switch.
+    fn launch_profile(&self, launch: Arc<AtomicBool>) -> CodexProfile {
         CodexProfile::new(
             self.capabilities.model().model_id(),
             self.approval_mode,
             self.effort_level.clone(),
         )
+        .following(self.native_hooks.clone(), launch)
     }
-    /// How every connection this provider opens is launched.
-    pub(super) fn process_factory(&self) -> acp_binding::ProcessFactory {
+
+    /// The profile a launch speaks when native hooks are `allowed`.
+    ///
+    /// Deletion passes `false` here and to
+    /// [`process_factory_allowing`](Self::process_factory_allowing). A
+    /// conversation's process start uses the profile `open` builds, which
+    /// reads the switch once at that start.
+    pub(super) fn profile_allowing(&self, allowed: bool) -> CodexProfile {
+        CodexProfile::new(
+            self.capabilities.model().model_id(),
+            self.approval_mode,
+            self.effort_level.clone(),
+        )
+        .allowing_native_hooks(allowed)
+    }
+
+    /// How a deletion process is launched with hooks `allowed` or suppressed.
+    ///
+    /// The closure keeps `allowed`. A conversation's process start does not
+    /// use this: it reads the shared cell the profile writes at that start.
+    pub(super) fn process_factory_allowing(&self, allowed: bool) -> acp_binding::ProcessFactory {
         let factory = self.clone();
         match &self.host {
             Some(host) => {
                 let host = host.clone();
                 Arc::new(move || {
                     let launch = HarnessLaunch {
-                        environment: factory.launch_environment(),
+                        environment: factory.launch_environment(allowed),
                     };
                     Ok(ProcessScope::remote(host.start(launch)?))
                 })
             }
-            None => {
-                Arc::new(move || ProcessScope::spawn(factory.launch_command()).map_err(Into::into))
+            None => Arc::new(move || {
+                ProcessScope::spawn(factory.launch_command(allowed)).map_err(Into::into)
+            }),
+        }
+    }
+
+    /// How a conversation's process is launched.
+    ///
+    /// The closure reads `launch`, which the profile writes from the one
+    /// switch read at the start of that process. It does not read the switch.
+    fn process_factory_following(&self, launch: Arc<AtomicBool>) -> acp_binding::ProcessFactory {
+        let factory = self.clone();
+        match &self.host {
+            Some(host) => {
+                let host = host.clone();
+                Arc::new(move || {
+                    let launch = HarnessLaunch {
+                        environment: factory.launch_environment(launch.load(Ordering::Relaxed)),
+                    };
+                    Ok(ProcessScope::remote(host.start(launch)?))
+                })
             }
+            None => Arc::new(move || {
+                ProcessScope::spawn(factory.launch_command(launch.load(Ordering::Relaxed)))
+                    .map_err(Into::into)
+            }),
         }
     }
 }

@@ -178,6 +178,7 @@ fn a_lease_runs_its_harness_on_the_host_and_ends_with_evidence_in_the_ledger() {
             terms: GrantedTerms {
                 sandbox: Sandbox::HarnessDefault,
                 timeout_ms: None,
+                lease_ms: None,
             },
         }
     );
@@ -277,7 +278,7 @@ fn a_lease_held_when_the_gateways_stream_ends_is_ended_as_lost_and_accounted_aft
     serving.finish();
     assert!(ledger(root.path())
         .iter()
-        .any(|entry| entry["kind"] == "ended" && entry["lost"] == true));
+        .any(|entry| entry["kind"] == "ended" && entry["cause"] == "lost"));
     // The next connection asks what became of it.
     let mut serving = serve(root.path());
     assert!(matches!(serving.next(), FromEnvironment::Hello { .. }));

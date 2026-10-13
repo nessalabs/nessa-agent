@@ -1,5 +1,7 @@
 //! ADR392 J23 and J27: retained admission snapshot, and the HTTP writer watch.
-use super::{record_writer_panic, watch_http_writer, Connection, Shared, State, NOTICES};
+use super::{
+    record_session_panic, watch_http_writer, Connection, HttpTask, Shared, State, NOTICES,
+};
 use crate::infrastructure::clock::RuntimeClock;
 use crate::infrastructure::mcp::http::{HttpSession, SendOutcome};
 use crate::infrastructure::mcp::{
@@ -207,6 +209,19 @@ async fn closed_cause_survives_a_panicked_writer() {
     let _guard = tracing::subscriber::set_default(subscriber);
     let mut finished = session.finished();
     watch_http_writer(writer, Arc::clone(&shared), Arc::clone(&session)).await;
+    let marker = b"custom HTTP writer panicked";
+    timeout(BOUND, async {
+        while !recorded
+            .lock()
+            .expect("log")
+            .windows(marker.len())
+            .any(|window| window == marker)
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("panic marker");
     let log = String::from_utf8(recorded.lock().expect("log").clone()).expect("utf8 log");
     assert!(
         log.contains("custom HTTP writer panicked"),
@@ -233,7 +248,7 @@ async fn closed_cause_survives_a_panicked_writer() {
     );
 }
 
-/// Sees the panic marker only after [`record_writer_panic`] has stored
+/// Sees the panic marker only after [`record_session_panic`] has stored
 /// `ServerGone`. A log that runs first leaves this false.
 struct EndBeforeLog {
     shared: Arc<Shared>,
@@ -297,7 +312,14 @@ async fn writer_panic_log_follows_the_recorded_end() {
     let _guard = tracing::subscriber::set_default(subscriber);
     tracing::callsite::rebuild_interest_cache();
     let mut finished = session.finished();
-    record_writer_panic(&session, &shared);
+    record_session_panic(&session, &shared, HttpTask::Writer);
+    timeout(BOUND, async {
+        while !saw_recorded_end.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("panic marker");
     assert!(
         saw_recorded_end.load(Ordering::SeqCst),
         "panic log ran before ServerGone was recorded"

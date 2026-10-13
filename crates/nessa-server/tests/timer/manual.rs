@@ -50,6 +50,8 @@ impl Default for ManualTimer {
 impl ManualTimer {
     /// Move the timer `by` forward, ending every wait whose deadline that
     /// reaches.
+    // Only the environment role's tests use this, and they are Unix only.
+    #[cfg(unix)]
     pub(crate) fn advance(&self, by: Duration) {
         self.now.send_modify(|now| *now = *now + by);
     }
@@ -58,6 +60,8 @@ impl ManualTimer {
         self.now.send_modify(|now| *now = (*now).max(moment));
     }
     /// How long after its origin the timer is.
+    // Only the environment role's tests use this, and they are Unix only.
+    #[cfg(unix)]
     pub(crate) fn elapsed(&self) -> Duration {
         self.now().since_origin()
     }
@@ -91,16 +95,22 @@ impl ManualTimer {
         }
     }
     /// The `index`th wait (from zero), once it has started.
+    // Only the environment role's tests use this, and they are Unix only.
+    #[cfg(unix)]
     pub(crate) async fn nth(&self, index: usize) -> Wait {
         self.started(|at, _| at == index).await
     }
     /// Once the `index`th wait has started, move the timer to its deadline.
+    // Only the environment role's tests use this, and they are Unix only.
+    #[cfg(unix)]
     pub(crate) async fn run_out(&self, index: usize) -> Wait {
         let wait = self.nth(index).await;
         self.advance_to(wait.deadline);
         wait
     }
     /// `operation`, with every wait run out as soon as it starts.
+    // Only the environment role's tests use this, and they are Unix only.
+    #[cfg(unix)]
     pub(crate) async fn passing<T>(&self, operation: impl std::future::Future<Output = T>) -> T {
         let mut started = self.started.subscribe();
         let passing = async {

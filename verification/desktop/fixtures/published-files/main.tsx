@@ -23,6 +23,7 @@
 import {
   NessaRpcError,
   ProductMethod,
+  type AgentsApi,
   type AuthApi,
   type ConversationView,
   type CredentialApi,
@@ -251,6 +252,7 @@ const dependencies = createDesktopDependencies({
         credentials: {} as CredentialApi,
         auth: {} as AuthApi,
         attachments: desktopAttachments,
+        agents: {} as AgentsApi,
       }),
     ),
   apps: { sandbox: undefined, platform: "web" },
@@ -350,6 +352,7 @@ function panelConversation(
 const desktopAgentFeatures = {
   permissionDenial: "unknown",
   nativeHookSuppression: "unknown",
+  nativeHooks: "off",
   compactionReporting: "unsupported_not_implemented",
   modelSwitchReporting: "unsupported_not_implemented",
   permissionDeferral: "unsupported_not_implemented",
