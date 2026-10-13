@@ -1,5 +1,25 @@
 {
   "Nessa": {
+    "commonTypes": {
+      "Grant": {
+        "type": "Record",
+        "attributes": {
+          "action": {
+            "type": "String",
+            "required": true
+          },
+          "resourceId": {
+            "type": "String",
+            "required": true
+          },
+          "organizationId": {
+            "type": "String",
+            "required": true
+          }
+        },
+        "additionalAttributes": false
+      }
+    },
     "entityTypes": {
       "Actor": {
         "shape": {
@@ -16,6 +36,13 @@
             "active": {
               "type": "Boolean",
               "required": true
+            },
+            "grants": {
+              "type": "Set",
+              "element": {
+                "type": "Grant"
+              },
+              "required": true
             }
           },
           "additionalAttributes": false
@@ -26,6 +53,22 @@
           "type": "Record",
           "attributes": {
             "organizationId": {
+              "type": "String",
+              "required": true
+            },
+            "id": {
+              "type": "String",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "Holder": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "kind": {
               "type": "String",
               "required": true
             }
@@ -45,16 +88,7 @@
           ],
           "context": {
             "type": "Record",
-            "attributes": {
-              "credentialAllows": {
-                "type": "Boolean",
-                "required": true
-              },
-              "identityMatches": {
-                "type": "Boolean",
-                "required": true
-              }
-            },
+            "attributes": {},
             "additionalAttributes": false
           }
         }
@@ -69,16 +103,7 @@
           ],
           "context": {
             "type": "Record",
-            "attributes": {
-              "credentialAllows": {
-                "type": "Boolean",
-                "required": true
-              },
-              "identityMatches": {
-                "type": "Boolean",
-                "required": true
-              }
-            },
+            "attributes": {},
             "additionalAttributes": false
           }
         }
@@ -93,16 +118,7 @@
           ],
           "context": {
             "type": "Record",
-            "attributes": {
-              "credentialAllows": {
-                "type": "Boolean",
-                "required": true
-              },
-              "identityMatches": {
-                "type": "Boolean",
-                "required": true
-              }
-            },
+            "attributes": {},
             "additionalAttributes": false
           }
         }
@@ -117,16 +133,7 @@
           ],
           "context": {
             "type": "Record",
-            "attributes": {
-              "credentialAllows": {
-                "type": "Boolean",
-                "required": true
-              },
-              "identityMatches": {
-                "type": "Boolean",
-                "required": true
-              }
-            },
+            "attributes": {},
             "additionalAttributes": false
           }
         }
@@ -141,12 +148,27 @@
           ],
           "context": {
             "type": "Record",
+            "attributes": {},
+            "additionalAttributes": false
+          }
+        }
+      },
+      "credential.hold": {
+        "appliesTo": {
+          "principalTypes": [
+            "Holder"
+          ],
+          "resourceTypes": [
+            "Resource"
+          ],
+          "context": {
+            "type": "Record",
             "attributes": {
-              "credentialAllows": {
-                "type": "Boolean",
+              "action": {
+                "type": "String",
                 "required": true
               },
-              "identityMatches": {
+              "administrative": {
                 "type": "Boolean",
                 "required": true
               }

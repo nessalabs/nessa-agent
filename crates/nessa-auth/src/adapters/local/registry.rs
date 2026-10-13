@@ -29,12 +29,12 @@ use crate::{
         pairing::StageGate,
         ports::{
             AccessError, AccessReader, AccessSnapshot, CredentialEvidence, CredentialVerifier,
-            PortFuture, VerifiedCredential,
+            Decision, GrantPolicyEvaluator, PortFuture, VerifiedCredential,
         },
     },
     domain::{
         pairing::{validate_pairing_collection, InvitationId, PairingError, PEER_PRINCIPAL_PREFIX},
-        Action, AudienceId, Credential, CredentialId, CredentialTransition, DomainError, Initiator,
+        AudienceId, Credential, CredentialId, CredentialTransition, DomainError, Initiator,
         IssuanceCause, Membership, Principal, PrincipalId, PrincipalKind, Supersession,
         TransitionCause,
     },
@@ -289,6 +289,9 @@ impl Drop for RegistryLock {
 }
 pub struct LocalCredentialStore {
     config: LocalStoreConfig,
+    /// Which grants a credential may carry (`GrantPolicyEvaluator`), asked on
+    /// every issue and every read or write of the registry.
+    grants: Arc<dyn GrantPolicyEvaluator>,
     root: PathBuf,
     path: PathBuf,
     _lock: RegistryLock,
@@ -308,14 +311,21 @@ pub struct LocalCredentialStore {
 impl LocalCredentialStore {
     /// Open `path` beneath the already-private trusted `root` and acquire its
     /// sibling lifetime lock. A missing registry is represented as uninitialized.
-    pub fn open(root: impl AsRef<Path>, path: impl AsRef<Path>) -> Result<Self, LocalStoreError> {
-        Self::open_with_config(root, path, LocalStoreConfig::default())
+    /// `grants` decides which grants a credential may carry; composition
+    /// supplies the Cedar adapter.
+    pub fn open(
+        root: impl AsRef<Path>,
+        path: impl AsRef<Path>,
+        grants: Arc<dyn GrantPolicyEvaluator>,
+    ) -> Result<Self, LocalStoreError> {
+        Self::open_with_config(root, path, LocalStoreConfig::default(), grants)
     }
 
     pub fn open_with_config(
         root: impl AsRef<Path>,
         path: impl AsRef<Path>,
         config: LocalStoreConfig,
+        grants: Arc<dyn GrantPolicyEvaluator>,
     ) -> Result<Self, LocalStoreError> {
         config.validate()?;
         let root = root.as_ref().to_path_buf();
@@ -383,7 +393,7 @@ impl LocalCredentialStore {
                     });
                     invalid_registry(&root, &path, fault)
                 })?;
-                validate_registry(&registry, &config)
+                validate_registry(&registry, &config, grants.as_ref())
                     .map_err(|fault| invalid_registry(&root, &path, fault))?;
                 Some(registry)
             }
@@ -392,6 +402,7 @@ impl LocalCredentialStore {
         };
         Ok(Self {
             config,
+            grants,
             root,
             path,
             _lock: RegistryLock(lock),
@@ -483,6 +494,7 @@ impl LocalCredentialStore {
         };
         let credential = domain_credential(&metadata)?;
         validate_grants(
+            self.grants.as_ref(),
             &metadata,
             principal_kind(&request.principal)?,
             &request.gateway_id,
@@ -589,6 +601,7 @@ impl LocalCredentialStore {
         };
         let credential = domain_credential(&metadata)?;
         validate_grants(
+            self.grants.as_ref(),
             &metadata,
             principal_kind(&request.principal)?,
             &current.gateway_id,
@@ -817,7 +830,13 @@ impl LocalCredentialStore {
             .iter()
             .find(|principal| principal.id == membership.principal_id)
             .ok_or(LocalStoreError::Corrupt)?;
-        validate_grants(&metadata, principal_kind(owner)?, &current.gateway_id, true)?;
+        validate_grants(
+            self.grants.as_ref(),
+            &metadata,
+            principal_kind(owner)?,
+            &current.gateway_id,
+            true,
+        )?;
         if !credential_identity_available(current, &metadata.id, None)
             .map_err(|_| LocalStoreError::Corrupt)?
         {
@@ -1020,7 +1039,8 @@ impl LocalCredentialStore {
     }
 
     fn persist(&self, registry: &Registry) -> Result<(), LocalStoreError> {
-        validate_registry(registry, &self.config).map_err(|_| LocalStoreError::Corrupt)?;
+        validate_registry(registry, &self.config, self.grants.as_ref())
+            .map_err(|_| LocalStoreError::Corrupt)?;
         let parent = self.path.parent().ok_or(LocalStoreError::Corrupt)?;
         let mut temporary = nessa_local_storage::PrivateTempFile::new_beneath(&self.root, parent)?;
         let bytes = serde_json::to_vec(registry).map_err(|_| LocalStoreError::Corrupt)?;
@@ -1073,7 +1093,8 @@ impl LocalCredentialStore {
         }
         let registry: Registry =
             serde_json::from_slice(&actual).map_err(|_| LocalStoreError::Corrupt)?;
-        validate_registry(&registry, &self.config).map_err(|_| LocalStoreError::Corrupt)?;
+        validate_registry(&registry, &self.config, self.grants.as_ref())
+            .map_err(|_| LocalStoreError::Corrupt)?;
         file.sync_all()?;
         self.sync_registry_directory(parent)
     }
@@ -1515,6 +1536,7 @@ fn validate_transitions(
 fn validate_registry(
     registry: &Registry,
     config: &LocalStoreConfig,
+    grants: &dyn GrantPolicyEvaluator,
 ) -> Result<(), CredentialRegistryFault> {
     if registry.schema_version != SCHEMA_VERSION {
         return Err(CredentialRegistryFault::UnsupportedSchema {
@@ -1652,7 +1674,13 @@ fn validate_registry(
             .ok_or(LocalStoreError::Corrupt)
             .and_then(principal_kind);
         kind.and_then(|kind| {
-            validate_grants(&credential.metadata, kind, &registry.gateway_id, true)
+            validate_grants(
+                grants,
+                &credential.metadata,
+                kind,
+                &registry.gateway_id,
+                true,
+            )
         })
         .map_err(|_| {
             CredentialRegistryFault::InvalidState(RegistryInvariant::CredentialMetadata)
@@ -1722,7 +1750,7 @@ fn principal_id_matches_kind(principal: &PrincipalInputDto) -> bool {
 /// registry keeps. A gateway principal is a paired peer: its credential is
 /// bound to the key it pinned by pairing (never a bearer secret) and its
 /// membership is a member's. Which grants each kind may hold is
-/// `validate_grants`'s check, through `PrincipalKind::may_hold`. A
+/// `validate_grants`'s check, through `GrantPolicyEvaluator::may_hold`. A
 /// pairing-bound credential names a gateway principal exactly when its
 /// enrollment's class is a peer's; that it holds exactly its class's one
 /// grant is its pairing's own check (`StoredPairing`).
@@ -1879,31 +1907,29 @@ fn principal_kind(principal: &PrincipalInputDto) -> Result<PrincipalKind, LocalS
         .map_err(|_| LocalStoreError::Conflict)
 }
 
-/// The grants a credential may carry: on this gateway, from the known actions,
-/// each one its principal's kind may hold (`PrincipalKind::may_hold`), and
-/// `credential.manage` only where administration is allowed. Every issuing
-/// path and the stored registry ask this one check.
+/// The grants a credential may carry: at least one, each on this gateway, and
+/// each one `grants` lets its principal's kind hold
+/// ([`GrantPolicyEvaluator::may_hold`]), `administrative` saying whether this
+/// path may hand out administration. Every issuing path and the stored
+/// registry ask this one check; which actions exist and who may hold them is
+/// the policy's, not this function's.
 fn validate_grants(
+    grants: &dyn GrantPolicyEvaluator,
     metadata: &CredentialMetadataDto,
     kind: PrincipalKind,
     gateway_id: &str,
-    administrative_allowed: bool,
+    administrative: bool,
 ) -> Result<(), LocalStoreError> {
-    if metadata.grants.is_empty()
-        || metadata.grants.iter().any(|grant| {
-            grant.resource.id != gateway_id
-                || Action::new(grant.action.clone()).map_or(true, |action| !kind.may_hold(&action))
-                || !matches!(
-                    grant.action.as_str(),
-                    "server.read"
-                        | "credential.manage"
-                        | "conversation.read"
-                        | "conversation.write"
-                        | "environment.serve"
-                )
-                || (!administrative_allowed && grant.action == "credential.manage")
-        })
-    {
+    let credential = domain_credential(metadata)?;
+    if credential.grants().is_empty() {
+        return Err(LocalStoreError::Conflict);
+    }
+    // A refusal and an unavailable policy are both a grant this credential
+    // may not carry: nothing is issued or kept on an answer that is not Allow.
+    if credential.grants().iter().any(|grant| {
+        grant.resource().id().as_str() != gateway_id
+            || grants.may_hold(kind, grant, administrative) != Ok(Decision::Allow)
+    }) {
         return Err(LocalStoreError::Conflict);
     }
     Ok(())
@@ -2029,7 +2055,11 @@ mod tests {
     ) -> Result<LocalCredentialStore, LocalStoreError> {
         let path = path.as_ref();
         let (root, relative) = trusted_root(path);
-        LocalCredentialStore::open(root, relative)
+        LocalCredentialStore::open(
+            root,
+            relative,
+            std::sync::Arc::new(crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap()),
+        )
     }
 
     fn open_store_with_config(
@@ -2038,18 +2068,33 @@ mod tests {
     ) -> Result<LocalCredentialStore, LocalStoreError> {
         let path = path.as_ref();
         let (root, relative) = trusted_root(path);
-        LocalCredentialStore::open_with_config(root, relative, config)
+        LocalCredentialStore::open_with_config(
+            root,
+            relative,
+            config,
+            std::sync::Arc::new(crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap()),
+        )
     }
 
     #[cfg(windows)]
     #[test]
     fn inherited_temp_root_is_rejected_while_a_protected_child_is_accepted() {
         let temporary = tempfile::tempdir().unwrap();
-        assert!(LocalCredentialStore::open(temporary.path(), "credentials.v1.json").is_err());
+        assert!(LocalCredentialStore::open(
+            temporary.path(),
+            "credentials.v1.json",
+            std::sync::Arc::new(crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap())
+        )
+        .is_err());
 
         let trusted = temporary.path().join("trusted");
         nessa_local_storage::create_directory(&trusted).unwrap();
-        assert!(LocalCredentialStore::open(&trusted, "credentials.v1.json").is_ok());
+        assert!(LocalCredentialStore::open(
+            &trusted,
+            "credentials.v1.json",
+            std::sync::Arc::new(crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap())
+        )
+        .is_ok());
     }
 
     pub(super) fn grant(org: &str, action: &str) -> CredentialGrantDto {
@@ -2973,7 +3018,8 @@ mod tests {
         symlink(&redirected, &intermediate).unwrap();
         assert!(LocalCredentialStore::open(
             root.path(),
-            Path::new("nested-link/credentials.v1.json")
+            Path::new("nested-link/credentials.v1.json"),
+            std::sync::Arc::new(crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap()),
         )
         .is_err());
         assert!(!redirected.join("credentials.lock").exists());

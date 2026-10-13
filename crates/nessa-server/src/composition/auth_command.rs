@@ -3,6 +3,7 @@
 use super::credential_registry::{self, RegistryOpenContext};
 use super::local_auth::SystemClock;
 use crate::{core::RunError, env::Environment};
+use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
 use nessa_auth::{
     adapters::local::{BootstrapRequest, LocalCredentialStore},
     application::{
@@ -18,6 +19,7 @@ use std::{
     fs::File,
     io::Write,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 use uuid::Uuid;
 
@@ -50,7 +52,12 @@ pub(super) fn execute_with_context(
     let directory = Environment::auth_directory_from_system()?;
     prepare_auth_directory(&directory)?;
     let settings = super::runtime_config::RuntimeConfig::load(&directory)?;
-    let store = credential_registry::open(&directory, settings.registry, registry_context)?;
+    let store = credential_registry::open(
+        &directory,
+        settings.registry,
+        grant_policy()?,
+        registry_context,
+    )?;
     // Reserve a new protected output before changing durable state. Never overwrite.
     let mut file = private_output(&output).map_err(failure)?;
     let now = SystemClock.unix_seconds();
@@ -124,6 +131,13 @@ pub(super) fn execute_with_context(
     Ok(())
 }
 
+/// The Cedar bundle the registry asks which grants a credential may carry.
+fn grant_policy() -> Result<Arc<CedarPolicyEvaluator>, RunError> {
+    CedarPolicyEvaluator::new()
+        .map(Arc::new)
+        .map_err(|_| RunError::Authentication("the embedded policy bundle is invalid".into()))
+}
+
 fn validate_options(args: &[String], allowed: &[&str]) -> Result<(), RunError> {
     let (pairs, rest) = args.as_chunks::<2>();
     let mut seen = std::collections::HashSet::new();
@@ -143,15 +157,15 @@ fn validate_options(args: &[String], allowed: &[&str]) -> Result<(), RunError> {
 /// consent when pairing (design row S17 in `docs/design/auth/device-pairing.md`).
 const OWNER_GRANTS: &str = "server.read,conversation.read,conversation.write,credential.manage";
 
+/// Each grant named once. Which actions a credential may carry is the policy
+/// bundle's, which the registry asks when it issues (`GrantPolicyEvaluator`).
 fn validate_grants(grants: &str) -> Result<(), RunError> {
     let mut seen = std::collections::HashSet::new();
-    if !grants.split(',').all(|grant| {
-        matches!(
-            grant,
-            "server.read" | "conversation.read" | "conversation.write" | "credential.manage"
-        ) && seen.insert(grant)
-    }) {
-        return Err(failure("grants must be distinct supported actions"));
+    if !grants
+        .split(',')
+        .all(|grant| !grant.is_empty() && seen.insert(grant))
+    {
+        return Err(failure("grants must be distinct actions"));
     }
     Ok(())
 }
@@ -212,7 +226,12 @@ fn provision_command(
     let directory = Environment::auth_directory_from_system()?;
     prepare_auth_directory(&directory)?;
     let settings = super::runtime_config::RuntimeConfig::load(&directory)?;
-    let store = credential_registry::open(&directory, settings.registry, registry_context)?;
+    let store = credential_registry::open(
+        &directory,
+        settings.registry,
+        grant_policy()?,
+        registry_context,
+    )?;
     provision(
         &store,
         &directory,
@@ -321,7 +340,12 @@ mod tests {
         prepare_auth_directory(&auth).unwrap();
 
         nessa_local_storage::verify_directory(&auth).unwrap();
-        LocalCredentialStore::open(&auth, "credentials.v1.json").unwrap();
+        LocalCredentialStore::open(
+            &auth,
+            "credentials.v1.json",
+            std::sync::Arc::new(nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap()),
+        )
+        .unwrap();
     }
 
     #[test]

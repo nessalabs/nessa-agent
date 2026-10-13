@@ -95,7 +95,14 @@ pub(super) async fn owned(
     organization: &str,
 ) -> (Arc<LocalCredentialStore>, AuthenticatedSession, String) {
     nessa_local_storage::create_directory(root).unwrap();
-    let auth = Arc::new(LocalCredentialStore::open(root, "credentials.json").unwrap());
+    let auth = Arc::new(
+        LocalCredentialStore::open(
+            root,
+            "credentials.json",
+            std::sync::Arc::new(nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap()),
+        )
+        .unwrap(),
+    );
     let owner = uuid();
     let grant = |action: &str| CredentialGrantDto {
         action: action.into(),

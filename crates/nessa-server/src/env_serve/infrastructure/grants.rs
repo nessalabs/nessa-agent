@@ -13,7 +13,8 @@
 //! and none when missing; its `commands` is the longest a command may run,
 //! and no commands when missing; its `maxLeaseMs` is the longest a
 //! harness's lease may last from its grant, and until ended when missing.
-//! A peer with no entry has the defaults `domain::granted_to` gives it.
+//! A peer with no entry is decided by the lease policy's no-entry rules
+//! (`cedar/policies.cedar`), and shown as `domain::unwritten` has it.
 //!
 //! The file is written as schema version 2 only when some entry has a
 //! `maxLeaseMs`, and as version 1 otherwise; both are read. A build that

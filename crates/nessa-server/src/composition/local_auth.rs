@@ -185,9 +185,11 @@ pub(super) async fn product_state(
                 .ok_or_else(|| setup_error("invalid data root"))?,
         )?;
     }
+    let policy = Arc::new(CedarPolicyEvaluator::new().map_err(setup_error)?);
     let store = Arc::new(super::credential_registry::open(
         directory,
         settings.registry,
+        policy.clone(),
         super::credential_registry::RegistryOpenContext::GatewayStartup,
     )?);
     let identity = store.identity().map_err(|_| {
@@ -207,7 +209,6 @@ pub(super) async fn product_state(
     let audience = AudienceId::new(identity.gateway_id).map_err(setup_error)?;
     let organization =
         OrganizationId::new(identity.organization_ids[0].clone()).map_err(setup_error)?;
-    let policy = Arc::new(CedarPolicyEvaluator::new().map_err(setup_error)?);
     let namespace = directory
         .parent()
         .ok_or_else(|| setup_error("invalid data root"))?;

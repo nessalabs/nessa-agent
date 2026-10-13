@@ -43,7 +43,7 @@ use crate::{
             PairingRecord, PublicIntent, TerminalCause,
         },
         Action, AudienceId, AuthContext, CredentialId, MembershipId, MembershipRole,
-        OrganizationId, PrincipalId, Resource, ResourceId, CONVERSATION_AUTHORITY_ACTIONS,
+        OrganizationId, PrincipalId, Resource, ResourceId,
     },
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -3805,7 +3805,7 @@ fn the_kind_alone_refuses_a_gateway_any_conversation_authority() {
     // Only the grants change, so the credential's verifier, membership and
     // binding to its pairing stay valid: the kind's allowance, asked by
     // `validate_grants`, is the one check left to refuse it.
-    for action in CONVERSATION_AUTHORITY_ACTIONS {
+    for action in ["conversation.write", "credential.manage"] {
         let mut changed = original.clone();
         changed
             .credentials
@@ -3814,10 +3814,11 @@ fn the_kind_alone_refuses_a_gateway_any_conversation_authority() {
             .unwrap()
             .metadata
             .grants[0]
-            .action = (*action).into();
+            .action = action.into();
         assert!(super::super::validate_principal_kind(&changed, peer_credential(&changed)).is_ok());
         assert!(matches!(
             super::super::validate_grants(
+                &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
                 &peer_credential(&changed).metadata,
                 crate::domain::PrincipalKind::Gateway,
                 &changed.gateway_id,

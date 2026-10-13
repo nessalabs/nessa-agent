@@ -138,6 +138,9 @@ impl Fixture {
             LocalCredentialStore::open(
                 private_root(directory.path(), "registry"),
                 "credentials.json",
+                std::sync::Arc::new(
+                    nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
+                ),
             )
             .unwrap(),
         );
@@ -238,7 +241,14 @@ impl Fixture {
         #[cfg(not(unix))]
         let parent = directory.path().to_path_buf();
         let registry = Arc::new(
-            LocalCredentialStore::open(parent.join("registry"), "credentials.json").unwrap(),
+            LocalCredentialStore::open(
+                parent.join("registry"),
+                "credentials.json",
+                std::sync::Arc::new(
+                    nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
+                ),
+            )
+            .unwrap(),
         );
         let keys = Arc::new(
             FilePairingState::open(&parent.join("gateway-private"), Path::new("state")).unwrap(),

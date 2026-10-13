@@ -1680,13 +1680,9 @@ async fn dispatch_authorized(
             };
             let context = session.context();
             let now = state.clock.unix_seconds();
-            let grants_supported = params.grants.iter().all(|grant| {
-                matches!(
-                    grant.action.as_str(),
-                    "server.read" | "conversation.read" | "conversation.write"
-                ) && grant.resource.organization_id == context.organization_id().as_str()
-                    && grant.resource.id == state.gateway_id().as_str()
-            });
+            // Which grants the new credential may carry is the store's question,
+            // answered by Cedar's `credential.hold` (gate 18): it is not
+            // repeated here.
             if params.request_id.is_empty()
                 || params.request_id.len() > 200
                 || params.membership.organization_id != context.organization_id().as_str()
@@ -1697,7 +1693,6 @@ async fn dispatch_authorized(
                     .expires_at
                     .is_some_and(|expiry| expiry <= now || expiry > 9_007_199_254_740_991)
                 || params.grants.is_empty()
-                || !grants_supported
             {
                 return failure(&frame.id, "invalid_request");
             }

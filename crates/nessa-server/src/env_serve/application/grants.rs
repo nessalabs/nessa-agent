@@ -3,14 +3,20 @@
 //! the next lease while the leases already running go on.
 //!
 //! ```text
-//! Grant / GrantCommand ──▶ grant_for(peer) ──▶ PeerGrants::entry(peer)
-//!   entry, or none ──▶ granted_to(peer, entry) (the domain's defaults)
-//!   unreadable ──▶ logged, and nothing granted
+//! Grant ──▶ admit_agent(peer, agent) ──┐
+//! GrantCommand ──▶ admit_command(peer, timeout) ──┤
+//!   ──▶ PeerGrants::entry(peer)
+//!       unreadable ──▶ logged, NotGranted (the policy is not asked)
+//!   ──▶ LeasePolicyEvaluator::evaluate(peer, entry, ask)
+//!       Deny ──▶ NotGranted
+//!   ──▶ Allow ──▶ the terms: the entry's, or unwritten(peer)'s
+//!       lease_ms(grant) | command_timeout(grant, timeout)
 //! ```
 //!
 //! Arrows are calls, in order. A grant that cannot be read grants nothing,
 //! to SSH as to a dialed gateway: a file somebody broke is not taken as no
-//! file.
+//! file. Whether a lease is allowed is the policy's alone; the terms of a
+//! yes (how long a lease lasts, how long a command runs) are the domain's.
 //!
 //! The owner's changes go through [`change_grant`], which audits each one
 //! twice, both times holding the store:
@@ -29,7 +35,10 @@
 //! records are kept and the grants are durable. An `intended` record with
 //! no outcome after it is a change whose process died between the two: it
 //! may or may not be in force, and the grants themselves say which.
-use crate::env_serve::domain::{granted_to, AllAgents, GrantOperation, Peer, PeerGrant};
+use super::lease_policy::{LeaseAsk, LeaseDecision, LeaseFacts, LeasePolicyEvaluator};
+use crate::env_serve::domain::{
+    command_timeout, lease_ms, unwritten, AllAgents, GrantOperation, NotGranted, Peer, PeerGrant,
+};
 use nessa_auth::application::ports::Clock;
 use std::cell::RefCell;
 
@@ -44,19 +53,80 @@ pub(crate) trait PeerGrants: Send + Sync {
     fn entry(&self, peer: &Peer) -> Result<Option<PeerGrant>, String>;
 }
 
-/// What `peer` is granted now: its entry with the domain's defaults, or
-/// nothing when the grants could not be read.
-pub(crate) fn grant_for(grants: &dyn PeerGrants, peer: &Peer) -> PeerGrant {
-    match grants.entry(peer) {
-        Ok(entry) => granted_to(peer, entry),
-        Err(error) => {
-            let peer = match peer {
-                Peer::Ssh => "ssh",
-                Peer::Gateway { .. } => "a dialed gateway",
-            };
-            tracing::error!(peer, %error, "this host's grants could not be read; nothing is granted");
-            PeerGrant::nothing()
+/// Whether `peer` may lease `agent`'s harness now, and if so how long the
+/// lease may last: `None` until it is ended.
+///
+/// # Errors
+/// [`NotGranted`] when the policy refuses it, or the grants could not be
+/// read.
+pub(crate) fn admit_agent(
+    grants: &dyn PeerGrants,
+    policy: &dyn LeasePolicyEvaluator,
+    peer: &Peer,
+    agent: &str,
+) -> Result<Option<u64>, NotGranted> {
+    admitted(grants, policy, peer, LeaseAsk::Agent(agent)).map(|grant| lease_ms(&grant))
+}
+
+/// Whether `peer` may run a command now, and if so the timeout it runs
+/// with: the one asked, or the grant's longest when that is shorter.
+///
+/// # Errors
+/// [`NotGranted`] when the policy refuses it, or the grants could not be
+/// read.
+pub(crate) fn admit_command(
+    grants: &dyn PeerGrants,
+    policy: &dyn LeasePolicyEvaluator,
+    peer: &Peer,
+    timeout_ms: u64,
+) -> Result<u64, NotGranted> {
+    let grant = admitted(grants, policy, peer, LeaseAsk::Command)?;
+    command_timeout(&grant, timeout_ms).ok_or_else(|| {
+        // A yes with no terms to run on cannot be honoured: nothing runs.
+        tracing::error!(
+            peer = peer_label(peer),
+            "the lease policy allowed a command its grant holds no timeout for; it is refused"
+        );
+        NotGranted
+    })
+}
+
+/// The grant whose terms an allowed lease gets: the peer's entry, or what a
+/// peer with no entry is shown as.
+fn admitted(
+    grants: &dyn PeerGrants,
+    policy: &dyn LeasePolicyEvaluator,
+    peer: &Peer,
+    ask: LeaseAsk<'_>,
+) -> Result<PeerGrant, NotGranted> {
+    let entry = grants.entry(peer).map_err(|error| {
+        tracing::error!(peer = peer_label(peer), %error, "this host's grants could not be read; nothing is granted");
+        NotGranted
+    })?;
+    let facts = LeaseFacts {
+        peer,
+        entry: entry.as_ref(),
+        ask,
+    };
+    match policy.evaluate(&facts) {
+        LeaseDecision::Allow { .. } => Ok(entry.unwrap_or_else(|| unwritten(peer))),
+        LeaseDecision::Deny { policies } => {
+            tracing::info!(
+                peer = peer_label(peer),
+                ?ask,
+                ?policies,
+                "a lease was not granted"
+            );
+            Err(NotGranted)
         }
+    }
+}
+
+/// How a log names `peer`, without its key.
+fn peer_label(peer: &Peer) -> &'static str {
+    match peer {
+        Peer::Ssh => "ssh",
+        Peer::Gateway { .. } => "a dialed gateway",
     }
 }
 
@@ -147,8 +217,9 @@ pub(crate) enum ChangeFailed {
 
 /// Make `operation` to `peer`'s grant for `initiator`, auditing it in
 /// `audit` as intended before it takes effect and as written, or not,
-/// after. A grant equal to the peer's defaults is kept as no entry, so the
-/// defaults stay the only statement of it.
+/// after. A grant equal to what a peer with no entry is shown as
+/// ([`unwritten`]) is kept as no entry, so the lease policy's no-entry
+/// rules go on deciding it.
 ///
 /// # Errors
 /// [`ChangeFailed`]; which variant says whether the change is in force.
@@ -180,11 +251,11 @@ pub(crate) fn change_grant(
     store.change(
         &peer,
         &mut |entry| {
-            let before = granted_to(&peer, entry);
+            let before = entry.unwrap_or_else(|| unwritten(&peer));
             let after = operation
                 .apply(before.clone())
                 .map_err(|AllAgents| ChangeFailed::AllAgents)?;
-            let kept = (after != granted_to(&peer, None)).then(|| after.clone());
+            let kept = (after != unwritten(&peer)).then(|| after.clone());
             *transition.borrow_mut() = Some(GrantChange {
                 committed_at_ms: 0,
                 initiator: initiator.to_owned(),
@@ -230,3 +301,7 @@ pub(crate) fn change_grant(
         .into_inner()
         .ok_or_else(|| ChangeFailed::Store("nothing was decided".into()))
 }
+
+#[cfg(test)]
+#[path = "../../../tests/env_serve/admission.rs"]
+mod tests;

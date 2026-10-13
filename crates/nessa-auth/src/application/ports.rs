@@ -1,6 +1,7 @@
 //! Implement these ports in local or hosted adapters. Choose adapters in composition.
 use crate::domain::{
-    Action, AudienceId, AuthContext, Credential, CredentialId, Membership, Resource,
+    Action, AudienceId, AuthContext, Credential, CredentialId, Grant, Membership, PrincipalKind,
+    Resource,
 };
 use std::{fmt, future::Future, pin::Pin};
 
@@ -179,6 +180,23 @@ pub trait PolicyEvaluator: Send + Sync {
         action: &Action,
         resource: &Resource,
         snapshot: &AccessSnapshot,
+    ) -> Result<Decision, AccessError>;
+}
+
+/// Which grants a credential may carry at all, asked when one is issued and
+/// whenever the registry holding it is read or written. A credential carries
+/// a grant only when this allows it; the request-time [`PolicyEvaluator`]
+/// then decides each use of it.
+pub trait GrantPolicyEvaluator: Send + Sync {
+    /// Whether a principal of `kind` may hold `grant`. `administrative` says
+    /// whether this issuing path may hand out administration: owner bootstrap,
+    /// recovery and provisioning may; an issue over the product protocol may not.
+    /// Missing or invalid policy data must not produce Allow.
+    fn may_hold(
+        &self,
+        kind: PrincipalKind,
+        grant: &Grant,
+        administrative: bool,
     ) -> Result<Decision, AccessError>;
 }
 

@@ -123,7 +123,7 @@ table survives edits.
 | | `conversation/domain/value_objects/share_access.rs` `ToolRules`, `ToolPreset` | The Drive tool policy: stored, never evaluated. Slice J4 builds its Cedar evaluator |
 | | `nessa-sdk` `infrastructure/claude_acp/tools/wire.rs` `DISALLOWED_TOOLS`; `infrastructure/opencode_acp/sessions/binding.rs` `SESSION_POLICY` | Fixed tool deny lists sent to the harness at launch |
 | **D. Environment host** | `nessa-server` `env_serve/domain/grants.rs` `granted_to`, `admit_agent`, `admit_command`; `env_serve/application/serve.rs` lease grant | Which agents and commands a leasing peer may use; SSH gets all, a dialed gateway nothing; a revoked gateway is refused |
-| **E. Artifacts in the SDK** | `nessa-sdk` `application/agent_execution/sessions/artifacts.rs` `admit`, `asked_by` | An artifact is recorded only by the lease issuer or the person who started the turn |
+| **E. Artifacts in the SDK** | `nessa-sdk` `application/agent_execution/sessions/artifacts.rs` `admit`, `asked_by` | An artifact is recorded only by the lease issuer or the person who started the turn. Not policy on a closer look: see step 6 |
 
 Not a migration: placing a conversation on an environment
 (`conversation/application/placement.rs`) has no per-principal rule today.
@@ -131,14 +131,21 @@ Adding one would be new policy, decided on its own issue.
 
 ### Migration order
 
-Each step is its own pull request, `Part of #803`, and deletes the Rust it
-replaces in the same change.
+Step 1 is its own pull request. Steps 2 to 5 land together in one more pull
+request, `Part of #803`, because each pull request costs a full CI run (Saurav,
+2026-10-13). Each step deletes the Rust it replaces in the same change.
 
 1. **This record, the gate, and the placement check.** No behaviour change.
-2. **A: gateway identity.** Grants and principal kind become entity facts;
-   `credentialAllows` and the action allowlist go; `may_hold` becomes a `forbid`
-   checked on every request; the `credential.issue` and `revoke` rules become
-   Cedar actions over the credential being issued or revoked.
+2. **A: gateway identity.** Grants and principal kind become entity facts:
+   each `permit` requires `principal.grants` to contain the requested action on
+   this resource, so `credentialAllows` and the five-action allowlist go, and
+   an action no policy names is refused by Cedar. Which grants a credential may
+   carry becomes the `credential.hold` action (`GrantPolicyEvaluator`), asked by
+   the registry on issue and on every load; `PrincipalKind::may_hold`, the
+   registry's lists and `credential.issue`'s own action list in
+   `product/socket.rs` go. The identity agreement check stays in Rust, before
+   Cedar runs: it is authentication, not policy, and a mismatch denies. Revoke and list scoping (the caller's org and audience) stay as
+   record invariants of the caller's own registry.
 3. **B: conversation access.** A conversation becomes a Cedar resource (org,
    owner, deleted), a paired reader a principal with its kind and binding owner,
    and a share role a fact. `read_access.rs`'s method sets become actions.
@@ -155,8 +162,11 @@ replaces in the same change.
    same policies rather than written twice.
 5. **D: environment host.** Agent and command grants become a Cedar bundle on
    the host; the terms (timeout clamp, lease deadlines) stay in Rust.
-6. **E: SDK artifacts.** The SDK gains a port for "may this actor record an
-   artifact under this lease"; the server answers it with Cedar.
+6. **E: SDK artifacts. Dropped.** `admit` and `asked_by` check that the actor
+   recording an artifact is the one the lease or turn was issued to. That is
+   binding an action to the identity that holds it, the same kind of check as
+   `identityMatches`, not a choice a policy could make differently. Moving it
+   behind a port would add a second place to ask without a rule to write.
 
 ## Alternatives considered
 

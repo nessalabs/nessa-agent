@@ -26,6 +26,9 @@ nessa-local-database = { path = "../nessa-local-database" }
 nessa-local-storage = { path = "../nessa-local-storage", features = ["physical-operation"] }
 nessa-gateway-endpoint = { path = "../nessa-gateway-endpoint" }
 nessa-auth = { path = "../nessa-auth" }
+# The environment host's lease policy (ADR 803), in `env_serve::infrastructure::cedar`
+# only. The same pin as nessa-auth's, so the build holds one engine.
+cedar-policy = { version = "=4.12.0", default-features = false }
 nessa-agent-credentials = { path = "../nessa-agent-credentials" }
 axum = { version = "0.8", features = ["ws"] }
 futures-util = "0.3"
