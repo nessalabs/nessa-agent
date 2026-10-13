@@ -1154,6 +1154,7 @@ fn public_retained_read_enforces_owner_scope_and_preserves_granted_peer_mode() {
             ReaderAccess {
                 role,
                 address: endpoint.address,
+                relay: None,
                 identity: &endpoint.device,
                 pin: endpoint.pin,
                 credential: "credential",

@@ -14,7 +14,7 @@ use nessa_auth::{
 use nessa_client_core::{
     pairing::NativeClientError,
     retained::{
-        ReadStop, ReaderAccess, ReaderRole, RetainedCache, RetainedEnrollmentClient,
+        ReadFailure, ReadStop, ReaderAccess, ReaderRole, RetainedCache, RetainedEnrollmentClient,
         RetainedTranscript,
     },
 };
@@ -157,6 +157,7 @@ fn verify_paired_lifecycle(removal_mode: usize) {
             ReaderAccess {
                 role: ReaderRole::DeviceOwner,
                 address,
+                relay: None,
                 identity: &identity,
                 pin,
                 credential: &credential,
@@ -304,6 +305,111 @@ fn verify_paired_lifecycle(removal_mode: usize) {
     assert_eq!(
         reopened.purge_receipt(receiver.as_str()).unwrap().as_ref(),
         Some(&purge)
+    );
+    runtime.block_on(device.shutdown());
+}
+
+/// Issue #266, slice R2b: a reader whose direct dial is refused is joined
+/// through the gateway's relay, and reads the same conversations a direct
+/// read does.
+#[test]
+fn a_reader_whose_direct_dial_is_refused_reads_through_the_relay() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("gateway");
+    let _gateway = Gateway::start_mode(&root, "relay");
+    let profile: Value =
+        serde_json::from_slice(&std::fs::read(root.join("profile.json")).unwrap()).unwrap();
+    let address: SocketAddr = profile["gatewayAddress"].as_str().unwrap().parse().unwrap();
+    let relay = std::fs::read_to_string(root.join("relay-address")).unwrap();
+    let state = Arc::new(
+        FilePairingState::open(
+            Path::new(profile["stateRoot"].as_str().unwrap()),
+            Path::new(profile["stateDirectory"].as_str().unwrap()),
+        )
+        .unwrap(),
+    );
+    let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+    let cache_root = directory.path().join("cache");
+    nessa_local_storage::create_directory(&cache_root).unwrap();
+    let device = RetainedEnrollmentClient::new(
+        state.clone(),
+        cache_root.join("status.sqlite3"),
+        Arc::new(Wall),
+        Arc::new(Time(Instant::now())),
+    )
+    .unwrap();
+    let status = runtime
+        .block_on(device.status(TcpStream::connect(address).unwrap(), None))
+        .unwrap();
+    let NativePairingStatus::Active {
+        receiver,
+        access_epoch,
+        ..
+    } = status.enrollment().as_ref().unwrap()
+    else {
+        panic!("paired device must be active")
+    };
+    let saved = state.load_credential().unwrap().unwrap();
+    let credential = saved.credential().as_str().to_owned();
+    let (key, pin, _) = saved.into_enrollment().into_parts();
+    let identity = NativeIdentity::restore(key).unwrap();
+    // A port nothing listens on: the direct dial is refused at once.
+    let refused = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let read = |cache: &mut RetainedCache, address: SocketAddr, relay: Option<&str>| {
+        cache.read(
+            ReaderAccess {
+                role: ReaderRole::DeviceOwner,
+                address,
+                relay,
+                identity: &identity,
+                pin,
+                credential: &credential,
+                receiver: receiver.as_str(),
+                access_epoch: *access_epoch,
+                client_id: "retained-relay-test",
+            },
+            &ReadStop::new(),
+            Duration::from_secs(5),
+            8,
+            &mut Vec::new(),
+        )
+    };
+
+    let mut relayed = RetainedCache::open(
+        &cache_root.join("relayed.sqlite3"),
+        Arc::new(Wall),
+        Arc::new(Time(Instant::now())),
+    )
+    .unwrap();
+    // The gateway registers at the relay once it has started; until then
+    // the relay answers that it is offline.
+    let registered = Instant::now() + Duration::from_secs(20);
+    let report = loop {
+        match read(&mut relayed, refused, Some(&relay)) {
+            Ok(report) => break report,
+            Err(failure) if Instant::now() < registered => {
+                assert_eq!(failure, ReadFailure::Unreachable);
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(failure) => panic!("never read through the relay: {failure:?}"),
+        }
+    };
+    assert!(report.complete);
+    assert!(report.conversations >= 2);
+
+    let mut direct = RetainedCache::open(
+        &cache_root.join("direct.sqlite3"),
+        Arc::new(Wall),
+        Arc::new(Time(Instant::now())),
+    )
+    .unwrap();
+    assert!(read(&mut direct, address, None).unwrap().complete);
+    assert_eq!(
+        relayed.conversation_ids(receiver.as_str()).unwrap(),
+        direct.conversation_ids(receiver.as_str()).unwrap()
     );
     runtime.block_on(device.shutdown());
 }
