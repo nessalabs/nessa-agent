@@ -12,14 +12,7 @@
  * pull that only moves the pin, `pnpm install` does nothing. `pnpm ui:types`
  * is the reliable way to advance; `--check` says when that is needed.
  */
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-} from "node:fs"
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -87,36 +80,28 @@ export function prepareVendor({ root, run = command, git = gitQuery } = {}) {
   const vendor = resolve(root, ".vendor/nessa_ui")
   const repo = "https://github.com/nessalabs/nessa_ui.git"
   const revision = readRevision(root)
-  const locals = [
-    resolve(root, "../nessa/.claude/worktrees/imessage-composer-chat-ui"),
-    resolve(root, "../nessa_ui"),
-  ]
   const revisionAt = (directory) => git(["rev-parse", "HEAD"], directory) === revision
   const checkoutRevision = () => {
     run("git", ["fetch", "--depth", "1", "origin", revision], vendor)
     run("git", ["checkout", "--detach", revision], vendor)
   }
 
-  mkdirSync(resolve(root, ".vendor"), { recursive: true })
-  for (const local of locals) {
-    if (!hasPackages(local) || !revisionAt(local)) continue
-    if (existsSync(vendor)) rmSync(vendor, { recursive: true, force: true })
-    symlinkSync(local, vendor)
-    break
-  }
+  const vendorRoot = resolve(root, ".vendor")
+  if (lstatSync(vendorRoot, { throwIfNoEntry: false })?.isSymbolicLink())
+    throw new Error(
+      "Preserving linked .vendor directory; replace it with a directory owned " +
+        "by this checkout, then run pnpm ui:types.",
+    )
+  mkdirSync(vendorRoot, { recursive: true })
+  // Build artifacts belong to this checkout. Remove only a borrowed link,
+  // including a dangling one, before cloning; its target remains untouched.
+  if (lstatSync(vendor, { throwIfNoEntry: false })?.isSymbolicLink()) rmSync(vendor)
   if (!hasPackages(vendor)) {
     if (existsSync(vendor)) rmSync(vendor, { recursive: true, force: true })
     run("git", ["clone", "--no-checkout", "--depth", "1", repo, vendor], root)
     checkoutRevision()
   }
   if (!revisionAt(vendor)) {
-    // A symlinked sibling checkout belongs to someone else; never move it.
-    if (lstatSync(vendor).isSymbolicLink())
-      throw new Error(
-        `Nessa UI must be exactly ${revision}, but .vendor/nessa_ui links to a ` +
-          "checkout at another commit. Move that checkout, or remove the link " +
-          "and run pnpm install to clone the pin.",
-      )
     // A managed clone is disposable, so it is advanced on its own — unless it
     // carries edits, which are never thrown away.
     const dirty = git(["status", "--porcelain"], vendor)

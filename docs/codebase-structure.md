@@ -1667,6 +1667,14 @@ the command's output.
 
 ## Command-line surface
 
+Pinned UI preparation is owned by `scripts/ensure-nessa-ui.mjs`, with filesystem
+and subprocess-seam regressions beside it in `scripts/ensure-nessa-ui.test.mjs`.
+The calling checkout's `.vendor/nessa_ui` clone owns dependency installation and
+package build artifacts. Preparation replaces a borrowed vendor link without
+changing its target and refuses a symlinked `.vendor` parent before effects;
+`nessa-ui-revision` remains the revision owner. The offline check reads the current
+vendor without preparing it. See [the UI dependency](../README.md#the-nessa-ui-dependency).
+
 Developer worktree lifecycle is owned by `scripts/worktree.sh`. Manual sibling
 worktrees and Claude Code's nested worktrees use different naming namespaces,
 but both keep Cargo output in a real `target/` directory inside the checkout.
