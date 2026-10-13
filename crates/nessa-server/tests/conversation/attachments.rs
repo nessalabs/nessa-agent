@@ -5,6 +5,15 @@ use super::{
     ConversationLimits, ConversationRepository, ConversationService, ProviderSessionErasers,
     SubmissionMode, SubmittedImage, SubmittedMessage,
 };
+use crate::attachments::{
+    application::{
+        AttachmentDependencies, AttachmentLimits, AttachmentService, BeginError, BeginOutcome,
+    },
+    infrastructure::{ConversationHolds, ModelImageNormalizer},
+};
+use crate::attachments_test_support::{
+    begin_request, caller as attachment_caller, Fixture, CONVERSATION,
+};
 use crate::{
     conversation::domain::Conversation,
     conversation_test_support::{
@@ -17,6 +26,7 @@ use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
 use nessa_protocol::conversation::view::{ConversationAttachment, ConversationMessageStatus};
 use nessa_protocol::{agents::AgentId, conversation::domain::ConversationId};
+use nessa_sdk::domain::model_metadata::value_objects::ImageInputLimits;
 use nessa_sdk::{
     application::agent_execution::agents::AgentError,
     domain::{
@@ -618,4 +628,66 @@ async fn an_agent_whose_answer_is_not_known_is_not_told_no_and_the_view_keeps_it
         Err(ConversationError::ImagesUnsupported)
     ));
     service.shutdown().await.unwrap();
+}
+
+/// The real attachment service and normalizer publish the same image offer used
+/// by upload admission, even when a present store still handles other files.
+#[tokio::test]
+async fn conversation_image_offer_matches_the_composed_upload_normalizer() {
+    let limits =
+        ImageInputLimits::new(vec![ImageMediaType::Png], 5_000_000, 8000, 2000, 2048).unwrap();
+    for available in [false, true] {
+        let fixture = Fixture::new(AttachmentLimits::default());
+        let uploads = AttachmentService::new(
+            AttachmentDependencies {
+                store: fixture.store.clone(),
+                audit: fixture.audit.clone(),
+                ownership: fixture.ownership.clone(),
+                secrets: fixture.secrets.clone(),
+                normalizer: Arc::new(
+                    ModelImageNormalizer::new(available.then_some(&limits), None).unwrap(),
+                ),
+                clock: fixture.clock.clone(),
+            },
+            AttachmentLimits::default(),
+        );
+        let (service, provider, _, _) = image_fixture(
+            true,
+            Some(Arc::new(ConversationHolds::new(
+                uploads.clone(),
+                fixture.reads(),
+            ))),
+        );
+        let id = ConversationId::new(CONVERSATION).unwrap();
+        service
+            .create(id.clone(), caller("panel", "create"), Default::default())
+            .await
+            .unwrap();
+        send(&service, &id, "text", "still usable", &[])
+            .await
+            .unwrap();
+        completed(&service, &id, 1).await;
+        let view = service
+            .read(id.clone(), caller("panel", "read"))
+            .await
+            .unwrap();
+        assert_eq!(view.capabilities.image_input, available);
+        let ticket = uploads
+            .begin(
+                attachment_caller("org", "owner"),
+                begin_request(CONVERSATION, b"image bytes", "image/png"),
+            )
+            .await;
+        if available {
+            assert!(matches!(ticket, Ok(BeginOutcome::UploadRequired { .. })));
+        } else {
+            assert!(matches!(ticket, Err(BeginError::ImagesUnsupported)));
+            assert!(matches!(
+                send(&service, &id, "image", "look", &[image(1)]).await,
+                Err(ConversationError::ImagesUnsupported)
+            ));
+        }
+        assert_eq!(provider.executions.lock().unwrap().len(), 1);
+        service.shutdown().await.unwrap();
+    }
 }
