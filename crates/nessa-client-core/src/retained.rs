@@ -57,6 +57,7 @@ use nessa_protocol::product::generated::{
     PASSIVE_MIN_REQUEST_TIMEOUT_MS,
 };
 use nessa_protocol::product_contract::generated::RecordReadErrorCode;
+use nessa_protocol::relay::{RelayAddress, DIRECT_HEAD_START};
 use nessa_sync::replication::{
     application::{StoreError, SyncError},
     catalogue::{
@@ -64,7 +65,7 @@ use nessa_sync::replication::{
     },
     domain::{Id, Limits, Scope},
 };
-use relay::{race, relay_leg, RelayRoute, HEAD_START};
+use relay::{race, relay_leg, RelayRoute};
 use std::cell::Cell;
 use std::io::{Read, Result as IoResult, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
@@ -132,7 +133,7 @@ pub struct ReaderAccess<'a> {
     /// The relay is asked for the pinned key and joins nothing it cannot
     /// prove; what crosses it is the same pinned TLS. `None` dials directly
     /// only.
-    pub relay: Option<&'a str>,
+    pub relay: Option<&'a RelayAddress>,
     /// The reader's own key.
     pub identity: &'a NativeIdentity,
     /// The gateway key pinned at enrollment.
@@ -279,7 +280,7 @@ impl GatewayConnector for StoppableConnector {
                     move |left| TcpStream::connect_timeout(&address, left),
                     move |left| relay_leg(&route, left),
                     timeout,
-                    HEAD_START,
+                    DIRECT_HEAD_START,
                     &|| self.ending.cancelled(),
                 )?
             }
@@ -493,7 +494,7 @@ impl RetainedCache {
                 // A pin that is no Ed25519 key fails TLS whatever the route.
                 relay: access.relay.and_then(|address| {
                     Some(RelayRoute {
-                        address: address.to_owned(),
+                        address: address.clone(),
                         key: relay_key(&access.pin)?,
                     })
                 }),

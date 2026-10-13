@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! direct dial ──────────────▶ connected first: used, the relay never dialed
-//!   not connected after HEAD_START, or refused sooner:
+//!   not connected after DIRECT_HEAD_START, or refused sooner:
 //!   relay leg: dial the relay ── Connect{K} ──▶ Joined: used
 //!                                           ──▶ Offline or NoAnswer: refused
 //! the first leg to connect is used; the other is dropped when it ends
@@ -12,7 +12,7 @@
 //! Both legs share the connect's one budget. What a joined stream carries is
 //! the same pinned TLS as a direct one, so the relay leg decides nothing
 //! about the gateway: it only finds a path to it.
-use nessa_protocol::relay::{read_frame, write_frame, GatewayKey, RelayFrame};
+use nessa_protocol::relay::{read_frame, write_frame, GatewayKey, RelayAddress, RelayFrame};
 use std::fmt;
 use std::io::{Error, ErrorKind, Result as IoResult};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -22,17 +22,11 @@ use std::time::{Duration, Instant};
 
 use super::STOP_SLICE;
 
-/// How long the direct dial has to connect before the relay leg starts. A
-/// direct dial to a home address from another network usually times out
-/// rather than being refused, so without this the relay would wait out the
-/// whole budget.
-pub(super) const HEAD_START: Duration = Duration::from_millis(750);
-
 /// Where a reader asks for its gateway when the direct dial does not
 /// connect: the relay's `host:port`, and the pinned gateway key it asks for.
 #[derive(Clone)]
 pub(super) struct RelayRoute {
-    pub(super) address: String,
+    pub(super) address: RelayAddress,
     pub(super) key: GatewayKey,
 }
 
@@ -169,7 +163,7 @@ pub(super) fn relay_leg(route: &RelayRoute, timeout: Duration) -> IoResult<TcpSt
     };
     let mut refused = None;
     let mut stream = None;
-    for address in route.address.to_socket_addrs()? {
+    for address in route.address.as_str().to_socket_addrs()? {
         match TcpStream::connect_timeout(&address, left()?) {
             Ok(connected) => {
                 stream = Some(connected);

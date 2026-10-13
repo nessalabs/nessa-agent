@@ -6,6 +6,7 @@ use crate::{
     product::{ConfiguredLimits, OperationalLimits, SessionSettings},
 };
 use nessa_auth::adapters::local::LocalStoreConfig;
+pub(super) use nessa_protocol::relay::RelayAddress;
 use nessa_sdk::domain::agent_execution::leases::{PeerEnvironment, SshDestination};
 use serde::Deserialize;
 use std::{io::Read, net::SocketAddr, path::Path, time::Duration};
@@ -86,50 +87,6 @@ pub(super) struct NativeConfig {
     /// gateway serves only directly.
     #[serde(default)]
     pub relay: Option<RelayAddress>,
-}
-
-/// Longest relay address: a DNS name's limit.
-const MAX_RELAY_ADDRESS: usize = 255;
-
-/// Where a relay listens: `host:port`, where the host is a name or an
-/// address (an IPv6 one in brackets). Unlike the listen address it may be a
-/// name, since a relay is usually somewhere public; it is looked up at each
-/// dial.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-#[serde(try_from = "String")]
-pub(super) struct RelayAddress(String);
-
-impl RelayAddress {
-    /// The `host:port` to dial.
-    pub(super) fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl TryFrom<String> for RelayAddress {
-    type Error = String;
-    fn try_from(address: String) -> Result<Self, Self::Error> {
-        let refuse = || format!("relay must be host:port, at most {MAX_RELAY_ADDRESS} bytes");
-        if address.len() > MAX_RELAY_ADDRESS
-            || address.chars().any(|c| c.is_whitespace() || c.is_control())
-        {
-            return Err(refuse());
-        }
-        let (host, port) = address.rsplit_once(':').ok_or_else(refuse)?;
-        let port_ok = port.parse::<u16>().is_ok_and(|port| port != 0);
-        let host_ok = !host.is_empty()
-            && match host.strip_prefix('[') {
-                Some(bracketed) => bracketed
-                    .strip_suffix(']')
-                    .is_some_and(|v6| v6.parse::<std::net::Ipv6Addr>().is_ok()),
-                None => !host.contains(':'),
-            };
-        if port_ok && host_ok {
-            Ok(Self(address))
-        } else {
-            Err(refuse())
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]

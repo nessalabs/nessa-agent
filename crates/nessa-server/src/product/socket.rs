@@ -22,9 +22,7 @@ use nessa_auth::application::credential_admin::{
     CredentialAdminError, IssueCredentialOutcome, IssueCredentialRequest, ListCredentialsRequest,
     RevokeCredentialOutcome, RevokeCredentialRequest,
 };
-use nessa_auth::application::dto::{
-    CredentialGrantDto, MembershipRoleDto, MembershipStateDto, ResourceDto,
-};
+use nessa_auth::application::dto::{CredentialGrantDto, MembershipStateDto, ResourceDto};
 use nessa_auth::application::ports::{
     AccessError, AccessSnapshot, CredentialEvidence, CredentialVerifier, Decision, PortFuture,
     SessionEvidence, VerifiedCredential,
@@ -1680,24 +1678,19 @@ async fn dispatch_authorized(
             };
             let context = session.context();
             let now = state.clock.unix_seconds();
-            let grants_supported = params.grants.iter().all(|grant| {
-                matches!(
-                    grant.action.as_str(),
-                    "server.read" | "conversation.read" | "conversation.write"
-                ) && grant.resource.organization_id == context.organization_id().as_str()
-                    && grant.resource.id == state.gateway_id().as_str()
-            });
+            // Only the frame's shape is checked here. Who may be issued a
+            // credential and which grants it may carry are the store's
+            // questions, answered by Cedar's `credential.issue` and
+            // `credential.hold` (gate 18): they are not repeated here.
             if params.request_id.is_empty()
                 || params.request_id.len() > 200
                 || params.membership.organization_id != context.organization_id().as_str()
                 || params.membership.principal_id != params.principal.id
-                || !matches!(params.membership.role, MembershipRoleDto::Member)
                 || !matches!(params.membership.state, MembershipStateDto::Active)
                 || params
                     .expires_at
                     .is_some_and(|expiry| expiry <= now || expiry > 9_007_199_254_740_991)
                 || params.grants.is_empty()
-                || !grants_supported
             {
                 return failure(&frame.id, "invalid_request");
             }
@@ -5464,6 +5457,96 @@ mod tests {
         let value: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(value["error"]["code"], "credential_store_unavailable");
         task.abort();
+    }
+
+    /// The registry, not the socket, decides what a credential may carry and
+    /// who it may be issued to; its refusal reaches the wire as
+    /// `credential_conflict`. Against a real store, a grant this principal's
+    /// kind may not hold and an admin membership are both refused that way,
+    /// and the same frame asking for an ordinary grant is issued.
+    #[tokio::test]
+    async fn the_store_refuses_an_unsupported_issue_as_a_credential_conflict() {
+        use nessa_auth::adapters::local::{BootstrapRequest, LocalCredentialStore};
+        use nessa_auth::application::dto::{
+            MembershipInputDto, MembershipRoleDto, OrganizationInputDto, PrincipalInputDto,
+            PrincipalKindDto,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let auth = directory.path().join("auth");
+        nessa_local_storage::create_directory(&auth).unwrap();
+        let store = LocalCredentialStore::open(
+            &auth,
+            "credentials.json",
+            Arc::new(CedarPolicyEvaluator::new().unwrap()),
+        )
+        .unwrap();
+        store
+            .bootstrap(BootstrapRequest {
+                gateway_id: "gateway".into(),
+                organization: OrganizationInputDto {
+                    id: "organization".into(),
+                },
+                principal: PrincipalInputDto {
+                    id: "principal".into(),
+                    kind: PrincipalKindDto::Human,
+                },
+                membership: MembershipInputDto {
+                    id: "membership".into(),
+                    principal_id: "principal".into(),
+                    organization_id: "organization".into(),
+                    role: MembershipRoleDto::Admin,
+                    state: MembershipStateDto::Active,
+                },
+                credential_id: "credential".into(),
+                issued_at: 50,
+                expires_at: None,
+                grants: vec![CredentialGrantDto {
+                    action: "credential.manage".into(),
+                    resource: ResourceDto {
+                        organization_id: "organization".into(),
+                        id: "gateway".into(),
+                    },
+                }],
+            })
+            .unwrap();
+        let (state, _) = fixture(MembershipRole::Admin);
+        let state = state.with_admin(Arc::new(store));
+        let session = authenticate(&state).await;
+        let issue = |request: &str, action: &str, role: &str| {
+            let mut params = issue_params();
+            params["requestId"] = json!(request);
+            params["membership"]["role"] = json!(role);
+            params["grants"][0]["action"] = json!(action);
+            params["grants"][0]["resource"]["id"] = json!("gateway");
+            json!({"type":"req","id":request,"method":"credential.issue","params":params})
+        };
+        for (frame, expected) in [
+            (
+                issue("serve", "environment.serve", "member"),
+                Err("credential_conflict"),
+            ),
+            (
+                issue("admin", "server.read", "admin"),
+                Err("credential_conflict"),
+            ),
+            (issue("read", "server.read", "member"), Ok(())),
+        ] {
+            let (socket, mut peer) = test_socket(None);
+            let task = tokio::spawn(run_authenticated(socket, state.clone(), session.clone()));
+            peer.input
+                .send(Ok(Message::Text(frame.to_string().into())))
+                .unwrap();
+            let Message::Text(text) = peer.message().await else {
+                panic!("response expected")
+            };
+            let value: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(value["id"], frame["id"], "{value}");
+            match expected {
+                Err(code) => assert_eq!(value["error"]["code"], code, "{value}"),
+                Ok(()) => assert_eq!(value["ok"], true, "{value}"),
+            }
+            task.abort();
+        }
     }
 
     #[tokio::test(start_paused = true)]

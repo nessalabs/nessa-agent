@@ -3,7 +3,7 @@
 use super::super::fetches::{Destination, FetchedFile, FileIdentity, PlacedFile, Placement};
 use super::FetchAsked;
 use super::*;
-use crate::env_serve::domain::{AgentName, Agents, CommandGrant, MaxLease};
+use crate::env_serve::domain::{AgentName, Agents, CommandGrant, MaxLease, PeerGrant};
 use crate::timer::{manual::ManualTimer, TokioTimer};
 use nessa_protocol::lease::{KEEPALIVE_INTERVAL, SILENCE_LIMIT};
 use nessa_sdk::application::agent_execution::providers::{CloseOutcome, HarnessCleanupFuture};
@@ -435,6 +435,9 @@ impl Gateway {
             Serving {
                 peer,
                 grants: grants.clone(),
+                policy: Arc::new(
+                    crate::env_serve::infrastructure::CedarLeasePolicy::new().unwrap(),
+                ),
             },
             Runners {
                 harnesses: launcher.clone(),
