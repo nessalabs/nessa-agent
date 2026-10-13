@@ -368,27 +368,19 @@ impl FileQueue {
 }
 
 /// In-flight `sync_all` calls. The pending count and the wait share one mutex.
+#[derive(Default)]
 struct SyncWait {
     state: Mutex<SyncState>,
     done: Condvar,
 }
 
+#[derive(Default)]
 struct SyncState {
     pending: usize,
     error: Option<String>,
 }
 
 impl SyncWait {
-    fn new() -> Self {
-        Self {
-            state: Mutex::new(SyncState {
-                pending: 0,
-                error: None,
-            }),
-            done: Condvar::new(),
-        }
-    }
-
     fn start(&self) {
         mutex_lock(&self.state).pending += 1;
     }
@@ -572,11 +564,31 @@ fn stage_runtime_using(
         .map_err(|error| error.to_string())?;
     note_dir!();
     let temporary = TemporaryRuntime(temporary_path);
-    // The pool joins before `temporary` drops, so a failed attempt removes its
-    // directory only after every worker has closed its files.
+    copy_sync_and_match(&temporary.0, &source, expected, clone)?;
+    phase!(Phase::Publish, publish(&temporary.0, &published))?;
+    // After publication the old temporary path no longer exists; its guard cannot
+    // remove the published directory even if directory synchronization fails.
+    phase!(
+        Phase::ParentSync,
+        nessa_local_storage::sync_directory(installations).map_err(|error| error.to_string())
+    )?;
+    Ok(published)
+}
+
+/// Copy, flush, and hash `source` into `staged`.
+///
+/// The pool joins before this returns, including on failure, so the caller's
+/// temporary-directory guard removes that directory only after every worker
+/// has closed its files.
+fn copy_sync_and_match(
+    staged: &Path,
+    source: &Path,
+    expected: &str,
+    clone: CloneFile,
+) -> Result<(), String> {
     let workers = parallelism();
     let queue = FileQueue::new(workers.saturating_mul(2));
-    let syncs = SyncWait::new();
+    let syncs = SyncWait::default();
     #[cfg(test)]
     let ledger = current_ledger();
     thread::scope(|scope| {
@@ -588,37 +600,27 @@ fn stage_runtime_using(
             scope.spawn(move || {
                 #[cfg(test)]
                 install_measurement(ledger);
-                while let Some(file) = queue.pop() {
-                    let mut finish = SyncFinish {
-                        wait: syncs,
-                        result: None,
-                    };
-                    finish.result = Some(phase!(
-                        Phase::FileSync,
-                        file.sync_all().map_err(|error| error.to_string())
-                    ));
-                }
+                sync_queued_files(queue, syncs);
             });
         }
-        let directories =
-            match copy_directory(&source, &source, &temporary.0, clone, &queue, &syncs) {
-                Ok(directories) => directories,
-                Err(error) => {
-                    queue.close();
-                    let _ = syncs.wait();
-                    return Err(error);
-                }
-            };
+        let directories = match copy_directory(source, source, staged, clone, &queue, &syncs) {
+            Ok(directories) => directories,
+            Err(error) => {
+                queue.close();
+                let _ = syncs.wait();
+                return Err(error);
+            }
+        };
         // Bytes are sealed. Hashing them overlaps the syncs still in flight;
         // sync_all does not change those bytes.
         let (digest_tx, digest_rx) = mpsc::channel();
-        let staged = temporary.0.clone();
+        let digest_path = staged.to_path_buf();
         #[cfg(test)]
         let digest_ledger = ledger.clone();
         scope.spawn(move || {
             #[cfg(test)]
             install_measurement(digest_ledger);
-            let result = phase!(Phase::Digest, tree_fingerprint(&staged));
+            let result = phase!(Phase::Digest, tree_fingerprint(&digest_path));
             let _ = digest_tx.send(result);
         });
         queue.close();
@@ -629,7 +631,7 @@ fn stage_runtime_using(
                 nessa_local_storage::sync_directory(directory).map_err(|error| error.to_string())
             )?;
         }
-        let checks = publication_checks(&temporary.0, expected);
+        let checks = publication_checks(staged, expected);
         let digest = digest_rx
             .recv()
             .unwrap_or_else(|_| Err("Runtime digest stopped before publication".into()))?;
@@ -638,15 +640,20 @@ fn stage_runtime_using(
             return Err(content_mismatch());
         }
         Ok(())
-    })?;
-    phase!(Phase::Publish, publish(&temporary.0, &published))?;
-    // After publication the old temporary path no longer exists; its guard cannot
-    // remove the published directory even if directory synchronization fails.
-    phase!(
-        Phase::ParentSync,
-        nessa_local_storage::sync_directory(installations).map_err(|error| error.to_string())
-    )?;
-    Ok(published)
+    })
+}
+
+fn sync_queued_files(queue: &FileQueue, syncs: &SyncWait) {
+    while let Some(file) = queue.pop() {
+        let mut finish = SyncFinish {
+            wait: syncs,
+            result: None,
+        };
+        finish.result = Some(phase!(
+            Phase::FileSync,
+            file.sync_all().map_err(|error| error.to_string())
+        ));
+    }
 }
 
 fn validate_fingerprint(expected: &str) -> Result<(), String> {

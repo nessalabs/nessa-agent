@@ -9,7 +9,7 @@ use serde_json::json;
 use std::{
     ffi::{CString, OsString},
     fs::{self, OpenOptions, Permissions},
-    io::{Read, Write},
+    io::Write,
     os::fd::AsRawFd,
     os::unix::{
         ffi::OsStringExt,
