@@ -65,6 +65,55 @@ const textPart = (text: string, offset: number, messageId?: string) => ({
   ...(messageId === undefined ? {} : { messageId }),
 })
 
+describe("what a bounded view says about history it did not draw", () => {
+  const states = [
+    "not_loaded",
+    "partial",
+    "complete_empty",
+    "complete",
+    "stale",
+    "unknown",
+  ] as const
+
+  it("carries omitted and unconfirmed history, and nothing when the view says it is whole", () => {
+    for (const transcriptState of states) {
+      for (const truncated of [false, true]) {
+        const history = transcriptFrom(
+          view("c", { transcriptState, truncated }),
+          1,
+          at,
+          GATEWAY_NOW_MS,
+        ).history
+        const unconfirmed =
+          transcriptState === "not_loaded" ||
+          transcriptState === "partial" ||
+          transcriptState === "stale" ||
+          transcriptState === "unknown"
+        if (!truncated && !unconfirmed) expect(history).toBeUndefined()
+        else expect(history).toEqual({ omitted: truncated, unconfirmed })
+      }
+    }
+  })
+
+  it("keeps the turns the view did draw when it says older ones were left out", () => {
+    const transcript = transcriptFrom(
+      view("c", {
+        truncated: true,
+        transcriptState: "complete",
+        messages: [turn({ userText: "recent", parts: [textPart("still here", 0)] })],
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(transcript.messages.map((message) => message.id)).toEqual([
+      inputId("e1"),
+      replyId("e1"),
+    ])
+    expect(transcript.history).toEqual({ omitted: true, unconfirmed: false })
+  })
+})
+
 describe("a conversation view as a transcript", () => {
   it("keeps an MCP App's widget part after its tool's step, and none for a tool without a UI", () => {
     const transcript = transcriptFrom(

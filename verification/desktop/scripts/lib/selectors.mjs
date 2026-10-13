@@ -841,4 +841,6 @@ export const transcriptNotes = {
   text: "[data-note-text]",
   /** What a turn says on each surface: the desktop's bubbles and replies, the panel's bubbles. */
   said: ".workspace-bubble, .workspace-message-body, [data-slot='chat-bubble']",
+  /** A bounded-view history notice in the desktop transcript. */
+  history: (kind) => `[data-history-extent="${kind}"]`,
 }

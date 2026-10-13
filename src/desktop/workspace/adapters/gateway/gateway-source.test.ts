@@ -464,6 +464,46 @@ describe("the index and the list subscription", () => {
 })
 
 describe("conversations", () => {
+  it("says when the view left history out, and a later whole view replaces those messages", async () => {
+    const { gateway, source, updates, follow } = started()
+    follow()
+    const turn = (executionId: string, userText: string, said: string) => ({
+      executionId,
+      userText,
+      attachments: [],
+      files: [],
+      status: "completed" as const,
+      parts: [{ offset: 0, kind: "text" as const, text: said, toolId: "", noticeId: "" }],
+    })
+    gateway.views.set(
+      "a",
+      view("a", {
+        truncated: true,
+        transcriptState: "stale",
+        messages: [turn("e1", "recent", "still here")],
+      }),
+    )
+    const first = await source.transcript("a")
+    expect(first.history).toEqual({ omitted: true, unconfirmed: true })
+    expect(first.messages.map(messageText)).toEqual(["recent", "still here"])
+    gateway.views.set(
+      "a",
+      view("a", {
+        truncated: false,
+        transcriptState: "complete",
+        messages: [turn("e2", "next", "the rest")],
+      }),
+    )
+    gateway.publish("a")
+    await flush()
+    const replaced = transcriptsOf(updates, "a").at(-1)
+    expect(replaced?.history).toBeUndefined()
+    expect(replaced?.messages.map(messageText)).toEqual(["next", "the rest"])
+    expect(new Set(replaced?.messages.map((message) => message.id)).size).toBe(
+      replaced?.messages.length,
+    )
+  })
+
   it("R3: a transcript subscribes, sends no create, and reads at its first revision", async () => {
     const { gateway, source } = started()
     gateway.views.set("a", view("a"))
