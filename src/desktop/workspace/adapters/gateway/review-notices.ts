@@ -85,16 +85,18 @@ export function applyReviewSnapshot(
 }
 
 /**
- * The browser's notifications. A denied permission shows nothing. A click
- * asks `open` to bring the conversation up and focuses this window.
+ * The browser's notifications. A denied permission shows nothing. Asking
+ * for permission is a user gesture: WebKit reports a console error and
+ * ignores a prompt that arrives with the page or with a server push. A
+ * pointer or key press asks once, and reviews that were already waiting
+ * are shown if the person allows it. A click on a notice asks `open` to
+ * bring the conversation up and focuses this window.
  */
 export function browserReviewNotifier(
   open: (conversationId: string) => void,
 ): ReviewNotifier {
-  if (typeof Notification !== "undefined" && Notification.permission === "default") {
-    void Notification.requestPermission()
-  }
   const shown = new Map<string, Notification>()
+  const waiting = new Map<string, WaitingReview>()
   const post = (review: WaitingReview) => {
     const id = noticeKey(review)
     if (shown.has(id) || typeof Notification === "undefined") return
@@ -109,20 +111,33 @@ export function browserReviewNotifier(
     }
     shown.set(id, notice)
   }
+  const flush = () => {
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return
+    for (const review of waiting.values()) post(review)
+    waiting.clear()
+  }
+  const ask = () => {
+    window.removeEventListener("pointerdown", ask)
+    window.removeEventListener("keydown", ask)
+    if (typeof Notification === "undefined" || Notification.permission !== "default") return
+    void Notification.requestPermission().then(() => flush())
+  }
+  if (typeof window !== "undefined") {
+    window.addEventListener("pointerdown", ask)
+    window.addEventListener("keydown", ask)
+  }
   return {
     show(review) {
-      if (typeof Notification === "undefined" || Notification.permission === "denied")
-        return
+      if (typeof Notification === "undefined" || Notification.permission === "denied") return
       if (Notification.permission === "granted") {
         post(review)
         return
       }
-      void Notification.requestPermission().then((permission) => {
-        if (permission === "granted") post(review)
-      })
+      waiting.set(noticeKey(review), review)
     },
     clear(review) {
       const id = noticeKey(review)
+      waiting.delete(id)
       shown.get(id)?.close()
       shown.delete(id)
     },

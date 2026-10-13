@@ -1,6 +1,8 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest"
 import {
   applyReviewSnapshot,
+  browserReviewNotifier,
   reviewToOpen,
   waitingReviews,
   type ReviewNotifier,
@@ -36,6 +38,37 @@ describe("applyReviewSnapshot", () => {
     applyReviewSnapshot([first, second], [], notifier)
     expect(show.mock.calls.map((call) => call[0].permissionId)).toEqual(["p1", "p2"])
     expect(clear.mock.calls.map((call) => call[0].permissionId)).toEqual(["p1", "p2"])
+  })
+})
+
+describe("browserReviewNotifier", () => {
+  it("does not ask for permission until a pointer or key press", async () => {
+    const created: { title: string }[] = []
+    class FakeNotification {
+      static permission: NotificationPermission = "default"
+      static requestPermission(): Promise<NotificationPermission> {
+        FakeNotification.permission = "granted"
+        return Promise.resolve("granted")
+      }
+      onclick: (() => void) | null = null
+      constructor(title: string) {
+        created.push({ title })
+      }
+      close() {}
+    }
+    const requestPermission = vi.spyOn(FakeNotification, "requestPermission")
+    vi.stubGlobal("Notification", FakeNotification)
+    const notifier = browserReviewNotifier(() => {})
+    const held = review("p1")
+    notifier.show(held)
+    expect(requestPermission).not.toHaveBeenCalled()
+    expect(created).toEqual([])
+    window.dispatchEvent(new Event("pointerdown"))
+    await Promise.resolve()
+    expect(requestPermission).toHaveBeenCalledOnce()
+    expect(created).toEqual([{ title: "Bash needs a decision" }])
+    notifier.clear(held)
+    vi.unstubAllGlobals()
   })
 })
 
