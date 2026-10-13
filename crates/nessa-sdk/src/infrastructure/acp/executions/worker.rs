@@ -2207,6 +2207,7 @@ impl<P: AcpProfile> Worker<P> {
             .permissions
             .remove(&permission_id)
             .expect("pending wire permission");
+        self.permission_context.remove(&permission_id);
         let response = permission_wire::selected(&wire_id, option_id.as_str());
         let result = self.send(response).await;
         // Codex ends the turn when the person picks `cancel`. The cancelled
@@ -3926,6 +3927,7 @@ impl<P: AcpProfile> Worker<P> {
     ) -> Result<(), WorkerFailure> {
         let mut failure: Option<WorkerFailure> = None;
         for record in &records {
+            self.permission_context.remove(record.request().id());
             self.config
                 .review_notices
                 .clear(record.request().execution_id(), record.request().id());
@@ -3984,6 +3986,7 @@ impl<P: AcpProfile> Worker<P> {
         // The turn these reviews belonged to is over. A deadline that fired
         // afterwards would answer a request the provider is no longer waiting on.
         self.armed_permissions.clear();
+        self.permission_context.clear();
         let asked: Vec<QuestionId> = self.questions.keys().cloned().collect();
         let mut failure = None;
         for id in asked {
@@ -4214,6 +4217,7 @@ impl<P: AcpProfile> Worker<P> {
             .map(|active| active.execution_id.clone())
         else {
             if let Some(wire_id) = self.permissions.remove(&id) {
+                self.permission_context.remove(&id);
                 let _ = self
                     .send(permission_wire::permission_cancel(&wire_id))
                     .await;
@@ -4257,6 +4261,7 @@ impl<P: AcpProfile> Worker<P> {
                 .permissions
                 .remove(&id)
                 .expect("pending wire permission");
+            self.permission_context.remove(&id);
             let sent = self
                 .send(permission_wire::selected_because(
                     &wire_id,
@@ -4280,6 +4285,7 @@ impl<P: AcpProfile> Worker<P> {
                 .map_err(|error| self.record_failure(OperationEffectPhase::Worker, error))?
             {
                 // The review is settled, including when its audit fails later.
+                self.permission_context.remove(&id);
                 self.config.review_notices.clear(&execution_id, &id);
                 if let Err(failure) = self
                     .record_audit(
