@@ -74,13 +74,11 @@
 //! why the name it is nonetheless given is never looked up. See
 //! [`dropping::attach_begun_by`].
 //!
-//! A `+` differs in what needs the name and not in where the name comes from.
-//! The page begins that gesture, so it captured the draft at the press and uses
-//! it for the files directly; the name is what the *tile* needs, since the host
-//! draws that mid-call and has nothing else to go on.
-//! [`readiness::Gesture`] is how the panel tells the two apart, so a pick
-//! answers with the draft it is already holding rather than reading the open
-//! tab a second time — one capture either way.
+//! A `+` differs in what needs the name: the page captures the draft at the
+//! press and passes a request ID with the picker command, then uses that
+//! captured destination for the files. The host carries the same ID into its
+//! batch and readiness events, so overlapping picks do not need invocation or
+//! delivery order to agree. Drops still receive host-minted batch names.
 //!
 //! # Ports, and why each is its own
 //!

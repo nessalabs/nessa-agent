@@ -27,6 +27,7 @@ const { chooseAttachmentFiles, readAttachmentBytes } = vi.hoisted(() => ({
   chooseAttachmentFiles: vi.fn(),
   readAttachmentBytes: vi.fn(),
 }))
+const { readDroppedImage } = vi.hoisted(() => ({ readDroppedImage: vi.fn() }))
 // This surface is the app's: composition asks the host whether there is a
 // picker that can say where a file is, and here there is.
 vi.mock("../../host", () => ({
@@ -38,6 +39,7 @@ vi.mock("../../host", () => ({
   onAttachmentReadying: () => Promise.resolve(() => {}),
   onAttachmentBatch: () => Promise.resolve(() => {}),
 }))
+vi.mock("../adapters/dropped-image", () => ({ readDroppedImage }))
 
 import { createDependencies } from "../../composition/dependencies"
 import {
@@ -54,6 +56,15 @@ import type { AttachmentResources } from "../adapters/attachment-resources"
 import { useFileAttachments } from "./use-file-attachments"
 
 let ticketCount = 0
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done
+    reject = fail
+  })
+  return { promise, resolve, reject }
+}
 /** Only the two ways in that this exercises; nothing reads bytes here. */
 const resources: AttachmentResources = {
   add: (files) =>
@@ -83,11 +94,12 @@ const resources: AttachmentResources = {
 
 /** What the hook answered, kept where the test can drive it. */
 let hook: ReturnType<typeof useFileAttachments>
+let selectedResources = resources
 /** Which conversation is showing, for the tests that close one. */
 let chat: ReturnType<typeof useConversation>
 function Surface() {
   chat = useConversation()
-  hook = useFileAttachments(chat, resources)
+  hook = useFileAttachments(chat, selectedResources)
   return React.createElement("div")
 }
 
@@ -98,8 +110,10 @@ const clickedInput = vi.fn()
 
 beforeEach(async () => {
   ticketCount = 0
+  selectedResources = resources
   chooseAttachmentFiles.mockReset()
   readAttachmentBytes.mockReset()
+  readDroppedImage.mockReset()
   readAttachmentBytes.mockResolvedValue(new ArrayBuffer(4))
   clickedInput.mockReset()
   container = document.createElement("div")
@@ -599,4 +613,191 @@ it("refuses a file linked by path for a conversation that runs on an SSH host, a
   })
   expect(draftFiles().map((file) => file.resource)).toMatchObject([{ name: "shot.png" }])
   expect(hook.refusal).toBeNull()
+})
+
+it("keeps refusals with the actual store when the mounted provider changes", async () => {
+  const refuseFromA = hook.refuse
+  const destinationA = hook.captureDestination()
+  expect(destinationA.store).toBe(store)
+  await act(async () => hook.refuse({ reason: "too-many-files" }))
+  expect(hook.refusal).toEqual({ reason: "too-many-files" })
+
+  const nextStore = makeStore(
+    createDependencies({
+      conversation: scenarioEffects("echo") as unknown as ConversationEffects,
+    }),
+  )
+  await act(async () => nextStore.dispatch(openConversation()))
+  expect(nextStore.getState().conversation.activeId).toBe(
+    store.getState().conversation.activeId,
+  )
+  store = nextStore
+  const nextResources = { ...resources }
+  selectedResources = nextResources
+  await act(async () => {
+    root.render(
+      React.createElement(Provider, { store, children: React.createElement(Surface) }),
+    )
+  })
+  expect(hook.refusal).toBeNull()
+
+  await act(async () => hook.refuse({ reason: "file-too-large", files: [] }))
+  const refusalB = hook.refusal
+  await act(async () => refuseFromA({ reason: "too-many-files" }))
+  expect(hook.refusal).toEqual(refusalB)
+})
+
+it("keeps an older image read in its store and its finally out of the newer operation", async () => {
+  const firstRead = deferred<ArrayBuffer>()
+  const secondRead = deferred<ArrayBuffer>()
+  const storeA = store
+  const conversationId = chat.active.id
+  chooseAttachmentFiles
+    .mockResolvedValueOnce([
+      { path: "/a.png", name: "a.png", size: 1, mimeType: "image/png", ticket: "a" },
+    ])
+    .mockResolvedValueOnce([
+      { path: "/b.png", name: "b.png", size: 1, mimeType: "image/png", ticket: "b" },
+    ])
+  readAttachmentBytes
+    .mockReturnValueOnce(firstRead.promise)
+    .mockReturnValueOnce(secondRead.promise)
+  await act(async () => hook.chooseFiles())
+  await act(async () => {
+    await vi.waitFor(() => expect(readAttachmentBytes).toHaveBeenCalledWith("a"))
+  })
+
+  const storeB = makeStore(
+    createDependencies({
+      conversation: scenarioEffects("echo") as unknown as ConversationEffects,
+    }),
+  )
+  await act(async () => storeB.dispatch(openConversation()))
+  expect(storeB.getState().conversation.activeId).toBe(conversationId)
+  const resourcesB = { ...resources }
+  store = storeB
+  selectedResources = resourcesB
+  await act(async () => {
+    root.render(
+      React.createElement(
+        React.StrictMode,
+        null,
+        React.createElement(Provider, {
+          store: storeB,
+          children: React.createElement(Surface),
+        }),
+      ),
+    )
+  })
+  await act(async () => hook.chooseFiles())
+  await act(async () => {
+    await vi.waitFor(() => expect(readAttachmentBytes).toHaveBeenCalledWith("b"))
+  })
+  expect(hook.isPending(conversationId)).toBe(true)
+
+  await act(async () => firstRead.resolve(new ArrayBuffer(4)))
+  expect(
+    storeA
+      .getState()
+      .conversation.conversations.find((item) => item.id === conversationId)?.draft,
+  ).toHaveLength(1)
+  expect(
+    storeB
+      .getState()
+      .conversation.conversations.find((item) => item.id === conversationId)?.draft,
+  ).toHaveLength(0)
+  expect(hook.isPending(conversationId)).toBe(true)
+  expect(hook.pendingFiles.map((file) => file.name)).toEqual(["b.png"])
+  await act(async () => secondRead.resolve(new ArrayBuffer(4)))
+  expect(
+    storeB
+      .getState()
+      .conversation.conversations.find((item) => item.id === conversationId)?.draft,
+  ).toHaveLength(1)
+  expect(hook.isPending(conversationId)).toBe(false)
+})
+
+it("refuses an active picker ID collision without replacing its destination", async () => {
+  const first = "01234567-89ab-cdef-0123-456789abcdef"
+  const randomUUID = vi
+    .spyOn(crypto, "randomUUID")
+    .mockReturnValueOnce(first)
+    .mockReturnValueOnce(first)
+    .mockReturnValueOnce(first)
+  const answers = new Map<string, (files: unknown[]) => void>()
+  chooseAttachmentFiles.mockImplementation(
+    (requestId: string) => new Promise((resolve) => answers.set(requestId, resolve)),
+  )
+
+  await act(async () => hook.chooseFiles())
+  await act(async () => hook.chooseFiles())
+  expect(chooseAttachmentFiles).toHaveBeenCalledTimes(1)
+  expect(hook.refusal).toEqual({ reason: "picker-unavailable" })
+
+  await act(async () => {
+    answers.get(`p-${first}`)?.([])
+    await Promise.resolve()
+  })
+  await act(async () => hook.chooseFiles())
+  expect(chooseAttachmentFiles.mock.calls.map(([requestId]) => requestId)).toEqual([
+    `p-${first}`,
+    `p-${first}`,
+  ])
+
+  await act(async () => {
+    answers.get(`p-${first}`)?.([])
+    await Promise.resolve()
+  })
+  randomUUID.mockRestore()
+})
+
+it("does not start another native read when an open picker returns after teardown", async () => {
+  const chosen = deferred<unknown[]>()
+  const cancelled = deferred<null>()
+  const click = vi.fn()
+  const input = document.createElement("input")
+  input.click = click
+  Object.defineProperty(hook.inputRef, "current", { value: input, writable: true })
+  const addChosen = vi.spyOn(resources, "addChosen")
+  chooseAttachmentFiles
+    .mockReturnValueOnce(chosen.promise)
+    .mockReturnValueOnce(cancelled.promise)
+
+  await act(async () => hook.chooseFiles())
+  await act(async () => hook.chooseFiles())
+  expect(chooseAttachmentFiles).toHaveBeenCalledTimes(2)
+  await act(async () => root.unmount())
+
+  await act(async () => {
+    chosen.resolve([
+      {
+        path: "/late.png",
+        name: "late.png",
+        size: 1,
+        mimeType: "image/png",
+        ticket: "late",
+      },
+    ])
+    cancelled.resolve(null)
+    await chosen.promise
+    await cancelled.promise
+    await Promise.resolve()
+  })
+
+  expect(click).not.toHaveBeenCalled()
+  expect(readAttachmentBytes).not.toHaveBeenCalled()
+  expect(addChosen).not.toHaveBeenCalled()
+  await hook.addImageUrl("https://example.com/late.png")
+  await hook.addChosenFiles([
+    {
+      path: "/late.png",
+      name: "late.png",
+      size: 1,
+      mimeType: "image/png",
+      ticket: "late",
+    },
+  ])
+  expect(readDroppedImage).not.toHaveBeenCalled()
+  expect(readAttachmentBytes).not.toHaveBeenCalled()
+  addChosen.mockRestore()
 })

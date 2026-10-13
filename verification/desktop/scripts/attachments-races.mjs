@@ -8,6 +8,25 @@ import { attachmentVerification as selectors } from "./lib/selectors.mjs"
 
 const root = resolve(fileURLToPath(import.meta.url), "../../../..")
 const url = "http://127.0.0.1:1486/attachment-verification"
+const onlyIndex = process.argv.indexOf("--only")
+const only = onlyIndex < 0 ? null : process.argv[onlyIndex + 1]
+const scenarios = [
+  "control",
+  "native-read",
+  "second-url",
+  "picker-owner-correlation",
+  "upload-parent-success",
+  "upload-parent-failure",
+  "upload-placement-success",
+  "upload-placement-failure",
+  "shared-resource",
+  "owner-swap",
+  "detached-queue",
+  "native-svg",
+]
+if (only && !scenarios.includes(only)) {
+  throw new Error(`Unknown scenario ${only}; choose one of: ${scenarios.join(", ")}`)
+}
 const server = spawn(
   resolve(root, "node_modules/.bin/vite"),
   ["--config", "verification/desktop/fixtures/attachments-races/vite.config.ts"],
@@ -51,19 +70,7 @@ try {
         : {}),
     })
     try {
-      for (const scenario of [
-        "control",
-        "native-read",
-        "second-url",
-        "upload-parent-success",
-        "upload-parent-failure",
-        "upload-placement-success",
-        "upload-placement-failure",
-        "shared-resource",
-        "owner-swap",
-        "detached-queue",
-        "native-svg",
-      ]) {
+      for (const scenario of only ? [only] : scenarios) {
         const context = await browser.newContext({
           viewport: { width: 800, height: 900 },
           reducedMotion: "reduce",
@@ -254,12 +261,124 @@ try {
             const sent = (await snapshot()).sends[0]
             assert.equal(sent.text, "include this image")
             assert.equal(sent.attachments.length, 1)
+          } else if (scenario === "picker-owner-correlation") {
+            await page.evaluate(() => (window.__attachmentProbe.holdPickers = true))
+            await page.getByRole(...selectors.addAttachment).click()
+            await page.getByRole(...selectors.addFiles).click()
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().pickerRequestIds.length === 1,
+            )
+            const idA = (await snapshot()).pickerRequestIds[0]
+
+            await page.evaluate(() => window.__attachmentProbe.swapOwner())
+            await page.getByRole(...selectors.addAttachment).click()
+            await page.getByRole(...selectors.addFiles).click()
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().pickerRequestIds.length === 2,
+            )
+            const idB = (await snapshot()).pickerRequestIds.find((id) => id !== idA)
+            assert.ok(idA && idB && idA !== idB)
+
+            // Deliver B's readiness first, then A's. B is the visible owner;
+            // neither event may be assigned by whichever picker was latest.
+            await page.evaluate(
+              ({ idA, idB }) => {
+                window.__attachmentProbe.announcePick(idB, "b.pdf")
+                window.__attachmentProbe.announcePick(idA, "a.pdf")
+              },
+              { idA, idB },
+            )
+            await page.waitForFunction(() =>
+              document.querySelector('[aria-label="Getting b.pdf ready"]'),
+            )
+            assert.equal(
+              await page.locator('[aria-label="Getting b.pdf ready"]').count(),
+              1,
+            )
+            assert.equal(
+              await page.locator('[aria-label="Getting a.pdf ready"]').count(),
+              0,
+            )
+
+            await page.evaluate(() => window.__attachmentProbe.showOriginalOwner())
+            await page.waitForFunction(() =>
+              document.querySelector('[aria-label="Getting a.pdf ready"]'),
+            )
+            assert.equal(
+              await page.locator('[aria-label="Getting a.pdf ready"]').count(),
+              1,
+            )
+            assert.equal(
+              await page.locator('[aria-label="Getting b.pdf ready"]').count(),
+              0,
+            )
+
+            const chosen = (name) => [
+              {
+                path: `/verification/${name}`,
+                name,
+                size: 1,
+                mimeType: "application/pdf",
+                ticket: `ticket-${name}`,
+              },
+            ]
+            await page.evaluate(
+              ({ idB, files }) => window.__attachmentProbe.settlePick(idB, files),
+              { idB, files: chosen("b.pdf") },
+            )
+            await page.evaluate(() => window.__attachmentProbe.showReplacementOwner())
+            await page.waitForFunction(() =>
+              window.__attachmentProbe
+                .snapshot()
+                .draft.some(
+                  (part) =>
+                    part.type === "file" && part.resource.path === "/verification/b.pdf",
+                ),
+            )
+            assert.equal(
+              (await snapshot()).draft.filter(
+                (part) =>
+                  part.type === "file" && part.resource.path === "/verification/b.pdf",
+              ).length,
+              1,
+            )
+
+            await page.evaluate(() => window.__attachmentProbe.showOriginalOwner())
+            assert.equal(
+              (await snapshot()).draft.some(
+                (part) =>
+                  part.type === "file" && part.resource.path === "/verification/b.pdf",
+              ),
+              false,
+            )
+            await page.evaluate(
+              ({ idA, files }) => window.__attachmentProbe.settlePick(idA, files),
+              { idA, files: chosen("a.pdf") },
+            )
+            await page.evaluate(() => window.__attachmentProbe.showOriginalOwner())
+            await page.waitForFunction(() =>
+              window.__attachmentProbe
+                .snapshot()
+                .draft.some(
+                  (part) =>
+                    part.type === "file" && part.resource.path === "/verification/a.pdf",
+                ),
+            )
+            assert.equal(
+              (await snapshot()).draft.filter(
+                (part) =>
+                  part.type === "file" && part.resource.path === "/verification/a.pdf",
+              ).length,
+              1,
+            )
           } else {
             for (const name of ["first", "second"]) {
+              const batch = `browser-${name}`
               await page.evaluate(
-                (name) =>
+                ({ name, batch }) => {
+                  window.__attachmentProbe.began?.(batch, "dropped")
                   window.__attachmentProbe.drop({
-                    batch: `browser-${name}`,
+                    batch,
                     files: [],
                     refused: null,
                     text: {
@@ -267,8 +386,9 @@ try {
                       uriList: `https://attachment-verification.invalid/${name}.png`,
                       html: `<img src="https://attachment-verification.invalid/${name}.png">`,
                     },
-                  }),
-                name,
+                  })
+                },
+                { name, batch },
               )
               if (name === "first")
                 await page.waitForFunction(

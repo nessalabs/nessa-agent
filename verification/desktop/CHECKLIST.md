@@ -1443,7 +1443,10 @@ zero times, preserves the draft and paints **Attachments still loading**; read
 completion allows one send containing the text and one image. A second URL drop
 while the first fetch is pending paints **Still reading files** and starts no
 second fetch. The JSON reports send, attachment, refusal and page-error counts
-for all twenty-two engine/scenario pairs. A late upload success or failure for a closed
+for all twenty-four engine/scenario pairs. Overlapping picker requests are
+announced and resolved in reverse order across two providers with the same
+conversation ID; each readiness tile and returned file stays with the provider
+that started it. A late upload success or failure for a closed
 parent leaves the replacement parent's shared-resource tile uploading (one rendered
 `data-upload="uploading"` tile), per [attachment lifetimes](../../docs/design/attachment-lifetimes.md).
 The same-parent remove/re-add cases also retain one uploading tile after an old

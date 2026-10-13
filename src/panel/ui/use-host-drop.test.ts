@@ -24,6 +24,7 @@ const { onAttachmentDragging, onAttachmentDropped } = vi.hoisted(() => ({
 vi.mock("../../host", () => ({ onAttachmentDragging, onAttachmentDropped }))
 
 import { useHostDrop } from "./use-host-drop"
+import type { AttachmentDestination } from "./use-file-attachments"
 
 type Dropped = Parameters<Parameters<typeof onAttachmentDropped>[0]>[0]
 
@@ -34,13 +35,22 @@ type Dropped = Parameters<Parameters<typeof onAttachmentDropped>[0]>[0]
  * it; what is tested here is that every answer a drop gives is routed by that
  * name rather than by whatever is on screen when the answer arrives.
  */
-const bound = new Map<string, string>([
-  ["b1", "c1"],
-  ["b2", "c2"],
+const destination = (conversationId: string) =>
+  ({
+    store: {},
+    conversationId,
+    resources: {},
+    attachFiles: vi.fn(),
+  }) as unknown as AttachmentDestination
+const bound = new Map<string, AttachmentDestination>([
+  ["b1", destination("c1")],
+  ["b2", destination("c2")],
 ])
 const actions = {
+  owner: {},
+  resources: {},
   addChosenFiles: vi.fn(),
-  conversationOf: vi.fn((batch: string) => bound.get(batch) ?? "whatever-is-open"),
+  destinationOf: vi.fn((batch: string) => bound.get(batch)),
   addImageUrl: vi.fn(),
   focusComposer: vi.fn(),
   pasteAttachment: vi.fn(),
@@ -75,7 +85,12 @@ const dropOf = (dropped: Partial<Dropped>): Dropped => ({
 })
 
 beforeEach(async () => {
-  for (const action of Object.values(actions)) action.mockClear()
+  actions.addChosenFiles.mockClear()
+  actions.destinationOf.mockClear()
+  actions.addImageUrl.mockClear()
+  actions.focusComposer.mockClear()
+  actions.pasteAttachment.mockClear()
+  actions.refuse.mockClear()
   onAttachmentDragging.mockReset()
   onAttachmentDropped.mockReset()
   onAttachmentDragging.mockImplementation((handler: (over: boolean) => void) => {
@@ -107,7 +122,7 @@ it("sends dropped files down the same route a picked selection takes", async () 
 
   await act(async () => deliver(dropOf({ files: dropped })))
 
-  expect(actions.addChosenFiles).toHaveBeenCalledWith(dropped, "c1")
+  expect(actions.addChosenFiles).toHaveBeenCalledWith(dropped, bound.get("b1"))
   // Nothing was classified here. A second opinion about what an image is is
   // the defect this feature already had once.
   expect(actions.pasteAttachment).not.toHaveBeenCalled()
@@ -144,7 +159,10 @@ it("downloads an image dragged off a web page, which also has no other route", a
     ),
   )
 
-  expect(actions.addImageUrl).toHaveBeenCalledWith("https://example.com/cat.png")
+  expect(actions.addImageUrl).toHaveBeenCalledWith(
+    "https://example.com/cat.png",
+    bound.get("b1"),
+  )
   expect(actions.pasteAttachment).not.toHaveBeenCalled()
 })
 
@@ -163,7 +181,7 @@ it("says why a drop was turned away, in the panel's own words and on its own dra
     ),
   )
 
-  expect(actions.refuse).toHaveBeenCalledWith({ reason: "empty-folder" }, "c1")
+  expect(actions.refuse).toHaveBeenCalledWith({ reason: "empty-folder" }, bound.get("b1"))
   expect(actions.addChosenFiles).not.toHaveBeenCalled()
 })
 
@@ -211,8 +229,17 @@ it("routes every answer by the drop's own name, whatever arrives when", async ()
   await act(async () => deliver(dropOf({ batch: "b1", files: [file("a.pdf", "")] })))
 
   expect(actions.addChosenFiles.mock.calls.map(([, target]) => target)).toEqual([
-    "c2",
-    "c1",
+    bound.get("b2"),
+    bound.get("b1"),
   ])
-  expect(actions.refuse).toHaveBeenCalledWith({ reason: "empty-folder" }, "c1")
+  expect(actions.refuse).toHaveBeenCalledWith({ reason: "empty-folder" }, bound.get("b1"))
+})
+
+it("ignores an unknown named batch instead of assigning it to the active tab", async () => {
+  await act(async () =>
+    deliver(dropOf({ batch: "evicted", refused: { reason: "folder-empty" } })),
+  )
+  expect(actions.refuse).not.toHaveBeenCalled()
+  expect(actions.addChosenFiles).not.toHaveBeenCalled()
+  expect(actions.addImageUrl).not.toHaveBeenCalled()
 })

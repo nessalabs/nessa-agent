@@ -37,7 +37,7 @@ vi.mock("../../host", () => ({
 }))
 vi.mock("../../conversation", () => import("../../conversation/testing"))
 
-import { openConversation, useConversation } from "../../conversation/testing"
+import { openConversation, setActive, useConversation } from "../../conversation/testing"
 import { createDependencies } from "../../composition/dependencies"
 import { makeStore } from "../../store"
 import { Provider } from "react-redux"
@@ -67,23 +67,40 @@ let began: (batch: string, gesture: "picked" | "dropped") => void
  * that *does* care, because two files share a name or because a tile has to
  * find the draft its gesture landed on, passes its own.
  */
-const say = (file: Omit<News, "id"> & { id?: string }) =>
-  said({ id: file.id ?? `b0:${file.name}`, ...file })
+const announced = new Set<string>()
+const announce = (batch: string, gesture: "picked" | "dropped") => {
+  announced.add(batch)
+  began(batch, gesture)
+}
+const say = (file: Omit<News, "id"> & { id?: string }) => {
+  const id = file.id ?? `b0:${file.name}`
+  const batch = id.split(":")[0] ?? ""
+  if (batch === "b0" && !announced.has(batch)) announce(batch, "dropped")
+  said({ id, ...file })
+}
 let hook: ReturnType<typeof useFileAttachments>
 let chat: ReturnType<typeof useConversation>
+let resources: ReturnType<typeof createAttachmentResources>
 let container: HTMLElement
 let root: Root
 let store: ReturnType<typeof makeStore>
 
 function Surface() {
   chat = useConversation()
-  hook = useFileAttachments(chat, createAttachmentResources())
+  hook = useFileAttachments(chat, resources)
   return null
 }
 
 const names = () => hook.pendingFiles.map((file) => file.name)
+const deferred = <T>() => {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => (resolve = done))
+  return { promise, resolve }
+}
 
 beforeEach(async () => {
+  announced.clear()
+  resources = createAttachmentResources()
   onAttachmentReadying.mockReset()
   onAttachmentReadying.mockImplementation((handler: (file: News) => void) => {
     said = handler
@@ -178,6 +195,7 @@ it("tells two files of the same name apart, because the host names them apart", 
   // Two folders, each holding a `report.pdf`. Keyed on the name there was one
   // entry for both: the first to settle took the other's tile away and the
   // draft became sendable while the second was still being fetched.
+  await act(async () => announce("b1", "dropped"))
   await act(async () => {
     say({ id: "b1:0", name: "report.pdf", readying: true })
     say({ id: "b1:1", name: "report.pdf", readying: true })
@@ -200,7 +218,7 @@ it("leaves the tile with the conversation the gesture landed on, not the one on 
   // moment the panel can bind it, since the file itself is up to forty-five
   // seconds away.
   const first = chat.active.id
-  await act(async () => began("b2", "dropped"))
+  await act(async () => announce("b2", "dropped"))
 
   // Another tab opens *before* the host has said anything at all. Reading the
   // open tab when the news finally comes would put the tile, and the block on
@@ -253,8 +271,16 @@ it("binds a picker selection the same way, because a `+` can be slow too", async
   // announced forty seconds after the first — long after somebody has moved
   // on. The gesture is what binds it, not the announcement.
   const first = chat.active.id
-  await act(async () => began("p4", "picked"))
-  await act(async () => say({ id: "p4:0", name: "one.pdf", readying: true }))
+  let requestId = ""
+  let close: (files: unknown[]) => void = () => {}
+  chooseAttachmentFiles.mockImplementation((id: string) => {
+    requestId = id
+    return new Promise((resolve) => (close = resolve))
+  })
+  const picking = hook.chooseFiles()
+  await vi.waitFor(() => expect(requestId).toMatch(/^p-/))
+  await act(async () => announce(requestId, "picked"))
+  await act(async () => say({ id: `${requestId}:0`, name: "one.pdf", readying: true }))
 
   await act(async () => {
     store.dispatch(openConversation())
@@ -262,49 +288,280 @@ it("binds a picker selection the same way, because a `+` can be slow too", async
   expect(chat.active.id).not.toBe(first)
 
   // The second file of the same selection, announced from the new tab.
-  await act(async () => say({ id: "p4:1", name: "two.pdf", readying: true }))
+  await act(async () => say({ id: `${requestId}:1`, name: "two.pdf", readying: true }))
 
   // Both belong to the draft `+` was pressed in. Reading the open tab put this
   // one on a conversation that had nothing to do with it and blocked its send.
   expect(names()).toEqual([])
   expect(hook.isPending(first)).toBe(true)
   expect(hook.isPending(chat.active.id)).toBe(false)
+  await act(async () => {
+    close([])
+    await picking
+  })
 })
 
-it("falls back to the open tab for a batch it never heard named", async () => {
-  // Not the ordinary path any more — both gestures announce themselves — but
-  // a panel that reloaded mid-attach has nothing else to go on, and the open
-  // tab is better than dropping the tile on the floor.
+it("retires a picker destination before any late readiness batch can reuse it", async () => {
+  const conversationId = chat.active.id
+  let requestId = ""
+  let close: (files: unknown[]) => void = () => {}
+  chooseAttachmentFiles.mockImplementation((id: string) => {
+    requestId = id
+    return new Promise((resolve) => (close = resolve))
+  })
+  hook.chooseFiles()
+  await vi.waitFor(() => expect(requestId).toMatch(/^p-/))
+
+  await act(async () => {
+    announce(requestId, "picked")
+    say({ id: `${requestId}:0`, name: "before-close.pdf", readying: true })
+  })
+  expect(hook.isPending(conversationId)).toBe(true)
+
+  await act(async () => {
+    close([])
+    await Promise.resolve()
+  })
+  expect(hook.isPending(conversationId)).toBe(false)
+
+  await act(async () => {
+    announce(requestId, "picked")
+    say({ id: `${requestId}:1`, name: "after-close.pdf", readying: true })
+  })
+  expect(names()).toEqual([])
+  expect(hook.isPending(conversationId)).toBe(false)
+})
+
+it("keeps overlapping picker events and results with their registered stores", async () => {
+  const storeA = store
+  const resourcesA = resources
+  const conversationId = chat.active.id
+  const answers = new Map<string, (files: unknown[]) => void>()
+  chooseAttachmentFiles.mockImplementation(
+    (requestId: string) => new Promise((resolve) => answers.set(requestId, resolve)),
+  )
+
+  hook.chooseFiles()
+  await vi.waitFor(() => expect(answers.size).toBe(1))
+  const idA = [...answers.keys()][0]!
+
+  const storeB = makeStore(
+    createDependencies({
+      conversation: scenarioEffects("echo") as unknown as ConversationEffects,
+    }),
+  )
+  await act(async () => storeB.dispatch(openConversation()))
+  await act(async () => storeB.dispatch(setActive(conversationId)))
+  expect(storeB.getState().conversation.activeId).toBe(conversationId)
+  const resourcesB = createAttachmentResources()
+  store = storeB
+  resources = resourcesB
+  await act(async () => {
+    root.render(
+      React.createElement(Provider, {
+        store: storeB,
+        children: React.createElement(Surface),
+      }),
+    )
+  })
+
+  hook.chooseFiles()
+  await vi.waitFor(() => expect(answers.size).toBe(2))
+  const idB = [...answers.keys()].find((id) => id !== idA)!
+  expect(idB).not.toBe(idA)
+
+  // The host may emit the later pick's batch and readying first. Each batch
+  // has already been registered to the store that asked for it.
+  await act(async () => {
+    announce(idB, "picked")
+    say({ id: `${idB}:0`, name: "b.pdf", readying: true })
+    announce(idA, "picked")
+    say({ id: `${idA}:0`, name: "a.pdf", readying: true })
+  })
+  expect(names()).toEqual(["b.pdf"])
+
+  store = storeA
+  resources = resourcesA
+  await act(async () => {
+    root.render(
+      React.createElement(Provider, {
+        store: storeA,
+        children: React.createElement(Surface),
+      }),
+    )
+  })
+  expect(names()).toEqual(["a.pdf"])
+
+  // Results settle in the opposite order. Each finally retires only its own
+  // batch and cannot take the other store's tile away.
+  await act(async () => {
+    answers.get(idB)?.([
+      {
+        path: "/b.pdf",
+        name: "b.pdf",
+        size: 1,
+        mimeType: "application/pdf",
+        ticket: "b",
+      },
+    ])
+  })
+  expect(names()).toEqual(["a.pdf"])
+  expect(
+    storeB
+      .getState()
+      .conversation.conversations.find((item) => item.id === conversationId)?.draft,
+  ).toHaveLength(1)
+  expect(
+    storeA
+      .getState()
+      .conversation.conversations.find((item) => item.id === conversationId)?.draft,
+  ).toHaveLength(0)
+
+  await act(async () => {
+    answers.get(idA)?.([
+      {
+        path: "/a.pdf",
+        name: "a.pdf",
+        size: 1,
+        mimeType: "application/pdf",
+        ticket: "a",
+      },
+    ])
+  })
+  expect(names()).toEqual([])
+  expect(
+    storeA
+      .getState()
+      .conversation.conversations.find((item) => item.id === conversationId)?.draft,
+  ).toHaveLength(1)
+})
+
+it("keeps A's native image read pending after B finishes first", async () => {
+  const storeA = store
+  const resourcesA = resources
+  const conversationId = chat.active.id
+  const readA = deferred<ArrayBuffer | null>()
+  const readB = deferred<ArrayBuffer | null>()
+  readAttachmentBytes.mockImplementation((ticket: string) =>
+    ticket === "read-A" ? readA.promise : readB.promise,
+  )
+  const chosen = (name: string, ticket: string) => [
+    {
+      path: `/${name}`,
+      name,
+      size: 1,
+      mimeType: "image/png",
+      ticket,
+    },
+  ]
+
+  await act(async () => {
+    void hook.addChosenFiles(chosen("A.png", "read-A"))
+  })
+  expect(hook.isPending(conversationId)).toBe(true)
+
+  const resourcesB = createAttachmentResources()
+  const storeB = makeStore(
+    createDependencies({
+      conversation: scenarioEffects("echo") as unknown as ConversationEffects,
+    }),
+  )
+  await act(async () => storeB.dispatch(openConversation()))
+  await act(async () => storeB.dispatch(setActive(conversationId)))
+  store = storeB
+  resources = resourcesB
+  await act(async () => {
+    root.render(
+      React.createElement(Provider, {
+        store: storeB,
+        children: React.createElement(Surface),
+      }),
+    )
+  })
+  await act(async () => {
+    void hook.addChosenFiles(chosen("B.png", "read-B"))
+  })
+  expect(hook.isPending(conversationId)).toBe(true)
+
+  await act(async () => {
+    readB.resolve(new ArrayBuffer(1))
+    await Promise.resolve()
+  })
+  expect(hook.isPending(conversationId)).toBe(false)
+
+  store = storeA
+  resources = resourcesA
+  await act(async () => {
+    root.render(
+      React.createElement(Provider, {
+        store: storeA,
+        children: React.createElement(Surface),
+      }),
+    )
+  })
+  expect(hook.isPending(conversationId)).toBe(true)
+  expect(names()).toEqual(["A.png"])
+
+  await act(async () => {
+    readA.resolve(new ArrayBuffer(1))
+  })
+  await vi.waitFor(() => expect(hook.isPending(conversationId)).toBe(false))
+})
+
+it("ignores a batch it never heard named rather than guessing its owner", async () => {
   const here = chat.active.id
   await act(async () => say({ id: "unheard-of:0", name: "picked.pdf", readying: true }))
 
-  expect(names()).toEqual(["picked.pdf"])
-  expect(hook.isPending(here)).toBe(true)
+  expect(names()).toEqual([])
+  expect(hook.isPending(here)).toBe(false)
 })
 
-it("remembers a bounded number of gestures, so a long session does not grow one", async () => {
+it("remembers a bounded number of drop names, so a long session does not grow one", async () => {
   // Nothing removes an entry when an attach ends — it can end in files, in a
   // refusal, or in a conversation that has since closed — so the map is a
   // window rather than a set of cleanup paths a fourth outcome could escape.
   const first = chat.active.id
-  await act(async () => began("old", "dropped"))
+  await act(async () => announce("old", "dropped"))
   await act(async () => {
-    for (let n = 0; n < 64; n += 1) began(`b${n}`, "dropped")
+    for (let n = 0; n < 64; n += 1) announce(`b${n}`, "dropped")
   })
   await act(async () => {
     store.dispatch(openConversation())
   })
 
-  // The oldest was evicted, so it falls back to the open tab — which is what
-  // the panel did for every gesture before any of this existed.
+  // The oldest was evicted, so its owner is unknown and it is ignored.
   await act(async () => say({ id: "old:0", name: "evicted.pdf", readying: true }))
-  expect(names()).toEqual(["evicted.pdf"])
+  expect(names()).toEqual([])
   expect(hook.isPending(first)).toBe(false)
 
   // And one still inside the window is still bound to where it began.
   await act(async () => say({ id: "b63:0", name: "kept.pdf", readying: true }))
-  expect(names()).toEqual(["evicted.pdf"])
+  expect(names()).toEqual([])
   expect(hook.isPending(first)).toBe(true)
+})
+
+it("keeps readiness for an active picker even after more than 64 pickers start", async () => {
+  const firstConversationId = chat.active.id
+  const pickerIds: string[] = []
+  chooseAttachmentFiles.mockImplementation((requestId: string) => {
+    pickerIds.push(requestId)
+    return new Promise(() => {})
+  })
+
+  for (let index = 0; index < 65; index += 1) {
+    if (index > 0) await act(async () => store.dispatch(openConversation()))
+    await act(async () => hook.chooseFiles())
+  }
+  expect(pickerIds).toHaveLength(65)
+
+  await act(async () => store.dispatch(setActive(firstConversationId)))
+  await act(async () => {
+    announce(pickerIds[0]!, "picked")
+    say({ id: `${pickerIds[0]}:0`, name: "still-active.pdf", readying: true })
+  })
+
+  expect(names()).toEqual(["still-active.pdf"])
+  expect(hook.isPending(firstConversationId)).toBe(true)
 })
 
 it("stops listening when the panel goes, so a late answer reaches nothing", async () => {
@@ -328,24 +585,19 @@ it("stops listening when the panel goes, so a late answer reaches nothing", asyn
 })
 
 it("binds a picker selection to the press, not to the tab when the picker closes", async () => {
-  // These were two reads of the same fact at different moments — the files at
-  // the press, the tile when the host spoke — and they agreed only while
-  // nothing could change between them. What guaranteed that was the picker
-  // being modal, which is rfd's presentation choice rather than a promise to
-  // us, and rfd presents it as a window-modal sheet.
-  //
-  // So the tab is changed *while the picker is open*, for real: the picker's
-  // promise is held until the end, and the change and the host's word are each
-  // their own step, so the panel's own view of the open tab has moved on by the
-  // time the name arrives. Reading it there is what this rules out.
+  // The request ID is already tied to this draft before the host opens its
+  // picker, so changing tabs while it waits cannot change the tile owner.
   const pressed = chat.active.id
+  let requestId = ""
   let close: (files: unknown[]) => void = () => {}
-  chooseAttachmentFiles.mockImplementation(
-    () => new Promise((resolve) => (close = resolve)),
-  )
+  chooseAttachmentFiles.mockImplementation((id: string) => {
+    requestId = id
+    return new Promise((resolve) => (close = resolve))
+  })
   // Started outside `act`, deliberately: it has to still be running across the
   // steps below, which a nested `act` cannot express.
   const picking = hook.chooseFiles()
+  await vi.waitFor(() => expect(requestId).toMatch(/^p-/))
 
   await act(async () => {
     store.dispatch(openConversation())
@@ -353,8 +605,8 @@ it("binds a picker selection to the press, not to the tab when the picker closes
   expect(chat.active.id).not.toBe(pressed)
 
   // The host names the selection as the picker closes.
-  await act(async () => began("p9", "picked"))
-  await act(async () => say({ id: "p9:0", name: "report.pdf", readying: true }))
+  await act(async () => announce(requestId, "picked"))
+  await act(async () => say({ id: `${requestId}:0`, name: "report.pdf", readying: true }))
 
   expect(hook.isPending(pressed)).toBe(true)
   expect(hook.isPending(chat.active.id)).toBe(false)
@@ -388,7 +640,7 @@ it("binds a drop that lands while a picker is open to the tab it landed on", asy
   })
   const landed = chat.active.id
   expect(landed).not.toBe(pressed)
-  await act(async () => began("d3", "dropped"))
+  await act(async () => announce("d3", "dropped"))
   await act(async () => say({ id: "d3:0", name: "dragged.pdf", readying: true }))
 
   expect(hook.isPending(landed)).toBe(true)

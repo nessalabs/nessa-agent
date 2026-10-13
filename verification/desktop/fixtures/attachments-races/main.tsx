@@ -91,6 +91,8 @@ const store = makeStore({
   },
 })
 let displayStore = store
+let replacementStore = store
+let replacementResources = resources
 store.dispatch(
   sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),
 )
@@ -109,17 +111,45 @@ window.fetch = (input, init) => {
     })
   })
 }
+type PickerFile = {
+  path: string
+  name: string
+  size: number
+  mimeType: string
+  ticket: string
+}
+type PickerReadyEvent = { id: string; name: string; readying: boolean }
 const probe = {
   drop: undefined as undefined | ((payload: unknown) => void),
-  choose: async () => [
-    {
-      path: "/verification/picked.png",
-      name: "picked.png",
-      size: png.length,
-      mimeType: "image/png",
-      ticket: "verification-native-ticket",
-    },
-  ],
+  began: undefined as
+    undefined | ((batch: string, gesture: "picked" | "dropped") => void),
+  readied: undefined as undefined | ((file: PickerReadyEvent) => void),
+  pickRequests: [] as { requestId: string; resolve: (files: PickerFile[]) => void }[],
+  holdPickers: false,
+  choose: (requestId: string) =>
+    probe.holdPickers
+      ? new Promise<PickerFile[]>((resolve) =>
+          probe.pickRequests.push({ requestId, resolve }),
+        )
+      : Promise.resolve([
+          {
+            path: "/verification/picked.png",
+            name: "picked.png",
+            size: png.length,
+            mimeType: "image/png",
+            ticket: "verification-native-ticket",
+          },
+        ]),
+  announcePick: (requestId: string, name: string) => {
+    probe.began?.(requestId, "picked")
+    probe.readied?.({ id: `${requestId}:0`, name, readying: true })
+  },
+  settlePick: (requestId: string, files: PickerFile[]) => {
+    const request = probe.pickRequests.find((pending) => pending.requestId === requestId)
+    if (!request) throw new Error(`Unknown picker request ${requestId}`)
+    probe.readied?.({ id: `${requestId}:0`, name: files[0]?.name ?? "", readying: false })
+    request.resolve(files)
+  },
   read: async (ticket: string) => {
     if (ticket !== "verification-native-ticket")
       throw new Error("Unexpected native attachment ticket")
@@ -277,8 +307,18 @@ const probe = {
       new File([png], "replacement.png", { type: "image/png" }),
     ])
     nextStore.dispatch(attachFiles({ conversationId: "c0", files: [resource!] }))
+    replacementStore = nextStore
+    replacementResources = nextResources
     displayStore = nextStore
     showScope(nextStore, nextResources)
+  },
+  showOriginalOwner: () => {
+    displayStore = store
+    showScope(store, resources)
+  },
+  showReplacementOwner: () => {
+    displayStore = replacementStore
+    showScope(replacementStore, replacementResources)
   },
   finishOriginalOwner: () =>
     sharedReplies!.get("00000000-0000-4000-8000-000000000001")!.resolve({
@@ -307,6 +347,7 @@ const probe = {
       .conversation.conversations.find(
         (c) => c.id === displayStore.getState().conversation.activeId,
       )?.draft,
+    pickerRequestIds: probe.pickRequests.map((request) => request.requestId),
   }),
 }
 ;(window as unknown as { __attachmentProbe: typeof probe }).__attachmentProbe = probe

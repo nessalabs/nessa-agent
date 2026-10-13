@@ -3,13 +3,19 @@ import { onAttachmentDragging, onAttachmentDropped, type ChosenFile } from "../.
 import { droppedImageUrl } from "../adapters/dropped-image"
 import { droppedText } from "../adapters/dropped-text"
 import { pickerRefusal, type AttachmentRefusal } from "../application/attachment-notice"
+import type { AttachmentDestination } from "./use-file-attachments"
 
 type HostDropActions = {
+  owner: object
+  resources: object
   /** The same call the picker's answer goes through, for a named draft. */
-  addChosenFiles: (chosen: readonly ChosenFile[], conversationId: string) => void
-  /** The conversation a batch was bound to when it began. */
-  conversationOf: (batch: string) => string
-  addImageUrl: (url: string) => void
+  addChosenFiles: (
+    chosen: readonly ChosenFile[],
+    destination: AttachmentDestination,
+  ) => void
+  /** The destination a batch was bound to when it began. */
+  destinationOf: (batch: string) => AttachmentDestination | undefined
+  addImageUrl: (url: string, destination: AttachmentDestination) => void
   focusComposer: () => void
   pasteAttachment: (text: string) => void
   /**
@@ -21,7 +27,7 @@ type HostDropActions = {
    * told about a file it had never seen. The panel's own refusals have always
    * carried their conversation; only the host's lost it.
    */
-  refuse: (refusal: AttachmentRefusal, conversationId: string) => void
+  refuse: (refusal: AttachmentRefusal, destination: AttachmentDestination) => void
 }
 
 /**
@@ -73,7 +79,7 @@ export function useHostDrop(actions: HostDropActions) {
   // so a drop reaches whatever the panel's current handlers are rather than
   // the ones that existed when it mounted. *Which draft* it lands on is not
   // read here at all: that is the drop's own name, resolved by
-  // `conversationOf`, and nothing in this hook consults the open tab.
+  // `destinationOf`, and nothing in this hook consults the open tab.
   const latest = React.useRef(actions)
   React.useLayoutEffect(() => {
     latest.current = actions
@@ -96,19 +102,20 @@ export function useHostDrop(actions: HostDropActions) {
         // names no draft, so it does not read this. A drag carrying no paths
         // is never announced for that reason, which makes this a fallback to
         // the open tab in that case; nothing below uses it.
-        const target = latest.current.conversationOf(dropped.batch)
+        const destination = latest.current.destinationOf(dropped.batch)
+        if (!destination) return
         if (dropped.refused) {
-          latest.current.refuse(pickerRefusal(dropped.refused), target)
+          latest.current.refuse(pickerRefusal(dropped.refused), destination)
           return
         }
         if (dropped.files.length > 0) {
-          latest.current.addChosenFiles(dropped.files, target)
+          latest.current.addChosenFiles(dropped.files, destination)
           return
         }
         const transfer = asTransfer(dropped.text)
         const image = droppedImageUrl(transfer)
         if (image) {
-          latest.current.addImageUrl(image)
+          latest.current.addImageUrl(image, destination)
           return
         }
         const text = droppedText(transfer)
@@ -121,6 +128,6 @@ export function useHostDrop(actions: HostDropActions) {
       live = false
       void subscriptions.then((unlisten) => unlisten.forEach((stop) => stop()))
     }
-  }, [])
+  }, [actions.owner, actions.resources])
   return { dragging }
 }

@@ -16,6 +16,8 @@ const hostBoundary = vi.hoisted(() => ({
   choose: vi.fn(),
   read: vi.fn(),
   drop: undefined as undefined | ((payload: DroppedOnPanel) => void),
+  batch: undefined as
+    undefined | ((batch: string, gesture: "picked" | "dropped") => void),
 }))
 
 vi.mock("../../host", async (importOriginal) => ({
@@ -24,7 +26,12 @@ vi.mock("../../host", async (importOriginal) => ({
   chooseAttachmentFiles: hostBoundary.choose,
   readAttachmentBytes: hostBoundary.read,
   onAttachmentReadying: () => Promise.resolve(() => {}),
-  onAttachmentBatch: () => Promise.resolve(() => {}),
+  onAttachmentBatch: (
+    handler: (batch: string, gesture: "picked" | "dropped") => void,
+  ) => {
+    hostBoundary.batch = handler
+    return Promise.resolve(() => {})
+  },
   onAttachmentDragging: () => Promise.resolve(() => {}),
   onAttachmentDropped: (handler: (payload: DroppedOnPanel) => void) => {
     hostBoundary.drop = handler
@@ -141,9 +148,11 @@ async function dropImage(url: string) {
   expect(hostBoundary.drop, "actual App host-drop subscription must exist").toBeTypeOf(
     "function",
   )
+  const batch = `image-only-text-gesture-${url}`
+  await act(async () => hostBoundary.batch?.(batch, "dropped"))
   await act(async () =>
     hostBoundary.drop!({
-      batch: "image-only-text-gesture",
+      batch,
       files: [],
       text: { plain: "", uriList: url, html: `<img src="${url}">` },
       refused: null,
@@ -238,6 +247,7 @@ beforeEach(() => {
     vi.fn(() => ({ cancel() {} })),
   )
   hostBoundary.choose.mockReset()
+  hostBoundary.batch = undefined
   hostBoundary.read.mockReset()
   hostBoundary.drop = undefined
   cleanups = []
@@ -339,6 +349,49 @@ it("attaches and sends the picked image once its read and upload have settled", 
     files: [],
     attachments: [{ mimeType: "image/png", size: 4 }],
   })
+})
+
+it("applies a host drop to A after the App switches to conversation B", async () => {
+  await mount()
+  const destinationStore = store
+  const conversationId = active().id
+  const batch = "b-origin-store-drop"
+  expect(hostBoundary.batch, "the App must subscribe to attachment batches").toBeTypeOf(
+    "function",
+  )
+  await act(async () => hostBoundary.batch!(batch, "dropped"))
+
+  await act(async () => store.dispatch(openConversation()))
+  expect(active().id).not.toBe(conversationId)
+  await act(async () =>
+    hostBoundary.drop?.({
+      batch,
+      files: [
+        {
+          path: "/Users/ada/original.pdf",
+          name: "original.pdf",
+          size: 4,
+          mimeType: "application/pdf",
+          ticket: "original-ticket",
+        },
+      ],
+      text: { plain: "", uriList: "", html: "" },
+      refused: null,
+    }),
+  )
+
+  expect(
+    destinationStore
+      .getState()
+      .conversation.conversations.find(
+        (conversation) => conversation.id === conversationId,
+      )?.draft,
+  ).toContainEqual(
+    expect.objectContaining({
+      type: "file",
+      resource: expect.objectContaining({ path: "/Users/ada/original.pdf" }),
+    }),
+  )
 })
 
 it("clears a failed native image read so the retained text can be sent", async () => {
