@@ -10,7 +10,8 @@ use super::super::domain::{
 use super::deletion_inventory::capture_fences;
 use super::ports::{
     AdmissionFailure, AdmissionLease, Authenticator, CopiedStore, DeletionLogStore, ExportClock,
-    ExportSource, FenceSource, ManifestPublisher, MutationAdmission, PinnedStore, PublishedRecord,
+    ExportSource, FenceSource, MacError, ManifestPublisher, MutationAdmission, PinnedStore,
+    PublishedRecord,
 };
 
 /// Everything one capture needs. The caller supplies the stores; this
@@ -86,7 +87,7 @@ pub async fn capture_export(
     let mac = request
         .authenticator
         .mac(&manifest.canonical())
-        .map_err(|()| ExportFailure::Authenticator)?;
+        .map_err(|MacError::Key| ExportFailure::Authenticator)?;
     let sealed = AuthenticatedManifest::seal(manifest, mac);
     let records = published(&sealed);
     request

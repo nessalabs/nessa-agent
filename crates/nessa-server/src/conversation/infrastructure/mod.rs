@@ -91,7 +91,7 @@ mod store;
 pub use catalogue_changes::MAX_CATALOGUE_CHANGE_WATCHES;
 pub use receiver_authority::{
     export_receivers, ExportedReceiver, LocalReceiverAuthority, ReceiverChangeError,
-    ReceiverSnapshot,
+    ReceiverSnapshot, ReceiverSnapshotError,
 };
 mod record_scope;
 pub use record_scope::{exact_record_scope, record_scope_from_identity};

@@ -24,12 +24,22 @@ pub struct CredentialRead {
     pub skipped: Vec<String>,
 }
 
+/// The registry bytes could not be read as a credential list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CredentialReadError {
+    /// Not a JSON object whose `credentials` field is an array.
+    NotARegistry,
+    /// A public record could not be encoded.
+    Record,
+}
+
 /// `bytes` is a credential registry file. A verifier field on a row is
-/// ignored. The whole file failing to parse is [`Err`].
-pub fn read_credentials(bytes: &[u8]) -> Result<CredentialRead, ()> {
-    let value: Value = serde_json::from_slice(bytes).map_err(|_| ())?;
+/// ignored. The whole file failing to parse is [`CredentialReadError`].
+pub fn read_credentials(bytes: &[u8]) -> Result<CredentialRead, CredentialReadError> {
+    let value: Value =
+        serde_json::from_slice(bytes).map_err(|_| CredentialReadError::NotARegistry)?;
     let Some(rows) = value.get("credentials").and_then(Value::as_array) else {
-        return Err(());
+        return Err(CredentialReadError::NotARegistry);
     };
     let mut credentials = Vec::new();
     let mut skipped = Vec::new();
@@ -61,7 +71,7 @@ pub fn read_credentials(bytes: &[u8]) -> Result<CredentialRead, ()> {
             "kind": kind.as_str(),
             "fingerprint": fingerprint.hex(),
         }))
-        .map_err(|_| ())?;
+        .map_err(|_| CredentialReadError::Record)?;
         credentials.push(PublicCredential {
             id: metadata.id,
             principal_id: metadata.principal_id,

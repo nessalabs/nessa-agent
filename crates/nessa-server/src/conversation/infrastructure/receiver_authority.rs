@@ -8,7 +8,7 @@ use nessa_auth::application::ports::Clock;
 use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId};
 use nessa_local_database::{
     rusqlite::{
-        params, Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior,
+        params, Connection, Error, OpenFlags, OptionalExtension, Transaction, TransactionBehavior,
     },
     OpenError, Schema,
 };
@@ -692,6 +692,13 @@ pub struct ExportedReceiver {
     pub active: bool,
 }
 
+/// The receiver-access file could not be snapshotted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReceiverSnapshotError {
+    /// The file could not be opened, or the read transaction failed.
+    Unavailable,
+}
+
 /// A read transaction on the receiver-access database.
 ///
 /// [`Self::open`] records the transition head. [`Self::read`] lists receivers
@@ -704,35 +711,33 @@ pub struct ReceiverSnapshot {
 }
 
 impl ReceiverSnapshot {
-    /// Begin a read transaction. A missing or unreadable file is `Err`.
-    /// The file is not created.
-    pub fn open(path: &std::path::Path) -> Result<Self, ()> {
+    /// Begin a read transaction. A missing or unreadable file is
+    /// [`ReceiverSnapshotError::Unavailable`]. The file is not created.
+    pub fn open(path: &std::path::Path) -> Result<Self, ReceiverSnapshotError> {
         let connection = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
-        .map_err(|_| ())?;
-        connection.execute_batch("BEGIN").map_err(|_| ())?;
+        .map_err(unavailable)?;
+        connection.execute_batch("BEGIN").map_err(unavailable)?;
         let head: i64 = connection
             .query_row(
                 "SELECT COALESCE(MAX(sequence), 0) FROM receiver_transitions",
                 [],
                 |row| row.get(0),
             )
-            .map_err(|_| ())?;
-        let watermark = head.to_string();
-        if watermark.is_empty() {
-            return Err(());
-        }
+            .map_err(unavailable)?;
         Ok(Self {
             connection,
-            watermark,
+            watermark: head.to_string(),
         })
     }
 
     /// Receivers visible to this snapshot. The watermark is the one [`Self::open`]
     /// recorded. A row that cannot be named is skipped.
-    pub fn read(&self) -> Result<(String, Vec<ExportedReceiver>, Vec<String>), ()> {
+    pub fn read(
+        &self,
+    ) -> Result<(String, Vec<ExportedReceiver>, Vec<String>), ReceiverSnapshotError> {
         read_receivers(&self.connection, &self.watermark)
     }
 }
@@ -743,25 +748,29 @@ impl ReceiverSnapshot {
 /// cannot be read. Skipped rows are the second value.
 pub fn export_receivers(
     path: &std::path::Path,
-) -> Result<(String, Vec<ExportedReceiver>, Vec<String>), ()> {
+) -> Result<(String, Vec<ExportedReceiver>, Vec<String>), ReceiverSnapshotError> {
     ReceiverSnapshot::open(path)?.read()
+}
+
+fn unavailable(_error: Error) -> ReceiverSnapshotError {
+    ReceiverSnapshotError::Unavailable
 }
 
 fn read_receivers(
     connection: &Connection,
     watermark: &str,
-) -> Result<(String, Vec<ExportedReceiver>, Vec<String>), ()> {
+) -> Result<(String, Vec<ExportedReceiver>, Vec<String>), ReceiverSnapshotError> {
     let mut statement = connection
         .prepare(
             "SELECT receiver_id, credential_id, access_epoch, active
              FROM receivers ORDER BY receiver_id",
         )
-        .map_err(|_| ())?;
-    let mut rows = statement.query([]).map_err(|_| ())?;
+        .map_err(unavailable)?;
+    let mut rows = statement.query([]).map_err(unavailable)?;
     let mut receivers = Vec::new();
     let mut skipped = Vec::new();
     let mut index = 0u64;
-    while let Some(row) = rows.next().map_err(|_| ())? {
+    while let Some(row) = rows.next().map_err(unavailable)? {
         index += 1;
         let receiver_id: String = match row.get(0) {
             Ok(value) => value,

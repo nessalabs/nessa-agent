@@ -9,6 +9,6 @@ pub use deletion_inventory::{capture_fences, InventoryFailure};
 pub use export::{capture_export, ExportFailure, ExportRequest};
 pub use ports::{
     AdmissionFailure, AdmissionLease, Authenticator, CopiedStore, DeletionLogStore, ExportClock,
-    ExportSource, FenceSource, MacKey, ManifestPublisher, MutationAdmission, PinnedStore,
+    ExportSource, FenceSource, MacError, MacKey, ManifestPublisher, MutationAdmission, PinnedStore,
     PublishedRecord,
 };

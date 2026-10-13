@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use serde_json::Value;
 
-use super::credentials::{read_credentials, CredentialRead};
+use super::credentials::{read_credentials, CredentialRead, CredentialReadError};
 use super::jsonl::jsonl_cut;
 use super::sensitivity::path_sensitivity;
 use super::snapshot::SqliteSnapshot;
@@ -27,6 +27,7 @@ use crate::backup::domain::{
 };
 use crate::conversation::infrastructure::{
     ExportFences, ExportSkip, MetadataSnapshot, NamedRecord, ReceiverSnapshot,
+    ReceiverSnapshotError,
 };
 
 /// Hold admission, read `namespace`, and publish the cut.
@@ -253,7 +254,7 @@ impl FactsCache {
                 *guard = FactsState::Open(snapshot);
                 Ok(())
             }
-            Err(()) => {
+            Err(_) => {
                 *guard = FactsState::Failed;
                 Err(())
             }
@@ -459,7 +460,9 @@ impl CredentialCache {
             match fs::read(&self.path) {
                 Ok(bytes) => match read_credentials(&bytes) {
                     Ok(read) => CredState::Read(read),
-                    Err(()) => CredState::Unreadable,
+                    Err(CredentialReadError::NotARegistry | CredentialReadError::Record) => {
+                        CredState::Unreadable
+                    }
                 },
                 Err(_) => CredState::Unreadable,
             }
@@ -933,7 +936,7 @@ impl ExportSource for Receivers {
             if matches!(*guard, ReceiverState::Cold) {
                 *guard = match opened {
                     Ok(snapshot) => ReceiverState::Open(snapshot),
-                    Err(()) => ReceiverState::Failed,
+                    Err(ReceiverSnapshotError::Unavailable) => ReceiverState::Failed,
                 };
             }
         }
@@ -968,7 +971,7 @@ impl PinnedStore for ReceiverPin {
         let read = tokio::task::spawn_blocking(move || snapshot.read())
             .await
             .map_err(|_| ())?;
-        let (watermark, rows, skipped_ids) = read?;
+        let (watermark, rows, skipped_ids) = read.map_err(|_| ())?;
         let mut records = Vec::new();
         let mut skipped = Vec::new();
         for row in rows {

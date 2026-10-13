@@ -11,7 +11,7 @@ pub(crate) mod snapshot;
 
 pub use admission::ConversationAdmission;
 pub use bundle::DirectoryPublisher;
-pub use credentials::read_credentials;
+pub use credentials::{read_credentials, CredentialReadError};
 pub use gateway::capture_namespace;
 pub use jsonl::jsonl_cut;
 pub use log::FileDeletionLog;

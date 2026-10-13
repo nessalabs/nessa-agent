@@ -9,8 +9,8 @@ use tokio::sync::{OwnedRwLockWriteGuard, RwLock};
 
 use crate::backup::application::{
     capture_export, AdmissionFailure, AdmissionLease, Authenticator, DeletionLogStore, ExportClock,
-    ExportFailure, ExportRequest, ExportSource, ManifestPublisher, MutationAdmission, PinnedStore,
-    PublishedRecord,
+    ExportFailure, ExportRequest, ExportSource, MacError, ManifestPublisher, MutationAdmission,
+    PinnedStore, PublishedRecord,
 };
 use crate::backup::domain::{
     AuthenticatedManifest, CapturedRecord, DeletionLog, Fingerprint, Sensitivity, SkipReason,
@@ -850,8 +850,8 @@ impl ManifestPublisher for MemoryPublisher {
 struct FailMac;
 
 impl Authenticator for FailMac {
-    fn mac(&self, _canonical: &str) -> Result<Fingerprint, ()> {
-        Err(())
+    fn mac(&self, _canonical: &str) -> Result<Fingerprint, MacError> {
+        Err(MacError::Key)
     }
 }
 

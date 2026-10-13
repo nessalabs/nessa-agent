@@ -333,7 +333,7 @@ fn change(
         transition,
         conversation_id: id.clone(),
         receiver_id: receiver.map(str::to_owned),
-        credential_id: CredentialId::new(&format!("{credential}-credential")).unwrap(),
+        credential_id: CredentialId::new(format!("{credential}-credential")).unwrap(),
         initiator: crate::conversation::application::ConversationCaller {
             organization_id: OrganizationId::new("org").unwrap(),
             principal_id: PrincipalId::new("alice").unwrap(),

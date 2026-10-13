@@ -225,7 +225,7 @@ impl DeletionEntry {
 }
 
 /// The inventory as a value: sequences start at 1 and only increase.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DeletionLog {
     entries: Vec<DeletionEntry>,
 }
@@ -277,14 +277,6 @@ impl DeletionLog {
 
     pub fn watermark(&self) -> String {
         self.entries.len().to_string()
-    }
-}
-
-impl Default for DeletionLog {
-    fn default() -> Self {
-        Self {
-            entries: Vec::new(),
-        }
     }
 }
 

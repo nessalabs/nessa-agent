@@ -9,8 +9,7 @@ use async_trait::async_trait;
 
 use crate::backup::application::{Authenticator, DeletionLogStore, MacKey};
 use crate::backup::domain::{
-    CredentialKind, DeletionEntry, DeletionError, DeletionFence, DeletionLog, Fingerprint,
-    GrantRole,
+    CredentialKind, DeletionEntry, DeletionFence, DeletionLog, Fingerprint, GrantRole,
 };
 
 /// `directory/deletion-inventory.txt` plus `directory/mac.key`.
@@ -34,9 +33,8 @@ impl FileDeletionLog {
             MacKey(bytes)
         } else {
             let mut bytes = [0u8; 32];
-            getrandom::fill(&mut bytes).map_err(|error| {
-                std::io::Error::new(std::io::ErrorKind::Other, error.to_string())
-            })?;
+            getrandom::fill(&mut bytes)
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
             fs::write(&key_path, bytes)?;
             MacKey(bytes)
         };
@@ -138,7 +136,7 @@ fn parse_entry(line: &str, sequence: u64) -> Result<DeletionFence, ()> {
             if parts.next().is_some() {
                 return Err(());
             }
-            DeletionFence::conversation(id).map_err(error)
+            DeletionFence::conversation(id).map_err(|_| ())
         }
         "grant" => {
             let conversation_id = decode(parts.next().ok_or(())?)?;
@@ -156,7 +154,7 @@ fn parse_entry(line: &str, sequence: u64) -> Result<DeletionFence, ()> {
                 role,
                 grant_sequence,
             )
-            .map_err(error)
+            .map_err(|_| ())
         }
         "credential" => {
             let kind = CredentialKind::parse(parts.next().ok_or(())?).ok_or(())?;
@@ -165,7 +163,7 @@ fn parse_entry(line: &str, sequence: u64) -> Result<DeletionFence, ()> {
             if parts.next().is_some() {
                 return Err(());
             }
-            DeletionFence::credential(kind, credential_id, fingerprint_hex(hex)?).map_err(error)
+            DeletionFence::credential(kind, credential_id, fingerprint_hex(hex)?).map_err(|_| ())
         }
         _ => Err(()),
     }
@@ -201,8 +199,3 @@ fn decode(value: &str) -> Result<String, ()> {
     }
     String::from_utf8(out).map_err(|_| ())
 }
-
-fn error(_error: DeletionError) -> () {}
-
-// DeletionEntry's fields are private. Parsing needs a constructor.
-// Added as `from_persisted` on the domain type.

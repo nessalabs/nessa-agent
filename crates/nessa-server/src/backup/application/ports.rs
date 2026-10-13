@@ -103,9 +103,16 @@ pub trait ExportClock: Send + Sync {
     fn unix_ms(&self) -> u64;
 }
 
+/// Why a mac was not produced. The cut aborts before publish.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MacError {
+    /// The key could not authenticate this text.
+    Key,
+}
+
 /// Produce the mac of a manifest. A failure aborts the cut before publish.
 pub trait Authenticator: Send + Sync {
-    fn mac(&self, canonical: &str) -> Result<Fingerprint, ()>;
+    fn mac(&self, canonical: &str) -> Result<Fingerprint, MacError>;
 }
 
 /// The mac key. It is not written into the bundle.
@@ -114,7 +121,7 @@ pub struct MacKey(pub [u8; 32]);
 
 impl Authenticator for MacKey {
     /// HMAC-SHA256 of `canonical`. The key stays in `self`.
-    fn mac(&self, canonical: &str) -> Result<Fingerprint, ()> {
+    fn mac(&self, canonical: &str) -> Result<Fingerprint, MacError> {
         use hmac::{Hmac, Mac};
         use sha2::Sha256;
         let mut mac =

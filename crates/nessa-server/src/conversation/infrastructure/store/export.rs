@@ -50,16 +50,16 @@ pub struct MetadataSnapshot {
 }
 
 impl MetadataSnapshot {
-    /// Begin a read transaction. A missing or unreadable file is `Err`.
-    /// The file is not created.
-    pub fn open(path: &Path) -> Result<Self, ()> {
+    /// Begin a read transaction. A missing or unreadable file is
+    /// [`ConversationError::Metadata`]. The file is not created.
+    pub fn open(path: &Path) -> Result<Self, ConversationError> {
         let connection = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
-        .map_err(|_| ())?;
-        connection.execute_batch("BEGIN").map_err(|_| ())?;
-        let watermark = watermark(&connection).map_err(|_| ())?;
+        .map_err(failed)?;
+        connection.execute_batch("BEGIN").map_err(failed)?;
+        let watermark = watermark(&connection)?;
         Ok(Self {
             connection,
             watermark,

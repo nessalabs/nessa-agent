@@ -134,8 +134,7 @@ async fn a_failed_export_releases_admission_and_publishes_nothing() {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("blocked"), b"x").unwrap();
     let publisher = DirectoryPublisher::new(root.path().join("blocked").join("cut"));
-    let error = publisher.put("manifest", &[]).await.unwrap_err();
-    assert_eq!(error, ());
+    assert!(publisher.put("manifest", &[]).await.is_err());
     assert!(!root
         .path()
         .join("blocked")
