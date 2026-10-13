@@ -2,6 +2,24 @@ use super::support::*;
 use nessa_sdk::domain::agent_execution::sessions::{ExecutionSession, ExecutionSessionId};
 
 #[test]
+fn a_caller_cannot_write_a_hook_refusal_code() {
+    // Only the runner, which carried the refusal out, records one.
+    for code in [
+        "hook-refusal.continue",
+        "hook-refusal.end_turn",
+        "hook-refusal.close_session",
+        CustomPermissionCancellationReason::HOOK_REFUSAL_PREFIX,
+    ] {
+        assert_eq!(
+            CustomPermissionCancellationReason::new(code, "withdrawn"),
+            Err(ExecutionError::ReservedCancellationCode),
+            "{code}"
+        );
+    }
+    assert!(CustomPermissionCancellationReason::new("hook-refusal", "withdrawn").is_ok());
+}
+
+#[test]
 fn custom_cancellation_reasons_validate_byte_bounds_and_preserve_code_and_explanation() {
     let custom = CustomPermissionCancellationReason::new(
         "guard.cost_limit",

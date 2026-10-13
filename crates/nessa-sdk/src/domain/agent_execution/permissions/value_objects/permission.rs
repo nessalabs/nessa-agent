@@ -1,6 +1,6 @@
 #![deny(missing_docs)]
 
-use super::{PermissionApplicationId, PermissionOptionId, PermissionSessionId};
+use super::{PermissionApplicationId, PermissionOptionId, PermissionSessionId, RefusalOutcome};
 use crate::domain::agent_execution::ExecutionError;
 use std::collections::HashSet;
 
@@ -427,11 +427,40 @@ impl CustomPermissionCancellationReason {
     pub const MAX_CODE_BYTES: usize = 128;
     /// Maximum UTF-8 byte length of the descriptive explanation.
     pub const MAX_EXPLANATION_BYTES: usize = 1024;
+    /// Codes that record a permission-review hook's refusal. Only the runner
+    /// that applied the refusal, and so ended the turn or closed the session
+    /// it records, writes one.
+    pub const HOOK_REFUSAL_PREFIX: &'static str = "hook-refusal.";
 
     /// Preserve `code` and `explanation` exactly. Returns [`ExecutionError::EmptyValue`]
     /// if either is blank or [`ExecutionError::ValueTooLong`] if its UTF-8 bytes
-    /// exceed the corresponding maximum. Construction performs no cancellation.
+    /// exceed the corresponding maximum. A code that starts with
+    /// [`Self::HOOK_REFUSAL_PREFIX`] is [`ExecutionError::ReservedCancellationCode`].
+    /// Construction performs no cancellation.
     pub fn new(
+        code: impl Into<String>,
+        explanation: impl Into<String>,
+    ) -> Result<Self, ExecutionError> {
+        let reason = Self::restore(code, explanation)?;
+        if reason.code.starts_with(Self::HOOK_REFUSAL_PREFIX) {
+            return Err(ExecutionError::ReservedCancellationCode);
+        }
+        Ok(reason)
+    }
+    /// The withdrawal the runner records for a hook refusal with `outcome`.
+    pub(crate) fn hook_refusal(
+        outcome: RefusalOutcome,
+        explanation: impl Into<String>,
+    ) -> Result<Self, ExecutionError> {
+        let name = match outcome {
+            RefusalOutcome::Continue => "continue",
+            RefusalOutcome::EndTurn => "end_turn",
+            RefusalOutcome::CloseSession => "close_session",
+        };
+        Self::restore(format!("{}{name}", Self::HOOK_REFUSAL_PREFIX), explanation)
+    }
+    /// Rebuild a saved reason, reserved codes included, checking only its bounds.
+    pub(crate) fn restore(
         code: impl Into<String>,
         explanation: impl Into<String>,
     ) -> Result<Self, ExecutionError> {

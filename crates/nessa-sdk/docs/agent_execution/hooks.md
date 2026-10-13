@@ -101,10 +101,10 @@ arrived, is not cancelled again. A turn that cleanup retired without a reply
 is not finished: the session still stops on the failure path. The answer,
 withdrawal and cancel run while the execution is still polled, as saves do,
 so a provider that completes them through its execution cannot deadlock. The
-hook thread receives only the proposed call, not the whole review. A caller's
-`Agent::cancel_permission` cannot record a terminal hook outcome: a withdrawal
-coded `hook-refusal.end_turn` or `hook-refusal.close_session` is rejected,
-since only the runner ends the turn or closes the session it records. Only a
+hook thread receives only the proposed call, not the whole review. A caller
+cannot write a `hook-refusal.` code: `CustomPermissionCancellationReason::new`
+rejects that namespace, so a withdrawal carrying one, by any path, was
+recorded by the runner that carried the refusal out. Only a
 continue is ever an answer, and the execution controller rejects a hook answer
 with any other outcome, so no answer carries a terminal outcome to replay.
 An end-turn the binding cannot perform is recorded as continue and does not
