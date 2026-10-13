@@ -5,6 +5,7 @@ use nessa_sdk::application::agent_execution::hooks::{
     HookRegistration, InvocationContext, InvocationHook, InvocationObservationWindow,
     ObservationKind, PhrasePresence, ProposedToolCall, ToolVerdict,
 };
+use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
 use nessa_sdk::domain::agent_execution::permissions::RefusalOutcome;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -1653,6 +1654,52 @@ async fn a_hook_refusal_leaves_evidence_of_who_refused_and_why() {
         answers[0].attribution.actor().principal_id(),
         close_action().principal_id()
     );
+}
+
+/// Records who started the turn each reviewed call belongs to.
+struct InitiationHook {
+    seen: Arc<Mutex<Vec<Initiation>>>,
+}
+
+impl InvocationHook for InitiationHook {
+    fn before_permission_review(
+        &self,
+        call: &ProposedToolCall<'_>,
+        _observations: &InvocationObservationWindow<'_>,
+    ) -> Result<ToolVerdict, HookError> {
+        self.seen.lock().unwrap().push(call.initiation().clone());
+        Ok(ToolVerdict::Allow)
+    }
+}
+
+/// The review hook is told who started the turn, from the turn's saved record,
+/// whether the turn ran at once or waited in the queue.
+#[tokio::test]
+async fn a_review_hook_sees_who_started_the_turn() {
+    let grant = Initiation::grant(GrantInitiator::new("receiver", 7).unwrap());
+    for (queued, initiation) in [
+        (false, Initiation::owner()),
+        (false, grant.clone()),
+        (true, grant.clone()),
+    ] {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let fixture = agent_with(
+            script(),
+            vec![Arc::new(InitiationHook { seen: seen.clone() })],
+        )
+        .await;
+        let submitter = Submitter {
+            context: close_action(),
+            initiation: initiation.clone(),
+        };
+        if queued {
+            let admission = fixture.agent.enqueue(request(), submitter).await.unwrap();
+            admission.wait().await.unwrap();
+        } else {
+            fixture.agent.invoke(request(), submitter).await.unwrap();
+        }
+        assert_eq!(*seen.lock().unwrap(), [initiation], "queued: {queued}");
+    }
 }
 
 fn named_review(id: &str, tool: &str) -> ExecutionEvent {

@@ -13,7 +13,7 @@
 use crate::application::agent_execution::executions::{ExecutionEvent, ExecutionUpdate};
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::{
-    executions::MessageKind,
+    executions::{Initiation, MessageKind},
     tools::{ToolCallId, ToolStatus},
 };
 use std::fmt;
@@ -83,15 +83,31 @@ pub struct ProposedToolCall<'a> {
     tool_id: &'a ToolCallId,
     name: &'a str,
     arguments_json: &'a str,
+    initiation: &'a Initiation,
 }
 
 impl<'a> ProposedToolCall<'a> {
-    pub(crate) fn new(tool_id: &'a ToolCallId, input: &'a ToolReviewInput) -> Self {
+    pub(crate) fn new(
+        tool_id: &'a ToolCallId,
+        input: &'a ToolReviewInput,
+        initiation: &'a Initiation,
+    ) -> Self {
         Self {
             tool_id,
             name: input.name.as_str(),
             arguments_json: input.arguments_json.as_str(),
+            initiation,
         }
+    }
+
+    /// Who started the turn this call belongs to, as its saved record says.
+    ///
+    /// It is read from the turn's record when the invocation begins. Input
+    /// steered into the running turn does not change it, so every call in the
+    /// turn is judged under this one initiation. A host that judges calls per
+    /// initiator must not let one initiator steer another's turn.
+    pub fn initiation(&self) -> &'a Initiation {
+        self.initiation
     }
 
     /// Tool call the review is about.
