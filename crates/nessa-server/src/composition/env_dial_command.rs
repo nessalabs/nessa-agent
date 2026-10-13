@@ -42,7 +42,10 @@ use crate::{
     timer::TokioTimer,
 };
 use nessa_auth::adapters::pairing::{ManualCode, NativeIdentity};
-use nessa_protocol::{clock::Clock, relay::RelayAddress};
+use nessa_protocol::{
+    clock::Clock,
+    relay::{host_port, RelayAddress},
+};
 use std::{
     future::Future,
     io::{self, Write},
@@ -333,12 +336,10 @@ async fn on_signal(stop: Arc<watch::Sender<bool>>, drain: Option<watch::Sender<b
     std::process::exit(130);
 }
 
-/// `address` has the form `HOST:PORT`; the name is not looked up.
+/// `address` has the form `HOST:PORT`, the shape every dial checks, with a
+/// port that is not 0; the name is not looked up.
 fn check_address(address: &str) -> Result<(), RunError> {
-    let fits = address.rsplit_once(':').is_some_and(|(host, port)| {
-        !host.is_empty() && port.parse::<u16>().is_ok_and(|port| port != 0)
-    });
-    if fits {
+    if host_port(address).is_some_and(|port| port != 0) {
         Ok(())
     } else {
         Err(RunError::Agent(format!(
