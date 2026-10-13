@@ -1,3 +1,4 @@
+import { AttachmentResource } from "../model"
 import * as React from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
@@ -83,17 +84,18 @@ describe("a sent turn's images", () => {
   const digest = `sha256:${"ab".repeat(32)}`
   const local = {
     type: "file" as const,
-    resourceId: "f",
     placementId: "f",
-    name: "finder.png",
-    mimeType: "image/png",
-    size: 2048,
-    previewUrl: "blob:finder",
     upload: {
       status: "stored" as const,
       image: { digest, mimeType: "image/png" as const, size: 2048 },
     },
-    path: null,
+    resource: AttachmentResource.create({
+      name: "finder.png",
+      mimeType: "image/png",
+      size: 2048,
+      previewUrl: "blob:finder",
+      path: null,
+    }),
   }
   const render = (content: React.ComponentProps<typeof MessageContentView>["content"]) =>
     renderToStaticMarkup(
@@ -124,7 +126,14 @@ describe("a sent turn's images", () => {
 
   it("paints a labelled tile, not a broken picture, for an original the webview cannot show", () => {
     const html = render([
-      { ...local, name: "IMG_0042.CR3", mimeType: "image/x-canon-cr3" },
+      {
+        ...local,
+        resource: AttachmentResource.create({
+          ...local.resource,
+          name: "IMG_0042.CR3",
+          mimeType: "image/x-canon-cr3",
+        }),
+      },
     ])
     expect(html).not.toContain("<img")
     expect(html).toContain("IMG_0042.CR3")
@@ -147,7 +156,14 @@ describe("a sent turn's images", () => {
     expect(render([{ type: "text", text: "plain" }])).not.toContain("<ul")
     const html = render([
       { type: "text", text: "see notes" },
-      { ...local, name: "notes.pdf", mimeType: "application/pdf" },
+      {
+        ...local,
+        resource: AttachmentResource.create({
+          ...local.resource,
+          name: "notes.pdf",
+          mimeType: "application/pdf",
+        }),
+      },
     ])
     expect(html).not.toContain("<img")
     expect(html).not.toContain("nessa-message-images")
@@ -164,10 +180,13 @@ describe("a sent turn's images", () => {
           {
             ...local,
             placementId: "d",
-            name: "report.pdf",
-            mimeType: "application/pdf",
-            previewUrl: "",
-            path: "/Users/ada/notes/report.pdf",
+            resource: AttachmentResource.create({
+              ...local.resource,
+              name: "report.pdf",
+              mimeType: "application/pdf",
+              previewUrl: "",
+              path: "/Users/ada/notes/report.pdf",
+            }),
           },
         ],
       }),

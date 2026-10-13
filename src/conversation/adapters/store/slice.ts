@@ -10,7 +10,7 @@ import {
   storedImages,
   type CommandFailure,
   type ConversationSelection,
-  type AttachmentInput,
+  type AttachmentResource,
   type MessageContent,
   type ReadFailure,
   type Turn,
@@ -681,7 +681,7 @@ const conversationSlice = createSlice({
     },
     attachFiles(
       state,
-      action: PayloadAction<{ files: AttachmentInput[]; conversationId: string }>,
+      action: PayloadAction<{ files: AttachmentResource[]; conversationId: string }>,
     ) {
       return gateway.attachFiles(
         state,
@@ -896,3 +896,5 @@ export { conversationHistoryReducer } from "./history"
 
 // Narrow composition entry: the store mounts reducers without loading UI barrels.
 export { attachmentResourceUsage } from "../../application/queries/attachment-resources"
+
+export { AttachmentResource } from "../../model"

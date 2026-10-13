@@ -36,6 +36,12 @@ the gateway owns commands through the SDK Agent. New contexts establish the
 feature-first, role-below layout immediately, including their module map and test
 locations. Existing SDK layout changes are tracked in [the SDK organization task](todo/sdk-context-first-organization.md).
 
+The pure public [conversation resource contract](../src/conversation/resources.ts)
+exports construction/recognition of the immutable resource value and its ownership
+snapshot type. The implementation remains in the conversation model/query; resource
+adapters use this entry without loading conversation UI. Placements retain that
+exact value; byte storage, accounting and preview eviction use its object identity.
+
 ## Target shape
 
 ```

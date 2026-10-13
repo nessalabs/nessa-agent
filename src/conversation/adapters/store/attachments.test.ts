@@ -1,3 +1,4 @@
+import { AttachmentResource } from "../../model"
 /**
  * What `sendDraft` does with a draft that holds files, and how a file gets from
  * attached to stored, against the real store and substituted effects.
@@ -66,22 +67,27 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-const image = (id: string, change: Partial<FileAttachment> = {}): FileAttachment => ({
+const image = (
+  id: string,
+  change: Partial<Pick<FileAttachment, "upload" | "placementId">> &
+    Partial<import("../../model").AttachmentResourceData> = {},
+): FileAttachment => ({
   type: "file",
-  resourceId: id,
   placementId: "a1",
-  name: `${id}.heic`,
-  mimeType: "image/heic",
-  size: 3,
-  previewUrl: `blob:${id}`,
-  upload: { status: "not-started" },
-  path: null,
-  ...change,
+  upload: change.upload ?? { status: "not-started" },
+  resource: AttachmentResource.create({
+    name: `${id}.heic`,
+    mimeType: "image/heic",
+    size: 3,
+    previewUrl: `blob:${id}`,
+    path: null,
+    ...change,
+  }),
 })
 const described = (file: FileAttachment) => ({
   digest: LOCAL_DIGEST,
-  mimeType: file.mimeType,
-  size: file.size,
+  mimeType: file.resource.mimeType,
+  size: file.resource.size,
 })
 
 /**
@@ -137,11 +143,13 @@ async function attachStored(
   store: ReturnType<typeof storeWith>["store"],
   file: FileAttachment,
 ) {
-  store.dispatch(attachFiles({ files: [file], conversationId: "c0" }))
+  store.dispatch(
+    attachFiles({ files: [file].map((file) => file.resource), conversationId: "c0" }),
+  )
   const placed = store
     .getState()
     .conversation.conversations[0]!.draft.find(
-      (part) => part.type === "file" && part.resourceId === file.resourceId,
+      (part) => part.type === "file" && part.resource === file.resource,
     )
   if (!placed || placed.type !== "file") throw new Error("Attachment was not admitted")
   store.dispatch(
@@ -183,7 +191,9 @@ async function expectRefused(
 it("refuses a file that is not an image, and says which", async () => {
   const context = storeWith()
   const notes = image("notes", { name: "notes.pdf", mimeType: "application/pdf" })
-  context.store.dispatch(attachFiles({ files: [notes], conversationId: "c0" }))
+  context.store.dispatch(
+    attachFiles({ files: [notes].map((file) => file.resource), conversationId: "c0" }),
+  )
   // Whether or not the caller's content mentions the file, the draft holds it.
   for (const content of [
     [{ type: "text" as const, text: "hello" }],
@@ -212,7 +222,9 @@ it("does not send a browser to a picker that would refuse the file again", async
   ] as const) {
     const context = storeWith({}, canChoosePaths)
     const notes = image("notes", { name: "notes.pdf", mimeType: "application/pdf" })
-    context.store.dispatch(attachFiles({ files: [notes], conversationId: "c0" }))
+    context.store.dispatch(
+      attachFiles({ files: [notes].map((file) => file.resource), conversationId: "c0" }),
+    )
     await expectRefused(context, "unsupported-file", sentence)
     // Neither surface ever offers what the other one rules out.
     expect(context.current().error).not.toMatch(canChoosePaths ? /Nessa app/ : /\+/)
@@ -738,7 +750,9 @@ it("does not bring back a tile removed while its upload was in flight", async ()
     }),
   })
   const file = image("a")
-  context.store.dispatch(attachFiles({ files: [file], conversationId: "c0" }))
+  context.store.dispatch(
+    attachFiles({ files: [file].map((file) => file.resource), conversationId: "c0" }),
+  )
   context.store.dispatch(
     uploadChanged({ conversationId: "c0", placementId: "a1", to: "uploading" }),
   )
@@ -794,15 +808,13 @@ it.each(["remove", "close", "delete"] as const)(
     }
     const size = 64 * 1024 * 1024
     for (let index = 1; index <= 2; index++) {
-      const file = {
-        type: "file" as const,
-        resourceId: `shared-${index}`,
+      const file = AttachmentResource.create({
         name: "image.png",
         mimeType: "image/png",
         size,
         previewUrl: `blob:${index}`,
         path: null,
-      }
+      })
       dispatch(attachFiles({ conversationId: "c0", files: [file] }))
       const part = tabs.conversations[0]!.draft[0]!
       if (part.type !== "file") throw new Error("File not admitted")
@@ -846,8 +858,8 @@ it.each(["remove", "close", "delete"] as const)(
     }
     expect(attachmentResourceUsage(tabs).needed.size).toBe(0)
     expect(
-      [...attachmentResourceUsage(tabs).previews.values()].reduce(
-        (sum, weight) => sum + weight,
+      [...attachmentResourceUsage(tabs).previews].reduce(
+        (sum, resource) => sum + resource.size,
         0,
       ),
     ).toBe(size)

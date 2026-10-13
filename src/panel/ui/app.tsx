@@ -593,14 +593,14 @@ export function App({
                 {attachments.viewed && (
                   <Sheet
                     className="nessa-detail-sheet"
-                    label={attachments.viewed.name}
+                    label={attachments.viewed.resource.name}
                     onClose={attachments.close}
                     onReturnFocus={focusComposer}
                   >
                     <SheetHandle />
                     <SheetHeader>
                       <SheetExpand />
-                      <SheetTitle>{attachments.viewed.name}</SheetTitle>
+                      <SheetTitle>{attachments.viewed.resource.name}</SheetTitle>
                       <SheetAction>Done</SheetAction>
                     </SheetHeader>
                     <SheetBody>

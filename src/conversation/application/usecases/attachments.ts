@@ -1,10 +1,9 @@
 import {
-  declaredMediaType,
   isImageFile,
   validDraftAttachments,
   validImageReference,
   type FileAttachment,
-  type AttachmentInput,
+  AttachmentResource,
 } from "../../model"
 import type { LocalTabs } from "../local-tabs"
 import type { UploadChange } from "../ports"
@@ -18,40 +17,24 @@ import {
 /**
  * Append files to the requested conversation, atomically within limits.
  *
- * Every file arrives with its upload not started, whatever the caller wrote on
- * it: only `changeUpload` moves that state, so a part cannot be attached already
- * claiming bytes the gateway never received.
- *
- * Its media type is settled here too, for every file however it arrived,
- * because the type is what decides the file's route and the gesture never is.
- * A browser reports most camera RAW files, and some HEIC, with no type at all,
- * and a file chosen through the host's picker was never opened by anything, so
- * in both cases the extension decides. Getting that wrong is how the same file
- * comes to behave differently depending on how it was attached.
+ * Only issued immutable resource values enter; their metadata stays intact.
+ * Admission owns the placement and its initial upload state. AL1/AL2/AL13 and
+ * the resource construction tests enforce this split, including copied inputs.
  */
 export function attachFiles(
   tabs: LocalTabs,
-  files: AttachmentInput[],
+  files: AttachmentResource[],
   conversationId: string,
 ): LocalTabs {
   const current = findConversation(tabs, conversationId)
   const count = files.length
   if (!current || count === 0) return tabs
   // Validate the whole resource batch before consuming placement identities.
-  const inputs: AttachmentInput[] = []
+  const inputs: AttachmentResource[] = []
   for (let index = 0; index < count; index++) {
-    const file = files[index]
-    if (!file) return tabs
-    const { resourceId, name, mimeType, size, previewUrl, path } = file
-    inputs.push({
-      type: "file",
-      resourceId,
-      name,
-      mimeType: declaredMediaType(name, mimeType),
-      size,
-      previewUrl,
-      path,
-    })
+    const resource = files[index]
+    if (!AttachmentResource.is(resource)) return tabs
+    inputs.push(resource)
   }
   const proposed = [...current.draft, ...inputs]
   if (!validDraftAttachments(proposed)) return tabs
@@ -59,7 +42,12 @@ export function attachFiles(
   const admitted = inputs.map((file): FileAttachment => {
     const next = takePlacementId(allocated)
     allocated = next.tabs
-    return { ...file, placementId: next.id, upload: { status: "not-started" } }
+    return {
+      type: "file",
+      resource: file,
+      placementId: next.id,
+      upload: { status: "not-started" },
+    }
   })
   return replaceConversation(
     allocated,
@@ -139,7 +127,7 @@ function changedFile(
       // attached here is stored as something else, under another digest and
       // size. What it must be is a reference, on a file that was an image to
       // begin with — otherwise a message would name something nobody stored.
-      if (!isImageFile(file.mimeType) || !validImageReference(change.image))
+      if (!isImageFile(file.resource.mimeType) || !validImageReference(change.image))
         return { ...file, upload: { status: "failed", reason: "rejected" } }
       return {
         ...file,

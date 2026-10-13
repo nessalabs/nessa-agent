@@ -1,3 +1,4 @@
+import { AttachmentResource } from "../../conversation/testing"
 // @vitest-environment jsdom
 /**
  * What the composer's attachment notices look like once they are on screen.
@@ -41,14 +42,15 @@ const file = (
   mimeType = "image/png",
 ): FileAttachment => ({
   type: "file",
-  resourceId: id,
   placementId: id,
-  name: `${id}.png`,
-  mimeType,
-  size: 3,
-  previewUrl: "blob:test",
-  path: null,
   upload,
+  resource: AttachmentResource.create({
+    name: `${id}.png`,
+    mimeType,
+    size: 3,
+    previewUrl: "blob:test",
+    path: null,
+  }),
 })
 
 let container: HTMLDivElement

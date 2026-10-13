@@ -17,6 +17,7 @@ import { standDownPlacementViolations } from "./architecture/stand-down-placemen
 import { environmentPortViolations } from "./architecture/environment-port.mjs"
 import { composerBudgetViolations } from "./architecture/composer-budget.mjs"
 import { wholeWorkspaceViolations } from "./architecture/whole-workspace.mjs"
+import { conversationImportAllowed } from "./architecture/conversation-boundary.mjs"
 import { importedPaths } from "./architecture/imported-paths.mjs"
 import { splitPanesBoundaryViolations } from "./architecture/split-panes-boundary.mjs"
 import { desktopVerticalViolations } from "./architecture/desktop-verticals.mjs"
@@ -226,19 +227,8 @@ for (const file of walk(src)) {
 
   if (!path.startsWith("src/conversation/") && !path.endsWith(".test.ts")) {
     for (const item of imports) {
-      if (!/conversation/.test(item)) continue
-      // Matched by name, so a stylesheet that happens to be called
-      // `conversation.css` (a workspace pane's) is no import of the vertical.
-      if (/\.css$/.test(item)) continue
-      const barrel =
-        /(?:^|\/)conversation$/.test(item) || /(?:^|\/)conversation\/index$/.test(item)
-      const slice = /conversation\/adapters\/store\/slice$/.test(item)
-      const identity = /conversation\/model$/.test(item)
-      if (inComposition && /\/(?:adapters\/|application\/ports$)/.test(item)) continue
-      if (path === "src/store.ts" && slice) continue
-      if (path === "src/icon-preview.tsx" && identity) continue
-      if (barrel) continue
-      fail(file, "other modules import the conversation barrel, not its internals")
+      if (conversationImportAllowed(path, item, inComposition)) continue
+      fail(file, "other modules import public conversation contracts, not its internals")
     }
   }
 

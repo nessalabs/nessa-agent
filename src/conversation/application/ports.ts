@@ -9,7 +9,7 @@ import {
   type ApprovalMode,
   type CommandFailure,
   type ConversationSelection,
-  type AttachmentInput,
+  type AttachmentResource,
   type HeldFile,
   type HeldFileFailure,
   type ImageReference,
@@ -23,7 +23,7 @@ import type { LocalTabs } from "./local-tabs"
 export interface ConversationGateway {
   attachFiles(
     tabs: LocalTabs,
-    files: AttachmentInput[],
+    files: AttachmentResource[],
     conversationId: string,
   ): LocalTabs
   removeFile(tabs: LocalTabs, id: string): LocalTabs

@@ -342,7 +342,9 @@ export function useFileAttachments(
       refuse({ reason: "too-many-files" }, targetId)
       return
     }
-    const carrying = targetFiles.filter((file) => !linkedFile(file))
+    const carrying = targetFiles
+      .filter((file) => !linkedFile(file.resource))
+      .map((file) => file.resource)
     if (
       [...carrying, ...held].reduce((total, file) => total + file.size, 0) >
       MAX_DRAFT_ATTACHMENT_BYTES

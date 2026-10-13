@@ -82,7 +82,7 @@ function createScope(
     dispose: () => {
       unsubscribe()
       dependencies.session.get()?.close()
-      dependencies.attachments.retain({ needed: new Set(), previews: new Map() })
+      dependencies.attachments.retain({ needed: new Set(), previews: new Set() })
     },
   }
 }

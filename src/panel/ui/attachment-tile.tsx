@@ -42,7 +42,7 @@ export function AttachmentTile({
   const status = file.upload.status
   const uploading = status === "uploading"
   // Only a few uploads run at once; an image that has not started is in line.
-  const waiting = status === "not-started" && isImageFile(file.mimeType)
+  const waiting = status === "not-started" && isImageFile(file.resource.mimeType)
   const failure = file.upload.status === "failed" ? file.upload.reason : undefined
   // Green is for the moment an upload finishes, not for as long as the file is
   // stored: a tile coming back on screen — a tab returned to, a draft restored
@@ -64,11 +64,15 @@ export function AttachmentTile({
       aria-busy={uploading || undefined}
     >
       <ChatAttachmentTile
-        label={file.name}
+        label={file.resource.name}
         // HEIC, RAW and the like are images the gateway reads and a webview
         // cannot: a named icon tile, not a broken picture.
-        imageSrc={previewableImage(file.mimeType) ? file.previewUrl : undefined}
-        icon={<AttachmentIcon name={file.name} mimeType={file.mimeType} />}
+        imageSrc={
+          previewableImage(file.resource.mimeType) ? file.resource.previewUrl : undefined
+        }
+        icon={
+          <AttachmentIcon name={file.resource.name} mimeType={file.resource.mimeType} />
+        }
         onOpen={onOpen}
         // Dimmed only while it waits its turn. An upload under way has the
         // band, and dimming as well would hide the picture for the whole of it.
@@ -79,7 +83,7 @@ export function AttachmentTile({
       {waiting && (
         <span
           role="status"
-          aria-label={`${file.name} is waiting to upload`}
+          aria-label={`${file.resource.name} is waiting to upload`}
           title="Waiting to upload"
           className="pointer-events-none absolute inset-0"
         />
@@ -93,14 +97,14 @@ export function AttachmentTile({
           data-state={ring}
           onAnimationEnd={finished ? () => setFinished(false) : undefined}
           role={uploading ? "status" : undefined}
-          aria-label={uploading ? `Uploading ${file.name}` : undefined}
+          aria-label={uploading ? `Uploading ${file.resource.name}` : undefined}
           className="nessa-upload-ring rounded-xl"
         />
       )}
       {failure && !worthRetrying(failure) && (
         <span
           role="status"
-          aria-label={`${file.name} did not upload: ${uploadFailureText(failure)}`}
+          aria-label={`${file.resource.name} did not upload: ${uploadFailureText(failure)}`}
           title={`Did not upload: ${uploadFailureText(failure)}`}
           className="pointer-events-none absolute inset-0"
         />
@@ -108,7 +112,7 @@ export function AttachmentTile({
       {failure && worthRetrying(failure) && (
         <button
           type="button"
-          aria-label={`Retry uploading ${file.name}: ${uploadFailureText(failure)}`}
+          aria-label={`Retry uploading ${file.resource.name}: ${uploadFailureText(failure)}`}
           title={`Did not upload: ${uploadFailureText(failure)}. Retry`}
           onClick={onRetry}
           className={`${cornerButton} -bottom-1.5 -right-1.5`}
@@ -118,8 +122,8 @@ export function AttachmentTile({
       )}
       <button
         type="button"
-        aria-label={`Remove ${file.name}`}
-        title={`Remove ${file.name}`}
+        aria-label={`Remove ${file.resource.name}`}
+        title={`Remove ${file.resource.name}`}
         onClick={onRemove}
         className={`${cornerButton} -right-1.5 -top-1.5`}
       >

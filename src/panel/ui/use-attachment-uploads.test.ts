@@ -105,7 +105,7 @@ async function mounted(
     const placed = store
       .getState()
       .conversation.conversations[0]!.draft.find(
-        (part) => part.type === "file" && part.resourceId === attachment!.resourceId,
+        (part) => part.type === "file" && part.resource === attachment!,
       )
     if (!placed || placed.type !== "file") throw new Error("Attachment was not admitted")
     return placed.placementId
@@ -148,7 +148,12 @@ it("uploads an attached image's original bytes once, and records what the gatewa
   expect(panel.stage.mock.calls[0]).toEqual([
     panel.store.getState().conversation.conversations[0]!.serverConversationId,
     { digest: DIGEST, mimeType: "image/heic", size: 3 },
-    original,
+    panel.dependencies.attachments.bytes(
+      panel.store
+        .getState()
+        .conversation.conversations[0]!.draft.find((part) => part.type === "file")!
+        .resource,
+    ),
     expect.any(AbortSignal),
   ])
   // The returned reference, not the digest computed here.
@@ -284,7 +289,7 @@ it("does not spin on an image whose upload ends before React has rendered at all
   const [attachment] = panel.dependencies.attachments.add([
     new File(["raw"], "gone.heic", { type: "image/heic" }),
   ])
-  panel.dependencies.attachments.retain({ needed: new Set(), previews: new Map() })
+  panel.dependencies.attachments.retain({ needed: new Set(), previews: new Set() })
   await React.act(async () => {
     panel.store.dispatch(attachFiles({ files: [attachment!], conversationId: "c0" }))
   })
@@ -327,14 +332,14 @@ it("AL4: shared bytes get independent upload slots and removing one placement le
   const second = panel.store.getState().conversation.conversations[1]!.draft[0]
   if (first?.type !== "file" || second?.type !== "file")
     throw new Error("Attachments were not admitted")
-  expect(first.resourceId).toBe(second.resourceId)
+  expect(first.resource).toBe(second.resource)
   expect(first.placementId).not.toBe(second.placementId)
   await React.act(async () => {
     panel.store.dispatch(closeConversation("c0"))
   })
   expect(calls[0]!.signal.aborted).toBe(true)
   expect(calls[1]!.signal.aborted).toBe(false)
-  expect(panel.dependencies.attachments.bytes(resource!.resourceId)).toBeDefined()
+  expect(panel.dependencies.attachments.bytes(resource!)).toBeDefined()
   await React.act(async () => {
     calls[1]!.resolve(stored)
   })

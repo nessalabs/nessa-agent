@@ -5,6 +5,7 @@
  * "the tile was removed while the image was being hashed" is a line of test
  * rather than a timing. Nothing sleeps.
  */
+import { AttachmentResource } from "../../conversation/testing"
 import { describe, expect, it, vi } from "vitest"
 
 import {
@@ -18,8 +19,13 @@ const DIGEST = `sha256:${"ab".repeat(32)}`
 const file = {
   conversationId: "c0",
   placementId: "f",
-  resourceId: "bytes",
-  mimeType: "image/heic",
+  resource: AttachmentResource.create({
+    name: "image.heic",
+    mimeType: "image/heic",
+    size: 3,
+    previewUrl: "",
+    path: null,
+  }),
 } as const
 /** A Blob of a given weight without allocating it: only `size` is read here. */
 const blob = (size: number) => ({ size, type: "image/heic" }) as Blob

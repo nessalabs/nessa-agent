@@ -1,3 +1,4 @@
+import { AttachmentResource } from "../../../../src/conversation/testing"
 /** Real App/store/editor composition for controlled native-read and URL-drop browser races. */
 import * as React from "react"
 import { createRoot } from "react-dom/client"
@@ -45,7 +46,7 @@ let sharedReplies:
       }
     >
   | undefined
-let sharedResourceId: string | undefined
+let sharedResource: AttachmentResource | undefined
 let uploadReached: (() => void) | undefined
 let uploadResult: Promise<unknown> | undefined
 const detachedReplies: Array<
@@ -130,15 +131,13 @@ const probe = {
       uploadReached = resolve
     })
     uploadReply = { resolve: () => {}, reject: () => {} }
-    const file = {
-      type: "file" as const,
-      resourceId: "same-file",
+    const file = AttachmentResource.create({
       name: "race.png",
       mimeType: "image/png",
       size: png.length,
       previewUrl: "",
       path: null,
-    }
+    })
     store.dispatch(
       bindConversation({ id: "c0", serverId: "00000000-0000-4000-8000-000000000001" }),
     )
@@ -185,7 +184,7 @@ const probe = {
     const [resource] = resources.add([
       new File([png], "shared.png", { type: "image/png" }),
     ])
-    sharedResourceId = resource!.resourceId
+    sharedResource = resource!
 
     store.dispatch(attachFiles({ conversationId: "c0", files: [resource!] }))
     store.dispatch(openConversation())
@@ -202,6 +201,18 @@ const probe = {
       size: png.length,
     }),
   closeSharedParent: () => store.dispatch(closeConversation("c1")),
+  attachNativeSvg: () => {
+    const [resource] = resources.add([
+      new File(
+        [
+          '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="red"/></svg>',
+        ],
+        "native.svg",
+        { type: "image/svg+xml" },
+      ),
+    ])
+    store.dispatch(attachFiles({ conversationId: "c0", files: [resource!] }))
+  },
   startDetachedUploads: () => {
     detached = true
     store.dispatch(
@@ -280,12 +291,14 @@ const probe = {
     sharedUploads: sharedReplies
       ? [...sharedReplies].map(([id, reply]) => ({ id, aborted: reply.aborted }))
       : [],
-    sharedBytesRetained: sharedResourceId
-      ? resources.bytes(sharedResourceId) !== undefined
+    sharedBytesRetained: sharedResource
+      ? resources.bytes(sharedResource) !== undefined
       : false,
     tabs: displayStore.getState().conversation.conversations.map((tab) => ({
       id: tab.id,
-      files: tab.draft.filter((part) => part.type === "file"),
+      files: tab.draft
+        .filter((part) => part.type === "file")
+        .map((part) => ({ ...part, sharedResource: part.resource === sharedResource })),
     })),
     sends,
     fetchCalls,

@@ -62,6 +62,7 @@ try {
         "shared-resource",
         "owner-swap",
         "detached-queue",
+        "native-svg",
       ]) {
         const context = await browser.newContext({
           viewport: { width: 800, height: 900 },
@@ -79,7 +80,23 @@ try {
             () => typeof window.__attachmentProbe?.drop === "function",
           )
           const snapshot = () => page.evaluate(() => window.__attachmentProbe.snapshot())
-          if (scenario === "detached-queue") {
+          if (scenario === "native-svg") {
+            await page.evaluate(() => window.__attachmentProbe.attachNativeSvg())
+            const image = page
+              .getByRole("button", { name: "Open native.svg", exact: true })
+              .locator("img")
+            await image.waitFor()
+            await page.waitForFunction(() => {
+              const image = document.querySelector("[data-upload] img")
+              return (
+                image instanceof HTMLImageElement &&
+                image.complete &&
+                image.naturalWidth > 0
+              )
+            })
+            assert.equal(await image.evaluate((image) => image.naturalWidth), 4)
+            await page.screenshot({ path: `/tmp/816-r3-native-svg-${engine}.png` })
+          } else if (scenario === "detached-queue") {
             await page.evaluate(() => window.__attachmentProbe.startDetachedUploads())
             await page.waitForFunction(
               () => window.__attachmentProbe.snapshot().detachedStageCount === 3,
@@ -156,7 +173,9 @@ try {
             )
             assert.equal(
               new Set(
-                shared.tabs.flatMap((tab) => tab.files.map((file) => file.resourceId)),
+                shared.tabs.flatMap((tab) =>
+                  tab.files.map((file) => file.sharedResource),
+                ),
               ).size,
               1,
             )

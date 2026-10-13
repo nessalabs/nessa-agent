@@ -1,3 +1,4 @@
+import { AttachmentResource } from "../../model"
 import { expect, it } from "vitest"
 import { makeStore } from "../../../store"
 import { createDependencies } from "../../../composition/dependencies"
@@ -24,14 +25,15 @@ const stored = {
 }
 const file: FileAttachment = {
   type: "file",
-  resourceId: "same-file",
   placementId: "same-file",
-  name: "image.jpg",
-  mimeType: "image/jpeg",
-  size: 3,
-  previewUrl: "",
-  path: null,
   upload: { status: "not-started" },
+  resource: AttachmentResource.create({
+    name: "image.jpg",
+    mimeType: "image/jpeg",
+    size: 3,
+    previewUrl: "",
+    path: null,
+  }),
 }
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -47,13 +49,17 @@ function fixture(overrides: Partial<ConversationEffects> = {}) {
     createDependencies({ conversation: { ...scenarioEffects("echo"), ...overrides } }),
   )
   store.dispatch(bindConversation({ id: "c0", serverId: first }))
-  store.dispatch(attachFiles({ conversationId: "c0", files: [file] }))
+  store.dispatch(
+    attachFiles({ conversationId: "c0", files: [file].map((file) => file.resource) }),
+  )
   store.dispatch(
     uploadChanged({ conversationId: "c0", placementId: "a1", to: "uploading" }),
   )
   store.dispatch(openConversation())
   store.dispatch(bindConversation({ id: "c1", serverId: second }))
-  store.dispatch(attachFiles({ conversationId: "c1", files: [file] }))
+  store.dispatch(
+    attachFiles({ conversationId: "c1", files: [file].map((file) => file.resource) }),
+  )
   store.dispatch(
     uploadChanged({ conversationId: "c1", placementId: "a2", to: "uploading" }),
   )
@@ -66,8 +72,8 @@ function upload(store: ReturnType<typeof makeStore>, id: string) {
       placementId: id === "c0" ? "a1" : "a2",
       file: {
         digest: `sha256:${"ab".repeat(32)}`,
-        mimeType: file.mimeType,
-        size: file.size,
+        mimeType: file.resource.mimeType,
+        size: file.resource.size,
       },
       bytes: new Blob(["raw"]),
     }),
@@ -229,8 +235,8 @@ it("UP3: editing a retained input while preparation waits cannot redirect its re
     placementId: "a2",
     file: {
       digest: `sha256:${"ab".repeat(32)}`,
-      mimeType: file.mimeType,
-      size: file.size,
+      mimeType: file.resource.mimeType,
+      size: file.resource.size,
     },
     bytes: new Blob(["raw"]),
   }
@@ -274,7 +280,9 @@ it.each(["preparation", "staging"] as const)(
       await reached.promise
       store.dispatch(setActive("c1"))
       store.dispatch(removeFile("a2"))
-      store.dispatch(attachFiles({ conversationId: "c1", files: [file] }))
+      store.dispatch(
+        attachFiles({ conversationId: "c1", files: [file].map((file) => file.resource) }),
+      )
       const replacement = state(store, "c1")
       if (!replacement || replacement.type !== "file")
         throw new Error("Attachment was not admitted")

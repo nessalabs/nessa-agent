@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import {
   type ApprovalMode,
   type ConversationSelection,
-  type AttachmentInput,
+  type AttachmentResource,
   type MessageContent,
 } from "../model"
 import type { UploadChange, UploadedFile } from "../application/ports"
@@ -59,7 +59,7 @@ export function useConversation() {
     rename: (id: string, title: string) => dispatch(renameConversation({ id, title })),
     deliveryMode,
     setDeliveryMode,
-    attachFiles: (files: AttachmentInput[], conversationId: string) =>
+    attachFiles: (files: AttachmentResource[], conversationId: string) =>
       dispatch(attachFiles({ files, conversationId })),
     removeFile: (id: string) => dispatch(removeFile(id)),
     /** Ask for one step in a draft file's upload. Steps that do not follow are ignored. */

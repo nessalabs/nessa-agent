@@ -95,9 +95,9 @@ export function AttachmentNotices({
     refusal,
     files: files.map((file) => ({
       placementId: file.placementId,
-      name: file.name,
-      image: isImageFile(file.mimeType),
-      linked: linkedFile(file),
+      name: file.resource.name,
+      image: isImageFile(file.resource.mimeType),
+      linked: linkedFile(file.resource),
       upload: file.upload,
     })),
     imageInput,

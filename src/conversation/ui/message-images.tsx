@@ -54,23 +54,25 @@ export function MessageImages({
     held?: ImageReference
   }
   const tiles = content.flatMap((part, index): Tile[] => {
-    if (part.type === "file" && isImageFile(part.mimeType))
+    if (part.type === "file" && isImageFile(part.resource.mimeType))
       return [
         {
           key: part.placementId,
-          label: part.name,
-          title: part.name,
+          label: part.resource.name,
+          title: part.resource.name,
           // An original the webview cannot paint (HEIC, RAW) gets the labelled
           // tile too, by its file name, rather than a broken picture.
-          src: previewableImage(part.mimeType) ? part.previewUrl : undefined,
+          src: previewableImage(part.resource.mimeType)
+            ? part.resource.previewUrl
+            : undefined,
         },
       ]
-    if (part.type === "file" && linkedFile(part))
+    if (part.type === "file" && linkedFile(part.resource))
       return [
         {
           key: part.placementId,
-          label: part.name,
-          title: part.path ?? part.name,
+          label: part.resource.name,
+          title: part.resource.path ?? part.resource.name,
           src: undefined,
           file: true,
         },

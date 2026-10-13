@@ -35,7 +35,8 @@ export {
 
 export {
   type FileAttachment,
-  type AttachmentInput,
+  AttachmentResource,
+  type AttachmentResourceData,
   type ImageReference,
   type ImageReferencePart,
   type ImageRefusal,

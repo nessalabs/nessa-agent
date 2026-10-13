@@ -1,4 +1,4 @@
-import type { Conversation, MessageContent } from "../../model"
+import type { AttachmentResource, Conversation, MessageContent } from "../../model"
 import type { LocalTabs } from "../local-tabs"
 import { attachmentResourceUsage } from "../queries/attachment-resources"
 import { findConversation, replaceConversation, withDraft } from "../internal"
@@ -34,13 +34,13 @@ export function forgetStoredUploads(tabs: LocalTabs, conversationId: string): Lo
 /** Evict whole preview-only resources; live drafts and unsettled turns retain their bytes. */
 export function boundSentPreviews(tabs: LocalTabs, maxBytes: number): LocalTabs {
   const usage = attachmentResourceUsage(tabs)
-  let held = [...usage.previews.values()].reduce((sum, size) => sum + size, 0)
+  let held = [...usage.previews].reduce((sum, resource) => sum + resource.size, 0)
   if (held <= maxBytes) return tabs
-  const evicted = new Set<string>()
-  for (const [resourceId, size] of usage.previews) {
+  const evicted = new Set<AttachmentResource>()
+  for (const resource of usage.previews) {
     if (held <= maxBytes) break
-    evicted.add(resourceId)
-    held -= size
+    evicted.add(resource)
+    held -= resource.size
   }
   const conversations = tabs.conversations.map((conversation): Conversation => ({
     ...conversation,
@@ -51,7 +51,7 @@ export function boundSentPreviews(tabs: LocalTabs, maxBytes: number): LocalTabs 
         content: turn.content.map((part) =>
           part.type === "file" &&
           part.upload.status === "stored" &&
-          evicted.has(part.resourceId)
+          evicted.has(part.resource)
             ? { type: "image-reference" as const, ...part.upload.image }
             : part,
         ),

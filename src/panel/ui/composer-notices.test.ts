@@ -1,3 +1,4 @@
+import { AttachmentResource } from "../../conversation/testing"
 // @vitest-environment jsdom
 /**
  * The strip above the pill, at its worst.
@@ -39,14 +40,15 @@ import { ComposerNotices } from "./composer-notices"
 
 const failedUpload: FileAttachment = {
   type: "file",
-  resourceId: "b",
   placementId: "b",
-  name: "b.png",
-  path: null,
-  mimeType: "image/png",
-  size: 3,
-  previewUrl: "blob:test",
   upload: { status: "failed", reason: "unavailable" },
+  resource: AttachmentResource.create({
+    name: "b.png",
+    mimeType: "image/png",
+    size: 3,
+    previewUrl: "blob:test",
+    path: null,
+  }),
 }
 
 const install = vi.fn()

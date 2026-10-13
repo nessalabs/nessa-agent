@@ -1,3 +1,4 @@
+import { AttachmentResource } from "./attachments"
 import { describe, expect, it } from "vitest"
 import {
   declaredMediaType,
@@ -35,39 +36,62 @@ const reference = (change: Partial<ImageReference> = {}): ImageReference => ({
 function image(
   id: string,
   upload: UploadState = { status: "stored", image: reference() },
-  change: Partial<FileAttachment> = {},
+  change: Partial<Pick<FileAttachment, "upload" | "placementId">> &
+    Partial<import("./attachments").AttachmentResourceData> = {},
 ): FileAttachment {
   return {
     type: "file",
-    resourceId: id,
     placementId: id,
-    name: `${id}.png`,
-    mimeType: "image/png",
-    previewUrl: `blob:${id}`,
-    size: 3,
     upload,
-    path: null,
-    ...change,
+    resource: AttachmentResource.create({
+      name: `${id}.png`,
+      mimeType: "image/png",
+      size: 3,
+      previewUrl: `blob:${id}`,
+      path: null,
+      ...change,
+    }),
   }
 }
 
 it("accepts empty files and exact file limit, rejects invalid byte sizes", () => {
   const file: FileAttachment = {
     type: "file",
-    resourceId: "a",
     placementId: "a",
-    name: "a.txt",
-    mimeType: "text/plain",
-    previewUrl: "blob:test-empty",
-    size: 0,
     upload: { status: "not-started" },
-    path: null,
+    resource: AttachmentResource.create({
+      name: "a.txt",
+      mimeType: "text/plain",
+      size: 0,
+      previewUrl: "blob:test-empty",
+      path: null,
+    }),
   }
   expect(validDraftAttachments([file])).toBe(true)
-  expect(validDraftAttachments([{ ...file, size: MAX_ATTACHMENT_BYTES }])).toBe(true)
-  for (const size of [-1, 0.5, Number.NaN, Infinity, MAX_ATTACHMENT_BYTES + 1]) {
-    expect(validDraftAttachments([{ ...file, size }])).toBe(false)
-  }
+  expect(
+    validDraftAttachments([
+      {
+        ...file,
+        resource: AttachmentResource.create({
+          ...file.resource,
+          size: MAX_ATTACHMENT_BYTES,
+        }),
+      },
+    ]),
+  ).toBe(true)
+  expect(
+    validDraftAttachments([
+      {
+        ...file,
+        resource: AttachmentResource.create({
+          ...file.resource,
+          size: MAX_ATTACHMENT_BYTES + 1,
+        }),
+      },
+    ]),
+  ).toBe(false)
+  for (const size of [-1, 0.5, Number.NaN, Infinity])
+    expect(() => AttachmentResource.create({ ...file.resource, size })).toThrow(TypeError)
 })
 
 describe("which parts of a message can go as images", () => {
@@ -392,7 +416,7 @@ describe("files a message points at", () => {
 
   it("sends a file by path when the host said where it is, and refuses one when nobody could", () => {
     const linked = document("report", "/Users/ada/report.pdf")
-    expect(linkedFile(linked)).toBe(true)
+    expect(linkedFile(linked.resource)).toBe(true)
     expect(messageFiles([linked])).toEqual([{ path: "/Users/ada/report.pdf" }])
     // Nothing was uploaded for it, and it is not an image, so the message's
     // image rules have nothing to say about it.
@@ -401,7 +425,7 @@ describe("files a message points at", () => {
     // The same file from a browser: no path, nothing to send, and the refusal
     // names it rather than leaving it silently behind.
     const unnameable = document("report", null)
-    expect(linkedFile(unnameable)).toBe(false)
+    expect(linkedFile(unnameable.resource)).toBe(false)
     expect(messageFiles([unnameable])).toEqual([])
     expect(messageImages([unnameable])).toEqual({
       ok: false,
@@ -422,7 +446,7 @@ describe("files a message points at", () => {
     // An image whose path is known is still carried as an image: a path would
     // leave it to the model to decide whether to look at it.
     const withPath = image("photo", undefined, { path: "/Users/ada/photo.png" })
-    expect(linkedFile(withPath)).toBe(false)
+    expect(linkedFile(withPath.resource)).toBe(false)
     expect(messageFiles([withPath])).toEqual([])
     expect(messageImages([withPath]).ok).toBe(true)
   })
@@ -538,3 +562,79 @@ describe("which paths can be carried to the agent", () => {
       expect(linkablePath(path), path).toBe(true)
   })
 })
+
+it("AL17/AL18/AL22: resource metadata is immutable and copies cannot become issued values", () => {
+  const data = {
+    name: "image.png",
+    mimeType: "image/png",
+    size: 3,
+    previewUrl: "blob:original",
+    path: null,
+  }
+  const resource = AttachmentResource.create(data)
+  expect(Object.isFrozen(resource)).toBe(true)
+  expect(Reflect.set(resource, "size", 1)).toBe(false)
+  expect(resource.size).toBe(3)
+  const copied = { ...resource, size: 1 }
+  const forged = Object.create(
+    Object.getPrototypeOf(resource),
+    Object.getOwnPropertyDescriptors(resource),
+  )
+  expect(AttachmentResource.is(copied)).toBe(false)
+  expect(AttachmentResource.is(forged)).toBe(false)
+  const minted = AttachmentResource.create(copied)
+  expect(AttachmentResource.is(minted)).toBe(true)
+  expect(minted).not.toBe(resource)
+  for (const key of ["name", "mimeType", "previewUrl", "path"] as const) {
+    expect(() =>
+      AttachmentResource.create({ ...data, [key]: new String("mutable") }),
+    ).toThrow(TypeError)
+  }
+  expect(() =>
+    AttachmentResource.create({ ...data, size: new Number(1) as unknown as number }),
+  ).toThrow(TypeError)
+})
+
+it("AL13/AL22: resource construction captures each scalar getter once", () => {
+  const data = {
+    name: "camera.cr3",
+    mimeType: "",
+    size: 3,
+    previewUrl: "blob:camera",
+    path: null,
+  }
+  const read = new Map<string, number>()
+  const input = { ...data }
+  for (const [key, value] of Object.entries(data))
+    Object.defineProperty(input, key, {
+      get: () => {
+        read.set(key, (read.get(key) ?? 0) + 1)
+        return read.get(key) === 1 ? value : new String("changed")
+      },
+    })
+  const resource = AttachmentResource.create(input)
+  expect(resource.name).toBe("camera.cr3")
+  expect(resource.mimeType).toBe("image/x-canon-cr3")
+  for (const key of Object.keys(data)) expect(read.get(key)).toBe(1)
+})
+
+function resourceTypeChecks() {
+  // @ts-expect-error A plain metadata record is not an issued resource value.
+  const plain: import("./attachments").AttachmentResource = {
+    name: "x",
+    mimeType: "",
+    size: 1,
+    previewUrl: "",
+    path: null,
+  }
+  AttachmentResource.create({
+    // @ts-expect-error Boxed scalar metadata is outside the constructor contract.
+    name: new String("x"),
+    mimeType: "",
+    size: 1,
+    previewUrl: "",
+    path: null,
+  })
+  return plain
+}
+void resourceTypeChecks

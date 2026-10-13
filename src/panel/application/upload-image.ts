@@ -1,3 +1,4 @@
+import type { AttachmentResource } from "../../conversation/resources"
 import type { UploadChange, UploadFailure } from "../../conversation"
 
 /**
@@ -11,7 +12,7 @@ export type UploadPorts = {
   /** `sha256:` and 64 lowercase hex digits, over exactly these bytes. */
   digest(bytes: Blob): Promise<string>
   /** The file's bytes, or nothing once its tile has been removed. */
-  bytes(resourceId: string): Blob | undefined
+  bytes(resource: AttachmentResource): Blob | undefined
   /**
    * Ask the conversation for one step of this file's upload state, and hear
    * whether it was taken. A step is refused when the file is not where the step
@@ -56,27 +57,26 @@ export async function uploadImage(
   file: {
     conversationId: string
     placementId: string
-    resourceId: string
-    mimeType: string
+    resource: AttachmentResource
   },
   ports: UploadPorts,
   signal: AbortSignal,
 ): Promise<void> {
-  const resourceId = file.resourceId
+  const resource = file.resource
   const target = { conversationId: file.conversationId, placementId: file.placementId }
   if (!ports.change({ ...target, to: "uploading" })) return
   const fail = (reason: UploadFailure) => {
     ports.change({ ...target, to: "failed", reason })
   }
-  const bytes = ports.bytes(resourceId)
+  const bytes = ports.bytes(resource)
   if (!bytes || bytes.size < 1) return fail("unreadable")
   try {
     const digest = await ports.digest(bytes)
-    if (signal.aborted || ports.bytes(resourceId) === undefined) return
+    if (signal.aborted || ports.bytes(resource) === undefined) return
     await ports.stage(
       {
         ...target,
-        file: { digest, mimeType: file.mimeType, size: bytes.size },
+        file: { digest, mimeType: resource.mimeType, size: bytes.size },
         bytes,
       },
       signal,

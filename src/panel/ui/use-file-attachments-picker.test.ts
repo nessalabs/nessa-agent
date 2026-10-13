@@ -1,3 +1,4 @@
+import { AttachmentResource } from "../../conversation/testing"
 // @vitest-environment jsdom
 /**
  * Where the composer's `+` gets its files from, and what happens to a draft
@@ -52,34 +53,29 @@ import { makeStore } from "../../store"
 import type { AttachmentResources } from "../adapters/attachment-resources"
 import { useFileAttachments } from "./use-file-attachments"
 
-let taken = 0
 let ticketCount = 0
 /** Only the two ways in that this exercises; nothing reads bytes here. */
 const resources: AttachmentResources = {
   add: (files) =>
-    files.map((file) => ({
-      type: "file" as const,
-      resourceId: `a${taken++}`,
-      placementId: `a${taken++}`,
-      name: file.name,
-      mimeType: file.type || "application/octet-stream",
-      size: file.size,
-      previewUrl: "blob:test",
-      upload: { status: "not-started" as const },
-      path: null,
-    })),
+    files.map((file) =>
+      AttachmentResource.create({
+        name: file.name,
+        mimeType: file.type || "application/octet-stream",
+        size: file.size,
+        previewUrl: "blob:test",
+        path: null,
+      }),
+    ),
   addChosen: (chosen) =>
-    chosen.map((file) => ({
-      type: "file" as const,
-      resourceId: `c${taken++}`,
-      placementId: `c${taken++}`,
-      name: file.name,
-      mimeType: "application/octet-stream",
-      size: file.size,
-      previewUrl: "",
-      upload: { status: "not-started" as const },
-      path: file.path,
-    })),
+    chosen.map((file) =>
+      AttachmentResource.create({
+        name: file.name,
+        mimeType: "application/octet-stream",
+        size: file.size,
+        previewUrl: "",
+        path: file.path,
+      }),
+    ),
   canAdd: () => true,
   bytes: () => undefined,
   retain: () => {},
@@ -101,7 +97,6 @@ let store: ReturnType<typeof makeStore>
 const clickedInput = vi.fn()
 
 beforeEach(async () => {
-  taken = 0
   ticketCount = 0
   chooseAttachmentFiles.mockReset()
   readAttachmentBytes.mockReset()
@@ -158,7 +153,7 @@ it("attaches a file far past every byte bound, because a path weighs nothing", a
   await act(async () => {
     await hook.chooseFiles()
   })
-  expect(draftFiles()).toMatchObject([
+  expect(draftFiles().map((file) => file.resource)).toMatchObject([
     { name: "holiday.mp4", path: "/Users/ada/holiday.mp4" },
   ])
   expect(hook.refusal).toBeNull()
@@ -263,19 +258,22 @@ it("uploads a picked image and points at a picked file, from one selection", asy
   // The image was read, typed from its name, and has bytes to upload.
   // Read by its ticket, never by its path: the host resolves what it minted.
   expect(readAttachmentBytes).toHaveBeenCalledWith("k-heic")
-  expect(image).toMatchObject({ name: "holiday.heic", mimeType: "image/heic" })
-  expect(image!.previewUrl).not.toBe("")
+  expect(image.resource).toMatchObject({ name: "holiday.heic", mimeType: "image/heic" })
+  expect(image!.resource.previewUrl).not.toBe("")
   // The document was not read at all, and travels as the path.
   expect(readAttachmentBytes).not.toHaveBeenCalledWith("k-pdf")
   expect(picked.every((file) => file.path.startsWith("/"))).toBe(true)
-  expect(document).toMatchObject({
+  expect(document.resource).toMatchObject({
     name: "report.pdf",
     path: "/Users/ada/report.pdf",
     previewUrl: "",
   })
   expect(readAttachmentBytes).toHaveBeenCalledTimes(1)
   // Attachment order is the order they were picked in.
-  expect(draftFiles().map((part) => part.name)).toEqual(["holiday.heic", "report.pdf"])
+  expect(draftFiles().map((part) => part.resource.name)).toEqual([
+    "holiday.heic",
+    "report.pdf",
+  ])
 })
 
 it("holds a picked image to the byte bound, and a picked file to none", async () => {
@@ -324,7 +322,7 @@ it("holds a picked image to the byte bound, and a picked file to none", async ()
   await act(async () => {
     await hook.chooseFiles()
   })
-  expect(draftFiles()).toMatchObject([{ name: "huge.mp4" }])
+  expect(draftFiles().map((file) => file.resource)).toMatchObject([{ name: "huge.mp4" }])
   expect(readAttachmentBytes).not.toHaveBeenCalled()
 })
 
@@ -436,10 +434,14 @@ it("routes an image the platform knows and the extension table does not, like a 
   // Every one of them was read and staged as an image, and none travels as a
   // path: `path` on a draft file is what makes it a linked file.
   const files = draftFiles()
-  expect(files.map((part) => part.name)).toEqual(["icon.ico", "photo.jpe", "art.tga"])
+  expect(files.map((part) => part.resource.name)).toEqual([
+    "icon.ico",
+    "photo.jpe",
+    "art.tga",
+  ])
   for (const part of files) {
-    expect(part.mimeType.startsWith("image/")).toBe(true)
-    expect(part.previewUrl).not.toBe("")
+    expect(part.resource.mimeType.startsWith("image/")).toBe(true)
+    expect(part.resource.previewUrl).not.toBe("")
   }
   expect(readAttachmentBytes).toHaveBeenCalledTimes(3)
   // Read by ticket, never by path.
@@ -473,10 +475,16 @@ it("still falls back to the extension when the platform has no answer", async ()
     await hook.chooseFiles()
   })
   const [raw, document] = draftFiles()
-  expect(raw).toMatchObject({ name: "holiday.cr3", mimeType: "image/x-canon-cr3" })
+  expect(raw!.resource).toMatchObject({
+    name: "holiday.cr3",
+    mimeType: "image/x-canon-cr3",
+  })
   expect(readAttachmentBytes).toHaveBeenCalledWith("k-cr3")
   // And the one the table does not know travels as its path, unread.
-  expect(document).toMatchObject({ name: "report.pdf", path: "/Users/ada/report.pdf" })
+  expect(document.resource).toMatchObject({
+    name: "report.pdf",
+    path: "/Users/ada/report.pdf",
+  })
   expect(readAttachmentBytes).not.toHaveBeenCalledWith("k-pdf")
 })
 
@@ -589,6 +597,6 @@ it("refuses a file linked by path for a conversation that runs on an SSH host, a
   await act(async () => {
     await hook.chooseFiles()
   })
-  expect(draftFiles()).toMatchObject([{ name: "shot.png" }])
+  expect(draftFiles().map((file) => file.resource)).toMatchObject([{ name: "shot.png" }])
   expect(hook.refusal).toBeNull()
 })

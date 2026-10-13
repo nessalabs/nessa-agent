@@ -1,3 +1,4 @@
+import { AttachmentResource } from "../../model"
 import { expect, it } from "vitest"
 import { emptyLocalTabs } from "../local-tabs"
 import { attachFiles, changeUpload } from "../usecases/attachments"
@@ -7,17 +8,14 @@ import { beginSend, failSend } from "../usecases/send-draft"
 import { boundSentPreviews } from "../usecases/release-uploads"
 import { restoreConversationTabs } from "../saved-tabs"
 import { attachmentResourceUsage } from "./attachment-resources"
-import type { AttachmentInput } from "../../model"
 
-const input: AttachmentInput = {
-  type: "file",
-  resourceId: "resource",
+const input: AttachmentResource = AttachmentResource.create({
   name: "image.png",
   mimeType: "image/png",
   size: 40,
   previewUrl: "blob:resource",
   path: null,
-}
+})
 const image = {
   digest: `sha256:${"ab".repeat(32)}`,
   mimeType: "image/png" as const,
@@ -72,9 +70,13 @@ it("AL1/AL2: re-admission mints a placement and discards the caller's old upload
   })
   const retained = placed(tabs)
   tabs = removeFile(tabs, original.placementId)
-  tabs = attachFiles(tabs, [retained], "c0")
+  tabs = attachFiles(
+    tabs,
+    [retained].map((file) => file.resource),
+    "c0",
+  )
   const replacement = placed(tabs)
-  expect(replacement.resourceId).toBe(original.resourceId)
+  expect(replacement.resource).toBe(original.resource)
   expect(replacement.placementId).not.toBe(original.placementId)
   expect(replacement.upload).toEqual({ status: "not-started" })
   for (const change of [
@@ -97,7 +99,7 @@ it("AL4: sharing resources creates independent placements and preserves within-d
   tabs = openConversation(tabs)
   tabs = attachFiles(tabs, [input], "c1")
   const second = placed(tabs, "c1")
-  expect(second.resourceId).toBe(first.resourceId)
+  expect(second.resource).toBe(first.resource)
   expect(second.placementId).not.toBe(first.placementId)
   const changed = changeUpload(tabs, {
     conversationId: "c1",
@@ -131,7 +133,7 @@ it("AL6: a refused submission returns the original placement to its draft", () =
   tabs = failSend(tabs, "c0", "execution", "refused", { kind: "refused", reupload: true })
   expect(placed(tabs)).toMatchObject({
     placementId: original.placementId,
-    resourceId: original.resourceId,
+    resource: original.resource,
     upload: { status: "not-started" },
   })
 })
@@ -140,7 +142,7 @@ it("AL7: a shared draft keeps accepted bytes needed and out of preview eviction"
   let tabs = accepted(attachFiles(emptyLocalTabs(), [input], "c0"), "first")
   tabs = attachFiles(tabs, [input], "c0")
   const usage = attachmentResourceUsage(tabs)
-  expect([...usage.needed]).toEqual([input.resourceId])
+  expect([...usage.needed]).toEqual([input])
   expect(usage.previews.size).toBe(0)
   expect(boundSentPreviews(tabs, 0)).toBe(tabs)
 })
@@ -148,9 +150,7 @@ it("AL7: a shared draft keeps accepted bytes needed and out of preview eviction"
 it("AL8: preview accounting counts one resource and eviction removes every accepted reference", () => {
   let tabs = accepted(attachFiles(emptyLocalTabs(), [input], "c0"), "first")
   tabs = accepted(attachFiles(tabs, [input], "c0"), "second")
-  expect([...attachmentResourceUsage(tabs).previews]).toEqual([
-    [input.resourceId, input.size],
-  ])
+  expect([...attachmentResourceUsage(tabs).previews]).toEqual([input])
   expect(boundSentPreviews(tabs, input.size)).toBe(tabs)
   const evicted = boundSentPreviews(tabs, 0)
   expect(
@@ -174,25 +174,16 @@ it("AL9/AL10: placement numbering is store-local, survives restoration and rejec
 
 function admissionTypeChecks() {
   // @ts-expect-error Placement identity is minted by admission, not supplied with a resource.
-  const placement: AttachmentInput = { ...input, placementId: "reused" }
+  const placement: AttachmentResource = { ...input, placementId: "reused" }
   // @ts-expect-error Upload state belongs to an admitted placement.
-  const upload: AttachmentInput = { ...input, upload: { status: "stored", image } }
+  const upload: AttachmentResource = { ...input, upload: { status: "stored", image } }
   return [placement, upload]
 }
 void admissionTypeChecks
 
-it("AL13: admission ignores caller array methods and captures every field once", () => {
-  const reads = new Map<string, number>()
-  const descriptor = { ...input, placementId: "caller", upload: { status: "stored" } }
-  for (const [key, value] of Object.entries(input))
-    Object.defineProperty(descriptor, key, {
-      get: () => {
-        reads.set(key, (reads.get(key) ?? 0) + 1)
-        return reads.get(key) === 1 ? value : key === "size" ? -1 : "changed"
-      },
-    })
-  const files = [descriptor]
-  Object.defineProperty(files, "map", { value: () => files })
+it("AL13: indexed admission ignores caller array methods", () => {
+  const files = [input]
+  Object.defineProperty(files, "map", { value: () => [] })
   Object.defineProperty(files, Symbol.iterator, {
     value: () => {
       throw new Error("caller iterator")
@@ -200,11 +191,11 @@ it("AL13: admission ignores caller array methods and captures every field once",
   })
   const tabs = attachFiles(emptyLocalTabs(), files, "c0")
   expect(placed(tabs)).toEqual({
-    ...input,
+    type: "file",
+    resource: input,
     placementId: "a1",
     upload: { status: "not-started" },
   })
+  expect(placed(tabs).resource).toBe(input)
   expect(tabs.nextPlacementId).toBe(2)
-  for (const key of ["resourceId", "name", "mimeType", "size", "previewUrl", "path"])
-    expect(reads.get(key)).toBe(1)
 })

@@ -77,14 +77,13 @@ export function useAttachmentUploads(
         : conversation.draft.flatMap((part) =>
             part.type === "file" &&
             part.upload.status === "not-started" &&
-            isImageFile(part.mimeType) &&
+            isImageFile(part.resource.mimeType) &&
             !queue.settled.has(part.placementId)
               ? [
                   {
                     conversationId: conversation.id,
                     placementId: part.placementId,
-                    resourceId: part.resourceId,
-                    mimeType: part.mimeType,
+                    resource: part.resource,
                   },
                 ]
               : [],

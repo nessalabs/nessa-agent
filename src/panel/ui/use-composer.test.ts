@@ -1,3 +1,4 @@
+import { AttachmentResource } from "../../conversation/testing"
 // @vitest-environment jsdom
 /**
  * What pressing send does when the draft cannot go, driven through the form.
@@ -27,14 +28,15 @@ import { useComposer } from "./use-composer"
 
 const file = {
   type: "file" as const,
-  resourceId: "f",
   placementId: "f",
-  name: "finder.png",
-  mimeType: "image/png",
-  size: 1,
-  previewUrl: "blob:test-file",
   upload: { status: "not-started" as const },
-  path: null,
+  resource: AttachmentResource.create({
+    name: "finder.png",
+    mimeType: "image/png",
+    size: 1,
+    previewUrl: "blob:test-file",
+    path: null,
+  }),
 }
 
 /** An editor holding "hello"; file tiles live in the draft, never in the editor. */
@@ -96,7 +98,9 @@ function storeWithAttachedFile(connected = true) {
     store.dispatch(
       sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),
     )
-  store.dispatch(attachFiles({ files: [file], conversationId: "c0" }))
+  store.dispatch(
+    attachFiles({ files: [file].map((file) => file.resource), conversationId: "c0" }),
+  )
   return { send, store }
 }
 
@@ -157,12 +161,16 @@ it("shows why a draft holding a file that is not an image did not send", async (
   const { send, store } = storeWithAttachedFile()
   const notes = {
     ...file,
-    resourceId: "n",
     placementId: "a2",
-    name: "notes.pdf",
-    mimeType: "application/pdf",
+    resource: AttachmentResource.create({
+      ...file.resource,
+      name: "notes.pdf",
+      mimeType: "application/pdf",
+    }),
   }
-  store.dispatch(attachFiles({ files: [notes], conversationId: "c0" }))
+  store.dispatch(
+    attachFiles({ files: [notes].map((file) => file.resource), conversationId: "c0" }),
+  )
   await pressSend(store, () => false)
   const conversation = store.getState().conversation.conversations[0]!
   expect(conversation.error).toMatch(/notes\.pdf.*cannot be sent/)

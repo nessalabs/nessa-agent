@@ -1,4 +1,7 @@
-import type { AttachmentInput, AttachmentResourceUsage } from "../../conversation"
+import {
+  AttachmentResource,
+  type AttachmentResourceUsage,
+} from "../../conversation/resources"
 import type { ChosenFile } from "../../host"
 
 /**
@@ -28,56 +31,76 @@ export const MAX_SESSION_ATTACHMENT_BYTES = 256 * 1024 * 1024
  * cannot be sent, which is a worse thing to be holding.
  */
 export function createAttachmentResources() {
-  const entries = new Map<string, { url: string; size: number; bytes: Blob }>()
-  let previewOnly = new Set<string>()
+  const entries = new Map<AttachmentResource, Blob>()
+  let previewOnly = new Set<AttachmentResource>()
   /** Bytes that count against attaching: every retained resource not classified as preview-only. */
   const budgeted = () => {
     let total = 0
-    for (const [id, entry] of entries) if (!previewOnly.has(id)) total += entry.size
+    for (const resource of entries.keys())
+      if (!previewOnly.has(resource)) total += resource.size
     return total
   }
-  function release(id: string) {
-    const entry = entries.get(id)
+  function release(resource: AttachmentResource) {
+    const entry = entries.get(resource)
     if (!entry) return
-    URL.revokeObjectURL(entry.url)
-    entries.delete(id)
+    URL.revokeObjectURL(resource.previewUrl)
+    entries.delete(resource)
   }
   function retain(usage: AttachmentResourceUsage) {
-    previewOnly = new Set(usage.previews.keys())
-    for (const id of entries.keys()) {
-      if (usage.needed.has(id) || previewOnly.has(id)) continue
-      release(id)
+    previewOnly = new Set(usage.previews)
+    for (const resource of entries.keys()) {
+      if (usage.needed.has(resource) || previewOnly.has(resource)) continue
+      release(resource)
     }
   }
   return {
-    /** Admission is atomic: a rejected batch allocates no URLs. */
-    add(files: readonly File[]): AttachmentInput[] {
-      const selectedBytes = files.reduce((total, file) => total + file.size, 0)
+    /** Budget rejection allocates no URLs; partial allocation releases its own URLs. */
+    add(files: readonly File[]): AttachmentResource[] {
+      const selected: Array<{
+        bytes: Blob
+        name: string
+        mimeType: string
+        size: number
+      }> = []
+      const count = files.length
+      for (let index = 0; index < count; index++) {
+        const file = files[index]
+        if (!file) throw new TypeError("Missing attachment bytes")
+        const name = file.name
+        const readType = Object.getOwnPropertyDescriptor(Blob.prototype, "type")?.get
+        if (!readType) throw new TypeError("Missing native Blob type accessor")
+        const mimeType = readType.call(file) as string
+        // Capture native immutable bytes, not a caller's later shadow Blob hooks.
+        const bytes = Object.freeze(
+          Blob.prototype.slice.call(file, 0, undefined, mimeType),
+        ) as Blob
+        selected.push({ bytes, name, mimeType, size: bytes.size })
+      }
+      const selectedBytes = selected.reduce((total, file) => total + file.size, 0)
       if (budgeted() + selectedBytes > MAX_SESSION_ATTACHMENT_BYTES)
         throw new Error("Attachment session budget exceeded")
       const previous = new Set(entries.keys())
       try {
-        return files.map((file) => {
-          const resourceId = crypto.randomUUID()
-          const previewUrl = URL.createObjectURL(file)
-          entries.set(resourceId, { url: previewUrl, size: file.size, bytes: file })
-          return {
-            type: "file",
-            resourceId,
-            name: file.name,
-            // As the browser reports it, which for most camera RAW files is
-            // not at all. What such a file is declared as is the conversation's
-            // rule, applied when it is attached.
-            mimeType: file.type || "application/octet-stream",
-            size: file.size,
-            previewUrl,
-            // A browser `File` deliberately does not say where it came from.
-            // What can learn that is the host's picker; see `addChosen`.
-            path: null,
+        return selected.map((file) => {
+          const previewUrl = URL.createObjectURL(file.bytes)
+          try {
+            const resource = AttachmentResource.create({
+              name: file.name,
+              mimeType: file.mimeType,
+              size: file.size,
+              previewUrl,
+              path: null,
+            })
+            entries.set(resource, file.bytes)
+            return resource
+          } catch (error) {
+            URL.revokeObjectURL(previewUrl)
+            throw error
           }
         })
       } catch (error) {
-        for (const id of entries.keys()) if (!previous.has(id)) release(id)
+        for (const resource of entries.keys())
+          if (!previous.has(resource)) release(resource)
         throw error
       }
     },
@@ -92,27 +115,25 @@ export function createAttachmentResources() {
      * wherever it came from, so the picker's images are read first and arrive
      * through `add` with their bytes, like any other image.
      */
-    addChosen(chosen: readonly ChosenFile[]): AttachmentInput[] {
-      return chosen.map((file) => ({
-        type: "file",
-        resourceId: crypto.randomUUID(),
-        name: file.name,
-        // The platform's answer, in the same slot a dropped file's `type`
-        // goes, so the conversation's one naming rule sees the same inputs
-        // whichever route a file arrived by. Empty where the system had none,
-        // which is exactly what a browser reporting nothing looks like.
-        mimeType: file.mimeType || "application/octet-stream",
-        size: file.size,
-        previewUrl: "",
-        path: file.path,
-      }))
+    addChosen(chosen: readonly ChosenFile[]): AttachmentResource[] {
+      const resources: AttachmentResource[] = []
+      const count = chosen.length
+      for (let index = 0; index < count; index++) {
+        const file = chosen[index]
+        if (!file) throw new TypeError("Missing attachment path")
+        const { name, mimeType, size, path } = file
+        resources.push(
+          AttachmentResource.create({ name, mimeType, size, previewUrl: "", path }),
+        )
+      }
+      return resources
     },
     canAdd(size: number) {
       return budgeted() + size <= MAX_SESSION_ATTACHMENT_BYTES
     },
     /** The bytes behind a retained file, or nothing once it has been released. */
-    bytes(resourceId: string): Blob | undefined {
-      return entries.get(resourceId)?.bytes
+    bytes(resource: AttachmentResource): Blob | undefined {
+      return entries.get(resource)
     },
     /** Reconcile one store's current resource references; needed bytes remain budgeted. */
     retain,

@@ -5,11 +5,12 @@
  * those projections. It imports slices, not UI barrels, so tests do not pull
  * the design system.
  */
-import { configureStore } from "@reduxjs/toolkit"
+import { configureStore, isPlain } from "@reduxjs/toolkit"
 
 import {
   conversationHistoryReducer,
   attachmentResourceUsage,
+  AttachmentResource,
   conversationReducer,
 } from "./conversation/adapters/store/slice"
 import { sessionReducer } from "./session/adapters/store/slice"
@@ -26,6 +27,10 @@ export function makeStore(dependencies: StoreDependencies = createDependencies()
   const store = configureStore({
     middleware: (getDefaultMiddleware) =>
       getDefaultMiddleware({
+        serializableCheck: {
+          isSerializable: (value: unknown) =>
+            isPlain(value) || AttachmentResource.is(value),
+        },
         thunk: {
           extraArgument: {
             conversation: dependencies.conversation,

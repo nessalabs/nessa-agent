@@ -1,3 +1,4 @@
+import { AttachmentResource } from "./slice"
 import { ConversationErrorCode, NessaRpcError, type NessaClient } from "@nessa/client"
 import { expect, it, vi } from "vitest"
 import { makeStore } from "../../../store"
@@ -152,20 +153,21 @@ it.each([false, true])(
       ...textContent("Keep this draft"),
       {
         type: "file",
-        resourceId: "notes",
         placementId: "notes",
-        name: "notes.txt",
-        mimeType: "text/plain",
-        size: 1,
-        previewUrl: "blob:notes",
-        path: "/tmp/notes.txt",
         upload: { status: "not-started" },
+        resource: AttachmentResource.create({
+          name: "notes.txt",
+          mimeType: "text/plain",
+          size: 1,
+          previewUrl: "blob:notes",
+          path: "/tmp/notes.txt",
+        }),
       },
     ]
     store.dispatch(
       attachFiles({
         conversationId: "c0",
-        files: draft.filter((part) => part.type === "file"),
+        files: draft.filter((part) => part.type === "file").map((file) => file.resource),
       }),
     )
     store.dispatch(setDraft({ id: "c0", draft }))
