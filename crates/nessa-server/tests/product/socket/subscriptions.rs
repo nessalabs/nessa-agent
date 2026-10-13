@@ -3696,11 +3696,33 @@ async fn a_drive_turn_is_refused_where_its_tools_cannot_be_checked() {
         &fixture.authority,
         &["conversation.write", "conversation.read", "server.read"],
     );
-    let mode = |mode: &str| {
-        json!({"conversationId": fixture.id.to_string(), "requestId": format!("mode-{mode}"), "mode": mode})
+    // A turn's view settles a moment before its agent is idle, and a mode
+    // changes only while nothing runs: ask again, under a new request, while
+    // the answer is `turn_running`, until it is applied.
+    let set_mode = |mode: &'static str, label: &'static str| {
+        let fixture = &fixture;
+        async move {
+            timeout(EXPECTED, async {
+                for attempt in 0.. {
+                    let params = json!({
+                        "conversationId": fixture.id.to_string(),
+                        "requestId": format!("mode-{label}-{attempt}"),
+                        "mode": mode,
+                    });
+                    let changed =
+                        owner_call(fixture, "conversation.setApprovalMode", params).await;
+                    if changed["error"]["code"] != "turn_running" {
+                        assert_eq!(changed["ok"], true, "{changed}");
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+        }
     };
-    let changed = owner_call(&fixture, "conversation.setApprovalMode", mode("auto")).await;
-    assert_eq!(changed["ok"], true, "{changed}");
+    set_mode("auto", "auto").await;
     let turns = fixture.turns().await;
     for method in ["conversation.send", "conversation.steer"] {
         let answer = fixture
@@ -3714,15 +3736,12 @@ async fn a_drive_turn_is_refused_where_its_tools_cannot_be_checked() {
     assert_eq!(fixture.turns().await, turns);
     fixture.owner_turn("owner-auto").await;
     fixture.settled_read(2).await;
-    let changed = owner_call(&fixture, "conversation.setApprovalMode", mode("ask")).await;
-    assert_eq!(changed["ok"], true, "{changed}");
+    set_mode("ask", "ask").await;
     fixture.turn("driven").await;
     fixture.settled_read(3).await;
     // A retry of the admitted turn is answered from what was saved, not
     // admitted again, whatever the mode is now.
-    let again = json!({"conversationId": fixture.id.to_string(), "requestId": "mode-auto-again", "mode": "auto"});
-    let changed = owner_call(&fixture, "conversation.setApprovalMode", again).await;
-    assert_eq!(changed["ok"], true, "{changed}");
+    set_mode("auto", "auto-again").await;
     let turns = fixture.turns().await;
     fixture.turn("driven").await;
     assert_eq!(fixture.turns().await, turns);
