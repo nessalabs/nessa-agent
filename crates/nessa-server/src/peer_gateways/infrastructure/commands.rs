@@ -415,7 +415,24 @@ impl PeerCommands {
             OwnerTurn::Closed => return Err(PeerError::Unavailable),
         };
         cycle.stop();
-        match self.within(PREEMPT, || turn.acquire_owned()).await {
+        let waiting = Arc::clone(&turn);
+        let acquired = self.within(PREEMPT, || waiting.acquire_owned()).await;
+        let outcome = match &acquired {
+            Some(Ok(_)) => None,
+            Some(Err(_)) => Some(PeerError::Unavailable),
+            None => Some(PeerError::Busy),
+        };
+        if outcome.is_some() {
+            // The cycle may already have given the turn back. Its drop could
+            // not remove the entry while this clone held the semaphore, so
+            // drop the clone and remove the entry when nothing else holds it
+            // (`a_peer_turn_is_dropped_when_its_wait_ends_after_the_cycle`).
+            drop(turn);
+            drop(cycle);
+            let mut turns = self.peers.lock().unwrap_or_else(PoisonError::into_inner);
+            take_free_turn(&mut turns, key);
+        }
+        match acquired {
             Some(Ok(permit)) => Ok(permit),
             Some(Err(_)) => Err(PeerError::Unavailable),
             None => Err(PeerError::Busy),

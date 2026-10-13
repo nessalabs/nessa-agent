@@ -10,6 +10,7 @@ use nessa_protocol::pairing::socket::WAKE_TICK;
 use nessa_protocol::relay::{GatewayKey, DIRECT_HEAD_START};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
 use tokio::sync::watch;
 
 struct NoKey;
@@ -62,11 +63,12 @@ impl PeerConnector for Nothing {
 }
 
 fn commands(root: &Path) -> Arc<PeerCommands> {
-    commands_with(root, Arc::new(Nothing), Arc::new(Nothing))
+    commands_with(root, Arc::new(Still), Arc::new(Nothing), Arc::new(Nothing))
 }
 
 fn commands_with(
     root: &Path,
+    clock: Arc<dyn MonotonicClock>,
     audit: Arc<dyn PeerAudit>,
     connector: Arc<dyn PeerConnector>,
 ) -> Arc<PeerCommands> {
@@ -82,7 +84,7 @@ fn commands_with(
     .unwrap();
     Arc::new(PeerCommands::new(
         Arc::new(records),
-        Arc::new(Still),
+        clock,
         audit,
         connector,
         Arc::new(|| {
@@ -175,6 +177,41 @@ fn a_peer_turn_is_dropped_when_nothing_holds_it() {
     assert_eq!(peer_turns(&commands), 0, "a cycle left its turn behind");
 }
 
+/// The cycle gives the turn back while the command still holds the semaphore
+/// it cloned. The wait then ends, because the clock is already past it, and
+/// that late acquire is discarded. The entry is removed with the clone.
+#[tokio::test(flavor = "current_thread")]
+async fn a_peer_turn_is_dropped_when_its_wait_ends_after_the_cycle() {
+    let directory = tempfile::tempdir().unwrap();
+    let clock = Arc::new(Moved(AtomicU64::new(0)));
+    let commands = commands_with(
+        &directory.path().join("root"),
+        clock.clone(),
+        Arc::new(Nothing),
+        Arc::new(Nothing),
+    );
+    let key = DeviceKey::new([9; 32]);
+    let cycle = CycleStop::new();
+    let held = commands.try_cycle_turn(key, &cycle).unwrap();
+    let waiting = tokio::spawn({
+        let commands = commands.clone();
+        async move { commands.peer_turn(key).await }
+    });
+    cycle.stopped().await;
+    drop(held);
+    clock.0.store(u64::MAX, Ordering::SeqCst);
+    let ended = tokio::time::timeout(Duration::from_secs(2), waiting)
+        .await
+        .expect("the wait did not end")
+        .expect("the wait task finishes");
+    assert_eq!(ended.unwrap_err(), PeerError::Busy);
+    assert_eq!(
+        peer_turns(&commands),
+        0,
+        "a turn whose wait ended after its cycle was kept"
+    );
+}
+
 fn peer_turns(commands: &Arc<PeerCommands>) -> usize {
     commands
         .peers
@@ -236,7 +273,12 @@ async fn a_command_admitted_before_shutdown_ends_with_its_outcome_and_no_effect(
         open: watch::channel(false).0,
     });
     let dials = Arc::new(Dials(0.into()));
-    let commands = commands_with(&directory.path().join("root"), audit.clone(), dials.clone());
+    let commands = commands_with(
+        &directory.path().join("root"),
+        Arc::new(Still),
+        audit.clone(),
+        dials.clone(),
+    );
     let owner = PrincipalId::new("owner").unwrap();
     let forget = tokio::spawn({
         let (commands, owner) = (commands.clone(), owner.clone());
@@ -310,7 +352,12 @@ async fn a_command_asked_after_close_is_refused_before_its_intent() {
         open: watch::channel(true).0,
     });
     let dials = Arc::new(Dials(0.into()));
-    let commands = commands_with(&directory.path().join("root"), audit.clone(), dials.clone());
+    let commands = commands_with(
+        &directory.path().join("root"),
+        Arc::new(Still),
+        audit.clone(),
+        dials.clone(),
+    );
     assert!(commands.close(Duration::from_secs(5)).await);
     let owner = PrincipalId::new("owner").unwrap();
     assert_eq!(
@@ -366,7 +413,12 @@ async fn close_waits_for_a_command_holding_the_turn_and_keeps_its_outcome() {
         dialed: AtomicBool::new(false),
         open: watch::channel(false).0,
     });
-    let commands = commands_with(&directory.path().join("root"), audit.clone(), dial.clone());
+    let commands = commands_with(
+        &directory.path().join("root"),
+        Arc::new(Still),
+        audit.clone(),
+        dial.clone(),
+    );
     let enroll = tokio::spawn({
         let commands = commands.clone();
         async move {
