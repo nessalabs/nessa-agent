@@ -1,8 +1,16 @@
 import { CannotRun } from "./cli.mjs"
 import { css, keys } from "./selectors.mjs"
 
+const observerAttribute = "data-overview-key-observer"
+let nextObserverId = 0
+
 /** Observe and act on the same mounted prefix, before a later render can finish it. */
 export function pressMountedOverviewKeys(sel) {
+  if (
+    sel.observerId !== undefined &&
+    document.documentElement?.getAttribute(sel.observerAttribute) !== sel.observerId
+  )
+    return false
   const column = document.querySelector(sel.column)
   if (!column) return false
   if (column.hasAttribute("data-overview-listed")) return { missed: true }
@@ -42,36 +50,51 @@ export function pressMountedOverviewKeys(sel) {
   return { missed: false, first, last, afterEnd, afterDown, afterHome }
 }
 
-/** Arm before opening; the qualifying browser callback returns its own measurements. */
+/** Arm before opening; this wait's page token makes stale polls inert after it settles. */
 export async function keysWhileRowsArrive(page) {
+  const observerId = String(++nextObserverId)
+  await page.evaluate(
+    (id) => document.documentElement.setAttribute("data-overview-key-observer", id),
+    observerId,
+  )
   const pending = page.waitForFunction(
     pressMountedOverviewKeys,
-    { column: css.overviewColumn, item: css.overviewItem },
+    { column: css.overviewColumn, item: css.overviewItem, observerId, observerAttribute },
     { timeout: 2000, polling: "raf" },
   )
   // A failed opening key must not leave an unobserved waiter rejection behind.
   void pending.catch(() => {})
-  await page.keyboard.press(keys.overview)
-  const handle = await pending
-  let read
   try {
-    read = await handle.jsonValue()
+    await page.keyboard.press(keys.overview)
+    const handle = await pending
+    let read
+    try {
+      read = await handle.jsonValue()
+    } finally {
+      await handle.dispose()
+    }
+    if (read.missed)
+      throw new CannotRun("the overview completed without a qualifying partial list")
+    const failures = []
+    const aligned = (label, step, want) => {
+      if (step.focused !== want)
+        failures.push(
+          `${label} left focus on ${step.focused}, not the mounted row ${want}`,
+        )
+      else if (step.tabbable !== step.focused)
+        failures.push(
+          `${label} marked ${step.tabbable} current while focus stayed on ${step.focused}`,
+        )
+    }
+    aligned("End", read.afterEnd, read.last)
+    aligned("↓", read.afterDown, read.last)
+    aligned("Home", read.afterHome, read.first)
+    return { ...read, failures }
   } finally {
-    await handle.dispose()
+    await page.evaluate((id) => {
+      const root = document.documentElement
+      if (root?.getAttribute("data-overview-key-observer") === id)
+        root.removeAttribute("data-overview-key-observer")
+    }, observerId)
   }
-  if (read.missed)
-    throw new CannotRun("the overview completed without a qualifying partial list")
-  const failures = []
-  const aligned = (label, step, want) => {
-    if (step.focused !== want)
-      failures.push(`${label} left focus on ${step.focused}, not the mounted row ${want}`)
-    else if (step.tabbable !== step.focused)
-      failures.push(
-        `${label} marked ${step.tabbable} current while focus stayed on ${step.focused}`,
-      )
-  }
-  aligned("End", read.afterEnd, read.last)
-  aligned("↓", read.afterDown, read.last)
-  aligned("Home", read.afterHome, read.first)
-  return { ...read, failures }
 }

@@ -12,6 +12,7 @@ function pageWithFastCompletion({
   noPartial = false,
   noActiveFocus = false,
   outsideFocus = false,
+  deliverBeforeOpeningFailure = false,
   openingFailure,
 } = {}) {
   const events = []
@@ -21,6 +22,7 @@ function pageWithFastCompletion({
     rows: [],
     focused: undefined,
     listedChecks: [],
+    observerId: undefined,
   }
   class Row {
     constructor(id) {
@@ -52,6 +54,17 @@ function pageWithFastCompletion({
     querySelectorAll: () => view.rows,
   }
   const document = {
+    documentElement: {
+      getAttribute(name) {
+        return name === "data-overview-key-observer" ? view.observerId : null
+      },
+      setAttribute(name, value) {
+        if (name === "data-overview-key-observer") view.observerId = value
+      },
+      removeAttribute(name) {
+        if (name === "data-overview-key-observer") view.observerId = undefined
+      },
+    },
     querySelector: () => (view.visible ? column : null),
     get activeElement() {
       return view.focused
@@ -93,11 +106,18 @@ function pageWithFastCompletion({
         if (view.visible) observe()
       })
     },
-    evaluate: async (predicate, selectors) => browser(predicate, selectors),
+    evaluate: async (operation, value) =>
+      runInNewContext(`(${operation.toString()})(value)`, { document, value }),
     keyboard: {
       press: async () => {
         events.push("open")
-        if (openingFailure) throw openingFailure
+        if (openingFailure) {
+          if (deliverBeforeOpeningFailure) {
+            view.visible = true
+            events.push("delivered")
+          }
+          throw openingFailure
+        }
         view.visible = true
         view.complete = noPartial
         if (noActiveFocus) view.focused = undefined
@@ -114,6 +134,7 @@ function pageWithFastCompletion({
     page,
     events,
     view,
+    poll: () => observe?.(),
     get disposed() {
       return disposed
     },
@@ -134,6 +155,7 @@ test("acts on the observed partial prefix before a later render completes", asyn
     failures: [],
   })
   assert.equal(scene.view.rows.length, 3)
+  assert.equal(scene.view.observerId, undefined)
   assert.equal(scene.disposed, true)
 })
 
@@ -165,6 +187,19 @@ test("preserves an opening-key failure", async () => {
   const scene = pageWithFastCompletion({ openingFailure: failure })
   await assert.rejects(keysWhileRowsArrive(scene.page), (error) => error === failure)
   assert.deepEqual(scene.events, ["arm", "open"])
+})
+
+test("stops observing when an opening key is delivered but its RPC rejects", async () => {
+  const failure = new Error("opening key acknowledgement failed")
+  const scene = pageWithFastCompletion({
+    deliverBeforeOpeningFailure: true,
+    openingFailure: failure,
+  })
+  await assert.rejects(keysWhileRowsArrive(scene.page), (error) => error === failure)
+  scene.poll()
+  assert.deepEqual(scene.events, ["arm", "open", "delivered"])
+  assert.deepEqual(scene.view.listedChecks, [])
+  assert.equal(scene.view.observerId, undefined)
 })
 
 test("does not act before its own rows and focus are mounted", () => {
