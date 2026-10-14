@@ -264,7 +264,10 @@ against a private scripted gateway.
   in `src/desktop/adapters/host-gateway.ts`. How the window's keys are matched and
   written on this platform is the window's, not the workspace's:
   `src/desktop/model/keyboard.ts`, with the platform read once in
-  `src/desktop/adapters/platform.ts`. So is the one id encoder
+  `src/desktop/adapters/platform.ts`. The shared binding adapter consumes a matched
+  chord before running its command; availability does not release native key
+  defaults ([workspace shortcuts](design/workspace-shortcuts.md)).
+  So is the one id encoder
   (`src/desktop/model/id-encoding.ts`), which writes any string, a lone
   surrogate too, in an alphabet a separator is never part of; whatever joins
   ids into one string encodes them through it. Views select what they show — a pane its own

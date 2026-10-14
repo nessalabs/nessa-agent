@@ -310,6 +310,11 @@ _ADR 238 › Focus follows the focused pane_; keys in
   held callbacks after the old workspace unmounts; they enqueue zero new frame
   work, and the current layout still focuses its composer. _Check:_ `focus.mjs`
   (`focus-retired-layout`); [frame lifetime](../../docs/design/ui-workspace-load.md#focus-frame-lifetime-730), #730.
+- [ ] **Bound workspace keys stay consumed while their actions are unavailable.**
+  With the quick switcher open, ⌘N and ⌘W prevent the native default, leave the
+  panes unchanged, and retain the switcher. An unbound key remains unconsumed;
+  closing the switcher restores ordinary split commands.
+  _Check:_ `focus.mjs` (`focus-bound-keys`), [workspace shortcuts](../../docs/design/workspace-shortcuts.md).
 - [ ] **A burst of keys leaves a working window**: no error, a focused pane.
   _Check:_ `focus.mjs` (`focus-mash`).
 - [ ] **A pane command from the overview**: one that is a navigation leaves
