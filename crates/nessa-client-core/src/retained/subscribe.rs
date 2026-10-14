@@ -1,8 +1,8 @@
 //! A linked device's live read of one conversation.
 //!
 //! `RetainedCache::read` still copies records into the private cache. This
-//! feed does not. It opens `conversation.subscribe` on the same pinned
-//! session and yields each `conversation.view` the gateway sends. Dropping
+//! feed does not. It opens `conversation.subscribe` on a new pinned session
+//! to the same gateway and yields each `conversation.view` the gateway sends. Dropping
 //! the feed drops the socket, which ends the subscription. `close` also
 //! sends `conversation.unsubscribe` when the socket is still up.
 //!
@@ -131,12 +131,16 @@ impl ConversationFeed {
     }
     /// Stop this subscription. A frame still queued is dropped with it.
     /// `unknown_subscription` and a socket that is already gone are success:
-    /// the server drops the subscription when the connection closes.
+    /// the server drops the subscription when the connection closes. Any other
+    /// refusal is returned and the socket is dropped, because this feed will
+    /// not retry `close` or read another frame, and the server ends the
+    /// subscription with the connection.
     ///
     /// # Errors
     ///
     /// A typed refusal other than `unknown_subscription`, mapped the same
-    /// way as [`Self::next_event`].
+    /// way as [`Self::next_event`]. `forbidden` and `unauthorized` set
+    /// [`SubscribeError::asks_status`].
     pub fn close(&mut self) -> Result<(), SubscribeError> {
         if self.closed {
             return Ok(());
@@ -159,9 +163,12 @@ impl ConversationFeed {
                 | GatewayError::Closed(_),
             )
             | Err(GatewayError::Subscription(SubscriptionRefusal::Subscription(
-                crate::read_only_sync::application::SubscriptionCode::Unknown,
+                SubscriptionCode::Unknown,
             ))) => Ok(()),
-            Err(error) => Err(self.mapped(error)),
+            Err(error) => {
+                self.session.disconnect();
+                Err(self.mapped(error))
+            }
         }
     }
     fn protocol(&self) -> SubscribeError {

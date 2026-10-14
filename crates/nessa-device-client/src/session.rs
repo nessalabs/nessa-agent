@@ -488,9 +488,12 @@ impl Driver {
 }
 /// Views the server still marks `stale` are one replay, sent immediately.
 /// Keep the newest and stop when one is settled, the cursor stops advancing,
-/// or the feed ends. A view already applied wins over a later failure so the
-/// caller can resume from its cursor. An authority refusal that ends the
-/// feed still asks status again, including when that view is kept.
+/// or the feed ends. The loop also stops after 32 views. That view may still
+/// be stale: its cursor is where the next follow resumes, and `transcriptState`
+/// in the view JSON says whether it had settled. A view already applied wins
+/// over a later failure so the caller can resume from its cursor. An authority
+/// refusal that ends the feed, including `conversation.unsubscribe`, still asks
+/// status again when that view is kept.
 fn take_settled(
     feed: &mut nessa_client_core::retained::ConversationFeed,
 ) -> (Result<FollowedConversation, ReadFailure>, bool) {
@@ -500,13 +503,13 @@ fn take_settled(
         let event = match feed.next_event() {
             Ok(event) => event,
             Err(error) => {
-                let _ = feed.close();
-                return settled_or_error(latest, error.failure(), error.asks_status());
+                let authority = error.asks_status() || close_asks_status(feed);
+                return settled_or_error(latest, error.failure(), authority);
             }
         };
         if let Some(error) = event.terminal_failure() {
-            let _ = feed.close();
-            return settled_or_error(latest, error.failure(), error.asks_status());
+            let authority = error.asks_status() || close_asks_status(feed);
+            return settled_or_error(latest, error.failure(), authority);
         }
         let FeedEvent::View { cursor, view } = event else {
             continue;
@@ -522,11 +525,7 @@ fn take_settled(
         match followed {
             Ok(view) => latest = Some(view),
             Err(_) => {
-                let _ = feed.close();
-                return match latest {
-                    Some(view) => (Ok(view), false),
-                    None => (Err(ReadFailure::Protocol), false),
-                };
+                return settled_or_error(latest, ReadFailure::Protocol, close_asks_status(feed));
             }
         }
         if !stale || stalled {
@@ -534,11 +533,13 @@ fn take_settled(
         }
         previous = Some(position);
     }
-    let _ = feed.close();
-    match latest {
-        Some(view) => (Ok(view), false),
-        None => (Err(ReadFailure::Protocol), false),
-    }
+    settled_or_error(latest, ReadFailure::Protocol, close_asks_status(feed))
+}
+
+/// Whether stopping the feed refused this credential. A view already applied
+/// does not hide that refusal.
+fn close_asks_status(feed: &mut nessa_client_core::retained::ConversationFeed) -> bool {
+    feed.close().is_err_and(|error| error.asks_status())
 }
 
 /// A view already applied is the result. `authority` is whether the failure
@@ -839,6 +840,9 @@ impl Drop for NativeSession {
     }
 }
 
+#[cfg(test)]
+#[path = "../tests/session/follow_close.rs"]
+mod follow_close;
 #[cfg(test)]
 #[path = "../tests/session/local_enrollment.rs"]
 mod local_enrollment_tests;

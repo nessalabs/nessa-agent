@@ -88,16 +88,15 @@ fn viewed(id: &str, position: &str, text: &str) -> serde_json::Value {
     })
 }
 fn send_view(socket: &mut PeerSocket, id: &str, position: &str, text: &str) {
+    send_view_of(socket, id, "conversation", position, text);
+}
+fn send_view_of(socket: &mut PeerSocket, id: &str, conversation: &str, position: &str, text: &str) {
+    let mut value = viewed(id, position, text);
+    value["view"]["conversationId"] = json!(conversation);
     send(
         socket,
         OutgoingMessage::Event(
-            EventFrame::push(
-                product_event::CONVERSATION_VIEW,
-                &viewed(id, position, text),
-                1,
-                0,
-            )
-            .unwrap(),
+            EventFrame::push(product_event::CONVERSATION_VIEW, &value, 1, 0).unwrap(),
         ),
     );
 }
@@ -458,5 +457,108 @@ fn an_empty_subscription_id_is_a_protocol_failure() {
         Some(GatewayError::Protocol)
     );
     drop(session);
+    gateway.join().unwrap();
+}
+
+/// A view whose subscription id matches, and whose conversation does not, is
+/// not delivered.
+#[test]
+fn a_view_for_another_conversation_is_a_protocol_failure() {
+    let (endpoint, gateway) = peer(|socket| {
+        admit(socket, "1");
+        send_view_of(socket, "1", "other", "1", "foreign");
+        while !socket.ended() {}
+    });
+    let mut session = connect(&endpoint);
+    session.begin().unwrap();
+    session.subscribe(&params(None)).unwrap();
+    session.finish().unwrap();
+    session.begin().unwrap();
+    assert!(matches!(
+        session.next_delivery(),
+        Err(GatewayError::Protocol)
+    ));
+    drop(session);
+    gateway.join().unwrap();
+}
+
+/// A view parked with the subscribe reply is rejected before the inbox keeps it.
+#[test]
+fn a_parked_view_for_another_conversation_fails_the_subscribe() {
+    let (endpoint, gateway) = peer(|socket| {
+        let _opened = request(socket);
+        send_view_of(socket, "1", "other", "1", "foreign");
+        while !socket.ended() {}
+    });
+    let mut session = connect(&endpoint);
+    session.begin().unwrap();
+    assert_eq!(
+        session.subscribe(&params(None)),
+        Err(GatewayError::Protocol)
+    );
+    drop(session);
+    gateway.join().unwrap();
+}
+
+/// Unsubscribe `forbidden` is returned, and the socket is gone before the feed
+/// is dropped, so the server subscription does not stay live.
+#[test]
+fn a_forbidden_unsubscribe_closes_the_socket_and_asks_status() {
+    let (endpoint, gateway) = peer(|socket| {
+        let opened = request(socket);
+        let conversation = opened.params["conversationId"].as_str().unwrap().to_owned();
+        send(
+            socket,
+            OutgoingMessage::Response(
+                ResponseFrame::success(&opened.id, &json!({"subscriptionId": "1"})).unwrap(),
+            ),
+        );
+        send_view_of(socket, "1", &conversation, "1", "settled");
+        let closing = request(socket);
+        assert_eq!(closing.method, product_method::CONVERSATION_UNSUBSCRIBE);
+        send(
+            socket,
+            OutgoingMessage::Response(ResponseFrame::failure(&closing.id, "forbidden", "revoked")),
+        );
+        assert!(socket.client_shut(), "unsubscribe refusal drops the socket");
+    });
+    let root = tempfile::tempdir().unwrap();
+    let private = root.path().join("cache");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let cache = RetainedCache::open(
+        &private.join("cache.sqlite3"),
+        Arc::new(Wall),
+        Arc::new(Time(Instant::now())),
+    )
+    .unwrap();
+    let conversation = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let stop = ReadStop::new();
+    let mut feed = cache
+        .subscribe(
+            ReaderAccess {
+                role: ReaderRole::GrantedPeer,
+                address: endpoint.address,
+                relay: None,
+                identity: &endpoint.device,
+                pin: endpoint.pin,
+                credential: "credential",
+                receiver: "receiver",
+                access_epoch: 3,
+                client_id: "example",
+            },
+            &conversation,
+            None,
+            &stop,
+            Duration::from_secs(2),
+        )
+        .unwrap_or_else(|error| panic!("subscribe failed: {error:?}"));
+    assert!(matches!(
+        feed.next_event().unwrap(),
+        crate::retained::FeedEvent::View { .. }
+    ));
+    let error = feed.close().unwrap_err();
+    assert!(error.asks_status());
+    assert_eq!(error.failure(), ReadFailure::Refused);
+    drop(feed);
     gateway.join().unwrap();
 }

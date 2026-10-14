@@ -681,8 +681,9 @@ impl RetainedCache {
         })
     }
 
-    /// The pinned session a read and a subscription share: the same key, pin,
-    /// credential, relay and stop. A subscription does not write the cache.
+    /// A new pinned connection for this call. It uses the same key, pin,
+    /// credential, relay and stop as a checkpoint read, and not that read's
+    /// socket. A subscription does not write the cache.
     fn open_session(
         &self,
         access: &ReaderAccess<'_>,

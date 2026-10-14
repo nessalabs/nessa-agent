@@ -190,8 +190,11 @@ impl Parked {
 
 /// The one subscription this connection opened. `closed` is set once its end
 /// has been delivered, so a view that arrives after that end is ignored.
+/// `conversation` is the id this connection subscribed to. A view for another
+/// conversation is rejected before it is queued.
 struct SubscriptionInbox {
     id: String,
+    conversation: String,
     parked: Parked,
     closed: bool,
 }
@@ -214,6 +217,9 @@ struct Events {
     subscription: Option<SubscriptionInbox>,
     /// Set while `conversation.subscribe` is unanswered.
     opening: Option<Parked>,
+    /// Conversation requested by the subscribe in flight, until the inbox
+    /// takes it. A view for any other conversation is a protocol failure.
+    opening_conversation: Option<String>,
 }
 impl Events {
     fn new(policy: GatewayPolicy) -> Self {
@@ -223,6 +229,7 @@ impl Events {
             inbox: None,
             subscription: None,
             opening: None,
+            opening_conversation: None,
         }
     }
     /// A watch event names a watch this connection minted, or the connection
@@ -261,7 +268,8 @@ impl Events {
             .ok_or(GatewayError::Protocol)
     }
     /// A view outside the generated shape is skipped. One for another
-    /// subscription than the one this connection opened is a protocol failure.
+    /// subscription than the one this connection opened, or for a different
+    /// conversation than the one it subscribed to, is a protocol failure.
     fn observe_view(&mut self, payload: serde_json::Value) -> Result<(), GatewayError> {
         let viewed = match strict_decode::<ConversationViewed>(payload) {
             Ok(viewed) if !viewed.subscription_id.is_empty() => viewed,
@@ -273,6 +281,14 @@ impl Events {
                 return Ok(());
             }
         };
+        let expected = self
+            .subscription
+            .as_ref()
+            .map(|inbox| inbox.conversation.as_str())
+            .or(self.opening_conversation.as_deref());
+        if expected.is_some_and(|conversation| viewed.view.conversation_id != conversation) {
+            return Err(GatewayError::Protocol);
+        }
         if let Some(live) = &mut self.subscription {
             if viewed.subscription_id != live.id {
                 return Err(GatewayError::Protocol);
@@ -501,6 +517,12 @@ impl Session {
         }
         retained
     }
+    /// Drop the socket. A typed unsubscribe refusal keeps the connection so a
+    /// later operation can ask again; a feed that will not ask again drops it
+    /// here, and the server ends the subscription with the connection.
+    pub(crate) fn disconnect(&mut self) {
+        self.socket.take();
+    }
     pub(super) fn rpc<T: Serialize>(
         &mut self,
         method: &str,
@@ -582,6 +604,7 @@ impl Session {
         if self.events.subscription.is_some() {
             return Err(self.fail(GatewayError::Busy));
         }
+        self.events.opening_conversation = Some(params.conversation_id.clone());
         self.events.opening = Some(Parked {
             views: Vec::new(),
             ended: None,
@@ -594,6 +617,7 @@ impl Session {
             Ok(value) => value,
             Err(error) => {
                 self.events.opening = None;
+                self.events.opening_conversation = None;
                 return Err(error);
             }
         };
@@ -601,6 +625,7 @@ impl Session {
             Ok(result) if !result.subscription_id.is_empty() => result,
             _ => {
                 self.events.opening = None;
+                self.events.opening_conversation = None;
                 return Err(self.fail(GatewayError::Protocol));
             }
         };
@@ -608,6 +633,9 @@ impl Session {
             views: Vec::new(),
             ended: None,
         });
+        let Some(conversation) = self.events.opening_conversation.take() else {
+            return Err(self.fail(GatewayError::Protocol));
+        };
         let foreign = parked
             .views
             .iter()
@@ -621,6 +649,7 @@ impl Session {
         }
         self.events.subscription = Some(SubscriptionInbox {
             id: result.subscription_id.clone(),
+            conversation,
             parked,
             closed: false,
         });
@@ -684,6 +713,7 @@ impl Session {
             return Err(self.fail(GatewayError::Protocol));
         }
         self.events.subscription = None;
+        self.events.opening_conversation = None;
         Ok(())
     }
     fn rpc_inner<T: Serialize>(

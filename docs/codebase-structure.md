@@ -1728,7 +1728,7 @@ and transitive edges. Both ends depend on `nessa-protocol` for shared rules.
 
 The public `retained` library selects owner-device or granted-peer catalogue reads
 through the existing source authorizer. `retained/subscribe.rs` is the live
-`conversation.subscribe` feed on that same pinned session; it does not write
+`conversation.subscribe` feed on a new pinned session to the same gateway; it does not write
 the checkpoint `RetainedCache::read` still copies. `retained/saved.rs` maps saved scope,
 catalogue pages and transcript/progress/deletion values through the existing
 private cache and passive projection, with no CLI, second fold or receiver.

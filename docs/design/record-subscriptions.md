@@ -61,8 +61,9 @@ The agent catalog is followed the same way (issue 706, part I-3; row I10 in
 
 Why views and not record batches: the desktop is TypeScript and must not keep
 a second fold (rule "one fold" in the transcript-fold design). A linked device
-follows one conversation with `conversation.subscribe` on the same pinned
-session as its checkpoint read. The checkpoint read still copies records
+follows one conversation with `conversation.subscribe` on a new pinned
+session to the same gateway as its checkpoint read. The two calls do not
+share a connection. The checkpoint read still copies records
 (`conversation.recordsHead` / `recordsPage`). `conversation.watchRecords`
 remains for that retained path until nessa-ios is confirmed off it.
 `conversation.subscribeList` stays refused to a paired device until #724
