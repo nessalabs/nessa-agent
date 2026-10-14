@@ -26,6 +26,7 @@ import {
   report,
   resultOfThrown,
   statusOf,
+  UnsafeToContinueError,
   UsageError,
   verdictOf,
 } from "./cli.mjs"
@@ -161,6 +162,18 @@ describe("attempt", () => {
     })
     assert.equal(rep.results[0].cannotRun, true)
     assert.equal(statusOf(rep.results), 2)
+  })
+
+  it("stops the check when recovery leaves its browser page unsafe to reuse", async () => {
+    const rep = collect()
+    const fatal = new UnsafeToContinueError("page retirement failed")
+    await assert.rejects(
+      attempt(rep, { name: "step" }, async () => {
+        throw fatal
+      }),
+      (error) => error === fatal,
+    )
+    assert.deepEqual(rep.results, [])
   })
 
   it("adds what the step returned", async () => {

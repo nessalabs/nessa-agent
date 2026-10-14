@@ -16,10 +16,10 @@ rather than being swallowed as absent rendering.
 | Case | Expected result | Evidence |
 | --- | --- | --- |
 | Rendering completes before the opening-key RPC returns | Capture and act on the earlier qualifying prefix | Fast-completion page-port test |
-| Opening-key delivery succeeds but its RPC rejects before the next observation poll | The opening error remains primary; disarm the unique page token so no synthetic keys run later | Delivery-then-rejection poll test |
+| Opening-key delivery succeeds but its RPC rejects before the next observation poll | The opening error remains primary; disarm the unique page token. If disarm fails, retire the page before returning so no later check can poll it | Delivery-then-rejection and failed-disarm retirement tests |
 | Render is complete before any eligible prefix | Could-not-run, no key measurements | Absent-prefix test |
 | Opening key fails | Original failure remains observable | Opening-failure test |
-| Opening or browser-result work fails, then disarm or handle disposal fails | Preserve the exact operation error; log cleanup failures, attempt later cleanup, and keep the waiter rejection observed. If disarm fails, token state is unknown; a closed page has no live poll | Primary-plus-cleanup-failure tests |
+| Opening or browser-result work fails, then disarm or handle disposal fails | Preserve the exact operation error; log cleanup failures, attempt later cleanup, and keep the waiter rejection observed. If disarm fails, token state is unknown, so retire the page. If retirement also fails while the page remains live, stop the driver through a typed fatal error with the primary error as its cause | Primary-plus-cleanup-failure, closed-page acknowledgement, and live-page retirement-failure tests |
 | Browser-result work succeeds, then disarm or handle disposal fails | Report the first cleanup failure after attempting remaining cleanup; log later cleanup failures | Cleanup-only-failure test |
 | Browser JSON read and handle disposal both fail | Preserve the exact JSON-read error | JSON-read-plus-disposal test |
 | Browser observation fails or times out | Original verifier fault remains observable; no fabricated measurements | Observation-fault test |
