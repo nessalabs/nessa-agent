@@ -208,7 +208,7 @@ policy engine, a new crate, or a grant-by-list.
 | `policy_revision` | Stays, under the name grant epoch. |
 | `paired.peer_gateway` | Deleted. `grant.comment` and `grant.drive` require the capability and, until the peer-write slice, a principal signed in as the binding owner. One condition, on the permit. |
 | A stored Drive role that a peer cannot use | `conversation.share` asks those permits before it writes. A denial writes nothing and returns the policy ids. The use case does not match a gateway principal on its own. The same permits deny a hand-built row at admission. |
-| `share_grants` key `(receiver_id, conversation_id)` | Becomes `(principal_id, resource_kind, resource_id)` in the refactor, one metadata version bump. A conversation row uses kind `conversation` and the conversation id. A directory row uses kind `directory` and the directory identity. The directory slice does not change the key. `receiver_id` stays for a paired device or gateway, because admission is still `Initiation::grant(receiver, epoch)`. An integration, and a later agent, store the principal and no receiver. |
+| `share_grants` key `(receiver_id, conversation_id)` | Becomes `(subject_kind, subject_id, resource_kind, resource_id)` in the refactor, one metadata version bump. A paired device or gateway uses subject kind `receiver` and its receiver id, so two devices of one owner stay two rows. An integration or a later agent uses subject kind `principal`. The same-person link is not the subject. The directory slice does not change the key. |
 | Credential `conversation.read`, `conversation.write`, `environment.serve` | Stay. They say whether this credential may read, may be the conversation authority, or may serve. They do not name a conversation or a directory. `hold.peer` stays as written. |
 | `grants.json` on the environment | Stays on that machine, so the gateway cannot widen it. The same capability and constraint words. `domain::unwritten` stays the default facts (an absent ssh entry is the host's own set; an absent dialed gateway is empty). |
 | Gateway `denyPrograms` / `allowPrograms` | Stay the host's own program list in `commands.cedar`. A grant's command rules are a further constraint, deny wins. |
@@ -281,10 +281,13 @@ path to Nessa stays outside Nessa's check, and the share says that too.
 
 Command matchers name a program by its file name, as
 `command.denied_program` does, and may add a bounded argv pattern. Deny
-wins over allow. The pattern bound is a row in
-[limits](../limits.md), owned by the slice that adds it, beside the
-existing tool-policy bounds. The program match reuses the file-name rule
-already in `commands.cedar`.
+wins over allow. The pattern bound, the rule-count bound, and the encoded
+grant bound are rows in [limits](../limits.md), owned by the slice that
+adds them, beside the existing tool-policy bounds. The encoded grant,
+including its command rules, must fit in the 64 KiB product frame with
+the frame overhead. `conversation.share` refuses a grant past that cap
+and writes nothing. The program match reuses the file-name rule already
+in `commands.cedar`.
 
 ## Same person
 
@@ -293,7 +296,9 @@ person. The credential still names `gateway:<key>` and `hold.peer` is
 unchanged. A link row says that gateway principal acts for the owner's
 person principal. Admission reports the person as who it acts for and the
 grant as what it may do. The link adds no capability, copies no
-conversation, and does not turn the peer into the owner phone.
+conversation, and does not turn the peer into the owner phone. The grant
+subject stays that gateway's receiver. Two gateways linked as the same
+person keep two rows.
 
 ## Live follow
 
@@ -307,9 +312,13 @@ admitted on `conversation.read` by `admit_paired_follow`, and the
 conversation is the share check.
 
 The live-follow slice opens two subscriptions on the grantor, both on the
-subscription machinery #851 already uses. Cursor `{incarnation, position}`,
-resume with `after`, replacement on a new incarnation, `cursor_ahead`
-refused, `lagging` resumed from `lastDelivered`.
+subscription machinery #851 already uses. Resume with `after`, replacement
+on a new incarnation, `cursor_ahead` refused, `lagging` resumed from
+`lastDelivered`. A chat subscription keeps the view cursor
+`{incarnation, position}` from #851. The grant subscription's position is
+an opaque counter for this receiver only. It advances when that receiver's
+grants change. It is not an owner catalogue revision, so a gap from the
+owner's other work does not appear in it.
 
 - **Grants.** A grant subscription for this receiver. Each frame is a
   prefix of that receiver's grants in cursor order: a grant added, a grant
@@ -322,9 +331,9 @@ refused, `lagging` resumed from `lastDelivered`.
   ([record subscriptions](record-subscriptions.md), row L3). The follower
   applies the prefix and resumes with `after` the last cursor in the frame
   until a frame is complete. It does not walk the owner's catalogue. The
-  subscription is not ended `too_large` because the set did not fit. One
-  grant row that itself exceeds the bound ends that subscription
-  `too_large`, which is the existing oversized-frame rule.
+subscription is not ended `too_large` because the set did not fit. Every
+stored grant already fits in one frame with the frame overhead, so one
+directory grant does not end this subscription either.
 - **Chats.** `conversation.subscribe` for each shared chat the follower has
   opened and chosen to follow, up to the connection's conversation cap. A
   refused chat subscribe withdraws that local replica.
@@ -407,7 +416,7 @@ session that presented one would be admitted as a paired reader.
 
 `conversation.share` is still the one share command. This slice teaches it a
 second target, the integration credential, beside a paired receiver. The
-grant row is the same fact, keyed by the integration principal and the
+grant row is the same fact, subject kind `principal` and the
 conversation resource, with no receiver. Delivery reads those
 grants. The gateway POSTs events for those conversations only. The payload
 is what a reader with that capability set may see.
@@ -514,16 +523,32 @@ code and does not leave a MAC key on either record.
 the HMAC key.
 
 This slice adds it. After the enrollment is Active, both sides already
-have a pinned TLS session. On that session each side offers an ephemeral
-X25519 public key. HKDF-SHA256 derives the 32-byte MAC key from the shared
-secret, with a fixed label used only for this announcement. The ephemeral
-private keys are dropped. Each side stores the MAC key beside the pin it
-already keeps for that peer: the dialing gateway on the peer file, the
-granting gateway on the pairing record that already stores that peer's pin
-and `class: "peer"`. The key is not written into the credential, the
-grant, or the announcement. The peer-file schema version bumps once. A
-record this build cannot read stays unreadable for that peer only, as the
-peer file already does.
+have a pinned TLS session. Install is one generation, retried until both
+sides have stored the same MAC key. A new generation does not start while
+this one is unfinished.
+
+1. Each side offers an ephemeral X25519 public key for that generation.
+2. Each side durably writes `offered`: the generation, its ephemeral
+   private key, and the peer's public key. It sends `stored` only after
+   that write commits.
+3. After both `stored` messages, each side derives the MAC key with
+   HKDF-SHA256 and a fixed label used only for this announcement. It
+   durably replaces `offered` with `installed`: the generation and the
+   MAC key. The ephemeral private key leaves in that write. It then sends
+   `installed`.
+4. A dropped session retries the same generation. A side in `offered`
+   resends the public key it stored and does not mint a new one. A side
+   in `installed` resends `installed` and does not derive again. A side
+   with nothing stored accepts the same generation.
+
+Neither side derives before the other's `offered` write has been acked,
+so a crash cannot leave one side installed and the other unable to
+recompute. The dialing gateway stores the state on the peer file beside
+the pin. The granting gateway stores it on the pairing record that
+already keeps that peer's pin and `class: "peer"`. The key is not written
+into the credential, the grant, or the announcement. The peer-file schema
+version bumps once. A record this build cannot read stays unreadable for
+that peer only, as the peer file already does.
 
 A peer row from before this slice has no discovery key. Alpha does not
 invent one. That peer is left out of the announcement and cannot match a
@@ -581,18 +606,20 @@ Part of the access-grant proposal in `docs/design/access-grants.md`.
 ## Deliver
 
 Make the conversation share row the access grant. The primary key is
-`(principal_id, resource_kind, resource_id)`, replacing
-`(receiver_id, conversation_id)`. This slice writes kind `conversation`
-and the conversation id. The directory slice writes kind `directory` and
-a resource id that names the environment and the directory. It does not
+`(subject_kind, subject_id, resource_kind, resource_id)`, replacing
+`(receiver_id, conversation_id)`. A paired device or paired gateway uses
+subject kind `receiver` and its receiver id. Two devices of one owner
+authenticate as that owner
+([peer gateways](auth/peer-gateways.md)) and keep distinct rows. A
+gateway credential still names `gateway:<key>`. The same-person link is
+not the subject and does not merge two receivers' grants. An integration
+or a later agent, which has no receiver, uses subject kind `principal`
+and the principal id. This slice writes resource kind `conversation` and
+the conversation id. The directory slice writes kind `directory` and a
+resource id that names the environment and the directory. It does not
 change the primary key and does not mint a conversation id for a
-directory. One principal may hold many directory rows.
-`receiver_id` is no longer the key and is no longer required. A paired
-device or gateway still stores the receiver its credential is bound to,
-because admission returns `Initiation::grant(receiver, epoch)`. An
-integration principal, and a later agent principal, store no receiver.
-Webhook and agent slices insert into this key. They do not migrate
-identity again.
+directory. One subject may hold many directory rows. Webhook and agent
+slices insert into this key. They do not migrate identity again.
 
 The capability set is `read`, and for a principal Cedar permits, `comment`
 and `drive`. Constraints are the tool policy and `commandHosts` a `drive`
@@ -624,8 +651,10 @@ A peer with `read` still reads, and comment and drive are refused. Sharing
 the Cedar policy ids. The share path has no principal-kind match of its
 own. A hand-built row that gives a gateway `comment` is denied by the same
 permits. A grant with a principal and no receiver can be stored, and a
-paired grant is still found by its receiver. Two rows for the same
-principal, resource kind, and resource id cannot both exist. A retry journals before
+paired grant is still found by its receiver. Two devices of one owner
+can each hold a grant on the same conversation. Two rows for the same
+subject and resource cannot both exist. A same-person link does not
+collapse two receiver subjects. A retry journals before
 equal to after. The previous metadata version is refused. A test fails if
 the capability check is removed from the permit.
 
@@ -712,9 +741,10 @@ A grant resource is one directory in an environment the grantor enforces:
 this gateway's machine, a remote environment it already leases, or a cloud
 environment a later agent uses. The grant names the environment and the
 directory. The row uses the refactor's key
-`(principal_id, resource_kind, resource_id)` with kind `directory`. The
-resource id names the environment and the directory. This slice does not
-change that key and does not mint a conversation id. Capabilities are
+`(subject_kind, subject_id, resource_kind, resource_id)` with resource
+kind `directory`. A paired subject is the receiver. The resource id names
+the environment and the directory. This slice does not change that key
+and does not mint a conversation id. Capabilities are
 `read`, `write`, and `exec`. `read` and
 `write` open a named path by walking from a directory handle on the
 granted directory, no-follow against each parent handle. A component that
@@ -732,7 +762,11 @@ Command rules are an ordered allow/deny list on the grant. Cedar matches
 the program by file name, as `command.denied_program` does, and may match
 a bounded argv pattern. Deny wins. The owner edits the list as matchers.
 The list is stored on the grant and is not written into Claude or Codex
-settings. With native hooks opted in, those hooks run in the harness, and
+settings. The rule count and the encoded grant, including the list, are
+bounded by rows this slice adds to `docs/limits.md`. The encoded grant
+must fit in the 64 KiB product frame with the frame overhead.
+`conversation.share` refuses a grant past that cap and writes nothing.
+With native hooks opted in, those hooks run in the harness, and
 Nessa's rules still run at the permission request, `run`, and
 `GrantCommand`. A call the harness makes without asking is reported as
 outside Nessa's gate.
@@ -751,7 +785,9 @@ A command on a sandbox-`none` host is refused `exec` even
 when its working directory is the granted directory. Where the environment
 enforces a filesystem sandbox, the audit names the profile it applied, and
 a path outside that profile's roots is refused. A denied program is
-refused and the audit names the matcher.
+refused and the audit names the matcher. A command-rule list whose
+encoding would not fit in one grant frame is refused and the row is
+unchanged. The grant subscription stays open.
 
 An opted-in Claude or Codex harness still runs its own hooks. The gateway
 cannot write a wider `grants.json` than the machine's owner wrote. A
@@ -774,13 +810,16 @@ Part of docs/design/access-grants.md.
 link row says this `gateway:<key>` principal acts for the owner's person
 principal. The credential, its class, and `hold.peer` stay as they are.
 The link adds no capability. Admission reports the person beside the
-grant. `PeerRead` and `DeviceRead` are unchanged. The owner-phone consent
+grant. The grant subject stays the gateway's receiver, so two gateways
+linked as the same person keep two rows. `PeerRead` and `DeviceRead` are
+unchanged. The owner-phone consent
 class (#811) is not this link and is not issued here.
 
 ## Gate
 
 Pairing with the choice records the person and the gateway principal. A
-read still requires a share grant. A gateway paired without the choice has
+read still requires a share grant. Two linked gateways with grants on
+the same conversation have two rows. A gateway paired without the choice has
 no person on its admission. Revoking the credential drops the link. An
 invitation cannot be relabelled from one choice to the other in transit,
 as the enrollment class cannot today.
@@ -805,7 +844,9 @@ including when the view frame is not sent.
 
 Push grant changes on a grant subscription for this receiver, on the same
 subscription machinery as `conversation.subscribe` (#851). The cursor is
-`{incarnation, position}`. Resume with `after`. A new incarnation replaces
+`{incarnation, position}`. The grant position is an opaque counter for
+this receiver. It advances only when that receiver's grants change, and
+it is not an owner catalogue revision. Resume with `after`. A new incarnation replaces
 the set. `cursor_ahead` is refused. `lagging` resumes from `lastDelivered`.
 Each frame is a prefix of that receiver's grants in cursor order: a grant
 added, a grant revoked, or a grant epoch changed. A frame that would pass
@@ -813,8 +854,8 @@ the 64 KiB product-frame bound is cut on a grant boundary and marked
 `complete: false`. The follower resumes with `after` the last cursor in
 that frame until a frame is complete. It does not walk the owner's
 catalogue. The subscription is not ended `too_large` because the set did
-not fit. One grant row that itself exceeds the bound ends that
-subscription `too_large`. It is not `catalogue.watch`, which fires on the
+not fit. A stored grant fits in one frame with the frame overhead, so
+one directory grant does not end the subscription. It is not `catalogue.watch`, which fires on the
 owner's whole catalogue. A chat the follower has opened follows on
 `conversation.subscribe` with the same cursor and resume rules. A refused
 chat subscribe withdraws that local conversation.
@@ -1027,16 +1068,24 @@ credential id, and the receiver. The enrollment PAKE does not leave a MAC
 key on either record. #705 does not supply the HMAC key.
 
 After the enrollment is Active, both sides already have a pinned TLS
-session. On that session each side offers an ephemeral X25519 public key.
-HKDF-SHA256 derives a 32-byte MAC key from the shared secret, with a fixed
-label used only for this announcement. The ephemeral private keys are
-dropped. The dialing gateway stores the key on the peer file beside the
-pin. The granting gateway stores it on the pairing record that already
-keeps that peer's pin. The peer-file schema version bumps once. The key
-is not written into the credential, the grant, or the announcement. A
-peer row from before this slice has no discovery key. Alpha does not
-invent one. That peer is left out of the announcement and cannot match a
-token until it is paired again under this slice.
+session. Install is one generation, retried until both have stored the
+same MAC key. Each side offers an ephemeral X25519 public key, durably
+writes `offered` (generation, its private key, the peer's public key),
+and sends `stored` only after that write commits. After both `stored`
+messages, each derives the MAC key with HKDF-SHA256, durably replaces
+`offered` with `installed` (generation and MAC key), and sends
+`installed`. The ephemeral private key leaves in that write. A dropped
+session retries the same generation: `offered` resends its stored public
+key, `installed` resends `installed`, and a side with nothing stored
+accepts the same generation. A new generation does not start while this
+one is unfinished. Neither side derives before the other's `offered`
+write has been acked. The dialing gateway stores the state on the peer
+file beside the pin. The granting gateway stores it on the pairing record
+that already keeps that peer's pin. The peer-file schema version bumps
+once. The key is not written into the credential, the grant, or the
+announcement. A peer row from before this slice has no discovery key.
+Alpha does not invent one. That peer is left out of the announcement and
+cannot match a token until it is paired again under this slice.
 
 The pinned key, its fingerprint, and any other stable gateway id are not
 in the announcement. Neither are the owner name, the organization,
@@ -1054,7 +1103,10 @@ is not a stable id.
 ## Gate
 
 An unpaired gateway sends no announcement. A paired peer with no discovery
-key is left out, and is not given an invented key. An announcement cannot
+key is left out, and is not given an invented key. A drop before either
+`offered` write, after one `offered` write, after both `offered` writes,
+after one `installed` write, and after `installed` before its ack, each
+resumes the same generation and ends with one MAC key on both sides. An announcement cannot
 enroll a listener. The announcement bytes contain no key fingerprint and
 no stable gateway id. Two windows for the same peer produce two different
 tokens. A token copied onto a different address or port does not match. A
