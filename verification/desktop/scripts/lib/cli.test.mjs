@@ -29,6 +29,7 @@ import {
   UsageError,
   verdictOf,
 } from "./cli.mjs"
+import { argsForCheck } from "./run-all-args.mjs"
 
 const require = createRequire(import.meta.url)
 
@@ -202,6 +203,26 @@ describe("resultOfThrown", () => {
 })
 
 describe("run-all's sum", () => {
+  it("passes an explicit production URL to committed-transcript", () => {
+    const url = "http://127.0.0.1:9000/desktop.html"
+    assert.deepEqual(
+      argsForCheck(
+        "committed-transcript",
+        { url, runs: undefined },
+        { base: [], out: "check.json", page: undefined, sharesPage: false },
+      ),
+      ["--out", "check.json", "--url", url, "--mode", "prod"],
+    )
+    assert.deepEqual(
+      argsForCheck(
+        "committed-transcript",
+        { url: undefined },
+        { base: [], out: "check.json", page: undefined, sharesPage: false },
+      ),
+      ["--out", "check.json", "--mode", "prod"],
+    )
+  })
+
   it("reads each check's exit code", () => {
     assert.equal(verdictOf(0), "held")
     assert.equal(verdictOf(1), "FAILED")
