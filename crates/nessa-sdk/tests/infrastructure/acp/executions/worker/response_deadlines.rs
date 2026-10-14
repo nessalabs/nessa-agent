@@ -987,6 +987,7 @@ async fn cancelling_the_wires_clears_the_waiting_notice() {
             once_allow: None,
             once_deny: None,
             specific: true,
+            awaiting_consult: false,
         },
     );
     promptly(worker.cancel_wire_requests())
