@@ -1,0 +1,33 @@
+source: 4d1b8da1404ec7ad38a867cf1f24a771bc32b0ec
+full frontend after owned frozen-lockfile dependency install: exit 0
+ℹ tests 12
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ tests 362
+ℹ pass 360
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 2
+ℹ tests 191
+ℹ pass 191
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ tests 104
+ℹ pass 104
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+architecture check passed
+protocol check passed
+ℹ tests 57
+ℹ pass 57
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+[warning] Found 0 errors and 36 warnings
+ Test Files  343 passed (343)
+      Tests  4563 passed (4563)
+✓ built in 9.15s
