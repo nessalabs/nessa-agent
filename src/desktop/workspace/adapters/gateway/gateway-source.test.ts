@@ -1722,6 +1722,169 @@ describe("a connection that could not be made says why (#419)", () => {
     warn.mockRestore()
   })
 
+  const waitingReview = (permissionId: string) => ({
+    conversationId: "conversation-1",
+    executionId: "execution-1",
+    permissionId,
+    tool: "Bash",
+  })
+
+  it("a connection that is not up clears waiting-review notices", async () => {
+    const waiting: (readonly { conversationId: string }[])[] = []
+    const gateway = fakeGateway()
+    const { clock } = manualClock()
+    const source = gatewaySource({
+      connect: () => Promise.resolve(gateway.client),
+      clock,
+      timing,
+      onReviewWaiting: (reviews) => waiting.push(reviews),
+    })
+    await source.index()
+    expect(waiting).toEqual([])
+    gateway.setState({
+      status: "reconnecting",
+      attempt: 1,
+      error: new NessaConnectionClosedError(1006, ""),
+    })
+    expect(waiting).toEqual([[]])
+    gateway.setState({
+      status: "connected",
+    })
+    expect(waiting).toEqual([[]])
+    gateway.setState({
+      status: "closed",
+      error: new NessaConnectionClosedError(1006, ""),
+    })
+    expect(waiting).toEqual([[], []])
+  })
+
+  it("a reconnect restores waiting reviews the snapshot missed", async () => {
+    const waiting: (readonly { permissionId: string }[])[] = []
+    const gateway = fakeGateway()
+    const { clock } = manualClock()
+    const source = gatewaySource({
+      connect: () => Promise.resolve(gateway.client),
+      clock,
+      timing,
+      onReviewWaiting: (reviews) => waiting.push(reviews),
+    })
+    await source.index()
+    const pending = waitingReview("permission-1")
+    gateway.publishEvent("permission.reviewWaiting", { reviews: [pending] })
+    expect(waiting).toEqual([[pending]])
+    gateway.setState({
+      status: "reconnecting",
+      attempt: 1,
+      error: new NessaConnectionClosedError(1006, ""),
+    })
+    expect(waiting).toEqual([[pending], []])
+    // No snapshot arrives. The one dispatched before the listener was
+    // attached is already gone, so the last set is put back.
+    gateway.setState({ status: "connected" })
+    expect(waiting).toEqual([[pending], [], [pending]])
+  })
+
+  it("a snapshot applied after the clear replaces the retained reviews", async () => {
+    const waiting: (readonly { permissionId: string }[])[] = []
+    const gateway = fakeGateway()
+    const { clock } = manualClock()
+    const source = gatewaySource({
+      connect: () => Promise.resolve(gateway.client),
+      clock,
+      timing,
+      onReviewWaiting: (reviews) => waiting.push(reviews),
+    })
+    await source.index()
+    const pending = waitingReview("permission-1")
+    const newer = waitingReview("permission-2")
+    gateway.publishEvent("permission.reviewWaiting", { reviews: [pending] })
+    gateway.setState({
+      status: "reconnecting",
+      attempt: 1,
+      error: new NessaConnectionClosedError(1006, ""),
+    })
+    gateway.publishEvent("permission.reviewWaiting", { reviews: [newer] })
+    gateway.setState({ status: "connected" })
+    expect(waiting).toEqual([[pending], [], [newer]])
+  })
+
+  it("a later client restores waiting reviews the snapshot missed", async () => {
+    const waiting: (readonly { permissionId: string }[])[] = []
+    const first = fakeGateway()
+    const second = fakeGateway()
+    const clients = [first.client, second.client]
+    let attempts = 0
+    const { clock } = manualClock()
+    const source = gatewaySource({
+      connect: () => {
+        const client = clients[attempts]
+        attempts += 1
+        return Promise.resolve(client!)
+      },
+      clock,
+      timing,
+      onReviewWaiting: (reviews) => waiting.push(reviews),
+    })
+    await source.index()
+    const pending = waitingReview("permission-1")
+    first.publishEvent("permission.reviewWaiting", { reviews: [pending] })
+    first.setState({
+      status: "closed",
+      error: new NessaConnectionClosedError(1006, ""),
+    })
+    await source.index()
+    expect(waiting).toEqual([[pending], [], [pending]])
+    expect(attempts).toBe(2)
+  })
+
+  it("a later client restores waiting reviews unless its snapshot arrives with the listener", async () => {
+    const waiting: (readonly { permissionId: string }[])[] = []
+    const first = fakeGateway()
+    const second = fakeGateway()
+    const newer = waitingReview("permission-2")
+    const inner = second.client
+    const replaying = {
+      conversation: inner.conversation,
+      subscriptions: inner.subscriptions,
+      get connectionState() {
+        return inner.connectionState
+      },
+      onConnectionStateChange: inner.onConnectionStateChange.bind(inner),
+      onEvent(event: string, handler: (payload: unknown) => void) {
+        const listen = inner.onEvent
+        if (!listen) return () => {}
+        const off = listen(event, handler)
+        if (event === "permission.reviewWaiting") handler({ reviews: [newer] })
+        return off
+      },
+      close: inner.close.bind(inner),
+    }
+    const clients = [first.client, replaying]
+    let attempts = 0
+    const { clock } = manualClock()
+    const source = gatewaySource({
+      connect: () => {
+        const client = clients[attempts]
+        attempts += 1
+        return Promise.resolve(client as FakeGateway["client"])
+      },
+      clock,
+      timing,
+      onReviewWaiting: (reviews) => waiting.push(reviews),
+    })
+    await source.index()
+    const pending = waitingReview("permission-1")
+    first.publishEvent("permission.reviewWaiting", { reviews: [pending] })
+    first.setState({
+      status: "closed",
+      error: new NessaConnectionClosedError(1006, ""),
+    })
+    expect(waiting).toEqual([[pending], []])
+    await source.index()
+    expect(waiting).toEqual([[pending], [], [newer]])
+    expect(attempts).toBe(2)
+  })
+
   it("S19: a connect that is already closed after a live one is not kept", async () => {
     const warn = quiet()
     const first = fakeGateway()

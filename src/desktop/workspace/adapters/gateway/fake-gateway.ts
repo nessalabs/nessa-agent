@@ -235,6 +235,8 @@ export interface FakeGateway {
   rewind(conversationId: string, position: number): void
   /** Moves the connection to `state`, telling every observer; any but connected ends every subscription. */
   setState(state: ConnectionState): void
+  /** Delivers a server push to the handlers registered on the client. A push with no handler is dropped. */
+  publishEvent(event: string, payload: unknown): void
   readonly closed: () => boolean
   readonly count: (method: Method) => number
 }
@@ -268,6 +270,7 @@ export function fakeGateway(
   const overrides = new Map<Exclude<Method, "answer">, Behaviour[]>()
   const answerOverrides: AnswerBehaviour[] = []
   const observers = new Set<(state: ConnectionState) => void>()
+  const eventListeners = new Map<string, Set<(payload: unknown) => void>>()
   const positions = new Map<string, number>()
   const subscriptions = new Map<string, Live>()
   // View subscribes on their way, which the gateway counts against its limit.
@@ -518,6 +521,14 @@ export function fakeGateway(
       observers.add(handler)
       return () => observers.delete(handler)
     },
+    onEvent(event: string, handler: (payload: unknown) => void) {
+      const handlers = eventListeners.get(event) ?? new Set()
+      handlers.add(handler)
+      eventListeners.set(event, handlers)
+      return () => {
+        handlers.delete(handler)
+      }
+    },
     close() {
       closed = true
       endAll(undefined, { reason: "disconnected" })
@@ -556,6 +567,11 @@ export function fakeGateway(
       // The client ends its subscriptions before anyone hears the state.
       if (next.status !== "connected") endAll(undefined, { reason: "disconnected" })
       for (const observer of [...observers]) observer(next)
+    },
+    publishEvent(event: string, payload: unknown) {
+      const handlers = eventListeners.get(event)
+      if (!handlers) return
+      for (const handler of [...handlers]) handler(payload)
     },
     closed: () => closed,
     count: (method: Method) => calls.filter((call) => call.method === method).length,

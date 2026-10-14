@@ -1,12 +1,13 @@
 //! The published bundle: a manifest and one file per public record.
-//! Redacted records have no file.
+//! Redacted records have no file. On Unix, directories are mode `0700` and
+//! files are mode `0600` (`a_published_bundle_is_owner_only`).
 
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use nessa_local_storage::sync_directory;
+use nessa_local_storage::{create_directory, open, sync_directory, OpenMode};
 
 use async_trait::async_trait;
 
@@ -48,7 +49,7 @@ fn write_bundle(root: &Path, manifest: &str, records: &[PublishedRecord]) -> Res
     for record in records {
         let path = record_path(staging.path(), record.store, &record.identity)?;
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|_| ())?;
+            create_directory(parent).map_err(|_| ())?;
         }
         write_synced(&path, &record.bytes)?;
     }
@@ -65,12 +66,7 @@ fn write_bundle(root: &Path, manifest: &str, records: &[PublishedRecord]) -> Res
 }
 
 fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), ()> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(path)
-        .map_err(|_| ())?;
+    let mut file = open(path, OpenMode::CreateNew).map_err(|_| ())?;
     file.write_all(bytes).map_err(|_| ())?;
     file.sync_all().map_err(|_| ())
 }
@@ -101,7 +97,7 @@ impl StagedDir {
         // The name is this attempt's. A directory already there is a crashed
         // attempt, not another publish in progress.
         let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).map_err(|_| ())?;
+        create_directory(&path).map_err(|_| ())?;
         Ok(Self { path })
     }
 
@@ -170,5 +166,36 @@ mod tests {
         assert!(first_name.starts_with("export-cut.partial-"));
         assert!(second_name.starts_with("export-cut.partial-"));
         assert_ne!(first_name, "export-cut.partial");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_published_bundle_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::backup::application::PublishedRecord;
+
+        let root = tempfile::tempdir().unwrap();
+        let published = root.path().join("cut");
+        let records = vec![PublishedRecord {
+            store: StoreKind::ConversationAudit,
+            identity: "creation/note.json".to_owned(),
+            bytes: b"audit".to_vec(),
+        }];
+        write_bundle(&published, "manifest-line\n", &records).unwrap();
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&published), 0o700);
+        assert_eq!(mode(&published.join("manifest.txt")), 0o600);
+        assert_eq!(mode(&published.join("records")), 0o700);
+        assert_eq!(mode(&published.join("records/conversation-audit")), 0o700);
+        let file = published
+            .join("records/conversation-audit")
+            .join(encode("creation/note.json"));
+        assert_eq!(mode(&file), 0o600);
+        assert_eq!(fs::read(file).unwrap(), b"audit");
+        assert_eq!(
+            fs::read(published.join("manifest.txt")).unwrap(),
+            b"manifest-line\n"
+        );
     }
 }

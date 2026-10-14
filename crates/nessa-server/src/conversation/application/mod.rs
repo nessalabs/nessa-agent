@@ -225,8 +225,8 @@ pub(crate) use drive_tools::MAX_ADMITTED_POLICIES;
 pub use drive_tools::{DriveToolAudit, DriveToolAuditRecord, DriveTools};
 pub use permission_rules::{
     rule_principal, ListedPermissionRule, PermissionRuleCatalog, PermissionRulePolicyEvaluator,
-    PermissionRuleRevocation, PermissionRuleRevocationAudit, PermissionRuleUnavailable,
-    RuleCatalogError, RuleChange, RulePrincipal, RuleSettlement, StoredPermissionRule,
+    PermissionRuleUnavailable, RuleCatalogError, RuleChange, RulePrincipal, RuleSettlement,
+    StoredPermissionRule,
 };
 #[cfg(unix)]
 pub(crate) use placement::PairedEnvironments;
