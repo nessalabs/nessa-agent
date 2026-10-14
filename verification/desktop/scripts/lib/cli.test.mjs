@@ -252,6 +252,7 @@ describe("run-all's sum", () => {
       "gateway-states",
       "published-files",
       "transcript-notes",
+      "transcript-unreadable",
       "turn-outcomes",
       "mcp-apps",
       "approval-deadline",

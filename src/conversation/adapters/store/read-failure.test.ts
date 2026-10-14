@@ -69,6 +69,8 @@ const view = (conversationId: string): ConversationView => ({
   truncated: false,
   queueComplete: true,
   transcriptState: "complete",
+  unreadable: [],
+  unreadableTruncated: false,
 })
 
 /**
