@@ -1663,6 +1663,35 @@ describe("a connection that could not be made says why (#419)", () => {
     warn.mockRestore()
   })
 
+  it("a connection that is not up clears waiting-review notices", async () => {
+    const waiting: readonly { conversationId: string }[][] = []
+    const gateway = fakeGateway()
+    const { clock } = manualClock()
+    const source = gatewaySource({
+      connect: () => Promise.resolve(gateway.client),
+      clock,
+      timing,
+      onReviewWaiting: (reviews) => waiting.push(reviews),
+    })
+    await source.index()
+    expect(waiting).toEqual([])
+    gateway.setState({
+      status: "reconnecting",
+      attempt: 1,
+      error: new NessaConnectionClosedError(1006, ""),
+    })
+    expect(waiting).toEqual([[]])
+    gateway.setState({
+      status: "connected",
+    })
+    expect(waiting).toEqual([[]])
+    gateway.setState({
+      status: "closed",
+      error: new NessaConnectionClosedError(1006, ""),
+    })
+    expect(waiting).toEqual([[], []])
+  })
+
   it("S19: a connect that is already closed after a live one is not kept", async () => {
     const warn = quiet()
     const first = fakeGateway()

@@ -478,13 +478,19 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         // Back: every subscription ended `disconnected` with the connection.
         restore()
         resync()
-      } else if (state.status === "closed") {
-        // Gone for good: the next call connects again. That next client
-        // resyncs when one had connected before (C3). The close is not a
-        // gap. A list frame already applied stays.
-        current.off()
-        current = undefined
-        scheduleRetry()
+      } else if (state.status === "reconnecting" || state.status === "closed") {
+        // A review cannot be answered while this socket is down. An empty
+        // snapshot closes the notice. The next connection sends the set
+        // still waiting (`a connection that is not up clears waiting-review notices`).
+        options.onReviewWaiting?.([])
+        if (state.status === "closed") {
+          // Gone for good: the next call connects again. That next client
+          // resyncs when one had connected before (C3). The close is not a
+          // gap. A list frame already applied stays.
+          current.off()
+          current = undefined
+          scheduleRetry()
+        }
       }
     })
     const state = connected.connectionState

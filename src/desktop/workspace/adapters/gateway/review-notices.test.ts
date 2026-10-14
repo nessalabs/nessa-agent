@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest"
 import {
   applyReviewSnapshot,
+  bindConversationTitles,
   browserReviewNotifier,
   reviewToOpen,
   waitingReviewNotices,
@@ -86,6 +87,40 @@ describe("browserReviewNotifier", () => {
     expect(created).toEqual([{ title: "Bash needs a decision" }])
     notices.showWaiting()
     expect(created).toEqual([{ title: "Bash needs a decision" }])
+    vi.unstubAllGlobals()
+  })
+})
+
+describe("browserReviewNotifier names the conversation", () => {
+  it("uses the conversation title when the window has one, and the id otherwise", () => {
+    const created: { title: string; body: string }[] = []
+    class FakeNotification {
+      static permission: NotificationPermission = "granted"
+      constructor(title: string, options?: NotificationOptions) {
+        created.push({ title, body: options?.body ?? "" })
+      }
+      close() {}
+    }
+    vi.stubGlobal("Notification", FakeNotification)
+    const notifier = browserReviewNotifier(() => {})
+    const held = review("p1")
+    notifier.show(held)
+    expect(created).toEqual([
+      {
+        title: "Bash needs a decision",
+        body: "11111111-1111-4111-8111-111111111111",
+      },
+    ])
+    bindConversationTitles(() => "Reconnect tests")
+    notifier.show(review("p2"))
+    expect(created[1]).toEqual({
+      title: "Bash needs a decision",
+      body: "Reconnect tests",
+    })
+    bindConversationTitles(() => "   ")
+    notifier.show(review("p3"))
+    expect(created[2]?.body).toBe("11111111-1111-4111-8111-111111111111")
+    bindConversationTitles(() => null)
     vi.unstubAllGlobals()
   })
 })
