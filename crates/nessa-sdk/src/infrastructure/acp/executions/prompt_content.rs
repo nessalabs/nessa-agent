@@ -24,7 +24,7 @@ use crate::application::agent_execution::{
     agents::AgentError,
     providers::{ImageInputRefusal, UserImageError, UserImageSource},
 };
-use crate::domain::agent_execution::prompts::{ImageReference, UserMessage};
+use crate::domain::agent_execution::prompts::{ImageReference, NoteAuthor, UserMessage};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -138,7 +138,8 @@ pub(in crate::infrastructure::acp) fn fits_one_frame(
         .sum();
     let context = app_model_context_text(message)
         .map_or(0, |context| TEXT_BLOCK_BYTES + json_string_bytes(&context));
-    let encoded_bytes = REQUEST_ALLOWANCE_BYTES + context + text + images + files;
+    let notes = notes_text(message).map_or(0, |notes| TEXT_BLOCK_BYTES + json_string_bytes(&notes));
+    let encoded_bytes = REQUEST_ALLOWANCE_BYTES + context + notes + text + images + files;
     let max_bytes = max_frame_bytes as u64;
     if encoded_bytes > max_bytes {
         return Err(AgentError::MessageTooLarge {
@@ -199,6 +200,45 @@ fn app_model_context_text(message: &UserMessage) -> Option<String> {
     Some(format!("{APP_CONTEXT_PREAMBLE}[{}]", entries.join(",")))
 }
 
+/// What the model is told before the notes a turn takes.
+const NOTES_PREAMBLE: &str = "Notes left in this conversation and not yet given to you, each by the conversation's owner or by someone it is shared with, and not written by the person sending this message:\n";
+
+/// The one text block that carries the notes `message` takes, or `None` when
+/// it takes none: [`NOTES_PREAMBLE`], then the notes as one JSON array of
+/// `{author, surface, text}` in the order they were left, `author` being
+/// `"owner"` or `"grant"`.
+///
+/// Written as JSON, as [`app_model_context_text`] is and for the same
+/// reason: nothing a note says can close the block or pass for the preamble,
+/// another note, or the person's own message.
+fn notes_text(message: &UserMessage) -> Option<String> {
+    if message.notes().is_empty() {
+        return None;
+    }
+    let string = |text: &str| Value::from(text).to_string();
+    let entries: Vec<String> = message
+        .notes()
+        .iter()
+        .map(|note| {
+            format!(
+                "{{\"author\":{},\"surface\":{},\"text\":{}}}",
+                string(match note.author() {
+                    NoteAuthor::Owner => "owner",
+                    NoteAuthor::Grant => "grant",
+                }),
+                string(note.surface()),
+                string(note.text()),
+            )
+        })
+        .collect();
+    Some(format!("{NOTES_PREAMBLE}[{}]", entries.join(",")))
+}
+
+/// One note's entry in the notes block with its surface and text empty and
+/// the longer author: the keys, quotes, and braces [`notes_text`] writes
+/// around what the note says.
+const NOTE_ENTRY_SYNTAX: &str = r#"{"author":"owner","surface":"","text":""}"#;
+
 /// Length of `text` as a JSON string, quotes included, as `serde_json` writes
 /// it: `"` and `\` and the five short escapes take two bytes, every other
 /// control character six, and everything else is copied.
@@ -225,25 +265,34 @@ const APP_CONTEXT_ENTRY_SYNTAX: &str =
 
 /// The bytes of the largest message's frame that are not its content, as
 /// [`fits_one_frame`] measures them: [`REQUEST_ALLOWANCE_BYTES`]; the message
-/// text's block and the app-context block, each [`TEXT_BLOCK_BYTES`] and its
-/// string's quotes; that block's [`APP_CONTEXT_PREAMBLE`] and brackets, and
+/// text's block, the app-context block and the notes block, each
+/// [`TEXT_BLOCK_BYTES`] and its string's quotes; the app-context block's
+/// [`APP_CONTEXT_PREAMBLE`] and brackets, and
 /// [`UserMessage::MAX_APP_MODEL_CONTEXTS`] entries'
 /// [`APP_CONTEXT_ENTRY_SYNTAX`] and the commas between them, all escaped once
-/// into the block's string; [`UserMessage::MAX_IMAGES`] image blocks; and
+/// into the block's string; the notes block's [`NOTES_PREAMBLE`] and
+/// brackets, and [`UserMessage::MAX_NOTES`] entries' [`NOTE_ENTRY_SYNTAX`] and
+/// the commas between them, escaped the same way;
+/// [`UserMessage::MAX_IMAGES`] image blocks; and
 /// [`UserMessage::MAX_FILES`] resource links, each with its URI's quotes and
 /// [`FILE_URI_SCHEME`] and its label's quotes.
 ///
-/// Content is everything a message's sender chooses: the text, each image's
-/// base64, each app's server, tool, tool call, text and structured content,
-/// and each file's path and name, with whatever escaping they take. A host
+/// Content is everything a message's sender chooses, and the notes the turn
+/// takes: the text, each image's base64, each app's server, tool, tool call,
+/// text and structured content, each file's path and name, and each note's
+/// surface and text, with whatever escaping they take. A host
 /// adds its own bound on those to this to know the largest frame it can be
 /// asked to write (`largest_message_syntax_is_what_the_frame_figure_adds_to_its_content`).
 pub(in crate::infrastructure::acp) const LARGEST_MESSAGE_SYNTAX_BYTES: u64 = REQUEST_ALLOWANCE_BYTES
-    + 2 * (TEXT_BLOCK_BYTES + 2)
+    + 3 * (TEXT_BLOCK_BYTES + 2)
     + (json_string_bytes(APP_CONTEXT_PREAMBLE) - 2)
     + 2
     + UserMessage::MAX_APP_MODEL_CONTEXTS as u64 * (json_string_bytes(APP_CONTEXT_ENTRY_SYNTAX) - 2)
     + (UserMessage::MAX_APP_MODEL_CONTEXTS as u64 - 1)
+    + (json_string_bytes(NOTES_PREAMBLE) - 2)
+    + 2
+    + UserMessage::MAX_NOTES as u64 * (json_string_bytes(NOTE_ENTRY_SYNTAX) - 2)
+    + (UserMessage::MAX_NOTES as u64 - 1)
     + UserMessage::MAX_IMAGES as u64 * IMAGE_BLOCK_BYTES
     + UserMessage::MAX_FILES as u64
         * (RESOURCE_LINK_BLOCK_BYTES + json_string_bytes(FILE_URI_SCHEME) + 2);
@@ -446,9 +495,12 @@ pub(in crate::infrastructure::acp) fn content_blocks(
             "resolved image blocks do not match the message".into(),
         ));
     }
-    let mut blocks = Vec::with_capacity(2 + images.blocks.len() + message.files().len());
+    let mut blocks = Vec::with_capacity(3 + images.blocks.len() + message.files().len());
     if let Some(context) = app_model_context_text(message) {
         blocks.push(json!({"type":"text","text":context}));
+    }
+    if let Some(notes) = notes_text(message) {
+        blocks.push(json!({"type":"text","text":notes}));
     }
     if let Some(text) = message.text() {
         blocks.push(json!({"type":"text","text":text.as_str()}));

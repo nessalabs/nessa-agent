@@ -328,6 +328,7 @@ function panelConversation(
         size: file.size,
         ...(file.executionId === undefined ? {} : { executionId: file.executionId }),
       })),
+      notes: [],
       approvalMode: "ask",
       approvalModes: [{ id: "ask", name: "Ask", description: "Asks." }],
       questions: [],

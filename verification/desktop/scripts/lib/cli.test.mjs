@@ -230,6 +230,7 @@ describe("run-all's sum", () => {
       "app-review",
       "gateway-states",
       "published-files",
+      "transcript-notes",
       "mcp-apps",
       "approval-deadline",
     ])

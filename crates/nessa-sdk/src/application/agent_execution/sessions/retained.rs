@@ -1,8 +1,8 @@
 //! Conservatively account owned continuation allocations, using payload owners' byte accounting.
 use super::{
     ArtifactRecord, CurrentLease, CurrentLeaseState, FetchOutcome, InvocationCancellationEvent,
-    InvocationRecord, InvocationSchedulingEvent, LeaseRecord, NoteRecord, QueueHistoryRecord,
-    SessionChange, SessionSnapshot, StorageError, SubmissionAcknowledgement,
+    InvocationRecord, InvocationSchedulingEvent, LeaseRecord, NoteId, NoteRecord,
+    QueueHistoryRecord, SessionChange, SessionSnapshot, StorageError, SubmissionAcknowledgement,
 };
 use crate::{
     application::agent_execution::{
@@ -71,6 +71,12 @@ pub(super) fn note(record: &NoteRecord) -> usize {
         .saturating_add(record.text.as_str().len())
         .saturating_add(actor(&record.actor))
         .saturating_add(initiator(&record.author))
+        .saturating_add(
+            record
+                .after_execution
+                .as_ref()
+                .map_or(0, |turn| turn.as_str().len()),
+        )
 }
 
 /// One artifact record's payload beyond its slot in the list.
@@ -318,6 +324,19 @@ pub(super) fn invocation(record: &InvocationRecord) -> usize {
         .saturating_add(record.request.execution_id.as_str().len())
         .saturating_add(actor(&record.actor))
         .saturating_add(initiation(&record.initiation))
+        .saturating_add(
+            record
+                .notes
+                .capacity()
+                .saturating_mul(size_of::<NoteId>())
+                .saturating_add(
+                    record
+                        .notes
+                        .iter()
+                        .map(|note| note.as_str().len())
+                        .fold(0usize, usize::saturating_add),
+                ),
+        )
         .saturating_add(record.cancellation.as_ref().map_or(0, stop))
         .saturating_add(record.local_cancellation.as_ref().map_or(0, stop))
         .saturating_add(acknowledgment)
@@ -425,7 +444,7 @@ pub(super) fn touched(
             .map_or(0, |id| id.as_str().len()),
         SessionChange::QueueDecision(_) => 0,
         SessionChange::Lease(_) => lease(snapshot.lease.as_ref()),
-        SessionChange::Artifact(_) | SessionChange::Note(_) => 0,
+        SessionChange::Artifact(_) | SessionChange::Note(_) | SessionChange::NoteRetired(_) => 0,
     })
 }
 pub(super) fn append_payload(change: &SessionChange) -> usize {

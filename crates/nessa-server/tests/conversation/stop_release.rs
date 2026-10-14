@@ -127,6 +127,7 @@ impl Fixture {
         let principal = PrincipalId::new("person").unwrap();
         let service = ConversationService::new(
             ConversationDependencies {
+                access_policy: crate::conversation_test_support::access_policy(),
                 agents: mode_agents(
                     provider.clone(),
                     Arc::new(

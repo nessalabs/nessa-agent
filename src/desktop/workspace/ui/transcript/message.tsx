@@ -1,5 +1,5 @@
 import { memo } from "react"
-import { PublishedFiles } from "../../../../conversation"
+import { PublishedFiles, TranscriptNote } from "../../../../conversation"
 import { discardUnsent, resendMessage } from "../../adapters/store/commands"
 import { useWorkspaceDispatch } from "../../adapters/store/hooks"
 import { useInlineWidgetHost } from "../../adapters/store/widget-hosts"
@@ -30,7 +30,8 @@ export function messageAuthor(app: MessageApp): Said {
  * (`messageAuthor`, #390); the agent's is prose, steps, code, lists,
  * widgets, each a card its plugin draws (`InlineWidget`), and the files it
  * published, each a card the conversation vertical draws and reads back
- * (`PublishedFiles`). Memoised on the
+ * (`PublishedFiles`). A note somebody left is a row of its own, neither
+ * (`TranscriptNote`). Memoised on the
  * message itself, so a reply streaming in renders only the message it grows.
  */
 export const Message = memo(function Message({
@@ -43,6 +44,12 @@ export const Message = memo(function Message({
   /** Arrived while the conversation was open, so it rises into place. */
   isNew: boolean
 }) {
+  if (message.role === "note")
+    return (
+      <div className="workspace-message" data-role="note" data-new={isNew || undefined}>
+        <TranscriptNote note={message.note} />
+      </div>
+    )
   if (message.role === "user") {
     const failed = message.delivery?.state === "failed" ? message.delivery.reason : null
     return (

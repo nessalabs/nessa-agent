@@ -151,6 +151,11 @@ async fn both_failing_is_the_relays_refusal() {
         .await
         .unwrap_err();
         assert_eq!(refused.kind(), io::ErrorKind::ConnectionRefused);
+        assert_eq!(
+            RelayRefusal::carried(&refused),
+            RelayRefusal::of(answer),
+            "the poller tells away from unreachable by it"
+        );
         serving.await.unwrap();
     }
 }

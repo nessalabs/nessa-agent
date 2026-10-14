@@ -44,7 +44,11 @@
  * chrome, their callbacks carried out by its commands
  * (`adapters/store/widget-hosts.ts`), and Escape for the one in front by
  * `adapters/dom/widget-escape.ts`; the workspace imports widgets and no
- * plugin. The Agents overview is part of the workspace: its rules
+ * plugin. Sharing a session with a linked device (`model/sharing.ts`) reads
+ * and writes through its own port, `SharingSource`, implemented over the
+ * gateway (`adapters/gateway/sharing-gateway.ts`) and in memory for the
+ * sample (`adapters/in-memory/in-memory-sharing.ts`); its dialog is
+ * `ui/share/`. The Agents overview is part of the workspace: its rules
  * in `model/overview/`, its state in the slice, its views in `ui/overview/`,
  * answering and reading through the same commands and effects as a pane.
  *
@@ -76,6 +80,11 @@ export {
   type GatewayClient,
   type GatewaySource,
 } from "./adapters/gateway/gateway-source"
+export { sharingGateway, type SharingClient } from "./adapters/gateway/sharing-gateway"
+export {
+  inMemorySharing,
+  type InMemorySharing,
+} from "./adapters/in-memory/in-memory-sharing"
 export {
   retryBudgetSession,
   sampleAppSession,

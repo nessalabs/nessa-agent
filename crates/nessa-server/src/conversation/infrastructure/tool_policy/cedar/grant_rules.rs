@@ -13,7 +13,8 @@ use serde_json::{json, Value};
 use crate::conversation::application::ToolPolicyUnavailable;
 use crate::conversation::domain::ToolRules;
 
-use super::evaluator::{ACTION, GRANT, TOOL, TOOL_CALL};
+use super::evaluator::{TOOL, TOOL_CALL};
+use super::request::{ACTION, GRANT};
 
 /// The prefix of every grant rule's id; no checked-in policy uses it.
 pub(super) const GRANT_RULES: &str = "tool.rules.";

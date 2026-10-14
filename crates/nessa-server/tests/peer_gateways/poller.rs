@@ -187,6 +187,32 @@ fn a_full_cache_is_listed_quota_and_a_read_that_saved_nothing_unreachable() {
     );
 }
 
+/// Issue #266, R3: a peer is `away` only when its relay said it is not
+/// registered there, on the status dial or on the read; a relay's
+/// `NoAnswer`, a busy peer, stays `unreachable`.
+#[test]
+fn a_peer_whose_relay_says_it_is_offline_is_listed_away() {
+    assert_eq!(sync_state(&Unread::Away), SyncState::Away);
+    assert_eq!(
+        sync_state(&Unread::Read(ReadFailure::Away)),
+        SyncState::Away
+    );
+    for (refusal, away) in [
+        (RelayRefusal::Offline, true),
+        (RelayRefusal::NoAnswer, false),
+    ] {
+        let asked = AskedStatus::dial_failed(refusal.into());
+        assert_eq!(asked.away, away, "{refusal:?}");
+        assert!(matches!(
+            asked.status,
+            Some(Err(NativeClientError::Io(
+                std::io::ErrorKind::ConnectionRefused
+            )))
+        ));
+    }
+    assert!(!AskedStatus::dial_failed(std::io::ErrorKind::TimedOut.into()).away);
+}
+
 /// A stop that wins after the status worker has passed its commit point, and
 /// before the reply is taken, still keeps that reply's cause on
 /// [`AskedStatus`]. The worker blocks until [`asked_status`] has chosen the
@@ -319,6 +345,7 @@ fn a_stopped_status_records_its_cause_and_does_not_read() {
             transition: Some(SlotTransition::Ended),
             landed: Some(SlotOutcome::Landed),
             stopped: true,
+            away: false,
         },
         &before,
         &after,

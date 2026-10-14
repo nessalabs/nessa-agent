@@ -10,6 +10,7 @@ import {
 import {
   bounds,
   ConversationErrorCode,
+  type ConversationToolPolicy,
   type ConversationView,
 } from "../generated/product.js"
 
@@ -18,6 +19,7 @@ const conversationId = "00000000-0000-4000-8000-000000000001"
 const view: ConversationView = {
   conversationId,
   artifacts: [],
+  notes: [],
   approvalMode: "ask",
   approvalModes: [
     {
@@ -1493,4 +1495,449 @@ it("waits out one delete's worst case, and only for delete", async () => {
   await api.close(conversationId)
   expect(request.mock.calls[0]![2]).toEqual({ atLeastMs: conversationDeleteTimeoutMs })
   expect(request.mock.calls[1]![2]).toBeUndefined()
+})
+
+const note = {
+  messageId: "2f1d1c1e-3b7a-4c7e-9a51-0c1e2d3f4a5b",
+  text: "Use the May fares",
+  acceptedAtMs: 1_700_000_000_000,
+  delivery: "next_turn",
+  deliveryState: "assigned",
+  executionId: "run-2",
+  afterExecutionId: "run-1",
+  author: { kind: "grant", surface: "phone" },
+} as const
+
+it("leaves a note under a stable request and retries it as the same note", async () => {
+  const receipt = {
+    requestId: "note-1",
+    messageId: note.messageId,
+    acceptedAtMs: note.acceptedAtMs,
+    deliveryState: "pending",
+  }
+  const request = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("connection lost"))
+    .mockResolvedValue(receipt)
+  const api = createConversationApi({ request }, () => "generated")
+  const failure = await api
+    .message(conversationId, "Use the May fares", "next_turn", { requestId: "note-1" })
+    .catch((error: unknown) => error)
+  expect(failure).toBeInstanceOf(NessaConversationMutationError)
+  await expect(
+    (failure as NessaConversationMutationError<unknown>).retry(),
+  ).resolves.toEqual(receipt)
+  expect(request).toHaveBeenCalledTimes(2)
+  for (const call of request.mock.calls)
+    expect(call).toEqual([
+      "conversation.message",
+      {
+        conversationId,
+        requestId: "note-1",
+        text: "Use the May fares",
+        delivery: "next_turn",
+      },
+    ])
+  // A generated request identity when none is given.
+  await api.message(conversationId, "fyi", "record_only").catch(() => undefined)
+  expect(request.mock.calls[2][1]).toMatchObject({
+    requestId: "generated",
+    delivery: "record_only",
+  })
+})
+
+it("refuses a note outside its bounds before anything is sent", () => {
+  const request = vi.fn()
+  const api = createConversationApi({ request }, () => "generated")
+  for (const text of ["", "  \n", "x".repeat(8193)])
+    expect(() => api.message(conversationId, text, "next_turn")).toThrow(TypeError)
+  expect(() =>
+    api.message(conversationId, "x", "later" as unknown as "next_turn"),
+  ).toThrow(TypeError)
+  expect(() => api.message("not-a-uuid", "x", "record_only")).toThrow(TypeError)
+  expect(request).not.toHaveBeenCalled()
+})
+
+it("accepts a note receipt only for its request and with a coherent state", async () => {
+  const base = {
+    requestId: "note-1",
+    messageId: note.messageId,
+    acceptedAtMs: note.acceptedAtMs,
+  }
+  for (const valid of [
+    { ...base, deliveryState: "recorded" },
+    { ...base, deliveryState: "pending" },
+    { ...base, deliveryState: "assigned", executionId: "run-2" },
+    { ...base, deliveryState: "retired", retiredReason: "permission_lost" },
+  ]) {
+    const api = createConversationApi(
+      { request: vi.fn().mockResolvedValue(valid) },
+      () => "generated",
+    )
+    await expect(
+      api.message(conversationId, "x", "next_turn", { requestId: "note-1" }),
+    ).resolves.toEqual(valid)
+  }
+  for (const invalid of [
+    { ...base, requestId: "another", deliveryState: "pending" },
+    { ...base, deliveryState: "delivered" },
+    { ...base, deliveryState: "assigned" },
+    { ...base, deliveryState: "pending", executionId: "run-2" },
+    { ...base, deliveryState: "retired" },
+    { ...base, deliveryState: "retired", retiredReason: "stale" },
+    { ...base, deliveryState: "pending", acceptedAtMs: -1 },
+    { ...base, deliveryState: "pending", extra: true },
+  ]) {
+    const api = createConversationApi(
+      { request: vi.fn().mockResolvedValue(invalid) },
+      () => "generated",
+    )
+    await expect(
+      api.message(conversationId, "x", "next_turn", { requestId: "note-1" }),
+    ).rejects.toBeInstanceOf(NessaConversationMutationError)
+  }
+})
+
+it("reads where the caller's note stands and refuses a status that contradicts itself", async () => {
+  const found = {
+    found: true,
+    requestId: "note-1",
+    messageId: note.messageId,
+    acceptedAtMs: note.acceptedAtMs,
+    deliveryState: "assigned",
+    executionId: "run-2",
+  }
+  const request = vi.fn().mockResolvedValue(found)
+  const api = createConversationApi({ request }, () => "generated")
+  await expect(api.messageStatus(conversationId, "note-1")).resolves.toEqual(found)
+  expect(request).toHaveBeenCalledWith("conversation.messageStatus", {
+    conversationId,
+    requestId: "note-1",
+  })
+  const missing = { found: false, requestId: "note-1" }
+  await expect(
+    createConversationApi(
+      { request: vi.fn().mockResolvedValue(missing) },
+      () => "generated",
+    ).messageStatus(conversationId, "note-1"),
+  ).resolves.toEqual(missing)
+  for (const invalid of [
+    { ...missing, deliveryState: "pending" },
+    { ...found, requestId: "another" },
+    { ...found, executionId: undefined },
+  ]) {
+    await expect(
+      createConversationApi(
+        { request: vi.fn().mockResolvedValue(invalid) },
+        () => "generated",
+      ).messageStatus(conversationId, "note-1"),
+    ).rejects.toThrow()
+  }
+  await expect(api.messageStatus(conversationId, "")).rejects.toThrow(TypeError)
+})
+
+it("accepts a view's bounded notes and refuses an incoherent one", async () => {
+  const read = (notes: unknown[]) =>
+    createConversationApi(
+      { request: vi.fn().mockResolvedValue({ ...view, notes }) },
+      () => "generated",
+    ).read(conversationId)
+  await expect(read([note])).resolves.toMatchObject({ notes: [note] })
+  await expect(read(Array(64).fill(note))).resolves.toBeDefined()
+  for (const invalid of [
+    Array(65).fill(note),
+    [{ ...note, text: "" }],
+    [{ ...note, text: "x".repeat(8193) }],
+    [{ ...note, deliveryState: "pending" }],
+    [{ ...note, author: { kind: "app", surface: "phone" } }],
+    [{ ...note, author: { kind: "owner", surface: "" } }],
+    [{ ...note, delivery: "later" }],
+    [{ ...note, policyRevision: 3 }],
+  ])
+    await expect(read(invalid)).rejects.toThrow()
+  await expect(
+    createConversationApi(
+      { request: vi.fn().mockResolvedValue({ ...view, notes: undefined }) },
+      () => "generated",
+    ).read(conversationId),
+  ).rejects.toThrow()
+})
+
+const credentialId = "device-credential"
+const drivePolicy: ConversationToolPolicy = {
+  preset: "read_only_tools",
+  commandHosts: ["devbox"],
+}
+
+it("grants, changes and revokes a share under a stable request id", async () => {
+  const request = vi.fn(async (method: string, params: unknown) => ({
+    requestId: (params as { requestId: string }).requestId,
+    applied: true,
+    ...(method === "conversation.share" ? { policyRevision: 7 } : {}),
+  }))
+  const api = createConversationApi({ request }, () => "action")
+  const policy = { preset: "read_only_tools" as const, commandHosts: ["devbox"] }
+  expect(await api.share(conversationId, credentialId, "drive", policy)).toEqual({
+    requestId: "action",
+    applied: true,
+    policyRevision: 7,
+  })
+  // Changing the caller's own object after the call changes nothing sent.
+  policy.commandHosts.push("other")
+  await api.share(conversationId, credentialId, "read", undefined, {
+    expectedPolicyRevision: 7,
+  })
+  await api.unshare(conversationId, credentialId, { requestId: "revoke" })
+  await api.unshare(conversationId, credentialId, {
+    requestId: "revoke-built",
+    expectedPolicyRevision: 0,
+  })
+  expect(request.mock.calls).toEqual([
+    [
+      "conversation.share",
+      {
+        conversationId,
+        requestId: "action",
+        credentialId,
+        role: "drive",
+        policy: drivePolicy,
+      },
+    ],
+    [
+      "conversation.share",
+      {
+        conversationId,
+        requestId: "action",
+        credentialId,
+        role: "read",
+        expectedPolicyRevision: 7,
+      },
+    ],
+    ["conversation.unshare", { conversationId, requestId: "revoke", credentialId }],
+    [
+      "conversation.unshare",
+      {
+        conversationId,
+        requestId: "revoke-built",
+        credentialId,
+        expectedPolicyRevision: 0,
+      },
+    ],
+  ])
+})
+
+it("refuses a malformed share before anything is sent", async () => {
+  const request = vi.fn()
+  const api = createConversationApi({ request }, () => "action")
+  expect(() => api.share("not-a-uuid", credentialId, "read")).toThrow(TypeError)
+  expect(() => api.share(conversationId, " ", "read")).toThrow(TypeError)
+  expect(() => api.share(conversationId, "c".repeat(257), "read")).toThrow(TypeError)
+  expect(() => api.unshare(conversationId, "")).toThrow(TypeError)
+  expect(() =>
+    api.share(conversationId, credentialId, "read", undefined, { requestId: "" }),
+  ).toThrow(TypeError)
+  for (const expectedPolicyRevision of [-1, 1.5, Number.NaN, 2 ** 53]) {
+    expect(() =>
+      api.share(conversationId, credentialId, "read", undefined, {
+        expectedPolicyRevision,
+      }),
+    ).toThrow(TypeError)
+    expect(() =>
+      api.unshare(conversationId, credentialId, { expectedPolicyRevision }),
+    ).toThrow(TypeError)
+  }
+  expect(request).not.toHaveBeenCalled()
+})
+
+it("keeps a share's typed refusal and retries it as the same grant", async () => {
+  const request = vi
+    .fn()
+    .mockRejectedValueOnce(
+      new NessaRpcError("share_target_not_paired", "share_target_not_paired"),
+    )
+    .mockResolvedValueOnce({ requestId: "action", applied: false, policyRevision: 3 })
+  const api = createConversationApi({ request }, () => "action")
+  const refused = await api
+    .share(conversationId, credentialId, "drive", drivePolicy)
+    .catch((error: unknown) => error)
+  expect(refused).toBeInstanceOf(NessaConversationMutationError)
+  const error = refused as NessaConversationMutationError<unknown>
+  expect(error.code).toBe(ConversationErrorCode.ShareTargetNotPaired)
+  expect(error.uncertain).toBe(false)
+  expect(await error.retry()).toEqual({
+    requestId: "action",
+    applied: false,
+    policyRevision: 3,
+  })
+  expect(request.mock.calls[1]).toEqual(request.mock.calls[0])
+})
+
+it("keeps a refusal for a grant changed since its revision as its own code", async () => {
+  const request = vi
+    .fn()
+    .mockRejectedValue(new NessaRpcError("share_grant_changed", "share_grant_changed"))
+  const api = createConversationApi({ request }, () => "action")
+  for (const call of [
+    () =>
+      api.share(conversationId, credentialId, "read", undefined, {
+        expectedPolicyRevision: 2,
+      }),
+    () => api.unshare(conversationId, credentialId, { expectedPolicyRevision: 2 }),
+  ]) {
+    const error = (await call().catch(
+      (caught: unknown) => caught,
+    )) as NessaConversationMutationError<unknown>
+    expect(error).toBeInstanceOf(NessaConversationMutationError)
+    expect(error.code).toBe(ConversationErrorCode.ShareGrantChanged)
+    expect(error.uncertain).toBe(false)
+  }
+})
+
+it.each([
+  ["another request", { requestId: "other", applied: true, policyRevision: 1 }],
+  ["no revision", { requestId: "action", applied: true }],
+  ["a negative revision", { requestId: "action", applied: true, policyRevision: -1 }],
+  [
+    "revision 0, which no grant holds",
+    { requestId: "action", applied: true, policyRevision: 0 },
+  ],
+  ["a fractional revision", { requestId: "action", applied: true, policyRevision: 1.5 }],
+  [
+    "an unknown field",
+    { requestId: "action", applied: true, policyRevision: 1, extra: true },
+  ],
+])("rejects a share answer with %s", async (_name, answer) => {
+  const api = createConversationApi(
+    { request: vi.fn().mockResolvedValue(answer) },
+    () => "action",
+  )
+  await expect(api.share(conversationId, credentialId, "read")).rejects.toThrow(
+    NessaConversationMutationError,
+  )
+})
+
+it("rejects an unshare answer for another request", async () => {
+  const api = createConversationApi(
+    { request: vi.fn().mockResolvedValue({ requestId: "other", applied: true }) },
+    () => "action",
+  )
+  await expect(api.unshare(conversationId, credentialId)).rejects.toThrow(
+    NessaConversationMutationError,
+  )
+})
+
+const grant = {
+  credentialId,
+  role: "drive",
+  policy: { allow: ["Read"], deny: [], commandHosts: ["devbox"] },
+  policyRevision: 2,
+  grantedAtMs: 1_700_000_000_000,
+}
+
+it("lists a conversation's grants within the published bounds", async () => {
+  const request = vi.fn().mockResolvedValue({
+    items: [
+      grant,
+      { credentialId: "phone", role: "read", policyRevision: 1, grantedAtMs: 1 },
+    ],
+  })
+  const api = createConversationApi({ request }, () => "action")
+  expect((await api.shares(conversationId)).items).toHaveLength(2)
+  expect(request).toHaveBeenCalledWith("conversation.shares", { conversationId })
+  // The most hosts and patterns a policy may name together.
+  const patterns = bounds.maxToolPolicyEntries - bounds.maxCommandHosts
+  request.mockResolvedValue({
+    items: [
+      {
+        ...grant,
+        policy: {
+          allow: Array.from({ length: patterns }, (_, n) => `t${n}`).slice(
+            0,
+            bounds.maxToolPolicyPatterns,
+          ),
+          deny: Array.from({ length: patterns }, (_, n) => `t${n}`).slice(
+            bounds.maxToolPolicyPatterns,
+          ),
+          commandHosts: Array.from({ length: bounds.maxCommandHosts }, (_, n) => `h${n}`),
+        },
+      },
+    ],
+  })
+  await expect(api.shares(conversationId)).resolves.toBeDefined()
+})
+
+it.each([
+  ["a repeated grant", { items: [grant, grant] }],
+  [
+    "a grant at revision 0, which names no grant held",
+    { items: [{ ...grant, policyRevision: 0 }] },
+  ],
+  ["a drive grant without a policy", { items: [{ ...grant, policy: undefined }] }],
+  ["a read grant with a policy", { items: [{ ...grant, role: "read" }] }],
+  ["an unknown role", { items: [{ ...grant, role: "owner" }] }],
+  [
+    "a preset beside patterns",
+    { items: [{ ...grant, policy: { preset: "all", allow: ["Read"] } }] },
+  ],
+  ["an unknown preset", { items: [{ ...grant, policy: { preset: "anything" } }] }],
+  ["an empty policy", { items: [{ ...grant, policy: { allow: [], deny: [] } }] }],
+  [
+    "an empty host list",
+    { items: [{ ...grant, policy: { preset: "all", commandHosts: [] } }] },
+  ],
+  [
+    "a host named twice",
+    { items: [{ ...grant, policy: { preset: "all", commandHosts: ["a", "a"] } }] },
+  ],
+  [
+    "a host past its bytes",
+    {
+      items: [
+        {
+          ...grant,
+          policy: {
+            preset: "all",
+            commandHosts: ["h".repeat(bounds.maxCommandHostBytes + 1)],
+          },
+        },
+      ],
+    },
+  ],
+  [
+    "hosts past the room the patterns leave",
+    {
+      items: [
+        {
+          ...grant,
+          policy: {
+            allow: Array.from(
+              { length: bounds.maxToolPolicyPatterns },
+              (_, n) => `a${n}`,
+            ),
+            deny: Array.from({ length: bounds.maxToolPolicyPatterns }, (_, n) => `d${n}`),
+            commandHosts: ["devbox"],
+          },
+        },
+      ],
+    },
+  ],
+  ["an unknown field", { items: [{ ...grant, extra: true }] }],
+  ["a negative revision", { items: [{ ...grant, policyRevision: -1 }] }],
+  [
+    "more grants than a conversation holds",
+    {
+      items: Array.from({ length: bounds.maxShareGrants + 1 }, (_, n) => ({
+        credentialId: `c${n}`,
+        role: "read",
+        policyRevision: 1,
+        grantedAtMs: 0,
+      })),
+    },
+  ],
+])("rejects %s in a shares answer", async (_name, answer) => {
+  const api = createConversationApi(
+    { request: vi.fn().mockResolvedValue(answer) },
+    () => "action",
+  )
+  await expect(api.shares(conversationId)).rejects.toThrow()
 })

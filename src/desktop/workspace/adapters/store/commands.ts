@@ -69,6 +69,7 @@ export const {
   setComposerText,
   transcriptRetried: retryTranscript,
   unsentDiscarded: discardUnsent,
+  closeShare,
 } = workspaceActions
 
 const {
@@ -685,3 +686,14 @@ export const providerLoginAvailable =
   (): WorkspaceCommand<Promise<boolean>> => async (_dispatch, _getState, dependencies) =>
     !!dependencies.signInToProvider &&
     (await (dependencies.providerLoginAvailable?.() ?? true))
+
+export {
+  askRevoke,
+  cancelRevoke,
+  draftShare,
+  openShare,
+  readShares,
+  restartShare,
+  revokeShare,
+  shareSession,
+} from "./sharing-commands"

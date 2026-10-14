@@ -19,13 +19,16 @@ import {
 } from "@nessa-ui/react/chat-bubbles"
 import { MessageContentView } from "./message-content"
 import { PublishedFiles } from "./published-files"
+import { TranscriptNotes } from "./transcript-note"
 import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
 import { ProviderSignInCard } from "../../provider-authentication/ui/provider-sign-in"
 import { TranscriptDivider } from "@nessa-ui/react/transcript-divider"
 
 import {
+  placeNotes,
   placePublished,
   type Conversation,
+  type Note,
   type PublishedFile,
   type Receipt,
   type Turn,
@@ -105,6 +108,7 @@ export function Transcript({
   const provider = conversation.remote?.runtime?.agent
   const sentTurns = conversation.turns.filter((turn) => turn.from === "user").length
   const published = publishedByRow(conversation, rows)
+  const notes = notesByRow(conversation, rows, waitingUsers)
 
   return (
     <>
@@ -115,9 +119,11 @@ export function Transcript({
             className="mt-auto gap-5 select-text"
           >
             {conversation.turns.length === 0 &&
-            // A file the agent published is something in the conversation,
-            // even with no turn shown: it is listed, not an empty welcome.
+            // A file the agent published, or a note somebody left, is
+            // something in the conversation, even with no turn shown: it is
+            // listed, not an empty welcome.
             (conversation.remote?.artifacts ?? []).length === 0 &&
+            (conversation.remote?.notes ?? []).length === 0 &&
             conversation.phase === "idle" &&
             emptyState ? (
               <EmptyState
@@ -127,6 +133,7 @@ export function Transcript({
                 statusLabel={statusLabel}
               />
             ) : null}
+            <TranscriptNotes notes={notes.before} />
             <PublishedFiles
               conversationId={conversation.serverConversationId}
               files={published.before}
@@ -214,6 +221,7 @@ export function Transcript({
                   ) : (
                     <TurnStatus key={`${row.key}:status`} status={row.status} />
                   )}
+                  <TranscriptNotes notes={notes.byRow.get(row.key) ?? []} />
                 </React.Fragment>
               )
             })}
@@ -222,14 +230,18 @@ export function Transcript({
               files={published.after}
             />
             {waitingUsers.map((turn) => (
-              <TurnRow
-                key={`${turn.id}:waiting`}
-                turn={turn}
-                conversationId={conversation.serverConversationId}
-                streaming={false}
-                animateMount={animateMount}
-                onOpenPaste={onOpenPaste}
-              />
+              <React.Fragment key={`${turn.id}:waiting`}>
+                <TurnRow
+                  turn={turn}
+                  conversationId={conversation.serverConversationId}
+                  streaming={false}
+                  animateMount={animateMount}
+                  onOpenPaste={onOpenPaste}
+                />
+                <TranscriptNotes
+                  notes={notes.byWaiting.get(turn.executionId ?? "") ?? []}
+                />
+              </React.Fragment>
             ))}
             {conversation.phase === "thinking" &&
             (rows.length === 0 || rows.at(-1)?.status === "running") &&
@@ -322,6 +334,52 @@ function publishedByRow(
   const files = conversation.remote?.artifacts ?? []
   const byRow = new Map<string, PublishedFile[]>()
   if (files.length === 0) return { byRow, before: [], after: [] }
+  const rowOf = rowsByExecution(conversation, rows, "first")
+  const placed = placePublished(files, rowOf.keys())
+  for (const [execution, published] of placed.byExecution) {
+    const row = rowOf.get(execution)
+    if (row !== undefined) byRow.set(row, published)
+  }
+  return { byRow, before: placed.before, after: placed.after }
+}
+
+/**
+ * The notes left in the conversation, by row: right after the row of the turn
+ * each followed — the last row that names it, so a note comes after all of
+ * that turn — one that followed an input shown waiting right after that
+ * input, and the rest before the first row, as `placeNotes` rules.
+ */
+function notesByRow(
+  conversation: Conversation,
+  rows: readonly { key: string; promptId?: string; sourceTurnId?: string }[],
+  /** The inputs shown waiting after every row. */
+  waitingUsers: readonly Turn[],
+): { byRow: Map<string, Note[]>; before: Note[]; byWaiting: Map<string, Note[]> } {
+  const notes = conversation.remote?.notes ?? []
+  const byRow = new Map<string, Note[]>()
+  if (notes.length === 0) return { byRow, before: [], byWaiting: new Map() }
+  const rowOf = rowsByExecution(conversation, rows, "last")
+  // Only the inputs this panel draws waiting, so no note waits on one it does not.
+  const waiting = waitingUsers.flatMap((turn) =>
+    turn.executionId ? [turn.executionId] : [],
+  )
+  const placed = placeNotes(notes, rowOf.keys(), waiting)
+  for (const [execution, left] of placed.byExecution) {
+    const row = rowOf.get(execution)
+    if (row !== undefined) byRow.set(row, left)
+  }
+  return { byRow, before: placed.before, byWaiting: placed.byWaiting }
+}
+
+/**
+ * The row each turn's execution is shown in: the first row that names it, or
+ * the last.
+ */
+function rowsByExecution(
+  conversation: Conversation,
+  rows: readonly { key: string; promptId?: string; sourceTurnId?: string }[],
+  which: "first" | "last",
+): Map<string, string> {
   const executionOf = new Map(
     conversation.turns.flatMap((turn) =>
       turn.executionId ? [[turn.id, turn.executionId] as const] : [],
@@ -332,14 +390,10 @@ function publishedByRow(
     const execution =
       (row.promptId && executionOf.get(row.promptId)) ||
       (row.sourceTurnId && executionOf.get(row.sourceTurnId))
-    if (execution && !rowOf.has(execution)) rowOf.set(execution, row.key)
+    if (execution && (which === "last" || !rowOf.has(execution)))
+      rowOf.set(execution, row.key)
   }
-  const placed = placePublished(files, rowOf.keys())
-  for (const [execution, published] of placed.byExecution) {
-    const row = rowOf.get(execution)
-    if (row !== undefined) byRow.set(row, published)
-  }
-  return { byRow, before: placed.before, after: placed.after }
+  return rowOf
 }
 
 /**
