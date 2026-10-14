@@ -4,8 +4,8 @@ use crate::{
     failures::{NativeCallError, NativeEnrollmentFailure, NativeReadFailure},
     saved::{NativeScope, NativeTranscript},
     session::{
-        LocalEnrollment, LocalIssuedEnrollment, NativeSession, SessionFailure, SessionRead,
-        SessionRefresh,
+        LocalEnrollment, LocalIssuedEnrollment, NativeSession, SessionFailure, SessionFollow,
+        SessionRead, SessionRefresh,
     },
 };
 use nessa_auth::{
@@ -19,7 +19,11 @@ use nessa_client_core::{
         RetainedPurge,
     },
 };
-use nessa_protocol::{conversation::domain::ConversationId, pairing::wire::NativePairingStatus};
+use nessa_protocol::{
+    conversation::domain::ConversationId,
+    pairing::wire::NativePairingStatus,
+    product::{generated::ConversationViewCursor, passive_read::conforming_view_cursor},
+};
 use nessa_sync::replication::{catalogue::EntryKey, domain::Id};
 use std::{net::SocketAddr, path::Path, sync::Arc};
 use uuid::Uuid;
@@ -480,6 +484,68 @@ impl NativeRefresh {
         })
     }
 }
+/// One admitted `conversation.subscribe` read. The view replaces what the
+/// device shows; it does not advance a physical checkpoint.
+#[derive(uniffi::Object)]
+pub struct NativeFollow {
+    value: SessionFollow,
+}
+#[uniffi::export]
+impl NativeFollow {
+    /// Original initial status and purge.
+    pub fn initial(&self) -> Arc<NativeStatus> {
+        Arc::new(NativeStatus {
+            value: self.value.initial().clone(),
+        })
+    }
+    /// Exact current binding refusal before product selection.
+    pub fn selection_failure(&self) -> Option<Arc<NativeEnrollmentFailure>> {
+        self.value
+            .selection_failure()
+            .map(|value| Arc::new(NativeEnrollmentFailure { value }))
+    }
+    /// Product view JSON when the first frame was a view.
+    pub fn view_json(&self) -> Option<String> {
+        self.value
+            .followed()
+            .and_then(|result| result.as_ref().ok())
+            .map(|value| value.view_json().to_owned())
+    }
+    /// Cursor incarnation on that view.
+    pub fn incarnation(&self) -> Option<String> {
+        self.value
+            .followed()
+            .and_then(|result| result.as_ref().ok())
+            .map(|value| value.incarnation().to_owned())
+    }
+    /// Cursor position on that view. A later follow passes it back as `after`.
+    pub fn position(&self) -> Option<String> {
+        self.value
+            .followed()
+            .and_then(|result| result.as_ref().ok())
+            .map(|value| value.position().to_owned())
+    }
+    /// Why no view was delivered, when a reader was selected.
+    /// [`NativeReadFailure::CursorAhead`] means `after` is past the gateway
+    /// head: follow again with no cursor.
+    /// [`NativeReadFailure::SubscriptionCapacity`] means the gateway's watch
+    /// capacity is full: follow again. Neither is an ungranted conversation,
+    /// and neither asks pinned status.
+    pub fn failure(&self) -> Option<NativeReadFailure> {
+        self.value
+            .followed()
+            .and_then(|result| result.as_ref().err().copied())
+            .map(Into::into)
+    }
+    /// Authority-refusal recheck. A conversation this device was not granted does not ask.
+    pub fn recheck(&self) -> Option<Arc<NativeStatus>> {
+        self.value.recheck().map(|value| {
+            Arc::new(NativeStatus {
+                value: value.clone(),
+            })
+        })
+    }
+}
 /// Immutable saved entry cursor. Restoration selects order, not read authority.
 #[derive(uniffi::Object)]
 pub struct NativeEntryKey {
@@ -737,7 +803,29 @@ impl NativeDeviceSession {
             .map(|value| value.map(|value| Arc::new(NativeLocalEnrollment { value })))
             .map_err(Into::into)
     }
-    /// Run status, binding, bounded read and refusal recheck under one admission.
+    /// Run status, binding, one `conversation.subscribe`, and an authority recheck.
+    /// `after_incarnation` and `after_position` are both absent, or both a
+    /// published `ConversationViewCursor`: incarnation within its character
+    /// bound, position a decimal `u64`. Anything else is
+    /// [`NativeCallError::InvalidArgument`] before a follow starts. The first
+    /// view is returned and the subscription is closed. Checkpoints stay on
+    /// [`Self::refresh`].
+    pub fn follow(
+        &self,
+        conversation: String,
+        after_incarnation: Option<String>,
+        after_position: Option<String>,
+        stop: Arc<NativeReadStop>,
+    ) -> Result<Arc<NativeFollow>, NativeCallError> {
+        let conversation =
+            ConversationId::new(&conversation).map_err(|_| NativeCallError::InvalidArgument)?;
+        let after = view_cursor(after_incarnation, after_position)?;
+        self.value
+            .follow(&conversation, after, stop.value.clone())
+            .map(|value| Arc::new(NativeFollow { value }))
+            .map_err(Into::into)
+    }
+    /// Run status, binding, bounded checkpoint read and refusal recheck under one admission.
     pub fn refresh(
         &self,
         stop: Arc<NativeReadStop>,
@@ -791,6 +879,30 @@ impl NativeDeviceSession {
     /// Await physical work and release private scope on the dedicated worker.
     pub fn close(&self) -> Result<(), NativeCallError> {
         self.value.close().map_err(Into::into)
+    }
+}
+
+/// A restored or caller-supplied cursor, or none when both parts are absent.
+/// [`conforming_view_cursor`] is the check: the published incarnation bound,
+/// and a position `decimal_u64` accepts.
+fn view_cursor(
+    incarnation: Option<String>,
+    position: Option<String>,
+) -> Result<Option<ConversationViewCursor>, NativeCallError> {
+    match (incarnation, position) {
+        (None, None) => Ok(None),
+        (Some(incarnation), Some(position)) => {
+            let cursor = ConversationViewCursor {
+                incarnation,
+                position,
+            };
+            if conforming_view_cursor(&cursor) {
+                Ok(Some(cursor))
+            } else {
+                Err(NativeCallError::InvalidArgument)
+            }
+        }
+        _ => Err(NativeCallError::InvalidArgument),
     }
 }
 

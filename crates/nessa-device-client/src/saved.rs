@@ -54,7 +54,9 @@ fn cache_error(error: ReadFailure) -> NativeViewError {
         ReadFailure::CacheDamaged => NativeViewError::CacheDamaged,
         ReadFailure::ResetRequired => NativeViewError::ResetRequired,
         ReadFailure::Quota => NativeViewError::Quota,
-        ReadFailure::Protocol => NativeViewError::InvalidTarget,
+        ReadFailure::Protocol | ReadFailure::CursorAhead | ReadFailure::SubscriptionCapacity => {
+            NativeViewError::InvalidTarget
+        }
         ReadFailure::Cache
         | ReadFailure::Refused
         | ReadFailure::Unreachable

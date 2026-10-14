@@ -216,10 +216,13 @@ let panelRoot: Root | undefined
 function showPanel() {
   const current = gateway.views.get(conversation)
   if (!current || !panelElement) return
-  const panelConversation = applyView(newConversation("panel"), {
-    ...current,
-    notes: current.notes.map(shownNote),
-  })
+  const panelConversation = applyView(
+    { ...newConversation(conversation), serverConversationId: conversation },
+    {
+      ...current,
+      notes: current.notes.map(shownNote),
+    },
+  )
   const tree = (
     <React.StrictMode>
       <Provider store={panelStore as never}>

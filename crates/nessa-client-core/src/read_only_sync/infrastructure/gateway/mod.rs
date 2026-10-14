@@ -8,7 +8,9 @@
 mod deadline_stream;
 mod held_files;
 mod session;
-pub(crate) use session::{DeviceEvidence, LocalConnector, Session};
+pub(crate) use session::{
+    subscription_refusal, DeviceEvidence, LocalConnector, Session, SubscriptionDelivery,
+};
 mod sources;
 pub(crate) use sources::{
     CatalogueReader, GatewayAuthorizer, GatewayConnection, RecordGatewaySource,

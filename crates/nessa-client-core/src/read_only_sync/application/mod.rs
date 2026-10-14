@@ -25,5 +25,5 @@ pub(crate) use catalogue::{CachedCatalogueEntry, CachedCataloguePage};
 mod gateway;
 pub(crate) use gateway::{
     Cancellation, GatewayAttempt, GatewayConnector, GatewayError, GatewayOutcome, GatewayPolicy,
-    GatewayStream, HeldFileRefusal,
+    GatewayStream, HeldFileRefusal, SubscriptionCode, SubscriptionRefusal,
 };

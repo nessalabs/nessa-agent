@@ -1,5 +1,6 @@
 //! The purge-before-forgetting store and the recheck rule, against doubles
 //! that record the order of effects.
+use super::super::SubscriptionCode;
 use super::*;
 use nessa_auth::domain::{
     pairing::{AttemptId, ConsentClass, ConsentIntentId, InvitationId},
@@ -285,6 +286,8 @@ fn only_authority_refusals_ask_status_again() {
         GatewayError::Watch(ChangeWatchErrorCode::StaleEpoch),
         GatewayError::HeldFile(HeldFileRefusal::Unauthorized),
         GatewayError::HeldFile(HeldFileRefusal::Forbidden),
+        GatewayError::Subscription(SubscriptionRefusal::Unauthorized),
+        GatewayError::Subscription(SubscriptionRefusal::Forbidden),
     ] {
         assert!(asks_status(asks), "{asks:?}");
     }
@@ -309,6 +312,22 @@ fn only_authority_refusals_ask_status_again() {
         GatewayError::HeldFile(HeldFileRefusal::Conversation(
             ConversationErrorCode::TemporarilyUnavailable,
         )),
+        GatewayError::Subscription(SubscriptionRefusal::Conversation(
+            ConversationErrorCode::ConversationNotFound,
+        )),
+        GatewayError::Subscription(SubscriptionRefusal::Conversation(
+            ConversationErrorCode::ConversationDeleted,
+        )),
+        GatewayError::Subscription(SubscriptionRefusal::Subscription(
+            SubscriptionCode::CursorAhead,
+        )),
+        GatewayError::Subscription(SubscriptionRefusal::Subscription(
+            SubscriptionCode::Duplicate,
+        )),
+        GatewayError::Subscription(SubscriptionRefusal::Subscription(
+            SubscriptionCode::Capacity,
+        )),
+        GatewayError::Subscription(SubscriptionRefusal::Subscription(SubscriptionCode::Unknown)),
     ] {
         assert!(!asks_status(keeps), "{keeps:?}");
     }
