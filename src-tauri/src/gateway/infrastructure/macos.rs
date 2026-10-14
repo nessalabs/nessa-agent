@@ -1371,11 +1371,19 @@ fn publish_deferred(stage: DeferredStage, lock: Option<control::NamespaceLock>) 
 
 /// Test rendezvous for a deferred publication: the thread holds the label lock
 /// and has not entered `stage_runtime` until `release`.
+///
+/// The three flags share one mutex. A condition variable may be waited on
+/// with only that mutex; waiting on a second one aborts the staging thread.
+#[cfg(test)]
+struct StagePauseState {
+    started: bool,
+    release: bool,
+    finished: Option<Result<(), String>>,
+}
+
 #[cfg(test)]
 struct StagePause {
-    started: Mutex<bool>,
-    release: Mutex<bool>,
-    finished: Mutex<Option<Result<(), String>>>,
+    state: Mutex<StagePauseState>,
     cv: Condvar,
 }
 
@@ -1383,62 +1391,64 @@ struct StagePause {
 impl StagePause {
     fn new() -> Arc<Self> {
         Arc::new(Self {
-            started: Mutex::new(false),
-            release: Mutex::new(false),
-            finished: Mutex::new(None),
+            state: Mutex::new(StagePauseState {
+                started: false,
+                release: false,
+                finished: None,
+            }),
             cv: Condvar::new(),
         })
     }
 
     fn mark_started(&self) {
-        *self.started.lock().expect("stage pause") = true;
+        self.state.lock().expect("stage pause").started = true;
         self.cv.notify_all();
     }
 
     fn wait_until_staging_holds_the_lock(&self) {
-        let guard = self.started.lock().expect("stage pause");
+        let guard = self.state.lock().expect("stage pause");
         let (guard, result) = self
             .cv
-            .wait_timeout_while(guard, Duration::from_secs(5), |started| !*started)
+            .wait_timeout_while(guard, Duration::from_secs(5), |state| !state.started)
             .expect("stage pause");
         assert!(
-            !result.timed_out() && *guard,
+            !result.timed_out() && guard.started,
             "deferred staging did not take the label lock"
         );
     }
 
     fn release(&self) {
-        *self.release.lock().expect("stage pause") = true;
+        self.state.lock().expect("stage pause").release = true;
         self.cv.notify_all();
     }
 
     fn wait_release(&self) {
-        let guard = self.release.lock().expect("stage pause");
+        let guard = self.state.lock().expect("stage pause");
         let (guard, result) = self
             .cv
-            .wait_timeout_while(guard, Duration::from_secs(30), |release| !*release)
+            .wait_timeout_while(guard, Duration::from_secs(30), |state| !state.release)
             .expect("stage pause");
         assert!(
-            !result.timed_out() && *guard,
+            !result.timed_out() && guard.release,
             "deferred staging was not released"
         );
     }
 
     fn finish(&self, result: Result<(), String>) {
-        *self.finished.lock().expect("stage pause") = Some(result);
+        self.state.lock().expect("stage pause").finished = Some(result);
         self.cv.notify_all();
     }
 
     fn wait_until_finished(&self) -> Result<(), String> {
-        let guard = self.finished.lock().expect("stage pause");
+        let guard = self.state.lock().expect("stage pause");
         let (guard, result) = self
             .cv
-            .wait_timeout_while(guard, Duration::from_secs(30), |finished| {
-                finished.is_none()
+            .wait_timeout_while(guard, Duration::from_secs(30), |state| {
+                state.finished.is_none()
             })
             .expect("stage pause");
         assert!(!result.timed_out(), "deferred staging did not finish");
-        guard.clone().expect("deferred staging finished")
+        guard.finished.clone().expect("deferred staging finished")
     }
 }
 
