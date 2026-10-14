@@ -177,7 +177,9 @@ function scriptedGateway(scenario = {}) {
         },
       }
     revision += 1
-    catalogue += 1
+    // A new grant moves the catalogue. A change of role or policy does not,
+    // as the gateway's change_revision does not.
+    if (!before) catalogue += 1
     const next = {
       credentialId: params.credentialId,
       role: params.role,
