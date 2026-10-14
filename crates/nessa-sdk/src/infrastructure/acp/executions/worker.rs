@@ -4367,10 +4367,18 @@ impl<P: AcpProfile> Worker<P> {
         context.awaiting_consult = false;
         let execution_id = context.execution.clone();
         let tool = context.tool.clone();
+        // The wait starts when the review can be shown. Time spent behind the
+        // hook is not part of the person's window, and a hook that outlasts
+        // the original instant does not settle the review as it is released
+        // (`a_held_review_keeps_its_full_window_after_the_hook`).
+        let now = self.config.clock.now();
+        if let Some(armed) = self.armed_permissions.get_mut(id) {
+            armed.at = now + armed.settlement.deadline().wait();
+        }
         let due = self
             .armed_permissions
             .get(id)
-            .is_some_and(|armed| self.config.clock.now() >= armed.at);
+            .is_some_and(|armed| now >= armed.at);
         if !due {
             if let Some(conversation_id) = self.session_key.clone().filter(|id| !id.is_empty()) {
                 self.config.review_notices.waiting(&ReviewNotice {

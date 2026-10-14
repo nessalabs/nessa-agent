@@ -1079,3 +1079,126 @@ async fn an_unpublished_deadline_cancellation_is_not_written_to_the_provider() {
         "the provider's request was let go before its cancellation was published"
     );
 }
+
+/// Time spent behind a permission-review hook is not part of the person's window.
+///
+/// The review is armed when the provider asks, and a held review is neither
+/// shown nor settled until the hook releases it. Releasing it after that
+/// original instant used to find it already due.
+#[tokio::test]
+async fn a_held_review_keeps_its_full_window_after_the_hook() {
+    use crate::application::agent_execution::permissions::{ReviewNotice, ReviewNotices};
+    use std::sync::atomic::Ordering;
+
+    struct Waiting(Mutex<Vec<ReviewNotice>>);
+    impl ReviewNotices for Waiting {
+        fn waiting(&self, notice: &ReviewNotice) {
+            self.0.lock().unwrap().push(notice.clone());
+        }
+        fn clear(
+            &self,
+            _: &str,
+            _: &crate::domain::agent_execution::executions::ExecutionId,
+            _: &crate::domain::agent_execution::permissions::PermissionId,
+        ) {
+        }
+    }
+
+    let (mut worker, mut execution, _events, _recovery, clock) = blocked_worker("", false).await;
+    let notices = Arc::new(Waiting(Mutex::new(Vec::new())));
+    worker.config.review_notices = notices.clone();
+    worker.session_key = Some("conversation".to_owned());
+    worker.hold_remembered_allows.store(true, Ordering::Release);
+    worker
+        .permission(&mut execution, RpcId::Number(77), permission_params(), None)
+        .await
+        .map_err(WorkerFailure::into_error)
+        .unwrap();
+    let id = worker
+        .armed_permissions
+        .keys()
+        .next()
+        .cloned()
+        .expect("the review is armed");
+    let wait = worker
+        .armed_permissions
+        .get(&id)
+        .expect("the review is armed")
+        .settlement
+        .deadline()
+        .wait();
+    let asked_at = worker.armed_permissions.get(&id).expect("armed").at;
+    clock.advance(wait);
+    assert!(
+        clock.now() >= asked_at,
+        "the hook did not outlast the deadline armed when the provider asked"
+    );
+    promptly(worker.settle_due_permissions(&mut execution, clock.now()))
+        .await
+        .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
+    assert!(
+        worker.armed_permissions.contains_key(&id),
+        "a held review was settled while the hook still had it"
+    );
+    assert!(
+        notices.0.lock().unwrap().is_empty(),
+        "the notice was shown during the hook"
+    );
+    let (reply, released) = oneshot::channel();
+    promptly(worker.command(&mut execution, Command::ReleaseConsult(id.clone(), reply)))
+        .await
+        .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
+    assert!(released.await.expect("release was answered").is_ok());
+    assert_eq!(
+        notices.0.lock().unwrap().len(),
+        1,
+        "releasing the review did not show it"
+    );
+    let armed_at = worker
+        .armed_permissions
+        .get(&id)
+        .expect("the review is still armed after the hook")
+        .at;
+    assert_eq!(
+        armed_at,
+        clock.now() + wait,
+        "the window did not start when the hook released the review"
+    );
+    promptly(worker.settle_due_permissions(&mut execution, clock.now()))
+        .await
+        .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
+    assert!(
+        worker.armed_permissions.contains_key(&id),
+        "the review settled at the moment it was shown"
+    );
+    clock.advance(wait - Duration::from_millis(1));
+    assert!(
+        worker
+            .next_permission_deadline()
+            .is_some_and(|at| clock.now() < at),
+        "the window ended before the configured wait"
+    );
+    clock.advance(Duration::from_millis(1));
+    assert!(
+        worker
+            .next_permission_deadline()
+            .is_some_and(|at| clock.now() >= at),
+        "the window did not end after the configured wait"
+    );
+    // The provider pipe is already full. Closing it makes the settlement's
+    // write fail at once, which is how this test sees that the review was due.
+    worker.scope.stdin = None;
+    let settled = promptly(worker.settle_due_permissions(&mut execution, clock.now()))
+        .await
+        .map_err(WorkerFailure::into_error);
+    assert_eq!(settled, Err(AgentError::Closed));
+    assert!(
+        !worker.armed_permissions.contains_key(&id),
+        "a due review was left armed"
+    );
+    worker
+        .scope
+        .cleanup(Duration::ZERO, Duration::from_secs(2))
+        .await
+        .unwrap();
+}
