@@ -15,7 +15,10 @@ use crate::{
         CommittedTranscript, CommittedViewState, LeaseRecord, SessionChange, SessionSnapshot,
         StorageError, UnreadablePart,
     },
-    domain::agent_execution::sessions::{ProviderContext, SessionId},
+    domain::agent_execution::{
+        executions::ExecutionId,
+        sessions::{ProviderContext, SessionId},
+    },
 };
 use event_stream::{EventId, NewEvent, Payload};
 use nessa_sync::replication::domain::{Id, Record, Scope};
@@ -327,6 +330,9 @@ impl TranscriptFold {
         };
         match step {
             FrameStep::Pending(piece) => {
+                // A valid frame, including one whose body is still arriving,
+                // ends the bad-frame run. The next malformed piece is its own line.
+                self.resyncing = false;
                 if let Some(piece) = piece {
                     self.pending.push(piece);
                 }
@@ -507,10 +513,15 @@ impl TranscriptFold {
         let unknown_lease = decoded
             .iter()
             .any(|change| matches!(change, SessionChange::Lease(LeaseRecord::Unreadable { .. })));
-        let applicable: Vec<SessionChange> = decoded
-            .into_iter()
-            .filter(|change| !self.hides_with_gap(change))
-            .collect();
+        let mut applicable = Vec::with_capacity(decoded.len());
+        for change in decoded {
+            // A turn this unit already accepted is in the snapshot only after
+            // the unit stages. Judge the rest of the unit against that prefix.
+            if self.hides_with_gap(&change, &applicable) {
+                continue;
+            }
+            applicable.push(change);
+        }
         if applicable.is_empty() {
             if unknown_lease {
                 self.note_unreadable(position);
@@ -565,19 +576,32 @@ impl TranscriptFold {
         Ok(())
     }
 
-    fn hides_with_gap(&self, change: &SessionChange) -> bool {
+    fn hides_with_gap(&self, change: &SessionChange, kept: &[SessionChange]) -> bool {
         let gap = !self.unread.is_empty();
-        let no_session = self.committed.snapshot().is_none();
+        let session_open = self.committed.snapshot().is_some()
+            || kept
+                .iter()
+                .any(|prior| matches!(prior, SessionChange::Opened { .. }));
+        let accepted_here = |id: &ExecutionId| {
+            kept.iter().any(|prior| {
+                matches!(
+                    prior,
+                    SessionChange::InputAccepted(record)
+                        if &record.request.execution_id == id
+                )
+            })
+        };
         // A new turn is the acceptance. It is hidden only when the chat was
         // never opened and that open is already a gap. A later record of a
-        // turn that was never accepted belongs to the skipped record.
+        // turn that was never accepted, in this unit or before it, belongs
+        // to the skipped record.
         match change {
             SessionChange::Opened { .. } => false,
-            SessionChange::InputAccepted(_) => no_session && gap,
+            SessionChange::InputAccepted(_) => !session_open && gap,
             _ => match affected_execution(change) {
-                Some(id) if self.committed.accepts_execution(id) => false,
-                Some(_) => gap || no_session,
-                None => no_session && gap,
+                Some(id) if self.committed.accepts_execution(id) || accepted_here(id) => false,
+                Some(_) => gap || !session_open,
+                None => !session_open && gap,
             },
         }
     }
@@ -3445,5 +3469,223 @@ mod tests {
         assert!(fold.snapshot().is_none());
         assert_eq!(fold.unreadable().len(), 1);
         assert_eq!(fold.view_state(), CommittedViewState::CompleteEmpty);
+    }
+
+    fn open_recorded() -> SessionChange {
+        let mut open = opened();
+        let SessionChange::Opened { context, .. } = &mut open else {
+            unreachable!()
+        };
+        *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+        open
+    }
+
+    fn one_unit(fold: &TranscriptFold, changes: &[SessionChange], generation: u64) -> Vec<Record> {
+        let payload = snapshot::encode_semantic_batch(changes).unwrap();
+        let start = fold.downloaded() + 1;
+        let frames = framed_save(&payload, fold.applied(), generation, start);
+        records(&fold.scope, start, &frames)
+    }
+
+    fn text_observation(name: &str) -> SessionChange {
+        SessionChange::ProviderObservation(ExecutionEvent::new(
+            ExecutionId::new(name).unwrap(),
+            ExecutionUpdate::Message(MessageChunk::text("kept")),
+        ))
+    }
+
+    fn permission_cancellation(name: &str) -> (ExecutionEvent, ExecutionEvent) {
+        let options = PermissionOptions::new(
+            vec![PermissionOption::new(
+                PermissionOptionId::new("allow").unwrap(),
+                "Allow",
+                PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request()),
+            )
+            .unwrap()],
+            &PermissionOfferPolicy::once_only(),
+        )
+        .unwrap();
+        let requested = ExecutionEvent::new(
+            ExecutionId::new("output").unwrap(),
+            ExecutionUpdate::PermissionRequested {
+                id: PermissionId::new(name).unwrap(),
+                tool_id: ToolCallId::new(name).unwrap(),
+                observation: ToolObservation::default(),
+                input: ToolReviewInput {
+                    name: "tool".into(),
+                    arguments_json: "{}".into(),
+                },
+                options: options.clone(),
+                deadline: None,
+            },
+        );
+        let ExecutionUpdate::PermissionRequested {
+            id,
+            tool_id,
+            input,
+            options,
+            ..
+        } = requested.update()
+        else {
+            unreachable!()
+        };
+        let mut domain = ExecutionSession::new(ExecutionSessionId::new("remote").unwrap());
+        domain
+            .begin_execution(requested.execution_id().clone())
+            .unwrap();
+        domain
+            .observe_tool(
+                requested.execution_id(),
+                ToolCallUpdate::new(tool_id.clone(), None, None, None, None, None),
+            )
+            .unwrap();
+        domain
+            .request_permission(PermissionRequest::new(
+                id.clone(),
+                requested.execution_id().clone(),
+                tool_id.clone(),
+                options.clone(),
+            ))
+            .unwrap();
+        let record = domain
+            .cancel_permission(
+                requested.execution_id(),
+                id,
+                PermissionCancellationReason::provider_withdrawal(),
+            )
+            .unwrap()
+            .unwrap();
+        let cancelled = ExecutionEvent::new(
+            requested.execution_id().clone(),
+            ExecutionUpdate::PermissionCancelled(
+                PermissionCancellation::from_record(
+                    ExecutionSessionId::new("remote").unwrap(),
+                    record,
+                    input.clone(),
+                    CancellationOrigin::Provider,
+                )
+                .unwrap(),
+            ),
+        );
+        (requested, cancelled)
+    }
+
+    #[test]
+    fn an_abandoned_cancellation_does_not_keep_its_witness() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(open_recorded(), 0, 0)))
+            .unwrap();
+        let input = one_unit(&fold, &[accepted_input("output")], 1);
+        fold.apply(&input).unwrap();
+        let (requested, cancelled) = permission_cancellation("review");
+        let abandoned = one_unit(
+            &fold,
+            &[
+                SessionChange::ProviderObservation(requested),
+                SessionChange::ProviderObservation(cancelled),
+                contradictory_open(),
+            ],
+            2,
+        );
+        fold.apply(&abandoned).unwrap();
+        assert_eq!(fold.unreadable().len(), 1);
+        assert!(fold.snapshot().unwrap().invocations[0].events.is_empty());
+        assert!(matches!(
+            fold.snapshot().unwrap().provider_context,
+            ProviderContext::Recorded(_)
+        ));
+        let clear = SessionChange::ProviderContext {
+            before: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+            after: ProviderContext::Absent,
+        };
+        fold.apply(&one_unit(&fold, &[clear], 3)).unwrap();
+        assert!(matches!(
+            fold.snapshot().unwrap().provider_context,
+            ProviderContext::Absent
+        ));
+        assert!(fold.snapshot().unwrap().invocations[0].events.is_empty());
+        assert_eq!(fold.unreadable().len(), 1);
+        fold.committed.assert_retained_accounting();
+    }
+
+    #[test]
+    fn a_valid_pending_frame_ends_an_unreadable_run() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&[Record {
+            position: 1,
+            id: id("torn"),
+            scope: scope.clone(),
+            payload: vec![0xff],
+        }])
+        .unwrap();
+        assert_eq!(fold.unreadable().len(), 1);
+        let frames = stream_fact::frame_fact(
+            &stream_fact::FramedFact {
+                key: FactKey::new(FactKind::SaveUnit, None, 0).unwrap(),
+                body: vec![7; 70 * 1024],
+            },
+            2,
+        )
+        .unwrap();
+        assert!(frames.len() > 2);
+        fold.apply(&records(&scope, 2, &frames[..1])).unwrap();
+        assert_eq!(
+            fold.unreadable().len(),
+            1,
+            "a valid start frame is not another gap"
+        );
+        let mut piece = records(&scope, 3, &frames[1..2]);
+        piece[0].payload[1] ^= 0xff;
+        fold.apply(&piece).unwrap();
+        assert_eq!(
+            fold.unreadable()
+                .iter()
+                .map(UnreadablePart::id)
+                .collect::<Vec<_>>(),
+            ["1", "3"]
+        );
+    }
+
+    #[test]
+    fn a_turn_accepted_in_a_gapped_unit_keeps_its_observation() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(open_recorded(), 0, 0)))
+            .unwrap();
+        let torn = save_payload_frames(b"{", fold.applied(), 1);
+        fold.apply(&records(&scope, fold.downloaded() + 1, &torn))
+            .unwrap();
+        assert_eq!(fold.unreadable().len(), 1);
+        fold.apply(&one_unit(
+            &fold,
+            &[accepted_input("kept"), text_observation("kept")],
+            2,
+        ))
+        .unwrap();
+        assert_eq!(fold.snapshot().unwrap().invocations.len(), 1);
+        assert_eq!(fold.snapshot().unwrap().invocations[0].events.len(), 1);
+        assert_eq!(fold.unreadable().len(), 1);
+    }
+
+    #[test]
+    fn an_opening_unit_keeps_the_turn_it_introduces() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&one_unit(
+            &fold,
+            &[
+                open_recorded(),
+                accepted_input("kept"),
+                text_observation("kept"),
+            ],
+            0,
+        ))
+        .unwrap();
+        assert!(fold.unreadable().is_empty());
+        assert_eq!(fold.snapshot().unwrap().id.as_str(), "conversation");
+        assert_eq!(fold.snapshot().unwrap().invocations.len(), 1);
+        assert_eq!(fold.snapshot().unwrap().invocations[0].events.len(), 1);
     }
 }

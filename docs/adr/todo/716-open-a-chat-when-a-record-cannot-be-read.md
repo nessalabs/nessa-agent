@@ -87,8 +87,9 @@ and no way to see which part failed.
 
 Inferring which later records depend on a skipped one, and storing that graph,
 is the shape #695 grew to thousands of lines to express. A later record is
-hidden only when it names a turn that is not in the snapshot and a gap is
-already present. That is the whole dependency rule.
+hidden only when it names a turn that is neither in the snapshot nor accepted
+earlier in the same save unit, and a gap is already present. An open earlier
+in that unit is the session. That is the whole dependency rule.
 
 Putting the gap on `SessionSnapshot` would make every snapshot literal and
 every adapter carry a display fact. The snapshot remains the session the fold
