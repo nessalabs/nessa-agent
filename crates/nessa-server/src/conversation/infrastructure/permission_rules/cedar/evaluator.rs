@@ -68,9 +68,10 @@ pub(crate) struct CedarPermissionRuleEvaluator;
 impl CedarPermissionRuleEvaluator {
     /// Load and strictly validate the checked-in schema and policies.
     ///
-    /// Composition calls this when it builds the rules, so a broken bundle
-    /// refuses to start. A later `settle` or `may` still fails closed if this
-    /// was not called.
+    /// The Unix gateway calls this when it composes the rules, so a broken
+    /// bundle refuses to start. A later `settle` or `may` still fails closed
+    /// if this was not called. Windows does not compose that gateway.
+    #[cfg(unix)]
     pub(crate) fn load() -> Result<Self, PermissionRuleUnavailable> {
         match BUNDLE.as_ref() {
             Ok(_) => Ok(Self),

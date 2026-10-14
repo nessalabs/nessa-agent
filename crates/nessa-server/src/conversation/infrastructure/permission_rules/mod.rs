@@ -19,5 +19,6 @@ mod memory;
 mod store;
 
 pub use audit::DurablePermissionRuleRevocationAudit;
+#[cfg(unix)]
 pub(crate) use cedar::CedarPermissionRuleEvaluator;
 pub use memory::{PermissionMemory, PublishedReview};
