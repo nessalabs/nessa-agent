@@ -73,6 +73,12 @@ fn cleanup_config() -> (tempfile::TempDir, AcpConfig) {
         images: None,
         clock: Arc::new(crate::infrastructure::clock::RuntimeClock::new()),
         workspace_paths: Arc::new(crate::infrastructure::workspace_paths::FilesystemPaths),
+        permission_rules: std::sync::Arc::new(
+            crate::application::agent_execution::permissions::IdlePermissionRules,
+        ),
+        review_notices: std::sync::Arc::new(
+            crate::application::agent_execution::permissions::IdleReviewNotices,
+        ),
     };
     assert!(config.executable.executable().is_absolute());
     assert!(config.workspace.is_absolute());

@@ -2608,9 +2608,10 @@ async fn c13_a_saved_steer_refused_after_save_does_not_drop_the_contexts_it_carr
                 ..SubmittedMessage::default()
             },
             SubmissionMode::Steer,
-            super::super::Writer::Person(Initiation::grant(
-                GrantInitiator::new("phone", 1).unwrap(),
-            )),
+            super::super::Writer::Person(
+                Initiation::grant(GrantInitiator::new("phone", 1).unwrap()),
+                false,
+            ),
         )
         .await;
     match sent {
@@ -2667,9 +2668,10 @@ async fn c13_a_saved_steer_unavailable_after_save_does_not_drop_the_contexts_it_
                 ..SubmittedMessage::default()
             },
             SubmissionMode::Steer,
-            super::super::Writer::Person(Initiation::grant(
-                GrantInitiator::new("phone", 1).unwrap(),
-            )),
+            super::super::Writer::Person(
+                Initiation::grant(GrantInitiator::new("phone", 1).unwrap()),
+                false,
+            ),
         )
         .await;
     match sent {

@@ -108,6 +108,7 @@ pub(super) struct CurrentAgentResolverInput {
     pub(super) clock: Arc<dyn Clock>,
     pub(super) images: Arc<dyn UserImageSource>,
     pub(super) native_hooks: Arc<crate::agents::infrastructure::NativeHooksPreferences>,
+    pub(super) permission_memory: Arc<crate::conversation::infrastructure::PermissionMemory>,
     pub(super) warm_up: CurrentOpenCodeWarmUp,
 }
 
@@ -135,6 +136,8 @@ impl CurrentAgentResolver {
                 images: input.images,
                 credentials: input.credentials,
                 native_hooks: input.native_hooks,
+                permission_rules: input.permission_memory.clone(),
+                review_notices: input.permission_memory,
             },
             warm_up: input.warm_up,
             warm_up_resolving: Arc::new(AtomicUsize::new(0)),

@@ -237,6 +237,7 @@ pub enum Dataset {
     ConversationMetadata,
     ReceiverAccess,
     BrowserSessions,
+    PermissionRules,
 }
 
 impl fmt::Display for Dataset {
@@ -245,6 +246,7 @@ impl fmt::Display for Dataset {
             Self::ConversationMetadata => "conversation metadata",
             Self::ReceiverAccess => "receiver access",
             Self::BrowserSessions => "browser sessions",
+            Self::PermissionRules => "permission rules",
         })
     }
 }

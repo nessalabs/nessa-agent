@@ -18,6 +18,7 @@ use nessa_protocol::conversation::projection::retained_view;
 use nessa_protocol::conversation::view::ConversationView;
 use nessa_protocol::product::generated::AgentsListResult;
 use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
+use nessa_sdk::application::agent_execution::permissions::PermissionCaller;
 use nessa_sdk::application::agent_execution::sessions::{
     SessionSnapshot, SessionStorage, SubmissionAcknowledgement,
 };
@@ -242,6 +243,7 @@ pub(super) async fn serve(
                         "first".into(),
                         "permission".into(),
                         "allow".into(),
+                        PermissionCaller::Owner,
                     )
                     .await
                     .unwrap();

@@ -5,11 +5,13 @@ use super::{
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    error_code, ConversationCaller, ConversationError, ConversationService, QuestionChoiceInput,
-    ReadOpening, RequestedAgent, RequestedConversation, SubmissionMode, SubmittedFile,
-    SubmittedImage, SubmittedMessage,
+    error_code, rule_principal, ConversationCaller, ConversationError, ConversationService,
+    ListedPermissionRule, PermissionRuleCatalog, QuestionChoiceInput, ReadOpening, RequestedAgent,
+    RequestedConversation, RuleCatalogError, RuleChange, RulePrincipal, SubmissionMode,
+    SubmittedFile, SubmittedImage, SubmittedMessage,
 };
-use nessa_auth::application::session::AuthenticatedSession;
+use nessa_auth::application::session::{AuthenticatedSession, ReadCurrentSession};
+use nessa_auth::domain::MembershipRole;
 use nessa_protocol::conversation::projection::CommittedCursor;
 use nessa_protocol::conversation::view::{
     ConversationList, ConversationObservation, ConversationObservationCursor,
@@ -23,10 +25,13 @@ use nessa_protocol::product::generated::{
     ConversationDeleteParams, ConversationListParams, ConversationListResult,
     ConversationMutationResult, ConversationObserveCursor, ConversationObserveParams,
     ConversationObserveResult, ConversationPermissionAnswerErrorDetails,
+    ConversationPermissionRulesParams, ConversationPermissionRulesResult,
     ConversationPermissionSelectionState, ConversationReadParams, ConversationReceiptParams,
     ConversationReceiptResult, ConversationRemoveParams, ConversationReorderParams,
+    ConversationRevokePermissionRuleParams, ConversationRevokePermissionRuleResult,
     ConversationSendParams, ConversationSetApprovalModeParams, ConversationSetApprovalModeResult,
     ConversationStopParams, ConversationSummary, ConversationView as WireConversationView,
+    PermissionRule, PermissionRuleEffect,
 };
 use nessa_protocol::product::generated::{
     ConversationMessageDelivery, ConversationMessageParams, ConversationMessageReceipt,
@@ -46,7 +51,7 @@ use nessa_sdk::application::agent_execution::{
         CreationFailure, CreationReceipt, CreationStage, CreationStorageError, MutationFailure,
         MutationOutcome, MutationReceipt, MutationStage,
     },
-    permissions::PermissionSelectionState,
+    permissions::{is_remember_option, PermissionCaller, PermissionSelectionState},
     sessions::{NoteDelivery, NoteRetirementReason, NoteState},
 };
 use nessa_sdk::domain::agent_execution::executions::Initiation;
@@ -60,6 +65,12 @@ pub(super) async fn dispatch(
     frame: RequestFrame,
     initiation: Initiation,
 ) -> OutgoingMessage {
+    if matches!(
+        frame.method.as_str(),
+        "conversation.permissionRules" | "conversation.revokePermissionRule"
+    ) {
+        return dispatch_permission_rules(state, session, frame).await;
+    }
     // This build runs no conversations at all, which is not the same fact as a
     // caller naming an agent this one is not configured for. Sharing a code
     // between them made the panel tell someone with a working Claude that the
@@ -178,12 +189,19 @@ pub(super) async fn dispatch(
                 let caller = caller(params.request_id.clone());
                 let execution_id = params.execution_id.clone();
                 let store = service.commands().ok_or(ConversationError::Unavailable)?;
+                // Admission still starts an unpaired session as an owner turn.
+                // Whether that turn may offer a remember choice is this
+                // membership, and a membership that cannot be read offers none.
+                let offers_remember = authenticated_rule_principal(state, session)
+                    .await
+                    .is_ok_and(|principal| principal == RulePrincipal::Owner);
                 let submitted = service
                     .submit_command(
                         store,
                         id.clone(),
                         caller.clone(),
                         initiation,
+                        offers_remember,
                         execution_id.clone(),
                         submitted_message(&params),
                         mode,
@@ -397,6 +415,30 @@ pub(super) async fn dispatch(
             }
             "conversation.answer" => {
                 let params = params!(ConversationAnswerParams);
+                // Only a remember choice reads the membership. An ordinary
+                // once answer does not fail when that read is unavailable.
+                let permission_caller = match permission_caller_for_option(
+                    &params.option_id,
+                    if is_remember_option(&params.option_id) {
+                        authenticated_rule_principal(state, session).await
+                    } else {
+                        Ok(RulePrincipal::Grant)
+                    },
+                ) {
+                    Ok(caller) => caller,
+                    Err(code) => return Ok(failure(&frame.id, code)),
+                };
+                // Cedar admits or refuses the caller who is answering. A grant
+                // is not rewritten as the owner, and a refusal writes nothing.
+                if is_remember_option(&params.option_id) {
+                    if let Some(rules) = state.permission_rules.as_deref() {
+                        if let Err(error) =
+                            rules.authorize(rule_principal(permission_caller), RuleChange::Grant)
+                        {
+                            return Ok(failure(&frame.id, catalog_code(error)));
+                        }
+                    }
+                }
                 service
                     .answer(
                         conversation_id(&params.conversation_id)?,
@@ -404,6 +446,7 @@ pub(super) async fn dispatch(
                         params.execution_id,
                         params.permission_id,
                         params.option_id,
+                        permission_caller,
                     )
                     .await?;
                 Ok(success(
@@ -496,6 +539,145 @@ pub(super) async fn dispatch(
         }
         Err(error) => failure(&frame.id, error_code(&error).as_str()),
     }
+}
+
+/// List and revoke remembered rules. Who may is the authenticated
+/// membership, not the turn-initiation category admission used.
+async fn dispatch_permission_rules(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+) -> OutgoingMessage {
+    let principal = match authenticated_rule_principal(state, session).await {
+        Ok(principal) => principal,
+        Err(code) => return failure(&frame.id, code),
+    };
+    let rules = match remembered_rules(state, &frame.id) {
+        Ok(rules) => rules,
+        Err(response) => return *response,
+    };
+    match frame.method.as_str() {
+        "conversation.permissionRules" => {
+            let Ok(params) =
+                serde_json::from_value::<ConversationPermissionRulesParams>(frame.params)
+            else {
+                return failure(&frame.id, ConversationErrorCode::InvalidRequest.as_str());
+            };
+            match rules.list(principal) {
+                Ok(listed) => success(
+                    &frame.id,
+                    &ConversationPermissionRulesResult {
+                        request_id: params.request_id,
+                        rules: listed.into_iter().filter_map(listed_rule).collect(),
+                    },
+                ),
+                Err(error) => failure(&frame.id, catalog_code(error)),
+            }
+        }
+        "conversation.revokePermissionRule" => {
+            let Ok(params) =
+                serde_json::from_value::<ConversationRevokePermissionRuleParams>(frame.params)
+            else {
+                return failure(&frame.id, ConversationErrorCode::InvalidRequest.as_str());
+            };
+            let Ok(actor) = caller(session, params.request_id.clone()).actor() else {
+                return failure(&frame.id, ConversationErrorCode::InvalidRequest.as_str());
+            };
+            match rules.revoke(&params.rule_id, principal, &actor) {
+                Ok(applied) => success(
+                    &frame.id,
+                    &ConversationRevokePermissionRuleResult {
+                        request_id: params.request_id,
+                        applied,
+                    },
+                ),
+                Err(error) => failure(&frame.id, catalog_code(error)),
+            }
+        }
+        _ => failure(&frame.id, ConversationErrorCode::UnknownMethod.as_str()),
+    }
+}
+
+/// The membership Cedar's rule policy is asked about.
+///
+/// An admin is the local owner or one of that owner's surfaces. A member is
+/// a grant, which the rule policy refuses. Admission maps every unpaired
+/// session to an owner turn; that category is not this decision.
+async fn authenticated_rule_principal(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<RulePrincipal, &'static str> {
+    let snapshot = ReadCurrentSession {
+        access: state.access.as_ref(),
+        clock: state.clock.as_ref(),
+    }
+    .execute(session)
+    .await
+    .map_err(|_| "temporarily_unavailable")?;
+    Ok(match snapshot.membership.role() {
+        MembershipRole::Admin => RulePrincipal::Owner,
+        MembershipRole::Member => RulePrincipal::Grant,
+    })
+}
+
+/// Who an answer is recorded as.
+///
+/// A remember choice needs the authenticated membership. Any other option
+/// does not: a failed membership read must not refuse an ordinary once answer.
+fn permission_caller_for_option(
+    option_id: &str,
+    principal: Result<RulePrincipal, &'static str>,
+) -> Result<PermissionCaller, &'static str> {
+    if !is_remember_option(option_id) {
+        return Ok(PermissionCaller::Grant);
+    }
+    principal.map(noted_permission_caller)
+}
+
+fn noted_permission_caller(principal: RulePrincipal) -> PermissionCaller {
+    match principal {
+        RulePrincipal::Owner => PermissionCaller::Owner,
+        RulePrincipal::Grant => PermissionCaller::Grant,
+    }
+}
+
+/// The remembered rules, or the refusal when this gateway has none.
+///
+/// Who may read or change them is Cedar's answer, from the authenticated
+/// membership. This does not decide that.
+fn remembered_rules<'a>(
+    state: &'a ProductRouteState,
+    request_id: &str,
+) -> Result<&'a crate::conversation::infrastructure::PermissionMemory, Box<OutgoingMessage>> {
+    state.permission_rules.as_deref().ok_or_else(|| {
+        Box::new(failure(
+            request_id,
+            ConversationErrorCode::ConversationsNotConfigured.as_str(),
+        ))
+    })
+}
+
+fn catalog_code(error: RuleCatalogError) -> &'static str {
+    match error {
+        RuleCatalogError::Refused => "forbidden",
+        RuleCatalogError::Unavailable => "temporarily_unavailable",
+    }
+}
+
+fn listed_rule(rule: ListedPermissionRule) -> Option<PermissionRule> {
+    let effect = match rule.effect {
+        "allow" => PermissionRuleEffect::Allow,
+        "deny" => PermissionRuleEffect::Deny,
+        _ => return None,
+    };
+    Some(PermissionRule {
+        id: rule.id,
+        revision: rule.revision,
+        workspace: rule.workspace,
+        source: rule.source,
+        tool: rule.tool,
+        effect,
+    })
 }
 
 /// Who sends a conversation command: the credential's verified identity.
@@ -992,6 +1174,36 @@ fn agent_read_hint(error: &AgentError) -> Option<&'static str> {
         AgentError::Backpressure => Some("backpressure"),
         AgentError::AttachmentUnavailable(_) => Some("attachment"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod permission_caller {
+    use super::{permission_caller_for_option, RulePrincipal};
+    use nessa_sdk::application::agent_execution::permissions::{PermissionCaller, REMEMBER_ALLOW};
+
+    #[test]
+    fn an_ordinary_answer_does_not_need_the_membership_read() {
+        assert_eq!(
+            permission_caller_for_option("allow", Err("temporarily_unavailable")),
+            Ok(PermissionCaller::Grant)
+        );
+    }
+
+    #[test]
+    fn a_remember_answer_still_needs_the_membership_read() {
+        assert_eq!(
+            permission_caller_for_option(REMEMBER_ALLOW, Err("temporarily_unavailable")),
+            Err("temporarily_unavailable")
+        );
+        assert_eq!(
+            permission_caller_for_option(REMEMBER_ALLOW, Ok(RulePrincipal::Owner)),
+            Ok(PermissionCaller::Owner)
+        );
+        assert_eq!(
+            permission_caller_for_option(REMEMBER_ALLOW, Ok(RulePrincipal::Grant)),
+            Ok(PermissionCaller::Grant)
+        );
     }
 }
 

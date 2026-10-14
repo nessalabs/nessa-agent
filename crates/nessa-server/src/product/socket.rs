@@ -34,10 +34,11 @@ use nessa_auth::domain::{Action, AudienceId, CredentialId};
 #[cfg(test)]
 use nessa_protocol::product::generated::wire_shape_product_session_ready;
 use nessa_protocol::product::generated::{
-    action_for_method, CredentialIssueParams, CredentialListParams, CredentialListResult,
-    CredentialRevokeParams, CredentialRevokeResult, ExistingCredentialResult,
-    IssuedCredentialResult, ProductSessionReady, SessionAuthenticateParams, SessionChallenge,
-    SessionTermination, MAX_NATIVE_HOOKS_REQUEST_ID_BYTES, MAX_PRODUCT_CLIENT_ID_CHARACTERS,
+    action_for_method, product_event, CredentialIssueParams, CredentialListParams,
+    CredentialListResult, CredentialRevokeParams, CredentialRevokeResult, ExistingCredentialResult,
+    IssuedCredentialResult, PermissionReviewNotice, PermissionReviewWaiting, ProductSessionReady,
+    SessionAuthenticateParams, SessionChallenge, SessionTermination,
+    MAX_NATIVE_HOOKS_REQUEST_ID_BYTES, MAX_PRODUCT_CLIENT_ID_CHARACTERS,
     MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS, MAX_RECORD_RESPONSE_BYTES,
     MIN_NATIVE_HOOKS_REQUEST_ID_CHARACTERS, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS,
     PRODUCT_VERSION,
@@ -586,8 +587,16 @@ struct QueuedResponse {
 
 enum WireResponse {
     Ordinary(Box<OutgoingMessage>),
-    Record { text: String },
+    Record {
+        text: String,
+    },
     Watch(Box<QueuedWatch>),
+    /// A waiting-review snapshot. Its sequence number is taken when the
+    /// writer sends it, so it follows the same order as a watch notice.
+    ReviewWaiting {
+        payload: PermissionReviewWaiting,
+        generation: u64,
+    },
 }
 
 struct QueuedWatch {
@@ -720,6 +729,9 @@ async fn write_authenticated<S>(
                         _record_work,
                         _mount,
                     } = *response;
+                    let Some(message) = number_review_notice(message, &watches) else {
+                        return true;
+                    };
                     send_queued(write_timeout, &mut sink, message).await.is_ok()
                 }
                 Some(Ok(WriterResponse::Watch(frame))) => {
@@ -919,6 +931,16 @@ where
     ));
     let control_slots = Arc::new(Semaphore::new(limits.control_slots()));
     let ordinary_slots = Arc::new(Semaphore::new(limits.ordinary_slots()));
+    // A waiting review is a snapshot on the ordinary lane. Abort this before
+    // the lane's sender is dropped: the task holds one, and the writer
+    // finishes only when every sender is gone.
+    let notice_task = state.permission_rules.clone().map(|board| {
+        let send = ordinary_send.clone();
+        let slots = Arc::clone(&ordinary_slots);
+        let state = state.clone();
+        let session = session.clone();
+        tokio::spawn(forward_review_notices(board, send, slots, state, session))
+    });
     let record_slots = Arc::new(Semaphore::new(RECORD_SLOT));
     let app_slots = Arc::new(Semaphore::new(limits.app_calls_per_socket()));
     let app_mounts = Arc::new(Mutex::new(HashMap::new()));
@@ -1357,11 +1379,104 @@ where
     drop(subscriptions);
     drop(control_send);
     drop(refusal_send);
+    if let Some(task) = notice_task {
+        task.abort();
+        let _ = task.await;
+    }
     drop(ordinary_send);
     drop(record_send);
     if !writer_finished {
         let _ = writer.await;
     }
+}
+
+/// Publish the reviews still waiting, then wait for the next change.
+///
+/// Each frame is the whole set, so a missed one is repaired by the next and
+/// a surface that connects while a review is up sees it. The writer takes
+/// the frame's sequence number as it sends, with the socket's other events.
+async fn forward_review_notices(
+    board: Arc<crate::conversation::infrastructure::PermissionMemory>,
+    send: mpsc::Sender<QueuedResponse>,
+    slots: Arc<Semaphore>,
+    state: ProductRouteState,
+    session: AuthenticatedSession,
+) {
+    // `None` is unseen, including a generation of zero. A session that
+    // connects after a restart, or a new authentication, is sent the board
+    // as it stands — empty, when nothing is waiting — so a desktop does not
+    // keep a review the server no longer has. A share that changes who may
+    // read a conversation filters that same generation again.
+    let mut seen = None;
+    let mut visibility_seen = board.visibility();
+    loop {
+        let (generation, reviews) = board.current();
+        let visibility = board.visibility();
+        if seen != Some(generation) || visibility_seen != visibility {
+            let mut visible = Vec::with_capacity(reviews.len());
+            for review in reviews {
+                if super::read_access::may_see_review(&state, &session, &review.conversation_id)
+                    .await
+                {
+                    visible.push(review);
+                }
+            }
+            let payload = PermissionReviewWaiting {
+                reviews: visible
+                    .into_iter()
+                    .map(|review| PermissionReviewNotice {
+                        conversation_id: review.conversation_id,
+                        execution_id: review.execution_id,
+                        permission_id: review.permission_id,
+                        tool: review.tool,
+                    })
+                    .collect(),
+            };
+            let Ok(permit) = slots.clone().acquire_owned().await else {
+                break;
+            };
+            let queued = QueuedResponse {
+                message: WireResponse::ReviewWaiting {
+                    payload,
+                    generation,
+                },
+                _slot: Arc::new(permit),
+                _record_work: None,
+                _mount: None,
+            };
+            if send.send(queued).await.is_err() {
+                break;
+            }
+            seen = Some(generation);
+            visibility_seen = visibility;
+        }
+        tokio::select! {
+            () = board.wait_after(generation) => {}
+            () = board.wait_for_visibility(visibility) => {}
+        }
+    }
+}
+
+/// Give a waiting-review snapshot the next event number. Any other message
+/// is unchanged. `None` when the numbering is spent: the socket keeps going,
+/// and a later change of the set is sent with a number if one remains.
+fn number_review_notice(message: WireResponse, watches: &WatchDeliveries) -> Option<WireResponse> {
+    let WireResponse::ReviewWaiting {
+        payload,
+        generation,
+    } = message
+    else {
+        return Some(message);
+    };
+    let seq = watches.sequence().next()?;
+    let frame = EventFrame::push(
+        product_event::PERMISSION_REVIEW_WAITING,
+        &payload,
+        seq,
+        generation,
+    )
+    .ok()?;
+    Some(WireResponse::ordinary(OutgoingMessage::Event(frame)))
 }
 
 fn queued_watch(reply: WatchReply) -> QueuedResponse {
@@ -2122,6 +2237,9 @@ async fn send_queued<S: Sink<Message> + Unpin>(
                 .await
                 .map_err(|_| ())
         }
+        // Numbered before it reaches here. A snapshot that was not is not a
+        // record and is not sent on this path.
+        WireResponse::ReviewWaiting { .. } => Err(()),
     }
 }
 
@@ -2162,7 +2280,7 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
         // watch replies go through `ConnectionWatches` on the ordinary lane, so
         // this arm is never reached. It is still delivered as `send_queued`
         // would, under this response's deadline, rather than dropped.
-        message @ WireResponse::Watch(_) => {
+        message @ (WireResponse::Watch(_) | WireResponse::ReviewWaiting { .. }) => {
             drop((slot, record_work, mount));
             return missed_record_deadline(
                 within_deadline(deadline, send_queued(write_timeout, socket, message)).await,
@@ -2233,11 +2351,13 @@ mod tests {
         BrowserSessionOrigin, BrowserSessionState,
     };
     use crate::conversation::application::{
-        CatalogueReadFuture, CatalogueReadOperation, CatalogueReadSource, ConversationRepository,
+        CatalogueReadFuture, CatalogueReadOperation, CatalogueReadSource, ConversationError,
+        ConversationFuture, ConversationRepository, HeldGrant, PermissionRuleCatalog,
         ReceiverAuthority, ReceiverBinding, RecordReadError, RecordReadFuture, RecordReadOperation,
-        RecordReadResponse, RecordReadSource,
+        RecordReadResponse, RecordReadSource, RevisionHold, RulePrincipal, ShareGrantChange,
+        ShareGrantList, ShareGrantReceipt, ShareGrants,
     };
-    use crate::conversation::domain::Conversation;
+    use crate::conversation::domain::{Conversation, ShareRole, ToolPolicy};
     use crate::conversation::infrastructure::{LocalConversationStore, NessaRecordReadSource};
     use crate::product::ProductDependencies;
     use base64::engine::general_purpose::STANDARD;
@@ -2267,10 +2387,16 @@ mod tests {
         MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
     };
     use nessa_protocol::product::passive_read::encode_response;
+    use nessa_sdk::application::agent_execution::permissions::{
+        ActionContext, PermissionCaller, PermissionRules, RememberRequest, ReviewNotice,
+        ReviewNotices,
+    };
     use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
     use nessa_sdk::application::agent_execution::sessions::{
         ProviderContext, SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
     };
+    use nessa_sdk::domain::agent_execution::executions::ExecutionId;
+    use nessa_sdk::domain::agent_execution::permissions::{PermissionEffect, PermissionId};
     use nessa_sdk::domain::agent_execution::sessions::SessionId;
     use nessa_sdk::infrastructure::session_storage::{
         RecordStorage, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES as SDK_MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
@@ -2286,6 +2412,124 @@ mod tests {
     use tokio_tungstenite::tungstenite::{protocol::Role, Message as Frame};
     use tokio_tungstenite::WebSocketStream;
     use uuid::Uuid;
+
+    /// No receiver binding: the session is an owner surface or a local member.
+    struct UnpairedBinding;
+    impl ReceiverAuthority for UnpairedBinding {
+        fn resolve<'a>(
+            &'a self,
+            _: &'a CredentialId,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<ReceiverBinding>, ReadRefusal>> + Send + 'a>>
+        {
+            Box::pin(async { Ok(None) })
+        }
+    }
+
+    /// A paired device whose binding owner is `owner`, signed in on this credential.
+    struct DeviceBinding;
+    impl ReceiverAuthority for DeviceBinding {
+        fn resolve<'a>(
+            &'a self,
+            _: &'a CredentialId,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<ReceiverBinding>, ReadRefusal>> + Send + 'a>>
+        {
+            Box::pin(async {
+                Ok(Some(ReceiverBinding {
+                    receiver_id: "device".into(),
+                    credential_id: CredentialId::new("credential").unwrap(),
+                    organization_id: OrganizationId::new("organization").unwrap(),
+                    owner_id: PrincipalId::new("owner").unwrap(),
+                    access_epoch: 3,
+                    active: true,
+                }))
+            })
+        }
+    }
+
+    /// A read grant on one conversation, for receiver `device` only.
+    struct GrantedConversation(String);
+    impl ShareGrants for GrantedConversation {
+        fn held_grant<'a>(
+            &'a self,
+            id: &'a ConversationId,
+            receiver_id: &'a str,
+        ) -> ConversationFuture<'a, Option<HeldGrant>> {
+            let allowed = receiver_id == "device" && id.to_string() == self.0;
+            Box::pin(async move {
+                Ok(allowed.then_some(HeldGrant {
+                    role: ShareRole::Read,
+                    policy_revision: 1,
+                }))
+            })
+        }
+        fn change(&self, _: ShareGrantChange) -> ConversationFuture<'_, ShareGrantReceipt> {
+            Box::pin(async { Err(ConversationError::Metadata) })
+        }
+        fn grants<'a>(&'a self, _: &'a ConversationId) -> ConversationFuture<'a, ShareGrantList> {
+            Box::pin(async { Err(ConversationError::Metadata) })
+        }
+        fn policy_at<'a>(
+            &'a self,
+            _: &'a ConversationId,
+            _: &'a str,
+            _: u64,
+        ) -> ConversationFuture<'a, Option<ToolPolicy>> {
+            Box::pin(async { Err(ConversationError::Metadata) })
+        }
+        fn hold_revision<'a>(
+            &'a self,
+            _: &'a ConversationId,
+            _: &'a str,
+            _: u64,
+        ) -> ConversationFuture<'a, RevisionHold> {
+            Box::pin(async { Err(ConversationError::Metadata) })
+        }
+    }
+
+    /// A read grant that a test can take away while a review is still waiting.
+    struct ToggleGrant {
+        conversation: String,
+        open: Arc<AtomicBool>,
+    }
+    impl ShareGrants for ToggleGrant {
+        fn held_grant<'a>(
+            &'a self,
+            id: &'a ConversationId,
+            receiver_id: &'a str,
+        ) -> ConversationFuture<'a, Option<HeldGrant>> {
+            let allowed = self.open.load(Ordering::SeqCst)
+                && receiver_id == "device"
+                && id.to_string() == self.conversation;
+            Box::pin(async move {
+                Ok(allowed.then_some(HeldGrant {
+                    role: ShareRole::Read,
+                    policy_revision: 1,
+                }))
+            })
+        }
+        fn change(&self, _: ShareGrantChange) -> ConversationFuture<'_, ShareGrantReceipt> {
+            Box::pin(async { Err(ConversationError::Metadata) })
+        }
+        fn grants<'a>(&'a self, _: &'a ConversationId) -> ConversationFuture<'a, ShareGrantList> {
+            Box::pin(async { Err(ConversationError::Metadata) })
+        }
+        fn policy_at<'a>(
+            &'a self,
+            _: &'a ConversationId,
+            _: &'a str,
+            _: u64,
+        ) -> ConversationFuture<'a, Option<ToolPolicy>> {
+            Box::pin(async { Err(ConversationError::Metadata) })
+        }
+        fn hold_revision<'a>(
+            &'a self,
+            _: &'a ConversationId,
+            _: &'a str,
+            _: u64,
+        ) -> ConversationFuture<'a, RevisionHold> {
+            Box::pin(async { Err(ConversationError::Metadata) })
+        }
+    }
 
     struct RecordBinding;
     impl ReceiverAuthority for RecordBinding {
@@ -2384,6 +2628,392 @@ mod tests {
                 "{method}"
             );
         }
+    }
+
+    struct FixedClock;
+    impl Clock for FixedClock {
+        fn unix_milliseconds(&self) -> u64 {
+            1
+        }
+    }
+
+    #[tokio::test]
+    async fn a_new_session_is_told_when_no_review_is_waiting() {
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("rules");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let clock = Arc::new(FixedClock);
+        let board = Arc::new(
+            crate::conversation::infrastructure::PermissionMemory::open(
+                &private.join("permission-rules.sqlite3"),
+                Arc::new(
+                    crate::conversation::infrastructure::DurablePermissionRuleRevocationAudit::new(
+                        private.join("revocations"),
+                        clock,
+                    )
+                    .unwrap(),
+                ),
+            )
+            .unwrap(),
+        );
+        let (send, mut recv) = mpsc::channel(1);
+        let slots = Arc::new(Semaphore::new(1));
+        let (state, _) = fixture(MembershipRole::Admin);
+        let session = authenticate(&state).await;
+        let task = tokio::spawn(super::forward_review_notices(
+            board, send, slots, state, session,
+        ));
+        let queued = tokio::time::timeout(std::time::Duration::from_secs(2), recv.recv())
+            .await
+            .expect("the empty board is sent")
+            .expect("the notice task stays up");
+        match queued.message {
+            WireResponse::ReviewWaiting {
+                payload,
+                generation,
+            } => {
+                assert!(payload.reviews.is_empty());
+                assert_eq!(generation, 0);
+            }
+            _ => panic!("expected the empty board"),
+        }
+        drop(recv);
+        task.abort();
+        let _ = task.await;
+    }
+
+    fn open_rules() -> (
+        tempfile::TempDir,
+        Arc<crate::conversation::infrastructure::PermissionMemory>,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("rules");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let board = crate::conversation::infrastructure::PermissionMemory::open(
+            &private.join("permission-rules.sqlite3"),
+            Arc::new(
+                crate::conversation::infrastructure::DurablePermissionRuleRevocationAudit::new(
+                    private.join("revocations"),
+                    Arc::new(FixedClock),
+                )
+                .unwrap(),
+            ),
+        )
+        .unwrap();
+        (directory, Arc::new(board))
+    }
+
+    fn owned_conversation(id: &str, owner: &str) -> Conversation {
+        Conversation::new(
+            ConversationId::new(id).unwrap(),
+            OrganizationId::new("organization").unwrap(),
+            PrincipalId::new(owner).unwrap(),
+            "panel".into(),
+            "create".into(),
+            1,
+            AgentId::Claude,
+            ConversationModelId::new("model").unwrap(),
+            ConversationApprovalMode::Ask,
+        )
+        .unwrap()
+    }
+
+    fn repository_of(rows: Vec<Conversation>) -> Arc<MemoryRepository> {
+        let repository = MemoryRepository::default();
+        {
+            let mut records = repository.records.lock().unwrap();
+            for conversation in rows {
+                records.insert(conversation.id().clone(), conversation);
+            }
+        }
+        Arc::new(repository)
+    }
+
+    async fn notice_snapshot(
+        board: Arc<crate::conversation::infrastructure::PermissionMemory>,
+        state: ProductRouteState,
+        session: AuthenticatedSession,
+    ) -> nessa_protocol::product::generated::PermissionReviewWaiting {
+        let (send, mut recv) = mpsc::channel(1);
+        let slots = Arc::new(Semaphore::new(1));
+        let task = tokio::spawn(super::forward_review_notices(
+            board, send, slots, state, session,
+        ));
+        let queued = tokio::time::timeout(std::time::Duration::from_secs(2), recv.recv())
+            .await
+            .expect("a board is sent")
+            .expect("the notice task stays up");
+        drop(recv);
+        task.abort();
+        let _ = task.await;
+        match queued.message {
+            WireResponse::ReviewWaiting { payload, .. } => payload,
+            _ => panic!("expected the board"),
+        }
+    }
+
+    fn code_of(message: OutgoingMessage) -> String {
+        let OutgoingMessage::Response(response) = message else {
+            panic!("response expected");
+        };
+        assert!(!response.ok);
+        response.error.unwrap().code
+    }
+
+    /// An unpaired member who can write conversations is still a grant.
+    /// Admission's owner turn is not the rule principal.
+    #[tokio::test]
+    async fn an_unpaired_member_cannot_list_or_revoke_remembered_rules() {
+        let (_directory, board) = open_rules();
+        let execution = ExecutionId::new("turn").unwrap();
+        board.arm("conversation", &execution, true);
+        let stored = board
+            .remember(RememberRequest {
+                workspace: "/work",
+                source: "claude",
+                tool: "Bash",
+                effect: PermissionEffect::Allow,
+                granted_by: &ActionContext::new("owner", "surface", "request").unwrap(),
+                caller: PermissionCaller::Owner,
+                conversation_id: "conversation",
+                execution_id: &execution,
+            })
+            .unwrap();
+        board.acknowledge(stored.reference()).unwrap();
+        let rule_id = stored.reference().rule_id().to_owned();
+        let (state, authority) = fixture(MembershipRole::Member);
+        *authority.snapshot.lock().unwrap() = snapshot_with(
+            MembershipRole::Member,
+            MembershipStatus::Active,
+            &["conversation.write"],
+        );
+        let state = state.with_permission_rules(board.clone());
+        let session = authenticate(&state).await;
+        let mut list = request("list", "conversation.permissionRules");
+        list.params = json!({ "requestId": "list" });
+        assert_eq!(code_of(dispatch(&state, &session, list).await), "forbidden");
+        let mut revoke = request("revoke", "conversation.revokePermissionRule");
+        revoke.params = json!({ "requestId": "revoke", "ruleId": rule_id });
+        assert_eq!(
+            code_of(dispatch(&state, &session, revoke).await),
+            "forbidden"
+        );
+        assert_eq!(board.list(RulePrincipal::Owner).unwrap().len(), 1);
+        *authority.snapshot.lock().unwrap() = snapshot_with(
+            MembershipRole::Admin,
+            MembershipStatus::Active,
+            &["conversation.write"],
+        );
+        let mut list = request("list-owner", "conversation.permissionRules");
+        list.params = json!({ "requestId": "list-owner" });
+        let OutgoingMessage::Response(response) = dispatch(&state, &session, list).await else {
+            panic!("response expected");
+        };
+        assert!(response.ok);
+        assert_eq!(
+            response.payload.unwrap()["rules"].as_array().unwrap().len(),
+            1
+        );
+    }
+
+    /// The waiting-review board is global. Each socket is told only the
+    /// reviews in conversations that principal may read.
+    #[tokio::test]
+    async fn a_review_notice_names_only_a_conversation_the_recipient_may_read() {
+        let (_directory, board) = open_rules();
+        let id_a = "00000000-0000-4000-8000-00000000000a";
+        let id_b = "00000000-0000-4000-8000-00000000000b";
+        let execution = ExecutionId::new("turn").unwrap();
+        board.waiting(&ReviewNotice {
+            conversation_id: id_a.into(),
+            execution_id: execution.clone(),
+            permission_id: PermissionId::new("perm-a").unwrap(),
+            tool: "Bash".into(),
+        });
+        board.waiting(&ReviewNotice {
+            conversation_id: id_b.into(),
+            execution_id: execution,
+            permission_id: PermissionId::new("perm-b").unwrap(),
+            tool: "Write".into(),
+        });
+        let foreign = repository_of(vec![
+            owned_conversation(id_a, "owner"),
+            owned_conversation(id_b, "owner"),
+        ]);
+        let mine = repository_of(vec![
+            owned_conversation(id_a, "principal"),
+            owned_conversation(id_b, "owner"),
+        ]);
+        let policy = crate::conversation_test_support::access_policy();
+
+        let member_sees = async |actions: &[&str],
+                                 receivers: Arc<dyn ReceiverAuthority>,
+                                 conversations: Arc<MemoryRepository>,
+                                 grants: Arc<dyn ShareGrants>,
+                                 role: MembershipRole| {
+            let (state, authority) = fixture(role);
+            *authority.snapshot.lock().unwrap() =
+                snapshot_with(role, MembershipStatus::Active, actions);
+            let state = state.with_passive_read(receivers, conversations, grants, policy.clone());
+            let session = authenticate(&state).await;
+            notice_snapshot(board.clone(), state, session).await
+        };
+
+        let read_only = member_sees(
+            &["server.read"],
+            Arc::new(UnpairedBinding),
+            foreign.clone(),
+            Arc::new(GrantedConversation(id_a.into())),
+            MembershipRole::Member,
+        )
+        .await;
+        assert!(
+            read_only.reviews.is_empty(),
+            "a server.read credential sees no other conversation's reviews"
+        );
+
+        let writer = member_sees(
+            &["conversation.write"],
+            Arc::new(UnpairedBinding),
+            foreign.clone(),
+            Arc::new(GrantedConversation(id_a.into())),
+            MembershipRole::Member,
+        )
+        .await;
+        assert!(
+            writer.reviews.is_empty(),
+            "conversation.write does not reveal someone else's reviews"
+        );
+
+        let owner_surface = member_sees(
+            &["server.read", "credential.manage"],
+            Arc::new(UnpairedBinding),
+            foreign.clone(),
+            Arc::new(GrantedConversation(id_a.into())),
+            MembershipRole::Admin,
+        )
+        .await;
+        let mut tools = owner_surface
+            .reviews
+            .iter()
+            .map(|review| review.tool.as_str())
+            .collect::<Vec<_>>();
+        tools.sort_unstable();
+        assert_eq!(tools, ["Bash", "Write"]);
+
+        let one_grant = member_sees(
+            &["conversation.read"],
+            Arc::new(DeviceBinding),
+            foreign.clone(),
+            Arc::new(GrantedConversation(id_a.into())),
+            MembershipRole::Member,
+        )
+        .await;
+        assert_eq!(one_grant.reviews.len(), 1);
+        assert_eq!(one_grant.reviews[0].conversation_id, id_a);
+        assert_eq!(one_grant.reviews[0].tool, "Bash");
+
+        let paired_admin = member_sees(
+            &["conversation.read", "credential.manage"],
+            Arc::new(DeviceBinding),
+            foreign,
+            Arc::new(GrantedConversation(id_a.into())),
+            MembershipRole::Admin,
+        )
+        .await;
+        assert_eq!(paired_admin.reviews.len(), 1);
+        assert_eq!(paired_admin.reviews[0].conversation_id, id_a);
+        assert_eq!(paired_admin.reviews[0].tool, "Bash");
+
+        let owns_one = member_sees(
+            &["conversation.write"],
+            Arc::new(UnpairedBinding),
+            mine,
+            Arc::new(GrantedConversation(id_a.into())),
+            MembershipRole::Member,
+        )
+        .await;
+        assert_eq!(owns_one.reviews.len(), 1);
+        assert_eq!(owns_one.reviews[0].conversation_id, id_a);
+        assert_eq!(owns_one.reviews[0].tool, "Bash");
+    }
+
+    /// A paired grant that goes away while the review is still waiting drops
+    /// that review from the next snapshot. The board generation does not move.
+    #[tokio::test]
+    async fn a_revoked_grant_drops_the_waiting_review_from_the_next_snapshot() {
+        let (_directory, board) = open_rules();
+        let id_a = "00000000-0000-4000-8000-00000000000a";
+        let execution = ExecutionId::new("turn").unwrap();
+        board.waiting(&ReviewNotice {
+            conversation_id: id_a.into(),
+            execution_id: execution,
+            permission_id: PermissionId::new("perm-a").unwrap(),
+            tool: "Bash".into(),
+        });
+        let open = Arc::new(AtomicBool::new(true));
+        let grants = Arc::new(ToggleGrant {
+            conversation: id_a.into(),
+            open: Arc::clone(&open),
+        });
+        let (state, authority) = fixture(MembershipRole::Member);
+        *authority.snapshot.lock().unwrap() = snapshot_with(
+            MembershipRole::Member,
+            MembershipStatus::Active,
+            &["conversation.read"],
+        );
+        let state = state.with_passive_read(
+            Arc::new(DeviceBinding),
+            repository_of(vec![owned_conversation(id_a, "owner")]),
+            grants,
+            crate::conversation_test_support::access_policy(),
+        );
+        let session = authenticate(&state).await;
+        let (send, mut recv) = mpsc::channel(1);
+        let slots = Arc::new(Semaphore::new(2));
+        let task = tokio::spawn(super::forward_review_notices(
+            board.clone(),
+            send,
+            slots,
+            state,
+            session,
+        ));
+        let first = tokio::time::timeout(std::time::Duration::from_secs(2), recv.recv())
+            .await
+            .expect("the granted review is sent")
+            .expect("the notice task stays up");
+        match first.message {
+            WireResponse::ReviewWaiting {
+                payload,
+                generation,
+            } => {
+                assert_eq!(payload.reviews.len(), 1);
+                assert_eq!(payload.reviews[0].tool, "Bash");
+                assert_eq!(generation, 1);
+            }
+            _ => panic!("expected the board"),
+        }
+        open.store(false, Ordering::SeqCst);
+        let generation_before = board.current().0;
+        board.recheck_visibility();
+        assert_eq!(board.current().0, generation_before);
+        let second = tokio::time::timeout(std::time::Duration::from_secs(2), recv.recv())
+            .await
+            .expect("the revoked grant is filtered")
+            .expect("the notice task stays up");
+        match second.message {
+            WireResponse::ReviewWaiting {
+                payload,
+                generation,
+            } => {
+                assert!(payload.reviews.is_empty());
+                assert_eq!(generation, generation_before);
+            }
+            _ => panic!("expected the filtered board"),
+        }
+        drop(recv);
+        task.abort();
+        let _ = task.await;
     }
 
     /// The five passive reads skip ordinary dispatch, so their Cedar check is
