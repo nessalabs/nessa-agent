@@ -5,14 +5,17 @@
 use std::collections::HashSet;
 
 use super::super::domain::{DeletionFence, DeletionLog, FenceKind};
-use super::ports::{DeletionLogStore, FenceSource};
+use super::ports::{DeletionLogStore, FenceSource, LogStoreError};
+
+/// How many times a writer reconciles again after another writer stored first.
+const REPLACE_ATTEMPTS: u32 = 8;
 
 /// Why the log was not updated. The fences themselves are unchanged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InventoryFailure {
     /// The log could not be read, so nothing was appended.
     Unreadable,
-    /// The replacement could not be stored. The previous log remains.
+    /// This attempt did not replace the log.
     NotStored,
 }
 
@@ -25,8 +28,10 @@ pub enum InventoryFailure {
 /// and credential fences stay. Survivors are written back at sequences 1, 2, 3,
 /// … and a fence that remains is still found by its key.
 ///
-/// Returns the log after the attempt. On [`InventoryFailure`] the previous
-/// log is still what `store` holds.
+/// Returns the log after the attempt. On [`InventoryFailure::NotStored`] this
+/// attempt did not replace the log. A writer that finds another writer's log
+/// reconciles again, up to [`REPLACE_ATTEMPTS`], so that other log's fences
+/// stay.
 pub async fn capture_fences(
     fences: &[&dyn FenceSource],
     store: &dyn DeletionLogStore,
@@ -38,19 +43,22 @@ pub async fn capture_fences(
             Err(()) => return Err(InventoryFailure::Unreadable),
         }
     }
-    let loaded = store
-        .load()
-        .await
-        .map_err(|()| InventoryFailure::Unreadable)?;
-    let next = reconcile(&loaded, pending);
-    if next.canonical() == loaded.canonical() {
-        return Ok(loaded);
+    for _ in 0..REPLACE_ATTEMPTS {
+        let loaded = store
+            .load()
+            .await
+            .map_err(|()| InventoryFailure::Unreadable)?;
+        let next = reconcile(&loaded, pending.clone());
+        if next.canonical() == loaded.canonical() {
+            return Ok(loaded);
+        }
+        match store.store(&loaded, &next).await {
+            Ok(()) => return Ok(next),
+            Err(LogStoreError::Stale) => continue,
+            Err(LogStoreError::Failed) => return Err(InventoryFailure::NotStored),
+        }
     }
-    store
-        .store(&next)
-        .await
-        .map_err(|()| InventoryFailure::NotStored)?;
-    Ok(next)
+    Err(InventoryFailure::NotStored)
 }
 
 /// Keep every non-grant fence, keep a grant fence only when `fences` still
