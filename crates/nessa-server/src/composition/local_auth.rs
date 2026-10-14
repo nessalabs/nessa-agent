@@ -1448,6 +1448,8 @@ fn agent_catalog(
     Ok(AgentsListResult {
         agents,
         environments: hosts.iter().map(|host| host.as_str().to_owned()).collect(),
+        // Read with the places each time the catalog is (`agents_catalog_now`).
+        command_hosts: Vec::new(),
         native_hooks: AgentsNativeHooks {
             claude: NativeHooksChoice::Off,
             codex: NativeHooksChoice::Off,

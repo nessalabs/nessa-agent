@@ -19,6 +19,7 @@ describe("nativeHooksGateway", () => {
             list: () =>
               listed({
                 environments: [],
+                commandHosts: [],
                 nativeHooks: { claude: "on", codex: "off" },
                 agents: [],
               }),

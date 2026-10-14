@@ -37,6 +37,10 @@ pub enum ConversationError {
     /// A share named a credential that is not an active paired device of
     /// the conversation's owner.
     ShareTargetNotPaired,
+    /// A share or revoke named the policy revision it was built on, and the
+    /// party's grant no longer holds it: changed or revoked since. Nothing
+    /// was changed.
+    ShareGrantChanged,
     /// A note's request already left another note in the conversation:
     /// another text, delivery, surface or authority under the same request.
     /// Nothing was saved; the first note stands.

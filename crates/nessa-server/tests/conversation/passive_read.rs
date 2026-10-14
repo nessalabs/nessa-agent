@@ -1251,23 +1251,26 @@ impl GrantFixture {
     }
     async fn change(&self, transition: crate::conversation::application::ShareGrantTransition) {
         use crate::conversation::application::ShareGrants;
-        assert!(self
-            .store
-            .change(crate::conversation::application::ShareGrantChange {
-                transition,
-                conversation_id: self.id.clone(),
-                receiver_id: Some("receiver".into()),
-                credential_id: CredentialId::new("credential").unwrap(),
-                initiator: crate::conversation::application::ConversationCaller {
-                    organization_id: OrganizationId::new("org").unwrap(),
-                    principal_id: PrincipalId::new("owner").unwrap(),
-                    surface_id: "desktop".into(),
-                    action_id: uuid::Uuid::new_v4().to_string(),
-                },
-                at_ms: 1,
-            })
-            .await
-            .unwrap());
+        assert!(
+            self.store
+                .change(crate::conversation::application::ShareGrantChange {
+                    transition,
+                    conversation_id: self.id.clone(),
+                    receiver_id: Some("receiver".into()),
+                    credential_id: CredentialId::new("credential").unwrap(),
+                    expected_policy_revision: None,
+                    initiator: crate::conversation::application::ConversationCaller {
+                        organization_id: OrganizationId::new("org").unwrap(),
+                        principal_id: PrincipalId::new("owner").unwrap(),
+                        surface_id: "desktop".into(),
+                        action_id: uuid::Uuid::new_v4().to_string(),
+                    },
+                    at_ms: 1,
+                })
+                .await
+                .unwrap()
+                .applied
+        );
     }
 }
 

@@ -474,7 +474,8 @@ impl ProductRouteState {
     }
 
     /// The agent catalog as it is now: the agents and SSH hosts composed at
-    /// startup, then the paired environments connected at this moment.
+    /// startup, then the paired environments connected at this moment, and
+    /// which of those take the owner's commands.
     /// `None` where conversations are not configured. `agents.list` answers
     /// it and every `agents.listed` frame carries it, so the two are read
     /// the same way.
@@ -487,6 +488,19 @@ impl ProductRouteState {
                 places.extend((connected.names)().into_iter().map(Value::String));
             }
         }
+        // Of those places, the ones the owner's turns may run commands on,
+        // read with them: the conversation service asks the command policy.
+        // The composed catalog's own copy is never shown.
+        let places: Vec<&str> = catalog["environments"]
+            .as_array()
+            .map(|places| places.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let command_hosts = self
+            .conversations
+            .as_ref()
+            .map(|service| service.owner_command_hosts(places))
+            .unwrap_or_default();
+        catalog["commandHosts"] = Value::from(command_hosts);
         // The stored hooks choice, read now. The composed catalog's own copy
         // is never shown.
         let selection = self

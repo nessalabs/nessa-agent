@@ -27,6 +27,22 @@ import {
   type ViewSubscriptionHandlers,
 } from "@nessa/client"
 import type { GatewayClient } from "./gateway-source"
+import type { SharingClient } from "./sharing-gateway"
+
+/**
+ * The fake's client: the source's, sharing's conversation methods (which
+ * reject — no test of the source shares), and the permission-rule calls
+ * Settings makes on the same conversation. The workspace adapter never calls
+ * those. A window fake still has to answer, because the window's client
+ * requires them.
+ */
+export type FakeGatewayClient = GatewayClient & {
+  readonly conversation: GatewayClient["conversation"] &
+    SharingClient["conversation"] &
+    Pick<ConversationApi, "permissionRules" | "revokePermissionRule">
+}
+
+const notShared = () => Promise.reject(new Error("the fake gateway does not share"))
 
 type Method =
   | "subscribe"
@@ -39,24 +55,6 @@ type Method =
   | "archive"
   | "permissionRules"
   | "revokePermissionRule"
-
-/**
- * The adapter's client, plus the permission-rule calls Settings makes on the
- * same conversation. The workspace adapter never calls them. A window fake
- * still has to answer, because the window's client requires them.
- */
-type WindowTestClient = GatewayClient & {
-  readonly conversation: Pick<
-    ConversationApi,
-    | "observe"
-    | "create"
-    | "send"
-    | "answer"
-    | "archive"
-    | "permissionRules"
-    | "revokePermissionRule"
-  >
-}
 
 /** How one call is answered instead: given the normal answer, the promise to return. */
 type Behaviour = (normal: () => unknown) => Promise<unknown>
@@ -165,7 +163,7 @@ export function view(
 }
 
 export interface FakeGateway {
-  readonly client: WindowTestClient
+  readonly client: FakeGatewayClient
   /** Every call made, in order. */
   readonly calls: { readonly method: Method; readonly args: readonly unknown[] }[]
   readonly rows: Map<string, ConversationSummary>
@@ -360,8 +358,11 @@ export function fakeGateway(
         live.handlers.ended(end)
       }
   }
-  const client: WindowTestClient = {
+  const client: FakeGatewayClient = {
     conversation: {
+      share: notShared,
+      unshare: notShared,
+      shares: notShared,
       observe: (options) =>
         answer("observe", [options], () => observePage(options)) as never,
       create: (options) =>

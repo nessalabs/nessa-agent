@@ -999,6 +999,8 @@ pub struct ConversationShareParams {
     pub role: ConversationShareRole,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<ConversationToolPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_policy_revision: Option<u64>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1006,6 +1008,8 @@ pub struct ConversationUnshareParams {
     pub conversation_id: String,
     pub request_id: String,
     pub credential_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_policy_revision: Option<u64>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1026,6 +1030,13 @@ pub struct ConversationShare {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationSharesResult {
     pub items: Vec<ConversationShare>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationShareResult {
+    pub request_id: String,
+    pub applied: bool,
+    pub policy_revision: u64,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1710,6 +1721,7 @@ pub struct AgentsSetNativeHooksResult {
 pub struct AgentsListResult {
     pub agents: Vec<AgentOption>,
     pub environments: Vec<String>,
+    pub command_hosts: Vec<String>,
     pub native_hooks: AgentsNativeHooks,
 }
 #[derive(Deserialize, Serialize)]

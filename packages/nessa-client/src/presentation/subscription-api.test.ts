@@ -241,6 +241,7 @@ describe("subscription API", () => {
     const catalog = {
       agents: [],
       environments: ["build.example", `peer:${"ab".repeat(32)}`],
+      commandHosts: ["build.example"],
       nativeHooks: { claude: "off", codex: "on" },
     }
     wire.emit(ProductEvent.AgentsListed, { subscriptionId: "1", catalog })
@@ -262,6 +263,7 @@ describe("subscription API", () => {
       catalog: {
         agents: [],
         environments: ["same", "same"],
+        commandHosts: [],
         nativeHooks: { claude: "off", codex: "off" },
       },
     })

@@ -1560,6 +1560,7 @@ function reasonFor(
     case ConversationErrorCode.ConversationStateUnreadable:
     case ConversationErrorCode.ConversationConfigurationChanged:
     case ConversationErrorCode.ShareTargetNotPaired:
+    case ConversationErrorCode.ShareGrantChanged:
     case ConversationErrorCode.IdempotencyConflict:
     case ConversationErrorCode.DrivePolicyUnenforceable:
       return uncertain ? "unavailable" : "not-supported"

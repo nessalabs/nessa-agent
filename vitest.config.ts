@@ -22,6 +22,9 @@ const designSystemEditorDependencies = existsSync(resolve("node_modules/@nessa-u
       "@nessa-ui/react > @tiptap/extension-task-item",
       "@nessa-ui/react > @tiptap/extension-table",
       "@nessa-ui/react > @tiptap/extension-image",
+      // A modal dialog's scroll lock: its CommonJS build would load a second
+      // React (see `server.deps.inline` below); bundled here it shares this one.
+      "@nessa-ui/react > radix-ui > @radix-ui/react-dialog > react-remove-scroll",
     ]
   : []
 
@@ -52,8 +55,9 @@ export default defineConfig({
         // every hook in it throws on a null dispatcher. Transformed here
         // instead, they go through the dedupe above. Everything from that
         // store is inlined, rather than each package as a test meets it; a
-        // CommonJS build (react-remove-scroll's, under a modal menu) is
-        // required by Node regardless and still loads its own.
+        // CommonJS build (react-remove-scroll's, under a modal menu or
+        // dialog) is required by Node regardless and still loads its own,
+        // unless the optimizer above bundles it, as it does for the dialog's.
         inline: [/radix-ui/, /@floating-ui/, /nessa_ui\/node_modules\//],
       },
     },

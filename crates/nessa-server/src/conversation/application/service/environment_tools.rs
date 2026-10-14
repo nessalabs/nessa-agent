@@ -38,8 +38,8 @@ use crate::conversation::application::drive_tools::{
     decision, AdmittedPolicies, DriveToolAuditRecord, DriveTools,
 };
 use crate::conversation::application::{
-    admit_command, environment::GrantedTerms, CommandInitiator, CommandQuestion, CommandResult,
-    Environment, ToolDecision,
+    admit_command, environment::GrantedTerms, CommandInitiator, CommandPolicyEvaluator,
+    CommandQuestion, CommandResult, Environment, ToolDecision,
 };
 use crate::conversation::domain::{ToolCall, ToolPolicy, ToolSource};
 use nessa_protocol::conversation::domain::ConversationId;
@@ -172,10 +172,9 @@ impl ConversationService {
             .map(|(name, environment)| (name.clone(), environment.clone()));
         for (name, environment) in hosts.chain(environments.connected_peers()) {
             let usable = match (policy, &initiator) {
-                (Some(policy), Some(initiator)) => matches!(
-                    policy.evaluate(initiator.ask(), CommandQuestion::Host { host: &name }),
-                    Ok(ToolDecision::Allow { .. })
-                ),
+                (Some(policy), Some(initiator)) => {
+                    allows_host(policy.as_ref(), initiator.ask(), &name)
+                }
                 _ => false,
             };
             let is_current = current.as_deref() == Some(name.as_str());
@@ -193,6 +192,29 @@ impl ConversationService {
             });
         }
         Ok(listed)
+    }
+
+    /// Of `names`, in their order, the ones a conversation owner's turns may
+    /// run commands on: an environment away from here that takes commands,
+    /// on a host the command policy lets the owner use. `agents.list` names
+    /// these `commandHosts`, so a share dialog offers a Drive grant only the
+    /// hosts it could use: a grant is never given a host its owner is not.
+    /// Empty when this gateway grants no commands; `here` is never one.
+    pub fn owner_command_hosts<'a>(&self, names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+        let environments = &self.inner.environment;
+        let Some(policy) = environments.command_policy() else {
+            return Vec::new();
+        };
+        names
+            .into_iter()
+            .filter(|name| {
+                environments
+                    .named(name)
+                    .is_some_and(|environment| environment.commands().is_some())
+                    && allows_host(policy.as_ref(), CommandInitiator::Owner, name)
+            })
+            .map(str::to_owned)
+            .collect()
     }
 
     /// Run `call` for conversation `id`'s running turn, once, and record
@@ -598,6 +620,19 @@ pub(super) fn running_turn(
         actor,
         turn.initiation.clone(),
     ))
+}
+
+/// Whether the command policy lets `initiator` run commands on `host` at all:
+/// the one question `environments_list` and `agents.list` ask of it.
+fn allows_host(
+    policy: &dyn CommandPolicyEvaluator,
+    initiator: CommandInitiator<'_>,
+    host: &str,
+) -> bool {
+    matches!(
+        policy.evaluate(initiator, CommandQuestion::Host { host }),
+        Ok(ToolDecision::Allow { .. })
+    )
 }
 
 /// The conversation's running turn, if one is.
