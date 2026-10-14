@@ -5,6 +5,8 @@ use nessa_gateway_endpoint::{
     },
     infrastructure::{FileEndpointDiscovery, FileEndpointPublication, ENDPOINT_FILE},
 };
+use nessa_local_storage::{open, OpenMode};
+use serde_json::Value;
 #[cfg(unix)]
 use std::{fs, os::unix::fs::PermissionsExt};
 use std::{
@@ -49,6 +51,31 @@ fn endpoint(port: u16) -> GatewayEndpoint {
         EndpointIdentity::new("3f43acfb-3ce4-48fb-8dd1-d31c9404a6bd".into(), 909).unwrap(),
     )
     .unwrap()
+}
+
+#[test]
+fn publication_replaces_an_endpoint_while_a_discovery_reader_retains_the_old_record() {
+    let temporary = tempfile::tempdir().unwrap();
+    let logs = private_logs(&temporary);
+    let publication = publication(&logs);
+    let first = advertisement(&endpoint(9137), None);
+    PublishGatewayEndpoint::new(&publication)
+        .execute(&first)
+        .unwrap();
+    let old_record = std::fs::read(logs.join(ENDPOINT_FILE)).unwrap();
+    let mut reader = open(&logs.join(ENDPOINT_FILE), OpenMode::Read).unwrap();
+
+    let replacement = advertisement(&endpoint(9138), None);
+    PublishGatewayEndpoint::new(&publication)
+        .execute(&replacement)
+        .unwrap();
+
+    let current: Value =
+        serde_json::from_slice(&std::fs::read(logs.join(ENDPOINT_FILE)).unwrap()).unwrap();
+    assert_eq!(current["webSocketUrl"], "ws://127.0.0.1:9138");
+    let mut retained = Vec::new();
+    reader.read_to_end(&mut retained).unwrap();
+    assert_eq!(retained, old_record);
 }
 
 #[test]

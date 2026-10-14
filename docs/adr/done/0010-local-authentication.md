@@ -538,7 +538,11 @@ Current limits:
   Windows, Linux, and macOS runtime checks passed in the
   [platform CI run](https://github.com/nessalabs/nessa-agent/actions/runs/34085966204),
   including Windows native and Node credential loading. Windows uses flushed files
-  and write-through replacement, without claiming Unix directory-fsync semantics.
+  and atomic replacement, without claiming Unix directory-fsync semantics.
+  Subsequent #874 replaces legacy Windows rename with a handle rename that
+  retains delete-sharing readers; it does not request a write-through move.
+  Native publication and flush semantics live with the
+  [storage owner](../../../crates/nessa-local-storage/README.md).
 
 Rust tests cover identity, permissions, storage, and gateway behavior.
 `pnpm auth:e2e` checks the real server, SDK, and CLI together, including issuance,

@@ -9,9 +9,10 @@ Windows supplies a protected DACL at creation (current user SID + LocalSystem),
 then checks the DACL, owner, persistent-ACL volume support, link count and reparse
 attributes through the same file handle used for I/O. Windows paths must be local
 absolute drive paths; alternate streams and device namespaces are rejected.
-Temporary files are private before data is written. Path-based Windows replacements
-request write-through moves. Retained Windows replacement flushes the file before
-and after handle rename; Unix callers also sync the containing directory.
+Temporary files are private before data is written. Callers flush payloads before path-based replacement. Windows replacement uses
+`FileRenameInfoEx` with POSIX semantics so delete-sharing readers retain the old
+file while new opens observe the replacement. Retained Windows replacement also
+flushes the file before and after handle rename; Unix callers also sync the containing directory.
 
 [Retained-directory publication design](../../docs/design/retained-directory-publication.md)
 owns the #324 ordering table and platform evidence boundaries.
@@ -26,8 +27,10 @@ owns the #324 ordering table and platform evidence boundaries.
 | `tests/support/physical_operation.rs` | Source-included cfg(test)-only actual adapter capture observations and OS watchdog fixtures; no execution/admission policy. |
 | `src/retained_directory.rs` | `PrivateDirectory`, native entry snapshots, origin-bound temporary files, and typed publication evidence. |
 | `src/unix/retained_directory.rs` | Retained directory descriptors through private roots or safe absolute locator ancestry, independent `openat(".")` enumeration cursors, identity checks, exclusive publication, atomic replacement, cleanup, and directory sync. |
-| `src/windows/retained_directory.rs` | Top-down non-delete-sharing directory handles, transient identity probes, handle enumeration, `FileRenameInfo` exclusive publication/replacement, and handle disposition cleanup. |
+| `src/windows.rs` | Path-based private Win32 storage and the shared handle rename encoder: exclusive publication or POSIX replacement that retains delete-sharing readers. |
+| `src/windows/retained_directory.rs` | Top-down non-delete-sharing directory handles, transient identity probes, handle enumeration, delegation to the shared rename encoder, and handle disposition cleanup. |
 | `tests/retained_directory.rs` | Cross-platform authority, enumeration, publication, cleanup, replacement, and native Windows handle-lifetime coverage. |
+| `tests/windows_replacement.rs` | Native Windows path-based replacement with retained readers, denied delete sharing, and read-only destinations (#874). |
 
 `PrivateDirectory` is acquired once beneath a trusted absolute root. Every file
 operation accepts one native single-component name and stays on that authority.
@@ -69,8 +72,8 @@ so they can inspect a reservation or destination while its publication handle
 remains open. `PrivateDirectory::sync` syncs the retained directory on Unix. On
 Windows it only revalidates binding: Windows has no directory fsync equivalent,
 and success does not claim directory-entry durability or survival of arbitrary
-power loss. Retained Windows publication uses `FileRenameInfo` through the
-reservation handle with the fully validated extended destination path, and flushes
+power loss. Retained Windows publication uses the shared handle rename encoder
+through the reservation handle with the fully validated extended destination path, and flushes
 that file before and after rename. The retained root and intermediate handles pin
 that path from the caller-trusted root down. Ancestors above the root, an upstream
 reparse point, and mutable drive mappings remain part of the caller's root-trust

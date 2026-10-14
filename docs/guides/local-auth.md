@@ -514,8 +514,11 @@ restricted environments that disable it fail closed. The desktop host does not
 require PowerShell. Run the gateway and client as the same Windows account.
 
 Registry writes flush a private temporary file before replacing the registry.
-Windows replacement requests `MoveFileExW` write-through; it does not claim Unix
-directory-fsync or universal power-loss guarantees. Token output is flushed before
+Windows replacement uses handle-based atomic rename so existing delete-sharing
+readers retain the previous file (#874). It does not request a write-through move
+or claim Unix directory-fsync or universal power-loss guarantees. The
+[storage owner](../../crates/nessa-local-storage/README.md) documents native
+publication and flush semantics. Token output is flushed before
 success is reported. OS administrators and processes running as the same account
 remain outside the separation provided by these files.
 

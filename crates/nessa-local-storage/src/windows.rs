@@ -13,13 +13,18 @@ use std::{
         io::{AsRawHandle, FromRawHandle},
     },
     path::{Component, PathBuf, Prefix},
-    ptr::{null, null_mut},
+    ptr::{addr_of_mut, null, null_mut},
 };
 use windows_sys::Win32::{
     Foundation::*,
     Security::{Authorization::*, *},
     Storage::FileSystem::*,
-    System::Threading::*,
+    System::{
+        Threading::*,
+        WindowsProgramming::{
+            FILE_RENAME_FLAG_POSIX_SEMANTICS, FILE_RENAME_FLAG_REPLACE_IF_EXISTS,
+        },
+    },
 };
 mod retained_directory;
 pub(crate) use retained_directory::{
@@ -403,7 +408,8 @@ pub fn open_temporary_beneath(root: &Path, relative: &Path) -> io::Result<File> 
     open_temporary(&root.join(relative))
 }
 /// Windows does not expose Unix directory fsync semantics. Files are flushed
-/// before publication; replacement requests the platform's write-through move.
+/// by callers before path-based publication; retained publication also flushes
+/// its payload after handle rename.
 pub fn sync_directory(_: &Path) -> io::Result<()> {
     Ok(())
 }
@@ -459,16 +465,58 @@ pub fn sync_directory_beneath(root: &Path, relative: &Path) -> io::Result<()> {
         verify_directory(&root.join(relative))
     }
 }
+fn rename_file(file: &File, to: &Path, replace: bool) -> io::Result<()> {
+    let name = wide(to)?;
+    let name_bytes = name
+        .len()
+        .checked_sub(1)
+        .and_then(|length| length.checked_mul(size_of::<u16>()))
+        .and_then(|length| u32::try_from(length).ok())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "destination is too long"))?;
+    let bytes = std::mem::offset_of!(FILE_RENAME_INFO, FileName)
+        .checked_add(name.len().checked_mul(size_of::<u16>()).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "destination is too long")
+        })?)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "destination is too long"))?;
+    let buffer_bytes = u32::try_from(bytes)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "destination is too long"))?;
+    let words = bytes.div_ceil(size_of::<usize>());
+    let mut buffer = vec![0usize; words];
+    let rename = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    unsafe {
+        // #874's delete-sharing reader regression reproduces OS 5 with legacy
+        // replacement. POSIX rename retains that reader's old object while the
+        // name changes; it does not request an override of read-only attributes.
+        (*rename).Anonymous.Flags = if replace {
+            FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS
+        } else {
+            0
+        };
+        (*rename).RootDirectory = null_mut();
+        (*rename).FileNameLength = name_bytes;
+        std::ptr::copy_nonoverlapping(
+            name.as_ptr(),
+            addr_of_mut!((*rename).FileName).cast::<u16>(),
+            name.len(),
+        );
+        check(SetFileInformationByHandle(
+            file.as_raw_handle(),
+            if replace {
+                FileRenameInfoEx
+            } else {
+                FileRenameInfo
+            },
+            rename.cast(),
+            buffer_bytes,
+        ))
+    }
+}
+
 pub fn replace(from: &Path, to: &Path) -> io::Result<()> {
     check_parents(from)?;
     check_parents(to)?;
-    unsafe {
-        check(MoveFileExW(
-            wide(from)?.as_ptr(),
-            wide(to)?.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        ))
-    }
+    let source = open_with_additional_access(from, OpenMode::Read, DELETE)?;
+    rename_file(&source, to, true)
 }
 /// Publish `from` under the unused name `to`, never replacing an existing one.
 ///
