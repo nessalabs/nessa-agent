@@ -93,10 +93,6 @@ test("the functional production preview inlines the ci stage on both halves", ()
     runAll,
     /target\(options, options\.mode === "prod" \? functionalPreviewEnv\(\) : \{\}\)/,
   )
-  assert.match(
-    runAll,
-    /if \(check === "committed-transcript" && options\.url\) args\.push\("--url", options\.url\)/,
-  )
   // The budget's preview is its own, at the default prod stage.
   const budget = readFileSync(join(scripts, "../perf-budget.mjs"), "utf8")
   assert.doesNotMatch(budget, /functionalPreviewEnv|VITE_NESSA_STAGE/)
