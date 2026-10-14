@@ -207,6 +207,12 @@ describe("conversation view agreement", () => {
     ).toThrow(/unreadable id/)
     expect(() =>
       conversationView(
+        { ...empty, unreadable: [{ id: "4" }, { id: "4" }] },
+        "conversation",
+      ),
+    ).toThrow(/Repeated conversation unreadable id/)
+    expect(() =>
+      conversationView(
         { ...empty, unreadable: [{ id: "4", report: true }] },
         "conversation",
       ),

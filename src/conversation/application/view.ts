@@ -28,15 +28,14 @@ export type ConversationView = {
   notes: Note[]
   /**
    * Records this read could not apply, oldest first. Each is one line in the
-   * transcript. Absent on a view built before the gateway sent the list.
+   * transcript. Empty when every record applied.
    */
-  unreadable?: { id: string; afterExecutionId?: string }[]
+  unreadable: { id: string; afterExecutionId?: string }[]
   /**
    * More records could not be read than `unreadable` lists. The transcript
-   * ends with one line for that. Absent on a view built before the gateway
-   * sent the flag.
+   * ends with one line for that.
    */
-  unreadableTruncated?: boolean
+  unreadableTruncated: boolean
   approvalMode: ApprovalMode
   approvalModes: ApprovalModeChoice[]
   approvalModeChange?: {
