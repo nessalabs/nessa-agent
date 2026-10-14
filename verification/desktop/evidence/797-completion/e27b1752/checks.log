@@ -1,0 +1,18 @@
+ok    apps
+ Test Files  346 passed (346)
+      Tests  4577 passed (4577)
+ok    calibration [chromium]
+ok    delivery [chromium columns]
+ok    delivery [chromium columns]
+ok    delivery [chromium columns]
+ok    delivery [chromium sidebar]
+ok    delivery [chromium sidebar]
+ok    delivery [chromium sidebar]
+ok    delivery [webkit columns]
+ok    delivery [webkit columns]
+ok    delivery [webkit columns]
+ok    delivery [webkit sidebar]
+ok    delivery [webkit sidebar]
+ok    delivery [webkit sidebar]
+ok    delivery-statistics
+message-sync: 14/14 held

@@ -1,0 +1,3076 @@
+{
+  "tests": 40,
+  "passed": 40,
+  "report": [
+    {
+      "engine": "chromium",
+      "scenario": "control",
+      "status": "passed",
+      "sendCount": 1,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": []
+          }
+        ],
+        "sends": [
+          {
+            "conversationId": "84bf1f33-62c9-47a3-8ce4-e168edf54cde",
+            "executionId": "8f924f76-d6c8-4b12-b0e5-e6be8d3cdb6f",
+            "requestId": "25d7e736-d5e5-4dd5-9626-4bdf6199b62c",
+            "mode": "queued",
+            "text": "include this image",
+            "attachments": [],
+            "files": [],
+            "target": {
+              "conversationId": "84bf1f33-62c9-47a3-8ce4-e168edf54cde",
+              "executionId": "8f924f76-d6c8-4b12-b0e5-e6be8d3cdb6f"
+            }
+          }
+        ],
+        "fetchCalls": 0,
+        "draft": [],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": [
+            {
+              "executionId": "8f924f76-d6c8-4b12-b0e5-e6be8d3cdb6f",
+              "receipt": "delivered",
+              "content": []
+            }
+          ]
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "chromium",
+      "scenario": "native-read",
+      "status": "passed",
+      "sendCount": 1,
+      "attachmentCount": 1,
+      "refusalCount": 1,
+      "heldRead": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": []
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "text",
+            "text": "include this image"
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": []
+          }
+        ],
+        "sends": [
+          {
+            "conversationId": "ab5012a3-2a08-496d-a976-5d5d0846af2f",
+            "executionId": "90e0d5b9-23a2-4aa1-acb4-31e0173a8ce1",
+            "requestId": "9ba05ff5-1132-4791-8742-eb39f5b11097",
+            "mode": "queued",
+            "text": "include this image",
+            "attachments": [
+              {
+                "digest": "sha256:abababababababababababababababababababababababababababababababab",
+                "mimeType": "image/png",
+                "size": 68
+              }
+            ],
+            "files": [],
+            "target": {
+              "conversationId": "ab5012a3-2a08-496d-a976-5d5d0846af2f",
+              "executionId": "90e0d5b9-23a2-4aa1-acb4-31e0173a8ce1"
+            }
+          }
+        ],
+        "fetchCalls": 0,
+        "draft": [],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": [
+            {
+              "executionId": "90e0d5b9-23a2-4aa1-acb4-31e0173a8ce1",
+              "receipt": "delivered",
+              "content": [
+                {
+                  "type": "file",
+                  "name": "picked.png",
+                  "upload": {
+                    "status": "stored",
+                    "image": {
+                      "digest": "sha256:abababababababababababababababababababababababababababababababab",
+                      "mimeType": "image/png",
+                      "size": 68
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "chromium",
+      "scenario": "second-url",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 1,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": []
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 1,
+        "draft": [
+          {
+            "type": "text",
+            "text": "include this image"
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "chromium",
+      "scenario": "picker-owner-correlation",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "a.pdf",
+                  "mimeType": "application/pdf",
+                  "size": 1,
+                  "previewUrl": "",
+                  "path": "/verification/a.pdf"
+                },
+                "placementId": "a1",
+                "upload": {
+                  "status": "not-started"
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "text",
+            "text": "include this image"
+          },
+          {
+            "type": "file",
+            "resource": {
+              "name": "a.pdf",
+              "mimeType": "application/pdf",
+              "size": 1,
+              "previewUrl": "",
+              "path": "/verification/a.pdf"
+            },
+            "placementId": "a1",
+            "upload": {
+              "status": "not-started"
+            }
+          }
+        ],
+        "pickerRequestIds": [
+          "p-dd9cd7ba-d79b-4013-8a72-c05b31f35a27",
+          "p-e669ae9d-ce7b-47a8-b26f-f5e4cbf348ad"
+        ],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "chromium",
+      "scenario": "folder-owner-send",
+      "status": "passed",
+      "sendCount": 1,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "folder-a.txt",
+                  "mimeType": "text/plain",
+                  "size": 24,
+                  "previewUrl": "blob:http://127.0.0.1:1486/b0b59552-bd80-400f-b35a-6e4c99761634",
+                  "path": null
+                },
+                "placementId": "a1",
+                "upload": {
+                  "status": "not-started"
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [
+          {
+            "conversationId": "5c81643b-eab4-4c3d-b6b4-d3ee37726a26",
+            "executionId": "2c50eac2-478a-44f9-97c3-2d661b14cc53",
+            "requestId": "7bdc1940-56a9-4f0f-a608-ba35204e372d",
+            "mode": "queued",
+            "text": "include this image",
+            "attachments": [],
+            "files": [],
+            "target": {
+              "conversationId": "5c81643b-eab4-4c3d-b6b4-d3ee37726a26",
+              "executionId": "2c50eac2-478a-44f9-97c3-2d661b14cc53"
+            }
+          }
+        ],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "text",
+            "text": "include this image"
+          },
+          {
+            "type": "file",
+            "resource": {
+              "name": "folder-a.txt",
+              "mimeType": "text/plain",
+              "size": 24,
+              "previewUrl": "blob:http://127.0.0.1:1486/b0b59552-bd80-400f-b35a-6e4c99761634",
+              "path": null
+            },
+            "placementId": "a1",
+            "upload": {
+              "status": "not-started"
+            }
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": ["folder-a"],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "chromium",
+      "scenario": "folder-owner-drop",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "folder-a.txt",
+                  "mimeType": "text/plain",
+                  "size": 24,
+                  "previewUrl": "blob:http://127.0.0.1:1486/ebb706ad-7abf-4803-9b04-c506fc8a7838",
+                  "path": null
+                },
+                "placementId": "a1",
+                "upload": {
+                  "status": "not-started"
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "text",
+            "text": "include this image"
+          },
+          {
+            "type": "file",
+            "resource": {
+              "name": "folder-a.txt",
+              "mimeType": "text/plain",
+              "size": 24,
+              "previewUrl": "blob:http://127.0.0.1:1486/ebb706ad-7abf-4803-9b04-c506fc8a7838",
+              "path": null
+            },
+            "placementId": "a1",
+            "upload": {
+              "status": "not-started"
+            }
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": ["folder-a", "folder-b"],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "chromium",
+      "scenario": "drop-capacity",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 1,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "after-free.pdf",
+                  "mimeType": "application/pdf",
+                  "size": 1,
+                  "previewUrl": "",
+                  "path": "/verification/after-free.pdf"
+                },
+                "placementId": "a1",
+                "upload": {
+                  "status": "not-started"
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "file",
+            "resource": {
+              "name": "after-free.pdf",
+              "mimeType": "application/pdf",
+              "size": 1,
+              "previewUrl": "",
+              "path": "/verification/after-free.pdf"
+            },
+            "placementId": "a1",
+            "upload": {
+              "status": "not-started"
+            }
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "chromium",
+      "scenario": "conversation-refusals",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "answer.pdf",
+                  "mimeType": "application/pdf",
+                  "size": 1,
+                  "previewUrl": "",
+                  "path": "/verification/answer.pdf"
+                },
+                "placementId": "a1",
+                "upload": {
+                  "status": "not-started"
+                },
+                "sharedResource": false
+              }
+            ]
+          },
+          {
+            "id": "c1",
+            "files": []
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "chromium",
+      "scenario": "pathless-host-drop",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": []
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 1,
+        "draft": [],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "chromium",
+      "scenario": "browser-picker-fallback",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": []
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "chromium",
+      "scenario": "upload-parent-success",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c1",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "race.png",
+                  "mimeType": "image/png",
+                  "size": 68,
+                  "previewUrl": "",
+                  "path": null
+                },
+                "placementId": "a2",
+                "upload": {
+                  "status": "uploading"
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "file",
+            "resource": {
+              "name": "race.png",
+              "mimeType": "image/png",
+              "size": 68,
+              "previewUrl": "",
+              "path": null
+            },
+            "placementId": "a2",
+            "upload": {
+              "status": "uploading"
+            }
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "chromium",
+      "scenario": "upload-parent-failure",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c1",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "race.png",
+                  "mimeType": "image/png",
+                  "size": 68,
+                  "previewUrl": "",
+                  "path": null
+                },
+                "placementId": "a2",
+                "upload": {
+                  "status": "uploading"
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "file",
+            "resource": {
+              "name": "race.png",
+              "mimeType": "image/png",
+              "size": 68,
+              "previewUrl": "",
+              "path": null
+            },
+            "placementId": "a2",
+            "upload": {
+              "status": "uploading"
+            }
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "chromium",
+      "scenario": "upload-placement-success",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "race.png",
+                  "mimeType": "image/png",
+                  "size": 68,
+                  "previewUrl": "",
+                  "path": null
+                },
+                "placementId": "a2",
+                "upload": {
+                  "status": "uploading"
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "text",
+            "text": "include this image"
+          },
+          {
+            "type": "file",
+            "resource": {
+              "name": "race.png",
+              "mimeType": "image/png",
+              "size": 68,
+              "previewUrl": "",
+              "path": null
+            },
+            "placementId": "a2",
+            "upload": {
+              "status": "uploading"
+            }
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "chromium",
+      "scenario": "upload-placement-failure",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "race.png",
+                  "mimeType": "image/png",
+                  "size": 68,
+                  "previewUrl": "",
+                  "path": null
+                },
+                "placementId": "a2",
+                "upload": {
+                  "status": "uploading"
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "text",
+            "text": "include this image"
+          },
+          {
+            "type": "file",
+            "resource": {
+              "name": "race.png",
+              "mimeType": "image/png",
+              "size": 68,
+              "previewUrl": "",
+              "path": null
+            },
+            "placementId": "a2",
+            "upload": {
+              "status": "uploading"
+            }
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "chromium",
+      "scenario": "shared-resource",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [
+          {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "aborted": true
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000002",
+            "aborted": false
+          }
+        ],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c2",
+            "files": []
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "chromium",
+      "scenario": "owner-swap",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [
+          {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "aborted": false
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000002",
+            "aborted": false
+          }
+        ],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "replacement.png",
+                  "mimeType": "image/png",
+                  "size": 68,
+                  "previewUrl": "blob:http://127.0.0.1:1486/5e077a1c-c9c5-43c2-bbc2-f260f3184648",
+                  "path": null
+                },
+                "placementId": "a1",
+                "upload": {
+                  "status": "stored",
+                  "image": {
+                    "digest": "sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                    "mimeType": "image/png",
+                    "size": 68
+                  }
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "file",
+            "resource": {
+              "name": "replacement.png",
+              "mimeType": "image/png",
+              "size": 68,
+              "previewUrl": "blob:http://127.0.0.1:1486/5e077a1c-c9c5-43c2-bbc2-f260f3184648",
+              "path": null
+            },
+            "placementId": "a1",
+            "upload": {
+              "status": "stored",
+              "image": {
+                "digest": "sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                "mimeType": "image/png",
+                "size": 68
+              }
+            }
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "chromium",
+      "scenario": "detached-queue",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 4,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "0.png",
+                  "mimeType": "image/png",
+                  "size": 68,
+                  "previewUrl": "blob:http://127.0.0.1:1486/3c94bb17-e550-4976-ad05-80fda33c2471",
+                  "path": null
+                },
+                "placementId": "a1",
+                "upload": {
+                  "status": "stored",
+                  "image": {
+                    "digest": "sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                    "mimeType": "image/png",
+                    "size": 68
+                  }
+                },
+                "sharedResource": false
+              },
+              {
+                "type": "file",
+                "resource": {
+                  "name": "1.png",
+                  "mimeType": "image/png",
+                  "size": 68,
+                  "previewUrl": "blob:http://127.0.0.1:1486/11c26351-ec21-4503-a673-564bbb4bf993",
+                  "path": null
+                },
+                "placementId": "a2",
+                "upload": {
+                  "status": "uploading"
+                },
+                "sharedResource": false
+              },
+              {
+                "type": "file",
+                "resource": {
+                  "name": "2.png",
+                  "mimeType": "image/png",
+                  "size": 68,
+                  "previewUrl": "blob:http://127.0.0.1:1486/b82e4807-c312-414e-b33a-2c7210577c9c",
+                  "path": null
+                },
+                "placementId": "a3",
+                "upload": {
+                  "status": "uploading"
+                },
+                "sharedResource": false
+              },
+              {
+                "type": "file",
+                "resource": {
+                  "name": "3.png",
+                  "mimeType": "image/png",
+                  "size": 68,
+                  "previewUrl": "blob:http://127.0.0.1:1486/811c9dfa-10a5-42d2-90b5-2d43108856e0",
+                  "path": null
+                },
+                "placementId": "a4",
+                "upload": {
+                  "status": "uploading"
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "text",
+            "text": "include this image"
+          },
+          {
+            "type": "file",
+            "resource": {
+              "name": "0.png",
+              "mimeType": "image/png",
+              "size": 68,
+              "previewUrl": "blob:http://127.0.0.1:1486/3c94bb17-e550-4976-ad05-80fda33c2471",
+              "path": null
+            },
+            "placementId": "a1",
+            "upload": {
+              "status": "stored",
+              "image": {
+                "digest": "sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                "mimeType": "image/png",
+                "size": 68
+              }
+            }
+          },
+          {
+            "type": "file",
+            "resource": {
+              "name": "1.png",
+              "mimeType": "image/png",
+              "size": 68,
+              "previewUrl": "blob:http://127.0.0.1:1486/11c26351-ec21-4503-a673-564bbb4bf993",
+              "path": null
+            },
+            "placementId": "a2",
+            "upload": {
+              "status": "uploading"
+            }
+          },
+          {
+            "type": "file",
+            "resource": {
+              "name": "2.png",
+              "mimeType": "image/png",
+              "size": 68,
+              "previewUrl": "blob:http://127.0.0.1:1486/b82e4807-c312-414e-b33a-2c7210577c9c",
+              "path": null
+            },
+            "placementId": "a3",
+            "upload": {
+              "status": "uploading"
+            }
+          },
+          {
+            "type": "file",
+            "resource": {
+              "name": "3.png",
+              "mimeType": "image/png",
+              "size": 68,
+              "previewUrl": "blob:http://127.0.0.1:1486/811c9dfa-10a5-42d2-90b5-2d43108856e0",
+              "path": null
+            },
+            "placementId": "a4",
+            "upload": {
+              "status": "uploading"
+            }
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "chromium",
+      "scenario": "native-svg",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "native.svg",
+                  "mimeType": "image/svg+xml",
+                  "size": 106,
+                  "previewUrl": "blob:http://127.0.0.1:1486/26689dfd-1f0d-421e-add4-e6ea68a5d9d9",
+                  "path": null
+                },
+                "placementId": "a1",
+                "upload": {
+                  "status": "failed",
+                  "reason": "unsupported-image"
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "text",
+            "text": "include this image"
+          },
+          {
+            "type": "file",
+            "resource": {
+              "name": "native.svg",
+              "mimeType": "image/svg+xml",
+              "size": 106,
+              "previewUrl": "blob:http://127.0.0.1:1486/26689dfd-1f0d-421e-add4-e6ea68a5d9d9",
+              "path": null
+            },
+            "placementId": "a1",
+            "upload": {
+              "status": "failed",
+              "reason": "unsupported-image"
+            }
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "chromium",
+      "scenario": "terminal-refusal-preserved",
+      "status": "passed",
+      "sendCount": 3,
+      "attachmentCount": 1,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": []
+          }
+        ],
+        "sends": [
+          {
+            "conversationId": "00000000-0000-4000-8000-000000000001",
+            "executionId": "ea2bd60e-8d1f-4dd9-be46-288922af2121",
+            "requestId": "534ac623-e77d-4481-b508-3a6b67516adb",
+            "mode": "queued",
+            "text": "include this image",
+            "attachments": [
+              {
+                "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                "mimeType": "image/png",
+                "size": 68
+              }
+            ],
+            "files": [],
+            "target": {
+              "conversationId": "00000000-0000-4000-8000-000000000001",
+              "executionId": "ea2bd60e-8d1f-4dd9-be46-288922af2121"
+            }
+          },
+          {
+            "conversationId": "00000000-0000-4000-8000-000000000001",
+            "executionId": "a4a946eb-7544-4cf9-af14-ba8fa4529533",
+            "requestId": "c865294b-34c3-45cf-885b-2fde3a8319f1",
+            "mode": "queued",
+            "text": "include this image",
+            "attachments": [
+              {
+                "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                "mimeType": "image/png",
+                "size": 68
+              }
+            ],
+            "files": [],
+            "target": {
+              "conversationId": "00000000-0000-4000-8000-000000000001",
+              "executionId": "a4a946eb-7544-4cf9-af14-ba8fa4529533"
+            }
+          },
+          {
+            "conversationId": "00000000-0000-4000-8000-000000000001",
+            "executionId": "2ff8262d-cf2e-4704-b367-fa6f1b1780da",
+            "requestId": "db2cb4d6-ff0b-4121-9b5e-6d40b299c8bd",
+            "mode": "queued",
+            "text": "",
+            "attachments": [
+              {
+                "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+                "mimeType": "image/png",
+                "size": 68
+              }
+            ],
+            "files": [],
+            "target": {
+              "conversationId": "00000000-0000-4000-8000-000000000001",
+              "executionId": "2ff8262d-cf2e-4704-b367-fa6f1b1780da"
+            }
+          }
+        ],
+        "fetchCalls": 0,
+        "draft": [],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 2,
+          "stageSizes": [41943040, 41943040],
+          "imageSizes": [68, 68],
+          "imageDigests": [
+            "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000002"
+          ],
+          "previewUrls": [
+            "blob:http://127.0.0.1:1486/54e93310-3932-444a-b444-f3998be1c48d",
+            "blob:http://127.0.0.1:1486/532b5008-e58b-4cf2-b9ef-7d92dae8c62e"
+          ],
+          "retained": [false, true],
+          "turns": [
+            {
+              "executionId": "a4a946eb-7544-4cf9-af14-ba8fa4529533",
+              "receipt": "delivered",
+              "content": [
+                {
+                  "type": "image-reference",
+                  "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+                }
+              ]
+            },
+            {
+              "executionId": "2ff8262d-cf2e-4704-b367-fa6f1b1780da",
+              "receipt": "delivered",
+              "content": [
+                {
+                  "type": "file",
+                  "name": "second-retained.png",
+                  "upload": {
+                    "status": "stored",
+                    "image": {
+                      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+                      "mimeType": "image/png",
+                      "size": 68
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "executionId": "ea2bd60e-8d1f-4dd9-be46-288922af2121",
+              "receipt": "failed",
+              "content": [
+                {
+                  "type": "image-reference",
+                  "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "chromium",
+      "scenario": "terminal-refusal-reupload",
+      "status": "passed",
+      "sendCount": 3,
+      "attachmentCount": 1,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": []
+          }
+        ],
+        "sends": [
+          {
+            "conversationId": "00000000-0000-4000-8000-000000000001",
+            "executionId": "5c192c06-8e70-4efd-a36d-e8553ee6f43f",
+            "requestId": "fea42f29-eacc-4b44-94e2-92aeb18cd6f7",
+            "mode": "queued",
+            "text": "include this image",
+            "attachments": [
+              {
+                "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                "mimeType": "image/png",
+                "size": 68
+              }
+            ],
+            "files": [],
+            "target": {
+              "conversationId": "00000000-0000-4000-8000-000000000001",
+              "executionId": "5c192c06-8e70-4efd-a36d-e8553ee6f43f"
+            }
+          },
+          {
+            "conversationId": "00000000-0000-4000-8000-000000000001",
+            "executionId": "cfc91e0f-58c2-4af6-b4c4-9b92fbdc381e",
+            "requestId": "9ba6a7af-a486-4db3-b3a8-17c45ac4e3ac",
+            "mode": "queued",
+            "text": "include this image",
+            "attachments": [
+              {
+                "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+                "mimeType": "image/png",
+                "size": 68
+              }
+            ],
+            "files": [],
+            "target": {
+              "conversationId": "00000000-0000-4000-8000-000000000001",
+              "executionId": "cfc91e0f-58c2-4af6-b4c4-9b92fbdc381e"
+            }
+          },
+          {
+            "conversationId": "00000000-0000-4000-8000-000000000001",
+            "executionId": "013c85d1-31ad-4f0b-b42a-f654b0ccf967",
+            "requestId": "b5d3b022-5b4c-4dbf-82a6-82f979d55562",
+            "mode": "queued",
+            "text": "",
+            "attachments": [
+              {
+                "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000003",
+                "mimeType": "image/png",
+                "size": 68
+              }
+            ],
+            "files": [],
+            "target": {
+              "conversationId": "00000000-0000-4000-8000-000000000001",
+              "executionId": "013c85d1-31ad-4f0b-b42a-f654b0ccf967"
+            }
+          }
+        ],
+        "fetchCalls": 0,
+        "draft": [],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 2,
+          "stageSizes": [41943040, 41943040, 41943040],
+          "imageSizes": [68, 68, 68],
+          "imageDigests": [
+            "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000003"
+          ],
+          "previewUrls": [
+            "blob:http://127.0.0.1:1486/f24d3acb-7913-4915-aae6-e8a86fe6355f",
+            "blob:http://127.0.0.1:1486/c42facaf-4c9c-4638-acac-e44746bb26a9"
+          ],
+          "retained": [false, true],
+          "turns": [
+            {
+              "executionId": "cfc91e0f-58c2-4af6-b4c4-9b92fbdc381e",
+              "receipt": "delivered",
+              "content": [
+                {
+                  "type": "image-reference",
+                  "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000002"
+                }
+              ]
+            },
+            {
+              "executionId": "013c85d1-31ad-4f0b-b42a-f654b0ccf967",
+              "receipt": "delivered",
+              "content": [
+                {
+                  "type": "file",
+                  "name": "second-retained.png",
+                  "upload": {
+                    "status": "stored",
+                    "image": {
+                      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000003",
+                      "mimeType": "image/png",
+                      "size": 68
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "executionId": "5c192c06-8e70-4efd-a36d-e8553ee6f43f",
+              "receipt": "failed",
+              "content": [
+                {
+                  "type": "image-reference",
+                  "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "webkit",
+      "scenario": "control",
+      "status": "passed",
+      "sendCount": 1,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": []
+          }
+        ],
+        "sends": [
+          {
+            "conversationId": "14c9d639-c648-4162-8b74-01f8c2e7da3c",
+            "executionId": "e8625a7c-a38e-4613-8df1-9d9cb528e1a5",
+            "requestId": "85d7c3a9-50f1-4e73-a153-f07baa300529",
+            "mode": "queued",
+            "text": "include this image",
+            "attachments": [],
+            "files": [],
+            "target": {
+              "conversationId": "14c9d639-c648-4162-8b74-01f8c2e7da3c",
+              "executionId": "e8625a7c-a38e-4613-8df1-9d9cb528e1a5"
+            }
+          }
+        ],
+        "fetchCalls": 0,
+        "draft": [],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": [
+            {
+              "executionId": "e8625a7c-a38e-4613-8df1-9d9cb528e1a5",
+              "receipt": "delivered",
+              "content": []
+            }
+          ]
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "webkit",
+      "scenario": "native-read",
+      "status": "passed",
+      "sendCount": 1,
+      "attachmentCount": 1,
+      "refusalCount": 1,
+      "heldRead": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": []
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "text",
+            "text": "include this image"
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": []
+          }
+        ],
+        "sends": [
+          {
+            "conversationId": "794a9621-5c35-45bd-9982-9ac9bbdcfa3c",
+            "executionId": "0397484a-0db3-454c-91bc-5d18ebdb20e0",
+            "requestId": "811304ab-3888-4808-b4e3-65a99f3e4ddc",
+            "mode": "queued",
+            "text": "include this image",
+            "attachments": [
+              {
+                "digest": "sha256:abababababababababababababababababababababababababababababababab",
+                "mimeType": "image/png",
+                "size": 68
+              }
+            ],
+            "files": [],
+            "target": {
+              "conversationId": "794a9621-5c35-45bd-9982-9ac9bbdcfa3c",
+              "executionId": "0397484a-0db3-454c-91bc-5d18ebdb20e0"
+            }
+          }
+        ],
+        "fetchCalls": 0,
+        "draft": [],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": [
+            {
+              "executionId": "0397484a-0db3-454c-91bc-5d18ebdb20e0",
+              "receipt": "delivered",
+              "content": [
+                {
+                  "type": "file",
+                  "name": "picked.png",
+                  "upload": {
+                    "status": "stored",
+                    "image": {
+                      "digest": "sha256:abababababababababababababababababababababababababababababababab",
+                      "mimeType": "image/png",
+                      "size": 68
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "webkit",
+      "scenario": "second-url",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 1,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": []
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 1,
+        "draft": [
+          {
+            "type": "text",
+            "text": "include this image"
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "webkit",
+      "scenario": "picker-owner-correlation",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "a.pdf",
+                  "mimeType": "application/pdf",
+                  "size": 1,
+                  "previewUrl": "",
+                  "path": "/verification/a.pdf"
+                },
+                "placementId": "a1",
+                "upload": {
+                  "status": "not-started"
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "text",
+            "text": "include this image"
+          },
+          {
+            "type": "file",
+            "resource": {
+              "name": "a.pdf",
+              "mimeType": "application/pdf",
+              "size": 1,
+              "previewUrl": "",
+              "path": "/verification/a.pdf"
+            },
+            "placementId": "a1",
+            "upload": {
+              "status": "not-started"
+            }
+          }
+        ],
+        "pickerRequestIds": [
+          "p-ab4914f8-96a7-4a06-b754-b153cca88a54",
+          "p-007224f2-a852-4064-9706-0403420014e3"
+        ],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "webkit",
+      "scenario": "folder-owner-send",
+      "status": "passed",
+      "sendCount": 1,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "folder-a.txt",
+                  "mimeType": "text/plain",
+                  "size": 24,
+                  "previewUrl": "blob:http://127.0.0.1:1486/eae3f351-d44a-4388-97c1-ea5b47a8807b",
+                  "path": null
+                },
+                "placementId": "a1",
+                "upload": {
+                  "status": "not-started"
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [
+          {
+            "conversationId": "921f3c1c-ac90-4bfe-b74c-f0b365790ad0",
+            "executionId": "f9ee7cd2-7e22-46f1-960f-98ca9d13e92c",
+            "requestId": "4a64ee0a-6108-41f9-9971-8f62ab1f9e42",
+            "mode": "queued",
+            "text": "include this image",
+            "attachments": [],
+            "files": [],
+            "target": {
+              "conversationId": "921f3c1c-ac90-4bfe-b74c-f0b365790ad0",
+              "executionId": "f9ee7cd2-7e22-46f1-960f-98ca9d13e92c"
+            }
+          }
+        ],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "text",
+            "text": "include this image"
+          },
+          {
+            "type": "file",
+            "resource": {
+              "name": "folder-a.txt",
+              "mimeType": "text/plain",
+              "size": 24,
+              "previewUrl": "blob:http://127.0.0.1:1486/eae3f351-d44a-4388-97c1-ea5b47a8807b",
+              "path": null
+            },
+            "placementId": "a1",
+            "upload": {
+              "status": "not-started"
+            }
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": ["folder-a"],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "webkit",
+      "scenario": "folder-owner-drop",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "folder-a.txt",
+                  "mimeType": "text/plain",
+                  "size": 24,
+                  "previewUrl": "blob:http://127.0.0.1:1486/37f47f77-4d15-4cf2-a6a3-9f765d61d10e",
+                  "path": null
+                },
+                "placementId": "a1",
+                "upload": {
+                  "status": "not-started"
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "text",
+            "text": "include this image"
+          },
+          {
+            "type": "file",
+            "resource": {
+              "name": "folder-a.txt",
+              "mimeType": "text/plain",
+              "size": 24,
+              "previewUrl": "blob:http://127.0.0.1:1486/37f47f77-4d15-4cf2-a6a3-9f765d61d10e",
+              "path": null
+            },
+            "placementId": "a1",
+            "upload": {
+              "status": "not-started"
+            }
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": ["folder-a", "folder-b"],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "webkit",
+      "scenario": "drop-capacity",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 1,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "after-free.pdf",
+                  "mimeType": "application/pdf",
+                  "size": 1,
+                  "previewUrl": "",
+                  "path": "/verification/after-free.pdf"
+                },
+                "placementId": "a1",
+                "upload": {
+                  "status": "not-started"
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "file",
+            "resource": {
+              "name": "after-free.pdf",
+              "mimeType": "application/pdf",
+              "size": 1,
+              "previewUrl": "",
+              "path": "/verification/after-free.pdf"
+            },
+            "placementId": "a1",
+            "upload": {
+              "status": "not-started"
+            }
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "webkit",
+      "scenario": "conversation-refusals",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "answer.pdf",
+                  "mimeType": "application/pdf",
+                  "size": 1,
+                  "previewUrl": "",
+                  "path": "/verification/answer.pdf"
+                },
+                "placementId": "a1",
+                "upload": {
+                  "status": "not-started"
+                },
+                "sharedResource": false
+              }
+            ]
+          },
+          {
+            "id": "c1",
+            "files": []
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "webkit",
+      "scenario": "pathless-host-drop",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": []
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 1,
+        "draft": [],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "webkit",
+      "scenario": "browser-picker-fallback",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": []
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "webkit",
+      "scenario": "upload-parent-success",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c1",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "race.png",
+                  "mimeType": "image/png",
+                  "size": 68,
+                  "previewUrl": "",
+                  "path": null
+                },
+                "placementId": "a2",
+                "upload": {
+                  "status": "uploading"
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "file",
+            "resource": {
+              "name": "race.png",
+              "mimeType": "image/png",
+              "size": 68,
+              "previewUrl": "",
+              "path": null
+            },
+            "placementId": "a2",
+            "upload": {
+              "status": "uploading"
+            }
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "webkit",
+      "scenario": "upload-parent-failure",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c1",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "race.png",
+                  "mimeType": "image/png",
+                  "size": 68,
+                  "previewUrl": "",
+                  "path": null
+                },
+                "placementId": "a2",
+                "upload": {
+                  "status": "uploading"
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "file",
+            "resource": {
+              "name": "race.png",
+              "mimeType": "image/png",
+              "size": 68,
+              "previewUrl": "",
+              "path": null
+            },
+            "placementId": "a2",
+            "upload": {
+              "status": "uploading"
+            }
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "webkit",
+      "scenario": "upload-placement-success",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "race.png",
+                  "mimeType": "image/png",
+                  "size": 68,
+                  "previewUrl": "",
+                  "path": null
+                },
+                "placementId": "a2",
+                "upload": {
+                  "status": "uploading"
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "text",
+            "text": "include this image"
+          },
+          {
+            "type": "file",
+            "resource": {
+              "name": "race.png",
+              "mimeType": "image/png",
+              "size": 68,
+              "previewUrl": "",
+              "path": null
+            },
+            "placementId": "a2",
+            "upload": {
+              "status": "uploading"
+            }
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "webkit",
+      "scenario": "upload-placement-failure",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "race.png",
+                  "mimeType": "image/png",
+                  "size": 68,
+                  "previewUrl": "",
+                  "path": null
+                },
+                "placementId": "a2",
+                "upload": {
+                  "status": "uploading"
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "text",
+            "text": "include this image"
+          },
+          {
+            "type": "file",
+            "resource": {
+              "name": "race.png",
+              "mimeType": "image/png",
+              "size": 68,
+              "previewUrl": "",
+              "path": null
+            },
+            "placementId": "a2",
+            "upload": {
+              "status": "uploading"
+            }
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "webkit",
+      "scenario": "shared-resource",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [
+          {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "aborted": true
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000002",
+            "aborted": false
+          }
+        ],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c2",
+            "files": []
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "webkit",
+      "scenario": "owner-swap",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [
+          {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "aborted": false
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000002",
+            "aborted": false
+          }
+        ],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "replacement.png",
+                  "mimeType": "image/png",
+                  "size": 68,
+                  "previewUrl": "blob:http://127.0.0.1:1486/05584140-94b8-4aa8-9dc5-3d2d085c73fc",
+                  "path": null
+                },
+                "placementId": "a1",
+                "upload": {
+                  "status": "stored",
+                  "image": {
+                    "digest": "sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                    "mimeType": "image/png",
+                    "size": 68
+                  }
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "file",
+            "resource": {
+              "name": "replacement.png",
+              "mimeType": "image/png",
+              "size": 68,
+              "previewUrl": "blob:http://127.0.0.1:1486/05584140-94b8-4aa8-9dc5-3d2d085c73fc",
+              "path": null
+            },
+            "placementId": "a1",
+            "upload": {
+              "status": "stored",
+              "image": {
+                "digest": "sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                "mimeType": "image/png",
+                "size": 68
+              }
+            }
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "webkit",
+      "scenario": "detached-queue",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 4,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "0.png",
+                  "mimeType": "image/png",
+                  "size": 68,
+                  "previewUrl": "blob:http://127.0.0.1:1486/4593bb64-5dc8-4be1-9933-0a528e4c3fd2",
+                  "path": null
+                },
+                "placementId": "a1",
+                "upload": {
+                  "status": "stored",
+                  "image": {
+                    "digest": "sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                    "mimeType": "image/png",
+                    "size": 68
+                  }
+                },
+                "sharedResource": false
+              },
+              {
+                "type": "file",
+                "resource": {
+                  "name": "1.png",
+                  "mimeType": "image/png",
+                  "size": 68,
+                  "previewUrl": "blob:http://127.0.0.1:1486/ab902212-5465-4046-8938-bfacdfafa4f5",
+                  "path": null
+                },
+                "placementId": "a2",
+                "upload": {
+                  "status": "uploading"
+                },
+                "sharedResource": false
+              },
+              {
+                "type": "file",
+                "resource": {
+                  "name": "2.png",
+                  "mimeType": "image/png",
+                  "size": 68,
+                  "previewUrl": "blob:http://127.0.0.1:1486/1e825c6c-9fa4-46d2-b15c-5c48e9596e27",
+                  "path": null
+                },
+                "placementId": "a3",
+                "upload": {
+                  "status": "uploading"
+                },
+                "sharedResource": false
+              },
+              {
+                "type": "file",
+                "resource": {
+                  "name": "3.png",
+                  "mimeType": "image/png",
+                  "size": 68,
+                  "previewUrl": "blob:http://127.0.0.1:1486/77332ea7-49e2-47b3-a766-b75115cce304",
+                  "path": null
+                },
+                "placementId": "a4",
+                "upload": {
+                  "status": "uploading"
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "text",
+            "text": "include this image"
+          },
+          {
+            "type": "file",
+            "resource": {
+              "name": "0.png",
+              "mimeType": "image/png",
+              "size": 68,
+              "previewUrl": "blob:http://127.0.0.1:1486/4593bb64-5dc8-4be1-9933-0a528e4c3fd2",
+              "path": null
+            },
+            "placementId": "a1",
+            "upload": {
+              "status": "stored",
+              "image": {
+                "digest": "sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                "mimeType": "image/png",
+                "size": 68
+              }
+            }
+          },
+          {
+            "type": "file",
+            "resource": {
+              "name": "1.png",
+              "mimeType": "image/png",
+              "size": 68,
+              "previewUrl": "blob:http://127.0.0.1:1486/ab902212-5465-4046-8938-bfacdfafa4f5",
+              "path": null
+            },
+            "placementId": "a2",
+            "upload": {
+              "status": "uploading"
+            }
+          },
+          {
+            "type": "file",
+            "resource": {
+              "name": "2.png",
+              "mimeType": "image/png",
+              "size": 68,
+              "previewUrl": "blob:http://127.0.0.1:1486/1e825c6c-9fa4-46d2-b15c-5c48e9596e27",
+              "path": null
+            },
+            "placementId": "a3",
+            "upload": {
+              "status": "uploading"
+            }
+          },
+          {
+            "type": "file",
+            "resource": {
+              "name": "3.png",
+              "mimeType": "image/png",
+              "size": 68,
+              "previewUrl": "blob:http://127.0.0.1:1486/77332ea7-49e2-47b3-a766-b75115cce304",
+              "path": null
+            },
+            "placementId": "a4",
+            "upload": {
+              "status": "uploading"
+            }
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "webkit",
+      "scenario": "native-svg",
+      "status": "passed",
+      "sendCount": 0,
+      "attachmentCount": 0,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": [
+              {
+                "type": "file",
+                "resource": {
+                  "name": "native.svg",
+                  "mimeType": "image/svg+xml",
+                  "size": 106,
+                  "previewUrl": "blob:http://127.0.0.1:1486/6b7e8278-3efb-472a-ad47-a0c57c27b389",
+                  "path": null
+                },
+                "placementId": "a1",
+                "upload": {
+                  "status": "failed",
+                  "reason": "unsupported-image"
+                },
+                "sharedResource": false
+              }
+            ]
+          }
+        ],
+        "sends": [],
+        "fetchCalls": 0,
+        "draft": [
+          {
+            "type": "text",
+            "text": "include this image"
+          },
+          {
+            "type": "file",
+            "resource": {
+              "name": "native.svg",
+              "mimeType": "image/svg+xml",
+              "size": 106,
+              "previewUrl": "blob:http://127.0.0.1:1486/6b7e8278-3efb-472a-ad47-a0c57c27b389",
+              "path": null
+            },
+            "placementId": "a1",
+            "upload": {
+              "status": "failed",
+              "reason": "unsupported-image"
+            }
+          }
+        ],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 0,
+          "stageSizes": [],
+          "imageSizes": [],
+          "imageDigests": [],
+          "previewUrls": [],
+          "retained": [],
+          "turns": []
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "webkit",
+      "scenario": "terminal-refusal-preserved",
+      "status": "passed",
+      "sendCount": 3,
+      "attachmentCount": 1,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": []
+          }
+        ],
+        "sends": [
+          {
+            "conversationId": "00000000-0000-4000-8000-000000000001",
+            "executionId": "e141b8be-324e-4ca0-87fe-06701fbfc85b",
+            "requestId": "4f6bae15-75f9-4d04-9a4c-3ec57718fe91",
+            "mode": "queued",
+            "text": "include this image",
+            "attachments": [
+              {
+                "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                "mimeType": "image/png",
+                "size": 68
+              }
+            ],
+            "files": [],
+            "target": {
+              "conversationId": "00000000-0000-4000-8000-000000000001",
+              "executionId": "e141b8be-324e-4ca0-87fe-06701fbfc85b"
+            }
+          },
+          {
+            "conversationId": "00000000-0000-4000-8000-000000000001",
+            "executionId": "0fb20561-0def-4c07-94c9-42205200f7db",
+            "requestId": "c3e54f88-4939-423d-9748-1bc9d6274015",
+            "mode": "queued",
+            "text": "include this image",
+            "attachments": [
+              {
+                "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                "mimeType": "image/png",
+                "size": 68
+              }
+            ],
+            "files": [],
+            "target": {
+              "conversationId": "00000000-0000-4000-8000-000000000001",
+              "executionId": "0fb20561-0def-4c07-94c9-42205200f7db"
+            }
+          },
+          {
+            "conversationId": "00000000-0000-4000-8000-000000000001",
+            "executionId": "f4ed73aa-feca-4370-aa0f-ad23781f85c2",
+            "requestId": "c0d95482-3f71-456b-b1fd-92688f3e5dd0",
+            "mode": "queued",
+            "text": "",
+            "attachments": [
+              {
+                "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+                "mimeType": "image/png",
+                "size": 68
+              }
+            ],
+            "files": [],
+            "target": {
+              "conversationId": "00000000-0000-4000-8000-000000000001",
+              "executionId": "f4ed73aa-feca-4370-aa0f-ad23781f85c2"
+            }
+          }
+        ],
+        "fetchCalls": 0,
+        "draft": [],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 2,
+          "stageSizes": [41943040, 41943040],
+          "imageSizes": [68, 68],
+          "imageDigests": [
+            "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000002"
+          ],
+          "previewUrls": [
+            "blob:http://127.0.0.1:1486/0f1345dc-a28c-428e-b806-dfe35e5f44f6",
+            "blob:http://127.0.0.1:1486/77d20e4b-5989-4c0b-8503-a9b6824f81b7"
+          ],
+          "retained": [false, true],
+          "turns": [
+            {
+              "executionId": "0fb20561-0def-4c07-94c9-42205200f7db",
+              "receipt": "delivered",
+              "content": [
+                {
+                  "type": "image-reference",
+                  "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+                }
+              ]
+            },
+            {
+              "executionId": "f4ed73aa-feca-4370-aa0f-ad23781f85c2",
+              "receipt": "delivered",
+              "content": [
+                {
+                  "type": "file",
+                  "name": "second-retained.png",
+                  "upload": {
+                    "status": "stored",
+                    "image": {
+                      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+                      "mimeType": "image/png",
+                      "size": 68
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "executionId": "e141b8be-324e-4ca0-87fe-06701fbfc85b",
+              "receipt": "failed",
+              "content": [
+                {
+                  "type": "image-reference",
+                  "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "pageErrors": 0
+    },
+    {
+      "engine": "webkit",
+      "scenario": "terminal-refusal-reupload",
+      "status": "passed",
+      "sendCount": 3,
+      "attachmentCount": 1,
+      "refusalCount": 0,
+      "snapshot": {
+        "detachedStageCount": 0,
+        "sharedUploads": [],
+        "sharedBytesRetained": false,
+        "tabs": [
+          {
+            "id": "c0",
+            "files": []
+          }
+        ],
+        "sends": [
+          {
+            "conversationId": "00000000-0000-4000-8000-000000000001",
+            "executionId": "c91ac490-0299-4b9e-8740-6edf684ae151",
+            "requestId": "c159f741-ae84-4348-8fdc-cfb90406cd6d",
+            "mode": "queued",
+            "text": "include this image",
+            "attachments": [
+              {
+                "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                "mimeType": "image/png",
+                "size": 68
+              }
+            ],
+            "files": [],
+            "target": {
+              "conversationId": "00000000-0000-4000-8000-000000000001",
+              "executionId": "c91ac490-0299-4b9e-8740-6edf684ae151"
+            }
+          },
+          {
+            "conversationId": "00000000-0000-4000-8000-000000000001",
+            "executionId": "d7b5e44d-bcfc-4005-a35f-a4e125797158",
+            "requestId": "10d7b4ad-fd08-4002-8398-4bc69acc6d67",
+            "mode": "queued",
+            "text": "include this image",
+            "attachments": [
+              {
+                "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+                "mimeType": "image/png",
+                "size": 68
+              }
+            ],
+            "files": [],
+            "target": {
+              "conversationId": "00000000-0000-4000-8000-000000000001",
+              "executionId": "d7b5e44d-bcfc-4005-a35f-a4e125797158"
+            }
+          },
+          {
+            "conversationId": "00000000-0000-4000-8000-000000000001",
+            "executionId": "d3903723-bf70-42de-adb9-623b19ae5079",
+            "requestId": "400a1382-d0f0-4eb2-a3cc-1d304439b948",
+            "mode": "queued",
+            "text": "",
+            "attachments": [
+              {
+                "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000003",
+                "mimeType": "image/png",
+                "size": 68
+              }
+            ],
+            "files": [],
+            "target": {
+              "conversationId": "00000000-0000-4000-8000-000000000001",
+              "executionId": "d3903723-bf70-42de-adb9-623b19ae5079"
+            }
+          }
+        ],
+        "fetchCalls": 0,
+        "draft": [],
+        "pickerRequestIds": [],
+        "folderStarts": [],
+        "terminalRetention": {
+          "processedSize": 68,
+          "acceptedSends": 2,
+          "stageSizes": [41943040, 41943040, 41943040],
+          "imageSizes": [68, 68, 68],
+          "imageDigests": [
+            "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000003"
+          ],
+          "previewUrls": [
+            "blob:http://127.0.0.1:1486/e2715d0f-13ba-4c81-b630-f7ea36eaaeed",
+            "blob:http://127.0.0.1:1486/aa3d1f51-17f0-4469-a13f-f52ab66d3924"
+          ],
+          "retained": [false, true],
+          "turns": [
+            {
+              "executionId": "d7b5e44d-bcfc-4005-a35f-a4e125797158",
+              "receipt": "delivered",
+              "content": [
+                {
+                  "type": "image-reference",
+                  "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000002"
+                }
+              ]
+            },
+            {
+              "executionId": "d3903723-bf70-42de-adb9-623b19ae5079",
+              "receipt": "delivered",
+              "content": [
+                {
+                  "type": "file",
+                  "name": "second-retained.png",
+                  "upload": {
+                    "status": "stored",
+                    "image": {
+                      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000003",
+                      "mimeType": "image/png",
+                      "size": 68
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "executionId": "c91ac490-0299-4b9e-8740-6edf684ae151",
+              "receipt": "failed",
+              "content": [
+                {
+                  "type": "image-reference",
+                  "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "pageErrors": 0
+    }
+  ]
+}
