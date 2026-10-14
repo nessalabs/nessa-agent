@@ -514,7 +514,7 @@ export async function chooseAttachmentFiles(
  */
 export interface DroppedOnPanel {
   /**
-   * Which drop this is — the same name {@link onAttachmentDragging} reported
+   * Which drop this is — the same name {@link onAttachmentBatch} reported
    * the moment it landed, and the only link back to the conversation the
    * gesture happened over. The files can be three quarters of a minute behind
    * the drop, by which time the open tab may be a different one.
@@ -570,13 +570,6 @@ export async function onAttachmentDropped(
 }
 
 /**
- * Be told while a drag is over the panel, so the drop target can be drawn.
- *
- * The page used to know this from its own `dragenter` and `dragleave`. It
- * receives neither now, and without the host saying so the panel would accept
- * a dropped file perfectly well while giving no sign beforehand that it would.
- */
-/**
  * Be told while a chosen file is being made readable.
  *
  * A file a cloud service is keeping is not on this disk, and the host asks for
@@ -587,10 +580,10 @@ export async function onAttachmentDropped(
  * `id` is the identity and `name` is only a label. Two folders can each hold a
  * `report.pdf`, and a panel keyed on the name kept one entry for both: the
  * first to settle took the other's tile away and let the draft be sent while
- * the second was still being fetched. The identity is minted by the host,
- * where the work is, and begins with the batch the drop announced — so a tile
- * belongs to the draft the gesture landed on rather than to whichever tab is
- * open when the host finally speaks.
+ * the second was still being fetched. The host derives each file identity from
+ * its batch and file index. Drops carry a host-minted batch; picks carry the
+ * request ID the panel registered before opening the chooser. That correlation
+ * keeps the tile with its gesture's destination while the host waits.
  *
  * `readying` false means that file has stopped waiting — it arrived, or it will
  * not — and the tile goes either way.
@@ -635,26 +628,11 @@ export async function onAttachmentDragging(
 /**
  * Be told that an attach has begun, what it is called, and which gesture it was.
  *
- * Said before the host has looked at anything. It is the page's only chance to
- * bind that attach to the conversation it belongs to: the files themselves can
- * be three quarters of a minute later, by which time the open tab may be a
- * different one, and binding then put the tile and the attach over a draft the
- * files were never going to join.
- *
- * Both gestures say it, because both can be slow. Only the drop did once, and
- * a `+` selection of two placeholders therefore put its second tile on
- * whichever tab was open when the second file finished — blocking that draft's
- * send for a file that had gone somewhere else entirely.
- *
- * `gesture` is here because the two know their draft at different moments, and
- * this is the only part of that the host knows and the page does not. A drop
- * *is* the moment: the host says so as it lands, so the open tab is the tab it
- * landed on. A `"picked"` selection was begun by the page, which captured the
- * draft when `+` was pressed and has held it ever since; this arrives when the
- * picker closes, and the page answers with what it already knows rather than
- * reading the tab a second time. Two reads of the same fact agree only while
- * nothing can change between them, and that was resting on the picker being
- * modal — which is rfd's presentation choice, not ours.
+ * A file drop registers its destination on this announcement, before the host
+ * reads its files. A picked selection carries the request ID already registered
+ * by {@link chooseAttachmentFiles}'s caller, so this event correlates with that
+ * existing operation. Neither route reconstructs a destination from a late file
+ * result or relies on the picker keeping the page modal.
  */
 export async function onAttachmentBatch(
   handler: (batch: string, gesture: "picked" | "dropped") => void,
