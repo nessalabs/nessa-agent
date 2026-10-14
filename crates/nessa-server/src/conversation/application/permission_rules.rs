@@ -54,6 +54,8 @@ pub struct StoredPermissionRule {
     pub effect: PermissionEffect,
     /// Who granted this revision.
     pub granted_by: ActionContext,
+    /// Stored, and not yet acknowledged. It does not settle a review.
+    pub provisional: bool,
 }
 
 /// What a live rule does to a review. `Ask` means no rule decided it.

@@ -158,6 +158,9 @@ fn revocation_agrees(
         if let Some(object) = value.as_object_mut() {
             object.remove("observedAtMs");
             object.remove("correlationId");
+            if let Some(initiator) = object.get_mut("initiator").and_then(Value::as_object_mut) {
+                initiator.remove("surfaceId");
+            }
         }
     }
     if stored != expected {
@@ -295,7 +298,7 @@ mod tests {
         let first = revocation("owner");
         audit.requested(&first).unwrap();
         let mut retry = revocation("owner");
-        retry.actor = ActionContext::new("owner", "surface", "retry").unwrap();
+        retry.actor = ActionContext::new("owner", "phone", "retry").unwrap();
         audit.requested(&retry).unwrap();
         assert_eq!(
             audit.requested(&revocation("someone-else")).unwrap_err(),

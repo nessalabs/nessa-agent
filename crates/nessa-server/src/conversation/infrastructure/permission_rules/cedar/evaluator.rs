@@ -288,6 +288,7 @@ mod tests {
             tool: tool.to_owned(),
             effect,
             granted_by: granted(),
+            provisional: false,
         }
     }
 

@@ -2116,9 +2116,12 @@ impl<P: AcpProfile> Worker<P> {
     /// with the harness's once option of the same effect. The harness's own
     /// always-allow is left as the caller sent it. A refusal stores nothing
     /// and leaves the review pending.
-    fn remembered_answer(&self, answer: PermissionAnswer) -> Result<PermissionAnswer, AgentError> {
+    fn remembered_answer(
+        &self,
+        answer: PermissionAnswer,
+    ) -> Result<(PermissionAnswer, Option<ApprovalRuleReference>), AgentError> {
         let Some(effect) = remember_effect(answer.option_id.as_str()) else {
-            return Ok(answer);
+            return Ok((answer, None));
         };
         let context = self
             .permission_context
@@ -2181,14 +2184,18 @@ impl<P: AcpProfile> Worker<P> {
                     AgentError::InvalidInput("the permission rule could not be stored".into())
                 }
             })?;
-        Ok(PermissionAnswer {
-            attribution: ApprovalAttribution::new(
-                answer.attribution.actor().clone(),
-                ApprovalBasis::Rule(rule.reference().clone()),
-            ),
-            option_id: once,
-            ..answer
-        })
+        let reference = rule.reference().clone();
+        Ok((
+            PermissionAnswer {
+                attribution: ApprovalAttribution::new(
+                    answer.attribution.actor().clone(),
+                    ApprovalBasis::Rule(reference.clone()),
+                ),
+                option_id: once,
+                ..answer
+            },
+            Some(reference),
+        ))
     }
     /// Answer one pending review with the caller's selection: record it, send
     /// it, then record what delivery did. Queue admission transferred ownership
@@ -2201,7 +2208,7 @@ impl<P: AcpProfile> Worker<P> {
     ) -> Result<(), WorkerFailure> {
         let permission_id = answer.id.clone();
         let answered_execution = answer.execution_id.clone();
-        let answer = match self.remembered_answer(answer) {
+        let (answer, provisional) = match self.remembered_answer(answer) {
             Ok(answer) => answer,
             Err(error) => {
                 let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
@@ -2212,9 +2219,9 @@ impl<P: AcpProfile> Worker<P> {
                 return Ok(());
             }
         };
-        // The rule is stored before the selection audit. If that audit is not
-        // recorded, the revision is withdrawn so it cannot answer a later review.
-        let provisional = unrecorded_rule(&answer);
+        // Only the revision this call stored is provisional. A review settled
+        // by a rule already acknowledged also carries `ApprovalBasis::Rule`,
+        // and withdrawing that would undo a different revision.
         let option_id = answer.option_id.clone();
         let resolution = match execution.answer_permission(answer) {
             Ok(resolution) => resolution,
@@ -4398,15 +4405,9 @@ fn wait_for_deadline(clock: &dyn Clock, deadline: Option<ClockInstant>) -> Clock
     }
 }
 
-/// The rule a remember choice stored, when this answer is that choice.
-fn unrecorded_rule(answer: &PermissionAnswer) -> Option<ApprovalRuleReference> {
-    match answer.attribution.basis() {
-        ApprovalBasis::Rule(reference) => Some(reference.clone()),
-        _ => None,
-    }
-}
-
 /// The selection was not recorded. The revision stored for it does not stay.
+/// If the withdrawal cannot be stored, the revision stays provisional and
+/// does not settle a later review.
 fn withdraw_unrecorded(rules: &dyn PermissionRules, rule: Option<&ApprovalRuleReference>) {
     let Some(rule) = rule else {
         return;

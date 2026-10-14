@@ -219,10 +219,12 @@ and stores nothing. The host notes who is answering (`PermissionRules::note_answ
 before the answer is queued; a missing note is not the owner. The audit
 basis is `ApprovalBasis::Rule`, naming the rule id, revision, and grantor. If
 that selection is not recorded, the binding withdraws the revision it just
-stored: a new rule is removed and a replacement returns to the revision it
-replaced, so a rule whose answer was not audited does not decide a later
-review. A later review of that tool in that workspace is answered the same
-way, without a card or a deadline, when a once option still exists. A shared user's turn is
+stored. Until it is acknowledged the revision is provisional and does not
+decide a later review, including when the withdrawal cannot be stored. A
+second remember of a key that is still provisional is refused. Withdrawing
+a replacement writes the previous rule back under a new revision. A later
+review of that tool in that workspace is answered the same way, without a
+card or a deadline, when a once option still exists. A shared user's turn is
 not offered the remember options. The host stores, lists, and revokes the
 rules; this binding does not.
 

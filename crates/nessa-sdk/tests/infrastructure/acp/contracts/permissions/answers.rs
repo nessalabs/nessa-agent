@@ -1124,3 +1124,51 @@ async fn a_remembered_rule_is_withdrawn_when_the_selection_audit_fails() {
     );
     assert_gone(&root, "pid");
 }
+
+/// A review settled by a rule already stored also carries `ApprovalBasis::Rule`.
+/// Failing to record that answer must not withdraw the live rule.
+#[tokio::test]
+async fn a_settled_rule_is_not_withdrawn_when_the_answer_audit_fails() {
+    let _slot = process_test_slot().await;
+    let rules = Arc::new(RememberingRules {
+        live: Mutex::new(vec![SettledRule::new(
+            ApprovalRuleReference::new("pr_live", "4", attribution().actor().clone()).unwrap(),
+            PermissionEffect::Allow,
+        )]),
+        withdrawn: Mutex::new(Vec::new()),
+    });
+    let audit = Arc::new(AnswerAudit {
+        reject_call: Some(1),
+        ..Default::default()
+    });
+    let (root, mut config, model) = test_acp_configuration("permission", 16);
+    config.shutdown_grace = Duration::from_secs(2);
+    config.execution_timeout = None;
+    config.permission_rules = rules.clone();
+    let binding =
+        ClaudeAcpProvider::new(config, &model, TokenLimits::new(900, 100).unwrap(), audit).unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "write").await;
+    next(&mut opened).await;
+    let ExecutionUpdate::PermissionRequested { .. } = next(&mut opened).await else {
+        panic!("expected the settled review to be announced")
+    };
+    let result = timeout(Duration::from_secs(5), active)
+        .await
+        .expect("the execution finishes");
+    assert_eq!(result.unwrap(), Err(AgentError::AuditFailure));
+    assert!(rules.withdrawn.lock().unwrap().is_empty());
+    {
+        let live = rules.live.lock().unwrap();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].reference().rule_id(), "pr_live");
+    }
+    let _ = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+    assert_gone(&root, "pid");
+}

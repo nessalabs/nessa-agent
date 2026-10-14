@@ -3,6 +3,8 @@
 //! A row that cannot be read as a rule is skipped. The file still opens, and
 //! the other rows still answer reviews. Nothing here migrates an older file:
 //! a different `user_version` is refused, the same as every other local dataset.
+//! `provisional` belongs to version 1. A file written by an earlier build of
+//! this version has no such column: it opens, and the first query fails.
 
 use nessa_local_database::rusqlite::{params, OptionalExtension};
 use nessa_local_database::{rusqlite, OpenError, Schema};
@@ -25,6 +27,7 @@ CREATE TABLE permission_rule (
     granted_principal TEXT NOT NULL,
     granted_surface TEXT NOT NULL,
     granted_request TEXT NOT NULL,
+    provisional INTEGER NOT NULL CHECK (provisional IN (0, 1)),
     UNIQUE (workspace, source, tool)
 );
 ";
@@ -59,6 +62,7 @@ struct RawRule {
     granted_principal: String,
     granted_surface: String,
     granted_request: String,
+    provisional: i64,
 }
 
 impl RuleStore {
@@ -72,7 +76,7 @@ impl RuleStore {
     pub(super) fn load(&self) -> Result<Vec<StoredPermissionRule>, rusqlite::Error> {
         let mut statement = self.connection.prepare(
             "SELECT id, revision, workspace, source, tool, effect,
-                    granted_principal, granted_surface, granted_request
+                    granted_principal, granted_surface, granted_request, provisional
              FROM permission_rule ORDER BY rowid",
         )?;
         let rows = statement.query_map([], read_raw)?;
@@ -85,9 +89,12 @@ impl RuleStore {
         Ok(rules)
     }
 
-    /// Insert a rule, or replace the one for this tool in this workspace.
-    /// A replacement keeps the id and bumps the revision. An unreadable row
-    /// occupying the key is deleted and a new rule takes its place.
+    /// Insert a provisional rule, or replace an acknowledged one for this
+    /// tool in this workspace. A replacement keeps the id and bumps the
+    /// revision. The new row does not settle until it is acknowledged. A key
+    /// that is already provisional is refused, so two unrecorded revisions
+    /// cannot overlap. An unreadable row occupying the key is deleted and a
+    /// new rule takes its place.
     pub(super) fn remember(
         &mut self,
         workspace: &str,
@@ -101,7 +108,7 @@ impl RuleStore {
         let existing = transaction
             .query_row(
                 "SELECT id, revision, workspace, source, tool, effect,
-                        granted_principal, granted_surface, granted_request
+                        granted_principal, granted_surface, granted_request, provisional
                  FROM permission_rule WHERE workspace = ?1 AND source = ?2 AND tool = ?3",
                 params![workspace, source, tool],
                 read_raw,
@@ -109,13 +116,15 @@ impl RuleStore {
             .optional()
             .map_err(failed)?;
         let stored = match existing.and_then(validate) {
+            Some(current) if current.provisional => return Err(WriteError::Revision),
             Some(current) => {
                 let revision = next_revision(&current.revision).ok_or(WriteError::Revision)?;
                 transaction
                     .execute(
                         "UPDATE permission_rule
                          SET revision = ?1, effect = ?2,
-                             granted_principal = ?3, granted_surface = ?4, granted_request = ?5
+                             granted_principal = ?3, granted_surface = ?4, granted_request = ?5,
+                             provisional = 1
                          WHERE id = ?6",
                         params![
                             revision,
@@ -135,6 +144,7 @@ impl RuleStore {
                     tool: tool.to_owned(),
                     effect,
                     granted_by: granted_by.clone(),
+                    provisional: true,
                 }
             }
             None => {
@@ -149,8 +159,8 @@ impl RuleStore {
                     .execute(
                         "INSERT INTO permission_rule (
                             id, revision, workspace, source, tool, effect,
-                            granted_principal, granted_surface, granted_request
-                         ) VALUES (?1, '1', ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                            granted_principal, granted_surface, granted_request, provisional
+                         ) VALUES (?1, '1', ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
                         params![
                             fresh_id,
                             workspace,
@@ -171,6 +181,7 @@ impl RuleStore {
                     tool: tool.to_owned(),
                     effect,
                     granted_by: granted_by.clone(),
+                    provisional: true,
                 }
             }
         };
@@ -198,22 +209,40 @@ impl RuleStore {
         )? > 0)
     }
 
-    /// Put `previous` back where `current_revision` still is.
-    /// `false` when that revision is no longer the row.
+    /// The selection was recorded. This revision may settle.
+    /// `false` when that revision is no longer provisional.
+    pub(super) fn acknowledge(
+        &mut self,
+        id: &str,
+        revision: &str,
+    ) -> Result<bool, rusqlite::Error> {
+        Ok(self.connection.execute(
+            "UPDATE permission_rule SET provisional = 0
+             WHERE id = ?1 AND revision = ?2 AND provisional = 1",
+            params![id, revision],
+        )? == 1)
+    }
+
+    /// Write `previous` back over the provisional `current_revision`, under
+    /// the next revision number. The restored row is acknowledged, because
+    /// only an acknowledged rule is replaced. `None` when that provisional
+    /// revision is no longer the row.
     pub(super) fn restore(
         &mut self,
         current_revision: &str,
         previous: &StoredPermissionRule,
-    ) -> Result<bool, WriteError> {
+    ) -> Result<Option<StoredPermissionRule>, WriteError> {
+        let revision = next_revision(current_revision).ok_or(WriteError::Revision)?;
         let updated = self
             .connection
             .execute(
                 "UPDATE permission_rule
                  SET revision = ?1, effect = ?2,
-                     granted_principal = ?3, granted_surface = ?4, granted_request = ?5
-                 WHERE id = ?6 AND revision = ?7",
+                     granted_principal = ?3, granted_surface = ?4, granted_request = ?5,
+                     provisional = 0
+                 WHERE id = ?6 AND revision = ?7 AND provisional = 1",
                 params![
-                    previous.revision,
+                    revision,
                     effect_text(previous.effect),
                     previous.granted_by.principal_id(),
                     previous.granted_by.surface_id(),
@@ -223,7 +252,19 @@ impl RuleStore {
                 ],
             )
             .map_err(failed)?;
-        Ok(updated == 1)
+        if updated != 1 {
+            return Ok(None);
+        }
+        Ok(Some(StoredPermissionRule {
+            id: previous.id.clone(),
+            revision,
+            workspace: previous.workspace.clone(),
+            source: previous.source.clone(),
+            tool: previous.tool.clone(),
+            effect: previous.effect,
+            granted_by: previous.granted_by.clone(),
+            provisional: false,
+        }))
     }
 }
 
@@ -238,6 +279,7 @@ fn read_raw(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawRule> {
         granted_principal: row.get(6)?,
         granted_surface: row.get(7)?,
         granted_request: row.get(8)?,
+        provisional: row.get(9)?,
     })
 }
 
@@ -261,6 +303,11 @@ fn validate(raw: RawRule) -> Option<StoredPermissionRule> {
         raw.granted_request,
     )
     .ok()?;
+    let provisional = match raw.provisional {
+        0 => false,
+        1 => true,
+        _ => return None,
+    };
     Some(StoredPermissionRule {
         id: raw.id,
         revision: raw.revision,
@@ -269,6 +316,7 @@ fn validate(raw: RawRule) -> Option<StoredPermissionRule> {
         tool: raw.tool,
         effect,
         granted_by,
+        provisional,
     })
 }
 
