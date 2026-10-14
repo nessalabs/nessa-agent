@@ -13,8 +13,8 @@ type HostDropActions = {
     chosen: readonly ChosenFile[],
     destination: AttachmentDestination,
   ) => void
-  /** The destination a batch was bound to when it began. */
-  destinationOf: (batch: string) => AttachmentDestination | undefined
+  /** Consume the destination reserved for this drop when its terminal result arrives. */
+  consumeDropDestination: (batch: string) => AttachmentDestination | undefined
   addImageUrl: (url: string, destination: AttachmentDestination) => void
   focusComposer: () => void
   pasteAttachment: (text: string) => void
@@ -78,8 +78,8 @@ export function useHostDrop(actions: HostDropActions) {
   // The handlers are read at drop time rather than captured at subscribe time,
   // so a drop reaches whatever the panel's current handlers are rather than
   // the ones that existed when it mounted. *Which draft* it lands on is not
-  // read here at all: that is the drop's own name, resolved by
-  // `destinationOf`, and nothing in this hook consults the open tab.
+  // read here at all: the drop's own name consumes its reserved destination,
+  // and nothing in this hook consults the open tab.
   const latest = React.useRef(actions)
   React.useLayoutEffect(() => {
     latest.current = actions
@@ -102,7 +102,7 @@ export function useHostDrop(actions: HostDropActions) {
         // names no draft, so it does not read this. A drag carrying no paths
         // is never announced for that reason, which makes this a fallback to
         // the open tab in that case; nothing below uses it.
-        const destination = latest.current.destinationOf(dropped.batch)
+        const destination = latest.current.consumeDropDestination(dropped.batch)
         if (!destination) return
         if (dropped.refused) {
           latest.current.refuse(pickerRefusal(dropped.refused), destination)

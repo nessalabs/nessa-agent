@@ -524,28 +524,35 @@ it("ignores a batch it never heard named rather than guessing its owner", async 
   expect(hook.isPending(here)).toBe(false)
 })
 
-it("remembers a bounded number of drop names, so a long session does not grow one", async () => {
-  // Nothing removes an entry when an attach ends — it can end in files, in a
-  // refusal, or in a conversation that has since closed — so the map is a
-  // window rather than a set of cleanup paths a fourth outcome could escape.
+it("keeps active drop destinations until a terminal result frees capacity", async () => {
   const first = chat.active.id
   await act(async () => announce("old", "dropped"))
   await act(async () => {
-    for (let n = 0; n < 64; n += 1) announce(`b${n}`, "dropped")
+    for (let n = 0; n < 63; n += 1) announce(`b${n}`, "dropped")
   })
   await act(async () => {
     store.dispatch(openConversation())
   })
+  const second = chat.active.id
 
-  // The oldest was evicted, so its owner is unknown and it is ignored.
-  await act(async () => say({ id: "old:0", name: "evicted.pdf", readying: true }))
-  expect(names()).toEqual([])
-  expect(hook.isPending(first)).toBe(false)
+  await act(async () => announce("old", "dropped"))
+  await act(async () => announce("rejected", "dropped"))
+  expect(hook.refusal).toEqual({ reason: "too-many-selections" })
 
-  // And one still inside the window is still bound to where it began.
-  await act(async () => say({ id: "b63:0", name: "kept.pdf", readying: true }))
+  // A duplicate begin cannot replace the original A destination, and the
+  // rejected batch has no readiness destination at all.
+  await act(async () => say({ id: "old:0", name: "kept.pdf", readying: true }))
+  await act(async () => say({ id: "rejected:0", name: "rejected.pdf", readying: true }))
   expect(names()).toEqual([])
   expect(hook.isPending(first)).toBe(true)
+  expect(hook.isPending(second)).toBe(false)
+
+  const original = hook.consumeDropDestination("old")
+  expect(original?.conversationId).toBe(first)
+  await act(async () => announce("after-release", "dropped"))
+  await act(async () => say({ id: "after-release:0", name: "new.pdf", readying: true }))
+  expect(names()).toEqual(["new.pdf"])
+  expect(hook.isPending(second)).toBe(true)
 })
 
 it("keeps readiness for an active picker even after more than 64 pickers start", async () => {

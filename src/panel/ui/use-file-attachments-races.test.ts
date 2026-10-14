@@ -395,6 +395,77 @@ it("applies a host drop to A after the App switches to conversation B", async ()
   )
 })
 
+it("keeps all 64 active drop owners, refuses the 65th, and consumes each result once", async () => {
+  await mount()
+  const originalId = active().id
+  await act(async () => {
+    for (let index = 0; index < 64; index += 1)
+      hostBoundary.batch!(`held-${index}`, "dropped")
+  })
+
+  await act(async () => store.dispatch(openConversation()))
+  const replacementId = active().id
+  await act(async () => hostBoundary.batch!("overflow", "dropped"))
+
+  const deliverFile = async (batch: string, name: string) =>
+    act(async () =>
+      hostBoundary.drop!({
+        batch,
+        files: [
+          {
+            path: `/Users/ada/${name}`,
+            name,
+            size: 4,
+            mimeType: "application/pdf",
+            ticket: `ticket-${name}`,
+          },
+        ],
+        text: { plain: "", uriList: "", html: "" },
+        refused: null,
+      }),
+    )
+
+  // The oldest accepted result remains bound to A while B is current, and its
+  // terminal result releases one of the 64 slots.
+  await deliverFile("held-0", "original.pdf")
+  const originalDraft = store
+    .getState()
+    .conversation.conversations.find(
+      (conversation) => conversation.id === originalId,
+    )?.draft
+  expect(originalDraft).toContainEqual(
+    expect.objectContaining({
+      type: "file",
+      resource: expect.objectContaining({ path: "/Users/ada/original.pdf" }),
+    }),
+  )
+  expect(container.textContent).toContain("Too many selections")
+
+  // A duplicate terminal result, the rejected 65th result, and an unknown
+  // result have all lost their destination and cannot attach anywhere.
+  await deliverFile("held-0", "duplicate.pdf")
+  await deliverFile("overflow", "overflow.pdf")
+  await deliverFile("unknown", "unknown.pdf")
+  expect(
+    store
+      .getState()
+      .conversation.conversations.find((conversation) => conversation.id === originalId)
+      ?.draft,
+  ).toHaveLength(1)
+  expect(active().draft).toEqual([])
+
+  // Capacity released by held-0 admits another batch on B.
+  await act(async () => hostBoundary.batch!("after-release", "dropped"))
+  await deliverFile("after-release", "replacement.pdf")
+  expect(active().id).toBe(replacementId)
+  expect(active().draft).toContainEqual(
+    expect.objectContaining({
+      type: "file",
+      resource: expect.objectContaining({ path: "/Users/ada/replacement.pdf" }),
+    }),
+  )
+})
+
 it("clears a failed native image read so the retained text can be sent", async () => {
   const reading = await pickImage()
   await act(async () =>

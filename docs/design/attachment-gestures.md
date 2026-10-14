@@ -14,11 +14,14 @@ Each live picker, image read, or URL fetch is one complete operation value
 shared by a ref (for synchronous admission) and state (for rendering). Its
 object identity owns cleanup, so an older completion cannot clear a later
 operation. Folder walks follow the same per-operation ownership rule and abort
-every active controller on unmount. Only host-minted drop metadata uses the
-bounded 64-name cache; active picker destinations live with their active picker
-operation until that command settles. An unknown or evicted drop name has no
-destination and is ignored rather than assigned to the active tab. No epoch,
-cancellation flag or global registry is used.
+every active controller on unmount. Host-minted drop metadata uses a bounded
+64-entry active-destination map: each accepted batch keeps its captured owner
+until the terminal drop result consumes the entry. A 65th active batch is
+refused on its captured destination, and a terminal result frees its slot.
+Active picker destinations live with their picker operation until that command
+settles. Unknown or already-consumed drop names are ignored rather than
+assigned to the active tab. No epoch, cancellation flag or global registry is
+used.
 
 Picker readiness needs a host identity before its first event: picker calls may
 overlap, and the separate batch event has no ordering contract with the command
@@ -49,6 +52,7 @@ request is refused without replacing that request's captured destination.
 | AG12 | Picker remains open; attachment hook unmounts; picker returns an image | Teardown retires the operation owner and closes admission; no native read or resource effect starts afterward | owner hook |
 | AG13 | Capture A/c1; replace its provider with B/c1; close A before picker preflight or a held image read settles | A's closed-destination notice is not redirected to B; same-owner closure still uses that owner's active tab as in AG7 | picker preflight and held-read regressions |
 | AG14 | Browser picker verification changes providers before the second gesture | Wait for the committed replacement provider; its empty draft must not start an unrelated upload or rename the attachment control | picker-owner browser scenario |
+| AG15 | 64 drop batches are active; a 65th begins, then an older result arrives | Keep all 64 destinations until their own terminal results; explicitly refuse the 65th on its captured destination, then admit a new batch after one result is consumed. Duplicate and unknown outcomes do nothing; a late result still attaches to its original live owner | actual App 65-drop saturation regression |
 
 The host-drop adapter carries the captured destination as one value; it does
 not resolve it to a local string and hand that to a replacement hook. The App

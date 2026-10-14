@@ -521,6 +521,7 @@ describe("why something was not attached", () => {
       "reading-files": { reason: "reading-files" },
       "reading-folder": { reason: "reading-folder" },
       "sending-while-reading": { reason: "sending-while-reading" },
+      "too-many-selections": { reason: "too-many-selections" },
       "too-many-files": { reason: "too-many-files" },
       "file-too-large": {
         reason: "file-too-large",

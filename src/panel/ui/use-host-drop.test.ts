@@ -42,15 +42,16 @@ const destination = (conversationId: string) =>
     resources: {},
     attachFiles: vi.fn(),
   }) as unknown as AttachmentDestination
-const bound = new Map<string, AttachmentDestination>([
-  ["b1", destination("c1")],
-  ["b2", destination("c2")],
-])
+const bound = new Map<string, AttachmentDestination>()
 const actions = {
   owner: {},
   resources: {},
   addChosenFiles: vi.fn(),
-  destinationOf: vi.fn((batch: string) => bound.get(batch)),
+  consumeDropDestination: vi.fn((batch: string) => {
+    const destination = bound.get(batch)
+    if (destination) bound.delete(batch)
+    return destination
+  }),
   addImageUrl: vi.fn(),
   focusComposer: vi.fn(),
   pasteAttachment: vi.fn(),
@@ -85,8 +86,12 @@ const dropOf = (dropped: Partial<Dropped>): Dropped => ({
 })
 
 beforeEach(async () => {
+  bound.clear()
+  bound.set("b1", destination("c1"))
+  bound.set("b2", destination("c2"))
+  bound.set("b3", destination("c3"))
   actions.addChosenFiles.mockClear()
-  actions.destinationOf.mockClear()
+  actions.consumeDropDestination.mockClear()
   actions.addImageUrl.mockClear()
   actions.focusComposer.mockClear()
   actions.pasteAttachment.mockClear()
@@ -115,6 +120,7 @@ afterEach(async () => {
 })
 
 it("sends dropped files down the same route a picked selection takes", async () => {
+  const target = bound.get("b1")
   // Both, in one drop, because the type is what decides and the gesture is
   // not: the hook hands the whole selection over untouched and
   // `addChosenFiles` splits it, exactly as it does for `+`.
@@ -122,7 +128,7 @@ it("sends dropped files down the same route a picked selection takes", async () 
 
   await act(async () => deliver(dropOf({ files: dropped })))
 
-  expect(actions.addChosenFiles).toHaveBeenCalledWith(dropped, bound.get("b1"))
+  expect(actions.addChosenFiles).toHaveBeenCalledWith(dropped, target)
   // Nothing was classified here. A second opinion about what an image is is
   // the defect this feature already had once.
   expect(actions.pasteAttachment).not.toHaveBeenCalled()
@@ -147,6 +153,7 @@ it("pastes dragged prose, which no longer reaches the page any other way", async
 })
 
 it("downloads an image dragged off a web page, which also has no other route", async () => {
+  const target = bound.get("b1")
   await act(async () =>
     deliver(
       dropOf({
@@ -159,14 +166,12 @@ it("downloads an image dragged off a web page, which also has no other route", a
     ),
   )
 
-  expect(actions.addImageUrl).toHaveBeenCalledWith(
-    "https://example.com/cat.png",
-    bound.get("b1"),
-  )
+  expect(actions.addImageUrl).toHaveBeenCalledWith("https://example.com/cat.png", target)
   expect(actions.pasteAttachment).not.toHaveBeenCalled()
 })
 
 it("says why a drop was turned away, in the panel's own words and on its own draft", async () => {
+  const target = bound.get("b1")
   // The host's reason, through the one function that knows its vocabulary —
   // and on the conversation the drop landed on. A folder refused forty seconds
   // later used to land on whichever tab was open by then: the draft it was
@@ -181,7 +186,7 @@ it("says why a drop was turned away, in the panel's own words and on its own dra
     ),
   )
 
-  expect(actions.refuse).toHaveBeenCalledWith({ reason: "empty-folder" }, bound.get("b1"))
+  expect(actions.refuse).toHaveBeenCalledWith({ reason: "empty-folder" }, target)
   expect(actions.addChosenFiles).not.toHaveBeenCalled()
 })
 
@@ -212,11 +217,14 @@ it("answers the handlers that are current when the drop lands", async () => {
   expect(later).toHaveBeenCalled()
 })
 
-it("routes every answer by the drop's own name, whatever arrives when", async () => {
+it("routes every terminal answer by the drop's own name, whatever arrives when", async () => {
   // Two drops on two drafts, answering out of order — which is what two
   // fetches of different sizes do, one of them forty-five seconds long. Files
   // and refusals alike belong to the drop that produced them, not to the tab
   // in front of somebody when the answer lands.
+  const targetB1 = bound.get("b1")
+  const targetB2 = bound.get("b2")
+  const targetB3 = bound.get("b3")
   await act(async () => deliver(dropOf({ batch: "b2", files: [file("b.pdf", "")] })))
   await act(async () =>
     deliver(
@@ -226,13 +234,25 @@ it("routes every answer by the drop's own name, whatever arrives when", async ()
       }),
     ),
   )
-  await act(async () => deliver(dropOf({ batch: "b1", files: [file("a.pdf", "")] })))
+  await act(async () => deliver(dropOf({ batch: "b3", files: [file("c.pdf", "")] })))
 
   expect(actions.addChosenFiles.mock.calls.map(([, target]) => target)).toEqual([
-    bound.get("b2"),
-    bound.get("b1"),
+    targetB2,
+    targetB3,
   ])
-  expect(actions.refuse).toHaveBeenCalledWith({ reason: "empty-folder" }, bound.get("b1"))
+  expect(actions.refuse).toHaveBeenCalledWith({ reason: "empty-folder" }, targetB1)
+})
+
+it("ignores duplicate terminal results after consuming a drop's destination", async () => {
+  const original = bound.get("b1")
+  const files = [file("a.pdf", "application/pdf")]
+  const first = dropOf({ batch: "b1", files })
+  await act(async () => deliver(first))
+  await act(async () => deliver(first))
+
+  expect(actions.consumeDropDestination).toHaveBeenCalledTimes(2)
+  expect(actions.addChosenFiles).toHaveBeenCalledTimes(1)
+  expect(actions.addChosenFiles).toHaveBeenCalledWith(files, original)
 })
 
 it("ignores an unknown named batch instead of assigning it to the active tab", async () => {

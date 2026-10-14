@@ -31,8 +31,8 @@ import { pickerRefusal, type AttachmentRefusal } from "../application/attachment
 
 const MIB = 1024 * 1024
 
-/** How many host-minted drop names the panel retains for delayed outcomes. */
-const MOST_REMEMBERED_BATCHES = 64
+/** How many host-minted drops may wait for their terminal result at once. */
+const MAX_ACTIVE_DROP_BATCHES = 64
 
 export type AttachmentDestination = Readonly<{
   store: AppStore
@@ -86,9 +86,12 @@ export function useFileAttachments(
     },
     [],
   )
-  const destinationIsCurrent = (destination: AttachmentDestination) =>
-    destination.store === currentScope.current.store &&
-    destination.resources === currentScope.current.resources
+  const destinationIsCurrent = React.useCallback(
+    (destination: AttachmentDestination) =>
+      destination.store === currentScope.current.store &&
+      destination.resources === currentScope.current.resources,
+    [],
+  )
   const conversationsOf = (destination: AttachmentDestination) =>
     destination.store.getState().conversation.conversations
   const inputRef = React.useRef<HTMLInputElement>(null)
@@ -119,9 +122,13 @@ export function useFileAttachments(
    * over whichever conversation somebody had since switched to: it blocked
    * *that* draft's send for forty-five seconds for a file it was never going
    * to get, while the draft the file was joining showed nothing at all.
+   *
+   * Accepted batches stay here until their terminal host result is consumed.
+   * A fixed admission limit bounds the map without evicting any result that is
+   * still in flight.
    */
-  // Only host-minted drop names use this bounded cache. Picker identity and
-  // lifetime are retained by their live operation values above.
+  // Picker identity and lifetime are retained by their live operation values
+  // above; this map owns only host-minted drops.
   const dropDestinations = React.useRef(new Map<string, AttachmentDestination>())
   const mounted = React.useRef(true)
   /**
@@ -148,13 +155,39 @@ export function useFileAttachments(
     destination: AttachmentDestination
     placementId: string
   } | null>(null)
+  /**
+   * Say why something was not taken. Defaults to the active conversation; a
+   * folder walk that finishes after somebody has moved on names the one it was
+   * dropped into, so its refusal is not shown above another draft quoting
+   * another draft's bounds.
+   *
+   * Replaces whatever was there. There is one of these at a time, and it is
+   * always the most recent thing the panel turned away.
+   */
+  const refuse = React.useCallback(
+    (
+      refusal: AttachmentRefusal,
+      target: AttachmentDestination | string = currentDestination(),
+    ) => {
+      const destination = typeof target === "string" ? currentDestination(target) : target
+      if (
+        !destinationIsCurrent(destination) ||
+        destination.conversationId !== activeId.current
+      )
+        return
+      setRefused({ destination, refusal })
+    },
+    [currentDestination, destinationIsCurrent],
+  )
   React.useEffect(() => {
     const operations = operationsRef.current
+    const drops = dropDestinations.current
     mounted.current = true
     return () => {
       mounted.current = false
       for (const operation of operations) operation.controller?.abort()
       operations.clear()
+      drops.clear()
     }
   }, [])
   /**
@@ -165,12 +198,17 @@ export function useFileAttachments(
    * A batch nobody recorded has no destination. The active conversation is
    * not evidence of where a delayed host event began.
    */
-  const destinationOf = React.useCallback(
+  const destinationForBatch = React.useCallback(
     (batch: string) =>
       [...operationsRef.current].find((operation) => operation.pickerRequestId === batch)
         ?.destination ?? dropDestinations.current.get(batch),
     [],
   )
+  const consumeDropDestination = React.useCallback((batch: string) => {
+    const destination = dropDestinations.current.get(batch)
+    if (destination) dropDestinations.current.delete(batch)
+    return destination
+  }, [])
   React.useEffect(() => {
     let live = true
     // The gesture's own moment, for both gestures. Everything after it can be
@@ -181,16 +219,13 @@ export function useFileAttachments(
       // A picker identity was registered before its command invocation, and
       // its event must not replace that captured owner. Drop identities are
       // host-minted, so their destination is captured at this event.
-      // Bounded: the oldest drop names are evicted because they have no return
-      // event that reliably resolves every outcome. Insertion order is age;
-      // the host's counter never reuses a drop name.
       const held = dropDestinations.current
-      if (gesture === "picked") return
-      held.set(named, currentDestination())
-      for (const oldest of held.keys()) {
-        if (held.size <= MOST_REMEMBERED_BATCHES) break
-        held.delete(oldest)
+      if (gesture === "picked" || held.has(named)) return
+      if (held.size >= MAX_ACTIVE_DROP_BATCHES) {
+        refuse({ reason: "too-many-selections" }, currentDestination())
+        return
       }
+      held.set(named, currentDestination())
     })
     const subscription = onAttachmentReadying(({ id, name, readying: waiting }) => {
       if (!live) return
@@ -200,7 +235,7 @@ export function useFileAttachments(
         // a file that is not coming is the refusal's, and a tile left spinning
         // beside it would be the panel disagreeing with itself.
         if (waiting) {
-          const destination = destinationOf(id.split(":")[0] ?? "")
+          const destination = destinationForBatch(id.split(":")[0] ?? "")
           if (!destination) return current
           next.set(id, { name, destination })
         } else next.delete(id)
@@ -212,7 +247,7 @@ export function useFileAttachments(
       void batch.then((stop) => stop())
       void subscription.then((stop) => stop())
     }
-  }, [currentDestination, destinationOf, resources, store])
+  }, [currentDestination, destinationForBatch, refuse, resources, store])
   React.useEffect(() => {
     if (
       viewed &&
@@ -238,27 +273,6 @@ export function useFileAttachments(
   const files = chat.active.draft.filter(
     (part): part is FileAttachment => part.type === "file",
   )
-  /**
-   * Say why something was not taken. Defaults to the active conversation; a
-   * folder walk that finishes after somebody has moved on names the one it was
-   * dropped into, so its refusal is not shown above another draft quoting
-   * another draft's bounds.
-   *
-   * Replaces whatever was there. There is one of these at a time, and it is
-   * always the most recent thing the panel turned away.
-   */
-  const refuse = (
-    refusal: AttachmentRefusal,
-    target: AttachmentDestination | string = currentDestination(),
-  ) => {
-    const destination = typeof target === "string" ? currentDestination(target) : target
-    if (
-      !destinationIsCurrent(destination) ||
-      destination.conversationId !== activeId.current
-    )
-      return
-    setRefused({ destination, refusal })
-  }
   /**
    * A closed tab in the current owner has nobody left to tell, so its notice
    * goes to that owner's active tab. A retired owner must not notify the
@@ -703,7 +717,7 @@ export function useFileAttachments(
       ),
     addFiles,
     addImageUrl,
-    destinationOf,
+    consumeDropDestination,
     captureDestination: currentDestination,
     isCurrent: (destination: AttachmentDestination) =>
       destinationIsCurrent(destination) &&
