@@ -8,6 +8,7 @@
 import * as React from "react"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
+import { flushSync } from "react-dom"
 import { Provider } from "react-redux"
 import { beforeEach, afterEach, expect, it, vi } from "vitest"
 import type { DroppedOnPanel } from "../../host"
@@ -18,6 +19,13 @@ const hostBoundary = vi.hoisted(() => ({
   drop: undefined as undefined | ((payload: DroppedOnPanel) => void),
   batch: undefined as
     undefined | ((batch: string, gesture: "picked" | "dropped") => void),
+}))
+
+const folderBoundary = vi.hoisted(() => ({ read: vi.fn() }))
+
+vi.mock("../adapters/dropped-folder", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../adapters/dropped-folder")>()),
+  readDroppedFolder: folderBoundary.read,
 }))
 
 vi.mock("../../host", async (importOriginal) => ({
@@ -76,39 +84,9 @@ function supplyProperty(target: object, name: string, value: unknown) {
   Object.defineProperty(target, name, { configurable: true, value })
 }
 
-async function mount(text = "") {
-  if (text) store.dispatch(setDraft({ draft: [{ type: "text", text }] }))
-  await act(async () =>
-    root.render(
-      React.createElement(
-        React.StrictMode,
-        null,
-        React.createElement(Provider, {
-          store,
-          children: React.createElement(ClockProvider, {
-            now: () => 1_000,
-            children: React.createElement(App, {
-              attachmentResources: resources,
-              canChoosePaths: true,
-              digest: async () => `sha256:${"ab".repeat(32)}`,
-              followConversationChoices: (show) => {
-                show({
-                  catalog: {
-                    agents: [],
-                    environments: [],
-                    commandHosts: [],
-                    nativeHooks: { claude: "off", codex: "off" },
-                  },
-                  chosenAgent: undefined,
-                })
-                return () => undefined
-              },
-            }),
-          }),
-        }),
-      ),
-    ),
-  )
+async function mount(text = "", targetStore = store, targetResources = resources) {
+  if (text) targetStore.dispatch(setDraft({ draft: [{ type: "text", text }] }))
+  await renderApp(targetStore, targetResources)
   // The editor is made asynchronously, and focuses itself when it attaches
   // (`use-composer.ts`). Wait for that before anything is clicked: under load
   // it could otherwise land after a test opened the tray, whose blur rule
@@ -120,6 +98,70 @@ async function mount(text = "") {
       expect(document.activeElement).toBe(editor)
     })
   })
+}
+
+async function renderApp(targetStore = store, targetResources = resources) {
+  await act(async () => root.render(appElement(targetStore, targetResources)))
+}
+
+function renderAppSynchronously(targetStore = store, targetResources = resources) {
+  flushSync(() => root.render(appElement(targetStore, targetResources)))
+}
+
+function appElement(targetStore: AppStore, targetResources: typeof resources) {
+  return React.createElement(
+    React.StrictMode,
+    null,
+    React.createElement(Provider, {
+      store: targetStore,
+      children: React.createElement(ClockProvider, {
+        now: () => 1_000,
+        children: React.createElement(App, {
+          attachmentResources: targetResources,
+          canChoosePaths: true,
+          digest: async () => `sha256:${"ab".repeat(32)}`,
+          followConversationChoices: (show) => {
+            show({
+              catalog: {
+                agents: [],
+                environments: [],
+                commandHosts: [],
+                nativeHooks: { claude: "off", codex: "off" },
+              },
+              chosenAgent: undefined,
+            })
+            return () => undefined
+          },
+        }),
+      }),
+    }),
+  )
+}
+
+function replacementProvider() {
+  const replacementResources = createAttachmentResources()
+  const effects = scenarioEffects("echo")
+  const replacementSend = vi.fn(effects.send)
+  const replacementStore = makeStore({
+    attachments: replacementResources,
+    canChoosePaths: true,
+    conversation: { ...effects, send: replacementSend },
+  })
+  replacementStore.dispatch(
+    sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),
+  )
+  expect(
+    replacementStore.getState().conversation.activeId,
+    "a different provider begins with the same local tab identity",
+  ).toBe("c0")
+  store = replacementStore
+  resources = replacementResources
+  send = replacementSend
+  return {
+    store: replacementStore,
+    resources: replacementResources,
+    send: replacementSend,
+  }
 }
 
 const active = () =>
@@ -172,6 +214,57 @@ async function dropPathless(payload: { plain: string; uriList: string; html: str
       text: payload,
       refused: null,
     }),
+  )
+}
+
+async function dropFolder() {
+  const { target, event } = folderDropEvent()
+  await act(async () => target.dispatchEvent(event))
+}
+
+function dropFolderSynchronously() {
+  const { target, event } = folderDropEvent()
+  flushSync(() => target.dispatchEvent(event))
+}
+
+function folderDropEvent() {
+  const rootElement = container.querySelector<HTMLElement>("[data-nessa-root]")
+  expect(rootElement, "the actual App drop boundary must be mounted").not.toBeNull()
+  const folder = { isDirectory: true } as FileSystemEntry
+  const event = new Event("drop", { bubbles: true, cancelable: true })
+  Object.defineProperty(event, "dataTransfer", {
+    value: {
+      types: ["Files"],
+      files: [],
+      items: [{ kind: "file", webkitGetAsEntry: () => folder }],
+    },
+  })
+  return { target: rootElement!, event }
+}
+
+async function enterComposerText(text: string) {
+  const editor = container.querySelector<HTMLElement>('[contenteditable="true"]')
+  expect(editor, "the actual Markdown editor must be mounted").not.toBeNull()
+  editor!.textContent = text
+  await act(async () =>
+    editor!.dispatchEvent(
+      new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }),
+    ),
+  )
+}
+
+function pressEnterSynchronously() {
+  const editor = container.querySelector<HTMLElement>('[contenteditable="true"]')
+  expect(editor, "the real Markdown editor must be mounted").not.toBeNull()
+  flushSync(() =>
+    editor!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    ),
   )
 }
 
@@ -265,6 +358,7 @@ beforeEach(() => {
   hostBoundary.batch = undefined
   hostBoundary.read.mockReset()
   hostBoundary.drop = undefined
+  folderBoundary.read.mockReset()
   cleanups = []
   resources = createAttachmentResources()
   const effects = scenarioEffects("echo")
@@ -625,4 +719,70 @@ it("ignores a native read settling after the panel unmounts", async () => {
   expect(add).not.toHaveBeenCalled()
   expect(active().draft).toEqual([{ type: "text", text: "include this image" }])
   expect(send).not.toHaveBeenCalled()
+})
+
+it("does not let A's pending walk block B's same-ID draft after a provider swap", async () => {
+  const readA = deferred<File[]>()
+  folderBoundary.read.mockReturnValue(readA.promise)
+  await mount()
+  await enterComposerText("send from B")
+  await dropFolder()
+  expect(folderBoundary.read).toHaveBeenCalledOnce()
+
+  const replacement = replacementProvider()
+  await act(async () => {
+    renderAppSynchronously(replacement.store, replacement.resources)
+    pressEnterSynchronously()
+  })
+
+  expect(
+    send,
+    "a walk in A's retired resource scope must not keep B's composer pending",
+  ).toHaveBeenCalledOnce()
+  expect(send.mock.calls[0]![0]).toMatchObject({ text: "send from B" })
+  expect(active().id).toBe("c0")
+  expect(replacement.send.mock.calls[0]![0]).toMatchObject({ text: "send from B" })
+  await act(async () => readA.resolve([new File(["a"], "A.txt")]))
+})
+
+it("starts a second same-ID folder walk in the replacement provider immediately", async () => {
+  const readA = deferred<File[]>()
+  const readB = deferred<File[]>()
+  folderBoundary.read.mockImplementation(() =>
+    folderBoundary.read.mock.calls.length === 1 ? readA.promise : readB.promise,
+  )
+  const originalStore = store
+  const originalId = active().id
+  await mount()
+  await dropFolder()
+
+  const replacement = replacementProvider()
+  await act(async () => {
+    renderAppSynchronously(replacement.store, replacement.resources)
+    dropFolderSynchronously()
+  })
+
+  expect(
+    folderBoundary.read,
+    "the new provider's folder gesture must not be refused as A's duplicate",
+  ).toHaveBeenCalledTimes(2)
+
+  await act(async () => readB.resolve([new File(["b"], "B.txt")]))
+  expect(
+    replacement.store
+      .getState()
+      .conversation.conversations.find((conversation) => conversation.id === originalId)
+      ?.draft,
+  ).toContainEqual(
+    expect.objectContaining({ resource: expect.objectContaining({ name: "B.txt" }) }),
+  )
+  await act(async () => readA.resolve([new File(["a"], "A.txt")]))
+  expect(
+    originalStore
+      .getState()
+      .conversation.conversations.find((conversation) => conversation.id === originalId)
+      ?.draft,
+  ).toContainEqual(
+    expect.objectContaining({ resource: expect.objectContaining({ name: "A.txt" }) }),
+  )
 })

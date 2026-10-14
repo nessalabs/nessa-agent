@@ -14,6 +14,8 @@ vi.mock("../adapters/dropped-folder", () => ({
 import type { AttachmentDestination } from "./use-file-attachments"
 import { useFolderDrop } from "./use-folder-drop"
 
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>((done) => (resolve = done))
@@ -35,7 +37,7 @@ const addFiles = vi.fn()
 const refuse = vi.fn()
 
 function Surface() {
-  hook = useFolderDrop(selected, addFiles, refuse)
+  hook = useFolderDrop(() => selected, addFiles, refuse)
   return null
 }
 
@@ -71,6 +73,7 @@ it("retains A's folder operation when B finishes first", async () => {
   const destinationB = destination("B")
   selected = destinationB
   await act(async () => root.render(React.createElement(Surface)))
+  expect(hook.isPending("B")).toBe(false)
   await act(async () => hook.addFolderEntries([]))
   expect(signals).toHaveLength(2)
 
@@ -92,6 +95,40 @@ it("retains A's folder operation when B finishes first", async () => {
     await Promise.resolve()
   })
   expect(addFiles).toHaveBeenCalledWith([fileA], destinationA)
+})
+
+it("filters pending work by the latest provider and admits its same-ID folder", async () => {
+  const readA = deferred<File[]>()
+  const readB = deferred<File[]>()
+  readDroppedFolder.mockImplementation(
+    (_entries: FileSystemEntry[], _limit: number, _signal: AbortSignal) =>
+      readDroppedFolder.mock.calls.length === 1 ? readA.promise : readB.promise,
+  )
+  const destinationA = destination("c0")
+  selected = destinationA
+  await act(async () => root.render(React.createElement(Surface)))
+  await act(async () => hook.addFolderEntries([]))
+
+  const destinationB = destination("c0")
+  selected = destinationB
+  await act(async () => root.render(React.createElement(Surface)))
+  expect(
+    hook.isPending("c0"),
+    "A's pending operation must not make B's same local tab pending",
+  ).toBe(false)
+  await act(async () => hook.addFolderEntries([]))
+  expect(readDroppedFolder).toHaveBeenCalledTimes(2)
+
+  await act(async () => readB.resolve([new File(["b"], "B.txt")]))
+  expect(addFiles).toHaveBeenCalledWith(
+    [expect.objectContaining({ name: "B.txt" })],
+    destinationB,
+  )
+  await act(async () => readA.resolve([new File(["a"], "A.txt")]))
+  expect(addFiles).toHaveBeenCalledWith(
+    [expect.objectContaining({ name: "A.txt" })],
+    destinationA,
+  )
 })
 
 it("aborts every active folder operation when the hook unmounts", async () => {

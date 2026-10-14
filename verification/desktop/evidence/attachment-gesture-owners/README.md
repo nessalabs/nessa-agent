@@ -83,3 +83,27 @@ its recorded `pnpm exec` command has no preserved raw shell output, so execution
 provenance is unverified. The R3 results use direct Node binaries and resolve
 their TypeScript, Vitest, Prettier, ESLint, Vite, `@nessa-ui/react`, Geist and
 Geist Mono dependencies inside this checkout.
+
+## R5 folder-operation scope
+
+The `folder-owner-send` and `folder-owner-drop` cases keep A's folder traversal
+pending while replacing the provider with B's store and resources under the
+same local `c0`. The next committed B render can send immediately and start its
+own folder walk; each traversal's eventual result remains in its captured
+provider. The new screenshots show the send and B folder gesture in B, and both
+settled folder tiles in their respective providers:
+
+![B sends while A's folder is pending, Chromium](folder-owner-send-b-chromium.png)
+![B sends while A's folder is pending, WebKit](folder-owner-send-b-webkit.png)
+![B accepts a second folder gesture, Chromium](folder-owner-drop-b-chromium.png)
+![B accepts a second folder gesture, WebKit](folder-owner-drop-b-webkit.png)
+![Folder A settles in its owner, Chromium](folder-owner-drop-a-chromium.png)
+![Folder A settles in its owner, WebKit](folder-owner-drop-a-webkit.png)
+
+The full actual-App matrix passes 36/36 engine/scenario pairs. The two folder
+scenarios also pass 4/4 isolated engine/scenario pairs after the screenshots
+were captured. The actual-App regressions both fail when `app.tsx` captures the
+folder destination during render, reproducing the stale owner at the provider
+swap. [r5-check.log](r5-check.log) records the frozen source, full tests, static
+checks, browser assertions, and source-revert result. The screenshots supplement
+the assertions; they do not replace the cross-store routing checks.
