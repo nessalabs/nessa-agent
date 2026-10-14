@@ -3135,7 +3135,7 @@ async fn a_conversation_holds_a_bounded_number_of_grants() {
     assert!(matches!(refused, Err(ConversationError::InvalidInput)));
     assert!(!opened.store.is_granted(&id, "one-more").await.unwrap());
     assert_eq!(
-        opened.store.grants(&id).await.unwrap().len() as i64,
+        opened.store.grants(&id).await.unwrap().grants.len() as i64,
         MAX_SHARE_GRANTS_PER_CONVERSATION
     );
 }
@@ -3328,7 +3328,7 @@ async fn only_grant(
     id: &ConversationId,
 ) -> crate::conversation::application::ShareGrant {
     use crate::conversation::application::ShareGrants;
-    let mut grants = store.grants(id).await.unwrap();
+    let mut grants = store.grants(id).await.unwrap().grants;
     assert_eq!(grants.len(), 1);
     grants.remove(0)
 }
@@ -3418,6 +3418,7 @@ async fn a_comment_or_drive_grant_pages_and_resolves_as_read_does() {
 /// not change.
 #[tokio::test]
 async fn a_change_of_role_or_policy_is_applied_journaled_and_moves_the_policy_revision() {
+    use crate::conversation::application::ShareGrants;
     let opened = opened();
     let store = &opened.store;
     let id = new_id();
@@ -3425,6 +3426,7 @@ async fn a_change_of_role_or_policy_is_applied_journaled_and_moves_the_policy_re
     assert!(share_as(store, &id, "phone", ShareAccess::read(), "share")
         .await
         .unwrap());
+    let catalogue = store.grants(&id).await.unwrap().change_revision;
     let read = only_grant(store, &id).await;
     let head = owner_head(store).await;
     let device_head = store
@@ -3454,6 +3456,11 @@ async fn a_change_of_role_or_policy_is_applied_journaled_and_moves_the_policy_re
     assert_eq!(back.access, ShareAccess::read());
     assert!(back.policy_revision > ruled.policy_revision);
     assert_eq!(owner_head(store).await, head, "no catalogue revision moved");
+    assert_eq!(
+        store.grants(&id).await.unwrap().change_revision,
+        catalogue,
+        "a policy change leaves the revision a shares page is bound to"
+    );
     assert_eq!(
         store
             .head(&org(), &alice(), &device("phone"))
@@ -3907,7 +3914,7 @@ async fn a_revoke_ends_a_grant_of_any_role() {
             .unwrap());
         assert!(revoke(&opened.store, &id, "phone").await);
         assert!(!opened.store.is_granted(&id, "phone").await.unwrap());
-        assert!(opened.store.grants(&id).await.unwrap().is_empty());
+        assert!(opened.store.grants(&id).await.unwrap().grants.is_empty());
         assert!(device_pass(&opened.store, device("phone"), 0)
             .await
             .is_empty());
@@ -3949,26 +3956,37 @@ async fn a_conversation_holds_a_bounded_number_of_drive_grants() {
         Err(ConversationError::InvalidInput)
     ));
     assert!(!store.is_granted(&id, "one-more").await.unwrap());
+    let before_reader = store.grants(&id).await.unwrap().change_revision;
     assert!(
         share_as(store, &id, "reader", ShareAccess::read(), "reader")
             .await
             .unwrap()
+    );
+    assert!(
+        store.grants(&id).await.unwrap().change_revision > before_reader,
+        "a new grant moves the revision a shares page is bound to"
     );
     assert!(matches!(
         share_as(store, &id, "reader", no_shell(), "reader-drives").await,
         Err(ConversationError::InvalidInput)
     ));
     assert_eq!(role_journal(&opened.path).len(), journaled + 1);
-    let grants = store.grants(&id).await.unwrap();
+    let grants = store.grants(&id).await.unwrap().grants;
     let driving = grants
         .iter()
         .filter(|grant| grant.access.role() == ShareRole::Drive)
         .count();
     assert_eq!(driving as i64, MAX_DRIVE_GRANTS_PER_CONVERSATION);
-    // A driver's own policy can still change: it takes no new Drive grant.
+    // A driver's own policy can still change: it takes no new Drive grant,
+    // and the revision a shares page is bound to stays.
+    let before_policy = store.grants(&id).await.unwrap().change_revision;
     assert!(share_as(store, &id, "driver-0", rules(), "driver-0-rules")
         .await
         .unwrap());
+    assert_eq!(
+        store.grants(&id).await.unwrap().change_revision,
+        before_policy
+    );
 }
 
 /// A share change is admitted by the access policy inside its transaction:
@@ -4048,14 +4066,9 @@ async fn a_revisions_command_hosts_are_read_from_its_journal_entry() {
     use crate::conversation::application::ShareGrants;
     use crate::conversation::domain::CommandHosts;
     let on = |hosts: &[&str]| {
-        drive_with(
-            ToolPolicy::preset(ToolPreset::All)
-                .with_command_hosts(
-                    CommandHosts::new(hosts.iter().map(|host| (*host).to_owned()).collect())
-                        .unwrap(),
-                )
-                .unwrap(),
-        )
+        drive_with(ToolPolicy::preset(ToolPreset::All).with_command_hosts(
+            CommandHosts::new(hosts.iter().map(|host| (*host).to_owned()).collect()).unwrap(),
+        ))
     };
     let peer = format!("peer:{}", "ab".repeat(32));
     let opened = opened();
@@ -4143,5 +4156,210 @@ async fn a_revisions_policy_is_read_from_its_journal_entry() {
     assert_eq!(
         at(id.clone(), "phone", shell_less).await,
         no_shell().policy().cloned()
+    );
+}
+
+/// Row J31: a Drive turn's save keeps the admitted revision, and a grant
+/// change waits until that hold is dropped. A missing grant, another
+/// revision, or a revision cell that is not a journal sequence is `revoked`.
+#[tokio::test]
+async fn a_turn_is_saved_only_while_its_grant_stays_at_the_admitted_revision() {
+    use crate::conversation::application::{ShareGrantTransition, ShareGrants};
+    use tokio::sync::Notify;
+    let opened = opened();
+    let Opened {
+        _directory,
+        path,
+        store,
+    } = opened;
+    let store = Arc::new(store);
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    assert!(share_as(&store, &id, "phone", no_shell(), "share")
+        .await
+        .unwrap());
+    let revision = only_grant(&store, &id).await.policy_revision;
+    assert!(matches!(
+        ShareGrants::hold_revision(&*store, &id, "other", revision).await,
+        Err(ConversationError::Revoked)
+    ));
+    assert!(matches!(
+        ShareGrants::hold_revision(&*store, &id, "phone", revision + 1).await,
+        Err(ConversationError::Revoked)
+    ));
+
+    let hold = ShareGrants::hold_revision(&*store, &id, "phone", revision)
+        .await
+        .unwrap();
+    let started = Arc::new(Notify::new());
+    let revoking = Arc::clone(&store);
+    let revoke_id = id.clone();
+    let started_in_task = Arc::clone(&started);
+    let mut revoke = tokio::spawn(async move {
+        started_in_task.notify_one();
+        revoking
+            .change(grant_change(
+                ShareGrantTransition::Revoke,
+                &revoke_id,
+                Some("phone"),
+                "phone-credential",
+                "revoke-during-hold",
+            ))
+            .await
+    });
+    started.notified().await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), &mut revoke)
+            .await
+            .is_err(),
+        "a revoke committed while the revision was held"
+    );
+    // Another conversation's grant is not this permit. Its revoke finishes
+    // while the first conversation's revision is still held.
+    let other = new_id();
+    store.create(owned(&other)).await.unwrap();
+    assert!(share_as(&store, &other, "phone", no_shell(), "other-share")
+        .await
+        .unwrap());
+    let other_store = Arc::clone(&store);
+    let other_id = other.clone();
+    let other_revoke = tokio::spawn(async move {
+        other_store
+            .change(grant_change(
+                ShareGrantTransition::Revoke,
+                &other_id,
+                Some("phone"),
+                "phone-credential",
+                "revoke-other",
+            ))
+            .await
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), other_revoke)
+            .await
+            .expect("another conversation's revoke is not blocked by this hold")
+            .expect("the other revoke task")
+            .unwrap()
+            .applied
+    );
+    drop(hold);
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), &mut revoke)
+            .await
+            .expect("the revoke finishes")
+            .expect("the revoke task")
+            .unwrap()
+            .applied
+    );
+    assert!(matches!(
+        ShareGrants::hold_revision(&*store, &id, "phone", revision).await,
+        Err(ConversationError::Revoked)
+    ));
+
+    let again = new_id();
+    store.create(owned(&again)).await.unwrap();
+    assert!(share_as(&store, &again, "phone", no_shell(), "share-again")
+        .await
+        .unwrap());
+    let live = only_grant(&store, &again).await.policy_revision;
+    let connection = raw(&path);
+    connection
+        .execute_batch("PRAGMA foreign_keys = OFF;")
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE share_grants SET policy_revision = 0 WHERE conversation_id = ?1",
+            params![again.to_string()],
+        )
+        .unwrap();
+    assert!(matches!(
+        ShareGrants::hold_revision(&*store, &again, "phone", live).await,
+        Err(ConversationError::Revoked)
+    ));
+}
+
+/// Releases a paused grant write when the test future is dropped.
+struct ReleaseOnDrop(Arc<super::store::GrantWritePause>);
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+/// Row J31: cancelling a grant change while its write is in flight does not
+/// drop the permit. A hold of the revision that write is about to replace
+/// waits until the write finishes, then sees the grant gone.
+#[tokio::test]
+async fn a_cancelled_grant_change_keeps_its_permit_until_the_write_finishes() {
+    use crate::conversation::application::{ShareGrantTransition, ShareGrants};
+    let opened = opened();
+    let store = Arc::new(opened.store);
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    assert!(share_as(&store, &id, "phone", no_shell(), "share")
+        .await
+        .unwrap());
+    let revision = only_grant(&store, &id).await.policy_revision;
+    let pause = super::store::GrantWritePause::new();
+    // A failed assertion still lets the blocked write finish, so the runtime
+    // is not left waiting on that task.
+    let _release = ReleaseOnDrop(Arc::clone(&pause));
+    store.pause_grant_writes(Arc::clone(&pause));
+    let revoking = Arc::clone(&store);
+    let revoke_id = id.clone();
+    let change = tokio::spawn(async move {
+        revoking
+            .change(grant_change(
+                ShareGrantTransition::Revoke,
+                &revoke_id,
+                Some("phone"),
+                "phone-credential",
+                "revoke-cancelled",
+            ))
+            .await
+    });
+    let entered = {
+        let pause = Arc::clone(&pause);
+        tokio::task::spawn_blocking(move || pause.wait_until_entered())
+    };
+    tokio::time::timeout(Duration::from_secs(5), entered)
+        .await
+        .expect("the write entered")
+        .expect("the write's wait");
+    change.abort();
+    assert!(change
+        .await
+        .expect_err("the change task was cancelled")
+        .is_cancelled());
+    let mut holding = {
+        let store = Arc::clone(&store);
+        let id = id.clone();
+        tokio::spawn(
+            async move { ShareGrants::hold_revision(&*store, &id, "phone", revision).await },
+        )
+    };
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), &mut holding)
+            .await
+            .is_err(),
+        "hold_revision read the revision while the cancelled change's write still held the gate"
+    );
+    pause.release();
+    let held = tokio::time::timeout(Duration::from_secs(5), holding)
+        .await
+        .expect("the hold finishes once the write does")
+        .expect("the hold task");
+    assert!(
+        matches!(held, Err(ConversationError::Revoked)),
+        "the hold kept a revision the cancelled write replaced"
+    );
+    assert!(
+        ShareGrants::grants(&*store, &id)
+            .await
+            .unwrap()
+            .grants
+            .is_empty(),
+        "the detached write did not revoke the grant"
     );
 }

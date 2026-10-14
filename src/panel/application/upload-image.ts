@@ -1,4 +1,4 @@
-import type { UploadFailure } from "../../conversation"
+import type { UploadChange, UploadFailure } from "../../conversation"
 
 /**
  * Everything one upload touches, handed in.
@@ -15,13 +15,9 @@ export type UploadPorts = {
   /**
    * Ask the conversation for one step of this file's upload state, and hear
    * whether it was taken. A step is refused when the file is not where the step
-   * starts from: gone from every draft, or already uploading.
+   * starts from: absent from its captured parent draft, or already uploading.
    */
-  change(
-    change: { fileId: string } & (
-      { to: "uploading" } | { to: "failed"; reason: UploadFailure }
-    ),
-  ): boolean
+  change(change: Extract<UploadChange, { to: "uploading" | "failed" }>): boolean
   /**
    * Upload the bytes. Records on the file what the gateway stored them as, or
    * why it did not; never rejects.
@@ -61,19 +57,19 @@ export async function uploadImage(
   ports: UploadPorts,
   signal: AbortSignal,
 ): Promise<void> {
-  if (!ports.change({ fileId: file.id, to: "uploading" })) return
+  const target = { conversationId: file.conversationId, fileId: file.id }
+  if (!ports.change({ ...target, to: "uploading" })) return
   const fail = (reason: UploadFailure) => {
-    ports.change({ fileId: file.id, to: "failed", reason })
+    ports.change({ ...target, to: "failed", reason })
   }
-  const bytes = ports.bytes(file.id)
+  const bytes = ports.bytes(target.fileId)
   if (!bytes || bytes.size < 1) return fail("unreadable")
   try {
     const digest = await ports.digest(bytes)
-    if (signal.aborted || ports.bytes(file.id) === undefined) return
+    if (signal.aborted || ports.bytes(target.fileId) === undefined) return
     await ports.stage(
       {
-        conversationId: file.conversationId,
-        fileId: file.id,
+        ...target,
         file: { digest, mimeType: file.mimeType, size: bytes.size },
         bytes,
       },

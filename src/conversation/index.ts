@@ -17,8 +17,10 @@
  *
  * The gateway Agent owns work. Local tabs only retain drafts, server identity,
  * and displayed receipts; closing a tab never stops another surface's Agent.
+ * application/saved-tabs restores remote references under fresh local names from
+ * the existing allocator, fencing retired callbacks (restored-lifetimes tests).
  */
-export { AGENT_HUES } from "./model"
+export { AGENT_HUES, questionAnswerReady, questionChoices } from "./model"
 export { ConversationNotification } from "./ui/conversation-notification"
 export { ConversationQueue } from "./ui/conversation-queue"
 export { ConversationList } from "./ui/conversation-list"
@@ -37,6 +39,7 @@ export {
   HeldFileReadError,
   type HeldFileReader,
   type HeldFileSaver,
+  type UploadChange,
 } from "./application/ports"
 // Notes left in a conversation, placed and shown: the panel's transcripts and
 // the desktop window's alike.

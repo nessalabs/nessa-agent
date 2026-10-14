@@ -32,7 +32,7 @@
 import type { StageMismatch, WorkspaceFailureReason } from "../model/failure"
 import type { ModelRef, WorkspaceIndex, SessionSummary } from "../model/workspace-index"
 import type { PaneRoom } from "../../split-panes/model/pane-sizing"
-import type { Transcript } from "../model/transcript"
+import type { QuestionChoice, Transcript } from "../model/transcript"
 import type { AgentsFilter } from "../model/overview/filter"
 import type {
   ShareGrant,
@@ -40,6 +40,7 @@ import type {
   SharingChoices,
   SharingFailure,
 } from "../model/sharing"
+import type { QuestionFlights } from "./question-flights"
 
 /**
  * A message sent to a session, as the source is asked to deliver it. Sent
@@ -153,6 +154,20 @@ export interface WorkspaceSource {
     approvalId: string,
     initiator: Initiator,
     optionId: string,
+  ): Promise<void>
+  /**
+   * Answers a question the session's agent is waiting on, or declines it
+   * (`choices` null). Resolves once the source has taken the answer. The
+   * question leaves the conversation when a later read no longer lists it.
+   * The gateway's source records nothing itself: the gateway records the
+   * answer as this window's authenticated caller.
+   */
+  answerQuestion(
+    sessionId: string,
+    executionId: string,
+    questionId: string,
+    choices: readonly QuestionChoice[] | null,
+    initiator: Initiator,
   ): Promise<void>
   /**
    * Pins or unpins a session. Resolves once the session's changed summary has
@@ -284,6 +299,12 @@ export interface WorkspaceDependencies {
    * (`effects.ts`). The store owns the filter; this only keeps it.
    */
   readonly overviewFilter: RememberedFilter
+  /**
+   * Asks already on their way, for this composed store. A second card joins
+   * the send when its choices and initiator match, and hears how it settled.
+   * A different answer does not (`question-flights.ts`).
+   */
+  readonly questionFlights: QuestionFlights
   /**
    * Who a session is shared with, and sharing it. Absent where the window
    * has nothing to share through — a source composition was handed with no

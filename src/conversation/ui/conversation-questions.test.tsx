@@ -13,6 +13,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { act } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { questionTargetConversation } from "@nessa/client"
 import type { Conversation } from "../model"
 
 const dispatch = vi.fn()
@@ -58,9 +59,13 @@ function question(key: string, required: boolean): Asked {
   }
 }
 
-function show(questions: Asked[]) {
+function show(
+  questions: Asked[],
+  conversationId = "00000000-0000-4000-8000-000000000001",
+) {
   const conversation = {
     id: "conversation",
+    serverConversationId: conversationId,
     controlPending: false,
     remote: {
       questions: [
@@ -79,8 +84,11 @@ function show(questions: Asked[]) {
 }
 
 function choose(key: string, value: string) {
-  const input = host.querySelector<HTMLInputElement>(
-    `input[name="${CSS.escape(key)}"][value="${CSS.escape(value)}"]`,
+  const field = [...host.querySelectorAll("fieldset")].find(
+    (item) => item.querySelector("legend")?.textContent === key,
+  )
+  const input = field?.querySelector<HTMLInputElement>(
+    `input[value="${CSS.escape(value)}"]`,
   )
   if (!input) throw new Error(`no ${value} for ${key}`)
   act(() => input.click())
@@ -110,7 +118,16 @@ function answer() {
 }
 
 function sent() {
-  return dispatch.mock.calls.map(([action]) => action.request.control.choices)
+  return dispatch.mock.calls.map(([action]) => {
+    const control = action.request.control
+    expect(questionTargetConversation(control.target)).toBe(
+      "00000000-0000-4000-8000-000000000001",
+    )
+    expect(control.target).toMatchObject({ executionId: "execution", questionId: "1" })
+    expect(control).not.toHaveProperty("executionId")
+    expect(control).not.toHaveProperty("questionId")
+    return control.choices
+  })
 }
 
 describe("an ask in the conversation", () => {
@@ -162,4 +179,43 @@ describe("an ask in the conversation", () => {
     act(() => skip.click())
     expect(sent()).toEqual([null])
   })
+})
+
+it("QT1: equal turn and ask names in another conversation do not inherit its answer draft", () => {
+  show([question("field", false)])
+  choose("field", "a")
+  expect(answer().disabled).toBe(false)
+  show([question("field", false)], "00000000-0000-4000-8000-000000000002")
+  expect(answer().disabled).toBe(true)
+})
+
+it("QT10: simultaneous asks with equal field keys have independent native radio groups", () => {
+  const conversation = {
+    id: "conversation",
+    serverConversationId: "00000000-0000-4000-8000-000000000001",
+    controlPending: false,
+    remote: {
+      questions: ["first", "second"].map((questionId) => ({
+        executionId: "execution",
+        questionId,
+        message: questionId,
+        questions: [question("same-field", false)],
+      })),
+    },
+  } as unknown as Conversation
+  act(() =>
+    root.render(
+      React.createElement(ConversationQuestions, {
+        conversation,
+        gatewayAvailable: true,
+      }),
+    ),
+  )
+  const inputs = [...host.querySelectorAll<HTMLInputElement>('input[value="a"]')]
+  const [first, second] = inputs
+  if (!first || !second) throw new Error("Both simultaneous asks must render a choice")
+  act(() => first.click())
+  act(() => second.click())
+  expect(inputs.map((input) => input.checked)).toEqual([true, true])
+  expect(new Set(inputs.map((input) => input.name)).size).toBe(2)
 })

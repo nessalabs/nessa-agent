@@ -963,17 +963,19 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
             result
         })
     }
-    fn steer(
-        &self,
+    fn steer<'a>(
+        &'a self,
         target: ExecutionId,
         input: ExecutionRequest,
-    ) -> ProviderOperationFuture<'_, SteeringOutcome> {
+        started: &'a (dyn Fn() + Send + Sync),
+    ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {
             let (sender, receiver) = oneshot::channel();
             let closing = self.close_activity.subscribe();
             let commands = {
                 let generation = self.generation.lock().await;
                 if generation.stopped() {
+                    started();
                     return Err(ProviderOperationFailure::new(
                         AgentError::Closed,
                         ProviderSessionState::CleanupRequired,
@@ -991,6 +993,7 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
                 .images(&input.user_message, &commands, closing, limit)
                 .await
                 .map_err(|error| {
+                    started();
                     let state = if error == AgentError::Closed {
                         ProviderSessionState::CleanupRequired
                     } else {
@@ -1004,8 +1007,12 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
                 deadline: Some(deadline),
             };
             enqueue(&commands, Command::Steer(target, prompt, sender)).map_err(|error| {
+                started();
                 ProviderOperationFailure::new(error, ProviderSessionState::Usable)
             })?;
+            // The harness has the steer. The host may release what it held
+            // until this handoff, before the response wait below.
+            started();
             receiver.await.unwrap_or_else(|_| {
                 Err(ProviderOperationFailure::new(
                     AgentError::Closed,

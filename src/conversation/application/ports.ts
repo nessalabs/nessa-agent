@@ -1,4 +1,4 @@
-import type { PermissionTarget } from "@nessa/client"
+import type { PermissionTarget, QuestionTarget, QuestionChoice } from "@nessa/client"
 import type {
   ConversationListing,
   ConversationView,
@@ -134,10 +134,8 @@ export interface ConversationEffects {
   answer(target: PermissionTarget, optionId: string): Promise<void>
   /** Answer one question the agent asked; null choices decline it. */
   answerQuestion(
-    conversationId: string,
-    executionId: string,
-    questionId: string,
-    choices: readonly { key: string; values: string[]; ownWords?: string }[] | null,
+    target: QuestionTarget,
+    choices: readonly QuestionChoice[] | null,
   ): Promise<void>
   cancel(target: PermissionTarget): Promise<void>
   close(conversationId: string): Promise<void>
@@ -251,8 +249,8 @@ export class AttachmentStagingError extends Error {
   }
 }
 
-/** One step in a draft file's upload. `stored` carries the gateway's reference. */
-export type UploadChange = { fileId: string } & (
+/** One step in the named local conversation's draft upload. `stored` carries the gateway's reference. */
+export type UploadChange = { conversationId: string; fileId: string } & (
   | { to: "uploading" }
   | { to: "stored"; image: ImageReference }
   | { to: "failed"; reason: UploadFailure }

@@ -73,7 +73,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Notify};
 
 const CONVERSATION: &str = "5c0a9f2e-1d3b-4c7a-8e6f-2b9d4a1c7e30";
 
@@ -173,11 +173,16 @@ pub(super) type FailingRecords = Arc<Mutex<Option<fn(&LeaseRecord) -> bool>>>;
 /// and every save holding a record `failing` names while it is set, as a disk
 /// that stays away would; and stalling, never to return, the next save
 /// holding a record `stall_once` names, as a disk that hangs would.
+/// A save of accepted input, paused after it is entered and before it is
+/// written, until the second notify.
+type InputStall = Arc<Mutex<Option<(Arc<Notify>, Arc<Notify>)>>>;
+
 struct Records {
     inner: RecordStorage,
     fail_issue: Arc<AtomicBool>,
     failing: FailingRecords,
     stall_once: FailingRecords,
+    stall_input: InputStall,
     /// Every lease record handed to a save, in order.
     saved: SavedRecords,
 }
@@ -195,6 +200,7 @@ impl SessionStorage for Records {
         let fail_issue = self.fail_issue.clone();
         let failing = self.failing.clone();
         let stall_once = self.stall_once.clone();
+        let stall_input = self.stall_input.clone();
         let saved = self.saved.clone();
         Box::pin(async move {
             let inner = self.inner.open(id).await?;
@@ -203,6 +209,7 @@ impl SessionStorage for Records {
                 fail_issue,
                 failing,
                 stall_once,
+                stall_input,
                 saved,
             }) as Box<dyn SessionStorageLease>)
         })
@@ -214,6 +221,7 @@ impl SessionStorage for Records {
         let fail_issue = self.fail_issue.clone();
         let failing = self.failing.clone();
         let stall_once = self.stall_once.clone();
+        let stall_input = self.stall_input.clone();
         let saved = self.saved.clone();
         Box::pin(async move {
             Ok(self.inner.open_existing(id).await?.map(|inner| {
@@ -222,6 +230,7 @@ impl SessionStorage for Records {
                     fail_issue,
                     failing,
                     stall_once,
+                    stall_input,
                     saved,
                 }) as Box<dyn SessionStorageLease>
             }))
@@ -233,6 +242,7 @@ pub(super) struct RecordsLease {
     fail_issue: Arc<AtomicBool>,
     failing: FailingRecords,
     stall_once: FailingRecords,
+    stall_input: InputStall,
     saved: SavedRecords,
 }
 impl RecordsLease {
@@ -244,6 +254,7 @@ impl RecordsLease {
             fail_issue: Arc::new(AtomicBool::new(false)),
             failing,
             stall_once: FailingRecords::default(),
+            stall_input: InputStall::default(),
             saved: SavedRecords::default(),
         }
     }
@@ -302,7 +313,32 @@ impl SessionStorageLease for RecordsLease {
                     _ => None,
                 }),
         );
-        self.inner.save_changes(binding, snapshot, units)
+        let input_stall = {
+            let mut stall = self.stall_input.lock().unwrap();
+            let matched = stall.is_some()
+                && units
+                    .iter()
+                    .flat_map(SessionSaveUnit::changes)
+                    .any(|change| matches!(change, SessionChange::InputAccepted(_)));
+            if matched {
+                stall.take()
+            } else {
+                None
+            }
+        };
+        // The future is lazy: the write starts when it is polled, after the
+        // release, so a grant change can be shown waiting on the admission
+        // hold while this save has not committed.
+        let save = self.inner.save_changes(binding, snapshot, units);
+        if let Some((entered, release)) = input_stall {
+            Box::pin(async move {
+                entered.notify_one();
+                release.notified().await;
+                save.await
+            })
+        } else {
+            save
+        }
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
         self.inner.erase()
@@ -313,6 +349,7 @@ struct Harness {
     service: ConversationService,
     storage: Arc<Records>,
     provider: Arc<ProviderFactory>,
+    metadata: Arc<LocalConversationStore>,
     id: ConversationId,
 }
 
@@ -375,8 +412,10 @@ fn harness_working_in(
         fail_issue: Arc::new(AtomicBool::new(false)),
         failing: Arc::new(Mutex::new(None)),
         stall_once: Arc::new(Mutex::new(None)),
+        stall_input: InputStall::default(),
         saved: SavedRecords::default(),
     });
+    let metadata_store = Arc::clone(&metadata);
     let service = ConversationService::new(
         ConversationDependencies {
             access_policy: crate::conversation_test_support::access_policy(),
@@ -418,6 +457,7 @@ fn harness_working_in(
         service,
         storage,
         provider,
+        metadata: metadata_store,
         id: ConversationId::new(CONVERSATION).unwrap(),
     }
 }
@@ -4092,8 +4132,12 @@ impl Harness {
 }
 
 /// A fetch wait short enough to time out quickly, and long enough for a
-/// call that is answered to save its asking first, under a loaded machine.
-const FETCH_SAVE_WAIT: Duration = Duration::from_secs(1);
+/// call that is answered to save its asking and reach the host first, under
+/// a loaded machine. One second was not enough for a max-size file on a
+/// loaded Windows runner (local-auth run 38503431790). Five seconds reached
+/// the host on the next Windows run (38508448020); that job then died on
+/// the 45-minute step bound while other server tests were still finishing.
+const FETCH_SAVE_WAIT: Duration = Duration::from_secs(5);
 
 /// A host's harness with its conversation created there, a turn running
 /// that `go` lets finish, and `bytes` held by the conversation.
@@ -5388,7 +5432,7 @@ impl super::ShareGrants for EveryRevisionHeld {
     fn grants<'a>(
         &'a self,
         _: &'a ConversationId,
-    ) -> super::ConversationFuture<'a, Vec<super::ShareGrant>> {
+    ) -> super::ConversationFuture<'a, super::ShareGrantList> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
     fn policy_at<'a>(
@@ -5399,6 +5443,16 @@ impl super::ShareGrants for EveryRevisionHeld {
     ) -> super::ConversationFuture<'a, Option<crate::conversation::domain::ToolPolicy>> {
         let policy = self.0.clone();
         Box::pin(async move { Ok(Some(policy)) })
+    }
+    fn hold_revision<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> super::ConversationFuture<'a, super::RevisionHold> {
+        // This double records no live grant row. The turns it admits are
+        // not testing revocation.
+        Box::pin(async { Ok(super::RevisionHold::vacant()) })
     }
 }
 
@@ -5618,14 +5672,12 @@ fn on_hosts(
     policy: crate::conversation::domain::ToolPolicy,
     hosts: &[&str],
 ) -> crate::conversation::domain::ToolPolicy {
-    policy
-        .with_command_hosts(
-            crate::conversation::domain::CommandHosts::new(
-                hosts.iter().map(|host| (*host).to_owned()).collect(),
-            )
-            .unwrap(),
+    policy.with_command_hosts(
+        crate::conversation::domain::CommandHosts::new(
+            hosts.iter().map(|host| (*host).to_owned()).collect(),
         )
-        .unwrap()
+        .unwrap(),
+    )
 }
 
 /// ADR 803 step 4: a Drive grant's turn whose policy allows `run` runs a
@@ -5898,7 +5950,7 @@ impl super::ShareGrants for NoEntry {
     fn grants<'a>(
         &'a self,
         _: &'a ConversationId,
-    ) -> super::ConversationFuture<'a, Vec<super::ShareGrant>> {
+    ) -> super::ConversationFuture<'a, super::ShareGrantList> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
     fn policy_at<'a>(
@@ -5908,6 +5960,14 @@ impl super::ShareGrants for NoEntry {
         _: u64,
     ) -> super::ConversationFuture<'a, Option<crate::conversation::domain::ToolPolicy>> {
         Box::pin(async { Ok(None) })
+    }
+    fn hold_revision<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> super::ConversationFuture<'a, super::RevisionHold> {
+        Box::pin(async { Ok(super::RevisionHold::vacant()) })
     }
 }
 
@@ -5929,4 +5989,894 @@ async fn j26_a_drive_turn_nothing_can_check_is_refused_and_reaches_no_agent() {
     });
     assert!(!harness.send_as_driver("no-entry", "phone", 3).await);
     assert!(harness.provider.executions.lock().unwrap().is_empty());
+}
+
+/// `policy_at` answers from the real journal, then waits, so a test can
+/// revoke the grant after the read and before admission continues.
+struct PausingGrants {
+    inner: Arc<LocalConversationStore>,
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+impl super::ShareGrants for PausingGrants {
+    fn held_grant<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        receiver_id: &'a str,
+    ) -> super::ConversationFuture<'a, Option<super::HeldGrant>> {
+        self.inner.held_grant(id, receiver_id)
+    }
+    fn change(
+        &self,
+        change: super::ShareGrantChange,
+    ) -> super::ConversationFuture<'_, crate::conversation::application::ShareGrantReceipt> {
+        self.inner.change(change)
+    }
+    fn grants<'a>(
+        &'a self,
+        id: &'a ConversationId,
+    ) -> super::ConversationFuture<'a, super::ShareGrantList> {
+        self.inner.grants(id)
+    }
+    fn policy_at<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        receiver_id: &'a str,
+        policy_revision: u64,
+    ) -> super::ConversationFuture<'a, Option<crate::conversation::domain::ToolPolicy>> {
+        let read = self.inner.policy_at(id, receiver_id, policy_revision);
+        let entered = Arc::clone(&self.entered);
+        let release = Arc::clone(&self.release);
+        Box::pin(async move {
+            let policy = read.await?;
+            entered.notify_one();
+            release.notified().await;
+            Ok(policy)
+        })
+    }
+    fn hold_revision<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        receiver_id: &'a str,
+        policy_revision: u64,
+    ) -> super::ConversationFuture<'a, super::RevisionHold> {
+        self.inner.hold_revision(id, receiver_id, policy_revision)
+    }
+}
+
+fn bind_live_grants(harness: &Harness, grants: Arc<dyn super::ShareGrants>) {
+    harness.service.bind_drive_tools(super::DriveTools {
+        grants,
+        evaluator: Arc::new(
+            crate::conversation::infrastructure::CedarToolPolicyEvaluator::new().unwrap(),
+        ),
+        audit: Arc::new(RecordedDriveTools::default()),
+    });
+}
+
+async fn grant_drive(harness: &Harness, receiver: &str) -> u64 {
+    use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy, ToolPreset};
+    crate::conversation_test_support::grant_as(
+        &harness.metadata,
+        &harness.id,
+        receiver,
+        ShareAccess::new(ShareRole::Drive, Some(ToolPolicy::preset(ToolPreset::All))).unwrap(),
+    )
+    .await;
+    super::ShareGrants::grants(&*harness.metadata, &harness.id)
+        .await
+        .unwrap()
+        .grants
+        .into_iter()
+        .find(|grant| grant.receiver_id == receiver)
+        .expect("the grant")
+        .policy_revision
+}
+
+async fn revoke_drive(store: &LocalConversationStore, id: &ConversationId, receiver: &str) -> bool {
+    use super::{
+        ConversationCaller, ConversationRepository, ShareGrantChange, ShareGrantTransition,
+    };
+    let conversation = ConversationRepository::load(store, id)
+        .await
+        .unwrap()
+        .expect("the conversation");
+    super::ShareGrants::change(
+        store,
+        ShareGrantChange {
+            transition: ShareGrantTransition::Revoke,
+            conversation_id: id.clone(),
+            receiver_id: None,
+            credential_id: nessa_auth::domain::CredentialId::new(format!("{receiver}-credential"))
+                .unwrap(),
+            expected_policy_revision: None,
+            initiator: ConversationCaller {
+                organization_id: conversation.organization().clone(),
+                principal_id: conversation.owner().clone(),
+                surface_id: "test".into(),
+                action_id: uuid::Uuid::new_v4().to_string(),
+            },
+            at_ms: 1,
+        },
+    )
+    .await
+    .unwrap()
+    .applied
+}
+
+fn drive_message() -> SubmittedMessage {
+    SubmittedMessage {
+        text: "hello".into(),
+        images: Vec::new(),
+        files: Vec::new(),
+    }
+}
+
+async fn submit_drive(
+    harness: &Harness,
+    execution: &str,
+    revision: u64,
+) -> Result<nessa_protocol::conversation::view::SubmissionReceipt, super::service::SubmitFailure> {
+    use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
+    harness
+        .service
+        .submit_as(
+            harness.id.clone(),
+            caller(execution),
+            execution.into(),
+            drive_message(),
+            SubmissionMode::Queue,
+            super::service::Writer::Person(Initiation::grant(
+                GrantInitiator::new("phone", revision).unwrap(),
+            )),
+        )
+        .await
+}
+
+/// Row J31: a grant revoked, or its policy replaced, after `policy_at` and
+/// before the turn is saved does not start that turn.
+async fn moved_during_admission(revoke: bool) {
+    use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy, ToolPreset};
+    let root = tempfile::tempdir().unwrap();
+    let harness = in_process(root.path(), DELETION_BUDGETS.stop);
+    let (entered, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    bind_live_grants(
+        &harness,
+        Arc::new(PausingGrants {
+            inner: Arc::clone(&harness.metadata),
+            entered: Arc::clone(&entered),
+            release: Arc::clone(&release),
+        }),
+    );
+    harness.create().await;
+    let revision = grant_drive(&harness, "phone").await;
+    let service = harness.service.clone();
+    let id = harness.id.clone();
+    let sent = tokio::spawn(async move {
+        use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
+        service
+            .submit_as(
+                id,
+                caller("driven"),
+                "driven".into(),
+                drive_message(),
+                SubmissionMode::Queue,
+                super::service::Writer::Person(Initiation::grant(
+                    GrantInitiator::new("phone", revision).unwrap(),
+                )),
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(10), entered.notified())
+        .await
+        .expect("admission read the policy");
+    if revoke {
+        assert!(revoke_drive(&harness.metadata, &harness.id, "phone").await);
+    } else {
+        crate::conversation_test_support::grant_as(
+            &harness.metadata,
+            &harness.id,
+            "phone",
+            ShareAccess::new(
+                ShareRole::Drive,
+                Some(ToolPolicy::preset(ToolPreset::ReadOnlyTools)),
+            )
+            .unwrap(),
+        )
+        .await;
+    }
+    release.notify_one();
+    let sent = tokio::time::timeout(Duration::from_secs(10), sent)
+        .await
+        .expect("the send finishes")
+        .expect("the send task");
+    match sent {
+        Err(super::service::SubmitFailure::NotAsked(error)) => {
+            assert!(matches!(error, ConversationError::Revoked), "{error:?}");
+            assert_eq!(super::error_code(&error).as_str(), "revoked");
+        }
+        other => panic!("the turn was refused before it was asked, got {other:?}"),
+    }
+    assert!(harness.provider.executions.lock().unwrap().is_empty());
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    assert!(
+        harness
+            .snapshot()
+            .await
+            .invocations
+            .iter()
+            .all(|turn| turn.request.execution_id.as_str() != "driven"),
+        "a revoked grant's turn was saved"
+    );
+}
+
+#[tokio::test]
+async fn a_grant_revoked_during_admission_starts_no_turn() {
+    moved_during_admission(true).await;
+}
+
+#[tokio::test]
+async fn a_grant_whose_policy_changes_during_admission_starts_no_turn() {
+    moved_during_admission(false).await;
+}
+
+/// Row J31: `hold_revision` refuses after the command is `Attempted`. The
+/// receipt is settled as no effect. The same request is `revoked` again,
+/// not `submission_unresolved`, and the turn is not saved.
+#[tokio::test]
+async fn a_revoked_admission_settles_the_command_and_the_same_request_is_revoked_again() {
+    use nessa_sdk::application::agent_execution::commands::{
+        CreationStorage, MutationFailure, MutationOutcome, MutationStage,
+    };
+    use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
+    use nessa_sdk::infrastructure::session_storage::RecordStorage;
+    let root = tempfile::tempdir().unwrap();
+    let harness = in_process(root.path(), DELETION_BUDGETS.stop);
+    let (entered, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    bind_live_grants(
+        &harness,
+        Arc::new(PausingGrants {
+            inner: Arc::clone(&harness.metadata),
+            entered: Arc::clone(&entered),
+            release: Arc::clone(&release),
+        }),
+    );
+    harness.create().await;
+    let revision = grant_drive(&harness, "phone").await;
+    let commands: Arc<dyn CreationStorage> =
+        Arc::new(RecordStorage::new(root.path().join("commands")).unwrap());
+    harness.service.bind_commands(Arc::clone(&commands));
+    let service = harness.service.clone();
+    let id = harness.id.clone();
+    let stored = Arc::clone(&commands);
+    let sent = tokio::spawn(async move {
+        service
+            .submit_command(
+                stored,
+                id,
+                caller("settle"),
+                Initiation::grant(GrantInitiator::new("phone", revision).unwrap()),
+                "driven".into(),
+                drive_message(),
+                SubmissionMode::Queue,
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(10), entered.notified())
+        .await
+        .expect("admission read the policy");
+    assert!(revoke_drive(&harness.metadata, &harness.id, "phone").await);
+    release.notify_one();
+    let sent = tokio::time::timeout(Duration::from_secs(10), sent)
+        .await
+        .expect("the send finishes")
+        .expect("the send task");
+    match sent {
+        Err(MutationFailure::Target(error)) => {
+            assert!(matches!(error, ConversationError::Revoked), "{error:?}");
+        }
+        Err(MutationFailure::Interrupted(_)) => {
+            panic!("the first refusal left the receipt attempted")
+        }
+        Ok(_) => panic!("the first refusal dispatched a turn"),
+        Err(_) => panic!("the first refusal was not revoked"),
+    }
+    let binding = super::ConversationService::submit_lookup(
+        &harness.id,
+        &caller("settle"),
+        "driven",
+        &drive_message(),
+        SubmissionMode::Queue,
+    )
+    .unwrap();
+    let receipt = harness
+        .service
+        .lookup_command(
+            Arc::clone(&commands),
+            harness.id.clone(),
+            caller("settle"),
+            binding,
+        )
+        .await
+        .expect("the receipt is readable")
+        .expect("the refusal was recorded");
+    assert_eq!(receipt.stage(), MutationStage::Settled);
+    assert_eq!(receipt.outcome(), Some(MutationOutcome::NoEffect));
+    let again = harness
+        .service
+        .submit_command(
+            commands,
+            harness.id.clone(),
+            caller("settle"),
+            Initiation::grant(GrantInitiator::new("phone", revision).unwrap()),
+            "driven".into(),
+            drive_message(),
+            SubmissionMode::Queue,
+        )
+        .await;
+    match again {
+        Err(MutationFailure::Target(error)) => {
+            assert!(matches!(error, ConversationError::Revoked), "{error:?}");
+        }
+        Err(MutationFailure::Interrupted(_)) => {
+            panic!("the same request was submission_unresolved")
+        }
+        Ok(_) => panic!("the retry dispatched a turn"),
+        Err(_) => panic!("the retry was not revoked again"),
+    }
+    assert!(harness.provider.executions.lock().unwrap().is_empty());
+}
+
+/// The hold before the save succeeds. The save check, the second hold, fails
+/// with `after_save`.
+struct SecondHoldRevokes {
+    holds: AtomicUsize,
+    after_save: ConversationError,
+}
+
+impl super::ShareGrants for SecondHoldRevokes {
+    fn held_grant<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+    ) -> super::ConversationFuture<'a, Option<super::HeldGrant>> {
+        Box::pin(async { Ok(None) })
+    }
+    fn change(
+        &self,
+        _: super::ShareGrantChange,
+    ) -> super::ConversationFuture<'_, crate::conversation::application::ShareGrantReceipt> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+    fn grants<'a>(
+        &'a self,
+        _: &'a ConversationId,
+    ) -> super::ConversationFuture<'a, super::ShareGrantList> {
+        Box::pin(async {
+            Ok(super::ShareGrantList {
+                grants: Vec::new(),
+                change_revision: 0,
+            })
+        })
+    }
+    fn policy_at<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> super::ConversationFuture<'a, Option<crate::conversation::domain::ToolPolicy>> {
+        use crate::conversation::domain::{ToolPolicy, ToolPreset};
+        let policy = ToolPolicy::preset(ToolPreset::All);
+        Box::pin(async move { Ok(Some(policy)) })
+    }
+    fn hold_revision<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> super::ConversationFuture<'a, super::RevisionHold> {
+        let holds = self.holds.fetch_add(1, Ordering::SeqCst);
+        let after_save = self.after_save.clone();
+        Box::pin(async move {
+            if holds == 0 {
+                Ok(super::RevisionHold::vacant())
+            } else {
+                Err(after_save)
+            }
+        })
+    }
+}
+
+/// Row J31: a native steer saved, then refused by the second revision hold,
+/// settles the command. The same request is `revoked_after_save` again, and
+/// the saved turn keeps the SDK's `RefusedAfterSave`.
+#[tokio::test]
+async fn a_saved_steer_revoked_after_save_settles_the_command_and_the_same_request_is_refused_again(
+) {
+    use nessa_sdk::application::agent_execution::commands::{
+        CreationStorage, MutationFailure, MutationOutcome, MutationStage,
+    };
+    use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
+    use nessa_sdk::infrastructure::session_storage::RecordStorage;
+    let root = tempfile::tempdir().unwrap();
+    let harness = in_process(root.path(), DELETION_BUDGETS.stop);
+    harness
+        .provider
+        .native_steering
+        .store(true, Ordering::SeqCst);
+    let grants = Arc::new(SecondHoldRevokes {
+        holds: AtomicUsize::new(0),
+        after_save: ConversationError::Revoked,
+    });
+    bind_live_grants(&harness, Arc::clone(&grants) as Arc<dyn super::ShareGrants>);
+    harness.create().await;
+    let commands: Arc<dyn CreationStorage> =
+        Arc::new(RecordStorage::new(root.path().join("commands")).unwrap());
+    harness.service.bind_commands(Arc::clone(&commands));
+    let initiation = Initiation::grant(GrantInitiator::new("phone", 1).unwrap());
+    let sent = harness
+        .service
+        .submit_command(
+            Arc::clone(&commands),
+            harness.id.clone(),
+            caller("settle"),
+            initiation.clone(),
+            "driven".into(),
+            drive_message(),
+            SubmissionMode::Steer,
+        )
+        .await;
+    match sent {
+        Err(MutationFailure::Target(error)) => {
+            assert!(
+                matches!(error, ConversationError::RevokedAfterSave),
+                "{error:?}"
+            );
+        }
+        Err(MutationFailure::Interrupted(_)) => {
+            panic!("the first refusal left the receipt attempted")
+        }
+        Ok(_) => panic!("the first refusal injected a turn"),
+        Err(_) => panic!("the first refusal was not revoked after save"),
+    }
+    assert_eq!(grants.holds.load(Ordering::SeqCst), 2);
+    let binding = super::ConversationService::submit_lookup(
+        &harness.id,
+        &caller("settle"),
+        "driven",
+        &drive_message(),
+        SubmissionMode::Steer,
+    )
+    .unwrap();
+    let receipt = harness
+        .service
+        .lookup_command(
+            Arc::clone(&commands),
+            harness.id.clone(),
+            caller("settle"),
+            binding,
+        )
+        .await
+        .expect("the receipt is readable")
+        .expect("the refusal was recorded");
+    assert_eq!(receipt.stage(), MutationStage::Settled);
+    assert_eq!(receipt.outcome(), Some(MutationOutcome::RefusedAfterSave));
+    let again = harness
+        .service
+        .submit_command(
+            commands,
+            harness.id.clone(),
+            caller("settle"),
+            initiation,
+            "driven".into(),
+            drive_message(),
+            SubmissionMode::Steer,
+        )
+        .await;
+    match again {
+        Err(MutationFailure::Target(error)) => {
+            assert!(
+                matches!(error, ConversationError::RevokedAfterSave),
+                "{error:?}"
+            );
+        }
+        Err(MutationFailure::Interrupted(_)) => {
+            panic!("the same request was submission_unresolved")
+        }
+        Ok(_) => panic!("the retry injected a turn"),
+        Err(_) => panic!("the retry was not revoked after save"),
+    }
+    assert!(harness.provider.executions.lock().unwrap().is_empty());
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    assert_eq!(
+        harness
+            .snapshot()
+            .await
+            .invocations
+            .into_iter()
+            .find(|turn| turn.request.execution_id.as_str() == "driven")
+            .expect("the saved steer")
+            .result,
+        Some(Err(AgentError::RefusedAfterSave))
+    );
+}
+
+/// Row J31: a native steer saved, then left unchecked because the second
+/// revision hold cannot be read, settles the command. The same request is
+/// `unavailable_after_save` again, and the saved turn keeps the SDK's
+/// `AfterSaveUnavailable`.
+#[tokio::test]
+async fn a_saved_steer_unavailable_after_save_settles_the_command_and_the_same_request_is_unavailable_again(
+) {
+    use nessa_sdk::application::agent_execution::commands::{
+        CreationStorage, MutationFailure, MutationOutcome, MutationStage,
+    };
+    use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
+    use nessa_sdk::infrastructure::session_storage::RecordStorage;
+    let root = tempfile::tempdir().unwrap();
+    let harness = in_process(root.path(), DELETION_BUDGETS.stop);
+    harness
+        .provider
+        .native_steering
+        .store(true, Ordering::SeqCst);
+    let grants = Arc::new(SecondHoldRevokes {
+        holds: AtomicUsize::new(0),
+        after_save: ConversationError::Metadata,
+    });
+    bind_live_grants(&harness, Arc::clone(&grants) as Arc<dyn super::ShareGrants>);
+    harness.create().await;
+    let commands: Arc<dyn CreationStorage> =
+        Arc::new(RecordStorage::new(root.path().join("commands")).unwrap());
+    harness.service.bind_commands(Arc::clone(&commands));
+    let initiation = Initiation::grant(GrantInitiator::new("phone", 1).unwrap());
+    let sent = harness
+        .service
+        .submit_command(
+            Arc::clone(&commands),
+            harness.id.clone(),
+            caller("settle"),
+            initiation.clone(),
+            "driven".into(),
+            drive_message(),
+            SubmissionMode::Steer,
+        )
+        .await;
+    match sent {
+        Err(MutationFailure::Target(error)) => {
+            assert!(
+                matches!(error, ConversationError::UnavailableAfterSave),
+                "{error:?}"
+            );
+        }
+        Err(MutationFailure::Interrupted(_)) => {
+            panic!("the first failure left the receipt attempted")
+        }
+        Ok(_) => panic!("the first failure injected a turn"),
+        Err(_) => panic!("the first failure was not unavailable after save"),
+    }
+    assert_eq!(grants.holds.load(Ordering::SeqCst), 2);
+    let binding = super::ConversationService::submit_lookup(
+        &harness.id,
+        &caller("settle"),
+        "driven",
+        &drive_message(),
+        SubmissionMode::Steer,
+    )
+    .unwrap();
+    let receipt = harness
+        .service
+        .lookup_command(
+            Arc::clone(&commands),
+            harness.id.clone(),
+            caller("settle"),
+            binding,
+        )
+        .await
+        .expect("the receipt is readable")
+        .expect("the failure was recorded");
+    assert_eq!(receipt.stage(), MutationStage::Settled);
+    assert_eq!(
+        receipt.outcome(),
+        Some(MutationOutcome::UnavailableAfterSave)
+    );
+    let again = harness
+        .service
+        .submit_command(
+            commands,
+            harness.id.clone(),
+            caller("settle"),
+            initiation,
+            "driven".into(),
+            drive_message(),
+            SubmissionMode::Steer,
+        )
+        .await;
+    match again {
+        Err(MutationFailure::Target(error)) => {
+            assert!(
+                matches!(error, ConversationError::UnavailableAfterSave),
+                "{error:?}"
+            );
+        }
+        Err(MutationFailure::Interrupted(_)) => {
+            panic!("the same request was submission_unresolved")
+        }
+        Ok(_) => panic!("the retry injected a turn"),
+        Err(_) => panic!("the retry was not unavailable after save"),
+    }
+    assert!(harness.provider.executions.lock().unwrap().is_empty());
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    assert_eq!(
+        harness
+            .snapshot()
+            .await
+            .invocations
+            .into_iter()
+            .find(|turn| turn.request.execution_id.as_str() == "driven")
+            .expect("the saved steer")
+            .result,
+        Some(Err(AgentError::AfterSaveUnavailable))
+    );
+}
+
+/// Row J31: the revision hold spans the save, so a revoke cannot commit
+/// until the turn's record is written.
+#[tokio::test]
+async fn a_grant_change_waits_until_the_turn_is_saved() {
+    let root = tempfile::tempdir().unwrap();
+    let harness = in_process(root.path(), DELETION_BUDGETS.stop);
+    bind_live_grants(
+        &harness,
+        Arc::clone(&harness.metadata) as Arc<dyn super::ShareGrants>,
+    );
+    harness.create().await;
+    let revision = grant_drive(&harness, "phone").await;
+    let (entered, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    *harness.storage.stall_input.lock().unwrap() =
+        Some((Arc::clone(&entered), Arc::clone(&release)));
+    let service = harness.service.clone();
+    let id = harness.id.clone();
+    let sent = tokio::spawn(async move {
+        use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
+        service
+            .submit_as(
+                id,
+                caller("driven"),
+                "driven".into(),
+                drive_message(),
+                SubmissionMode::Queue,
+                super::service::Writer::Person(Initiation::grant(
+                    GrantInitiator::new("phone", revision).unwrap(),
+                )),
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(10), entered.notified())
+        .await
+        .expect("the turn's save is entered");
+    let metadata = Arc::clone(&harness.metadata);
+    let conversation = harness.id.clone();
+    let revoke_started = Arc::new(Notify::new());
+    let revoke_started_in_task = Arc::clone(&revoke_started);
+    let mut revoke = tokio::spawn(async move {
+        revoke_started_in_task.notify_one();
+        revoke_drive(&metadata, &conversation, "phone").await
+    });
+    tokio::time::timeout(Duration::from_secs(5), revoke_started.notified())
+        .await
+        .expect("the revoke started");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), &mut revoke)
+            .await
+            .is_err(),
+        "the revoke committed while the turn was still being saved"
+    );
+    release.notify_one();
+    let sent = tokio::time::timeout(Duration::from_secs(10), sent)
+        .await
+        .expect("the send finishes")
+        .expect("the send task");
+    assert!(sent.is_ok(), "{sent:?}");
+    assert!(tokio::time::timeout(Duration::from_secs(5), &mut revoke)
+        .await
+        .expect("the revoke finishes")
+        .expect("the revoke task"));
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    let snapshot = harness.snapshot().await;
+    let turn = snapshot
+        .invocations
+        .iter()
+        .find(|turn| turn.request.execution_id.as_str() == "driven")
+        .expect("the saved turn");
+    match turn.initiation.initiator() {
+        nessa_sdk::domain::agent_execution::executions::Initiator::Grant(grant) => {
+            assert_eq!(grant.grant(), "phone");
+            assert_eq!(grant.policy_revision(), revision);
+        }
+        other => panic!("saved as the grant, got {other:?}"),
+    }
+    assert!(super::ShareGrants::grants(&*harness.metadata, &harness.id)
+        .await
+        .unwrap()
+        .grants
+        .is_empty());
+}
+
+/// Row J31: a stalled save on one conversation does not block another
+/// conversation's revoke or its Drive turn. The permit is the grant's, not
+/// the process's.
+#[tokio::test]
+async fn a_stalled_save_on_one_conversation_does_not_block_another() {
+    use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy, ToolPreset};
+    let root = tempfile::tempdir().unwrap();
+    let harness = in_process(root.path(), DELETION_BUDGETS.stop);
+    bind_live_grants(
+        &harness,
+        Arc::clone(&harness.metadata) as Arc<dyn super::ShareGrants>,
+    );
+    harness.create().await;
+    let revision = grant_drive(&harness, "phone").await;
+    let other = ConversationId::new("6c0a9f2e-1d3b-4c7a-8e6f-2b9d4a1c7e31").unwrap();
+    harness
+        .service
+        .create(
+            other.clone(),
+            caller("create-other"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    crate::conversation_test_support::grant_as(
+        &harness.metadata,
+        &other,
+        "phone",
+        ShareAccess::new(ShareRole::Drive, Some(ToolPolicy::preset(ToolPreset::All))).unwrap(),
+    )
+    .await;
+    let other_revision = super::ShareGrants::grants(&*harness.metadata, &other)
+        .await
+        .unwrap()
+        .grants
+        .into_iter()
+        .find(|grant| grant.receiver_id == "phone")
+        .expect("the other grant")
+        .policy_revision;
+    let (entered, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    *harness.storage.stall_input.lock().unwrap() =
+        Some((Arc::clone(&entered), Arc::clone(&release)));
+    let service = harness.service.clone();
+    let id = harness.id.clone();
+    let stalled = tokio::spawn(async move {
+        use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
+        service
+            .submit_as(
+                id,
+                caller("driven-a"),
+                "driven-a".into(),
+                drive_message(),
+                SubmissionMode::Queue,
+                super::service::Writer::Person(Initiation::grant(
+                    GrantInitiator::new("phone", revision).unwrap(),
+                )),
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(10), entered.notified())
+        .await
+        .expect("conversation A's save is entered");
+    let release_when_done = ReleaseWhenDropped(Arc::clone(&release));
+    let sent = tokio::time::timeout(
+        Duration::from_secs(5),
+        submit_drive_on(&harness, &other, "driven-b", other_revision),
+    )
+    .await
+    .expect("conversation B's Drive turn is not blocked by A's save");
+    assert!(sent.is_ok(), "{sent:?}");
+    let metadata = Arc::clone(&harness.metadata);
+    let other_for_revoke = other.clone();
+    let revoked = tokio::time::timeout(Duration::from_secs(2), async move {
+        revoke_drive(&metadata, &other_for_revoke, "phone").await
+    })
+    .await
+    .expect("conversation B's revoke is not blocked by A's save");
+    assert!(revoked);
+    drop(release_when_done);
+    let stalled = tokio::time::timeout(Duration::from_secs(10), stalled)
+        .await
+        .expect("conversation A's send finishes")
+        .expect("conversation A's send task");
+    assert!(stalled.is_ok(), "{stalled:?}");
+    harness
+        .service
+        .close(harness.id.clone(), caller("close-a"))
+        .await
+        .unwrap();
+    harness
+        .service
+        .close(other, caller("close-b"))
+        .await
+        .unwrap();
+}
+
+/// Notifies when dropped, including when an assertion panics, so a stalled
+/// save does not outlive the test.
+struct ReleaseWhenDropped(Arc<Notify>);
+
+impl Drop for ReleaseWhenDropped {
+    fn drop(&mut self) {
+        self.0.notify_one();
+    }
+}
+
+async fn submit_drive_on(
+    harness: &Harness,
+    id: &ConversationId,
+    execution: &str,
+    revision: u64,
+) -> Result<nessa_protocol::conversation::view::SubmissionReceipt, super::service::SubmitFailure> {
+    use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
+    harness
+        .service
+        .submit_as(
+            id.clone(),
+            caller(execution),
+            execution.into(),
+            drive_message(),
+            SubmissionMode::Queue,
+            super::service::Writer::Person(Initiation::grant(
+                GrantInitiator::new("phone", revision).unwrap(),
+            )),
+        )
+        .await
+}
+
+/// Row J31: a retry of a turn already saved is answered from that save
+/// after the grant is revoked, and is not admitted again.
+#[tokio::test]
+async fn a_saved_drive_turn_is_retried_after_its_grant_is_revoked() {
+    let root = tempfile::tempdir().unwrap();
+    let harness = in_process(root.path(), DELETION_BUDGETS.stop);
+    bind_live_grants(
+        &harness,
+        Arc::clone(&harness.metadata) as Arc<dyn super::ShareGrants>,
+    );
+    harness.create().await;
+    let revision = grant_drive(&harness, "phone").await;
+    assert!(submit_drive(&harness, "driven", revision).await.is_ok());
+    assert!(revoke_drive(&harness.metadata, &harness.id, "phone").await);
+    assert!(submit_drive(&harness, "driven", revision).await.is_ok());
+    assert_eq!(
+        harness.provider.executions.lock().unwrap().as_slice(),
+        ["driven"]
+    );
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    let driven: Vec<_> = harness
+        .snapshot()
+        .await
+        .invocations
+        .into_iter()
+        .filter(|turn| turn.request.execution_id.as_str() == "driven")
+        .collect();
+    assert_eq!(driven.len(), 1);
 }

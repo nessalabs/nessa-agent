@@ -10,7 +10,8 @@
 //! asked with, and maps its answer to a wire code. It also maps a share's
 //! role and policy between the wire and the domain. `conversation.read`,
 //! `artifact.read` and every view subscription batch
-//! (`subscription::authorize_batch`) ask [`admit_conversation`];
+//! (`subscription::authorize_batch`) ask [`admit_conversation`]; a paired
+//! device is admitted to that batch on [`admit_paired_follow`];
 //! `conversation.list`, `conversation.observe` and every list batch ask
 //! [`admit_list`]. A gateway that pairs no device has no receiver binding, so
 //! every session is the owner's and reads exactly as before (row G11).
@@ -40,9 +41,9 @@ use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
 use nessa_protocol::product::generated::{
     action_for_method, ConversationMutationResult, ConversationShare, ConversationShareParams,
-    ConversationShareResult, ConversationShareRole, ConversationSharesParams,
-    ConversationSharesResult, ConversationToolPolicy, ConversationToolPreset,
-    ConversationUnshareParams,
+    ConversationShareResult, ConversationShareRole, ConversationSharesCursor,
+    ConversationSharesParams, ConversationSharesResult, ConversationToolPolicy,
+    ConversationToolPreset, ConversationUnshareParams, MAX_SHARE_PAGE,
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
@@ -80,6 +81,38 @@ fn party<'a>(binding: &'a ReceiverBinding, session: &'a AuthenticatedSession) ->
         signed_in_as: session.context().principal_id(),
         binding_owner: &binding.owner_id,
         receiver: &binding.receiver_id,
+    }
+}
+
+/// Whether a paired `session` may open or stop one view subscription on
+/// `method`.
+///
+/// Returns whether this call admitted it. A session that is not paired, and
+/// a method other than `conversation.subscribe` or `conversation.unsubscribe`,
+/// returns false so the caller asks the method's own grant. A paired session
+/// is admitted on the grant pairing mints (`conversation.read`). One that
+/// holds `conversation.write` instead is admitted on that grant, as a paired
+/// session holding the owner's write grant already was. The conversation it
+/// may follow is [`admit_conversation`], asked by the subscription task.
+/// `conversation.subscribeList` is not here: a device stays refused it until
+/// the catalogue is grant-scoped.
+pub(super) async fn admit_paired_follow(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    method: &str,
+) -> Result<bool, &'static str> {
+    if method != "conversation.subscribe" && method != "conversation.unsubscribe" {
+        return Ok(false);
+    }
+    if paired_binding(state, session).await?.is_none() {
+        return Ok(false);
+    }
+    match admit_grant(state, session, PAIRING_GRANT).await {
+        Ok(()) => Ok(true),
+        Err("forbidden") => admit_grant(state, session, "conversation.write")
+            .await
+            .map(|()| true),
+        Err(code) => Err(code),
     }
 }
 
@@ -416,14 +449,30 @@ pub(super) async fn dispatch_share(
             "conversation.shares" => {
                 let params: ConversationSharesParams = serde_json::from_value(frame.params)
                     .map_err(|_| ConversationError::InvalidInput)?;
+                let page_size = usize::try_from(params.page_size)
+                    .ok()
+                    .filter(|size| (1..=MAX_SHARE_PAGE).contains(size))
+                    .ok_or(ConversationError::InvalidInput)?;
+                if let Some(cursor) = &params.cursor {
+                    CredentialId::new(cursor.credential_id.clone())
+                        .map_err(|_| ConversationError::InvalidInput)?;
+                    if cursor.granted_at_ms > MAX_POLICY_REVISION {
+                        return Err(ConversationError::InvalidInput);
+                    }
+                }
                 let id = conversation_id(&params.conversation_id)?;
-                let items = shares
+                let listed = shares
                     .shares(&caller(session, frame.id.clone()), &id)
-                    .await?
-                    .iter()
-                    .map(listed)
-                    .collect();
-                Ok(success(&frame.id, &ConversationSharesResult { items }))
+                    .await?;
+                let page = share_page(&listed.grants, params.cursor.as_ref(), page_size);
+                Ok(success(
+                    &frame.id,
+                    &ConversationSharesResult {
+                        items: page.items,
+                        cursor: page.cursor,
+                        change_revision: listed.change_revision,
+                    },
+                ))
             }
             _ => Err(ConversationError::InvalidInput),
         }
@@ -520,9 +569,9 @@ fn expected_revision(value: Option<u64>) -> Result<Option<u64>, ConversationErro
 
 /// A wire policy as the domain's: `preset` alone, or `allow` and `deny`
 /// together, each checked by `ToolRules::new`, with `commandHosts` beside
-/// either, checked by `CommandHosts::new` and against the policy's entries
-/// (`ToolPolicy::with_command_hosts`); absent or empty, it names none.
-/// Any other shape is `InvalidInput` (row J3).
+/// either, checked by `CommandHosts::new`; absent or empty, it names none.
+/// Hosts are not counted against the patterns. Any other shape is
+/// `InvalidInput` (row J3).
 fn tool_policy(policy: ConversationToolPolicy) -> Result<ToolPolicy, ConversationError> {
     let hosts = CommandHosts::new(policy.command_hosts.unwrap_or_default())
         .map_err(|_| ConversationError::InvalidInput)?;
@@ -533,9 +582,7 @@ fn tool_policy(policy: ConversationToolPolicy) -> Result<ToolPolicy, Conversatio
             .map_err(|_| ConversationError::InvalidInput)?,
         _ => return Err(ConversationError::InvalidInput),
     };
-    tools
-        .with_command_hosts(hosts)
-        .map_err(|_| ConversationError::InvalidInput)
+    Ok(tools.with_command_hosts(hosts))
 }
 
 fn wire_policy(policy: &ToolPolicy) -> ConversationToolPolicy {
@@ -554,6 +601,47 @@ fn wire_policy(policy: &ToolPolicy) -> ConversationToolPolicy {
             deny: Some(rules.deny().to_vec()),
             command_hosts,
         },
+    }
+}
+
+struct SharePage {
+    items: Vec<ConversationShare>,
+    cursor: Option<ConversationSharesCursor>,
+}
+
+/// One page of `grants`, already oldest first (`granted_at_ms`, then
+/// credential). `cursor` names the last grant the previous page returned;
+/// this page is the grants strictly after that pair. The cursor on the
+/// result names this page's last grant when further grants remain, and is
+/// absent when the page finishes the list.
+fn share_page(
+    grants: &[ShareGrant],
+    cursor: Option<&ConversationSharesCursor>,
+    page_size: usize,
+) -> SharePage {
+    let start = match cursor {
+        None => 0,
+        Some(cursor) => grants
+            .iter()
+            .position(|grant| {
+                (grant.granted_at_ms, grant.credential_id.as_str())
+                    > (cursor.granted_at_ms, cursor.credential_id.as_str())
+            })
+            .unwrap_or(grants.len()),
+    };
+    let end = start.saturating_add(page_size).min(grants.len());
+    let slice = &grants[start..end];
+    let cursor = if end < grants.len() {
+        slice.last().map(|grant| ConversationSharesCursor {
+            granted_at_ms: grant.granted_at_ms,
+            credential_id: grant.credential_id.as_str().to_owned(),
+        })
+    } else {
+        None
+    };
+    SharePage {
+        items: slice.iter().map(listed).collect(),
+        cursor,
     }
 }
 

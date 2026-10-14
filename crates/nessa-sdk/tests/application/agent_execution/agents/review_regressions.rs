@@ -191,14 +191,16 @@ impl ProviderSessionBackend for Probe {
             }
         })
     }
-    fn steer(
-        &self,
+    fn steer<'a>(
+        &'a self,
         _: ExecutionId,
         _: ExecutionRequest,
-    ) -> ProviderOperationFuture<'_, SteeringOutcome> {
+        started: &'a (dyn Fn() + Send + Sync),
+    ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {
             let result: Result<SteeringOutcome, AgentError> = {
                 self.steers.fetch_add(1, Ordering::SeqCst);
+                started();
                 Box::pin(async {
                     match self.control_result().await {
                         Some(error) => Err(error),

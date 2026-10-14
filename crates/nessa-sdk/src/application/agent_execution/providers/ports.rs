@@ -111,12 +111,19 @@ pub trait ProviderSessionBackend: Send + Sync {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()>;
     /// Deliver input only to the target execution. An ambiguous delivery failure
     /// is an error, never permission to replay the input as a fresh invocation.
-    fn steer(
-        &self,
+    ///
+    /// Call `started` once the steer has been handed to the harness, and on
+    /// every path that returns without handing it over, before this future
+    /// waits for the harness's response. The host releases what it held until
+    /// that handoff. Calling `started` again is harmless.
+    fn steer<'a>(
+        &'a self,
         _target: ExecutionId,
         _input: ExecutionRequest,
-    ) -> ProviderOperationFuture<'_, SteeringOutcome> {
-        Box::pin(async {
+        started: &'a (dyn Fn() + Send + Sync),
+    ) -> ProviderOperationFuture<'a, SteeringOutcome> {
+        Box::pin(async move {
+            started();
             Err(ProviderOperationFailure::new(
                 AgentError::Unsupported("provider does not support steering".into()),
                 ProviderSessionState::Usable,

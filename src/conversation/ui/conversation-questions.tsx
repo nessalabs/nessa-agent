@@ -1,5 +1,6 @@
+import { questionTargets, type QuestionTarget } from "@nessa/client"
 import { useState } from "react"
-import type { Conversation } from "../model"
+import { questionAnswerReady, questionChoices, type Conversation } from "../model"
 import { controlConversation } from "../adapters/store/slice"
 import { useConversationDispatch } from "../adapters/store/hooks"
 
@@ -17,7 +18,7 @@ import {
 } from "@nessa-ui/react/questionnaire"
 import { Button } from "@nessa-ui/react/button"
 
-type Asked = NonNullable<Conversation["remote"]>["questions"][number]
+type Asked = QuestionTarget
 
 /**
  * What the agent is waiting to hear, asked where the conversation is.
@@ -39,13 +40,19 @@ export function ConversationQuestions({
   conversation: Conversation
   gatewayAvailable: boolean
 }) {
-  const questions = conversation.remote?.questions ?? []
+  const questions =
+    conversation.serverConversationId && conversation.remote
+      ? questionTargets({
+          conversationId: conversation.serverConversationId,
+          questions: conversation.remote.questions,
+        })
+      : []
   if (!questions.length) return null
   return (
     <div className="flex flex-col gap-3">
       {questions.map((ask) => (
         <ConversationQuestion
-          key={JSON.stringify([ask.executionId, ask.questionId])}
+          key={JSON.stringify([ask.conversationId, ask.executionId, ask.questionId])}
           ask={ask}
           conversation={conversation}
           gatewayAvailable={gatewayAvailable}
@@ -75,13 +82,7 @@ function ConversationQuestion({
   const [chosen, setChosen] = useState<ReadonlyMap<string, string[]>>(new Map())
   const [ownWords, setOwnWords] = useState<ReadonlyMap<string, string>>(new Map())
   const busy = !gatewayAvailable || conversation.controlPending
-  const hasAnswer = (question: Asked["questions"][number]) =>
-    Boolean(chosen.get(question.key)?.length || ownWords.get(question.key)?.trim())
-  const answered =
-    ask.questions.some(hasAnswer) &&
-    ask.questions.every(
-      (question) => !question.required || Boolean(chosen.get(question.key)?.length),
-    )
+  const answered = questionAnswerReady(ask.questions, chosen, ownWords)
 
   const send = (
     choices: { key: string; values: string[]; ownWords?: string }[] | null,
@@ -91,8 +92,7 @@ function ConversationQuestion({
         id: conversation.id,
         control: {
           kind: "answerQuestion",
-          executionId: ask.executionId,
-          questionId: ask.questionId,
+          target: ask,
           choices,
         },
       }),
@@ -109,7 +109,7 @@ function ConversationQuestion({
         <QuestionnaireTitle>{ask.message}</QuestionnaireTitle>
       </QuestionnaireHeader>
       {ask.questions.map((question) => (
-        <QuestionnaireItem key={question.key} name={question.key}>
+        <QuestionnaireItem key={question.key}>
           {/* With one question the framing above is the question, so repeating
               it as a title would say the same thing twice. */}
           {ask.questions.length > 1 || question.header ? (
@@ -175,17 +175,7 @@ function ConversationQuestion({
         <QuestionnaireSubmit
           disabled={busy || !answered}
           onClick={() => {
-            send(
-              ask.questions
-                .map((question) => ({
-                  key: question.key,
-                  values: chosen.get(question.key) ?? [],
-                  ownWords: ownWords.get(question.key)?.trim() || undefined,
-                }))
-                // A question nobody touched is left out rather than sent empty,
-                // which is how the agent's own form expresses a skip.
-                .filter((choice) => choice.values.length || choice.ownWords),
-            )
+            send(questionChoices(ask.questions, chosen, ownWords))
           }}
         >
           Answer

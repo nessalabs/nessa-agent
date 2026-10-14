@@ -34,7 +34,17 @@ impl ConversationService {
     ///
     /// `delivery` is the submission receipt from the call that actually
     /// enqueued. A settled retry leaves it empty; the socket then reads the
-    /// saved turn without enqueueing again.
+    /// saved turn without enqueueing again. A submit settled
+    /// [`MutationOutcome::NoEffect`] is returned as [`ConversationError::Revoked`]:
+    /// the effect refused before anything was enqueued, and the same request
+    /// answers that refusal again. A submit settled
+    /// [`MutationOutcome::RefusedAfterSave`] is returned as
+    /// [`ConversationError::RevokedAfterSave`]: the turn was saved and then
+    /// refused before injection, and the same request answers that refusal
+    /// again. A submit settled [`MutationOutcome::UnavailableAfterSave`] is
+    /// returned as [`ConversationError::UnavailableAfterSave`]: the turn was
+    /// saved and then could not be checked, and the same request answers
+    /// that failure again.
     ///
     /// `initiation` is who the turn is saved as started by: the owner, or the
     /// share grant that admitted it. A retry of the same request is answered
@@ -99,6 +109,20 @@ impl ConversationService {
         })
         .await
         .map_err(|error| MutationFailure::TaskFault(CreationTaskFault::from_join_error(error)))??;
+        match progress.outcome() {
+            Some(MutationOutcome::NoEffect) => {
+                return Err(MutationFailure::Target(ConversationError::Revoked));
+            }
+            Some(MutationOutcome::RefusedAfterSave) => {
+                return Err(MutationFailure::Target(ConversationError::RevokedAfterSave));
+            }
+            Some(MutationOutcome::UnavailableAfterSave) => {
+                return Err(MutationFailure::Target(
+                    ConversationError::UnavailableAfterSave,
+                ));
+            }
+            _ => {}
+        }
         let delivery = delivery
             .lock()
             .map_err(|_| MutationFailure::Target(ConversationError::Unavailable))?
@@ -273,7 +297,7 @@ impl MutationTarget for SubmitTarget {
         let mode = self.mode;
         let delivery = self.delivery.clone();
         Box::pin(async move {
-            let receipt = service
+            let submitted = service
                 .submit_as(
                     id,
                     caller,
@@ -283,8 +307,25 @@ impl MutationTarget for SubmitTarget {
                     Writer::Person(initiation, offers_remember),
                 )
                 .await
-                .map_err(SubmitFailure::into_error)
-                .map_err(CreationInitializationFailure::Target)?;
+                .map_err(SubmitFailure::into_error);
+            let receipt = match submitted {
+                // The revision hold refused after this command was recorded
+                // Attempted, or the second hold could not be read. Settle it,
+                // so the same request is answered again instead of
+                // `submission_unresolved`. Before the save, nothing was
+                // enqueued. After the save, the SDK already cached
+                // `RefusedAfterSave` or `AfterSaveUnavailable`; the receipt
+                // keeps that answer.
+                Err(ConversationError::Revoked) => return Ok(MutationOutcome::NoEffect),
+                Err(ConversationError::RevokedAfterSave) => {
+                    return Ok(MutationOutcome::RefusedAfterSave)
+                }
+                Err(ConversationError::UnavailableAfterSave) => {
+                    return Ok(MutationOutcome::UnavailableAfterSave)
+                }
+                Err(error) => return Err(CreationInitializationFailure::Target(error)),
+                Ok(receipt) => receipt,
+            };
             delivery
                 .lock()
                 .map_err(|_| ConversationError::Unavailable)
