@@ -2,8 +2,17 @@
 //! failures in a row, and one draw of entropy. And the status answer a stop
 //! does not drop once the worker has committed an ending, which the audit
 //! then records instead of continuing into a read.
+use super::super::audit::DurablePeerAudit;
 use super::*;
-use crate::peer_gateways::application::{CacheState, PeerState};
+use crate::peer_gateways::application::{
+    CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable,
+    PeerConnectFuture, PeerConnector, PeerState,
+};
+use crate::peer_gateways::infrastructure::{PeerRecords, AUDIT_DEADLINE};
+use futures_util::FutureExt;
+use nessa_auth::application::pairing::{GatewayKeyStore, PrivateKeyMaterial, PrivateStateError};
+use nessa_auth::application::ports::Clock;
+use nessa_auth::domain::PrincipalId;
 use nessa_auth::domain::{
     pairing::{
         AttemptId, AttemptOutcome, ConsentClass, ConsentIntentId, DisclosedConsent, InvitationId,
@@ -12,11 +21,14 @@ use nessa_auth::domain::{
     AudienceId, OrganizationId, Resource, ResourceId,
 };
 use nessa_protocol::pairing::wire::NativePairingStatus;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 
 const POLICY: PollPolicy = PollPolicy {
     interval: Duration::from_secs(30),
     backoff_cap: Duration::from_secs(15 * 60),
     read_budget: Duration::from_secs(60),
+    reads_at_once: 4,
 };
 /// The draws that give the shortest, the middle and the longest spread.
 const LOW: u32 = 0;
@@ -25,19 +37,39 @@ const HIGH: u32 = 400;
 
 #[test]
 fn a_settled_or_waiting_peer_waits_the_interval_and_clears_its_failures() {
-    for pace in [Pace::Settled, Pace::Waiting] {
-        assert_eq!(next_wait(&POLICY, pace, 5, MIDDLE), (POLICY.interval, 0));
-    }
+    assert_eq!(
+        next_wait(&POLICY, Pace::Settled, 5, MIDDLE, false),
+        (POLICY.interval, 0)
+    );
+    assert_eq!(
+        next_wait(&POLICY, Pace::Waiting, 5, MIDDLE, true),
+        (POLICY.interval, 0)
+    );
+}
+
+/// A read in flight lists a new peer before its owner has approved it.
+/// That first pending status is read again soon, so the approval is not
+/// stuck behind the interval. A peer that is still pending then waits it.
+#[test]
+fn a_peer_seen_pending_is_read_again_soon_and_then_waits_the_interval() {
+    assert_eq!(
+        next_wait(&POLICY, Pace::Waiting, 5, MIDDLE, false),
+        (POLICY.interval / 8, 0)
+    );
+    assert_eq!(
+        next_wait(&POLICY, Pace::Waiting, 0, MIDDLE, true),
+        (POLICY.interval, 0)
+    );
 }
 
 #[test]
 fn an_incomplete_read_continues_soon_and_a_stopped_one_keeps_its_failures() {
     assert_eq!(
-        next_wait(&POLICY, Pace::Continue, 3, MIDDLE),
+        next_wait(&POLICY, Pace::Continue, 3, MIDDLE, false),
         (POLICY.interval / 8, 0)
     );
     assert_eq!(
-        next_wait(&POLICY, Pace::Stopped, 3, MIDDLE),
+        next_wait(&POLICY, Pace::Stopped, 3, MIDDLE, false),
         (POLICY.interval / 8, 3)
     );
 }
@@ -47,7 +79,7 @@ fn failures_double_the_wait_up_to_the_cap() {
     let mut failures = 0;
     let mut waits = Vec::new();
     for _ in 0..8 {
-        let (wait, after) = next_wait(&POLICY, Pace::Failed, failures, MIDDLE);
+        let (wait, after) = next_wait(&POLICY, Pace::Failed, failures, MIDDLE, false);
         assert_eq!(after, failures + 1);
         failures = after;
         waits.push(wait.as_secs());
@@ -55,32 +87,35 @@ fn failures_double_the_wait_up_to_the_cap() {
     assert_eq!(waits, [60, 120, 240, 480, 900, 900, 900, 900]);
     // Failures saturate rather than overflow the shift.
     assert_eq!(
-        next_wait(&POLICY, Pace::Failed, u32::MAX, MIDDLE),
+        next_wait(&POLICY, Pace::Failed, u32::MAX, MIDDLE, false),
         (POLICY.backoff_cap, u32::MAX)
     );
 }
 
 #[test]
 fn jitter_spreads_a_wait_over_80_to_120_percent_and_the_cap_still_holds() {
-    let low = next_wait(&POLICY, Pace::Settled, 0, LOW).0;
-    let high = next_wait(&POLICY, Pace::Settled, 0, HIGH).0;
+    let low = next_wait(&POLICY, Pace::Settled, 0, LOW, false).0;
+    let high = next_wait(&POLICY, Pace::Settled, 0, HIGH, false).0;
     assert_eq!(low, Duration::from_secs(24));
     assert_eq!(high, Duration::from_secs(36));
     // Draws wrap rather than leave the range.
-    assert_eq!(next_wait(&POLICY, Pace::Settled, 0, HIGH + 401).0, high);
+    assert_eq!(
+        next_wait(&POLICY, Pace::Settled, 0, HIGH + 401, false).0,
+        high
+    );
     for draw in [LOW, MIDDLE, HIGH, u32::MAX] {
         for failures in 0..12 {
-            let (wait, _) = next_wait(&POLICY, Pace::Failed, failures, draw);
+            let (wait, _) = next_wait(&POLICY, Pace::Failed, failures, draw, false);
             assert!(wait <= POLICY.backoff_cap, "{wait:?} after {failures}");
         }
     }
     // At the cap, the longest spread is held to it.
     assert_eq!(
-        next_wait(&POLICY, Pace::Failed, 10, HIGH).0,
+        next_wait(&POLICY, Pace::Failed, 10, HIGH, false).0,
         POLICY.backoff_cap
     );
     assert_eq!(
-        next_wait(&POLICY, Pace::Failed, 10, LOW).0,
+        next_wait(&POLICY, Pace::Failed, 10, LOW, false).0,
         POLICY.backoff_cap.mul_f64(0.8)
     );
 }
@@ -110,6 +145,50 @@ fn records_that_cannot_be_listed_wait_the_interval_not_a_due_already_past() {
         next_wake(false, [500].into_iter(), 1_000, POLICY.interval),
         1_000 + interval
     );
+}
+
+#[test]
+fn a_read_in_flight_wakes_within_a_tick_and_an_idle_poller_waits_its_schedule() {
+    assert!(look_again_soon(true, true, 0));
+    assert!(look_again_soon(true, true, 30_000));
+    // Due, and not started: look again, rather than spin on the same listing.
+    assert!(look_again_soon(true, false, 0));
+    // Nothing running, and the next peer is in the future: wait that out.
+    assert!(!look_again_soon(true, false, 30_000));
+    // A list that failed waits the interval, whether or not a read is in flight.
+    assert!(!look_again_soon(false, true, 0));
+    assert!(!look_again_soon(false, false, 30_000));
+}
+
+/// A wake while a read runs is every tick. The directory is scanned when the
+/// records change, or once an interval has passed.
+#[test]
+fn a_schedule_of_no_places_still_reads_one() {
+    assert_eq!(read_places(0), 1);
+    assert_eq!(read_places(1), 1);
+    assert_eq!(read_places(READS_AT_ONCE), READS_AT_ONCE);
+}
+
+/// One more cycle than the queue was sized for does not fit beside the
+/// owner headroom. A schedule that asks for it runs [`READS_AT_ONCE`].
+#[test]
+fn a_schedule_past_the_audit_bound_reads_only_that_many() {
+    let asked = READS_AT_ONCE + 1;
+    assert!(
+        asked * RECORDS_PER_CYCLE + AUDIT_HEADROOM > AUDIT_QUEUE,
+        "one more cycle no longer overflows the audit queue"
+    );
+    assert_eq!(read_places(asked), READS_AT_ONCE);
+    assert!(read_places(asked) * RECORDS_PER_CYCLE + AUDIT_HEADROOM <= AUDIT_QUEUE);
+}
+
+#[test]
+fn a_running_read_lists_when_the_records_change_or_the_interval_passes() {
+    let interval = POLICY.interval.as_millis() as u64;
+    assert!(!list_peers(false, 0, interval));
+    assert!(!list_peers(false, interval - 1, interval));
+    assert!(list_peers(false, interval, interval));
+    assert!(list_peers(true, 0, interval));
 }
 
 #[test]
@@ -417,4 +496,382 @@ async fn a_read_that_panics_still_reports_what_it_withdrew() {
         read_ended(joined, &withdrawn),
         (Err(ReadFailure::Cache), vec!["withdrawn".to_owned()])
     );
+}
+
+/// Two cycles on the reset path each hand over [`RECORDS_PER_CYCLE`] records.
+/// A queue of 64, the old depth, refuses that burst while the writer is
+/// stalled on the first record. The queue the gateway builds holds every
+/// cycle that can run at once plus the owner headroom, and keeps them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_queue_of_64_refuses_two_full_cycles_and_the_sized_queue_keeps_every_cycle_and_an_owner_record(
+) {
+    let two_cycles = 2 * RECORDS_PER_CYCLE;
+    assert!(
+        two_cycles > 64,
+        "two full cycles no longer overflow the old queue of 64"
+    );
+    let burst = READS_AT_ONCE * RECORDS_PER_CYCLE + AUDIT_HEADROOM;
+    assert!(burst <= AUDIT_QUEUE);
+    assert!(
+        refused_while_stalled(64, two_cycles).await > 0,
+        "a queue of 64 accepted two full cycles"
+    );
+    assert_eq!(
+        refused_while_stalled(AUDIT_QUEUE, burst).await,
+        0,
+        "a cycle or the owner record was refused while the writer was stalled"
+    );
+}
+
+/// The writer has kept the first record and is stalled on the second, so
+/// the rest of the cycle is still queued. Past [`AUDIT_DEADLINE`] the read
+/// slot stays held, so a replacement cycle cannot enqueue another wave, and
+/// the owner headroom still accepts a record. What is still queued plus
+/// that wave is more than the queue. The first record's answer was already
+/// taken, and waiting on it again would panic. A stop releases the slot
+/// while the writer is still stalled, so shutdown can drain it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_read_slot_stays_until_queued_records_leave() {
+    // The stalled record has been taken out of the queue, and the one
+    // before it has been written.
+    let still_queued = RECORDS_PER_CYCLE - 2;
+    assert!(
+        still_queued + READS_AT_ONCE * RECORDS_PER_CYCLE + AUDIT_HEADROOM > AUDIT_QUEUE,
+        "a replacement wave no longer passes the owner headroom"
+    );
+
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("audit");
+    nessa_local_storage::create_directory(&directory).unwrap();
+    let stall = Stall::at(2);
+    let release = Release(stall.clone());
+    let clock = Arc::new(Manual(AtomicU64::new(0)));
+    let audit = Arc::new(DurablePeerAudit::with_writer_hook(
+        directory,
+        Arc::new(Ticks(AtomicU64::new(1))),
+        clock.clone(),
+        AUDIT_QUEUE,
+        stall.hook(),
+    ));
+    let commands = slot_commands(&root.path().join("gateway"), clock.clone(), audit.clone());
+    let holding = PeerHolding {
+        record: PeerState::Unknown,
+        cache: CacheState::Unknown,
+    };
+    let mut records = Vec::new();
+    for _ in 0..RECORDS_PER_CYCLE {
+        records.push(commands.poller_changed(
+            DeviceKey::new([7; 32]),
+            PollerCause::Approved,
+            holding.clone(),
+            holding.clone(),
+            Ok(()),
+        ));
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !stall.reached.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the writer did not take the first record");
+
+    let reads = Arc::new(Semaphore::new(1));
+    let permit = reads.clone().try_acquire_owned().unwrap();
+    let (stop, mut stopped) = watch::channel(false);
+    let mut held = std::pin::pin!(async {
+        commands.poller_kept(records, &mut stopped).await;
+        drop(permit);
+    });
+    // The deadline is captured on the first poll, while the clock still
+    // stands. The sleep is only so that poll happens before the jump.
+    tokio::select! {
+        biased;
+        _ = &mut held => panic!("the cycle finished before the audit deadline"),
+        () = tokio::time::sleep(WAKE_TICK / 2) => {}
+    }
+    clock
+        .0
+        .fetch_add(AUDIT_DEADLINE.as_millis() as u64, Ordering::SeqCst);
+    tokio::select! {
+        biased;
+        _ = &mut held => panic!(
+            "the read slot was freed at the audit deadline while records were still queued"
+        ),
+        () = tokio::time::sleep(2 * WAKE_TICK) => {}
+    }
+    assert!(
+        reads.try_acquire().is_err(),
+        "a replacement cycle could take the read slot"
+    );
+    for index in 0..AUDIT_HEADROOM {
+        assert!(
+            audit.record(owner_record()).now_or_never().is_none(),
+            "owner record {index} was refused while the cycle still held its slot"
+        );
+    }
+
+    stop.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(2), held)
+        .await
+        .expect("a stop left the read slot held");
+    assert_eq!(
+        reads.available_permits(),
+        1,
+        "a stop did not release the slot"
+    );
+
+    drop(release);
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            audit.drained(Duration::from_secs(20))
+        )
+        .await
+        .is_ok(),
+        "the writer did not finish"
+    );
+}
+
+/// The first record is refused before the deadline. The second never
+/// answers. The refusal has already completed its future; waiting on it
+/// again panics and the cycle is rescheduled as a failure. The slot stays
+/// for the record that is still unanswered, and a stop releases it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_audit_error_before_the_deadline_is_not_waited_on_again() {
+    let root = tempfile::tempdir().unwrap();
+    let clock = Arc::new(Manual(AtomicU64::new(0)));
+    let commands = slot_commands(
+        &root.path().join("gateway"),
+        clock.clone(),
+        Arc::new(RefusedThenPending::default()),
+    );
+    let holding = PeerHolding {
+        record: PeerState::Unknown,
+        cache: CacheState::Unknown,
+    };
+    let mut records = Vec::new();
+    for _ in 0..2 {
+        records.push(commands.poller_changed(
+            DeviceKey::new([7; 32]),
+            PollerCause::Approved,
+            holding.clone(),
+            holding.clone(),
+            Ok(()),
+        ));
+    }
+    let reads = Arc::new(Semaphore::new(1));
+    let permit = reads.clone().try_acquire_owned().unwrap();
+    let (stop, mut stopped) = watch::channel(false);
+    let mut held = std::pin::pin!(async {
+        commands.poller_kept(records, &mut stopped).await;
+        drop(permit);
+    });
+    tokio::select! {
+        biased;
+        _ = &mut held => panic!("the cycle finished while a record was still unanswered"),
+        () = tokio::time::sleep(WAKE_TICK / 2) => {}
+    }
+    clock
+        .0
+        .fetch_add(AUDIT_DEADLINE.as_millis() as u64, Ordering::SeqCst);
+    tokio::select! {
+        biased;
+        _ = &mut held => panic!("the read slot was freed while a record was still unanswered"),
+        () = tokio::time::sleep(2 * WAKE_TICK) => {}
+    }
+    assert!(
+        reads.try_acquire().is_err(),
+        "a replacement cycle could take the read slot"
+    );
+    stop.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(2), held)
+        .await
+        .expect("a stop left the read slot held");
+    assert_eq!(
+        reads.available_permits(),
+        1,
+        "a stop did not release the slot"
+    );
+}
+
+/// The first poller record is refused at once. Later records never answer.
+#[derive(Default)]
+struct RefusedThenPending {
+    calls: AtomicUsize,
+}
+impl PeerAudit for RefusedThenPending {
+    fn record(&self, _: PeerAuditRecord) -> PeerAuditFuture<'static> {
+        let first = self.calls.fetch_add(1, Ordering::SeqCst) == 0;
+        Box::pin(async move {
+            if first {
+                Err(PeerAuditUnavailable)
+            } else {
+                std::future::pending().await
+            }
+        })
+    }
+}
+
+/// How many of `count` records a stalled writer of `capacity` refuses.
+/// The writer blocks on the first record, so the queue cannot drain.
+async fn refused_while_stalled(capacity: usize, count: usize) -> usize {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("audit");
+    nessa_local_storage::create_directory(&directory).unwrap();
+    let stall = Stall::new();
+    let release = Release(stall.clone());
+    let audit = DurablePeerAudit::with_writer_hook(
+        directory,
+        Arc::new(Ticks(AtomicU64::new(1))),
+        Arc::new(Manual(AtomicU64::new(0))),
+        capacity,
+        stall.hook(),
+    );
+    let queued: Vec<_> = (0..count).map(|_| audit.record(owner_record())).collect();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !stall.reached.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the writer did not take the first record");
+    let mut refused = 0;
+    for record in queued {
+        if matches!(record.now_or_never(), Some(Err(PeerAuditUnavailable))) {
+            refused += 1;
+        }
+    }
+    drop(release);
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            audit.drained(Duration::from_secs(20))
+        )
+        .await
+        .is_ok(),
+        "the writer did not finish"
+    );
+    refused
+}
+
+/// Blocks the writer on one record's sequence until dropped.
+struct Stall {
+    at: u64,
+    reached: AtomicBool,
+    open: Mutex<bool>,
+    opened: Condvar,
+}
+impl Stall {
+    /// Block on the first record.
+    fn new() -> Arc<Self> {
+        Self::at(1)
+    }
+    fn at(sequence: u64) -> Arc<Self> {
+        Arc::new(Self {
+            at: sequence,
+            reached: AtomicBool::new(false),
+            open: Mutex::new(false),
+            opened: Condvar::new(),
+        })
+    }
+    fn hook(self: &Arc<Self>) -> Arc<dyn Fn(u64) + Send + Sync> {
+        let stall = Arc::clone(self);
+        Arc::new(move |sequence| {
+            if sequence != stall.at {
+                return;
+            }
+            stall.reached.store(true, Ordering::SeqCst);
+            let mut open = stall.open.lock().unwrap();
+            while !*open {
+                open = stall.opened.wait(open).unwrap();
+            }
+        })
+    }
+}
+struct Release(Arc<Stall>);
+impl Drop for Release {
+    fn drop(&mut self) {
+        *self.0.open.lock().unwrap() = true;
+        self.0.opened.notify_all();
+    }
+}
+struct Ticks(AtomicU64);
+impl Clock for Ticks {
+    fn unix_milliseconds(&self) -> u64 {
+        self.0.fetch_add(1, Ordering::SeqCst)
+    }
+}
+struct Manual(AtomicU64);
+impl nessa_protocol::clock::Clock for Manual {
+    fn elapsed_ms(&self) -> u64 {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+fn slot_commands(
+    root: &std::path::Path,
+    clock: Arc<dyn nessa_protocol::clock::Clock>,
+    audit: Arc<dyn PeerAudit>,
+) -> Arc<PeerCommands> {
+    nessa_local_storage::create_directory(root).unwrap();
+    nessa_local_storage::create_directory_beneath(root, std::path::Path::new("peers")).unwrap();
+    let records = PeerRecords::open(
+        root,
+        std::path::Path::new("peers"),
+        Arc::new(NoKey),
+        AudienceId::new("gateway").unwrap(),
+        Arc::new(Ticks(AtomicU64::new(1))),
+    )
+    .unwrap();
+    Arc::new(PeerCommands::new(
+        Arc::new(records),
+        clock,
+        audit,
+        Arc::new(Refuses),
+        Arc::new(|| {
+            Box::new(nessa_auth::adapters::pairing::OsEntropy)
+                as Box<dyn crate::peer_gateways::infrastructure::EnrollmentEntropy>
+        }),
+    ))
+}
+
+struct NoKey;
+impl GatewayKeyStore for NoKey {
+    fn restore_gateway_key(
+        &self,
+        _: &AudienceId,
+        _: &dyn Clock,
+    ) -> Result<Option<PrivateKeyMaterial>, PrivateStateError> {
+        Ok(None)
+    }
+    fn save_gateway_key(
+        &self,
+        _: &PrivateKeyMaterial,
+        _: &AudienceId,
+        _: &dyn Clock,
+    ) -> Result<(), PrivateStateError> {
+        Err(PrivateStateError::Unavailable)
+    }
+}
+
+struct Refuses;
+impl PeerConnector for Refuses {
+    fn connect(&self, _: std::net::SocketAddr) -> PeerConnectFuture<'_> {
+        Box::pin(async { Err(std::io::ErrorKind::ConnectionRefused.into()) })
+    }
+    fn relay<'a>(
+        &'a self,
+        _: &'a nessa_protocol::relay::RelayAddress,
+        _: nessa_protocol::relay::GatewayKey,
+    ) -> PeerConnectFuture<'a> {
+        Box::pin(async { Err(std::io::ErrorKind::ConnectionRefused.into()) })
+    }
+}
+
+fn owner_record() -> PeerAuditRecord {
+    PeerAuditRecord::ForgetRequested {
+        operation: uuid::Uuid::new_v4(),
+        initiator: PrincipalId::new("owner").unwrap(),
+        peer: DeviceKey::new([7; 32]),
+    }
 }
