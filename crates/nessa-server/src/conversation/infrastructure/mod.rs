@@ -3,7 +3,9 @@
 //! `LocalConversationStore` keeps ownership records, tombstones and summaries
 //! with approval-mode requests in one private SQLite database (`schema.sql`, opened by
 //! `nessa-local-database`), and is the repository, the summaries and the
-//! listing and the owner-scoped catalogue at once.
+//! listing and the owner-scoped catalogue at once. `export_facts` reads that
+//! database for the export cut: live grants, and grants whose latest journal
+//! row is a revoke.
 //!
 //! `LocalReceiverAuthority` keeps server-minted receiver bindings, durable access
 //! epochs and transition evidence in its own private SQLite dataset,
@@ -87,7 +89,10 @@ mod receiver_authority;
 pub(crate) mod ssh_environment;
 mod store;
 pub use catalogue_changes::MAX_CATALOGUE_CHANGE_WATCHES;
-pub use receiver_authority::{LocalReceiverAuthority, ReceiverChangeError};
+pub use receiver_authority::{
+    export_receivers, ExportedReceiver, LocalReceiverAuthority, ReceiverChangeError,
+    ReceiverSnapshot, ReceiverSnapshotError,
+};
 mod record_scope;
 pub use record_scope::{exact_record_scope, record_scope_from_identity};
 mod catalogue_read;
@@ -95,7 +100,10 @@ mod record_read;
 pub use catalogue_read::NessaCatalogueReadSource;
 pub use record_read::{InvalidReadWorkBudget, NessaRecordReadSource};
 pub(crate) use record_read::{DISCOVERY_STEPS_PER_READ, READ_WORK_BUDGET};
-pub use store::LocalConversationStore;
+pub use store::{
+    ExportFacts, ExportFences, ExportSkip, LocalConversationStore, MetadataSnapshot, NamedRecord,
+    RevocationFact,
+};
 
 mod catalogue_source;
 pub use catalogue_source::{CatalogueWorkerError, NessaCatalogueSource};
