@@ -4110,6 +4110,17 @@ impl<P: AcpProfile> Worker<P> {
     async fn cancel_wire_requests(&mut self) -> Result<(), AgentError> {
         // The turn these reviews belonged to is over. A deadline that fired
         // afterwards would answer a request the provider is no longer waiting on.
+        // Clear the waiting notice before the context that names it is dropped,
+        // so a cancelled review does not leave the prompt up
+        // (`cancelling_the_wires_clears_the_waiting_notice`).
+        let waiting: Vec<(ExecutionId, PermissionId)> = self
+            .permission_context
+            .iter()
+            .map(|(id, context)| (context.execution.clone(), id.clone()))
+            .collect();
+        for (execution, id) in &waiting {
+            self.clear_review(execution, id);
+        }
         self.armed_permissions.clear();
         self.permission_context.clear();
         let asked: Vec<QuestionId> = self.questions.keys().cloned().collect();

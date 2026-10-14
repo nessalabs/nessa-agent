@@ -446,6 +446,32 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   let current: { client: C; off: () => void } | undefined
   let connecting: Promise<C> | undefined
   let connectedBefore = false
+  // The last waiting-review snapshot this source applied, and how many have
+  // been applied. A socket that is down publishes an empty set. The server's
+  // next frame can be dispatched before the replacement listener exists, and
+  // a frame with no listener is dropped, so coming back republishes this set
+  // when nothing newer was applied after that clear
+  // (`a reconnect restores waiting reviews the snapshot missed`).
+  let retainedReviews: readonly WaitingReview[] = []
+  let reviewsApplied = 0
+  let reviewsClearedAt = -1
+  const publishReviews = (reviews: readonly WaitingReview[]) => {
+    options.onReviewWaiting?.(reviews)
+  }
+  const noteReviews = (reviews: readonly WaitingReview[]) => {
+    retainedReviews = reviews.slice()
+    reviewsApplied += 1
+    publishReviews(retainedReviews.slice())
+  }
+  const clearReviews = () => {
+    reviewsClearedAt = reviewsApplied
+    publishReviews([])
+  }
+  const restoreReviews = () => {
+    if (reviewsApplied !== reviewsClearedAt || retainedReviews.length === 0) return
+    reviewsClearedAt = -1
+    publishReviews(retainedReviews.slice())
+  }
   // After a connect that failed — refused, or out of time — nothing in the
   // background connects again until `waitUntil` (#419): each connect asks
   // the host for the gateway and its credential, and the gateway to
@@ -470,7 +496,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     const offReviews =
       connected.onEvent?.("permission.reviewWaiting", (payload) => {
         const reviews = waitingReviews(payload)
-        if (reviews) options.onReviewWaiting?.(reviews)
+        if (reviews) noteReviews(reviews)
       }) ?? (() => {})
     const off = connected.onConnectionStateChange((state) => {
       if (current?.client !== connected) return
@@ -478,13 +504,21 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         // Back: every subscription ended `disconnected` with the connection.
         restore()
         resync()
-      } else if (state.status === "closed") {
-        // Gone for good: the next call connects again. That next client
-        // resyncs when one had connected before (C3). The close is not a
-        // gap. A list frame already applied stays.
-        current.off()
-        current = undefined
-        scheduleRetry()
+        restoreReviews()
+      } else if (state.status === "reconnecting" || state.status === "closed") {
+        // A review cannot be answered while this socket is down. An empty
+        // snapshot closes the notice (`a connection that is not up clears
+        // waiting-review notices`). The set still waiting is put back when
+        // this socket is usable again, unless a newer snapshot arrived.
+        clearReviews()
+        if (state.status === "closed") {
+          // Gone for good: the next call connects again. That next client
+          // resyncs when one had connected before (C3). The close is not a
+          // gap. A list frame already applied stays.
+          current.off()
+          current = undefined
+          scheduleRetry()
+        }
       }
     })
     const state = connected.connectionState
@@ -505,6 +539,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     if (connectedBefore) {
       restore()
       resync()
+      restoreReviews()
     }
     connectedBefore = true
     return undefined

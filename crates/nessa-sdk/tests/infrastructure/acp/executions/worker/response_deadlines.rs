@@ -953,6 +953,61 @@ async fn armed_permissions_are_empty_after_the_turn_ends_and_after_provider_canc
         .unwrap();
 }
 
+#[tokio::test]
+async fn cancelling_the_wires_clears_the_waiting_notice() {
+    use crate::application::agent_execution::permissions::ReviewNotices;
+    use crate::domain::agent_execution::executions::ExecutionId;
+
+    struct Cleared(Mutex<Vec<(String, String, String)>>);
+    impl ReviewNotices for Cleared {
+        fn waiting(&self, _: &crate::application::agent_execution::permissions::ReviewNotice) {}
+        fn clear(
+            &self,
+            conversation: &str,
+            execution: &ExecutionId,
+            permission: &crate::domain::agent_execution::permissions::PermissionId,
+        ) {
+            self.0.lock().unwrap().push((
+                conversation.to_owned(),
+                execution.as_str().to_owned(),
+                permission.as_str().to_owned(),
+            ));
+        }
+    }
+
+    let (mut worker, _, _, _, _) = blocked_worker("", false).await;
+    let notices = Arc::new(Cleared(Mutex::new(Vec::new())));
+    worker.config.review_notices = notices.clone();
+    worker.session_key = Some("conversation".to_owned());
+    let id = PermissionId::new("review").unwrap();
+    worker.permission_context.insert(
+        id.clone(),
+        PermissionContext {
+            execution: ExecutionId::new("turn").unwrap(),
+            tool: "Read".into(),
+            once_allow: None,
+            once_deny: None,
+            specific: true,
+        },
+    );
+    promptly(worker.cancel_wire_requests())
+        .await
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    assert_eq!(
+        notices.0.lock().unwrap().as_slice(),
+        [(
+            "conversation".to_owned(),
+            "turn".to_owned(),
+            "review".to_owned()
+        )]
+    );
+    worker
+        .scope
+        .cleanup(Duration::ZERO, Duration::from_secs(2))
+        .await
+        .unwrap();
+}
+
 /// A deadline's choice the provider never received is not a decision.
 ///
 /// The notice says the review was allowed or denied automatically, and it is
