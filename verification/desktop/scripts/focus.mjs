@@ -287,27 +287,12 @@ async function answerOnceInOverview(page) {
       `a held ⌘↩ answered ${start - (await requestCount(page))} requests, not 1`,
     )
   const next = await requestCount(page)
-  const keyTimes = await page.evaluateHandle(() => {
-    const times = []
-    const record = (event) => {
-      if (event.code === "Enter" && (event.metaKey || event.ctrlKey))
-        times.push({ stamp: event.timeStamp, observed: performance.now() })
-    }
-    document.addEventListener("keydown", record, true)
-    return { times, stop: () => document.removeEventListener("keydown", record, true) }
-  })
   await page.keyboard.press(keys.allow)
   await page.waitForTimeout(withinAnswerPause)
   await page.keyboard.press(keys.allow)
-  const timing = await keyTimes.evaluate((owner) => {
-    owner.stop()
-    return owner.times
-  })
-  await keyTimes.dispose()
   const twice = (await fewer(page, next - 1)) && (await noFewer(page, next - 1))
   trail.push({
     step: "⌘↩ twice, 80ms apart",
-    timing,
     before: next,
     after: await requestCount(page),
   })
