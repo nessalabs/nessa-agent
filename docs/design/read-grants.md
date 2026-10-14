@@ -628,8 +628,10 @@ makes it `assigned` to that turn for good; one that can no longer go is
   note taken by the owner's turn, a revoke that lands while that turn is
   being admitted stops the next turn, not that one (row J23). A Drive
   grant's own turn proceeds only while its grant is still at the admitted
-  revision, so a revoke during that save refuses the turn and the note is
-  not taken (row J31).
+  revision. A revoke that commits before the revision hold is acquired
+  refuses the turn, and the note is not taken. A revoke requested during
+  the save waits until enqueue returns, and the saved turn keeps the notes
+  it took (row J31).
 - **Admission retires before it takes.** Under its lock, `notes::select`
   walks the pending notes in the order they were left: one past 24 hours
   is retired `expired`, one the host revoked `permission_lost`, and up to 8
