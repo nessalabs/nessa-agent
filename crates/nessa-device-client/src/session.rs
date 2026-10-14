@@ -18,13 +18,14 @@ use nessa_auth::{
 use nessa_client_core::{
     pairing::{NativeClientError, NativeRetryOutcome},
     retained::{
-        ReadFailure, ReadReport, ReadStop, RetainedCache, RetainedCataloguePage,
+        FeedEvent, ReadFailure, ReadReport, ReadStop, RetainedCache, RetainedCataloguePage,
         RetainedDeviceReader, RetainedEnrollmentClient, RetainedEnrollmentStatus, RetainedPurge,
         RetainedTranscript, HANDSHAKE,
     },
 };
 use nessa_protocol::{
     clock::Clock, conversation::domain::ConversationId, pairing::wire::NativePairingStatus,
+    product::generated::ConversationViewCursor,
 };
 use nessa_sync::replication::{catalogue::EntryKey, domain::Scope};
 use std::{
@@ -154,6 +155,60 @@ impl SessionRefresh {
         self.read.as_ref()
     }
     /// Fresh refusal recheck and its own purge; generic network failures do not recheck.
+    pub fn recheck(&self) -> Option<&Result<RetainedEnrollmentStatus, NativeClientError>> {
+        self.recheck.as_ref()
+    }
+}
+
+/// The first live view from `conversation.subscribe`. It does not advance a
+/// physical checkpoint; [`SessionRefresh`] still does that.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FollowedConversation {
+    incarnation: String,
+    position: String,
+    view_json: String,
+}
+impl FollowedConversation {
+    /// Cursor incarnation the gateway stamped on this view.
+    pub fn incarnation(&self) -> &str {
+        &self.incarnation
+    }
+    /// Cursor position the gateway stamped on this view.
+    pub fn position(&self) -> &str {
+        &self.position
+    }
+    /// The product view JSON. The caller replaces what it shows with this.
+    pub fn view_json(&self) -> &str {
+        &self.view_json
+    }
+}
+
+/// One admitted live read. Status and binding selection match a refresh. The
+/// product call is `conversation.subscribe`, and only an authority refusal
+/// asks status again.
+#[derive(Debug)]
+pub struct SessionFollow {
+    initial: Result<RetainedEnrollmentStatus, NativeClientError>,
+    selection_failure: Option<NativeClientError>,
+    followed: Option<Result<FollowedConversation, ReadFailure>>,
+    recheck: Option<Result<RetainedEnrollmentStatus, NativeClientError>>,
+}
+impl SessionFollow {
+    /// Initial pinned status and its original operation purge.
+    pub fn initial(&self) -> &Result<RetainedEnrollmentStatus, NativeClientError> {
+        &self.initial
+    }
+    /// A contradictory or unreadable current binding refused product selection.
+    pub fn selection_failure(&self) -> Option<NativeClientError> {
+        self.selection_failure
+    }
+    /// The first view, absent when initial status or binding selected no reader.
+    pub fn followed(&self) -> Option<&Result<FollowedConversation, ReadFailure>> {
+        self.followed.as_ref()
+    }
+    /// Fresh refusal recheck. A conversation this device was not granted does
+    /// not ask. A view already delivered does not hide a grant revoked before
+    /// the feed's next batch.
     pub fn recheck(&self) -> Option<&Result<RetainedEnrollmentStatus, NativeClientError>> {
         self.recheck.as_ref()
     }
@@ -362,6 +417,60 @@ impl Driver {
         });
         outcome
     }
+    /// Live read of one conversation through `conversation.subscribe`. The
+    /// checkpoint pull stays on [`Self::refresh`].
+    fn follow(
+        &mut self,
+        conversation: &ConversationId,
+        after: Option<ConversationViewCursor>,
+        stop: &Arc<ReadStop>,
+    ) -> SessionFollow {
+        let initial = self.status();
+        let mut outcome = SessionFollow {
+            initial,
+            selection_failure: None,
+            followed: None,
+            recheck: None,
+        };
+        let status = match &outcome.initial {
+            Ok(status) => match status.enrollment() {
+                Ok(status) => status,
+                Err(_) => return outcome,
+            },
+            Err(_) => return outcome,
+        };
+        let reader = match RetainedDeviceReader::from_current(status, self.state.as_ref()) {
+            Ok(Some(reader)) => reader,
+            Ok(None) => return outcome,
+            Err(error) => {
+                outcome.selection_failure = Some(error);
+                return outcome;
+            }
+        };
+        let address = self.address;
+        let cache = match self.cache() {
+            Ok(cache) => cache,
+            Err(failure) => {
+                outcome.followed = Some(Err(failure));
+                return outcome;
+            }
+        };
+        let (followed, authority) = match cache.subscribe(
+            reader.access(address, "nessa-ios"),
+            conversation,
+            after,
+            stop,
+            Duration::from_secs(5),
+        ) {
+            Err(error) => (Err(error.failure()), error.asks_status()),
+            Ok(mut feed) => take_settled(&mut feed),
+        };
+        if authority && !stop.is_stopped() {
+            outcome.recheck = Some(self.status());
+        }
+        outcome.followed = Some(followed);
+        outcome
+    }
     fn saved_scope(&mut self) -> Result<Option<Scope>, SessionFailure> {
         let issued = self
             .state
@@ -375,6 +484,75 @@ impl Driver {
     }
     fn drain(&self) {
         self.runtime.block_on(self.enrollment.shutdown());
+    }
+}
+/// Views the server still marks `stale` are one replay, sent immediately.
+/// Keep the newest and stop when one is settled, the cursor stops advancing,
+/// or the feed ends. The loop also stops after 32 views. That view may still
+/// be stale: its cursor is where the next follow resumes, and `transcriptState`
+/// in the view JSON says whether it had settled. A view already applied wins
+/// over a later failure so the caller can resume from its cursor. An authority
+/// refusal that ends the feed, including `conversation.unsubscribe`, still asks
+/// status again when that view is kept.
+fn take_settled(
+    feed: &mut nessa_client_core::retained::ConversationFeed,
+) -> (Result<FollowedConversation, ReadFailure>, bool) {
+    let mut latest = None;
+    let mut previous = None;
+    for _ in 0..32 {
+        let event = match feed.next_event() {
+            Ok(event) => event,
+            Err(error) => {
+                let authority = error.asks_status() || close_asks_status(feed);
+                return settled_or_error(latest, error.failure(), authority);
+            }
+        };
+        if let Some(error) = event.terminal_failure() {
+            let authority = error.asks_status() || close_asks_status(feed);
+            return settled_or_error(latest, error.failure(), authority);
+        }
+        let FeedEvent::View { cursor, view } = event else {
+            continue;
+        };
+        let stale = view.transcript_state == "stale";
+        let position = cursor.position.clone();
+        let stalled = previous.as_ref() == Some(&position);
+        let followed = serde_json::to_string(&view).map(|view_json| FollowedConversation {
+            incarnation: cursor.incarnation,
+            position: cursor.position,
+            view_json,
+        });
+        match followed {
+            Ok(view) => latest = Some(view),
+            Err(_) => {
+                return settled_or_error(latest, ReadFailure::Protocol, close_asks_status(feed));
+            }
+        }
+        if !stale || stalled {
+            break;
+        }
+        previous = Some(position);
+    }
+    settled_or_error(latest, ReadFailure::Protocol, close_asks_status(feed))
+}
+
+/// Whether stopping the feed refused this credential. A view already applied
+/// does not hide that refusal.
+fn close_asks_status(feed: &mut nessa_client_core::retained::ConversationFeed) -> bool {
+    feed.close().is_err_and(|error| error.asks_status())
+}
+
+/// A view already applied is the result. `authority` is whether the failure
+/// that stopped the feed refused this credential, so a kept view does not
+/// hide a grant revocation.
+fn settled_or_error(
+    latest: Option<FollowedConversation>,
+    failure: ReadFailure,
+    authority: bool,
+) -> (Result<FollowedConversation, ReadFailure>, bool) {
+    match latest {
+        Some(view) => (Ok(view), authority),
+        None => (Err(failure), authority),
     }
 }
 impl Drop for Driver {
@@ -549,7 +727,8 @@ impl NativeSession {
     pub fn local_enrollment(&self) -> Result<Option<LocalEnrollment>, SessionFailure> {
         self.enter(None)?.driver().local_enrollment()
     }
-    /// One admitted status/binding/read/refusal-recheck. A caller can stop this
+    /// One admitted status/binding/checkpoint read/refusal-recheck. Live
+    /// conversation activity is [`Self::follow`]. A caller can stop this
     /// handle before dispatch; no status is then asked (`stopped_before_dispatch`).
     pub fn refresh(&self, stop: Arc<ReadStop>) -> Result<SessionRefresh, SessionFailure> {
         let mut operation = self.enter(Some(stop.clone()))?;
@@ -557,6 +736,22 @@ impl NativeSession {
             return Err(SessionFailure::Stopped);
         }
         Ok(operation.driver().refresh(&stop))
+    }
+    /// One admitted live read of `conversation` through `conversation.subscribe`.
+    /// `after` is the last cursor this caller applied. Views the gateway still
+    /// marks stale are read until one is settled or the cursor stops advancing,
+    /// then the subscription is closed. A physical checkpoint is not advanced.
+    pub fn follow(
+        &self,
+        conversation: &ConversationId,
+        after: Option<ConversationViewCursor>,
+        stop: Arc<ReadStop>,
+    ) -> Result<SessionFollow, SessionFailure> {
+        let mut operation = self.enter(Some(stop.clone()))?;
+        if stop.is_stopped() {
+            return Err(SessionFailure::Stopped);
+        }
+        Ok(operation.driver().follow(conversation, after, &stop))
     }
     /// Saved selection derives receiver from the issued record and origin/stream
     /// from actual retained scope; address metadata is not used as scope.
@@ -645,6 +840,9 @@ impl Drop for NativeSession {
     }
 }
 
+#[cfg(test)]
+#[path = "../tests/session/follow_close.rs"]
+mod follow_close;
 #[cfg(test)]
 #[path = "../tests/session/local_enrollment.rs"]
 mod local_enrollment_tests;

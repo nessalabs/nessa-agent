@@ -13,6 +13,7 @@ import {
   NessaConversationControlError,
   NessaConversationMutationError,
   NessaRpcError,
+  questionTargetConversation,
   type ConversationPermission,
 } from "@nessa/client"
 import { describe, expect, it, vi } from "vitest"
@@ -593,8 +594,24 @@ describe("conversations", () => {
         },
       ],
     }
+    const otherQuestion = {
+      ...question,
+      questionId: "q2",
+      message: "What priority should this have?",
+      questions: [
+        {
+          ...question.questions[0],
+          key: "priority",
+          prompt: "Pick a priority",
+          options: [{ value: "high", label: "High" }],
+        },
+      ],
+    }
     gateway.rows.set("a", row("a", { running: true }))
-    gateway.views.set("a", view("a", { messages: [running()], questions: [question] }))
+    gateway.views.set(
+      "a",
+      view("a", { messages: [running()], questions: [question, otherQuestion] }),
+    )
     await source.index()
     follow()
     await source.transcript("a")
@@ -604,6 +621,10 @@ describe("conversations", () => {
     })
     expect(transcriptsOf(updates, "a").at(-1)?.questions).toEqual([
       expect.objectContaining({ questionId: "q1", message: "Where should this land?" }),
+      expect.objectContaining({
+        questionId: "q2",
+        message: "What priority should this have?",
+      }),
     ])
     await source.answerQuestion(
       "a",
@@ -612,15 +633,23 @@ describe("conversations", () => {
       [{ key: "where", values: ["here"] }],
       "person",
     )
-    expect(gateway.calls.find((call) => call.method === "answerQuestion")?.args).toEqual([
-      "a",
-      "turn",
-      "q1",
-      [{ key: "where", values: ["here"], ownWords: null }],
+    const answerCall = gateway.calls.find((call) => call.method === "answerQuestion")
+    if (!answerCall) throw new Error("expected the gateway to answer the question")
+    expect(questionTargetConversation(answerCall.args[0])).toBe("a")
+    expect(answerCall.args[0]).toMatchObject({
+      executionId: "turn",
+      questionId: "q1",
+      message: "Where should this land?",
+      questions: [{ key: "where", options: [{ value: "here", label: "Here" }] }],
+    })
+    expect(answerCall?.args[1]).toEqual([
+      { key: "where", values: ["here"], ownWords: null },
     ])
     gateway.publish("a")
     await flush()
-    expect(transcriptsOf(updates, "a").at(-1)?.questions).toEqual([])
+    expect(transcriptsOf(updates, "a").at(-1)?.questions).toEqual([
+      expect.objectContaining({ questionId: "q2" }),
+    ])
   })
 
   it("declines a question with a null answer and refuses one the view does not list", async () => {
@@ -650,12 +679,99 @@ describe("conversations", () => {
     )
     await source.transcript("a")
     await source.answerQuestion("a", "turn", "q1", null, "agent")
-    expect(gateway.calls.find((call) => call.method === "answerQuestion")?.args[3]).toBe(
+    expect(gateway.calls.find((call) => call.method === "answerQuestion")?.args[1]).toBe(
       null,
     )
+    gateway.publish("a")
+    await flush()
     await expect(
-      source.answerQuestion("a", "turn", "gone", null, "person"),
+      source.answerQuestion("a", "turn", "q1", null, "person"),
     ).rejects.toMatchObject({ reason: "not-waiting" })
+    expect(gateway.count("answerQuestion")).toBe(1)
+  })
+
+  it("maps synchronous stale-choice validation without mapping later TypeErrors", async () => {
+    const { gateway, source } = started()
+    const question = {
+      executionId: "turn",
+      questionId: "q1",
+      message: "Where should this land?",
+      questions: [
+        {
+          key: "where",
+          prompt: "Pick a place",
+          multiSelect: false,
+          freeText: false,
+          required: true,
+          options: [{ value: "here", label: "Here" }],
+        },
+      ],
+    }
+    gateway.views.set("a", view("a", { messages: [running()], questions: [question] }))
+    await source.transcript("a")
+
+    gateway.views.set(
+      "a",
+      view("a", {
+        messages: [running()],
+        questions: [
+          {
+            ...question,
+            questions: [
+              {
+                ...question.questions[0],
+                options: [{ value: "there", label: "There" }],
+              },
+            ],
+          },
+        ],
+      }),
+    )
+    gateway.publish("a")
+    await flush()
+
+    // The SDK's local target/choice validation throws before sending its RPC.
+    const answerQuestion = vi
+      .spyOn(gateway.client.conversation, "answerQuestion")
+      .mockImplementation(() => {
+        throw new TypeError("Select a field and choice offered by the captured question")
+      })
+    await expect(
+      source.answerQuestion(
+        "a",
+        "turn",
+        "q1",
+        [{ key: "where", values: ["here"] }],
+        "person",
+      ),
+    ).rejects.toMatchObject({ reason: "not-waiting" })
+
+    expect(answerQuestion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionId: "turn",
+        questionId: "q1",
+        questions: [
+          expect.objectContaining({
+            key: "where",
+            options: [{ value: "there", label: "There" }],
+          }),
+        ],
+      }),
+      [{ key: "where", values: ["here"], ownWords: null }],
+    )
+    expect(gateway.count("answerQuestion")).toBe(0)
+
+    answerQuestion.mockRestore()
+    gateway.once("answerQuestion", () => Promise.reject(new TypeError("late failure")))
+    await expect(
+      source.answerQuestion(
+        "a",
+        "turn",
+        "q1",
+        [{ key: "where", values: ["there"] }],
+        "person",
+      ),
+    ).rejects.toBeInstanceOf(TypeError)
     expect(gateway.count("answerQuestion")).toBe(1)
   })
 
