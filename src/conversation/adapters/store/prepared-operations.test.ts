@@ -24,6 +24,7 @@ import {
   setActive,
   setDraft,
   submissionStarted,
+  submissionAccepted,
   stopGenerating,
   type Control,
 } from "./slice"
@@ -210,6 +211,26 @@ it("retry consumes the original immutable mode, action and message after edits a
   expect(store.getState().conversation.conversations[0]!.draft).toEqual(
     textContent("new draft"),
   )
+})
+
+it("forgets retry intent once the turn is authoritatively accepted", async () => {
+  const echo = scenarioEffects("echo")
+  const submit = vi
+    .fn(echo.submit)
+    .mockRejectedValueOnce(new Error("lost acknowledgement"))
+  const { store } = fixture({ submit, create: echo.create }, echo)
+  await store.dispatch(sendDraft({ content: textContent("original") }))
+  const prepared = submit.mock.calls[0]![0]
+
+  store.dispatch(submissionAccepted({ id: "c0", executionId: prepared.executionId }))
+  await store.dispatch(
+    controlConversation({
+      id: "c0",
+      control: { kind: "retry", target: prepared.target },
+    }),
+  )
+
+  expect(submit).toHaveBeenCalledOnce()
 })
 
 it.each(["conversation", "execution"] as const)(

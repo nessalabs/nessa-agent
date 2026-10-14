@@ -140,10 +140,14 @@ const commandFailure = (error: unknown): CommandFailure | undefined =>
  * going; once it has, the same execution is stopped even if the tab was
  * closed locally in between.
  */
-type PreparedOperation = { readonly prepared: PreparedSubmission; stopRequested: boolean }
+type PreparedOperation = {
+  readonly prepared: PreparedSubmission
+  stopRequested: boolean
+  inflight: boolean
+}
 // getState is unique to a Redux store, even when effects/dependencies are shared.
 // The promise owns its operation after tab closure; the table retains retry intent
-// only while its original local turn remains (prepared-operation tests).
+// only while its original local turn remains retryable (prepared-operation tests).
 const operationTables = new WeakMap<
   () => ThunkConfig["state"],
   Map<string, Map<string, PreparedOperation>>
@@ -155,12 +159,11 @@ function operationsOf(getState: () => ThunkConfig["state"]) {
     const current = getState().conversation.conversations.find(
       (conversation) => conversation.id === id,
     )
-    for (const [executionId] of operations) {
-      if (
-        !current?.turns.some(
-          (turn) => turn.from === "user" && turn.executionId === executionId,
-        )
+    for (const [executionId, operation] of operations) {
+      const turn = current?.turns.find(
+        (turn) => turn.from === "user" && turn.executionId === executionId,
       )
+      if (!turn || (turn.receipt !== "unknown" && !operation.inflight))
         operations.delete(executionId)
     }
     if (!operations.size) table.delete(id)
@@ -243,7 +246,11 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
       dispatch(showError({ id, message: detail(error) }))
       return rejectWithValue({ kind: "invalid-submission" })
     }
-    const operation: PreparedOperation = { prepared, stopRequested: false }
+    const operation: PreparedOperation = {
+      prepared,
+      stopRequested: false,
+      inflight: true,
+    }
     const operations = operationsOf(getState)
     let retained = operations.get(id)
     if (!retained) operations.set(id, (retained = new Map()))
@@ -266,9 +273,11 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
         throw new Error("Gateway returned a different submission identity.")
       dispatch(submissionAccepted({ id, executionId }))
       await stopAfterAdmission(operation, id, { dispatch, extra })
+      operation.inflight = false
       retained.delete(executionId)
       await dispatch(refollowConversation(id))
     } catch (error) {
+      operation.inflight = false
       if (sendOutcome(error, admissionAttempted).kind !== "uncertain")
         retained.delete(executionId)
       dispatch(
@@ -670,16 +679,21 @@ export const controlConversation = createAsyncThunk<
           const executionId = control.target.executionId
           const operation = retryOperation
           if (!operation) throw new Error("Retry intent was not captured.")
+          operation.inflight = true
           dispatch(submissionReattempted({ id, executionId }))
-          const receipt = await extra.conversation.submit(operation.prepared)
-          if (
-            receipt.conversationId !== operation.prepared.conversationId ||
-            receipt.executionId !== executionId
-          )
-            throw new Error("Gateway returned a different submission identity.")
-          dispatch(submissionAccepted({ id, executionId }))
-          await stopAfterAdmission(operation, id, { dispatch, extra })
-          operationsOf(getState).get(id)?.delete(executionId)
+          try {
+            const receipt = await extra.conversation.submit(operation.prepared)
+            if (
+              receipt.conversationId !== operation.prepared.conversationId ||
+              receipt.executionId !== executionId
+            )
+              throw new Error("Gateway returned a different submission identity.")
+            dispatch(submissionAccepted({ id, executionId }))
+            await stopAfterAdmission(operation, id, { dispatch, extra })
+          } finally {
+            operation.inflight = false
+            operationsOf(getState)
+          }
           break
         }
       }
