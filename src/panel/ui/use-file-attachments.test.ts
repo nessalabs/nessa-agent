@@ -233,10 +233,15 @@ it("says a refusal at the moment it happens, without taking a failed upload's Re
   const [file] = draftOf(store)
   await React.act(async () => {
     store.dispatch(
-      uploadChanged({ fileId: (file as { id: string }).id, to: "uploading" }),
+      uploadChanged({
+        conversationId: "c0",
+        fileId: (file as { id: string }).id,
+        to: "uploading",
+      }),
     )
     store.dispatch(
       uploadChanged({
+        conversationId: "c0",
         fileId: (file as { id: string }).id,
         to: "failed",
         reason: "unavailable",

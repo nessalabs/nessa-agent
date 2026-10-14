@@ -706,6 +706,7 @@ export const harmlessConsole = [
 
 /** Actual-panel attachment race verification gestures and refusal notices. */
 export const attachmentVerification = {
+  uploadTile: "[data-upload]",
   editor: '[contenteditable="true"]',
   addAttachment: ["button", { name: "Add attachment", exact: true }],
   addFiles: ["button", { name: "Add files", exact: true }],

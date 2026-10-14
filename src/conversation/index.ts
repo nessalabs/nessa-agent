@@ -39,6 +39,7 @@ export {
   HeldFileReadError,
   type HeldFileReader,
   type HeldFileSaver,
+  type UploadChange,
 } from "./application/ports"
 // Notes left in a conversation, placed and shown: the panel's transcripts and
 // the desktop window's alike.

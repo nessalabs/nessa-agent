@@ -43,3 +43,10 @@ two exact action records: an offered choice for the second conversation and null
 decline for the first. This recorder does not authenticate a server or establish
 current authority. The cropped screenshot lives in
 `verification/desktop/evidence/question-targets/question-targets.png`.
+
+`lifetime-fixture.html?same` restores the same remote conversation; without the
+query it restores another. Both mount the production `useConversation` follow
+and controls over a gated close port. `local-tab-lifetimes.mjs` measures fresh
+local identity, old follow cleanup, replacement follow, original close target,
+and replacement notices at 360, 600 and 1440 pixels in both engines. The
+fixture is served in development and is excluded from product assets.

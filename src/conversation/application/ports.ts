@@ -249,8 +249,8 @@ export class AttachmentStagingError extends Error {
   }
 }
 
-/** One step in a draft file's upload. `stored` carries the gateway's reference. */
-export type UploadChange = { fileId: string } & (
+/** One step in the named local conversation's draft upload. `stored` carries the gateway's reference. */
+export type UploadChange = { conversationId: string; fileId: string } & (
   | { to: "uploading" }
   | { to: "stored"; image: ImageReference }
   | { to: "failed"; reason: UploadFailure }

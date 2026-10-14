@@ -27,7 +27,9 @@ verification/
     README.md               committed transcript fixture and publication ownership
     fixture.html            real ConversationControls and applyView browser fixture
     fixture.tsx             typed current gateway view cases and question-target controls
-    vite.config.ts         verification-only production build of those components
+    vite.config.ts           verification-only production build of those components
+    lifetime-fixture.html   restored tab over a gated original close
+    lifetime-fixture.tsx    production follow/control consumers
     lease-fixture.html      the production details sheet over one published lease per page
     lease-fixture.tsx       each lease state the gateway publishes
   desktop/
@@ -40,13 +42,14 @@ verification/
       onboarding-readiness/ real setup with stalled HTTP response and retry cases
       provider-sign-in/     real transcript with typed auth refusal and controlled login launch
       message-sync/         real window over controlled active and stalled gateway reads
-      app-review/           real window over a fake gateway whose app's call asks for a review
+      app-review/           real window over a typed fake gateway whose app's call asks for a review
     scripts/
       provider-sign-in.mjs compact login recovery geometry, keyboard launch and replacement
       attachments-races.mjs pending image admission and concurrent URL-drop refusals
       onboarding-readiness.mjs readiness deadline and retry in both browser engines
       run-all.mjs           every check, summarised
-      committed-transcript.mjs history notices, permission controls, re-enable and question-target identities
+      committed-transcript.mjs history notices, permissions, re-enable and question-target identities
+      local-tab-lifetimes.mjs restored local identities, follow and completion ownership
       lease-details.mjs     the details sheet's Where it runs, for every published lease state
       smoke.mjs             loads, sends, splits, Settings, overview; console errors
       icon-buttons.mjs      every icon button: size, shape, name, tooltip, hover, keyboard focus
@@ -182,3 +185,6 @@ ends each step once its motion has, not after a fixed wait.
   runs them in the frontend job, through `pnpm frontend:check`.
 
 Per [machine-readable command output](../CODING_STANDARDS.md#machine-readable-command-output).
+
+The app-review fixture contract and ordering evidence are in
+[app review verification](../docs/design/app-review-verification.md).

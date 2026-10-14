@@ -130,9 +130,11 @@ async fn scheduling_retry_rejects_changed_content_attribution_or_delivery_mode()
 #[tokio::test]
 async fn scheduling_retry_under_a_different_initiation_is_a_conflict() {
     let (agent, storage, _, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
-    let grant = |revision| Submitter {
-        context: actor(),
-        initiation: Initiation::checked_grant(GrantInitiator::new("grant-1", revision).unwrap()),
+    let grant = |revision| {
+        Submitter::new(
+            actor(),
+            Initiation::checked_grant(GrantInitiator::new("grant-1", revision).unwrap()),
+        )
     };
     let first = agent.enqueue(request("same"), grant(1)).await.unwrap();
     let running = started(&mut calls, "same").await;

@@ -2737,7 +2737,7 @@ describe("an app's review is shown after its turn ended (#436)", () => {
       view("a", { revision: "2", messages: [ended], permissions: [appReview] }),
     )
     await flush()
-    gateway.once("answer", async (normal) => {
+    gateway.onceAnswer(async (normal) => {
       answer.resolve("allowed")
       return normal()
     })
