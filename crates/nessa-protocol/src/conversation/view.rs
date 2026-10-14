@@ -77,7 +77,29 @@ pub struct ConversationView {
     /// [`MAX_VIEW_NOTES`](super::projection::MAX_VIEW_NOTES) in the order
     /// they were left. Empty before any was left.
     pub notes: Vec<ConversationNote>,
+    /// Records this read could not apply, oldest first, at most 32. Empty
+    /// when every record could be read. Always sent, including when empty,
+    /// and a chat with no turns may still list these.
+    #[serde(default)]
+    pub unreadable: Vec<ConversationUnreadable>,
+    /// More records could not be read than [`Self::unreadable`] lists. The
+    /// transcript ends with one line for that. Always sent.
+    pub unreadable_truncated: bool,
 }
+
+/// One saved record the fold could not read. `id` is its physical position.
+/// `after_execution_id` is the last turn accepted when it was skipped.
+///
+/// The line a transcript draws for this is where a future report action
+/// attaches. This view does not carry a report control.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationUnreadable {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_execution_id: Option<String>,
+}
+
 /// Product status of the last physical committed read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

@@ -37,6 +37,8 @@ function view() {
     transcriptState: "complete",
     artifacts: [],
     notes: [],
+    unreadable: [],
+    unreadableTruncated: false,
     messages: [
       {
         executionId: "queued",
@@ -176,6 +178,49 @@ describe("conversation view agreement", () => {
     expect(() =>
       conversationView({ ...view(), transcriptState: "complete_empty" }, "conversation"),
     ).toThrow(/Empty conversation/)
+  })
+
+  it("keeps a line for a record it could not read, including when the chat is otherwise empty", () => {
+    const sample = view()
+    const empty = {
+      ...sample,
+      messages: [],
+      pending: [],
+      tools: [],
+      transcriptState: "complete_empty",
+      unreadable: [{ id: "4" }, { id: "12", afterExecutionId: "run-1" }],
+    }
+    expect(conversationView(empty, "conversation").unreadable).toEqual([
+      { id: "4" },
+      { id: "12", afterExecutionId: "run-1" },
+    ])
+    expect(conversationView(empty, "conversation").unreadableTruncated).toBe(false)
+    expect(
+      conversationView({ ...empty, unreadableTruncated: true }, "conversation")
+        .unreadableTruncated,
+    ).toBe(true)
+    expect(() =>
+      conversationView({ ...empty, unreadableTruncated: "yes" }, "conversation"),
+    ).toThrow(/unreadableTruncated/)
+    expect(() =>
+      conversationView({ ...empty, unreadable: [{ id: "01" }] }, "conversation"),
+    ).toThrow(/unreadable id/)
+    expect(() =>
+      conversationView(
+        { ...empty, unreadable: [{ id: "4" }, { id: "4" }] },
+        "conversation",
+      ),
+    ).toThrow(/Repeated conversation unreadable id/)
+    expect(() =>
+      conversationView(
+        { ...empty, unreadable: [{ id: "4", report: true }] },
+        "conversation",
+      ),
+    ).toThrow(/unknown fields/)
+    const tooMany = Array.from({ length: 33 }, (_, index) => ({ id: String(index) }))
+    expect(() =>
+      conversationView({ ...empty, unreadable: tooMany }, "conversation"),
+    ).toThrow(/unreadable/)
   })
 
   it("keeps the product fixture's question attached to a running turn", () => {

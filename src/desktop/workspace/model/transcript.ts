@@ -119,10 +119,12 @@ export interface QuestionChoice {
 }
 
 /**
- * One row of a conversation: a message from the person or the agent, or a
- * note somebody left in it (`NoteMessage`).
+ * One row of a conversation: a message from the person or the agent, a
+ * note somebody left in it (`NoteMessage`), or a saved record this read
+ * could not apply (`UnreadableMessage`).
  */
-export type Message = TurnMessage | NoteMessage
+export type Message =
+  TurnMessage | NoteMessage | UnreadableMessage | UnreadableOverflowMessage
 
 /** A message the person or the agent said in a turn. */
 export interface TurnMessage {
@@ -172,6 +174,49 @@ export interface NoteMessage {
   readonly observedInput?: never
   readonly delivery?: never
   readonly app?: never
+  readonly unreadable?: never
+}
+
+/**
+ * A saved record this read could not apply, drawn as one line
+ * (`UnreadablePartLine`). `unreadable.id` is the record's position, and the
+ * line is where a future report action attaches. Nothing the window sends
+ * is one of these.
+ */
+export interface UnreadableMessage {
+  readonly id: string
+  readonly role: "unreadable"
+  readonly at: number
+  readonly parts: readonly Part[]
+  readonly unreadable: { readonly id: string; readonly afterExecutionId?: string }
+  readonly note?: never
+  readonly observedInput?: never
+  readonly delivery?: never
+  readonly app?: never
+  /** A gap is not a turn, so it has no ending the gateway reported. */
+  readonly terminal?: never
+  readonly executionId?: never
+  readonly requiredWorkFailed?: never
+}
+
+/**
+ * The final line when more records could not be read than the view lists
+ * (`UnreadableOverflowLine`). Not a record, and not a turn.
+ */
+export interface UnreadableOverflowMessage {
+  readonly id: string
+  readonly role: "unreadable-overflow"
+  readonly at: number
+  readonly parts: readonly Part[]
+  readonly note?: never
+  readonly unreadable?: never
+  readonly observedInput?: never
+  readonly delivery?: never
+  readonly app?: never
+  /** The overflow line is not a turn, so it has no ending the gateway reported. */
+  readonly terminal?: never
+  readonly executionId?: never
+  readonly requiredWorkFailed?: never
 }
 
 /** An MCP App, as a message it wrote names it: its server, and the tool whose UI it is. */

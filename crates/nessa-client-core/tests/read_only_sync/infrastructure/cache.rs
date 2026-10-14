@@ -149,30 +149,34 @@ async fn restart_restores_pending_suffix_once() {
 }
 
 #[test]
-fn invalid_semantic_page_has_no_effects() {
+fn invalid_semantic_page_is_a_gap_and_publishes_no_session() {
     let root = tempfile::tempdir().unwrap();
     let mut cache = cache(&cache_path(root.path(), "cache.sqlite3"));
     cache.observe_head(&scope(), 0).unwrap();
-    let before = cache.cached_progress(&scope()).unwrap();
     let invalid = Record {
         position: 1,
         id: id("invalid"),
         scope: scope(),
         payload: vec![255],
     };
-    assert_eq!(
-        cache.apply(plan(&scope(), 0, vec![invalid])),
-        Err(StoreError::Failed)
-    );
-    assert_eq!(cache.take_refusal(), Some(CacheError::Corrupt));
-    assert_eq!(cache.cached_progress(&scope()).unwrap(), before);
+    assert_eq!(cache.apply(plan(&scope(), 0, vec![invalid])), Ok(()));
+    assert_eq!(cache.take_refusal(), None);
+    let progress = cache.cached_progress(&scope()).unwrap().unwrap();
+    assert_eq!(progress.downloaded, 1);
+    assert_eq!(progress.applied, 0);
+    assert_eq!(progress.facts, 0);
+    let transcript = cache.transcript(&scope()).unwrap();
+    assert!(transcript.snapshot().is_none());
+    assert_eq!(transcript.unreadable().len(), 1);
+    assert_eq!(transcript.unreadable()[0].id(), "1");
+    assert!(!transcript.unreadable_truncated());
     let count: i64 = cache
         .connection
         .query_row("SELECT count(*) FROM transcript_records", [], |row| {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(count, 0);
+    assert_eq!(count, 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

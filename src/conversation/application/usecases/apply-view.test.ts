@@ -9,6 +9,8 @@ const view: ConversationView = {
   conversationId: "server",
   artifacts: [],
   notes: [],
+  unreadable: [],
+  unreadableTruncated: false,
   approvalMode: "ask",
   approvalModes: [
     { id: "ask", name: "Provider asks", description: "Provider asks where required." },
@@ -650,4 +652,16 @@ it("carries the notes left in the conversation as the view lists them, and repla
   const taken = { ...left, deliveryState: "assigned" as const }
   expect(applyView(first, { ...view, notes: [taken] }).remote?.notes).toEqual([taken])
   expect(applyView(first, { ...view, notes: [] }).remote?.notes).toEqual([])
+})
+
+it("carries each record the view could not read, and replaces them with the next view", () => {
+  const gap = { id: "12", afterExecutionId: "run" }
+  const first = applyView(conversation("tab"), { ...view, unreadable: [gap] })
+  expect(first.remote?.unreadable).toEqual([gap])
+  expect(first.turns).toEqual(applyView(conversation("tab"), view).turns)
+  expect(applyView(first, { ...view, unreadable: [] }).remote?.unreadable).toEqual([])
+  expect(first.remote?.unreadableTruncated).toBe(false)
+  expect(
+    applyView(first, { ...view, unreadableTruncated: true }).remote?.unreadableTruncated,
+  ).toBe(true)
 })

@@ -45,6 +45,12 @@ export {
 // the desktop window's alike.
 export { TranscriptNote } from "./ui/transcript-note"
 export {
+  UnreadableOverflowLine,
+  UnreadablePartLine,
+  UNREADABLE_MORE_SENTENCE,
+  UNREADABLE_SENTENCE,
+} from "./ui/unreadable-part"
+export {
   historyExtent,
   historyNotices,
   placeNotes,

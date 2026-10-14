@@ -3465,8 +3465,10 @@ mod tests {
         reopened.shutdown().await.unwrap();
     }
 
-    /// One chat whose saved batch is unmarked, another version, or an invalid
-    /// marker does not open. A sibling written by the same store still does.
+    /// A writer lease still refuses a chat whose saved batch is unmarked,
+    /// another version, or an invalid marker, so nothing is appended on top of
+    /// bytes it cannot continue. A committed read of that chat opens with one
+    /// gap and no snapshot. A sibling written by the same store still opens.
     #[tokio::test]
     async fn a_record_this_build_cannot_read_leaves_the_other_chat_open() {
         let directory = tempfile::tempdir().unwrap();
@@ -3523,27 +3525,41 @@ mod tests {
 
         let reopened = RecordStorage::new(&root).unwrap();
         let unmarked = SessionId::new("unmarked").unwrap();
+        let other_version = SessionId::new("other-version").unwrap();
+        let invalid_marker = SessionId::new("invalid-marker").unwrap();
         assert!(matches!(
             reopened.open_existing(unmarked.clone()).await,
             Err(StorageError::AnotherVersion { found: None })
         ));
+        let read = reopened.read_committed(unmarked).await.unwrap().unwrap();
+        assert!(read.snapshot().is_none());
+        assert_eq!(read.unreadable().len(), 1);
+        assert!(!read.unreadable_truncated());
         assert!(matches!(
-            reopened.read_committed(unmarked).await,
-            Err(StorageError::AnotherVersion { found: None })
-        ));
-        assert!(matches!(
-            reopened
-                .open_existing(SessionId::new("other-version").unwrap())
-                .await,
+            reopened.open_existing(other_version.clone()).await,
             Err(StorageError::AnotherVersion { found: Some(found) })
                 if found == StorageError::SCHEMA_VERSION + 1
         ));
+        let read = reopened
+            .read_committed(other_version)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(read.snapshot().is_none());
+        assert_eq!(read.unreadable().len(), 1);
+        assert!(!read.unreadable_truncated());
         assert!(matches!(
-            reopened
-                .open_existing(SessionId::new("invalid-marker").unwrap())
-                .await,
+            reopened.open_existing(invalid_marker.clone()).await,
             Err(StorageError::Corrupt(_))
         ));
+        let read = reopened
+            .read_committed(invalid_marker)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(read.snapshot().is_none());
+        assert_eq!(read.unreadable().len(), 1);
+        assert!(!read.unreadable_truncated());
         let lease = reopened
             .open_existing(readable.clone())
             .await

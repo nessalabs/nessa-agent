@@ -140,6 +140,8 @@ export function view(
     tools: [],
     artifacts: [],
     notes: [],
+    unreadable: [],
+    unreadableTruncated: false,
     capabilities: {
       queue: true,
       steer: true,
@@ -408,12 +410,12 @@ export function fakeGateway(
           const { conversationId, executionId, questionId } = target
           const current = views.get(conversationId)
           if (current)
-            views.set(conversationId, {
+            views.set(target.conversationId, {
               ...current,
               questions: current.questions.filter(
                 (question) =>
-                  question.executionId !== executionId ||
-                  question.questionId !== questionId,
+                  question.executionId !== target.executionId ||
+                  question.questionId !== target.questionId,
               ),
             })
           return { requestId: "answer-question", applied: true }
