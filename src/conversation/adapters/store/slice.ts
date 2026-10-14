@@ -613,10 +613,14 @@ export const controlConversation = createAsyncThunk<
     )
       return
     const requestedOrder = control.kind === "reorder" ? control.executionIds : []
-    dispatch(controlStarted(id))
-    if (control.kind === "close")
-      dispatch(cancellationChanged({ id, status: "cancelling" }))
+    // Retry owns its prepared value across creation too: an authoritative view
+    // can settle the old receipt while create is waiting, but Stop must still
+    // be able to mark this promise for a second Stop after admission.
+    if (retryOperation) retryOperation.inflight = true
     try {
+      dispatch(controlStarted(id))
+      if (control.kind === "close")
+        dispatch(cancellationChanged({ id, status: "cancelling" }))
       const created = await extra.conversation.create(serverId, current.selection)
       if (created.conversationId !== serverId)
         throw new Error("Gateway returned a different conversation identity.")
@@ -668,21 +672,15 @@ export const controlConversation = createAsyncThunk<
           const executionId = control.target.executionId
           const operation = retryOperation
           if (!operation) throw new Error("Retry intent was not captured.")
-          operation.inflight = true
           dispatch(submissionReattempted({ id, executionId }))
-          try {
-            const receipt = await extra.conversation.submit(operation.prepared)
-            if (
-              receipt.conversationId !== operation.prepared.conversationId ||
-              receipt.executionId !== executionId
-            )
-              throw new Error("Gateway returned a different submission identity.")
-            dispatch(submissionAccepted({ id, executionId }))
-            await stopAfterAdmission(operation, id, { dispatch, extra })
-          } finally {
-            operation.inflight = false
-            extra.preparedOperations.prune(getState().conversation.conversations)
-          }
+          const receipt = await extra.conversation.submit(operation.prepared)
+          if (
+            receipt.conversationId !== operation.prepared.conversationId ||
+            receipt.executionId !== executionId
+          )
+            throw new Error("Gateway returned a different submission identity.")
+          dispatch(submissionAccepted({ id, executionId }))
+          await stopAfterAdmission(operation, id, { dispatch, extra })
           break
         }
       }
@@ -709,6 +707,10 @@ export const controlConversation = createAsyncThunk<
       )
       throw error
     } finally {
+      if (retryOperation) {
+        retryOperation.inflight = false
+        extra.preparedOperations.prune(getState().conversation.conversations)
+      }
       dispatch(controlFinished(id))
     }
   },

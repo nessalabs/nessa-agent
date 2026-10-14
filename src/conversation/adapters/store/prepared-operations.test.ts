@@ -229,6 +229,143 @@ it("prunes retry intent as soon as a passive authoritative view accepts the turn
   }
 })
 
+it.each([false, true])(
+  "keeps a retry stoppable after a passive view accepts it during creation (PS28 refused=%s)",
+  async (stopRefused) => {
+    const waiting = gate()
+    const echo = scenarioEffects("echo")
+    let creates = 0
+    let follows = 0
+    const retry = { executionId: undefined as string | undefined }
+    let publishView: ((view: ConversationView) => void) | undefined
+    const stopFollowing = vi.fn()
+    const follow = vi.fn<ConversationEffects["follow"]>((_id, listener) => {
+      follows++
+      publishView = listener.view
+      if (follows > 2 && retry.executionId)
+        listener.view(acceptedView(first, retry.executionId))
+      return stopFollowing
+    })
+    const create = vi.fn(async (id: string) => {
+      if (creates++ === 1) await waiting.promise
+      return echo.create(id)
+    })
+    const submit = vi
+      .fn(echo.submit)
+      .mockRejectedValueOnce(new Error("lost acknowledgement"))
+    const stop = vi.fn<ConversationEffects["stop"]>(async () => {})
+    if (stopRefused)
+      stop.mockRejectedValueOnce(
+        new ControlFailedError("conversation-not-found", "refused"),
+      )
+    const { store } = fixture({ create, follow, submit, stop }, echo)
+    const following = store.dispatch(followConversation("c0"))
+    await vi.waitFor(() => expect(publishView).toBeDefined())
+    await store.dispatch(sendDraft({ content: textContent("original") }))
+    const prepared = submit.mock.calls[0]![0]
+    retry.executionId = prepared.executionId
+
+    const retrying = store.dispatch(
+      controlConversation({
+        id: "c0",
+        control: { kind: "retry", target: prepared.target },
+      }),
+    )
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(2))
+    const refreshing = store.dispatch(followConversation("c0"))
+    await vi.waitFor(() => expect(follow).toHaveBeenCalledTimes(2))
+    publishView!(acceptedView(first, prepared.executionId))
+    await vi.waitFor(() =>
+      expect(store.getState().conversation.conversations[0]!.turns[0]).toMatchObject({
+        receipt: "accepted",
+      }),
+    )
+    const stopping = await store.dispatch(stopGenerating({ conversationId: "c0" }))
+    expect(stopping.meta.requestStatus).toBe(stopRefused ? "rejected" : "fulfilled")
+    expect(stop).toHaveBeenCalledOnce()
+
+    waiting.resolve()
+    const result = await retrying
+    expect(result.meta.requestStatus).toBe("fulfilled")
+    expect(submit.mock.calls[1]![0]).toBe(prepared)
+    expect(stop).toHaveBeenCalledTimes(2)
+    expect(stop.mock.calls[0]![0]).toBe(prepared.target)
+    expect(stop.mock.calls[1]![0]).toBe(prepared.target)
+    await store.dispatch(unfollowConversation("c0"))
+    await Promise.all([following, refreshing])
+    expect(stopFollowing).toHaveBeenCalled()
+  },
+)
+
+it("settles retry ownership when creation fails after acceptance and tab closure (PS29)", async () => {
+  const watched = watchPreparedOperations()
+  try {
+    const waiting = gate()
+    const echo = scenarioEffects("echo")
+    let creates = 0
+    let follows = 0
+    const retry = { executionId: undefined as string | undefined }
+    let publishView: ((view: ConversationView) => void) | undefined
+    const stopFollowing = vi.fn()
+    const follow = vi.fn<ConversationEffects["follow"]>((_id, listener) => {
+      follows++
+      publishView = listener.view
+      if (follows > 2 && retry.executionId)
+        listener.view(acceptedView(first, retry.executionId))
+      return stopFollowing
+    })
+    const create = vi.fn(async (id: string) => {
+      if (creates++ === 1) {
+        await waiting.promise
+        throw new SubmissionRefusedError("conversation-not-found")
+      }
+      return echo.create(id)
+    })
+    const submit = vi
+      .fn(echo.submit)
+      .mockRejectedValueOnce(new Error("lost acknowledgement"))
+    const { store, stop } = fixture({ create, follow, submit }, echo)
+    const following = store.dispatch(followConversation("c0"))
+    await vi.waitFor(() => expect(publishView).toBeDefined())
+    await store.dispatch(sendDraft({ content: textContent("original") }))
+    const prepared = submit.mock.calls[0]![0]
+    retry.executionId = prepared.executionId
+
+    const retrying = store.dispatch(
+      controlConversation({
+        id: "c0",
+        control: { kind: "retry", target: prepared.target },
+      }),
+    )
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(2))
+    const refreshing = store.dispatch(followConversation("c0"))
+    await vi.waitFor(() => expect(follow).toHaveBeenCalledTimes(2))
+    const operation = watched.table().get("c0", prepared.executionId)
+    expect(operation?.inflight).toBe(true)
+    publishView!(acceptedView(first, prepared.executionId))
+    await vi.waitFor(() =>
+      expect(store.getState().conversation.conversations[0]!.turns[0]).toMatchObject({
+        receipt: "accepted",
+      }),
+    )
+    await store.dispatch(stopGenerating({ conversationId: "c0" }))
+    expect(stop).toHaveBeenCalledOnce()
+    store.dispatch(closeConversation("c0"))
+    expect(watched.table().get("c0", prepared.executionId)).toBeUndefined()
+
+    waiting.resolve()
+    const result = await retrying
+    expect(result.meta.requestStatus).toBe("rejected")
+    expect(operation?.inflight).toBe(false)
+    expect(submit).toHaveBeenCalledOnce()
+    await store.dispatch(unfollowConversation("c0"))
+    await Promise.all([following, refreshing])
+    expect(stopFollowing).toHaveBeenCalled()
+  } finally {
+    watched.restore()
+  }
+})
+
 it.each(["create", "admission"] as const)(
   "stops the prepared operation immediately during %s and again after admission (PS6)",
   async (phase) => {
