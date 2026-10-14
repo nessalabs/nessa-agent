@@ -1271,18 +1271,27 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
             )
           : undefined
         if (!target) throw new WorkspaceSourceError("not-waiting")
-        await dispatch(live, (connected) =>
-          connected.conversation.answerQuestion(
-            target,
-            choices === null
-              ? null
-              : choices.map((choice) => ({
-                  key: choice.key,
-                  values: [...choice.values],
-                  ownWords: choice.ownWords ?? null,
-                })),
-          ),
-        )
+        await dispatch(live, (connected) => {
+          try {
+            return connected.conversation.answerQuestion(
+              target,
+              choices === null
+                ? null
+                : choices.map((choice) => ({
+                    key: choice.key,
+                    values: [...choice.values],
+                    ownWords: choice.ownWords ?? null,
+                  })),
+            )
+          } catch (error) {
+            // The SDK validates the captured target and offered choices
+            // before it sends anything. Its TypeError means this answer is
+            // stale locally, not that an unanswered RPC has an unknown
+            // outcome.
+            if (error instanceof TypeError) throw new WorkspaceSourceError("not-waiting")
+            throw error
+          }
+        })
       }),
     // The gateway keeps no pin.
     setPinned: () => Promise.reject(new WorkspaceSourceError("not-supported")),

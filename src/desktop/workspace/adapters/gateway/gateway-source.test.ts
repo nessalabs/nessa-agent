@@ -690,6 +690,91 @@ describe("conversations", () => {
     expect(gateway.count("answerQuestion")).toBe(1)
   })
 
+  it("maps synchronous stale-choice validation without mapping later TypeErrors", async () => {
+    const { gateway, source } = started()
+    const question = {
+      executionId: "turn",
+      questionId: "q1",
+      message: "Where should this land?",
+      questions: [
+        {
+          key: "where",
+          prompt: "Pick a place",
+          multiSelect: false,
+          freeText: false,
+          required: true,
+          options: [{ value: "here", label: "Here" }],
+        },
+      ],
+    }
+    gateway.views.set("a", view("a", { messages: [running()], questions: [question] }))
+    await source.transcript("a")
+
+    gateway.views.set(
+      "a",
+      view("a", {
+        messages: [running()],
+        questions: [
+          {
+            ...question,
+            questions: [
+              {
+                ...question.questions[0],
+                options: [{ value: "there", label: "There" }],
+              },
+            ],
+          },
+        ],
+      }),
+    )
+    gateway.publish("a")
+    await flush()
+
+    // The SDK's local target/choice validation throws before sending its RPC.
+    const answerQuestion = vi
+      .spyOn(gateway.client.conversation, "answerQuestion")
+      .mockImplementation(() => {
+        throw new TypeError("Select a field and choice offered by the captured question")
+      })
+    await expect(
+      source.answerQuestion(
+        "a",
+        "turn",
+        "q1",
+        [{ key: "where", values: ["here"] }],
+        "person",
+      ),
+    ).rejects.toMatchObject({ reason: "not-waiting" })
+
+    expect(answerQuestion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionId: "turn",
+        questionId: "q1",
+        questions: [
+          expect.objectContaining({
+            key: "where",
+            options: [{ value: "there", label: "There" }],
+          }),
+        ],
+      }),
+      [{ key: "where", values: ["here"], ownWords: null }],
+    )
+    expect(gateway.count("answerQuestion")).toBe(0)
+
+    answerQuestion.mockRestore()
+    gateway.once("answerQuestion", () => Promise.reject(new TypeError("late failure")))
+    await expect(
+      source.answerQuestion(
+        "a",
+        "turn",
+        "q1",
+        [{ key: "where", values: ["there"] }],
+        "person",
+      ),
+    ).rejects.toBeInstanceOf(TypeError)
+    expect(gateway.count("answerQuestion")).toBe(1)
+  })
+
   it("shows a withheld-review notice without saying the session waits on the person", async () => {
     const { gateway, source, updates, follow } = started()
     gateway.rows.set("a", row("a"))
