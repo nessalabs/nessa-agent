@@ -688,6 +688,12 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   public `ClockProvider`/`useNow` API; any console or page error fails in both
   Chromium and WebKit.
   _Check:_ `clock-snapshots.mjs` (`fixtures/clock-snapshots/`, dev server).
+
+  | Case | Setup and action | Required browser evidence | Enforcement evidence |
+  | --- | --- | --- | --- |
+  | CL1 — consecutive reads | Inject `now()` as 999 for its first read, then 1000; render the actual hook in StrictMode. | The published-snapshot hook stays error-free while the old time-derived getter emits React's uncached-snapshot warning in both engines. | Replace the cached getter with `Math.floor(clock.now() / interval)`; the case fails on the warning. |
+  | CL2 — published tick | Hold the active 1000 ms timer callback, record committed `999` and its render count, advance to 1000, then invoke that callback. | One tick commits `1000` and increases the DOM render count beyond the recorded baseline. | Remove the listener notification from the callback; the case fails before any new render commits. |
+  | CL3 — last reader cleanup | Unmount the last reader after CL2's tick. | Every StrictMode interval start is matched by a stop; the stopped timer cannot publish again. | CL2 asserts the last-reader timer cleanup counts. |
 - [ ] **An app's review is drawn, and names the app, not the agent**, in the
   window over a fake gateway (`fixtures/app-review/`, dev server only): at
   rest, a conversation whose turn has ended is not read again; when its app

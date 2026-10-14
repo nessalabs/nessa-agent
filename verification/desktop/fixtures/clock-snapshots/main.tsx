@@ -11,6 +11,7 @@ declare global {
       timerTicks: number
       timerStops: number
       intervals: number[]
+      nowValues: number[]
       advance(): void
       publishTick(): void
       unmount(): void
@@ -25,15 +26,23 @@ const probe: Window["__clockProbe"] = (window.__clockProbe = {
   timerTicks: 0,
   timerStops: 0,
   intervals: [],
+  nowValues: [],
   advance: () => {},
   publishTick: () => {},
   unmount: () => {},
 })
 
+const scenario = new URLSearchParams(window.location.search).get("case")
+if (scenario !== "consecutive-reads" && scenario !== "published-tick-and-cleanup")
+  throw new Error(`unknown clock snapshot scenario: ${scenario}`)
+
 let currentTime = 999
 const now = () => {
+  const value =
+    scenario === "consecutive-reads" && probe.nowReads > 0 ? 1000 : currentTime
   probe.nowReads += 1
-  return currentTime
+  probe.nowValues.push(value)
+  return value
 }
 
 function ClockReadout() {
