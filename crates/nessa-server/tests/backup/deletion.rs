@@ -305,22 +305,24 @@ async fn grant(
     receiver: &str,
     access: ShareAccess,
 ) {
-    assert!(store
+    let receipt = store
         .change(change(
             ShareGrantTransition::Grant(access),
             id,
             Some(receiver),
-            receiver
+            receiver,
         ))
         .await
-        .unwrap());
+        .unwrap();
+    assert!(receipt.applied);
 }
 
 async fn revoke(store: &LocalConversationStore, id: &ConversationId, receiver: &str) {
-    assert!(store
+    let receipt = store
         .change(change(ShareGrantTransition::Revoke, id, None, receiver))
         .await
-        .unwrap());
+        .unwrap();
+    assert!(receipt.applied);
 }
 
 fn change(
@@ -334,6 +336,7 @@ fn change(
         conversation_id: id.clone(),
         receiver_id: receiver.map(str::to_owned),
         credential_id: CredentialId::new(format!("{credential}-credential")).unwrap(),
+        expected_policy_revision: None,
         initiator: crate::conversation::application::ConversationCaller {
             organization_id: OrganizationId::new("org").unwrap(),
             principal_id: PrincipalId::new("alice").unwrap(),
