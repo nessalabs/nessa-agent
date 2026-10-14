@@ -90,10 +90,16 @@ const checks = {
       if (options.shots) {
         mkdirSync(options.shots, { recursive: true })
         await page.locator(`${ui.desktop} .workspace-transcript`).screenshot({
-          path: join(options.shots, `turn-outcomes-desktop-${engine}-${layout}.png`),
+          path: join(
+            options.shots,
+            `turn-outcomes-terminals-desktop-${engine}-${layout}.png`,
+          ),
         })
         await page.locator(ui.panel).screenshot({
-          path: join(options.shots, `turn-outcomes-panel-${engine}-${layout}.png`),
+          path: join(
+            options.shots,
+            `turn-outcomes-terminals-panel-${engine}-${layout}.png`,
+          ),
         })
       }
       await opened.settleRequests()
@@ -129,11 +135,29 @@ const checks = {
     }
   },
 
-  async cleared({ browser, url, layout }) {
+  async cleared({ browser, url, layout, engine, options }) {
     const opened = await open(browser, url, layout)
     const failures = []
     try {
       const { page } = opened
+      if (options.shots) {
+        mkdirSync(options.shots, { recursive: true })
+        await page.locator(`${ui.desktop} ${ui.question("place")}`).screenshot({
+          path: join(
+            options.shots,
+            `turn-outcomes-cleared-desktop-${engine}-${layout}.png`,
+          ),
+        })
+        await page
+          .locator(`${ui.panel} [data-slot="questionnaire"]`)
+          .first()
+          .screenshot({
+            path: join(
+              options.shots,
+              `turn-outcomes-cleared-panel-${engine}-${layout}.png`,
+            ),
+          })
+      }
       const place = page.locator(`${ui.desktop} ${ui.question("place")}`)
       await place.locator(ui.choice, { hasText: "Staging" }).click()
       await place.locator("button", { hasText: "Answer" }).click()
