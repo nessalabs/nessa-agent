@@ -376,13 +376,8 @@ struct StartupProgress {
         )
     )]
     events: Arc<dyn GatewayStartupEvents>,
-    #[cfg_attr(
-        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
-        expect(
-            dead_code,
-            reason = "native reconciliation is supported only on macOS and Linux"
-        )
-    )]
+    // Read on every platform: quit yields this session's writer gate while a
+    // deferred copy runs. The other fields stay macOS and Linux only.
     journal: Arc<dyn GatewayReconciliationJournalSession>,
     state: Arc<Mutex<ProgressState>>,
     deferred_stage: Mutex<Option<DeferredStageWait>>,
