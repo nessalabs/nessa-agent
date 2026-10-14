@@ -31,4 +31,4 @@ B accepts a new drop after the terminal result frees a slot:
 [check.log](check.log) records the final 26-case matrix and concise quality
 checks. [revert.log](revert.log) records the expected failure after temporarily
 restoring oldest-entry eviction; the source was restored before the final
-matrix. The design contract is [AG15](../../../../docs/design/attachment-gestures.md#ag15).
+matrix. The design contract is [AG15](../../../../docs/design/attachment-gestures.md).
