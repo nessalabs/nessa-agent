@@ -35,6 +35,7 @@ verification/
   desktop/
     CHECKLIST.md            what we always test and reproduce, with the contract each item holds
     evidence/
+      797-completion/       combined-source gateway summary and calibrated delivery measurements
       conversation-unread/  screenshots the pull request shows for that check
     fixtures/
       sandbox-probes/      labelled host for visible isolation and navigation probes
