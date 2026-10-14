@@ -18,6 +18,8 @@ function gatewayView(): ConversationView {
     questions: [],
     artifacts: [],
     notes: [],
+    unreadable: [],
+    unreadableTruncated: false,
     conversationId: "server",
     title: null,
     revision: "capabilities",

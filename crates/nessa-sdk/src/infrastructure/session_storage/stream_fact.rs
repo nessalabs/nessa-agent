@@ -371,6 +371,14 @@ impl FrameValidator {
         self.offset
     }
 
+    /// Advance past a frame that cannot be read. Returns whether a fact in
+    /// progress was abandoned. The caller has already checked the position.
+    pub(crate) fn skip(&mut self, position: u64) -> bool {
+        let abandoned = self.pending.take().is_some();
+        self.offset = position;
+        abandoned
+    }
+
     pub(crate) fn is_pending(&self) -> bool {
         self.pending.is_some()
     }
