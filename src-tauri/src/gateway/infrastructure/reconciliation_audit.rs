@@ -4,7 +4,10 @@
 //! application session -> retained directory -> acknowledged immutable record
 //! ```
 //! Arrows mean durable writes. One retained session validates the whole stage,
-//! holds its lock, and orders every record for its attempt.
+//! holds its lock, and orders every record for its attempt. A deferred
+//! publication releases only the in-process writer gate while the copy runs,
+//! so quit in this process can append its own attempt. The file lock stays
+//! held until that publication session drops.
 use crate::gateway::{
     application::{
         GatewayError, GatewayLifecycleRecovery, GatewayReconciliationAttempt,
@@ -35,6 +38,7 @@ use std::{
     fs::File,
     io::{self, Read, Seek, SeekFrom, Write},
     os::fd::AsRawFd,
+    panic::{catch_unwind, AssertUnwindSafe},
     path::{Path, PathBuf},
     sync::{Arc, Condvar, Mutex},
     time::{Duration, Instant},
@@ -48,6 +52,7 @@ pub(in crate::gateway::infrastructure) struct FileReconciliationAudit {
     config_root: Option<PathBuf>,
     manager: ServiceManager,
     clock: Arc<dyn MonotonicClock>,
+    gate: Arc<StageGate>,
 }
 
 impl FileReconciliationAudit {
@@ -62,6 +67,7 @@ impl FileReconciliationAudit {
             config_root,
             manager,
             clock,
+            gate: Arc::new(StageGate::new()),
         }
     }
 
@@ -77,16 +83,135 @@ impl FileReconciliationAudit {
     }
 }
 
+/// Process-local exclusion around journal appends, plus the stage file lock.
+///
+/// `depth` counts sessions in this process. Only the transition 0→1 flocks,
+/// and only 1→0 unlocks. A second session therefore does not flock again:
+/// on Linux a second descriptor would block on the first, and on macOS
+/// unlocking either descriptor would drop the process lock. The file lock
+/// stays held for the whole publication, including the copy, so another
+/// process cannot recover that attempt. `writers_held` is released around
+/// the copy so quit in this process can append its own chain.
+struct StageGate {
+    depth: Mutex<usize>,
+    lock: Mutex<Option<File>>,
+    writers_held: Mutex<bool>,
+}
+
+impl StageGate {
+    fn new() -> Self {
+        Self {
+            depth: Mutex::new(0),
+            lock: Mutex::new(None),
+            writers_held: Mutex::new(false),
+        }
+    }
+
+    fn enter(
+        &self,
+        directory: &PrivateDirectory,
+        deadline: Option<Instant>,
+        clock: &dyn MonotonicClock,
+    ) -> Result<(), GatewayError> {
+        let mut depth = self.depth.lock().map_err(|_| stage_gate_unavailable())?;
+        if *depth == 0 {
+            let mut slot = self.lock.lock().map_err(|_| stage_gate_unavailable())?;
+            if slot.is_none() {
+                let file = directory
+                    .open_file(OsStr::new(LOCK_FILE), OpenMode::OpenOrCreate)
+                    .map_err(|error| GatewayError::Registration(error.to_string()))?;
+                *slot = Some(file);
+            }
+            let file = slot.as_ref().expect("stage lock file");
+            flock_file(file, deadline, clock)?;
+        }
+        *depth += 1;
+        Ok(())
+    }
+
+    fn leave(&self) {
+        let Ok(mut depth) = self.depth.lock() else {
+            return;
+        };
+        *depth = depth.saturating_sub(1);
+        if *depth == 0 {
+            if let Ok(slot) = self.lock.lock() {
+                if let Some(file) = slot.as_ref() {
+                    unsafe {
+                        libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+                    }
+                }
+            }
+        }
+    }
+
+    fn acquire_writers(
+        &self,
+        deadline: Option<Instant>,
+        clock: &dyn MonotonicClock,
+    ) -> Result<(), GatewayError> {
+        let deadline = deadline.unwrap_or_else(|| clock.now() + Duration::from_secs(120));
+        loop {
+            let mut held = self
+                .writers_held
+                .lock()
+                .map_err(|_| stage_gate_unavailable())?;
+            if !*held {
+                *held = true;
+                return Ok(());
+            }
+            drop(held);
+            if clock.now() >= deadline {
+                return Err(GatewayError::Registration(
+                    "Gateway lifecycle journal deadline passed while waiting for the writer gate"
+                        .into(),
+                ));
+            }
+            // Same wait as the file lock, so a test clock can advance it.
+            clock.wait(Duration::from_millis(50));
+        }
+    }
+
+    fn release_writers(&self) {
+        if let Ok(mut held) = self.writers_held.lock() {
+            *held = false;
+        }
+    }
+}
+
+fn stage_gate_unavailable() -> GatewayError {
+    GatewayError::Registration("Gateway lifecycle journal state is unavailable".into())
+}
+
 struct FileJournalSession {
     manager: ServiceManager,
     directory: PrivateDirectory,
-    _lock: File,
+    gate: Arc<StageGate>,
+    holds_writers: Mutex<bool>,
     attempt: GatewayReconciliationAttempt,
     state: Mutex<SessionState>,
     advanced: Condvar,
     deadline: Option<Instant>,
     clock: Arc<dyn MonotonicClock>,
     recovery: Option<GatewayLifecycleRecovery>,
+}
+
+impl Drop for FileJournalSession {
+    fn drop(&mut self) {
+        if self
+            .holds_writers
+            .lock()
+            .map(|mut held| {
+                let was_held = *held;
+                *held = false;
+                was_held
+            })
+            .unwrap_or(false)
+        {
+            self.gate.release_writers();
+        }
+        self.gate.leave();
+    }
 }
 
 struct SessionState {
@@ -950,18 +1075,15 @@ fn record_kind(kind: &str) -> Option<LifecycleRecordKind> {
     .find(|candidate| candidate.file_name() == kind)
 }
 
-fn acquire_lock(
-    directory: &PrivateDirectory,
+fn flock_file(
+    file: &File,
     deadline: Option<Instant>,
     clock: &dyn MonotonicClock,
-) -> Result<File, GatewayError> {
-    let file = directory
-        .open_file(OsStr::new(LOCK_FILE), OpenMode::OpenOrCreate)
-        .map_err(|error| GatewayError::Registration(error.to_string()))?;
+) -> Result<(), GatewayError> {
     let deadline = deadline.unwrap_or_else(|| clock.now() + Duration::from_secs(120));
     loop {
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-            return Ok(file);
+            return Ok(());
         }
         let error = io::Error::last_os_error();
         if error.kind() != io::ErrorKind::WouldBlock || clock.now() >= deadline {
@@ -971,6 +1093,19 @@ fn acquire_lock(
         }
         clock.wait(Duration::from_millis(50));
     }
+}
+
+#[cfg(test)]
+fn acquire_lock(
+    directory: &PrivateDirectory,
+    deadline: Option<Instant>,
+    clock: &dyn MonotonicClock,
+) -> Result<File, GatewayError> {
+    let file = directory
+        .open_file(OsStr::new(LOCK_FILE), OpenMode::OpenOrCreate)
+        .map_err(|error| GatewayError::Registration(error.to_string()))?;
+    flock_file(&file, deadline, clock)?;
+    Ok(file)
 }
 
 fn load_records(
@@ -1031,6 +1166,7 @@ fn validate_stage_records(
     manager: ServiceManager,
 ) -> Result<(), GatewayError> {
     let mut unresolved = 0usize;
+    let mut quit_unresolved = 0usize;
     let mut index = 0usize;
     while index < records.len() {
         let correlation = &records[index].attempt_correlation;
@@ -1039,22 +1175,42 @@ fn validate_stage_records(
             records[index].validate_header()?;
             index += 1;
         }
-        let chain = records[start..index]
+        let chain_records = &records[start..index];
+        let quit = intent_cause_is_quit(chain_records);
+        let chain = chain_records
             .iter()
             .map(domain_record)
             .collect::<Result<Vec<_>, _>>()?;
         let history = LifecycleHistory::restore(manager, &chain)
             .map_err(|error| GatewayError::Registration(error.to_string()))?;
         if !history.is_terminal() {
-            unresolved += 1;
+            if quit {
+                quit_unresolved += 1;
+            } else {
+                unresolved += 1;
+            }
         }
     }
-    if unresolved > 1 {
+    // Quit may be unfinished while a deferred publication plan is still open.
+    // Two of either kind means recovery no longer knows which attempt to settle.
+    if unresolved > 1 || quit_unresolved > 1 {
         return Err(GatewayError::Registration(
             "Gateway lifecycle journal contains multiple unresolved attempts".into(),
         ));
     }
     Ok(())
+}
+
+fn intent_cause_is_quit(chain: &[StoredRecord]) -> bool {
+    chain.first().is_some_and(|record| {
+        record.kind == LifecycleRecordKind::Intent.file_name()
+            && record
+                .payload
+                .get("origin")
+                .and_then(|origin| origin.get("cause"))
+                .and_then(Value::as_str)
+                == Some("desktop_quit_policy")
+    })
 }
 
 fn unresolved_recovery(
@@ -1369,49 +1525,101 @@ impl GatewayReconciliationAudit for FileReconciliationAudit {
         deadline: Option<Instant>,
     ) -> Result<Arc<dyn GatewayReconciliationJournalSession>, GatewayError> {
         let directory = self.open_directory()?;
-        let lock = acquire_lock(&directory, deadline, self.clock.as_ref())?;
-        let records = load_records(&directory, self.manager)?;
-        if deadline.is_some_and(|deadline| self.clock.now() >= deadline) {
-            return Err(GatewayError::Registration(
-                "Gateway lifecycle journal deadline passed during recovery".into(),
-            ));
+        self.gate.enter(&directory, deadline, self.clock.as_ref())?;
+        if let Err(error) = self.gate.acquire_writers(deadline, self.clock.as_ref()) {
+            self.gate.leave();
+            return Err(error);
         }
-        let recovery = unresolved_recovery(&records, self.manager)?;
-        let (session_attempt, namespace, next_sequence, history, latest_observation, recovery) =
-            match recovery {
-                Some((recovery, history)) => (
-                    recovery.attempt().clone(),
-                    Some(recovery.target().service().to_owned()),
-                    history.next_sequence(),
-                    Some(history.clone()),
-                    history.latest_observation().cloned(),
-                    Some(recovery),
-                ),
-                None => (attempt.clone(), None, 0, None, None, None),
+        let opened = (|| {
+            let records = load_records(&directory, self.manager)?;
+            if deadline.is_some_and(|deadline| self.clock.now() >= deadline) {
+                return Err(GatewayError::Registration(
+                    "Gateway lifecycle journal deadline passed during recovery".into(),
+                ));
+            }
+            let recovery = unresolved_recovery(&records, self.manager)?;
+            // Startup adopts an unresolved attempt so recovery can settle it.
+            // Quit passes a deadline and must record its own attempt while a
+            // deferred publication plan is still open; adopting that plan
+            // would reject the stop intent.
+            let adopt_recovery = match &recovery {
+                Some((pending, _)) => {
+                    deadline.is_none() || pending.attempt().correlation() == attempt.correlation()
+                }
+                None => false,
             };
-        Ok(Arc::new(FileJournalSession {
-            manager: self.manager,
-            directory,
-            _lock: lock,
-            attempt: session_attempt,
-            state: Mutex::new(SessionState {
-                namespace,
-                next_sequence,
-                terminal: false,
-                history,
-                latest_observation,
-            }),
-            advanced: Condvar::new(),
-            deadline,
-            clock: self.clock.clone(),
-            recovery,
-        }))
+            let (session_attempt, namespace, next_sequence, history, latest_observation, recovery) =
+                match recovery.filter(|_| adopt_recovery) {
+                    Some((recovery, history)) => (
+                        recovery.attempt().clone(),
+                        Some(recovery.target().service().to_owned()),
+                        history.next_sequence(),
+                        Some(history.clone()),
+                        history.latest_observation().cloned(),
+                        Some(recovery),
+                    ),
+                    None => (attempt.clone(), None, 0, None, None, None),
+                };
+            Ok(Arc::new(FileJournalSession {
+                manager: self.manager,
+                directory,
+                gate: self.gate.clone(),
+                holds_writers: Mutex::new(true),
+                attempt: session_attempt,
+                state: Mutex::new(SessionState {
+                    namespace,
+                    next_sequence,
+                    terminal: false,
+                    history,
+                    latest_observation,
+                }),
+                advanced: Condvar::new(),
+                deadline,
+                clock: self.clock.clone(),
+                recovery,
+            }))
+        })();
+        if opened.is_err() {
+            self.gate.release_writers();
+            self.gate.leave();
+        }
+        opened.map(|session| session as Arc<dyn GatewayReconciliationJournalSession>)
     }
 }
 
 impl GatewayReconciliationJournalSession for FileJournalSession {
     fn recovery(&self) -> Option<GatewayLifecycleRecovery> {
         self.recovery.clone()
+    }
+
+    fn while_lock_yielded(
+        &self,
+        wait: &mut dyn FnMut() -> Result<(), String>,
+    ) -> Result<(), String> {
+        {
+            let mut held = self
+                .holds_writers
+                .lock()
+                .map_err(|_| "Gateway lifecycle journal state is unavailable".to_owned())?;
+            if *held {
+                self.gate.release_writers();
+                *held = false;
+            }
+        }
+        let result = catch_unwind(AssertUnwindSafe(wait));
+        let relock = self
+            .gate
+            .acquire_writers(self.deadline, self.clock.as_ref());
+        if let Ok(mut held) = self.holds_writers.lock() {
+            if relock.is_ok() {
+                *held = true;
+            }
+        }
+        relock.map_err(|error| error.to_string())?;
+        match result {
+            Ok(value) => value,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
     }
 
     fn intent(&self, intent: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
@@ -2606,6 +2814,100 @@ mod tests {
         fs::create_dir(journal.join(name)).unwrap();
         assert!(load_records(&directory, ServiceManager::Launchd).is_err());
         assert!(journal.join(name).is_dir());
+    }
+
+    #[test]
+    fn one_unresolved_quit_may_sit_beside_one_unresolved_publication() {
+        let publication = stored(
+            "00000000-0000-4000-8000-000000000001",
+            0,
+            LifecycleRecordKind::Intent,
+        );
+        let mut quit = stored(
+            "00000000-0000-4000-8000-000000000002",
+            0,
+            LifecycleRecordKind::Intent,
+        );
+        quit.payload["origin"]["cause"] = json!("desktop_quit_policy");
+        assert!(validate_stage_records(
+            &[publication.clone(), quit.clone()],
+            ServiceManager::Launchd
+        )
+        .is_ok());
+        let other = stored(
+            "00000000-0000-4000-8000-000000000003",
+            0,
+            LifecycleRecordKind::Intent,
+        );
+        assert!(
+            validate_stage_records(&[publication, quit, other], ServiceManager::Launchd).is_err()
+        );
+    }
+
+    #[test]
+    fn quit_records_its_own_attempt_while_a_publication_plan_is_unresolved() {
+        let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let audit = Arc::new(FileReconciliationAudit::new(
+            Some(temporary.path().join("Nessa")),
+            ServiceManager::Launchd,
+            Arc::new(SystemMonotonicClock),
+        ));
+        let publication = reconciliation_attempt(0x601, ReconciliationCause::Startup);
+        let session = audit.clone().open(&publication, None).unwrap();
+        let target = ReconciliationTarget::new(
+            "gui/501/so.nessa.gateway.prod".into(),
+            "a".repeat(64),
+            "b".repeat(64),
+        )
+        .unwrap();
+        session
+            .intent(
+                &GatewayReconciliationIntent::new(publication.clone(), target.clone(), None)
+                    .unwrap(),
+            )
+            .unwrap();
+        let quit = reconciliation_attempt(0x603, ReconciliationCause::DesktopQuitPolicy);
+        let recorded = session.while_lock_yielded(&mut || {
+            let quit_session = audit
+                .clone()
+                .open(&quit, Some(Instant::now() + Duration::from_secs(1)))
+                .map_err(|error| error.to_string())?;
+            if quit_session.recovery().is_some() {
+                return Err("quit adopted the unresolved publication".into());
+            }
+            quit_session
+                .intent(
+                    &GatewayReconciliationIntent::new(quit.clone(), target.clone(), None).unwrap(),
+                )
+                .map_err(|error| error.to_string())
+        });
+        recorded.expect("quit wrote its intent while the publication attempt was open");
+        drop(session);
+        let restored = audit
+            .open(
+                &reconciliation_attempt(0x605, ReconciliationCause::Startup),
+                None,
+            )
+            .unwrap();
+        assert!(
+            restored.recovery().is_some(),
+            "startup still recovers while a quit attempt is unresolved"
+        );
+    }
+
+    fn reconciliation_attempt(id: u64, cause: ReconciliationCause) -> GatewayReconciliationAttempt {
+        let correlation = |value: u64| {
+            ReconciliationCorrelation::parse(format!("00000000-0000-4000-8000-{value:012x}"))
+                .unwrap()
+        };
+        GatewayReconciliationAttempt::new(
+            correlation(id),
+            GatewayReconciliationRequest::new(
+                correlation(id + 1),
+                ReconciliationEvidence::new(cause, ReconciliationInitiator::DesktopHost).unwrap(),
+            ),
+        )
+        .unwrap()
     }
 
     #[test]

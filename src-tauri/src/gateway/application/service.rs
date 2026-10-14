@@ -290,6 +290,17 @@ impl AttemptReceipt {
         Ok(())
     }
 
+    /// The attempt has published Ready and is still finishing deferred work.
+    ///
+    /// Quit reads this instead of waiting for settlement. A later attempt that
+    /// is only starting has not released the surface, so it still waits.
+    fn surface_released(&self) -> bool {
+        self.state
+            .lock()
+            .map(|state| state.surface_ready)
+            .unwrap_or(false)
+    }
+
     fn wait_physical_until(
         &self,
         deadline: Instant,
@@ -767,6 +778,9 @@ fn publish_ready_while_stage_finishes(
     current.ready_gateway = Some(gateway.clone());
     current.startup = current.startup.next(GatewayStartupPhase::Ready);
     let startup = current.startup.clone();
+    // Same critical section as Ready, so quit cannot observe the phase
+    // without the surface flag that lets it skip this receipt.
+    let _ = receipt.release_surface();
     drop(current);
     publish(&executor.startup_events, &startup);
     Some(previous)
@@ -1371,7 +1385,20 @@ impl Gateway {
                 .lifecycle
                 .lock()
                 .map_err(|_| GatewayError::NotReconciled)?;
-            let Some(attempt) = lifecycle.running.clone() else {
+            let running = lifecycle.running.clone();
+            // Deferred publication leaves this receipt running after Ready.
+            // The copy is not the stop. A later attempt that has not released
+            // the surface still waits, even if an older ready identity remains.
+            if matches!(lifecycle.startup.phase(), GatewayStartupPhase::Ready)
+                && running
+                    .as_ref()
+                    .is_some_and(|attempt| attempt.surface_released())
+            {
+                if let Some(ready) = lifecycle.ready_gateway.clone() {
+                    break ready;
+                }
+            }
+            let Some(attempt) = running else {
                 break lifecycle
                     .retained_gateway
                     .clone()
@@ -1938,34 +1965,52 @@ fn execute_attempt(
         }),
     };
     let mut journal = open_journal();
-    let restored = journal.as_ref().ok().cloned();
-    if let Some(recovery) = restored.as_ref().and_then(|session| session.recovery()) {
-        if let Some(restored) = restored {
-            let recovery_result = catch_unwind(AssertUnwindSafe(|| {
-                executor.host.recover(&recovery, restored.as_ref())
-            }))
-            .unwrap_or_else(|_| {
-                Err(GatewayError::Registration(
-                    "gateway host panicked during lifecycle recovery".into(),
-                ))
-            });
-            drop(restored);
-            drop(journal);
-            journal = match recovery_result {
-                Ok(()) => open_journal(),
-                Err(error) => Err(error),
-            };
-            if journal
-                .as_ref()
-                .ok()
-                .and_then(|session| session.recovery())
-                .is_some()
-            {
-                journal = Err(GatewayError::Registration(
-                    "Gateway lifecycle recovery returned without terminal settlement".into(),
-                ));
-            }
+    // A crash during quit can leave the publication attempt and the quit
+    // attempt both unresolved. Settle each one. The same attempt coming back
+    // means recovery did not close it.
+    for _ in 0..2 {
+        let Some(session) = journal.as_ref().ok().cloned() else {
+            break;
+        };
+        let Some(recovery) = session.recovery() else {
+            break;
+        };
+        let recovered_attempt = recovery.attempt().clone();
+        let recovery_result = catch_unwind(AssertUnwindSafe(|| {
+            executor.host.recover(&recovery, session.as_ref())
+        }))
+        .unwrap_or_else(|_| {
+            Err(GatewayError::Registration(
+                "gateway host panicked during lifecycle recovery".into(),
+            ))
+        });
+        drop(session);
+        drop(journal);
+        journal = match recovery_result {
+            Ok(()) => open_journal(),
+            Err(error) => Err(error),
+        };
+        let still_open = journal
+            .as_ref()
+            .ok()
+            .and_then(|next| next.recovery())
+            .is_some_and(|again| again.attempt() == &recovered_attempt);
+        if still_open {
+            journal = Err(GatewayError::Registration(
+                "Gateway lifecycle recovery returned without terminal settlement".into(),
+            ));
+            break;
         }
+    }
+    if journal
+        .as_ref()
+        .ok()
+        .and_then(|session| session.recovery())
+        .is_some()
+    {
+        journal = Err(GatewayError::Registration(
+            "Gateway lifecycle recovery returned without terminal settlement".into(),
+        ));
     }
     if let Err(error) = receipt.publish_journal(journal.clone()) {
         return AttemptExecution {
@@ -2032,12 +2077,17 @@ fn execute_attempt(
                 let early = physical.as_ref().ok().and_then(|gateway| {
                     publish_ready_while_stage_finishes(executor, receipt, gateway)
                 });
-                if early.is_some() {
-                    // Surface readers return while this thread waits for the
-                    // copy and records its real completion.
-                    let _ = receipt.release_surface();
-                }
-                let stage_result = deferred.publication_result();
+                // Surface readers already returned from `publish_ready`. This
+                // thread still waits for the copy, but it drops the in-process
+                // writer gate first so quit can record a stop against the
+                // ready gateway. The stage file lock stays held.
+                let stage_result = if early.is_some() {
+                    progress
+                        .journal
+                        .while_lock_yielded(&mut || deferred.publication_result())
+                } else {
+                    deferred.publication_result()
+                };
                 match complete_deferred_stage(
                     &progress,
                     executor.host.as_ref(),

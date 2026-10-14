@@ -1151,6 +1151,19 @@ pub trait GatewayReconciliationJournalSession: Send + Sync {
         None
     }
 
+    /// Runs `wait` without this session's in-process writer gate.
+    ///
+    /// The stage file lock stays held, so another process cannot recover the
+    /// attempt. Quit in this process can record its own stop. Deferred
+    /// publication calls this around the copy, which outlasts the desktop quit
+    /// budget. Journals that do not take that gate run `wait` directly.
+    fn while_lock_yielded(
+        &self,
+        wait: &mut dyn FnMut() -> Result<(), String>,
+    ) -> Result<(), String> {
+        wait()
+    }
+
     fn intent(&self, intent: &GatewayReconciliationIntent) -> Result<(), GatewayError>;
 
     fn outcome(
