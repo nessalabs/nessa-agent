@@ -10,6 +10,7 @@ import {
   sharePage,
   toolPolicyBounds,
   type AgentsListResult,
+  type ConversationCapability,
   type ConversationSharesResult,
 } from "@nessa/client"
 import { describe, expect, it, vi } from "vitest"
@@ -229,7 +230,7 @@ describe("reading a session's sharing", () => {
     const dropped = shares.items[0]
     const kept = {
       credentialId: "watch",
-      capabilities: ["read"] as const,
+      capabilities: ["read"] as ConversationCapability[],
       policyRevision: 4,
       grantedAtMs: 8,
     }
@@ -273,7 +274,7 @@ describe("reading a session's sharing", () => {
                 items: [
                   {
                     credentialId,
-                    capabilities: ["read"] as const,
+                    capabilities: ["read"] as ConversationCapability[],
                     policyRevision: 1,
                     grantedAtMs: n,
                   },
