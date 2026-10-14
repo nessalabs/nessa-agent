@@ -203,6 +203,21 @@ describe("resultOfThrown", () => {
 })
 
 describe("run-all's sum", () => {
+  it("recognizes the clock check by --only name and leaves it out of production previews", () => {
+    const source = readFileSync(new URL("../run-all.mjs", import.meta.url), "utf8")
+    const match = source.match(/const functional = \[([\s\S]*?)\n\]/)
+    assert.ok(match, "run-all declares its functional check registry")
+    const functional = Array.from(match[1].matchAll(/"([^"]+)"/g), ([, name]) => name)
+    assert.deepEqual(
+      chosen("clock-snapshots", functional, (value) => value.split(",").filter(Boolean)),
+      ["clock-snapshots"],
+    )
+
+    const scheduled = checksUnder("prod", functional)
+    assert.ok(scheduled.leftOut.includes("clock-snapshots"))
+    assert.ok(!scheduled.run.includes("clock-snapshots"))
+  })
+
   it("passes an explicit production URL to committed-transcript", () => {
     const url = "http://127.0.0.1:9000/desktop.html"
     assert.deepEqual(
@@ -254,6 +269,7 @@ describe("run-all's sum", () => {
       "transcript-notes",
       "transcript-unreadable",
       "turn-outcomes",
+      "clock-snapshots",
       "mcp-apps",
       "approval-deadline",
     ])

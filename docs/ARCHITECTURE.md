@@ -322,7 +322,8 @@ not reading the session, which stays unread.
   focus following the focused pane and owning its queued settlement for the mounted
   subscription (`focus.ts`, [frame lifetime](design/ui-workspace-load.md#focus-frame-lifetime-730)), the page's measure of the
   panes' room (`measure.ts`, injected into the commands), the arrival of a
-  first message, and the clock's ticks. `adapters/storage/` keeps the Agents overview's
+  first message. `src/clock/` owns the shared published clock ticks used by
+  conversation and workspace readers. `adapters/storage/` keeps the Agents overview's
   filter between launches (`remembered-filter.ts`).
 - `ui/` holds each component once — source list (two variants of one
   component), session list, pane grid, pane, pane header, transcript, message,
