@@ -549,9 +549,32 @@ it("carries authentication-required evidence separately from its diagnostic", ()
       },
     ],
   })
-  expect(result.turns.find((turn) => turn.from === "assistant")).toMatchObject({
+  const assistant = result.turns.find((turn) => turn.from === "assistant")
+  expect(assistant).toMatchObject({
     authenticationRequired: true,
     status: "OAuth session expired",
+  })
+  expect(assistant).not.toHaveProperty("requiredWorkFailed")
+})
+
+it("carries an independent required-work failure separately from the diagnostic", () => {
+  const result = applyView(conversation("tab"), {
+    ...view,
+    pending: [],
+    messages: [
+      {
+        ...view.messages[0]!,
+        status: "failed",
+        error: "The turn could not complete all required work.",
+        authenticationRequired: true,
+        requiredWorkFailed: true,
+      },
+    ],
+  })
+  expect(result.turns.find((turn) => turn.from === "assistant")).toMatchObject({
+    authenticationRequired: true,
+    requiredWorkFailed: true,
+    status: "The turn could not complete all required work.",
   })
 })
 

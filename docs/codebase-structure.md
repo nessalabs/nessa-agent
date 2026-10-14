@@ -1910,8 +1910,9 @@ after observing a refusal retires its recovery even if delivery fails; `ui/trans
 provider-sign-in browser fixture exercise both states and the accepted queued,
 running and output transitions.
 The floating panel carries the same typed fact through `applyView` and replaces
-that turn's error divider with the shared card; its App receives the login action
-from composition. The card imports neither a store nor a host. See [ADR 501](adr/todo/501-provider-authentication-recovery.md)
+that turn's error divider with the shared card. It shows the required-work
+diagnostic beside the card only when that turn's `requiredWorkFailed` is set.
+Its App receives the login action from composition. The card imports neither a store nor a host. See [ADR 501](adr/todo/501-provider-authentication-recovery.md)
 for states and the Claude internal-error limitation.
 
 The panel's causal recovery integration test is

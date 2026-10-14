@@ -29,8 +29,10 @@ authentication diagnostic `TranscriptDivider` and retains unrelated notices.
 A pure authentication refusal publishes no diagnostic error. If independent
 required work also failed, the projection publishes `requiredWorkFailed` on
 that failed turn and keeps the person-facing diagnostic in `error`. Surfaces
-branch on the flag. The panel keeps that diagnostic beside the card; the
-desktop keeps it on the turn's terminal.
+branch on the flag. The panel shows that diagnostic beside the card only when
+`requiredWorkFailed` is set, and shows no status beside the card for a pure
+refusal or for an authentication diagnostic folded into the turn's status.
+The desktop keeps the diagnostic on the turn's terminal when the flag is set.
 
 The compact transcript card uses the requested heading **Your login expired**
 and one **Sign in to Claude** or **Sign in to Codex** button. ACP's fact means
@@ -55,6 +57,8 @@ outside Nessa's launcher.
 | State | Event | Result | Evidence |
 | --- | --- | --- | --- |
 | Latest turn failed | Adapter-owned authentication-required report for Claude or Codex | Recovery card shown; pure refusal omits the terminal | SDK code test, projection restoration test, gateway mapping test |
+| Card showing | Authentication diagnostic folded into status, `requiredWorkFailed` absent | Card only; that diagnostic is not repeated beside it | Panel transcript regression |
+| Card showing | `requiredWorkFailed` set | Card and the required-work diagnostic | Panel transcript regression |
 | Latest turn failed | Same report for OpenCode, an unknown agent, or no agent | No recovery card; the failure stays on the terminal | Desktop gateway mapping test |
 | Latest turn failed | Generic provider code, including `-32000` or auth diagnostic text | No recovery card | SDK code test, projection test, gateway mapping test |
 | Card unsupported | Capability absent, false, or unanswerable | Disabled action; no launch | Browser provider-sign-in script |

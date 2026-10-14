@@ -68,6 +68,7 @@ export function applyView(current: Conversation, view: ConversationView): Conver
           .map((part) => part.text)
           .join(""),
         authenticationRequired: message.authenticationRequired,
+        ...(message.requiredWorkFailed === true ? { requiredWorkFailed: true } : {}),
         status: message.error ?? message.status,
       })
     }

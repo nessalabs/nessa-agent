@@ -6,6 +6,9 @@ import { openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { providerSignIn as selectors } from "./lib/selectors.mjs"
 
+const OAUTH_DIAGNOSTIC = "Internal error: OAuth session expired"
+const REQUIRED_WORK = "The turn could not complete all required work."
+
 await main(
   { name: "provider-sign-in", defaults: { engine: "chromium,webkit" } },
   async ({ options, rep, url }) => {
@@ -177,6 +180,49 @@ await main(
               await opened.close()
             }
           }
+        }
+      }
+      for (const [label, query, shown] of [
+        ["oauth-diagnostic", { diagnostic: OAUTH_DIAGNOSTIC }, false],
+        ["required-work", { diagnostic: REQUIRED_WORK, requiredWork: "failed" }, true],
+      ]) {
+        const target = new URL(selectors.panelPage, url)
+        target.searchParams.set("provider", "claude")
+        target.searchParams.set("diagnostic", query.diagnostic)
+        if (query.requiredWork)
+          target.searchParams.set("requiredWork", query.requiredWork)
+        const opened = await openPage(browser, {
+          url: target.href,
+          width: 1000,
+          height: 700,
+          readySelector: selectors.card,
+        })
+        try {
+          const count = await opened.page
+            .getByText(query.diagnostic, { exact: true })
+            .count()
+          if (count !== (shown ? 1 : 0))
+            throw new Error(
+              `${label} diagnostic beside sign-in: expected ${shown ? 1 : 0}, saw ${count}`,
+            )
+          if (options.shots) {
+            mkdirSync(options.shots, { recursive: true })
+            await opened.page.screenshot({
+              path: resolve(options.shots, `${engine}-panel-${label}.png`),
+            })
+          }
+          rep.add({
+            name: "provider-sign-in-required-work",
+            engine,
+            surface: "panel",
+            label,
+            shown,
+            count,
+            passed: true,
+            errors: opened.errors.length,
+          })
+        } finally {
+          await opened.close()
         }
       }
     })

@@ -143,6 +143,13 @@ export function Transcript({
             />
             {rows.map((row) => {
               const user = row.promptId ? users.get(row.promptId) : undefined
+              const sourceTurn = conversation.turns.find(
+                (turn) => turn.id === row.sourceTurnId && turn.from === "assistant",
+              )
+              const recovery =
+                sourceTurn?.from === "assistant" && sourceTurn.authenticationRequired
+                  ? sourceTurn
+                  : undefined
               return (
                 <React.Fragment key={row.key}>
                   {user && (
@@ -202,12 +209,7 @@ export function Transcript({
                   />
                   {provider &&
                   offersAuthenticationRecovery(
-                    conversation.turns.find(
-                      (turn) =>
-                        turn.id === row.sourceTurnId &&
-                        turn.from === "assistant" &&
-                        turn.authenticationRequired,
-                    )?.executionId,
+                    recovery?.executionId,
                     conversation.remote?.latestInputId,
                     localInputs,
                   ) ? (
@@ -217,7 +219,7 @@ export function Transcript({
                         onSignIn={onProviderSignIn}
                         canSignIn={canSignInToProvider}
                       />
-                      {row.status !== "failed" ? (
+                      {recovery?.requiredWorkFailed === true ? (
                         <TurnStatus status={row.status} />
                       ) : null}
                     </React.Fragment>

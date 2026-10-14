@@ -1445,7 +1445,9 @@ within the card, keyboard activation opens the selected provider once, an
 acknowledged launch keeps the card, a failed launch says so, and a newer
 transcript removes the card. Both browser engines report geometry, launch counts,
 and zero page errors. The raw authentication diagnostic is absent and unrelated
-local notices remain.
+local notices remain. On the panel, an authentication diagnostic folded into
+the turn's status stays off the card unless `requiredWorkFailed` is set, in
+which case the required-work sentence is shown once beside it.
 
 The same script drives an older failed local submission through a later wire
 refusal, a newer local submission after seeing that refusal, repeated replacement
