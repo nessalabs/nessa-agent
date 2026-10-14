@@ -45,7 +45,11 @@ The owner manages grants with three socket methods, each admitted by Cedar for
 - `conversation.unshare {requestId, conversationId, credentialId}` revokes. It
   needs only ownership, so access can be taken away from a deleted
   conversation or an unpaired device.
-- `conversation.shares {conversationId}` lists the grants on one conversation.
+- `conversation.shares {conversationId, pageSize, cursor?}` lists one page of
+  the grants on one conversation. `pageSize` is required. The first page names
+  no cursor; a later page echoes the cursor the previous page returned. The
+  answer names the catalogue revision those grants were read at, and a cursor
+  when further grants remain.
 
 Each grant, change of role or policy, and revoke is journaled
 (`share_grant_changes`) in the same transaction as the grant itself: the
@@ -926,7 +930,7 @@ otherwise.
 | G14 | A device unpaired (its binding inactive), whatever it was granted | Socket reads refused `unauthorized`; passive reads as before | `an_unpaired_device_reads_nothing_whatever_it_was_granted` |
 | G15 | A records watch installed while granted; the grant revoked; a record committed | No `conversation.changed` is delivered; the next notice is admitted again, refused, and the connection closes `authorization_lost` | `a_revoke_ends_an_installed_records_watch_at_its_next_notice` (`tests/product/socket/watches.rs`) |
 | G16 | A share or unshare retried with the same request id, after a later change | Answers what it answered the first time and changes nothing; the same request naming another device or the other change is refused `InvalidInput`. This holds for a request that changed nothing, which replays `applied: false`. A retried share is admitted like a new one first, so after a delete or an unpairing it is refused and changes nothing | `a_retried_share_replays_its_answer_and_never_undoes_a_later_unshare`, `a_retried_share_that_changed_nothing_never_undoes_a_later_unshare` |
-| G17 | A share past `MAX_SHARE_GRANTS_PER_CONVERSATION` (64) grants on one conversation | Refused `InvalidInput`, nothing written, so a `conversation.shares` answer fits one frame | `a_conversation_holds_a_bounded_number_of_grants` |
+| G17 | A share past `MAX_SHARE_GRANTS_PER_CONVERSATION` (64) grants on one conversation | Refused `InvalidInput`, nothing written. The conversation holds at most 64 grants; one page of `conversation.shares` is what fits one frame | `a_conversation_holds_a_bounded_number_of_grants` |
 | J1 | A device holding a Comment or a Drive grant reads: record head and page, a records watch, its catalogue, `conversation.read` and a view subscription | Exactly as a Read grant: admitted, the same rows and head; refused once revoked | `a_comment_or_drive_grant_reads_records_as_read_does`; `a_comment_or_drive_grant_watches_records_as_read_does` (`tests/product/socket/watches.rs`); `a_comment_or_drive_grant_pages_and_resolves_as_read_does`; `a_comment_or_drive_grant_reads_on_the_socket_as_read_does` |
 | J3 | Share Drive without a policy, Read or Comment with one, a policy past its bounds or of no known shape, or an unknown role | Refused `InvalidInput`; nothing written or journaled | `drive_needs_a_policy_and_read_and_comment_take_none`, `tool_rules_are_bounded_and_plain` (`tests/conversation/share_access.rs`); `a_share_whose_role_and_policy_do_not_fit_is_refused_and_writes_nothing` |
 | J4 | Share again with another role (Read to Drive, Drive to Read) or another policy | Applied; journaled with role and policy before and after; the policy revision moves to that journal row; the catalogue revision and the device's head do not move | `a_change_of_role_or_policy_is_applied_journaled_and_moves_the_policy_revision` |
