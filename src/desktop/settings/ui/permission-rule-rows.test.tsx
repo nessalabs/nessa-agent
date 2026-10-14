@@ -64,3 +64,58 @@ it("lists a rule and revokes it", async () => {
   expect(revoked).toEqual(["pr_one"])
   expect(host.textContent).toContain("Rules you save from a review appear here.")
 })
+
+it("says a failed revoke left the rule stored only when the reread still lists it", async () => {
+  const gateway: PermissionRulesGateway = {
+    read: async () => ({ ok: true, rules: [rule] }),
+    revoke: async () => ({ ok: false }),
+  }
+  await show(gateway)
+  await act(async () => host.querySelector("button")?.click())
+  expect(host.textContent).toContain("Could not revoke that rule.")
+  expect(host.textContent).toContain("It is still remembered.")
+  expect(host.textContent).toContain("Always allow Bash")
+})
+
+it("does not say a failed revoke left the rule stored when the reread omits it", async () => {
+  let rules = [rule]
+  const gateway: PermissionRulesGateway = {
+    read: async () => ({ ok: true, rules }),
+    revoke: async () => {
+      rules = []
+      return { ok: false }
+    },
+  }
+  await show(gateway)
+  await act(async () => host.querySelector("button")?.click())
+  expect(host.textContent).toContain("Could not revoke that rule.")
+  expect(host.textContent).toContain("It is no longer listed.")
+  expect(host.textContent).not.toContain("It is still remembered.")
+  expect(host.textContent).not.toContain("Always allow Bash")
+})
+
+it("says the list could not be read again when a failed revoke cannot be reread", async () => {
+  let reads = 0
+  const gateway: PermissionRulesGateway = {
+    read: async () => {
+      reads += 1
+      return reads === 1 ? { ok: true, rules: [rule] } : { ok: false }
+    },
+    revoke: async () => ({ ok: false }),
+  }
+  await show(gateway)
+  await act(async () => host.querySelector("button")?.click())
+  expect(host.textContent).toContain("Could not revoke that rule.")
+  expect(host.textContent).toContain("The list could not be read again.")
+  expect(host.textContent).toContain("Always allow Bash")
+})
+
+async function show(gateway: PermissionRulesGateway) {
+  await act(async () =>
+    root.render(
+      <PermissionRulesProvider gateway={gateway}>
+        <PermissionRuleRows />
+      </PermissionRulesProvider>,
+    ),
+  )
+}

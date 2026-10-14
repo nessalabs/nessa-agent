@@ -17,6 +17,12 @@ import { Group, ItemRow } from "./settings-controls"
  * row rests. Another client can revoke a rule, so the list is read again
  * when the window regains focus or becomes visible.
  */
+function revokeFailureDetail(retained: boolean | undefined): string {
+  if (retained === true) return "It is still remembered."
+  if (retained === false) return "It is no longer listed."
+  return "The list could not be read again."
+}
+
 const PermissionRulesContext = createContext<PermissionRulesGateway | undefined>(
   undefined,
 )
@@ -44,6 +50,7 @@ type Phase =
       readonly rules: readonly PermissionRule[]
       readonly revoking?: string
       readonly failed?: boolean
+      readonly retained?: boolean
     }
 
 export function PermissionRuleRows() {
@@ -84,10 +91,14 @@ export function PermissionRuleRows() {
       const again = await gateway.read()
       if (generation !== latest.current) return
       if (!outcome.ok) {
+        const retained = again.ok
+          ? again.rules.some((rule) => rule.id === ruleId)
+          : undefined
         setPhase({
           kind: "ready",
           rules: again.ok ? again.rules : phase.rules,
           failed: true,
+          retained,
         })
         return
       }
@@ -119,7 +130,10 @@ export function PermissionRuleRows() {
         />
       ) : null}
       {phase.kind === "ready" && phase.failed ? (
-        <ItemRow label="Could not revoke that rule." detail="It is still remembered." />
+        <ItemRow
+          label="Could not revoke that rule."
+          detail={revokeFailureDetail(phase.retained)}
+        />
       ) : null}
       {phase.kind === "ready" && phase.rules.length === 0 ? (
         <ItemRow
