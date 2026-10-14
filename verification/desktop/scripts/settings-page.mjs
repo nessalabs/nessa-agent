@@ -435,7 +435,7 @@ const checks = {
       has: page.locator('[data-setting="claude-native-hooks"]'),
     })
     await group.scrollIntoViewIfNeeded()
-    await group.screenshot({ path: join(shot, `access-resting-${engine}.png`) })
+    await group.screenshot({ path: join(shot, `native-hooks-resting-${engine}.png`) })
     const routing = []
     for (const [id, label] of [
       ["claude-native-hooks", "Claude Code hooks"],
@@ -510,7 +510,7 @@ const checks = {
     mkdirSync(shot, { recursive: true })
     const group = page.locator(".settings-group", { has: row })
     await group.scrollIntoViewIfNeeded()
-    await group.screenshot({ path: join(shot, `access-on-${engine}.png`) })
+    await group.screenshot({ path: join(shot, `native-hooks-on-${engine}.png`) })
     return { checked, failures }
   },
 
@@ -527,7 +527,7 @@ const checks = {
       failures.push("the unset row does not say the agent isn't set up")
     if (!text.includes("turn it on only for projects you trust"))
       failures.push("the unset row does not keep the trust warning")
-    await shotNativeHooks(page, row, `access-unset-${engine}.png`)
+    await shotNativeHooks(page, row, `native-hooks-unset-${engine}.png`)
     return { failures }
   },
 
@@ -546,7 +546,7 @@ const checks = {
       failures.push("the failed row does not say the change failed")
     if (checked !== "true")
       failures.push(`the failed change did not keep Claude's stored choice: ${checked}`)
-    await shotNativeHooks(page, row, `access-failed-${engine}.png`)
+    await shotNativeHooks(page, row, `native-hooks-failed-${engine}.png`)
     return { failures }
   },
 
