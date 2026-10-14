@@ -42,6 +42,14 @@ The four combinations are exercised by the retention matrix in
 Stop while a retry is in flight after its receipt has become accepted: it uses
 the retained target immediately and again after admission.
 
+The retry promise owns its captured operation from before the first publication
+through creation and submission. A passive view can accept the receipt while
+creation is still waiting; the operation remains marked in flight, so Stop can
+record its request on that same operation and the admitted retry repeats the
+captured target. Creation or admission failure clears in-flight ownership in the
+promise's outer settlement path, then reconciles the table against current
+receipts and tab lifetimes.
+
 ## API and owners
 
 `presentation/conversation-api.ts::prepareSubmission` owns validation and copied
@@ -110,7 +118,12 @@ flowchart TD
 | PS25 | Synchronous subscriber Stops on first submission publication | Operation already registered; immediate Stop and same-target Stop after successful admission, including immediate refusal | `prepared-operations.test.ts` |
 | PS26 | First-publication subscriber Stops then closes tab and triggers pruning | Promise retains same operation and stops it after successful admission; refused create/admission performs no admission-triggered Stop | `prepared-operations.test.ts` |
 | PS27 | Requested local tab is absent before preparation | Reject without registration/publication/create/admission | `prepared-operations.test.ts` |
+| PS28 | Passive accepted view arrives while a retry waits for creation; Stop succeeds or is refused | Keep the captured operation reachable through creation; repeat Stop against the same target after admission | `prepared-operations.test.ts` |
+| PS29 | Passive acceptance and Stop while retry creation waits, then local tab closes and creation refuses | Settle retry ownership and prune the table entry without submitting | `prepared-operations.test.ts` |
 
+PS28 and PS29 were added to the table after their tests and implementation were
+already present: review exposed this missing retry-creation ordering, and the
+table now records it rather than claiming the ordering was designed first.
 
 Existing scenarios and gateway fakes consume the same prepared contract. Their
 fixture IDs are canonical UUIDs; display labels stay separate. A fake bypass of
