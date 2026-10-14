@@ -294,8 +294,7 @@
     "conversation.view": "ConversationViewed",
     "conversation.listed": "ConversationListed",
     "agents.listed": "AgentsListed",
-    "conversation.subscriptionEnded": "ConversationSubscriptionEnded",
-    "permission.reviewWaiting": "PermissionReviewWaiting"
+    "conversation.subscriptionEnded": "ConversationSubscriptionEnded"
   },
   "handshakeMethod": "session.authenticate"
 }

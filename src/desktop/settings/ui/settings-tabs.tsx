@@ -51,7 +51,6 @@ import { IntegrationsTab } from "./integrations-tab"
 import { LinkedDevicesTab } from "./linked-devices-tab"
 import { NativeHooksRows } from "./native-hooks-rows"
 import { PermissionRuleRows } from "./permission-rule-rows"
-import { ReviewNoticeRows } from "./review-notice-rows"
 
 /**
  * What each tab shows. Every setting the window owns is real and
@@ -519,7 +518,6 @@ function AccessTab() {
         </Row>
       </Group>
       <PermissionRuleRows />
-      <ReviewNoticeRows />
       <NativeHooksRows />
     </>
   )

@@ -2539,19 +2539,6 @@ pub struct ConversationRevokePermissionRuleResult {
     pub request_id: String,
     pub applied: bool,
 }
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PermissionReviewNotice {
-    pub conversation_id: String,
-    pub execution_id: String,
-    pub permission_id: String,
-    pub tool: String,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PermissionReviewWaiting {
-    pub reviews: Vec<PermissionReviewNotice>,
-}
 pub const MAX_CHANGE_WATCH_ID_BYTES: usize = 57;
 pub const CHANGE_WATCH_ID_PATTERN: &str =
     "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,19}$";
@@ -2681,7 +2668,6 @@ pub mod product_event {
     pub const CONVERSATION_LISTED: &str = "conversation.listed";
     pub const AGENTS_LISTED: &str = "agents.listed";
     pub const CONVERSATION_SUBSCRIPTION_ENDED: &str = "conversation.subscriptionEnded";
-    pub const PERMISSION_REVIEW_WAITING: &str = "permission.reviewWaiting";
 }
 pub fn wire_shape_session_challenge(value: &Value) -> bool {
     value.as_object().is_some_and(|object| {

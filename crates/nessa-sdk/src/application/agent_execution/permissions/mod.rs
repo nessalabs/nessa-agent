@@ -10,7 +10,6 @@
 //! configured refusal --> admit_configured_outcome --> OperationCapabilities
 //! permission deadline --> ApprovalBasis::Deadline (actor permission-deadline)
 //! remembered rule --> PermissionRules::settle --> ApprovalBasis::Rule
-//! waiting review --> ReviewNotices (cleared on answer, cancel, deadline)
 //! ```
 //!
 //! Arrows show control flow. The adapter asks the controller to resolve a review
@@ -45,7 +44,6 @@ pub(crate) use cancellation::validate_hook_withdrawal;
 pub use cancellation::{CancellationOrigin, PermissionCancellation, PermissionCancellationRequest};
 pub use outcome::{admit_configured_outcome, ConfiguredRefusal, StopKind};
 pub use rules::{
-    is_remember_option, remember_effect, IdlePermissionRules, IdleReviewNotices, PermissionCaller,
-    PermissionRules, RememberError, RememberRequest, ReviewNotice, ReviewNotices, SettledRule,
-    REMEMBER_ALLOW, REMEMBER_DENY,
+    is_remember_option, remember_effect, IdlePermissionRules, PermissionCaller, PermissionRules,
+    RememberError, RememberRequest, SettledRule, REMEMBER_ALLOW, REMEMBER_DENY,
 };

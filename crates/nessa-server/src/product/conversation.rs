@@ -190,11 +190,16 @@ pub(super) async fn dispatch(
                 let execution_id = params.execution_id.clone();
                 let store = service.commands().ok_or(ConversationError::Unavailable)?;
                 // Admission still starts an unpaired session as an owner turn.
-                // Whether that turn may offer a remember choice is this
-                // membership, and a membership that cannot be read offers none.
-                let offers_remember = authenticated_rule_principal(state, session)
-                    .await
-                    .is_ok_and(|principal| principal == RulePrincipal::Owner);
+                // Whether that turn may offer a remember choice is Cedar, asked
+                // as this membership. A membership that cannot be read offers
+                // none. An unpaired member is a grant, and Cedar refuses one.
+                let offers_remember = match authenticated_rule_principal(state, session).await {
+                    Ok(principal) => state
+                        .permission_rules
+                        .as_ref()
+                        .is_some_and(|rules| rules.permits(principal, RuleChange::Grant)),
+                    Err(_) => false,
+                };
                 let submitted = service
                     .submit_command(
                         store,

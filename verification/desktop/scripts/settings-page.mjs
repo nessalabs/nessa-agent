@@ -343,25 +343,6 @@ const checks = {
   },
 
   /**
-   * Privacy & Permissions › Access: review notifications offer Allow and
-   * do not ask until that button is pressed.
-   */
-  "review-notices": async (page) => {
-    const failures = []
-    await show(page, "Privacy & Permissions", "Access")
-    const row = page.locator('[data-setting="review-notices"]')
-    if ((await row.count()) !== 1) {
-      failures.push("review-notices is missing")
-      return { text: "", failures }
-    }
-    const text = (await row.textContent()) ?? ""
-    if (!text.includes("Allow")) failures.push("the row does not offer Allow")
-    if (!text.includes("while you are away"))
-      failures.push("the row does not say what the notification is for")
-    return { text, failures }
-  },
-
-  /**
    * Privacy & Permissions › Access, with no gateway: remembered rules rest.
    * The row is the catalogue entry, and it says this window cannot list them.
    */
@@ -552,7 +533,7 @@ const meta = {
 Usage: node verification/desktop/scripts/settings-page.mjs [options]
 
   --only <list>   Checks, comma-separated: masthead, condense, arrive, search,
-                  focus-ring, review-notices, remembered-rules, native-hooks,
+                  focus-ring, remembered-rules, native-hooks,
                   native-hooks-on,
                   native-hooks-unset, native-hooks-failed
 
@@ -565,7 +546,6 @@ Per engine:
   arrive      a page's motion is at most 300ms; none under less motion
   search      Enter lands on the setting, in view and marked a moment; ⌘F
   focus-ring  a tab and a switch show the window's focus ring
-  review-notices  Access offers Allow and does not ask before that press
   remembered-rules  Access rests the remembered-rules row without a gateway
   native-hooks  Access rests Claude and Codex hook rows without a gateway, and
                  says a hook can deny or change a tool call

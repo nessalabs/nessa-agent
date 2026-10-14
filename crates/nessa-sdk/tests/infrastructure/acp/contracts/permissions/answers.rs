@@ -1019,21 +1019,21 @@ async fn agent_acp_permission_query_does_not_wait_behind_consumed_answer_audit()
     assert_eq!(queried.unwrap().unwrap(), Ok(false));
 }
 
-/// Rules a test stores, and withdraws when the selection audit fails.
+/// Rules a test stores. The grant commits with its own audit, so a later
+/// failure to record the permission answer leaves the rule in place.
 struct RememberingRules {
     live: Mutex<Vec<SettledRule>>,
-    withdrawn: Mutex<Vec<ApprovalRuleReference>>,
 }
 
 impl PermissionRules for RememberingRules {
-    fn settle(&self, _: &str, _: &str, _: &str) -> Option<SettledRule> {
+    fn settle(&self, _: PermissionCaller, _: &str, _: &str, _: &str) -> Option<SettledRule> {
         self.live.lock().unwrap().last().cloned()
     }
-    fn offers_remember(&self, _: &ExecutionId) -> bool {
+    fn offers_remember(&self, _: &str, _: &ExecutionId) -> bool {
         true
     }
-    fn arm(&self, _: &ExecutionId, _: bool) {}
-    fn answerer(&self, _: &ExecutionId, _: &str) -> Option<PermissionCaller> {
+    fn arm(&self, _: &str, _: &ExecutionId, _: bool) {}
+    fn answerer(&self, _: &str, _: &ExecutionId, _: &str) -> Option<PermissionCaller> {
         Some(PermissionCaller::Owner)
     }
     fn remember(&self, request: RememberRequest<'_>) -> Result<SettledRule, RememberError> {
@@ -1044,25 +1044,15 @@ impl PermissionRules for RememberingRules {
         self.live.lock().unwrap().push(settled.clone());
         Ok(settled)
     }
-    fn acknowledge(&self, rule: &ApprovalRuleReference) {
-        let _ = rule;
-    }
-    fn withdraw(&self, rule: &ApprovalRuleReference) -> Result<(), RememberError> {
-        self.withdrawn.lock().unwrap().push(rule.clone());
-        self.live
-            .lock()
-            .unwrap()
-            .retain(|stored| stored.reference() != rule);
-        Ok(())
-    }
 }
 
+/// The rule's own audit committed with the save. Failing to record the
+/// permission answer does not remove that rule.
 #[tokio::test]
-async fn a_remembered_rule_is_withdrawn_when_the_selection_audit_fails() {
+async fn a_remembered_rule_stays_when_the_selection_audit_fails() {
     let _slot = process_test_slot().await;
     let rules = Arc::new(RememberingRules {
         live: Mutex::new(Vec::new()),
-        withdrawn: Mutex::new(Vec::new()),
     });
     let audit = Arc::new(AnswerAudit {
         reject_call: Some(1),
@@ -1106,9 +1096,11 @@ async fn a_remembered_rule_is_withdrawn_when_the_selection_audit_fails() {
         .await
         .unwrap_err();
     assert_eq!(failure.error(), &AgentError::AuditFailure);
-    assert!(rules.live.lock().unwrap().is_empty());
-    assert_eq!(rules.withdrawn.lock().unwrap().len(), 1);
-    assert_eq!(rules.withdrawn.lock().unwrap()[0].rule_id(), "pr_test");
+    assert_eq!(rules.live.lock().unwrap().len(), 1);
+    assert_eq!(
+        rules.live.lock().unwrap()[0].reference().rule_id(),
+        "pr_test"
+    );
     let records = answers(&audit);
     assert_eq!(records[0].delivery(), &PermissionAnswerDelivery::Selected);
     assert!(matches!(
@@ -1138,7 +1130,6 @@ async fn a_settled_rule_is_not_withdrawn_when_the_answer_audit_fails() {
             ApprovalRuleReference::new("pr_live", "4", attribution().actor().clone()).unwrap(),
             PermissionEffect::Allow,
         )]),
-        withdrawn: Mutex::new(Vec::new()),
     });
     let audit = Arc::new(AnswerAudit {
         reject_call: Some(1),
@@ -1163,7 +1154,6 @@ async fn a_settled_rule_is_not_withdrawn_when_the_answer_audit_fails() {
         .await
         .expect("the execution finishes");
     assert_eq!(result.unwrap(), Err(AgentError::AuditFailure));
-    assert!(rules.withdrawn.lock().unwrap().is_empty());
     {
         let live = rules.live.lock().unwrap();
         assert_eq!(live.len(), 1);
@@ -1209,7 +1199,6 @@ async fn agent_with_live_allow(hook: Arc<dyn InvocationHook>) -> (TempDir, Agent
             ApprovalRuleReference::new("pr_live", "4", attribution().actor().clone()).unwrap(),
             PermissionEffect::Allow,
         )]),
-        withdrawn: Mutex::new(Vec::new()),
     });
     let (root, mut config, model) = test_acp_configuration("permission", 16);
     config.shutdown_grace = Duration::from_secs(2);

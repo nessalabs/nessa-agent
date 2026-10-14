@@ -13,7 +13,6 @@
 import {
   memo,
   useCallback,
-  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -63,7 +62,6 @@ import {
   useWorkspaceSelector,
   useWorkspaceStore,
 } from "../../adapters/store/hooks"
-import { reviewToOpen } from "../../adapters/gateway/review-notices"
 import {
   selectChrome,
   selectColumnCount,
@@ -270,14 +268,6 @@ export function WorkspaceShell({
   browserSurface: boolean
 }) {
   const dispatch = useWorkspaceDispatch()
-  useEffect(() => {
-    const open = (event: Event) => {
-      const sessionId = reviewToOpen(event)
-      if (sessionId) void dispatch(openSession({ sessionId }))
-    }
-    window.addEventListener("nessa-open-review", open)
-    return () => window.removeEventListener("nessa-open-review", open)
-  }, [dispatch])
   const store = useWorkspaceStore()
   const root = useRef<HTMLDivElement>(null)
   const [theme] = useThemePreference()

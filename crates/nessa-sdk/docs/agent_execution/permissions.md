@@ -217,16 +217,16 @@ asked only after the review is checked: the answer's execution is the review's,
 and the once option of that effect was offered. Either miss refuses the choice
 and stores nothing. The host notes who is answering (`PermissionRules::note_answerer`)
 before the answer is queued; a missing note is not the owner. The audit
-basis is `ApprovalBasis::Rule`, naming the rule id, revision, and grantor. If
-that selection is not recorded, the binding withdraws the revision it just
-stored. Until it is acknowledged the revision is provisional and does not
-decide a later review, including when the withdrawal cannot be stored. A
-second remember of a key that is still provisional is refused. Withdrawing
-a replacement writes the previous rule back under a new revision. A later
-review of that tool in that workspace is answered the same way, without a
-card or a deadline, when a once option still exists. A shared user's turn is
-not offered the remember options. The host stores, lists, and revokes the
-rules; this binding does not.
+basis is `ApprovalBasis::Rule`, naming the rule id, revision, and grantor.
+The host commits that rule and its own audit record together. A later failure
+to record this answer does not remove the rule. A later review of that tool
+in that workspace is answered the same way, without a card or a deadline,
+when a once option still exists, unless the invocation's permission-review
+hooks are deciding the tool. Those hooks are the shared-folder and Drive
+grant check. The rule is read only after they allow the tool. A turn that is
+not the owner's, and has no such hook, is not answered from a rule. A shared
+user's turn is not offered the remember options. The host stores, lists, and
+revokes the rules; this binding does not.
 
 Regression coverage lives under `tests/infrastructure/acp/`, compiled internally for private adapter access:
 [permission answers](../../tests/infrastructure/acp/contracts/permissions/answers.rs)

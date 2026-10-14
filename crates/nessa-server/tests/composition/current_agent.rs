@@ -324,13 +324,7 @@ fn resolver_from(root: &Path, input: ResolverTestInput) -> CurrentAgentResolver 
             Arc::new(
                 crate::conversation::infrastructure::PermissionMemory::open(
                     &rules.join("permission-rules.sqlite3"),
-                    Arc::new(
-                        crate::conversation::infrastructure::DurablePermissionRuleRevocationAudit::new(
-                            rules.join("revocations"),
-                            Arc::new(SystemClock),
-                        )
-                        .unwrap(),
-                    ),
+                    Arc::new(SystemClock),
                 )
                 .unwrap(),
             )

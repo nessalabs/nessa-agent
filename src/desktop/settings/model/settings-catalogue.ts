@@ -388,14 +388,6 @@ export const settingsEntries = [
     keywords: "allow deny permission rule revoke project",
   },
   {
-    id: "review-notices",
-    tab: "access",
-    label: "Review notifications",
-    detail:
-      "Allow notifications to hear about a review while you are away from this window.",
-    keywords: "notify notification desktop phone permission review waiting",
-  },
-  {
     id: "claude-native-hooks",
     tab: "access",
     label: "Claude Code hooks",

@@ -14,7 +14,7 @@ use crate::conversation_test_support::{
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::application::agent_execution::permissions::{
-    PermissionRules, RememberError, RememberRequest, SettledRule,
+    PermissionCaller, PermissionRules, RememberError, RememberRequest, SettledRule,
 };
 use nessa_sdk::application::agent_execution::{
     agents::{AgentError, AttachmentPhase},
@@ -1371,7 +1371,8 @@ async fn an_owner_turn_offers_remember_only_when_the_membership_may() {
         )
         .await
         .unwrap();
-    assert!(!rules.offers_remember(&ExecutionId::new("hidden").unwrap()));
+    let scope = target.to_string();
+    assert!(!rules.offers_remember(&scope, &ExecutionId::new("hidden").unwrap()));
     service
         .submit_command(
             storage.clone(),
@@ -1385,32 +1386,34 @@ async fn an_owner_turn_offers_remember_only_when_the_membership_may() {
         )
         .await
         .unwrap();
-    assert!(rules.offers_remember(&ExecutionId::new("offered").unwrap()));
+    assert!(rules.offers_remember(&scope, &ExecutionId::new("offered").unwrap()));
     retire(service, storage, metadata).await;
 }
 
 #[derive(Default)]
 struct RecordingRules {
-    armed: std::sync::Mutex<Vec<(String, bool)>>,
+    armed: std::sync::Mutex<Vec<(String, String, bool)>>,
 }
 
 impl PermissionRules for RecordingRules {
-    fn settle(&self, _: &str, _: &str, _: &str) -> Option<SettledRule> {
+    fn settle(&self, _: PermissionCaller, _: &str, _: &str, _: &str) -> Option<SettledRule> {
         None
     }
-    fn offers_remember(&self, execution: &ExecutionId) -> bool {
+    fn offers_remember(&self, conversation: &str, execution: &ExecutionId) -> bool {
         self.armed
             .lock()
             .unwrap()
             .iter()
-            .find(|(id, _)| id == execution.as_str())
-            .is_some_and(|(_, offered)| *offered)
+            .any(|(scope, id, offered)| {
+                scope == conversation && id == execution.as_str() && *offered
+            })
     }
-    fn arm(&self, execution: &ExecutionId, owner: bool) {
-        self.armed
-            .lock()
-            .unwrap()
-            .push((execution.as_str().to_owned(), owner));
+    fn arm(&self, conversation: &str, execution: &ExecutionId, owner: bool) {
+        self.armed.lock().unwrap().push((
+            conversation.to_owned(),
+            execution.as_str().to_owned(),
+            owner,
+        ));
     }
     fn remember(&self, _: RememberRequest<'_>) -> Result<SettledRule, RememberError> {
         Err(RememberError::Refused)

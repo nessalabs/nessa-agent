@@ -1627,8 +1627,8 @@ impl Agent {
             }
         };
         // Permission-review hooks are this turn's tool policy. A remembered
-        // allow stays parked until they decide, and the hold ends with the
-        // invocation so a later turn without those hooks answers immediately.
+        // rule is not read until they allow the tool, and the hold ends with
+        // the invocation so a later turn without those hooks answers immediately.
         let _remembered_allow_hold = hooks.reviews_permissions().then(|| {
             attached
                 .session
@@ -1895,6 +1895,7 @@ impl Agent {
                                 }
                                 _ => None,
                             };
+                            let hook_reviews = proposed.is_some();
                             if let Some(proposed) = proposed {
                                 drop(events);
                                 // The hook wait cannot poll the message-commit
@@ -1950,13 +1951,6 @@ impl Agent {
                                 result.is_some(),
                             ).await {
                                 Ok(()) => {
-                                    // A refusal, a stop, or a failed hook drops a parked
-                                    // allow. It is not sent after that decision.
-                                    if !matches!(decision.verdict, ToolVerdict::Allow) {
-                                        if let Some(id) = review_id.as_ref() {
-                                            let _ = attached.session.take_remembered_allow(id);
-                                        }
-                                    }
                                     if let ToolVerdict::Refuse(_) = &decision.verdict {
                                         drop(events);
                                         let applied = self
@@ -1996,33 +1990,82 @@ impl Agent {
                                     // A refused review is already answered or
                                     // withdrawn, and a stopping one is not for a
                                     // person: only an allowed review is published.
-                                    // A remembered allow is sent before the review is
-                                    // published
+                                    // A remembered rule is read only after the
+                                    // review hook allows the tool
                                     // (`a_review_hook_refusal_stops_a_remembered_allow_before_the_tool_starts`).
                                     if matches!(decision.verdict, ToolVerdict::Allow) {
                                         let mut released = true;
-                                        if let Some(id) = review_id.as_ref() {
-                                            if let Some(answer) = attached.session.take_remembered_allow(id) {
+                                        if hook_reviews {
+                                            if let Some(id) = review_id.as_ref() {
                                                 drop(events);
-                                                let delivered = SupervisedWait {
+                                                let consulted = SupervisedWait {
                                                     execution: execution.as_mut(),
                                                     stop_notice: &mut stop_notice,
                                                     stop_observed: &mut stop_observed,
                                                     pending_provider_outcome: &mut pending_provider_outcome,
                                                     result_known: result.is_some(),
                                                 }
-                                                .run(self.answer_permission(answer))
+                                                .run(attached.session.consult_remembered_allow(id))
                                                 .await;
-                                                if let Err(failure) = delivered {
-                                                    let failure = failure.into_parts().0;
-                                                    refusal_failure = Some(match refusal_failure.take() {
-                                                        None => failure,
-                                                        Some(first) => AgentError::MultipleOperationFailures {
-                                                            first_error: Box::new(first),
-                                                            subsequent_error: Box::new(failure),
-                                                        },
-                                                    });
-                                                    released = false;
+                                                let answer = match consulted {
+                                                    Ok(answer) => answer,
+                                                    // A usable session still has the review. The
+                                                    // person is asked. A session that cannot
+                                                    // continue reports the failure and publishes
+                                                    // nothing.
+                                                    Err(failure) => {
+                                                        if !matches!(
+                                                            failure.session_state(),
+                                                            ProviderSessionState::Usable
+                                                        ) {
+                                                            let failure = failure.into_error();
+                                                            refusal_failure = Some(match refusal_failure.take() {
+                                                                None => failure,
+                                                                Some(first) => AgentError::MultipleOperationFailures {
+                                                                    first_error: Box::new(first),
+                                                                    subsequent_error: Box::new(failure),
+                                                                },
+                                                            });
+                                                            released = false;
+                                                        }
+                                                        None
+                                                    }
+                                                };
+                                                if let Some(answer) = answer {
+                                                    let delivered = SupervisedWait {
+                                                        execution: execution.as_mut(),
+                                                        stop_notice: &mut stop_notice,
+                                                        stop_observed: &mut stop_observed,
+                                                        pending_provider_outcome: &mut pending_provider_outcome,
+                                                        result_known: result.is_some(),
+                                                    }
+                                                    .run(self.answer_permission(answer))
+                                                    .await;
+                                                    match delivered {
+                                                        Ok(_) => {
+                                                            // The rule answered the review. A person
+                                                            // is not asked as well.
+                                                            released = false;
+                                                        }
+                                                        // The review is still pending, so the person
+                                                        // is asked. A consumed or unknown selection
+                                                        // is already the answer; it fails visibly
+                                                        // and is not asked again.
+                                                        Err(failure)
+                                                            if failure.selection()
+                                                                == PermissionSelectionState::Pending => {}
+                                                        Err(failure) => {
+                                                            let failure = failure.into_parts().0;
+                                                            refusal_failure = Some(match refusal_failure.take() {
+                                                                None => failure,
+                                                                Some(first) => AgentError::MultipleOperationFailures {
+                                                                    first_error: Box::new(first),
+                                                                    subsequent_error: Box::new(failure),
+                                                                },
+                                                            });
+                                                            released = false;
+                                                        }
+                                                    }
                                                 }
                                                 events = attached.events.lock().await;
                                             }
@@ -2033,9 +2076,6 @@ impl Agent {
                                     }
                                 }
                                 Err(error) => {
-                                    if let Some(id) = review_id.as_ref() {
-                                        let _ = attached.session.take_remembered_allow(id);
-                                    }
                                     pending_save_failure = Some(error);
                                 }
                             }

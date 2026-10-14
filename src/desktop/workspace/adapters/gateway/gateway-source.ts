@@ -139,7 +139,6 @@ import {
   summaryFrom,
   transcriptFrom,
 } from "./gateway-views"
-import { waitingReviews, type WaitingReview } from "./review-notices"
 
 /** What the adapter asks of a gateway client: its conversations, its subscriptions, and how its connection stands. */
 export interface GatewayClient {
@@ -329,8 +328,6 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   readonly timing?: GatewayTiming
   /** Told each view applied and each conversation deleted: the window's MCP Apps. */
   readonly apps?: GatewayViewObserver
-  /** The reviews still waiting, each time the gateway says so. An empty list means none. */
-  readonly onReviewWaiting?: (reviews: readonly WaitingReview[]) => void
 }): GatewaySource<C> {
   const { clock } = options
   const timing = options.timing ?? defaultGatewayTiming
@@ -461,11 +458,6 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
    * that failure. The caller closes the client and fails the attempt.
    */
   const adopt = (connected: C): WorkspaceSourceError | undefined => {
-    const offReviews =
-      connected.onEvent?.("permission.reviewWaiting", (payload) => {
-        const reviews = waitingReviews(payload)
-        if (reviews) options.onReviewWaiting?.(reviews)
-      }) ?? (() => {})
     const off = connected.onConnectionStateChange((state) => {
       if (current?.client !== connected) return
       if (state.status === "connected") {
@@ -484,14 +476,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     const state = connected.connectionState
     if (state.status === "closed") {
       off()
-      offReviews()
       return connectFailure(state.error)
     }
     current = {
       client: connected,
       off: () => {
         off()
-        offReviews()
       },
     }
     waitUntil = 0

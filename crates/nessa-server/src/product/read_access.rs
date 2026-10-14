@@ -28,14 +28,14 @@ use super::{
 };
 use crate::conversation::application::{
     binding_of, error_code, paired_facts, AccessAction, ConversationAccessPolicyEvaluator,
-    ConversationError, OwnerAccess, PairedAccess, PairedParty, PairedRefusal, ReceiverBinding,
-    RequestShape, ShareConversation, ShareGrant, MAX_POLICY_REVISION,
+    ConversationError, PairedAccess, PairedParty, PairedRefusal, ReceiverBinding, RequestShape,
+    ShareConversation, ShareGrant, MAX_POLICY_REVISION,
 };
 use crate::conversation::domain::{
     CommandHosts, ShareRole, ToolChoice, ToolPolicy, ToolPreset, ToolRules,
 };
-use nessa_auth::application::session::{AuthenticatedSession, ReadCurrentSession};
-use nessa_auth::domain::{CredentialId, MembershipRole};
+use nessa_auth::application::session::AuthenticatedSession;
+use nessa_auth::domain::CredentialId;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
 use nessa_protocol::product::generated::{
@@ -81,71 +81,6 @@ fn party<'a>(binding: &'a ReceiverBinding, session: &'a AuthenticatedSession) ->
         binding_owner: &binding.owner_id,
         receiver: &binding.receiver_id,
     }
-}
-
-/// Whether `session` may be told that a review is waiting in `conversation_id`.
-///
-/// A paired session is asked the conversation access policy for that
-/// conversation, so a grant on one conversation learns nothing about the
-/// others. An unpaired admin is an owner surface: the policy names the
-/// owner principal, and a surface is a different principal, so the board is
-/// that surface's. An unpaired member is asked the same policy as that
-/// principal, which refuses a conversation they do not own.
-pub(super) async fn may_see_review(
-    state: &ProductRouteState,
-    session: &AuthenticatedSession,
-    conversation: &str,
-) -> bool {
-    match paired_binding(state, session).await {
-        Ok(Some(_)) => {
-            let Ok(id) = conversation_id(conversation) else {
-                return false;
-            };
-            admit_conversation(state, session, &id).await.is_ok()
-        }
-        Ok(None) => match owner_surface(state, session).await {
-            Some(true) => true,
-            Some(false) => person_may_read(state, session, conversation).await,
-            None => false,
-        },
-        Err(_) => false,
-    }
-}
-
-async fn owner_surface(state: &ProductRouteState, session: &AuthenticatedSession) -> Option<bool> {
-    let snapshot = ReadCurrentSession {
-        access: state.access.as_ref(),
-        clock: state.clock.as_ref(),
-    }
-    .execute(session)
-    .await
-    .ok()?;
-    Some(snapshot.membership.role() == MembershipRole::Admin)
-}
-
-async fn person_may_read(
-    state: &ProductRouteState,
-    session: &AuthenticatedSession,
-    conversation: &str,
-) -> bool {
-    let (Some((_, conversations, _)), Some(policy), Ok(id)) = (
-        state.passive_read.as_ref(),
-        state.conversation_access.as_deref(),
-        conversation_id(conversation),
-    ) else {
-        return false;
-    };
-    let Ok(Some(conversation)) = conversations.load(&id).await else {
-        return false;
-    };
-    OwnerAccess::new(policy)
-        .admit_to(
-            AccessAction::Read,
-            &conversation,
-            session.context().organization_id(),
-            session.context().principal_id(),
-        )
-        .is_ok()
 }
 
 /// Whether `session` may read conversation `id` (`conversation.read`). An

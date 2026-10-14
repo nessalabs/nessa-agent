@@ -333,8 +333,6 @@ export type {
   PermissionRuleEffect,
   ConversationPermissionRulesResult,
   ConversationRevokePermissionRuleResult,
-  PermissionReviewNotice,
-  PermissionReviewWaiting,
   ConversationShare,
   ConversationShareResult,
   ConversationSharesResult,

@@ -2541,22 +2541,6 @@ export interface ConversationRevokePermissionRuleResult {
   /** True when a rule was deleted. False when none had this id. */
   applied: boolean
 }
-/** One review waiting on a person. */
-export interface PermissionReviewNotice {
-  /** Conversation the review belongs to. */
-  conversationId: string
-  /** Execution that owns the review. */
-  executionId: string
-  /** Pending permission identity. */
-  permissionId: string
-  /** Tool the review named. */
-  tool: string
-}
-/** The reviews still waiting. A later event replaces this one; an empty list means none are waiting. */
-export interface PermissionReviewWaiting {
-  /** Waiting reviews, oldest first, at most 64. */
-  reviews: PermissionReviewNotice[]
-}
 export const maxChangeWatchIdBytes = 57 as const
 export const changeWatchIdPattern =
   "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,19}$" as const
@@ -2755,7 +2739,6 @@ export const ProductEvent = {
   ConversationListed: "conversation.listed",
   AgentsListed: "agents.listed",
   ConversationSubscriptionEnded: "conversation.subscriptionEnded",
-  PermissionReviewWaiting: "permission.reviewWaiting",
 } as const
 export const ProductHandshakeMethod = "session.authenticate" as const
 export const productReadyMethods = [

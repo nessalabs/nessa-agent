@@ -76,9 +76,6 @@ fn cleanup_config() -> (tempfile::TempDir, AcpConfig) {
         permission_rules: std::sync::Arc::new(
             crate::application::agent_execution::permissions::IdlePermissionRules,
         ),
-        review_notices: std::sync::Arc::new(
-            crate::application::agent_execution::permissions::IdleReviewNotices,
-        ),
     };
     assert!(config.executable.executable().is_absolute());
     assert!(config.workspace.is_absolute());

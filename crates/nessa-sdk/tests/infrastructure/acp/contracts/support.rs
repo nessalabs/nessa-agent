@@ -260,9 +260,6 @@ pub(super) fn test_acp_configuration(
         permission_rules: std::sync::Arc::new(
             crate::application::agent_execution::permissions::IdlePermissionRules,
         ),
-        review_notices: std::sync::Arc::new(
-            crate::application::agent_execution::permissions::IdleReviewNotices,
-        ),
     };
     (root, config, model)
 }

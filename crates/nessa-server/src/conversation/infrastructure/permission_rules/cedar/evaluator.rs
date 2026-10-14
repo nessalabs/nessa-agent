@@ -65,9 +65,24 @@ static BUNDLE: LazyLock<Result<Bundle, PermissionRuleUnavailable>> = LazyLock::n
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CedarPermissionRuleEvaluator;
 
+impl CedarPermissionRuleEvaluator {
+    /// Load and strictly validate the checked-in schema and policies.
+    ///
+    /// Composition calls this when it builds the adapter, so a broken bundle
+    /// refuses to start instead of failing closed on the first review.
+    pub(in crate::conversation::infrastructure::permission_rules) fn validated(
+    ) -> Result<Self, PermissionRuleUnavailable> {
+        BUNDLE
+            .as_ref()
+            .map(|_| Self)
+            .map_err(|_| PermissionRuleUnavailable)
+    }
+}
+
 impl PermissionRulePolicyEvaluator for CedarPermissionRuleEvaluator {
     fn settle(
         &self,
+        principal_kind: RulePrincipal,
         workspace: &str,
         source: &str,
         tool: &str,
@@ -87,7 +102,7 @@ impl PermissionRulePolicyEvaluator for CedarPermissionRuleEvaluator {
         let response = authorized(
             bundle,
             &policies,
-            principal(RulePrincipal::Owner)?,
+            principal(principal_kind)?,
             "rule.settle",
             tool_entity(tool, source)?,
             context(workspace)?,
@@ -288,7 +303,6 @@ mod tests {
             tool: tool.to_owned(),
             effect,
             granted_by: granted(),
-            provisional: false,
         }
     }
 
@@ -297,23 +311,29 @@ mod tests {
         let evaluator = CedarPermissionRuleEvaluator;
         let rules = [rule("rule-a", PermissionEffect::Allow, "Bash", "/work")];
         assert_eq!(
-            evaluator.settle("/work", "claude", "Bash", &rules).unwrap(),
+            evaluator
+                .settle(RulePrincipal::Owner, "/work", "claude", "Bash", &rules)
+                .unwrap(),
             RuleSettlement::Allow {
                 rule_id: "rule-a".to_owned()
             }
         );
         assert_eq!(
             evaluator
-                .settle("/other", "claude", "Bash", &rules)
+                .settle(RulePrincipal::Owner, "/other", "claude", "Bash", &rules)
                 .unwrap(),
             RuleSettlement::Ask
         );
         assert_eq!(
-            evaluator.settle("/work", "codex", "Bash", &rules).unwrap(),
+            evaluator
+                .settle(RulePrincipal::Grant, "/work", "codex", "Bash", &rules)
+                .unwrap(),
             RuleSettlement::Ask
         );
         assert_eq!(
-            evaluator.settle("/work", "claude", "Read", &rules).unwrap(),
+            evaluator
+                .settle(RulePrincipal::Owner, "/work", "claude", "Read", &rules)
+                .unwrap(),
             RuleSettlement::Ask
         );
     }
@@ -323,13 +343,17 @@ mod tests {
         let evaluator = CedarPermissionRuleEvaluator;
         let rules = [rule("rule-d", PermissionEffect::Deny, "Bash", "/work")];
         assert_eq!(
-            evaluator.settle("/work", "claude", "Bash", &rules).unwrap(),
+            evaluator
+                .settle(RulePrincipal::Grant, "/work", "claude", "Bash", &rules)
+                .unwrap(),
             RuleSettlement::Deny {
                 rule_id: "rule-d".to_owned()
             }
         );
         assert_eq!(
-            evaluator.settle("/work", "claude", "Bash", &[]).unwrap(),
+            evaluator
+                .settle(RulePrincipal::Owner, "/work", "claude", "Bash", &[])
+                .unwrap(),
             RuleSettlement::Ask
         );
     }

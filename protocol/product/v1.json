@@ -6065,56 +6065,6 @@
         }
       },
       "required": ["requestId", "applied"]
-    },
-    "PermissionReviewNotice": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "One review waiting on a person.",
-      "properties": {
-        "conversationId": {
-          "type": "string",
-          "minLength": 36,
-          "maxLength": 36,
-          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-          "description": "Conversation the review belongs to."
-        },
-        "executionId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256,
-          "x-utf8MaxBytes": 256,
-          "description": "Execution that owns the review."
-        },
-        "permissionId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256,
-          "x-utf8MaxBytes": 256,
-          "description": "Pending permission identity."
-        },
-        "tool": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256,
-          "x-utf8MaxBytes": 256,
-          "description": "Tool the review named."
-        }
-      },
-      "required": ["conversationId", "executionId", "permissionId", "tool"]
-    },
-    "PermissionReviewWaiting": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "The reviews still waiting. A later event replaces this one; an empty list means none are waiting.",
-      "properties": {
-        "reviews": {
-          "type": "array",
-          "maxItems": 64,
-          "items": { "$ref": "#/$defs/PermissionReviewNotice" },
-          "description": "Waiting reviews, oldest first, at most 64."
-        }
-      },
-      "required": ["reviews"]
     }
   }
 }

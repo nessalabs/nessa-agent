@@ -4,7 +4,7 @@
 use super::StandInSessions;
 use crate::application::agent_execution::{
     agents::AgentError,
-    permissions::{ConfiguredRefusal, PermissionRules, ReviewNotices},
+    permissions::{ConfiguredRefusal, PermissionRules},
     providers::{ExecutableUseSnapshot, UserImageSource},
 };
 use crate::domain::agent_execution::permissions::{
@@ -474,9 +474,6 @@ pub struct AcpConfig {
     /// a rule is the owner's decision about a tool, not which provider context
     /// a saved session restores.
     pub permission_rules: Arc<dyn PermissionRules>,
-    /// Where a review that is left waiting is announced, and cleared when it
-    /// ends. Idle notices announce nothing.
-    pub review_notices: Arc<dyn ReviewNotices>,
 }
 impl AcpConfig {
     /// This configuration for a harness a host starts, working in `workspace`

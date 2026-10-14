@@ -1,20 +1,17 @@
-//! Scoped permission rules and the notices a waiting review raises.
+//! Scoped permission rules.
 //!
 //! A rule answers a later review of one tool in one workspace. The host
-//! stores it and decides it; these types do not. A notice names a review
-//! that is still waiting, and is cleared when that review is answered,
-//! cancelled, or settled by its deadline.
+//! stores it and decides it; these types do not. The rule and its audit
+//! record commit together in the host store.
 //!
 //! ```text
 //! owner turn ──arm──▶ PermissionRules::offers_remember
 //! review ──settle──▶ live rule selects the once option (Rule basis)
-//! review left pending ──waiting──▶ ReviewNotices
-//! answer | cancel | deadline ──clear──▶ ReviewNotices
 //! ```
 
 use crate::application::agent_execution::permissions::{ActionContext, ApprovalRuleReference};
 use crate::domain::agent_execution::executions::ExecutionId;
-use crate::domain::agent_execution::permissions::{PermissionEffect, PermissionId};
+use crate::domain::agent_execution::permissions::PermissionEffect;
 
 /// Option id of Nessa's "always allow in this project" choice.
 pub const REMEMBER_ALLOW: &str = "nessa.remember.allow";
@@ -88,6 +85,9 @@ pub struct RememberRequest<'a> {
     pub caller: PermissionCaller,
     /// The execution whose review offered the choice.
     pub execution_id: &'a ExecutionId,
+    /// The conversation this execution belongs to. The same execution id in
+    /// another conversation is a different turn.
+    pub conversation: &'a str,
 }
 
 /// Why a remember choice was not stored. The review stays pending.
@@ -106,64 +106,64 @@ pub enum RememberError {
 /// or denies a tool by itself. `remember` is the opposite: a failure leaves
 /// the review pending and writes nothing.
 pub trait PermissionRules: Send + Sync {
-    /// A live rule for this tool in this workspace, if one should answer it.
-    fn settle(&self, workspace: &str, source: &str, tool: &str) -> Option<SettledRule>;
+    /// A live rule for this tool in this workspace, asked as `caller`, if one
+    /// should answer it. `caller` is the turn's principal. A host does not
+    /// rewrite a grant as the owner.
+    fn settle(
+        &self,
+        caller: PermissionCaller,
+        workspace: &str,
+        source: &str,
+        tool: &str,
+    ) -> Option<SettledRule>;
 
-    /// Whether this execution may be offered Nessa's remember choices.
-    fn offers_remember(&self, execution: &ExecutionId) -> bool;
+    /// Whether this execution in `conversation` may be offered Nessa's remember choices.
+    fn offers_remember(&self, conversation: &str, execution: &ExecutionId) -> bool;
 
-    /// Record whether `execution` may be offered remember choices.
+    /// Record whether `execution` in `conversation` may be offered remember choices.
     ///
     /// `owner` is that offer. An owner turn whose membership cannot use a
-    /// remember choice is recorded as not offered.
-    fn arm(&self, execution: &ExecutionId, owner: bool);
+    /// remember choice is recorded as not offered. A later arm of the same
+    /// conversation and execution replaces the earlier one. Another
+    /// conversation's arm of the same execution id does not.
+    fn arm(&self, conversation: &str, execution: &ExecutionId, owner: bool);
 
-    /// Record that the answer identified by `execution` and `request_id` is
-    /// `caller`. The host sets this before that answer is queued. A later note
-    /// for the same key replaces this one. Reading it in [`Self::answerer`]
-    /// removes it, so a later answer is not attributed to an earlier caller.
-    fn note_answerer(&self, execution: &ExecutionId, request_id: &str, caller: PermissionCaller) {
-        let _ = (self, execution, request_id, caller);
+    /// Record that the answer identified by `conversation`, `execution`, and
+    /// `request_id` is `caller`. The host sets this before that answer is
+    /// queued. A later note for the same key replaces this one. Reading it in
+    /// [`Self::answerer`] removes it, so a later answer is not attributed to
+    /// an earlier caller.
+    fn note_answerer(
+        &self,
+        conversation: &str,
+        execution: &ExecutionId,
+        request_id: &str,
+        caller: PermissionCaller,
+    ) {
+        let _ = (self, conversation, execution, request_id, caller);
     }
 
     /// The caller noted for this answer, if the host set one.
     ///
     /// `None` when it did not. Callers must not treat `None` as the owner.
     /// Reading removes the note.
-    fn answerer(&self, execution: &ExecutionId, request_id: &str) -> Option<PermissionCaller> {
-        let _ = (self, execution, request_id);
+    fn answerer(
+        &self,
+        conversation: &str,
+        execution: &ExecutionId,
+        request_id: &str,
+    ) -> Option<PermissionCaller> {
+        let _ = (self, conversation, execution, request_id);
         None
     }
 
     /// Store a rule for `request.caller`. The review stays pending on error.
     /// Cedar admits or refuses that caller; the owner is not assumed.
     ///
-    /// The revision stays provisional until [`Self::acknowledge`]. Until then
-    /// it does not settle a review, and [`Self::withdraw`] removes a fresh
-    /// rule or writes the replaced rule back as a new revision. A second
-    /// remember of a key that is still provisional is
-    /// [`RememberError::Unavailable`]. A host that stores nothing may leave
-    /// both as they are.
+    /// The rule and its audit record commit together. A failure writes
+    /// neither. A later failure to record the permission answer does not
+    /// remove the rule: the grant was already recorded.
     fn remember(&self, request: RememberRequest<'_>) -> Result<SettledRule, RememberError>;
-
-    /// The selection that stored `rule` was recorded. The revision may settle.
-    /// Withdrawing it afterwards does not remove it or restore what it replaced.
-    fn acknowledge(&self, rule: &ApprovalRuleReference) {
-        let _ = (self, rule);
-    }
-
-    /// The selection that stored `rule` was not recorded. Remove that revision.
-    ///
-    /// A fresh rule is deleted. A replacement writes the previous rule back
-    /// under a new revision, never the number it already used. A revision
-    /// that was already acknowledged, already revoked, or is not the current
-    /// provisional revision is left as it is. [`RememberError::Unavailable`]
-    /// means the unrecorded revision is still stored, and it still does not
-    /// settle.
-    fn withdraw(&self, rule: &ApprovalRuleReference) -> Result<(), RememberError> {
-        let _ = (self, rule);
-        Ok(())
-    }
 }
 
 /// No rules, and no execution is offered a remember choice.
@@ -171,52 +171,14 @@ pub trait PermissionRules: Send + Sync {
 pub struct IdlePermissionRules;
 
 impl PermissionRules for IdlePermissionRules {
-    fn settle(&self, _: &str, _: &str, _: &str) -> Option<SettledRule> {
+    fn settle(&self, _: PermissionCaller, _: &str, _: &str, _: &str) -> Option<SettledRule> {
         None
     }
-    fn offers_remember(&self, _: &ExecutionId) -> bool {
+    fn offers_remember(&self, _: &str, _: &ExecutionId) -> bool {
         false
     }
-    fn arm(&self, _: &ExecutionId, _: bool) {}
+    fn arm(&self, _: &str, _: &ExecutionId, _: bool) {}
     fn remember(&self, _: RememberRequest<'_>) -> Result<SettledRule, RememberError> {
         Err(RememberError::Refused)
     }
-}
-
-/// A review that is waiting on a person.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReviewNotice {
-    /// Conversation the review belongs to. The SDK session key is that id.
-    pub conversation_id: String,
-    /// Execution that owns the review.
-    pub execution_id: ExecutionId,
-    /// Pending permission identity.
-    pub permission_id: PermissionId,
-    /// Tool the review named.
-    pub tool: String,
-}
-
-/// Notices a waiting review raises, and clears when the review ends.
-pub trait ReviewNotices: Send + Sync {
-    /// `notice` is waiting. A second call for the same review replaces it.
-    ///
-    /// The same execution and permission ids in another conversation are a
-    /// different review. `permissionId` is only unique within one execution,
-    /// and two conversations can use the same execution id.
-    fn waiting(&self, notice: &ReviewNotice);
-    /// The review was answered, cancelled, or settled by its deadline.
-    ///
-    /// `conversation` is part of the identity, with the execution and the
-    /// permission. Clearing one conversation leaves another conversation's
-    /// review that happens to reuse those ids.
-    fn clear(&self, conversation: &str, execution: &ExecutionId, permission: &PermissionId);
-}
-
-/// No notices.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct IdleReviewNotices;
-
-impl ReviewNotices for IdleReviewNotices {
-    fn waiting(&self, _: &ReviewNotice) {}
-    fn clear(&self, _: &str, _: &ExecutionId, _: &PermissionId) {}
 }

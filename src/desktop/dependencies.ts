@@ -31,13 +31,6 @@
  */
 import type { AttachmentApi, McpAppsApi } from "@nessa/client"
 import {
-  bindWaitingReviewNotices,
-  browserReviewNotifier,
-  openReviewEvent,
-  waitingReviewNotices,
-  type WaitingReview,
-} from "./workspace/adapters/gateway/review-notices"
-import {
   heldFileReader,
   HeldFileReadError,
   monotonicWallClock,
@@ -233,17 +226,6 @@ type WindowGatewayClient = GatewayClient &
     readonly attachments: AttachmentApi
   }
 
-/** Notices for reviews that are waiting, replaced by each snapshot the gateway sends. */
-function reviewWaiting(): (reviews: readonly WaitingReview[]) => void {
-  const notices = waitingReviewNotices(
-    browserReviewNotifier((conversationId) => {
-      window.dispatchEvent(openReviewEvent(conversationId))
-    }),
-  )
-  bindWaitingReviewNotices(notices.showWaiting)
-  return notices.apply
-}
-
 /**
  * The gateway's workspace, and — where apps are drawn — its servers' apps:
  * told each view the source applies, their calls made on the client the
@@ -257,14 +239,12 @@ function gatewayWorkspace(
   registry: DesktopWidgetRegistry,
   apps: AppsOptions | undefined,
 ): GatewaySource<WindowGatewayClient> {
-  const onReviewWaiting = reviewWaiting()
-  if (!apps) return gatewaySource({ connect, clock, onReviewWaiting })
+  if (!apps) return gatewaySource({ connect, clock })
   const mcpApps = (): Promise<McpAppsApi> =>
     source.connected().then((client) => client.mcpApps)
   const source: GatewaySource<WindowGatewayClient> = gatewaySource({
     connect,
     clock,
-    onReviewWaiting,
     apps: gatewayApps({
       registry,
       mcpApps: {
