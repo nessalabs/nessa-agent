@@ -10,7 +10,8 @@
 //! asked with, and maps its answer to a wire code. It also maps a share's
 //! role and policy between the wire and the domain. `conversation.read`,
 //! `artifact.read` and every view subscription batch
-//! (`subscription::authorize_batch`) ask [`admit_conversation`];
+//! (`subscription::authorize_batch`) ask [`admit_conversation`]; a paired
+//! device is admitted to that batch on [`admit_paired_follow`];
 //! `conversation.list`, `conversation.observe` and every list batch ask
 //! [`admit_list`]. A gateway that pairs no device has no receiver binding, so
 //! every session is the owner's and reads exactly as before (row G11).
@@ -79,6 +80,38 @@ fn party<'a>(binding: &'a ReceiverBinding, session: &'a AuthenticatedSession) ->
         signed_in_as: session.context().principal_id(),
         binding_owner: &binding.owner_id,
         receiver: &binding.receiver_id,
+    }
+}
+
+/// Whether a paired `session` may open or stop one view subscription on
+/// `method`.
+///
+/// Returns whether this call admitted it. A session that is not paired, and
+/// a method other than `conversation.subscribe` or `conversation.unsubscribe`,
+/// returns false so the caller asks the method's own grant. A paired session
+/// is admitted on the grant pairing mints (`conversation.read`). One that
+/// holds `conversation.write` instead is admitted on that grant, as a paired
+/// session holding the owner's write grant already was. The conversation it
+/// may follow is [`admit_conversation`], asked by the subscription task.
+/// `conversation.subscribeList` is not here: a device stays refused it until
+/// the catalogue is grant-scoped.
+pub(super) async fn admit_paired_follow(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    method: &str,
+) -> Result<bool, &'static str> {
+    if method != "conversation.subscribe" && method != "conversation.unsubscribe" {
+        return Ok(false);
+    }
+    if paired_binding(state, session).await?.is_none() {
+        return Ok(false);
+    }
+    match admit_grant(state, session, PAIRING_GRANT).await {
+        Ok(()) => Ok(true),
+        Err("forbidden") => admit_grant(state, session, "conversation.write")
+            .await
+            .map(|()| true),
+        Err(code) => Err(code),
     }
 }
 

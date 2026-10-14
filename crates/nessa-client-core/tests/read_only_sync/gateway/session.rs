@@ -194,6 +194,16 @@ impl PeerSocket {
     fn ended(&mut self) -> bool {
         self.read_text().is_none()
     }
+    /// The client shut this socket. A read that only timed out does not count:
+    /// the peer is still holding the connection.
+    fn client_shut(&mut self) -> bool {
+        let buffer = self.frames.unfilled().expect("frame buffer");
+        match self.transport.read(buffer) {
+            Ok(0) => true,
+            Err(error) => !matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock),
+            Ok(_) => false,
+        }
+    }
 }
 pub(crate) fn send(socket: &mut PeerSocket, message: OutgoingMessage) {
     let text = message.to_wire_text().unwrap();
@@ -1269,5 +1279,7 @@ fn public_retained_read_enforces_owner_scope_and_preserves_granted_peer_mode() {
 
 #[path = "session/held_files.rs"]
 mod held_files;
+#[path = "session/subscribe.rs"]
+mod subscribe;
 #[path = "session/watch.rs"]
 mod watch;

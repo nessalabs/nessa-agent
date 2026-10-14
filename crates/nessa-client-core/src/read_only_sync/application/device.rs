@@ -13,7 +13,7 @@
 //! the record may go, so a device never forgets a receiver whose data it still
 //! holds. A refusal, a timeout, a closed connection or an unreadable status
 //! ends nothing and purges nothing (design rows PC2–PC5).
-use super::{CacheError, GatewayError, HeldFileRefusal};
+use super::{CacheError, GatewayError, HeldFileRefusal, SubscriptionRefusal};
 use nessa_auth::{
     application::pairing::{
         ClientPendingStore, DeviceCredential, PendingEnrollment, PrivateKeyMaterial,
@@ -209,6 +209,9 @@ pub(crate) fn asks_status(error: GatewayError) -> bool {
                     | ChangeWatchErrorCode::StaleEpoch
             )
             | GatewayError::HeldFile(HeldFileRefusal::Unauthorized | HeldFileRefusal::Forbidden)
+            | GatewayError::Subscription(
+                SubscriptionRefusal::Unauthorized | SubscriptionRefusal::Forbidden
+            )
     )
 }
 

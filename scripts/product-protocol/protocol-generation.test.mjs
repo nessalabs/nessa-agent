@@ -461,6 +461,40 @@ test("watch policy and identity publish the same schema owner to both languages"
     assert.match(outcomes, /impl ChangeWatchErrorCode/)
   }))
 
+test("subscription identity and view cursor publish the schema to rust and typescript", () =>
+  fixture((path) => {
+    const pattern = "^[1-9][0-9]{0,4}$"
+    edit(path, "protocol/product/v1.json", (schema) => {
+      schema.$defs.ConversationSubscriptionId.pattern = pattern
+      schema.$defs.ConversationSubscriptionId.maxLength = 5
+      schema.$defs.ConversationViewCursor.properties.incarnation.minLength = 2
+      schema.$defs.ConversationViewCursor.properties.incarnation.maxLength = 9
+      schema.$defs.ConversationView.properties.transcriptState.enum = ["alpha", "beta"]
+    })
+    const result = generate(path, "generate-product-protocol")
+    assert.equal(result.status, 0, result.stderr)
+    const output = (name) => readFileSync(join(path, name), "utf8")
+    const ts = output("packages/nessa-client/src/generated/product.ts")
+    const rust = output("crates/nessa-protocol/src/product/generated.rs")
+    assert.ok(
+      ts.includes(`conversationSubscriptionIdPattern = ${JSON.stringify(pattern)}`),
+    )
+    assert.match(ts, /maxViewCursorIncarnationLength = 9/)
+    assert.ok(
+      rust.includes(
+        `CONVERSATION_SUBSCRIPTION_ID_PATTERN: &str = ${JSON.stringify(pattern)};`,
+      ),
+    )
+    assert.match(rust, /MIN_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS: usize = 1;/)
+    assert.match(rust, /MAX_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS: usize = 5;/)
+    assert.match(rust, /MIN_VIEW_CURSOR_INCARNATION_CHARACTERS: usize = 2;/)
+    assert.match(rust, /MAX_VIEW_CURSOR_INCARNATION_CHARACTERS: usize = 9;/)
+    assert.match(rust, /DECIMAL_U64_PATTERN: &str =/)
+    assert.match(rust, /MAX_DECIMAL_U64_CHARACTERS: usize = 20;/)
+    assert.match(rust, /TRANSCRIPT_STATES: &\[&str\] = &\["alpha", "beta"\];/)
+    assert.match(ts, /transcriptStates = \["alpha", "beta"\] as const/)
+  }))
+
 for (const [name, value] of [
   ["globalOwners", undefined],
   ["globalOwners", 0],
