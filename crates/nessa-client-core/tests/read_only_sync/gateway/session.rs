@@ -39,7 +39,7 @@ use serde_json::json;
 use std::io::{ErrorKind, Read, Result as IoResult, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle, Result as ThreadResult};
 use std::time::{Duration, Instant};
 
@@ -80,6 +80,54 @@ impl Drop for Peer {
             }
         }
     }
+}
+
+fn prepare_then_start<T, E, R>(
+    prepare: impl FnOnce() -> Result<T, E>,
+    start: impl FnOnce(T) -> R,
+) -> Result<R, E> {
+    let prepared = prepare()?;
+    Ok(start(prepared))
+}
+
+#[test]
+fn prepare_then_start_runs_peer_with_prepared_inputs() {
+    let ready = Arc::new(AtomicBool::new(false));
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let peer = prepare_then_start(
+        || {
+            trace.lock().unwrap().push("prepared");
+            ready.store(true, Ordering::SeqCst);
+            Ok::<_, ()>(ready.clone())
+        },
+        |ready| {
+            assert!(ready.load(Ordering::SeqCst));
+            trace.lock().unwrap().push("start");
+            let trace = trace.clone();
+            Peer::spawn(move || {
+                assert!(ready.load(Ordering::SeqCst));
+                trace.lock().unwrap().push("peer");
+            })
+        },
+    )
+    .unwrap();
+
+    peer.join().unwrap();
+    assert_eq!(*trace.lock().unwrap(), ["prepared", "start", "peer"]);
+}
+
+#[test]
+fn prepare_then_start_does_not_start_peer_after_preparation_error() {
+    let started = Arc::new(AtomicBool::new(false));
+    let result: Result<(), &str> = prepare_then_start(
+        || Err::<(), _>("preparation failed"),
+        |_: ()| {
+            started.store(true, Ordering::SeqCst);
+        },
+    );
+
+    assert_eq!(result, Err("preparation failed"));
+    assert!(!started.load(Ordering::SeqCst));
 }
 fn bounded_accept(listener: &TcpListener) -> (TcpStream, SocketAddr) {
     listener.set_nonblocking(true).unwrap();
@@ -201,36 +249,45 @@ fn native_peer_answering(
     reply: Option<Vec<u8>>,
     script: impl FnOnce(&mut PeerSocket) + Send + 'static,
 ) -> (Endpoint, Peer) {
-    let gateway = NativeIdentity::generate(&mut OsEntropy).unwrap();
-    let pin = gateway.public_spki();
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let thread = Peer::spawn(move || {
-        let (stream, _) = bounded_accept(&listener);
-        let transport = NativeTransport::accept(stream, &gateway).unwrap();
-        let mut selector = EnrollmentChannel::new(transport);
-        let first = selector.receive_envelope().unwrap();
-        assert!(matches!(
-            decode_request(&first).unwrap(),
-            NativePairingRequest::OpenProduct
-        ));
-        if let Some(reply) = reply {
-            selector.send_envelope(&reply).unwrap();
-        }
-        let mut socket = PeerSocket {
-            transport: selector.into_transport(),
-            frames: FrameReader::new(MAX_PROTECTED_REQUEST_BYTES),
-        };
-        script(&mut socket);
-    });
-    (
-        Endpoint {
-            address,
-            pin,
-            device: NativeIdentity::generate(&mut OsEntropy).unwrap(),
+    prepare_then_start(
+        || -> Result<_, nessa_auth::adapters::pairing::PairingCryptoError> {
+            let gateway = NativeIdentity::generate(&mut OsEntropy)?;
+            let device = NativeIdentity::generate(&mut OsEntropy)?;
+            Ok((gateway, device))
         },
-        thread,
+        |(gateway, device)| {
+            let pin = gateway.public_spki();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let thread = Peer::spawn(move || {
+                let (stream, _) = bounded_accept(&listener);
+                let transport = NativeTransport::accept(stream, &gateway).unwrap();
+                let mut selector = EnrollmentChannel::new(transport);
+                let first = selector.receive_envelope().unwrap();
+                assert!(matches!(
+                    decode_request(&first).unwrap(),
+                    NativePairingRequest::OpenProduct
+                ));
+                if let Some(reply) = reply {
+                    selector.send_envelope(&reply).unwrap();
+                }
+                let mut socket = PeerSocket {
+                    transport: selector.into_transport(),
+                    frames: FrameReader::new(MAX_PROTECTED_REQUEST_BYTES),
+                };
+                script(&mut socket);
+            });
+            (
+                Endpoint {
+                    address,
+                    pin,
+                    device,
+                },
+                thread,
+            )
+        },
     )
+    .unwrap()
 }
 /// A native peer that authenticates the client, then runs `script`.
 pub(crate) fn peer(script: impl FnOnce(&mut PeerSocket) + Send + 'static) -> (Endpoint, Peer) {
@@ -1121,33 +1178,42 @@ fn public_retained_read_enforces_owner_scope_and_preserves_granted_peer_mode() {
             Id::new("epoch-3").unwrap(),
         );
         let actual = scope.clone();
-        let (endpoint, peer) = peer(move |socket| {
-            while let Some(text) = socket.read_text() {
-                let request = RequestFrame::decode(&text).unwrap();
-                let payload = match request.method.as_str() {
-                    product_method::CONVERSATION_CATALOGUE_HEAD => {
-                        json!({"scope":wire_scope(&actual), "head":"0"})
+        let (_root, mut cache, endpoint, peer) = prepare_then_start(
+            || -> Result<_, ReadFailure> {
+                let root = tempfile::tempdir().map_err(|_| ReadFailure::Cache)?;
+                let private = root.path().join("cache");
+                nessa_local_storage::create_directory(&private)
+                    .map_err(|_| ReadFailure::Cache)?;
+                let cache = RetainedCache::open(
+                    &private.join("cache.sqlite3"),
+                    Arc::new(Wall),
+                    Arc::new(Time(Instant::now())),
+                )?;
+                Ok((root, cache))
+            },
+            |(root, cache)| {
+                let (endpoint, peer) = peer(move |socket| {
+                    while let Some(text) = socket.read_text() {
+                        let request = RequestFrame::decode(&text).unwrap();
+                        let payload = match request.method.as_str() {
+                            product_method::CONVERSATION_CATALOGUE_HEAD => {
+                                json!({"scope":wire_scope(&actual), "head":"0"})
+                            }
+                            product_method::CONVERSATION_CATALOGUE_MANIFEST => {
+                                json!({"request": request.params["request"], "entries":[], "hasMore":false})
+                            }
+                            method => panic!("unexpected retained operation {method}"),
+                        };
+                        send(
+                            socket,
+                            OutgoingMessage::Response(
+                                ResponseFrame::success(&request.id, &payload).unwrap(),
+                            ),
+                        );
                     }
-                    product_method::CONVERSATION_CATALOGUE_MANIFEST => {
-                        json!({"request": request.params["request"], "entries":[], "hasMore":false})
-                    }
-                    method => panic!("unexpected retained operation {method}"),
-                };
-                send(
-                    socket,
-                    OutgoingMessage::Response(
-                        ResponseFrame::success(&request.id, &payload).unwrap(),
-                    ),
-                );
-            }
-        });
-        let root = tempfile::tempdir().unwrap();
-        let private = root.path().join("cache");
-        nessa_local_storage::create_directory(&private).unwrap();
-        let mut cache = RetainedCache::open(
-            &private.join("cache.sqlite3"),
-            Arc::new(Wall),
-            Arc::new(Time(Instant::now())),
+                });
+                (root, cache, endpoint, peer)
+            },
         )
         .unwrap();
         let result = cache.read(
