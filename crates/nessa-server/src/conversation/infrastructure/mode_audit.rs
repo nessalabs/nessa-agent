@@ -95,26 +95,38 @@ pub(super) async fn write_once(
     id: String,
     value: Value,
 ) -> Result<(), ConversationError> {
-    tokio::task::spawn_blocking(move || {
-        let destination = directory.join(format!("{id}.json"));
-        if agrees(&destination, &value)? {
-            return sync_directory(&directory).map_err(|_| ConversationError::Audit);
+    tokio::task::spawn_blocking(move || commit_once(&directory, &id, &value))
+        .await
+        .map_err(|_| ConversationError::Audit)?
+}
+
+/// Commit `value` as the immutable record `id` in `directory`.
+///
+/// Written once, and acknowledged again when the stored record agrees with it
+/// apart from its times. A record that contradicts the stored one is refused.
+/// The caller is blocked for the write; a revoke holds its rule lock across
+/// this so the row and its evidence stay one step.
+pub(crate) fn commit_once(
+    directory: &Path,
+    id: &str,
+    value: &Value,
+) -> Result<(), ConversationError> {
+    let destination = directory.join(format!("{id}.json"));
+    if agrees(&destination, value)? {
+        return sync_directory(directory).map_err(|_| ConversationError::Audit);
+    }
+    let mut file = PrivateTempFile::new_in(directory).map_err(|_| ConversationError::Audit)?;
+    serde_json::to_writer(file.as_file_mut(), value).map_err(|_| ConversationError::Audit)?;
+    file.as_file_mut()
+        .write_all(b"\n")
+        .and_then(|_| file.as_file().sync_all())
+        .map_err(|_| ConversationError::Audit)?;
+    if let Err(error) = file.publish(&destination) {
+        if error.kind() != ErrorKind::AlreadyExists || !agrees(&destination, value)? {
+            return Err(ConversationError::Audit);
         }
-        let mut file = PrivateTempFile::new_in(&directory).map_err(|_| ConversationError::Audit)?;
-        serde_json::to_writer(file.as_file_mut(), &value).map_err(|_| ConversationError::Audit)?;
-        file.as_file_mut()
-            .write_all(b"\n")
-            .and_then(|_| file.as_file().sync_all())
-            .map_err(|_| ConversationError::Audit)?;
-        if let Err(error) = file.publish(&destination) {
-            if error.kind() != ErrorKind::AlreadyExists || !agrees(&destination, &value)? {
-                return Err(ConversationError::Audit);
-            }
-        }
-        sync_directory(&directory).map_err(|_| ConversationError::Audit)
-    })
-    .await
-    .map_err(|_| ConversationError::Audit)?
+    }
+    sync_directory(directory).map_err(|_| ConversationError::Audit)
 }
 fn agrees(destination: &Path, expected: &Value) -> Result<bool, ConversationError> {
     let mut file = match open(destination, OpenMode::Read) {

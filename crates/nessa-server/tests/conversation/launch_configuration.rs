@@ -404,6 +404,12 @@ async fn turning_the_switch_on_reaches_the_next_claude_and_codex_provider() {
         images: Arc::new(NoImages),
         credentials: Arc::new(NoCredentials),
         native_hooks: preferences.clone(),
+        permission_rules: Arc::new(
+            nessa_sdk::application::agent_execution::permissions::IdlePermissionRules,
+        ),
+        review_notices: Arc::new(
+            nessa_sdk::application::agent_execution::permissions::IdleReviewNotices,
+        ),
     };
     let claude = composed_provider(
         &dependencies,

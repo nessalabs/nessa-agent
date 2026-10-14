@@ -166,6 +166,15 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
     /// see only part of the request would have to review an action it cannot
     /// fully describe. The shared runtime does not interpret the request.
     fn permission_input(&self, request: &Value) -> Result<ToolReviewInput, AgentError>;
+    /// Whether this review names one tool, rather than only an ACP kind.
+    ///
+    /// A project rule is one tool. Codex identifies some calls only by kind
+    /// (`execute`, `edit`); a rule on that kind would cover every such call.
+    /// The default is that the profile's tool name is that identity, which is
+    /// what Claude's observed name is.
+    fn permission_names_a_tool(&self, _request: &Value) -> bool {
+        true
+    }
     /// Which denial a deadline selects, and which of those stop the turn.
     ///
     /// The default is that a one-request refusal continues the turn, which is

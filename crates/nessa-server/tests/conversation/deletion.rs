@@ -21,6 +21,7 @@ use crate::conversation_test_support::{
 };
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
 use nessa_protocol::conversation::view::ConversationMessageStatus;
+use nessa_sdk::application::agent_execution::permissions::PermissionCaller;
 use nessa_sdk::application::agent_execution::sessions::{
     SessionLoad, SessionLoadState, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
 };
@@ -424,6 +425,7 @@ async fn a_deleted_conversation_refuses_every_command_on_it() {
                 "turn-1".into(),
                 "permission".into(),
                 "allow".into(),
+                PermissionCaller::Owner,
             )
             .await,
     );
