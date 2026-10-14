@@ -11,9 +11,10 @@ use super::{
     ArtifactAnswer, ArtifactAnswering, ArtifactBytes, ArtifactChunk, ArtifactOffer,
     ConversationAgent, ConversationAgents, ConversationAttachments, ConversationCaller,
     ConversationDeletionBudgets, ConversationDependencies, ConversationError, ConversationLimits,
-    ConversationService, Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease,
-    Environments, GrantedCommand, GrantedTerms, LeaseHold, LeaseRelease, RequestedConversation,
-    SubmissionMode, SubmittedFile, SubmittedMessage,
+    ConversationPlacements, ConversationService, Environment, EnvironmentDeclaration,
+    EnvironmentFuture, EnvironmentLease, Environments, GrantedCommand, GrantedTerms, LeaseHold,
+    LeaseRelease, PlacementError, RequestedConversation, SubmissionMode, SubmittedFile,
+    SubmittedMessage,
 };
 use super::{
     CommandAnswer, CommandCall, CommandCallError, CommandEnvironment, CommandHold, CommandResult,
@@ -73,7 +74,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::{mpsc, oneshot, Notify};
 
 const CONVERSATION: &str = "5c0a9f2e-1d3b-4c7a-8e6f-2b9d4a1c7e30";
 
@@ -1901,10 +1902,21 @@ fn with_publishing_host_waiting(
     attachments: Arc<MemoryAttachments>,
     wait: Duration,
 ) -> Harness {
-    let hosts: BTreeMap<String, Arc<dyn Environment>> =
-        BTreeMap::from([("devbox".into(), host as _)]);
     let placements =
         Arc::new(FilePlacements::new(root.join("conversations").join("placements")).unwrap());
+    with_publishing_host_waiting_and_placements(root, host, attachments, wait, placements)
+}
+
+/// [`with_publishing_host_waiting`], using a placement port supplied by the test.
+fn with_publishing_host_waiting_and_placements(
+    root: &Path,
+    host: Arc<Host>,
+    attachments: Arc<MemoryAttachments>,
+    wait: Duration,
+    placements: Arc<dyn ConversationPlacements>,
+) -> Harness {
+    let hosts: BTreeMap<String, Arc<dyn Environment>> =
+        BTreeMap::from([("devbox".into(), host as _)]);
     let provider = Arc::new(ProviderFactory::default());
     let binding = Arc::new(Provider::new(provider.clone()));
     harness_working_in(
@@ -2101,6 +2113,45 @@ fn placement_file(root: &Path) -> std::path::PathBuf {
     root.join("conversations")
         .join("placements")
         .join(format!("{CONVERSATION}.json"))
+}
+
+/// A file placement store whose armed reads stop only when their caller drops them.
+struct PendingPlacements {
+    inner: FilePlacements,
+    read_entered: mpsc::UnboundedSender<()>,
+    stall_reads: Arc<AtomicBool>,
+}
+
+impl ConversationPlacements for PendingPlacements {
+    fn place<'a>(
+        &'a self,
+        conversation: &'a ConversationId,
+        host: Option<&'a str>,
+    ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
+        self.inner.place(conversation, host)
+    }
+
+    fn placement<'a>(
+        &'a self,
+        conversation: &'a ConversationId,
+    ) -> EnvironmentFuture<'a, Result<Option<String>, PlacementError>> {
+        let placement = self.inner.placement(conversation);
+        if !self.stall_reads.load(Ordering::SeqCst) {
+            return placement;
+        }
+        let read_entered = self.read_entered.clone();
+        Box::pin(async move {
+            let _ = read_entered.send(());
+            std::future::pending().await
+        })
+    }
+
+    fn erase<'a>(
+        &'a self,
+        conversation: &'a ConversationId,
+    ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
+        self.inner.erase(conversation)
+    }
 }
 
 impl Harness {
@@ -4503,60 +4554,87 @@ async fn a_fetch_whose_lease_ends_mid_transfer_is_refused_lease_ended() {
         .unwrap();
 }
 
-/// A placement store that stalls holds the call no longer than its wait,
-/// and no longer than its caller stays: every step that can wait is inside
-/// both, the store's read included. A pipe is what stalls it here.
-#[cfg(unix)]
-#[tokio::test]
+/// An injected pending placement read verifies both the fetch deadline and
+/// caller-cancellation outcomes in
+/// [`a_fetch_whose_placement_read_stalls_is_timed_out_or_cancelled`].
+#[tokio::test(start_paused = true)]
 async fn a_fetch_whose_placement_read_stalls_is_timed_out_or_cancelled() {
-    use std::os::unix::ffi::OsStrExt as _;
     let root = tempfile::tempdir().unwrap();
     let bytes = b"a picture".to_vec();
-    let (harness, host, _attachments, go) =
-        fetching_turn(root.path(), &bytes, Duration::from_millis(200)).await;
-    // The placement becomes a pipe nobody writes: reading it waits.
-    let placement = placement_file(root.path());
-    let kept = std::fs::read(&placement).unwrap();
-    std::fs::remove_file(&placement).unwrap();
-    let fifo = std::ffi::CString::new(placement.as_os_str().as_bytes()).unwrap();
-    // SAFETY: mkfifo reads the NUL-terminated path only.
-    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    let (host, _publisher) = Host::publishing();
+    let host = Arc::new(host);
+    let attachments = Arc::new(MemoryAttachments::default());
+    let (read_entered, mut reads) = mpsc::unbounded_channel();
+    let stall_reads = Arc::new(AtomicBool::new(false));
+    let placements = Arc::new(PendingPlacements {
+        inner: FilePlacements::new(root.path().join("conversations").join("placements")).unwrap(),
+        read_entered,
+        stall_reads: stall_reads.clone(),
+    });
+    let wait = Duration::from_millis(200);
+    let harness = with_publishing_host_waiting_and_placements(
+        root.path(),
+        host.clone(),
+        attachments.clone(),
+        wait,
+        placements,
+    );
+    harness.create_on("devbox").await.unwrap();
+    let go = harness.running_turn().await;
+    let time_before_fetch = tokio::time::Instant::now();
+    attachments
+        .files
+        .lock()
+        .unwrap()
+        .push((harness.id.clone(), digest_hex(&bytes), bytes.clone()));
+    stall_reads.store(true, Ordering::SeqCst);
+
+    let entered = tokio::time::timeout(Duration::from_secs(5), reads.recv());
+    let mut timeout_fetch = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        let call = fetch_call("devbox", &bytes, "a.bin", "call-1");
+        tokio::spawn(async move {
+            let (_caller, stop) = tokio::sync::watch::channel(false);
+            service.fetch_artifact(&id, call, stop).await
+        })
+    };
+    // Assert the injected read is the operation the application deadline stops.
+    assert!(entered.await.unwrap().is_some());
+    assert_eq!(tokio::time::Instant::now(), time_before_fetch);
+    tokio::time::advance(wait).await;
+    let timed_out = match tokio::time::timeout(Duration::from_secs(5), &mut timeout_fetch).await {
+        Ok(result) => result.unwrap(),
+        Err(_) => {
+            timeout_fetch.abort();
+            panic!("the test deadline bounds a missing application deadline");
+        }
+    };
     assert_eq!(
-        harness
-            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-1"))
-            .await,
+        timed_out,
         FetchAnswer::Refused(FetchCallRefusal::TimedOut { delivered: false })
     );
+
     let (caller_gone, stop) = tokio::sync::watch::channel(false);
-    let cancelled = {
+    let cancel_fetch = {
         let service = harness.service.clone();
         let id = harness.id.clone();
         let call = fetch_call("devbox", &bytes, "a.bin", "call-2");
         tokio::spawn(async move { service.fetch_artifact(&id, call, stop).await })
     };
+    assert!(tokio::time::timeout(Duration::from_secs(5), reads.recv())
+        .await
+        .expect("the placement read is entered before cancellation")
+        .is_some());
     caller_gone.send(true).unwrap();
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(5), cancelled)
+        tokio::time::timeout(Duration::from_secs(5), cancel_fetch)
             .await
             .unwrap()
             .unwrap(),
         FetchAnswer::Refused(FetchCallRefusal::Cancelled { delivered: false })
     );
     assert!(host.fetching.asks.lock().unwrap().is_empty());
-    // Let the stalled reads go, so nothing is left waiting: a writer on the
-    // pipe ends their wait. It opens for reading too, so it does not itself
-    // wait for a reader: on a slow machine a call can time out before its
-    // read ever opens the pipe, and then no reader comes. It stays open
-    // until the placement is back, so a read that reaches the pipe after it
-    // opened finds a writer too.
-    let writer = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&placement)
-        .unwrap();
-    std::fs::remove_file(&placement).unwrap();
-    std::fs::write(&placement, &kept).unwrap();
-    drop(writer);
     go.send(()).unwrap();
 }
 
