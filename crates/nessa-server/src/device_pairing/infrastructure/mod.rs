@@ -14,6 +14,7 @@
 //! connection --> tls_stream --> EnvironmentPeers (paired environments)
 //! runtime  --> registration (one code registration at a time)
 //! owner_commands --> runtime (owner side only; the product socket's handle)
+//! runtime --> FenceCapture (after pairing.cancel commits; a failure leaves it)
 //! receivers --> conversation receiver authority (application's PairingReceivers)
 //! runtime  --> owner_admission (every owner command's lease; drained at shutdown)
 //! ```

@@ -5,6 +5,7 @@ mod bundle;
 mod cedar;
 mod committed;
 mod credentials;
+mod decision_audit;
 mod gateway;
 mod jsonl;
 mod log;

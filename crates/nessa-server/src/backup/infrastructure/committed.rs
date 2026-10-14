@@ -3,10 +3,13 @@
 //! a bundle.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use async_trait::async_trait;
+use nessa_auth::application::ports::Clock;
 
 use super::cedar::CedarInventoryPolicy;
+use super::decision_audit::FileInventoryDecisions;
 use super::gateway::read_committed_fences;
 use super::log::FileDeletionLog;
 use crate::backup::application::{
@@ -21,23 +24,30 @@ pub struct CommittedInventory {
     namespace: PathBuf,
     log: FileDeletionLog,
     policy: CedarInventoryPolicy,
+    decisions: FileInventoryDecisions,
 }
 
 impl CommittedInventory {
     /// Open or create `namespace/backup`. The mac key is created when absent.
+    /// `clock` is the observation time of each policy decision.
     ///
     /// # Errors
-    /// The directory or mac key could not be opened, or the inventory policy
-    /// does not validate.
-    pub fn open(namespace: impl AsRef<Path>) -> Result<Self, String> {
+    /// The directory, mac key, or decision log could not be opened, or the
+    /// inventory policy does not validate. A decision log that is not a
+    /// sequence of `inventory-decision-N` lines is refused.
+    pub fn open(namespace: impl AsRef<Path>, clock: Arc<dyn Clock>) -> Result<Self, String> {
         let namespace = namespace.as_ref().to_path_buf();
-        let log = FileDeletionLog::open(namespace.join("backup"))
+        let backup = namespace.join("backup");
+        let log = FileDeletionLog::open(&backup)
             .map_err(|error| format!("the deletion inventory could not be opened: {error}"))?;
+        let decisions = FileInventoryDecisions::open(&backup, clock)
+            .map_err(|error| format!("the inventory decisions could not be opened: {error}"))?;
         let policy = CedarInventoryPolicy::new()?;
         Ok(Self {
             namespace,
             log,
             policy,
+            decisions,
         })
     }
 
@@ -57,7 +67,7 @@ impl CommittedInventory {
         let fences = CommittedFences {
             namespace: &self.namespace,
         };
-        capture_inventory(facts, &self.policy, &[&fences], &self.log).await
+        capture_inventory(facts, &self.policy, &self.decisions, &[&fences], &self.log).await
     }
 }
 
@@ -84,7 +94,7 @@ impl FenceCapture for CommittedInventory {
         .map(|_| ())
         .map_err(|error| match error {
             CaptureError::Denied(_) => FenceCaptureError::Refused,
-            CaptureError::Inventory(_) => FenceCaptureError::NotStored,
+            CaptureError::NotAudited | CaptureError::Inventory(_) => FenceCaptureError::NotStored,
         })
     }
 }

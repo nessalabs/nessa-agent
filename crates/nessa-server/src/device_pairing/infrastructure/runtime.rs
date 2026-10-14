@@ -1,6 +1,7 @@
 //! One volatile setup slot around canonical invitation and authentication owners.
 use super::owner_admission::{OwnerAdmission, OwnerAdmissionRefusal, OwnerLease};
 use super::{RegistrationError, RegistrationWorker};
+use crate::conversation::application::FenceCapture;
 use crate::device_pairing::application::{
     Approval, CleanupError, DeviceStatusError, FreshStage, OwnerError, PairingOwner,
     PairingReceivers, ReadDevicePairing, ReceiverError, SettleCleanup,
@@ -30,7 +31,7 @@ use nessa_protocol::pairing::socket::worker_fault;
 use nessa_protocol::pairing::DevicePairingStatus;
 use std::{
     io::{Read, Write},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 use tokio::{
     runtime::Handle,
@@ -147,6 +148,10 @@ pub struct GatewayPairing {
     creating: Arc<Semaphore>,
     owners: OwnerAdmission,
     available: Arc<Mutex<Option<AvailableSetup>>>,
+    /// Bound after open, once composition has the deletion inventory. Empty
+    /// until then: a cancellation still commits, and the inventory is caught
+    /// up by the next capture.
+    inventory: Arc<OnceLock<Arc<dyn FenceCapture>>>,
 }
 impl GatewayPairing {
     /// Settle this gateway's unfinished records before serving. Every one is
@@ -179,7 +184,13 @@ impl GatewayPairing {
             creating: Arc::new(Semaphore::new(1)),
             owners: OwnerAdmission::new(),
             available: Arc::new(Mutex::new(None)),
+            inventory: Arc::new(OnceLock::new()),
         })
+    }
+    /// Record a pairing cancellation in the deletion inventory. A second bind
+    /// is ignored. Unbound, a cancellation still commits.
+    pub fn bind_fence_capture(&self, capture: Arc<dyn FenceCapture>) {
+        let _ = self.inventory.set(capture);
     }
     fn owner_from(dependencies: &PairingRuntimeDependencies) -> PairingOwner<'_> {
         PairingOwner {
@@ -567,7 +578,8 @@ impl GatewayPairing {
         decision: OwnerDecision,
     ) -> Result<PairingRecord, PairingRuntimeError> {
         let session = session.clone();
-        self.owner_command(move |owner, handle| {
+        let cancelled = matches!(decision, OwnerDecision::Cancel);
+        let record = self.owner_command(move |owner, handle| {
             let record = handle.block_on(owner.decide(&session, id, decision))?;
             if !record.cleanup_pending() {
                 return Ok(record);
@@ -591,7 +603,25 @@ impl GatewayPairing {
                 }
             }
         })
-        .await
+        .await?;
+        if cancelled {
+            self.record_cancelled_credential().await;
+        }
+        Ok(record)
+    }
+    /// A cancellation of an active enrollment revokes its credential inside
+    /// Auth, which never reaches `LocalAdmin::revoke`. Capture after that
+    /// commit. A capture that fails does not change the cancellation.
+    async fn record_cancelled_credential(&self) {
+        let Some(inventory) = self.inventory.get() else {
+            return;
+        };
+        if let Err(error) = inventory.capture().await {
+            tracing::warn!(
+                ?error,
+                "the deletion inventory was not updated after a pairing cancellation"
+            );
+        }
     }
     /// Settle `id`'s receiver if it ended with cleanup owed; a failure leaves
     /// the obligation for the next path or reconciliation.

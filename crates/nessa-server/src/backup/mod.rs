@@ -13,13 +13,15 @@
 //!
 //! committed fence ──▶ FenceCapture::capture
 //!                       ├── Cedar: who may write
+//!                       ├── decision audit
 //!                       └── DeletionLog.append    no admission, no bundle
 //! ```
 //!
 //! Arrows are calls, in order. The export path is one capture. The fence
-//! path is a deletion, unshare, or credential revocation that has already
-//! committed: it asks Cedar, then reconciles the log. It does not take
-//! admission and does not publish a bundle. The domain decides what a cut
+//! path is a deletion, unshare, credential revocation, or pairing
+//! cancellation that has already committed: it asks Cedar, stores that
+//! decision, then reconciles the log. It does not take admission and does
+//! not publish a bundle. The domain decides what a cut
 //! may contain. The application runs that order. Infrastructure reads
 //! stores and writes the bundle. Export takes admission and never a per-grant
 //! gate. Restore and quarantine are not here.

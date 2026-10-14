@@ -200,6 +200,26 @@ pub trait InventoryCapturePolicyEvaluator: Send + Sync {
     fn evaluate(&self, facts: &InventoryFacts<'_>) -> InventoryDecision;
 }
 
+/// Why a policy decision was not stored. The log must not be read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecisionAuditError {
+    /// The decision was not stored.
+    NotStored,
+}
+
+/// Persist one inventory policy decision before the log is read or written.
+///
+/// The adapter assigns the record's identity and observation time.
+/// [`DecisionAuditError::NotStored`] means the decision was not stored; the
+/// caller must not read or write the log.
+pub trait InventoryDecisionAudit: Send + Sync {
+    fn record(
+        &self,
+        facts: &InventoryFacts<'_>,
+        decision: &InventoryDecision,
+    ) -> Result<(), DecisionAuditError>;
+}
+
 impl Authenticator for MacKey {
     /// HMAC-SHA256 of `canonical`. The key stays in `self`.
     fn mac(&self, canonical: &str) -> Result<Fingerprint, MacError> {

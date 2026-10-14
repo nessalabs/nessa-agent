@@ -4,14 +4,14 @@
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
 use crate::backup::application::{
-    capture_inventory, CaptureError, DeletionLogStore, FenceSource, InventoryAction,
-    InventoryCapturePolicyEvaluator, InventoryCause, InventoryDecision, InventoryDenial,
-    InventoryFacts, InventoryFailure, LogStoreError,
+    capture_inventory, CaptureError, DecisionAuditError, DeletionLogStore, FenceSource,
+    InventoryAction, InventoryCapturePolicyEvaluator, InventoryCause, InventoryDecision,
+    InventoryDecisionAudit, InventoryDenial, InventoryFacts, InventoryFailure, LogStoreError,
 };
 use crate::backup::domain::{DeletionFence, DeletionLog};
 use crate::backup::infrastructure::{CedarInventoryPolicy, CommittedInventory};
@@ -23,7 +23,7 @@ use crate::conversation::application::{
 use crate::conversation::domain::{Conversation, ReceiverBinding, ShareAccess};
 use crate::conversation::infrastructure::LocalConversationStore;
 use nessa_auth::application::dto::{CredentialGrantDto, CredentialMetadataDto, ResourceDto};
-use nessa_auth::application::ports::{AccessReader, AccessSnapshot, PortFuture};
+use nessa_auth::application::ports::{AccessReader, AccessSnapshot, Clock, PortFuture};
 use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId, Resource, ResourceId};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
@@ -33,6 +33,22 @@ use nessa_protocol::conversation::read_scope::ReadRefusal;
 
 const VERIFIER: &str = "VERIFIER-MUST-NOT-LEAK";
 
+fn open_inventory(root: &Path) -> CommittedInventory {
+    CommittedInventory::open(root, Arc::new(FixedClock)).unwrap()
+}
+
+struct FixedClock;
+
+impl Clock for FixedClock {
+    fn unix_milliseconds(&self) -> u64 {
+        1
+    }
+}
+
+fn decisions(root: &Path) -> String {
+    std::fs::read_to_string(root.join("backup/inventory-decisions.jsonl")).unwrap()
+}
+
 #[tokio::test]
 async fn the_gateway_may_record_a_committed_fence() {
     let namespace = tempfile::tempdir().unwrap();
@@ -41,7 +57,7 @@ async fn the_gateway_may_record_a_committed_fence() {
         root,
         vec![credential("device-1", "user:one", "server.read")],
     );
-    let inventory = CommittedInventory::open(root).unwrap();
+    let inventory = open_inventory(root);
     FenceCapture::capture(&inventory).await.unwrap();
     let log = std::fs::read_to_string(root.join("backup/deletion-inventory.txt")).unwrap();
     assert!(log.contains("credential device device-1"), "{log}");
@@ -60,13 +76,24 @@ async fn the_gateway_may_record_a_committed_fence() {
         policies.iter().any(|id| id == "inventory.record.gateway"),
         "{policies:?}"
     );
+    let stored = decisions(root);
+    assert!(stored.contains("\"outcome\":\"allow\""), "{stored}");
+    assert!(stored.contains("inventory.record.gateway"), "{stored}");
+    assert!(stored.contains("\"principalKind\":\"gateway\""), "{stored}");
+    assert!(stored.contains("\"cause\":\"committed-fence\""), "{stored}");
+    assert!(
+        stored.contains("\"action\":\"deletion.inventory.record\""),
+        "{stored}"
+    );
+    assert!(stored.contains("\"observedAtMs\":1"), "{stored}");
+    assert!(!stored.contains("principalId"), "{stored}");
 }
 
 #[tokio::test]
 async fn a_device_peer_environment_or_worker_may_not_capture() {
     let namespace = tempfile::tempdir().unwrap();
     let root = namespace.path();
-    let inventory = CommittedInventory::open(root).unwrap();
+    let inventory = open_inventory(root);
     for kind in ["device", "peer", "environment-peer", "worker"] {
         let error = inventory.capture_as(kind).await.unwrap_err();
         let CaptureError::Denied(InventoryDenial::Forbidden { policies }) = error else {
@@ -80,6 +107,15 @@ async fn a_device_peer_environment_or_worker_may_not_capture() {
         );
     }
     assert!(!root.join("backup/deletion-inventory.txt").exists());
+    let stored = decisions(root);
+    for kind in ["device", "peer", "environment-peer", "worker"] {
+        assert!(
+            stored.contains(&format!("inventory.refuse.{kind}")),
+            "{kind}: {stored}"
+        );
+    }
+    assert!(stored.contains("\"outcome\":\"deny\""), "{stored}");
+    assert!(stored.contains("\"denial\":\"forbidden\""), "{stored}");
     let policy = CedarInventoryPolicy::new().unwrap();
     assert!(matches!(
         policy.evaluate(&facts("person", InventoryCause::Operator, InventoryAction::Capture)),
@@ -122,6 +158,7 @@ async fn a_denied_capture_does_not_write() {
     let error = capture_inventory(
         &facts("device", InventoryCause::Operator, InventoryAction::Capture),
         &Refuse,
+        &Remember,
         &[&touched],
         &log,
     )
@@ -137,7 +174,7 @@ async fn a_denied_capture_does_not_write() {
         root,
         vec![credential("device-1", "user:one", "server.read")],
     );
-    let inventory = CommittedInventory::open(root).unwrap();
+    let inventory = open_inventory(root);
     FenceCapture::capture(&inventory).await.unwrap();
     let path = root.join("backup/deletion-inventory.txt");
     let before = std::fs::read(&path).unwrap();
@@ -147,6 +184,61 @@ async fn a_denied_capture_does_not_write() {
         CaptureError::Denied(InventoryDenial::Forbidden { .. })
     ));
     assert_eq!(std::fs::read(&path).unwrap(), before);
+    let stored = decisions(root);
+    assert!(stored.contains("inventory.refuse.device"), "{stored}");
+    assert!(stored.contains("\"denial\":\"forbidden\""), "{stored}");
+}
+
+#[tokio::test]
+async fn the_inventory_decision_is_stored_before_the_log() {
+    let policy = CedarInventoryPolicy::new().unwrap();
+    let order = Order::default();
+    let recorded = capture_inventory(
+        &facts(
+            "gateway",
+            InventoryCause::CommittedFence,
+            InventoryAction::Record,
+        ),
+        &policy,
+        &order,
+        &[&order],
+        &order,
+    )
+    .await
+    .unwrap();
+    assert!(order.log_after_audit.load(Ordering::SeqCst));
+    assert_eq!(recorded.entries().len(), 1);
+    assert!(recorded.canonical().contains("conversation gone"));
+}
+
+#[tokio::test]
+async fn a_failed_decision_audit_does_not_write() {
+    let touched = Touched(AtomicBool::new(false));
+    let log = MemLog(Mutex::new(DeletionLog::default()));
+    let error = capture_inventory(
+        &facts("person", InventoryCause::Operator, InventoryAction::Capture),
+        &CedarInventoryPolicy::new().unwrap(),
+        &Closed,
+        &[&touched],
+        &log,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error, CaptureError::NotAudited);
+    assert!(!touched.0.load(Ordering::SeqCst));
+    assert!(log.0.lock().unwrap().entries().is_empty());
+
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    write_registry(
+        root,
+        vec![credential("device-1", "user:one", "server.read")],
+    );
+    let inventory = open_inventory(root);
+    std::fs::create_dir(root.join("backup/inventory-decisions.jsonl")).unwrap();
+    let error = inventory.capture_as("person").await.unwrap_err();
+    assert_eq!(error, CaptureError::NotAudited);
+    assert!(!root.join("backup/deletion-inventory.txt").exists());
 }
 
 #[tokio::test]
@@ -164,7 +256,7 @@ async fn a_revoked_worker_credential_is_inventoried() {
     );
     write_worker(root, "workers", "one.json", "worker-1");
     write_worker(root, "workers", "device.json", "device-1");
-    let inventory = CommittedInventory::open(root).unwrap();
+    let inventory = open_inventory(root);
     FenceCapture::capture(&inventory).await.unwrap();
     let log = std::fs::read_to_string(root.join("backup/deletion-inventory.txt")).unwrap();
     assert!(log.contains("credential device device-1"), "{log}");
@@ -189,7 +281,7 @@ async fn a_damaged_worker_enrollment_does_not_commit_fences() {
         "bad.json",
         b"{\"name\":\"not-a-credential\"}",
     );
-    let inventory = CommittedInventory::open(root).unwrap();
+    let inventory = open_inventory(root);
     let error = inventory.capture_as("person").await.unwrap_err();
     assert_eq!(error, CaptureError::Inventory(InventoryFailure::Unreadable));
     assert!(!root.join("backup/deletion-inventory.txt").exists());
@@ -201,7 +293,7 @@ async fn a_damaged_worker_enrollment_does_not_commit_fences() {
         vec![credential("device-1", "user:one", "server.read")],
     );
     std::fs::write(root.join("workers"), b"not-a-directory").unwrap();
-    let inventory = CommittedInventory::open(root).unwrap();
+    let inventory = open_inventory(root);
     let error = inventory.capture_as("person").await.unwrap_err();
     assert_eq!(error, CaptureError::Inventory(InventoryFailure::Unreadable));
     assert!(!root.join("backup/deletion-inventory.txt").exists());
@@ -230,7 +322,7 @@ async fn an_unshare_reconciles_the_revoked_grant() {
             .unwrap()
             .applied
     );
-    let inventory = CommittedInventory::open(root).unwrap();
+    let inventory = open_inventory(root);
     let unused = Unused;
     let gateway = resource();
     let shares = ShareConversation {
@@ -262,6 +354,98 @@ struct Refuse;
 impl InventoryCapturePolicyEvaluator for Refuse {
     fn evaluate(&self, _facts: &InventoryFacts<'_>) -> InventoryDecision {
         InventoryDecision::Deny(InventoryDenial::Unavailable)
+    }
+}
+
+struct Remember;
+
+impl InventoryDecisionAudit for Remember {
+    fn record(
+        &self,
+        _: &InventoryFacts<'_>,
+        decision: &InventoryDecision,
+    ) -> Result<(), DecisionAuditError> {
+        assert_eq!(
+            decision,
+            &InventoryDecision::Deny(InventoryDenial::Unavailable)
+        );
+        Ok(())
+    }
+}
+
+struct Closed;
+
+impl InventoryDecisionAudit for Closed {
+    fn record(
+        &self,
+        _: &InventoryFacts<'_>,
+        _: &InventoryDecision,
+    ) -> Result<(), DecisionAuditError> {
+        Err(DecisionAuditError::NotStored)
+    }
+}
+
+struct Order {
+    audited: AtomicBool,
+    log_after_audit: AtomicBool,
+    log: Mutex<DeletionLog>,
+}
+
+impl Default for Order {
+    fn default() -> Self {
+        Self {
+            audited: AtomicBool::new(false),
+            log_after_audit: AtomicBool::new(false),
+            log: Mutex::new(DeletionLog::default()),
+        }
+    }
+}
+
+impl InventoryDecisionAudit for Order {
+    fn record(
+        &self,
+        facts: &InventoryFacts<'_>,
+        decision: &InventoryDecision,
+    ) -> Result<(), DecisionAuditError> {
+        assert_eq!(facts.kind, "gateway");
+        assert_eq!(facts.cause, InventoryCause::CommittedFence);
+        assert!(self.log.lock().unwrap().entries().is_empty());
+        let InventoryDecision::Allow { policies } = decision else {
+            panic!("the gateway was not allowed: {decision:?}");
+        };
+        assert!(
+            policies.iter().any(|id| id == "inventory.record.gateway"),
+            "{policies:?}"
+        );
+        self.audited.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl FenceSource for Order {
+    async fn fences(&self) -> Result<Vec<DeletionFence>, ()> {
+        assert!(self.audited.load(Ordering::SeqCst));
+        Ok(vec![DeletionFence::conversation("gone").unwrap()])
+    }
+}
+
+#[async_trait]
+impl DeletionLogStore for Order {
+    async fn load(&self) -> Result<DeletionLog, ()> {
+        assert!(self.audited.load(Ordering::SeqCst));
+        self.log_after_audit.store(true, Ordering::SeqCst);
+        Ok(self.log.lock().unwrap().clone())
+    }
+
+    async fn store(&self, base: &DeletionLog, next: &DeletionLog) -> Result<(), LogStoreError> {
+        assert!(self.audited.load(Ordering::SeqCst));
+        let mut guard = self.log.lock().unwrap();
+        if guard.canonical() != base.canonical() {
+            return Err(LogStoreError::Stale);
+        }
+        *guard = next.clone();
+        Ok(())
     }
 }
 

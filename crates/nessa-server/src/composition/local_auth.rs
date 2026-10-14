@@ -218,7 +218,8 @@ pub(super) async fn product_state(
     let namespace = directory
         .parent()
         .ok_or_else(|| setup_error("invalid data root"))?;
-    let inventory = Arc::new(CommittedInventory::open(namespace).map_err(setup_error)?);
+    let inventory =
+        Arc::new(CommittedInventory::open(namespace, Arc::new(SystemClock)).map_err(setup_error)?);
     // One receiver authority, shared by conversations' passive reads and by
     // native pairing, which pairs and fences receivers (design row S7).
     let receivers = if settings.agents.is_some() || settings.native.is_some() {
@@ -234,8 +235,8 @@ pub(super) async fn product_state(
     // this gateway's unfinished enrollments are settled, and ended ones have
     // their receivers settled (design rows S3–S8).
     let native = match (&settings.native, &receivers) {
-        (Some(native), Some(receivers)) => Some(
-            super::native_pairing::prepare(
+        (Some(native), Some(receivers)) => {
+            let (prepared, commands, peers) = super::native_pairing::prepare(
                 native,
                 super::native_pairing::NativeInputs {
                     namespace: namespace.to_path_buf(),
@@ -248,8 +249,10 @@ pub(super) async fn product_state(
                     audience: audience.clone(),
                 },
             )
-            .await?,
-        ),
+            .await?;
+            prepared.bind_fence_capture(inventory.clone() as Arc<dyn FenceCapture>);
+            Some((prepared, commands, peers))
+        }
         _ => None,
     };
     let credential_namespace = CredentialNamespace::new(
