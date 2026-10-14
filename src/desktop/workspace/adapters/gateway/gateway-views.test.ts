@@ -1397,3 +1397,60 @@ describe("a conversation view's lease", () => {
     })
   })
 })
+
+describe("user attachment references across conversation reads", () => {
+  const image = { digest: "a".repeat(64), mimeType: "image/png" as const, size: 2048 }
+  const file = { path: "/workspace/quarterly [report].csv" }
+  for (const phase of ["committed", "pending", "restored"] as const) {
+    for (const kind of ["image", "file", "mixed"] as const) {
+      it(`keeps ${kind} metadata in ${phase} inputs without changing their owner`, () => {
+        const attachments = kind === "file" ? [] : [image]
+        const files = kind === "image" ? [] : [file]
+        const wire = view("original", {
+          messages:
+            phase === "pending"
+              ? []
+              : [
+                  turn({
+                    userText: kind === "mixed" ? " Inspect `this`. " : "",
+                    attachments,
+                    files,
+                  }),
+                ],
+          pending:
+            phase === "pending"
+              ? [
+                  {
+                    executionId: "e1",
+                    mode: "queued",
+                    text: kind === "mixed" ? " Inspect `this`. " : "",
+                    attachments,
+                    files,
+                  },
+                ]
+              : [],
+        })
+        const read = phase === "restored" ? JSON.parse(JSON.stringify(wire)) : wire
+        const transcript = transcriptFrom(read, 1, at, GATEWAY_NOW_MS)
+        expect(transcript.sessionId).toBe("original")
+        expect(transcript.messages[0]).toMatchObject({
+          id: inputId("e1"),
+          role: "user",
+          parts: [
+            { kind: "text", text: kind === "mixed" ? " Inspect `this`. " : "" },
+            {
+              kind: "attachments",
+              content: [
+                ...attachments.map((item) => ({ type: "image-reference", ...item })),
+                ...files.map((item) => ({ type: "file-reference", ...item })),
+              ],
+            },
+          ],
+        })
+        expect(wire.messages[0]?.attachments ?? wire.pending[0].attachments).toEqual(
+          attachments,
+        )
+      })
+    }
+  }
+})
