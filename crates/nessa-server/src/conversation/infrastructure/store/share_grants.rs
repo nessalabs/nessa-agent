@@ -55,7 +55,7 @@ type OwnedWait = Pin<Box<dyn Future<Output = tokio::sync::OwnedMutexGuard<()>> +
 struct GrantPermit {
     key: GrantKey,
     gates: Arc<GrantGates>,
-    gate: GrantGate,
+    gate: Option<GrantGate>,
     guard: Option<tokio::sync::OwnedMutexGuard<()>>,
 }
 
@@ -132,7 +132,7 @@ impl Future for LockWait {
                 Poll::Ready(GrantPermit {
                     key: this.key.clone(),
                     gates: Arc::clone(&this.gates),
-                    gate: this.gate.take().expect("a lock wait keeps its gate"),
+                    gate: Some(this.gate.take().expect("a lock wait keeps its gate")),
                     guard: Some(guard),
                 })
             }
@@ -142,35 +142,56 @@ impl Future for LockWait {
 
 impl Drop for LockWait {
     fn drop(&mut self) {
-        // The lock future holds one Arc. Release it before counting, so a
-        // cancelled wait uses the same last-clone rule as a finished permit.
+        // The lock future holds one Arc. Release it before this wait's own
+        // clone, so the count is not that future.
         self.waiting.take();
-        let Some(gate) = self.gate.as_ref() else {
+        let Some(gate) = self.gate.take() else {
             return;
         };
-        remove_if_last(&self.gates, &self.key, gate);
+        release_gate(&self.gates, std::mem::take(&mut self.key), gate);
     }
 }
 
 impl Drop for GrantPermit {
     fn drop(&mut self) {
-        // Release the waiters before deciding whether this gate is still in
-        // use. The map lock makes that decision atomic with a later lookup.
+        // Release waiters before the map lock. A woken waiter takes that
+        // lock next.
         self.guard.take();
-        remove_if_last(&self.gates, &self.key, &self.gate);
+        let Some(gate) = self.gate.take() else {
+            return;
+        };
+        release_gate(&self.gates, std::mem::take(&mut self.key), gate);
     }
 }
 
-/// Remove `key` when `gate` is still the map's gate and the only other owner
-/// is this call. Two owners: the map, and `gate`.
-fn remove_if_last(gates: &GrantGates, key: &GrantKey, gate: &GrantGate) {
+/// Drop this caller's gate, then remove `key` when the map's gate is unused.
+///
+/// The clone is dropped while the map lock is held. A permit and a cancelled
+/// wait that both counted before either dropped would each still see the
+/// other and leave the entry behind.
+fn release_gate(gates: &GrantGates, key: GrantKey, gate: GrantGate) {
     let mut map = gates.gates.lock().unwrap_or_else(PoisonError::into_inner);
-    let last = map
-        .get(key)
-        .is_some_and(|current| Arc::ptr_eq(current, gate) && Arc::strong_count(gate) == 2);
-    if last {
-        map.remove(key);
+    drop(gate);
+    let idle = map
+        .get(&key)
+        .is_some_and(|current| Arc::strong_count(current) == 1);
+    if idle {
+        map.remove(&key);
     }
+    drop(map);
+    // After the decision, so a test can hold one releaser here while the
+    // other still owns its clone. Dropping the clone only after this point
+    // leaves the entry in the map.
+    #[cfg(test)]
+    if let Some(barrier) = RELEASE_PAUSE.with(|slot| slot.take()) {
+        barrier.wait();
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static RELEASE_PAUSE: std::cell::Cell<Option<Arc<std::sync::Barrier>>> =
+        const { std::cell::Cell::new(None) };
 }
 
 /// What one attempt to write a grant change did.
@@ -963,6 +984,43 @@ mod cancelled_wait {
         assert!(
             map.is_empty(),
             "a cancelled contended wait left a gate in the map"
+        );
+    }
+
+    /// The permit and a cancelled wait release the same gate together. They
+    /// meet after each has finished the map update and before returning, so
+    /// a clone dropped only after that meeting is still visible to the other.
+    #[test]
+    fn a_permit_and_a_cancelled_wait_that_release_together_leave_the_map_empty() {
+        let gates = GrantGates::new();
+        let key = ("conversation".to_owned(), "phone".to_owned());
+        let gate = Arc::new(tokio::sync::Mutex::new(()));
+        {
+            let mut map = gates.gates.lock().unwrap_or_else(PoisonError::into_inner);
+            map.insert(key.clone(), Arc::clone(&gate));
+        }
+        let first = Arc::clone(&gate);
+        let second = gate;
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let gates_a = Arc::clone(&gates);
+        let gates_b = Arc::clone(&gates);
+        let key_a = key.clone();
+        let pause_a = Arc::clone(&barrier);
+        let pause_b = barrier;
+        let left = std::thread::spawn(move || {
+            RELEASE_PAUSE.with(|slot| slot.set(Some(pause_a)));
+            release_gate(&gates_a, key_a, first);
+        });
+        let right = std::thread::spawn(move || {
+            RELEASE_PAUSE.with(|slot| slot.set(Some(pause_b)));
+            release_gate(&gates_b, key, second);
+        });
+        left.join().expect("one releaser");
+        right.join().expect("the other releaser");
+        let map = gates.gates.lock().unwrap_or_else(PoisonError::into_inner);
+        assert!(
+            map.is_empty(),
+            "a permit and a cancelled wait left a gate in the map"
         );
     }
 }
