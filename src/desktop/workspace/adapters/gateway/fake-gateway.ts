@@ -30,11 +30,16 @@ import type { GatewayClient } from "./gateway-source"
 import type { SharingClient } from "./sharing-gateway"
 
 /**
- * The fake's client: the source's, and sharing's conversation methods, which
- * reject — no test of the source shares, and one that did would say so.
+ * The fake's client: the source's, sharing's conversation methods (which
+ * reject — no test of the source shares), and the permission-rule calls
+ * Settings makes on the same conversation. The workspace adapter never calls
+ * those. A window fake still has to answer, because the window's client
+ * requires them.
  */
 export type FakeGatewayClient = GatewayClient & {
-  readonly conversation: GatewayClient["conversation"] & SharingClient["conversation"]
+  readonly conversation: GatewayClient["conversation"] &
+    SharingClient["conversation"] &
+    Pick<ConversationApi, "permissionRules" | "revokePermissionRule">
 }
 
 const notShared = () => Promise.reject(new Error("the fake gateway does not share"))
@@ -49,6 +54,8 @@ type Method =
   | "answer"
   | "answerQuestion"
   | "archive"
+  | "permissionRules"
+  | "revokePermissionRule"
 
 type AnswerArgs = Parameters<ConversationApi["answer"]>
 type AnswerResult = Awaited<ReturnType<ConversationApi["answer"]>>
@@ -427,6 +434,13 @@ export function fakeGateway(
           rows.delete(args[0])
           return { requestId: "archive", applied: true }
         }) as never,
+      permissionRules: () =>
+        answer("permissionRules", [], () => ({ requestId: "rules", rules: [] })) as never,
+      revokePermissionRule: (...args) =>
+        answer("revokePermissionRule", args, () => ({
+          requestId: "revoke",
+          applied: false,
+        })) as never,
     },
     subscriptions: {
       view: (conversationId, handlers, { signal, ...options } = {}) =>

@@ -31,6 +31,13 @@
  */
 import type { AttachmentApi, McpAppsApi } from "@nessa/client"
 import {
+  bindWaitingReviewNotices,
+  browserReviewNotifier,
+  openReviewEvent,
+  waitingReviewNotices,
+  type WaitingReview,
+} from "./workspace/adapters/gateway/review-notices"
+import {
   heldFileReader,
   HeldFileReadError,
   monotonicWallClock,
@@ -40,12 +47,15 @@ import {
   linkedDevicesGateway,
   mcpServersGateway,
   nativeHooksGateway,
+  permissionRulesGateway,
   type LinkedDevicesClient,
   type LinkedDevicesGateway,
   type McpServersClient,
   type McpServersGateway,
   type NativeHooksClient,
   type NativeHooksGateway,
+  type PermissionRulesClient,
+  type PermissionRulesGateway,
 } from "./settings"
 import {
   createWidgetRegistry,
@@ -96,6 +106,8 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   readonly linkedDevices: LinkedDevicesGateway | undefined
   /** Claude and Codex native-hook choices, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly nativeHooks: NativeHooksGateway | undefined
+  /** Remembered permission rules, for Settings; absent without a gateway. Provided by `main.tsx`. */
+  readonly permissionRules: PermissionRulesGateway | undefined
   /**
    * How the window reads back a file a conversation holds — one its agent
    * published — verified, for the transcript to show and save. Through the
@@ -184,6 +196,9 @@ export function createDesktopDependencies(
     nativeHooks: source
       ? nativeHooksGateway({ connected: () => source.connected() })
       : undefined,
+    permissionRules: source
+      ? permissionRulesGateway({ connected: () => source.connected() })
+      : undefined,
     // Shared on the gateway's own client; the sample shares in memory, and a
     // window with neither offers no Share.
     sharing: source
@@ -214,10 +229,22 @@ type WindowGatewayClient = GatewayClient &
   McpServersClient &
   LinkedDevicesClient &
   NativeHooksClient &
+  PermissionRulesClient &
   SharingClient & {
     readonly mcpApps: McpAppsApi
     readonly attachments: AttachmentApi
   }
+
+/** Notices for reviews that are waiting, replaced by each snapshot the gateway sends. */
+function reviewWaiting(): (reviews: readonly WaitingReview[]) => void {
+  const notices = waitingReviewNotices(
+    browserReviewNotifier((conversationId) => {
+      window.dispatchEvent(openReviewEvent(conversationId))
+    }),
+  )
+  bindWaitingReviewNotices(notices.showWaiting)
+  return notices.apply
+}
 
 /**
  * The gateway's workspace, and — where apps are drawn — its servers' apps:
@@ -232,12 +259,14 @@ function gatewayWorkspace(
   registry: DesktopWidgetRegistry,
   apps: AppsOptions | undefined,
 ): GatewaySource<WindowGatewayClient> {
-  if (!apps) return gatewaySource({ connect, clock })
+  const onReviewWaiting = reviewWaiting()
+  if (!apps) return gatewaySource({ connect, clock, onReviewWaiting })
   const mcpApps = (): Promise<McpAppsApi> =>
     source.connected().then((client) => client.mcpApps)
   const source: GatewaySource<WindowGatewayClient> = gatewaySource({
     connect,
     clock,
+    onReviewWaiting,
     apps: gatewayApps({
       registry,
       mcpApps: {

@@ -5509,9 +5509,10 @@ impl Harness {
                     files: Vec::new(),
                 },
                 SubmissionMode::Queue,
-                super::service::Writer::Person(Initiation::grant(
-                    GrantInitiator::new(grant, revision).unwrap(),
-                )),
+                super::service::Writer::Person(
+                    Initiation::grant(GrantInitiator::new(grant, revision).unwrap()),
+                    false,
+                ),
             )
             .await;
         match sent {
@@ -6126,9 +6127,10 @@ async fn submit_drive(
             execution.into(),
             drive_message(),
             SubmissionMode::Queue,
-            super::service::Writer::Person(Initiation::grant(
-                GrantInitiator::new("phone", revision).unwrap(),
-            )),
+            super::service::Writer::Person(
+                Initiation::grant(GrantInitiator::new("phone", revision).unwrap()),
+                false,
+            ),
         )
         .await
 }
@@ -6161,9 +6163,10 @@ async fn moved_during_admission(revoke: bool) {
                 "driven".into(),
                 drive_message(),
                 SubmissionMode::Queue,
-                super::service::Writer::Person(Initiation::grant(
-                    GrantInitiator::new("phone", revision).unwrap(),
-                )),
+                super::service::Writer::Person(
+                    Initiation::grant(GrantInitiator::new("phone", revision).unwrap()),
+                    false,
+                ),
             )
             .await
     });
@@ -6260,6 +6263,7 @@ async fn a_revoked_admission_settles_the_command_and_the_same_request_is_revoked
                 id,
                 caller("settle"),
                 Initiation::grant(GrantInitiator::new("phone", revision).unwrap()),
+                false,
                 "driven".into(),
                 drive_message(),
                 SubmissionMode::Queue,
@@ -6313,6 +6317,7 @@ async fn a_revoked_admission_settles_the_command_and_the_same_request_is_revoked
             harness.id.clone(),
             caller("settle"),
             Initiation::grant(GrantInitiator::new("phone", revision).unwrap()),
+            false,
             "driven".into(),
             drive_message(),
             SubmissionMode::Queue,
@@ -6425,6 +6430,7 @@ async fn a_saved_steer_revoked_after_save_settles_the_command_and_the_same_reque
             harness.id.clone(),
             caller("settle"),
             initiation.clone(),
+            false,
             "driven".into(),
             drive_message(),
             SubmissionMode::Steer,
@@ -6472,6 +6478,7 @@ async fn a_saved_steer_revoked_after_save_settles_the_command_and_the_same_reque
             harness.id.clone(),
             caller("settle"),
             initiation,
+            false,
             "driven".into(),
             drive_message(),
             SubmissionMode::Steer,
@@ -6544,6 +6551,7 @@ async fn a_saved_steer_unavailable_after_save_settles_the_command_and_the_same_r
             harness.id.clone(),
             caller("settle"),
             initiation.clone(),
+            false,
             "driven".into(),
             drive_message(),
             SubmissionMode::Steer,
@@ -6594,6 +6602,7 @@ async fn a_saved_steer_unavailable_after_save_settles_the_command_and_the_same_r
             harness.id.clone(),
             caller("settle"),
             initiation,
+            false,
             "driven".into(),
             drive_message(),
             SubmissionMode::Steer,
@@ -6657,9 +6666,10 @@ async fn a_grant_change_waits_until_the_turn_is_saved() {
                 "driven".into(),
                 drive_message(),
                 SubmissionMode::Queue,
-                super::service::Writer::Person(Initiation::grant(
-                    GrantInitiator::new("phone", revision).unwrap(),
-                )),
+                super::service::Writer::Person(
+                    Initiation::grant(GrantInitiator::new("phone", revision).unwrap()),
+                    false,
+                ),
             )
             .await
     });
@@ -6771,9 +6781,10 @@ async fn a_stalled_save_on_one_conversation_does_not_block_another() {
                 "driven-a".into(),
                 drive_message(),
                 SubmissionMode::Queue,
-                super::service::Writer::Person(Initiation::grant(
-                    GrantInitiator::new("phone", revision).unwrap(),
-                )),
+                super::service::Writer::Person(
+                    Initiation::grant(GrantInitiator::new("phone", revision).unwrap()),
+                    false,
+                ),
             )
             .await
     });
@@ -6839,9 +6850,10 @@ async fn submit_drive_on(
             execution.into(),
             drive_message(),
             SubmissionMode::Queue,
-            super::service::Writer::Person(Initiation::grant(
-                GrantInitiator::new("phone", revision).unwrap(),
-            )),
+            super::service::Writer::Person(
+                Initiation::grant(GrantInitiator::new("phone", revision).unwrap()),
+                false,
+            ),
         )
         .await
 }

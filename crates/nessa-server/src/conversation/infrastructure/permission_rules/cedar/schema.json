@@ -1,0 +1,63 @@
+{
+  "Nessa": {
+    "entityTypes": {
+      "Owner": {
+        "shape": {
+          "type": "Record",
+          "attributes": {},
+          "additionalAttributes": false
+        }
+      },
+      "Grant": {
+        "shape": {
+          "type": "Record",
+          "attributes": {},
+          "additionalAttributes": false
+        }
+      },
+      "Tool": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "name": { "type": "String", "required": true },
+            "source": { "type": "String", "required": true }
+          },
+          "additionalAttributes": false
+        }
+      }
+    },
+    "actions": {
+      "rule.settle": {
+        "appliesTo": {
+          "principalTypes": ["Owner", "Grant"],
+          "resourceTypes": ["Tool"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "workspace": { "type": "String", "required": true }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "rule.grant": {
+        "appliesTo": {
+          "principalTypes": ["Owner", "Grant"],
+          "resourceTypes": ["Tool"]
+        }
+      },
+      "rule.revoke": {
+        "appliesTo": {
+          "principalTypes": ["Owner", "Grant"],
+          "resourceTypes": ["Tool"]
+        }
+      },
+      "rule.list": {
+        "appliesTo": {
+          "principalTypes": ["Owner", "Grant"],
+          "resourceTypes": ["Tool"]
+        }
+      }
+    }
+  }
+}

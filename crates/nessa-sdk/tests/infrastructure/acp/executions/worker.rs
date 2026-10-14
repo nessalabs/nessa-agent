@@ -236,6 +236,7 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             permission_authority: PermissionAuthoritySource::default(),
             operation_capabilities,
             permissions: HashMap::new(),
+            permission_context: HashMap::new(),
             armed_permissions: HashMap::new(),
             path_classification: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
             startup_advisory_session: None,
@@ -260,6 +261,8 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             launch_cause:
                 crate::application::agent_execution::executions::NativeHooksLaunchCause::Open,
             session_key: None,
+            hold_remembered_allows: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            parked_allows: Arc::new(std::sync::Mutex::new(HashMap::new())),
         };
         if pending_permission {
             worker
