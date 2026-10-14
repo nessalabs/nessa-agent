@@ -7,6 +7,7 @@
 //! creation: Accepted -> Attempted -> Ready
 //! submit/stop: Accepted -> Attempted -> Settled
 //!              Accepted -> Settled(AlreadyFinal) when stop sends nothing
+//!              Attempted -> Settled(NoEffect) when the effect refuses before dispatch
 //! restart Attempted -> Interrupted (observation only, no repeated effect)
 //! ```
 //! The coordinator owns effect ordering. The host owns authentication and target

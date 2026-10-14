@@ -38,6 +38,11 @@ pub enum MutationOutcome {
     Cancelled,
     /// The named turn was already final. No withdraw or cancel was sent.
     AlreadyFinal,
+    /// The submit was refused before anything was enqueued or injected.
+    ///
+    /// Saved only from `Attempted`. A retry returns this receipt and does not
+    /// perform the effect again.
+    NoEffect,
 }
 
 /// Immutable principal/request binding for one submit or stop.
@@ -129,7 +134,9 @@ impl MutationReceipt {
     ///
     /// `Accepted` may become `Attempted` with no outcome, or `Settled` with
     /// [`MutationOutcome::AlreadyFinal`] when classification proved nothing
-    /// would be sent. `Attempted` may become `Settled` with the effect's outcome.
+    /// would be sent. `Attempted` may become `Settled` with the effect's outcome,
+    /// including [`MutationOutcome::NoEffect`] when the effect refused before
+    /// it enqueued or injected anything.
     ///
     /// # Errors
     /// Returns [`StorageError::Corrupt`] for a skipped, reversed, or outcome-less transition.
@@ -149,6 +156,7 @@ impl MutationReceipt {
                             | MutationOutcome::Withdrawn
                             | MutationOutcome::Cancelled
                             | MutationOutcome::AlreadyFinal
+                            | MutationOutcome::NoEffect
                     )
                 )
                 | (

@@ -55,8 +55,10 @@ pub enum ConversationError {
     DrivePolicyUnenforceable,
     /// A Drive grant's turn whose grant was revoked, or whose revision moved,
     /// before the turn was saved. A queued turn saves nothing. A steer that
-    /// is queued rather than injected saves nothing. The same command is
-    /// admitted again only under the grant as it stands now (row J31).
+    /// is queued rather than injected saves nothing. The command receipt is
+    /// settled as no effect, and retrying that same request is answered
+    /// `revoked` again. A new request is admitted only under the grant as it
+    /// stands now (row J31).
     Revoked,
     /// A native steer that was saved, then refused because the grant moved
     /// before injection. The saved attempt is settled as refused and nothing

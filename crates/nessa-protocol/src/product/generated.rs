@@ -835,6 +835,7 @@ pub enum ConversationCommandOutcome {
     Withdrawn,
     Cancelled,
     AlreadyFinal,
+    NoEffect,
 }
 impl ConversationCommandOutcome {
     pub fn as_str(self) -> &'static str {
@@ -843,6 +844,7 @@ impl ConversationCommandOutcome {
             Self::Withdrawn => "withdrawn",
             Self::Cancelled => "cancelled",
             Self::AlreadyFinal => "already_final",
+            Self::NoEffect => "no_effect",
         }
     }
 }

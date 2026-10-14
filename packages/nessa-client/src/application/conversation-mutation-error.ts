@@ -173,7 +173,8 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
       return true
     // A Drive grant's send, or a steer that is queued rather than injected,
     // whose grant was revoked or changed before the turn was saved. Nothing
-    // was saved.
+    // was saved. The command receipt is settled, so the same request is
+    // answered revoked again.
     case ConversationErrorCode.Revoked:
       return true
     // `temporarily_unavailable` is the one worth naming: a supervising task

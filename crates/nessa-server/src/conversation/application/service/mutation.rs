@@ -34,7 +34,10 @@ impl ConversationService {
     ///
     /// `delivery` is the submission receipt from the call that actually
     /// enqueued. A settled retry leaves it empty; the socket then reads the
-    /// saved turn without enqueueing again.
+    /// saved turn without enqueueing again. A submit settled
+    /// [`MutationOutcome::NoEffect`] is returned as [`ConversationError::Revoked`]:
+    /// the effect refused before anything was enqueued, and the same request
+    /// answers that refusal again.
     ///
     /// `initiation` is who the turn is saved as started by: the owner, or the
     /// share grant that admitted it. A retry of the same request is answered
@@ -94,6 +97,9 @@ impl ConversationService {
         })
         .await
         .map_err(|error| MutationFailure::TaskFault(CreationTaskFault::from_join_error(error)))??;
+        if progress.outcome() == Some(MutationOutcome::NoEffect) {
+            return Err(MutationFailure::Target(ConversationError::Revoked));
+        }
         let delivery = delivery
             .lock()
             .map_err(|_| MutationFailure::Target(ConversationError::Unavailable))?
@@ -266,7 +272,7 @@ impl MutationTarget for SubmitTarget {
         let mode = self.mode;
         let delivery = self.delivery.clone();
         Box::pin(async move {
-            let receipt = service
+            let submitted = service
                 .submit_as(
                     id,
                     caller,
@@ -276,8 +282,16 @@ impl MutationTarget for SubmitTarget {
                     Writer::Person(initiation),
                 )
                 .await
-                .map_err(SubmitFailure::into_error)
-                .map_err(CreationInitializationFailure::Target)?;
+                .map_err(SubmitFailure::into_error);
+            let receipt = match submitted {
+                // The revision hold refused after this command was recorded
+                // Attempted, and before the agent was asked. Settle that as
+                // no effect so the same request is answered `revoked` again
+                // instead of `submission_unresolved`.
+                Err(ConversationError::Revoked) => return Ok(MutationOutcome::NoEffect),
+                Err(error) => return Err(CreationInitializationFailure::Target(error)),
+                Ok(receipt) => receipt,
+            };
             delivery
                 .lock()
                 .map_err(|_| ConversationError::Unavailable)

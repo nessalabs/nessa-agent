@@ -6221,6 +6221,113 @@ async fn a_grant_whose_policy_changes_during_admission_starts_no_turn() {
     moved_during_admission(false).await;
 }
 
+/// Row J31: `hold_revision` refuses after the command is `Attempted`. The
+/// receipt is settled as no effect. The same request is `revoked` again,
+/// not `submission_unresolved`, and the turn is not saved.
+#[tokio::test]
+async fn a_revoked_admission_settles_the_command_and_the_same_request_is_revoked_again() {
+    use nessa_sdk::application::agent_execution::commands::{
+        CreationStorage, MutationFailure, MutationOutcome, MutationStage,
+    };
+    use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
+    use nessa_sdk::infrastructure::session_storage::RecordStorage;
+    let root = tempfile::tempdir().unwrap();
+    let harness = in_process(root.path(), DELETION_BUDGETS.stop);
+    let (entered, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    bind_live_grants(
+        &harness,
+        Arc::new(PausingGrants {
+            inner: Arc::clone(&harness.metadata),
+            entered: Arc::clone(&entered),
+            release: Arc::clone(&release),
+        }),
+    );
+    harness.create().await;
+    let revision = grant_drive(&harness, "phone").await;
+    let commands: Arc<dyn CreationStorage> =
+        Arc::new(RecordStorage::new(root.path().join("commands")).unwrap());
+    harness.service.bind_commands(Arc::clone(&commands));
+    let service = harness.service.clone();
+    let id = harness.id.clone();
+    let stored = Arc::clone(&commands);
+    let sent = tokio::spawn(async move {
+        service
+            .submit_command(
+                stored,
+                id,
+                caller("settle"),
+                Initiation::grant(GrantInitiator::new("phone", revision).unwrap()),
+                "driven".into(),
+                drive_message(),
+                SubmissionMode::Queue,
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(10), entered.notified())
+        .await
+        .expect("admission read the policy");
+    assert!(revoke_drive(&harness.metadata, &harness.id, "phone").await);
+    release.notify_one();
+    let sent = tokio::time::timeout(Duration::from_secs(10), sent)
+        .await
+        .expect("the send finishes")
+        .expect("the send task");
+    match sent {
+        Err(MutationFailure::Target(error)) => {
+            assert!(matches!(error, ConversationError::Revoked), "{error:?}");
+        }
+        Err(MutationFailure::Interrupted(_)) => {
+            panic!("the first refusal left the receipt attempted")
+        }
+        Ok(_) => panic!("the first refusal dispatched a turn"),
+        Err(_) => panic!("the first refusal was not revoked"),
+    }
+    let binding = super::ConversationService::submit_lookup(
+        &harness.id,
+        &caller("settle"),
+        "driven",
+        &drive_message(),
+        SubmissionMode::Queue,
+    )
+    .unwrap();
+    let receipt = harness
+        .service
+        .lookup_command(
+            Arc::clone(&commands),
+            harness.id.clone(),
+            caller("settle"),
+            binding,
+        )
+        .await
+        .expect("the receipt is readable")
+        .expect("the refusal was recorded");
+    assert_eq!(receipt.stage(), MutationStage::Settled);
+    assert_eq!(receipt.outcome(), Some(MutationOutcome::NoEffect));
+    let again = harness
+        .service
+        .submit_command(
+            commands,
+            harness.id.clone(),
+            caller("settle"),
+            Initiation::grant(GrantInitiator::new("phone", revision).unwrap()),
+            "driven".into(),
+            drive_message(),
+            SubmissionMode::Queue,
+        )
+        .await;
+    match again {
+        Err(MutationFailure::Target(error)) => {
+            assert!(matches!(error, ConversationError::Revoked), "{error:?}");
+        }
+        Err(MutationFailure::Interrupted(_)) => {
+            panic!("the same request was submission_unresolved")
+        }
+        Ok(_) => panic!("the retry dispatched a turn"),
+        Err(_) => panic!("the retry was not revoked again"),
+    }
+    assert!(harness.provider.executions.lock().unwrap().is_empty());
+}
+
 /// Row J31: the revision hold spans the save, so a revoke cannot commit
 /// until the turn's record is written.
 #[tokio::test]
