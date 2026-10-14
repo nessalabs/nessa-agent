@@ -1,0 +1,132 @@
+$ pnpm ui:check && vitest run --config vitest.config.ts src/desktop/workspace/adapters/gateway/gateway-views.test.ts
+$ node scripts/ensure-nessa-ui.mjs --check
+
+ RUN  v3.2.7 /Users/nessa/.codex/worktrees/797-question-targets/nessa-agent
+
+ ❯ src/desktop/workspace/adapters/gateway/gateway-views.test.ts (52 tests | 9 failed) 14ms
+   ✓ what a bounded view says about history it did not draw > carries omitted and unconfirmed history, and nothing when the view says it is whole 1ms
+   ✓ what a bounded view says about history it did not draw > keeps the turns the view did draw when it says older ones were left out 0ms
+   ✓ a conversation view as a transcript > keeps an MCP App's widget part after its tool's step, and none for a tool without a UI 0ms
+   ✓ a conversation view as a transcript > names the input by its execution id, so the window's message is found under the id it sent 0ms
+   ✓ a conversation view as a transcript > never gives two messages one id, whatever the execution ids 0ms
+   ✓ a conversation view as a transcript > joins text the provider names as one message, and nothing else; thoughts are not shown 0ms
+   ✓ a conversation view as a transcript > reads a tool's kind into the window's four, the rest as run 0ms
+   ✓ a conversation view as a transcript > lets go a tool part the bounded view has no tool for 0ms
+   ✓ a conversation view as a transcript > shows inputs still waiting after the turns, once each 0ms
+   ✓ a conversation view as a transcript > ends a turn's reply with the files it published, and puts the rest after the last turn 0ms
+   ✓ a conversation view as a transcript > shows each note as a row of its own right after the turn or waiting input it followed, and one left before any turn or after a dropped turn first 0ms
+   ✓ a conversation view as a transcript > shows a record it could not read as its own line after the turn it followed, and one with no turn first 0ms
+   ✓ a conversation view as a transcript > ends with one line when more records could not be read than the view lists 0ms
+   ✓ a conversation view as a transcript > puts a note left between two inputs waiting right after the first, as the gateway lists them 0ms
+   ✓ a conversation view as a transcript > draws an input waiting that the view lists apart from its turns after every turn, its note right after it, as the panel does 0ms
+   ✓ a conversation view as a transcript > names a note apart from every input, reply and list of published files 0ms
+   ✓ a conversation view as a transcript > D17 (#390): says which app wrote a turn, waiting or not, and nothing of the person's own 0ms
+   ✓ a conversation view as a transcript > says what a running turn does until its reply streams, then nothing 0ms
+   ✓ a conversation view as a transcript > asks the first pending permission as the approval, under an id that names the review 0ms
+   ✓ a conversation view as a transcript > puts the deadline on the window's clock, so a clock ahead or behind the gateway's counts down the same 0ms
+   ✓ who asks for an approval (#436) > carries each offered answer in the view's order and words, and none it did not offer (#444) 0ms
+   ✓ who asks for an approval (#436) > O1: a review the agent's harness asked for is the agent's 0ms
+   ✓ who asks for an approval (#436) > O2: a review an app asked for is the app's, naming its server and the tool 0ms
+   ✓ who asks for an approval (#436) > D19 (#390): carries what the review asks as the gateway says it 0ms
+   ✓ approval ids > read back only what they wrote 0ms
+   ✓ a list row as a summary > is running, waiting on the person, or idle 0ms
+   ✓ the model a session runs on > is the catalogue's entry for what the gateway runs, or none it does not list 0ms
+   ✓ the model a session runs on > is said as the known one, else the composer's default 0ms
+   ✓ provider authentication recovery > uses only the latest turn's typed refusal, never its diagnostic text 0ms
+   ✓ shows auth recovery without duplicating its diagnostic and preserves unrelated notices 0ms
+   ✓ keeps an independent failure beside authentication recovery 0ms
+   ✓ does not treat the required-work sentence as the independent failure 0ms
+   ✓ keeps a Failed mark on an authentication refusal once another turn has followed 0ms
+   ✓ keeps an authentication failure when sign-in cannot render 0ms
+   ✓ recovery follows the latest mapped input across pending and dispatched turns 0ms
+   ✓ retains an unknown Codex runtime agent independently of catalogue fallback 0ms
+   ✓ a turn the gateway says ended > keeps a failure with no reply on the input, status and diagnostic apart 0ms
+   ✓ a turn the gateway says ended > keeps a cancellation on the reply and leaves the partial text as it arrived 0ms
+   ✓ a turn the gateway says ended > omits a blank diagnostic and leaves a finished or still-running turn unmarked 0ms
+   ✓ a turn the gateway says ended > shows an OpenCode failure the gateway already reported 0ms
+   ✓ questions and a withheld interaction > keeps a question that names an ask, and the gateway's notice in its own words 0ms
+   ✓ questions and a withheld interaction > skips a question, field, or option that names nothing, and a blank notice 0ms
+   ✓ a conversation view's lease > is carried as where the agent runs, and is absent until one is recorded 0ms
+   × user attachment references across conversation reads > keeps image metadata in committed inputs without changing their owner 4ms
+     → expected { Object (id, role, ...) } to match object { id: 'e1', role: 'user', …(1) }
+(1 matching property omitted from actual)
+   × user attachment references across conversation reads > keeps file metadata in committed inputs without changing their owner 0ms
+     → expected { Object (id, role, ...) } to match object { id: 'e1', role: 'user', …(1) }
+(1 matching property omitted from actual)
+   × user attachment references across conversation reads > keeps mixed metadata in committed inputs without changing their owner 0ms
+     → expected { Object (id, role, ...) } to match object { id: 'e1', role: 'user', …(1) }
+(1 matching property omitted from actual)
+   × user attachment references across conversation reads > keeps image metadata in pending inputs without changing their owner 0ms
+     → expected { Object (id, role, ...) } to match object { id: 'e1', role: 'user', …(1) }
+(1 matching property omitted from actual)
+   × user attachment references across conversation reads > keeps file metadata in pending inputs without changing their owner 0ms
+     → expected { Object (id, role, ...) } to match object { id: 'e1', role: 'user', …(1) }
+(1 matching property omitted from actual)
+   × user attachment references across conversation reads > keeps mixed metadata in pending inputs without changing their owner 0ms
+     → expected { Object (id, role, ...) } to match object { id: 'e1', role: 'user', …(1) }
+(1 matching property omitted from actual)
+   × user attachment references across conversation reads > keeps image metadata in restored inputs without changing their owner 0ms
+     → expected { Object (id, role, ...) } to match object { id: 'e1', role: 'user', …(1) }
+(1 matching property omitted from actual)
+   × user attachment references across conversation reads > keeps file metadata in restored inputs without changing their owner 0ms
+     → expected { Object (id, role, ...) } to match object { id: 'e1', role: 'user', …(1) }
+(1 matching property omitted from actual)
+   × user attachment references across conversation reads > keeps mixed metadata in restored inputs without changing their owner 0ms
+     → expected { Object (id, role, ...) } to match object { id: 'e1', role: 'user', …(1) }
+(1 matching property omitted from actual)
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 9 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/desktop/workspace/adapters/gateway/gateway-views.test.ts > user attachment references across conversation reads > keeps image metadata in committed inputs without changing their owner
+ FAIL  src/desktop/workspace/adapters/gateway/gateway-views.test.ts > user attachment references across conversation reads > keeps file metadata in committed inputs without changing their owner
+ FAIL  src/desktop/workspace/adapters/gateway/gateway-views.test.ts > user attachment references across conversation reads > keeps mixed metadata in committed inputs without changing their owner
+ FAIL  src/desktop/workspace/adapters/gateway/gateway-views.test.ts > user attachment references across conversation reads > keeps image metadata in pending inputs without changing their owner
+ FAIL  src/desktop/workspace/adapters/gateway/gateway-views.test.ts > user attachment references across conversation reads > keeps file metadata in pending inputs without changing their owner
+ FAIL  src/desktop/workspace/adapters/gateway/gateway-views.test.ts > user attachment references across conversation reads > keeps mixed metadata in pending inputs without changing their owner
+ FAIL  src/desktop/workspace/adapters/gateway/gateway-views.test.ts > user attachment references across conversation reads > keeps image metadata in restored inputs without changing their owner
+ FAIL  src/desktop/workspace/adapters/gateway/gateway-views.test.ts > user attachment references across conversation reads > keeps file metadata in restored inputs without changing their owner
+ FAIL  src/desktop/workspace/adapters/gateway/gateway-views.test.ts > user attachment references across conversation reads > keeps mixed metadata in restored inputs without changing their owner
+AssertionError: expected { Object (id, role, ...) } to match object { id: 'e1', role: 'user', …(1) }
+(1 matching property omitted from actual)
+
+- Expected
++ Received
+
+@@ -3,19 +3,8 @@
+    "parts": [
+      {
+        "kind": "text",
+        "text": "",
+      },
+-     {
+-       "content": [
+-         {
+-           "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+-           "mimeType": "image/png",
+-           "size": 2048,
+-           "type": "image-reference",
+-         },
+-       ],
+-       "kind": "attachments",
+-     },
+    ],
+    "role": "user",
+  }
+
+ ❯ src/desktop/workspace/adapters/gateway/gateway-views.test.ts:1436:40
+    1434|         const transcript = transcriptFrom(read, 1, at, GATEWAY_NOW_MS)
+    1435|         expect(transcript.sessionId).toBe("original")
+    1436|         expect(transcript.messages[0]).toMatchObject({
+       |                                        ^
+    1437|           id: inputId("e1"),
+    1438|           role: "user",
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/9]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  9 failed | 43 passed (52)
+   Start at  15:07:36
+   Duration  2.08s (transform 1.09s, setup 0ms, collect 1.87s, tests 14ms, environment 0ms, prepare 35ms)
+
+[ELIFECYCLE] Test failed. See above for more details.

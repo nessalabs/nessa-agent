@@ -1,0 +1,1673 @@
+{
+  "check": "perf-budget",
+  "ok": true,
+  "started": "2026-10-14T22:11:34.739Z",
+  "finished": "2026-10-14T22:13:32.785Z",
+  "target": {
+    "url": "http://127.0.0.1:58067/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:58067/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "calibration",
+      "engine": "chromium",
+      "calibration": {
+        "rate": 4,
+        "plainMs": 23,
+        "throttledMs": 65,
+        "ratio": 2.86,
+        "ok": true
+      },
+      "calibrationFrame": {
+        "cost": 120,
+        "measuredMs": 120.60000002384186,
+        "attributed": true,
+        "ok": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "send-home",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 34.799999952316284,
+      "median": 34,
+      "over50": 0,
+      "runs": [
+        {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 32.59999990463257,
+          "over": 0,
+          "frames": 91,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": "open",
+            "homes": 1,
+            "draft": "hello from home",
+            "userTexts": [],
+            "agentText": "",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": "open",
+            "homes": 0,
+            "draft": "",
+            "userTexts": ["hello from home"],
+            "agentText": "",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 34.799999952316284,
+          "over": 0,
+          "frames": 92,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": "open",
+            "homes": 1,
+            "draft": "hello from home",
+            "userTexts": [],
+            "agentText": "",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": "open",
+            "homes": 0,
+            "draft": "",
+            "userTexts": ["hello from home"],
+            "agentText": "",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 34,
+          "over": 0,
+          "frames": 91,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": "open",
+            "homes": 1,
+            "draft": "hello from home",
+            "userTexts": [],
+            "agentText": "",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": "open",
+            "homes": 0,
+            "draft": "",
+            "userTexts": ["hello from home"],
+            "agentText": "",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "typing",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 23.600000023841858,
+      "median": 22.09999990463257,
+      "over50": 0,
+      "runs": [
+        {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 22.09999990463257,
+          "over": 0,
+          "frames": 177,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": "open",
+            "homes": 0,
+            "draft": "",
+            "userTexts": [
+              "Let the workspace hold two or three conversations side by side. Dragging a session onto the chat area should open it in a split.",
+              "Good. Cap it at four — past that nothing is readable at 1440."
+            ],
+            "agentText": "Readsrc/desktop/ui/desktop-app.tsxReadsplit-view/split-view-math.tsSearched forSplitView · 6 resultsThe shell already owns one SplitView for the sidebars, so I'd keep panes in a second, nested group. Each pane stores a fraction of the chat area rather than a pixel width, which means:Resizing the window keeps every pane's proportions.A new pane takes its share from the one it was dropped beside.The focused pane is lit by --desktop-light-edge; the others step back slightly.\nEditedsrc/desktop/ui/workspace-panes.tsx+142−8Capped at four. Dropping another replaces the pane under the pointer instead, and the drop target says so before you let go.",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": "open",
+            "homes": 0,
+            "draft": "the quick brown fox jumps over",
+            "userTexts": [
+              "Let the workspace hold two or three conversations side by side. Dragging a session onto the chat area should open it in a split.",
+              "Good. Cap it at four — past that nothing is readable at 1440."
+            ],
+            "agentText": "Readsrc/desktop/ui/desktop-app.tsxReadsplit-view/split-view-math.tsSearched forSplitView · 6 resultsThe shell already owns one SplitView for the sidebars, so I'd keep panes in a second, nested group. Each pane stores a fraction of the chat area rather than a pixel width, which means:Resizing the window keeps every pane's proportions.A new pane takes its share from the one it was dropped beside.The focused pane is lit by --desktop-light-edge; the others step back slightly.\nEditedsrc/desktop/ui/workspace-panes.tsx+142−8Capped at four. Dropping another replaces the pane under the pointer instead, and the drop target says so before you let go.",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 19.699999928474426,
+          "over": 0,
+          "frames": 177,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": "open",
+            "homes": 0,
+            "draft": "",
+            "userTexts": [
+              "Let the workspace hold two or three conversations side by side. Dragging a session onto the chat area should open it in a split.",
+              "Good. Cap it at four — past that nothing is readable at 1440."
+            ],
+            "agentText": "Readsrc/desktop/ui/desktop-app.tsxReadsplit-view/split-view-math.tsSearched forSplitView · 6 resultsThe shell already owns one SplitView for the sidebars, so I'd keep panes in a second, nested group. Each pane stores a fraction of the chat area rather than a pixel width, which means:Resizing the window keeps every pane's proportions.A new pane takes its share from the one it was dropped beside.The focused pane is lit by --desktop-light-edge; the others step back slightly.\nEditedsrc/desktop/ui/workspace-panes.tsx+142−8Capped at four. Dropping another replaces the pane under the pointer instead, and the drop target says so before you let go.",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": "open",
+            "homes": 0,
+            "draft": "the quick brown fox jumps over",
+            "userTexts": [
+              "Let the workspace hold two or three conversations side by side. Dragging a session onto the chat area should open it in a split.",
+              "Good. Cap it at four — past that nothing is readable at 1440."
+            ],
+            "agentText": "Readsrc/desktop/ui/desktop-app.tsxReadsplit-view/split-view-math.tsSearched forSplitView · 6 resultsThe shell already owns one SplitView for the sidebars, so I'd keep panes in a second, nested group. Each pane stores a fraction of the chat area rather than a pixel width, which means:Resizing the window keeps every pane's proportions.A new pane takes its share from the one it was dropped beside.The focused pane is lit by --desktop-light-edge; the others step back slightly.\nEditedsrc/desktop/ui/workspace-panes.tsx+142−8Capped at four. Dropping another replaces the pane under the pointer instead, and the drop target says so before you let go.",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 23.600000023841858,
+          "over": 0,
+          "frames": 177,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": "open",
+            "homes": 0,
+            "draft": "",
+            "userTexts": [
+              "Let the workspace hold two or three conversations side by side. Dragging a session onto the chat area should open it in a split.",
+              "Good. Cap it at four — past that nothing is readable at 1440."
+            ],
+            "agentText": "Readsrc/desktop/ui/desktop-app.tsxReadsplit-view/split-view-math.tsSearched forSplitView · 6 resultsThe shell already owns one SplitView for the sidebars, so I'd keep panes in a second, nested group. Each pane stores a fraction of the chat area rather than a pixel width, which means:Resizing the window keeps every pane's proportions.A new pane takes its share from the one it was dropped beside.The focused pane is lit by --desktop-light-edge; the others step back slightly.\nEditedsrc/desktop/ui/workspace-panes.tsx+142−8Capped at four. Dropping another replaces the pane under the pointer instead, and the drop target says so before you let go.",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": "open",
+            "homes": 0,
+            "draft": "the quick brown fox jumps over",
+            "userTexts": [
+              "Let the workspace hold two or three conversations side by side. Dragging a session onto the chat area should open it in a split.",
+              "Good. Cap it at four — past that nothing is readable at 1440."
+            ],
+            "agentText": "Readsrc/desktop/ui/desktop-app.tsxReadsplit-view/split-view-math.tsSearched forSplitView · 6 resultsThe shell already owns one SplitView for the sidebars, so I'd keep panes in a second, nested group. Each pane stores a fraction of the chat area rather than a pixel width, which means:Resizing the window keeps every pane's proportions.A new pane takes its share from the one it was dropped beside.The focused pane is lit by --desktop-light-edge; the others step back slightly.\nEditedsrc/desktop/ui/workspace-panes.tsx+142−8Capped at four. Dropping another replaces the pane under the pointer instead, and the drop target says so before you let go.",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 576,
+                "y": 8,
+                "w": 1016,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "stream-1-of-4",
+      "engine": "chromium",
+      "layout": "columns",
+      "max": 23.399999976158142,
+      "median": 22.5,
+      "over50": 0,
+      "runs": [
+        {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 22.5,
+          "over": 0,
+          "frames": 361,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": "open",
+            "homes": 0,
+            "draft": "go",
+            "userTexts": [
+              "After the Mac wakes, every client reconnects at once and the gateway drops half of them."
+            ],
+            "agentText": "They all retry on the same fixed schedule. I added full jitter to the backoff; to prove it I need to restart the local gateway with 200 simulated clients.",
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": "open",
+            "homes": 0,
+            "draft": "",
+            "userTexts": [
+              "After the Mac wakes, every client reconnects at once and the gateway drops half of them.",
+              "go"
+            ],
+            "agentText": "They all retry on the same fixed schedule. I added full jitter to the backoff; to prove it I need to restart the local gateway with 200 simulated clients.\nSearched the workspace4 resultsOn it. I’ll start by reading what #gateway already has around “go”, then come back with a short plan before I change anything. If it touches more than a couple of files, I’ll ask first.",
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 22.399999976158142,
+          "over": 0,
+          "frames": 361,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": "open",
+            "homes": 0,
+            "draft": "go",
+            "userTexts": [
+              "After the Mac wakes, every client reconnects at once and the gateway drops half of them."
+            ],
+            "agentText": "They all retry on the same fixed schedule. I added full jitter to the backoff; to prove it I need to restart the local gateway with 200 simulated clients.",
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": "open",
+            "homes": 0,
+            "draft": "",
+            "userTexts": [
+              "After the Mac wakes, every client reconnects at once and the gateway drops half of them.",
+              "go"
+            ],
+            "agentText": "They all retry on the same fixed schedule. I added full jitter to the backoff; to prove it I need to restart the local gateway with 200 simulated clients.\nSearched the workspace4 resultsOn it. I’ll start by reading what #gateway already has around “go”, then come back with a short plan before I change anything. If it touches more than a couple of files, I’ll ask first.",
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 23.399999976158142,
+          "over": 0,
+          "frames": 361,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": "open",
+            "homes": 0,
+            "draft": "go",
+            "userTexts": [
+              "After the Mac wakes, every client reconnects at once and the gateway drops half of them."
+            ],
+            "agentText": "They all retry on the same fixed schedule. I added full jitter to the backoff; to prove it I need to restart the local gateway with 200 simulated clients.",
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": "open",
+            "homes": 0,
+            "draft": "",
+            "userTexts": [
+              "After the Mac wakes, every client reconnects at once and the gateway drops half of them.",
+              "go"
+            ],
+            "agentText": "They all retry on the same fixed schedule. I added full jitter to the backoff; to prove it I need to restart the local gateway with 200 simulated clients.\nSearched the workspace4 resultsOn it. I’ll start by reading what #gateway already has around “go”, then come back with a short plan before I change anything. If it touches more than a couple of files, I’ll ask first.",
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 576,
+                "y": 8,
+                "w": 400,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 984,
+                "y": 8,
+                "w": 300,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1292,
+                "y": 8,
+                "w": 300,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1292,
+                "y": 504,
+                "w": 300,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "send-home",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 41.699999928474426,
+      "median": 39.299999952316284,
+      "over50": 0,
+      "runs": [
+        {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 36.5,
+          "over": 0,
+          "frames": 92,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": null,
+            "homes": 1,
+            "draft": "hello from home",
+            "userTexts": [],
+            "agentText": "",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": null,
+            "homes": 0,
+            "draft": "",
+            "userTexts": ["hello from home"],
+            "agentText": "",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 41.699999928474426,
+          "over": 0,
+          "frames": 91,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": null,
+            "homes": 1,
+            "draft": "hello from home",
+            "userTexts": [],
+            "agentText": "",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": null,
+            "homes": 0,
+            "draft": "",
+            "userTexts": ["hello from home"],
+            "agentText": "",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 39.299999952316284,
+          "over": 0,
+          "frames": 91,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": null,
+            "homes": 1,
+            "draft": "hello from home",
+            "userTexts": [],
+            "agentText": "",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": null,
+            "homes": 0,
+            "draft": "",
+            "userTexts": ["hello from home"],
+            "agentText": "",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "typing",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 22.299999952316284,
+      "median": 21,
+      "over50": 0,
+      "runs": [
+        {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 21,
+          "over": 0,
+          "frames": 177,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": null,
+            "homes": 0,
+            "draft": "",
+            "userTexts": [
+              "Let the workspace hold two or three conversations side by side. Dragging a session onto the chat area should open it in a split.",
+              "Good. Cap it at four — past that nothing is readable at 1440."
+            ],
+            "agentText": "Readsrc/desktop/ui/desktop-app.tsxReadsplit-view/split-view-math.tsSearched forSplitView · 6 resultsThe shell already owns one SplitView for the sidebars, so I'd keep panes in a second, nested group. Each pane stores a fraction of the chat area rather than a pixel width, which means:Resizing the window keeps every pane's proportions.A new pane takes its share from the one it was dropped beside.The focused pane is lit by --desktop-light-edge; the others step back slightly.\nEditedsrc/desktop/ui/workspace-panes.tsx+142−8Capped at four. Dropping another replaces the pane under the pointer instead, and the drop target says so before you let go.",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": null,
+            "homes": 0,
+            "draft": "the quick brown fox jumps over",
+            "userTexts": [
+              "Let the workspace hold two or three conversations side by side. Dragging a session onto the chat area should open it in a split.",
+              "Good. Cap it at four — past that nothing is readable at 1440."
+            ],
+            "agentText": "Readsrc/desktop/ui/desktop-app.tsxReadsplit-view/split-view-math.tsSearched forSplitView · 6 resultsThe shell already owns one SplitView for the sidebars, so I'd keep panes in a second, nested group. Each pane stores a fraction of the chat area rather than a pixel width, which means:Resizing the window keeps every pane's proportions.A new pane takes its share from the one it was dropped beside.The focused pane is lit by --desktop-light-edge; the others step back slightly.\nEditedsrc/desktop/ui/workspace-panes.tsx+142−8Capped at four. Dropping another replaces the pane under the pointer instead, and the drop target says so before you let go.",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 22.299999952316284,
+          "over": 0,
+          "frames": 178,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": null,
+            "homes": 0,
+            "draft": "",
+            "userTexts": [
+              "Let the workspace hold two or three conversations side by side. Dragging a session onto the chat area should open it in a split.",
+              "Good. Cap it at four — past that nothing is readable at 1440."
+            ],
+            "agentText": "Readsrc/desktop/ui/desktop-app.tsxReadsplit-view/split-view-math.tsSearched forSplitView · 6 resultsThe shell already owns one SplitView for the sidebars, so I'd keep panes in a second, nested group. Each pane stores a fraction of the chat area rather than a pixel width, which means:Resizing the window keeps every pane's proportions.A new pane takes its share from the one it was dropped beside.The focused pane is lit by --desktop-light-edge; the others step back slightly.\nEditedsrc/desktop/ui/workspace-panes.tsx+142−8Capped at four. Dropping another replaces the pane under the pointer instead, and the drop target says so before you let go.",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": null,
+            "homes": 0,
+            "draft": "the quick brown fox jumps over",
+            "userTexts": [
+              "Let the workspace hold two or three conversations side by side. Dragging a session onto the chat area should open it in a split.",
+              "Good. Cap it at four — past that nothing is readable at 1440."
+            ],
+            "agentText": "Readsrc/desktop/ui/desktop-app.tsxReadsplit-view/split-view-math.tsSearched forSplitView · 6 resultsThe shell already owns one SplitView for the sidebars, so I'd keep panes in a second, nested group. Each pane stores a fraction of the chat area rather than a pixel width, which means:Resizing the window keeps every pane's proportions.A new pane takes its share from the one it was dropped beside.The focused pane is lit by --desktop-light-edge; the others step back slightly.\nEditedsrc/desktop/ui/workspace-panes.tsx+142−8Capped at four. Dropping another replaces the pane under the pointer instead, and the drop target says so before you let go.",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 20.399999976158142,
+          "over": 0,
+          "frames": 178,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": null,
+            "homes": 0,
+            "draft": "",
+            "userTexts": [
+              "Let the workspace hold two or three conversations side by side. Dragging a session onto the chat area should open it in a split.",
+              "Good. Cap it at four — past that nothing is readable at 1440."
+            ],
+            "agentText": "Readsrc/desktop/ui/desktop-app.tsxReadsplit-view/split-view-math.tsSearched forSplitView · 6 resultsThe shell already owns one SplitView for the sidebars, so I'd keep panes in a second, nested group. Each pane stores a fraction of the chat area rather than a pixel width, which means:Resizing the window keeps every pane's proportions.A new pane takes its share from the one it was dropped beside.The focused pane is lit by --desktop-light-edge; the others step back slightly.\nEditedsrc/desktop/ui/workspace-panes.tsx+142−8Capped at four. Dropping another replaces the pane under the pointer instead, and the drop target says so before you let go.",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": null,
+            "homes": 0,
+            "draft": "the quick brown fox jumps over",
+            "userTexts": [
+              "Let the workspace hold two or three conversations side by side. Dragging a session onto the chat area should open it in a split.",
+              "Good. Cap it at four — past that nothing is readable at 1440."
+            ],
+            "agentText": "Readsrc/desktop/ui/desktop-app.tsxReadsplit-view/split-view-math.tsSearched forSplitView · 6 resultsThe shell already owns one SplitView for the sidebars, so I'd keep panes in a second, nested group. Each pane stores a fraction of the chat area rather than a pixel width, which means:Resizing the window keeps every pane's proportions.A new pane takes its share from the one it was dropped beside.The focused pane is lit by --desktop-light-edge; the others step back slightly.\nEditedsrc/desktop/ui/workspace-panes.tsx+142−8Capped at four. Dropping another replaces the pane under the pointer instead, and the drop target says so before you let go.",
+            "panes": 1,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": true,
+                "x": 272,
+                "y": 8,
+                "w": 1320,
+                "h": 984
+              }
+            ],
+            "order": "1",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "stream-1-of-4",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "max": 27.700000047683716,
+      "median": 25.200000047683716,
+      "over50": 0,
+      "runs": [
+        {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 27.700000047683716,
+          "over": 0,
+          "frames": 361,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": null,
+            "homes": 0,
+            "draft": "go",
+            "userTexts": [
+              "After the Mac wakes, every client reconnects at once and the gateway drops half of them."
+            ],
+            "agentText": "They all retry on the same fixed schedule. I added full jitter to the backoff; to prove it I need to restart the local gateway with 200 simulated clients.",
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": null,
+            "homes": 0,
+            "draft": "",
+            "userTexts": [
+              "After the Mac wakes, every client reconnects at once and the gateway drops half of them.",
+              "go"
+            ],
+            "agentText": "They all retry on the same fixed schedule. I added full jitter to the backoff; to prove it I need to restart the local gateway with 200 simulated clients.\nSearched the workspace4 resultsOn it. I’ll start by reading what #gateway already has around “go”, then come back with a short plan before I change anything. If it touches more than a couple of files, I’ll ask first.",
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 21.399999976158142,
+          "over": 0,
+          "frames": 361,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": null,
+            "homes": 0,
+            "draft": "go",
+            "userTexts": [
+              "After the Mac wakes, every client reconnects at once and the gateway drops half of them."
+            ],
+            "agentText": "They all retry on the same fixed schedule. I added full jitter to the backoff; to prove it I need to restart the local gateway with 200 simulated clients.",
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": null,
+            "homes": 0,
+            "draft": "",
+            "userTexts": [
+              "After the Mac wakes, every client reconnects at once and the gateway drops half of them.",
+              "go"
+            ],
+            "agentText": "They all retry on the same fixed schedule. I added full jitter to the backoff; to prove it I need to restart the local gateway with 200 simulated clients.\nSearched the workspace4 resultsOn it. I’ll start by reading what #gateway already has around “go”, then come back with a short plan before I change anything. If it touches more than a couple of files, I’ll ask first.",
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        },
+        {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 25.200000047683716,
+          "over": 0,
+          "frames": 361,
+          "slow": [],
+          "noLoaf": false,
+          "before": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": null,
+            "homes": 0,
+            "draft": "go",
+            "userTexts": [
+              "After the Mac wakes, every client reconnects at once and the gateway drops half of them."
+            ],
+            "agentText": "They all retry on the same fixed schedule. I added full jitter to the backoff; to prove it I need to restart the local gateway with 200 simulated clients.",
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "after": {
+            "thinking": null,
+            "sidebar": "open",
+            "list": null,
+            "homes": 0,
+            "draft": "",
+            "userTexts": [
+              "After the Mac wakes, every client reconnects at once and the gateway drops half of them.",
+              "go"
+            ],
+            "agentText": "They all retry on the same fixed schedule. I added full jitter to the backoff; to prove it I need to restart the local gateway with 200 simulated clients.\nSearched the workspace4 resultsOn it. I’ll start by reading what #gateway already has around “go”, then come back with a short plan before I change anything. If it touches more than a couple of files, I’ll ask first.",
+            "panes": 4,
+            "geometry": [
+              {
+                "key": "1",
+                "focused": false,
+                "x": 272,
+                "y": 8,
+                "w": 652,
+                "h": 984
+              },
+              {
+                "key": "2",
+                "focused": false,
+                "x": 932,
+                "y": 8,
+                "w": 326,
+                "h": 984
+              },
+              {
+                "key": "4",
+                "focused": false,
+                "x": 1266,
+                "y": 8,
+                "w": 326,
+                "h": 488
+              },
+              {
+                "key": "6",
+                "focused": true,
+                "x": 1266,
+                "y": 504,
+                "w": 326,
+                "h": 488
+              }
+            ],
+            "order": "1,2,4,6",
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "6",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "6",
+            "requests": 0,
+            "ghost": 0
+          },
+          "did": null
+        }
+      ]
+    }
+  ]
+}

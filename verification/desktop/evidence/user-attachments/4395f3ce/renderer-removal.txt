@@ -1,0 +1,58 @@
+FAIL  committed:image:open [chromium 600]
+        - attachment metadata [], expected ["PNG image, 2 KiB"]
+        - attachment list is not labelled
+FAIL  committed:file:open [chromium 600]
+        - attachment metadata [], expected ["/workspace/quarterly [report].csv"]
+        - attachment list is not labelled
+FAIL  committed:mixed:open [chromium 600]
+        - attachment metadata [], expected ["PNG image, 2 KiB","/workspace/quarterly [report].csv"]
+        - attachment list is not labelled
+FAIL  pending:image:open [chromium 600]
+        - attachment metadata [], expected ["PNG image, 2 KiB"]
+        - attachment list is not labelled
+FAIL  pending:file:open [chromium 600]
+        - attachment metadata [], expected ["/workspace/quarterly [report].csv"]
+        - attachment list is not labelled
+FAIL  pending:mixed:open [chromium 600]
+        - attachment metadata [], expected ["PNG image, 2 KiB","/workspace/quarterly [report].csv"]
+        - attachment list is not labelled
+FAIL  restored:image:open [chromium 600]
+        - attachment metadata [], expected ["PNG image, 2 KiB"]
+        - attachment list is not labelled
+FAIL  restored:file:open [chromium 600]
+        - attachment metadata [], expected ["/workspace/quarterly [report].csv"]
+        - attachment list is not labelled
+FAIL  restored:mixed:open [chromium 600]
+        - attachment metadata [], expected ["PNG image, 2 KiB","/workspace/quarterly [report].csv"]
+        - attachment list is not labelled
+FAIL  committed:image:reopen [chromium 600]
+        - attachment metadata [], expected ["PNG image, 2 KiB"]
+        - attachment list is not labelled
+FAIL  committed:file:reopen [chromium 600]
+        - attachment metadata [], expected ["/workspace/quarterly [report].csv"]
+        - attachment list is not labelled
+FAIL  committed:mixed:reopen [chromium 600]
+        - attachment metadata [], expected ["PNG image, 2 KiB","/workspace/quarterly [report].csv"]
+        - attachment list is not labelled
+FAIL  pending:image:reopen [chromium 600]
+        - attachment metadata [], expected ["PNG image, 2 KiB"]
+        - attachment list is not labelled
+FAIL  pending:file:reopen [chromium 600]
+        - attachment metadata [], expected ["/workspace/quarterly [report].csv"]
+        - attachment list is not labelled
+FAIL  pending:mixed:reopen [chromium 600]
+        - attachment metadata [], expected ["PNG image, 2 KiB","/workspace/quarterly [report].csv"]
+        - attachment list is not labelled
+FAIL  restored:image:reopen [chromium 600]
+        - attachment metadata [], expected ["PNG image, 2 KiB"]
+        - attachment list is not labelled
+FAIL  restored:file:reopen [chromium 600]
+        - attachment metadata [], expected ["/workspace/quarterly [report].csv"]
+        - attachment list is not labelled
+FAIL  restored:mixed:reopen [chromium 600]
+        - attachment metadata [], expected ["PNG image, 2 KiB","/workspace/quarterly [report].csv"]
+        - attachment list is not labelled
+ok    console [chromium 600]
+ok    console [chromium columns]
+wrote /tmp/nessa-682-renderer-probe.json
+user-attachments: 2/20 held

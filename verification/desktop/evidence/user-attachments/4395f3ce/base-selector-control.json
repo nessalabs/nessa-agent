@@ -1,0 +1,212 @@
+{
+  "check": "shared-controls",
+  "ok": true,
+  "started": "2026-10-14T22:06:58.633Z",
+  "finished": "2026-10-14T22:07:20.804Z",
+  "target": {
+    "url": "http://127.0.0.1:1494/desktop.html",
+    "mode": "given"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1494/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "identity",
+      "engine": "chromium",
+      "layout": "columns",
+      "measured": {
+        "inWindow": {
+          "failures": [],
+          "text": "nessa Studio",
+          "box": {
+            "x": 10,
+            "y": 862,
+            "height": 28
+          },
+          "row": {
+            "x": 8,
+            "y": 860,
+            "height": 32
+          }
+        },
+        "inSettings": {
+          "failures": [],
+          "text": "nessa Agent",
+          "box": {
+            "x": 10,
+            "y": 862,
+            "height": 28
+          },
+          "row": {
+            "x": 8,
+            "y": 860,
+            "height": 32
+          }
+        },
+        "inClassic": {
+          "failures": [],
+          "text": "nessa Studio",
+          "box": {
+            "x": -268,
+            "y": 851,
+            "height": 28
+          },
+          "row": null
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "badges",
+      "engine": "chromium",
+      "layout": "columns",
+      "measured": {
+        "onLoad": {
+          "failures": [],
+          "headerPoint": false,
+          "counts": 4,
+          "points": ["unread"]
+        },
+        "inOverview": {
+          "failures": [],
+          "headerPoint": true,
+          "counts": 4,
+          "points": ["unread", "needs-you", "needs-you"]
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "segmented",
+      "engine": "chromium",
+      "layout": "columns",
+      "measured": {
+        "counts": 2,
+        "hover": "oklab(0.985 0 0 / 0.05)",
+        "pressed": "oklab(0.985 0 0 / 0.085)"
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "rims",
+      "engine": "chromium",
+      "layout": "columns",
+      "measured": {
+        "[data-widget-inline]": 12,
+        ".workspace-code": 2,
+        ".workspace-approval-command": 1
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "empty",
+      "engine": "chromium",
+      "layout": "columns",
+      "measured": {
+        "inList": [
+          {
+            "words": "No sessions match.",
+            "variant": "compact",
+            "color": "oklab(0.985 0 0 / 0.4)"
+          }
+        ],
+        "inClassic": [
+          {
+            "words": "Your conversations will appear here.",
+            "variant": "compact",
+            "color": "oklab(0.985 0 0 / 0.4)"
+          },
+          {
+            "words": "Your conversations will appear here.",
+            "variant": "compact",
+            "color": "oklab(0.985 0 0 / 0.4)"
+          },
+          {
+            "words": "Nothing open",
+            "variant": "compact",
+            "color": "oklab(0.985 0 0 / 0.4)"
+          }
+        ]
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "keys",
+      "engine": "chromium",
+      "layout": "columns",
+      "measured": {
+        "onLoad": [
+          {
+            "key": "⌘F",
+            "width": 25.23,
+            "height": 18
+          }
+        ],
+        "inSwitcher": [
+          {
+            "key": "↩",
+            "width": 19.23,
+            "height": 18
+          },
+          {
+            "key": "⌘↩",
+            "width": 29.7,
+            "height": 18
+          }
+        ]
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "rows",
+      "engine": "chromium",
+      "layout": "columns",
+      "measured": {
+        "scale": {
+          "hover": "oklab(0.985 0 0 / 0.05)",
+          "press": "oklab(0.985 0 0 / 0.11)",
+          "selected": "oklab(0.985 0 0 / 0.085)",
+          "unread": "600"
+        },
+        "hover": {
+          "kit row under its count": "oklab(0.985 0 0 / 0.05)",
+          "kit row under its glyph": "oklab(0.985 0 0 / 0.05)",
+          "sidebar row": "oklab(0.985 0 0 / 0.05)",
+          "pinned session": "oklab(0.985 0 0 / 0.05)",
+          "session list row": "oklab(0.985 0 0 / 0.05)",
+          "overview row": "oklab(0.985 0 0 / 0.05)",
+          "switcher row left by the keys": "rgba(0, 0, 0, 0)"
+        },
+        "rows": 83
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "list",
+      "engine": "chromium",
+      "layout": "columns",
+      "measured": {
+        "search": 32,
+        "rows": 7,
+        "switcher": 27
+      }
+    }
+  ]
+}

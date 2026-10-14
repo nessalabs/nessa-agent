@@ -1,0 +1,90 @@
+$ pnpm ui:check && vitest run --config vitest.config.ts src/desktop/workspace/ui/transcript/message-attachments.test.tsx
+$ node scripts/ensure-nessa-ui.mjs --check
+
+ RUN  v3.2.7 /Users/nessa/.codex/worktrees/797-question-targets/nessa-agent
+
+ ❯ src/desktop/workspace/ui/transcript/message-attachments.test.tsx (1 test | 1 failed) 17ms
+   × shows retained input metadata without reading or offering unavailable bytes 17ms
+     → expected "spy" to not be called at all, but actually been called 1 times
+
+Received: 
+
+  1st spy call:
+
+    Array [
+      "original",
+      Object {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mimeType": "image/png",
+        "size": 2048,
+      },
+      AbortSignal {},
+    ]
+
+
+Number of calls: 1
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/desktop/workspace/ui/transcript/message-attachments.test.tsx > shows retained input metadata without reading or offering unavailable bytes
+AssertionError: expected "spy" to not be called at all, but actually been called 1 times
+
+Received: 
+
+  1st spy call:
+
+    Array [
+      "original",
+      Object {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mimeType": "image/png",
+        "size": 2048,
+      },
+      AbortSignal {},
+    ]
+
+
+Number of calls: 1
+
+ ❯ src/desktop/workspace/ui/transcript/message-attachments.test.tsx:52:22
+     50|     expect(host.textContent).toContain("Inspect this [report].")
+     51|     expect(host.querySelector("img, button")).toBeNull()
+     52|     expect(read).not.toHaveBeenCalled()
+       |                      ^
+     53|     expect(save).not.toHaveBeenCalled()
+     54|   } finally {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯
+
+Vitest caught 1 unhandled error during the test run.
+This might cause false positive tests. Resolve unhandled errors to make sure your tests are not affected.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: URL.createObjectURL is not a function
+ ❯ Object.create src/conversation/adapters/browser/held-file-urls.ts:24:26
+     22| 
+     23| const pageUrls: ObjectUrls = {
+     24|   create: (bytes) => URL.createObjectURL(bytes),
+       |                          ^
+     25|   revoke: (url) => URL.revokeObjectURL(url),
+     26| }
+ ❯ arriving.then.entry.arriving src/conversation/adapters/browser/held-file-urls.ts:177:51
+ ❯ processTicksAndRejections node:internal/process/task_queues:104:5
+
+This error originated in "src/desktop/workspace/ui/transcript/message-attachments.test.tsx" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+The latest test that might've caused the error is "shows retained input metadata without reading or offering unavailable bytes". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed (1)
+     Errors  1 error
+   Start at  15:07:32
+   Duration  2.86s (transform 1.50s, setup 0ms, collect 2.39s, tests 17ms, environment 309ms, prepare 33ms)
+
+[ELIFECYCLE] Test failed. See above for more details.
