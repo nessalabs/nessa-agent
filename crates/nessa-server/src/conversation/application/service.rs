@@ -3626,7 +3626,12 @@ impl ConversationService {
                 .map_err(|_| ConversationError::InvalidInput)?;
             if is_remember_option(option_id.as_str()) {
                 if let Some(rules) = service.inner.permission_rules.get() {
-                    rules.note_answerer(&execution_id, actor.request_id(), permission_caller);
+                    rules.note_answerer(
+                        &id.to_string(),
+                        &execution_id,
+                        actor.request_id(),
+                        permission_caller,
+                    );
                 }
             }
             let live = service.resolve(&id, &caller).await?;

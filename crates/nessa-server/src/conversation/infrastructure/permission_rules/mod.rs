@@ -3,22 +3,18 @@
 //! A rule is one tool in one workspace. Cedar decides whether it answers a
 //! review and whether the caller may change the rules (`cedar/`). The file
 //! is `permission-rules.sqlite3`, not the conversation catalogue. A row that
-//! is not a rule is skipped; the rest still answer.
+//! is not a rule is skipped; the rest still answer. A rule change and its
+//! audit row commit in that file together.
 //!
 //! ```text
 //! PermissionRules ─┐
 //! ReviewNotices    ├─▶ PermissionMemory ─▶ permission-rules.sqlite3
-//! PermissionRuleCatalog ─┘         │                 │
-//!                                  │                 └─▶ CedarPermissionRuleEvaluator
-//!                                  └─▶ DurablePermissionRuleRevocationAudit
+//! PermissionRuleCatalog ─┘         │
+//!                                  └─▶ CedarPermissionRuleEvaluator
 //! ```
 
-mod audit;
 mod cedar;
 mod memory;
 mod store;
 
-pub use audit::DurablePermissionRuleRevocationAudit;
-#[cfg(unix)]
-pub(crate) use cedar::CedarPermissionRuleEvaluator;
-pub use memory::{PermissionMemory, PublishedReview};
+pub use memory::{PermissionMemory, PublishedReview, RulesOpenError};
