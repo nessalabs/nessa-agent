@@ -267,6 +267,26 @@ fn fingerprint_hex(hex: &str) -> Result<Fingerprint, ()> {
     Ok(Fingerprint::from_digest(bytes))
 }
 
+fn decode(value: &str) -> Result<String, ()> {
+    let bytes = value.as_bytes();
+    let mut out = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len() {
+                return Err(());
+            }
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).map_err(|_| ())?;
+            out.push(u8::from_str_radix(hex, 16).map_err(|_| ())?);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,24 +426,4 @@ mod tests {
         assert_eq!(mode(&directory), 0o700);
         assert_eq!(mode(&directory.join("mac.key")), 0o600);
     }
-}
-
-fn decode(value: &str) -> Result<String, ()> {
-    let bytes = value.as_bytes();
-    let mut out = Vec::new();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            if index + 2 >= bytes.len() {
-                return Err(());
-            }
-            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).map_err(|_| ())?;
-            out.push(u8::from_str_radix(hex, 16).map_err(|_| ())?);
-            index += 3;
-        } else {
-            out.push(bytes[index]);
-            index += 1;
-        }
-    }
-    String::from_utf8(out).map_err(|_| ())
 }
