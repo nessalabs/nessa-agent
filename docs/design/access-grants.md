@@ -26,7 +26,7 @@ One grant:
 | Resource | One conversation id, or one directory in an environment the grantor enforces. That environment is this gateway's machine, a remote environment it already leases, or a cloud environment a later agent uses. |
 | Capabilities | A set drawn from `read`, `comment`, `drive`, `write`, `exec`. `comment` and `drive` belong to a conversation. `write` and `exec` belong to a directory. |
 | Constraints | The path boundary, the tool policy, and the command allow/deny rules that apply inside that resource. |
-| Epoch | The grant epoch: the counter that advances when capabilities or constraints change. A turn, a lease, and a webhook delivery keep the epoch they were admitted under. |
+| Epoch | The grant epoch: the counter that advances when capabilities or constraints change. A turn, a lease, and a webhook attempt keep the epoch they were admitted under. The next admission reads the epoch again. |
 
 The grant row is facts. Cedar permits or refuses. A use case may refuse to
 write a fact Cedar would deny; it does not allow something Cedar denies.
@@ -250,18 +250,27 @@ The resource is one canonical directory in an environment the grantor
 enforces. The environment is this gateway's own machine, a remote
 environment it already leases over SSH or a paired connection, or a cloud
 environment a later agent slice will run. The grant names the environment
-and the directory. `read` lists and reads files under that directory.
-`write` creates and edits files under it. `exec` runs commands whose
-working directory is inside it.
+and the directory. `read` lists and reads named paths under that directory. `write` creates
+and edits named paths under it. A path with `..`, or a symlink that
+resolves outside the directory, is outside the grant. The environment
+checks a path where it sees one: publish, a file tool that names a path,
+and the working directory of a command.
 
-The path boundary is that directory in that environment. A path with `..`,
-or a symlink that resolves outside it, is outside the grant. The
-environment starts the lease with that directory as its workspace. On
-publish and on `GrantCommand` the environment sees the path and refuses
-one outside it. A file tool the harness runs without naming a path to
-Nessa is outside
-that check; the share says the account and the harness sandbox are what
-enclose it, as the runtime map's sandbox table already does.
+`exec` is the process. A working directory inside the grant does not
+confine it. The settled command lease runs with sandbox `none`: nothing
+encloses the process, and a program allow or deny list is a policy, not a
+sandbox
+([the contract settled here](runtime-architecture.md#slice-c-environments_list-and-run-for-the-agent-700)).
+A command started in the directory can still open a file outside it.
+`exec` is admitted only when that environment enforces a filesystem
+boundary around the process and the boundary contains the directory. The
+profiles that can do that are the harness sandbox and a container, in the
+runtime map's [sandbox table](runtime-architecture.md#sandboxes-honestly).
+The environment says which it can enforce. A lease it can only run as
+sandbox `none` is refused `exec`, and the share says the refusal. Command
+matchers still choose which program may run inside a boundary the
+environment can enforce. A file tool the harness runs without naming a
+path to Nessa stays outside Nessa's check, and the share says that too.
 
 Command matchers name a program by its file name, as
 `command.denied_program` does, and may add a bounded argv pattern. Deny
@@ -341,13 +350,34 @@ The body is signed with HMAC-SHA256 over a canonical string of the
 timestamp, the delivery id, and the body. That is the mac
 [backup manifests](../../crates/nessa-server/src/backup/application/ports.rs)
 already use; the webhook key is its own, stored with the registration, and
-is not written into the body. Delivery retries with bounded backoff and
-repeats the same delivery id. Revoke advances the grant epoch and stops
-delivery. Each attempt records the target, the delivery id, the grant
-epoch, the outcome of that attempt (sent, retry scheduled, or not sent),
-and the cause. An attempt is one observation of a POST. Stopping delivery
-is the transition with a before and after: delivering, then stopped, with
-the revoke as cause and the owner as initiator.
+is not written into the body. A retry repeats the same delivery id while
+the attempt's epoch still allows delivery.
+
+Revoke and a delivery attempt share one permit for that registration, the
+same shape as `hold_revision` on a share grant. The attempt that holds the
+permit finishes under the epoch it read. Revoke then advances the epoch.
+The next admission reads the new epoch and is not sent. That is the Drive
+turn's rule: admitted work finishes, and the next command is refused.
+
+- An attempt takes the permit, reads the epoch, and only then writes the
+  POST. An epoch that no longer allows delivery records `not sent` and
+  writes nothing.
+- Revoke takes the same permit. When an attempt holds it, revoke waits
+  until that attempt records its outcome and drops the permit. Revoke does
+  not cancel that write. It then advances the epoch and records the
+  transition: delivering, then stopped, with the revoke as cause and the
+  owner as initiator. The record names the delivery id it waited for, when
+  there was one.
+- A retry is a new admission. After the epoch advances it reads the new
+  epoch and is not sent.
+- When revoke commits before an attempt takes the permit, that attempt is
+  not sent.
+
+One POST that already holds the permit can still reach the receiver. No
+later attempt is sent. Each attempt records the target, the delivery id,
+the grant epoch it read, the outcome of that attempt (sent, retry
+scheduled, or not sent), and the cause. An attempt is one observation of
+a POST.
 
 ## LAN announcement
 
@@ -506,11 +536,15 @@ Part of docs/design/access-grants.md.
 A grant resource is one directory in an environment the grantor enforces:
 this gateway's machine, a remote environment it already leases, or a cloud
 environment a later agent uses. The grant names the environment and the
-directory. Capabilities are `read`, `write`, and `exec`. The lease
-workspace is that directory. A named path outside it, including `..` and a
-symlink that resolves outside, is refused. This slice enforces the
-boundary on a machine the grantor already runs. The cloud agent uses the
-same resource and is not built here.
+directory. Capabilities are `read`, `write`, and `exec`. `read` and
+`write` refuse a named path outside the directory, including `..` and a
+symlink that resolves outside. `exec` is admitted only when that
+environment enforces a filesystem sandbox around the process (the harness
+sandbox or a container) and the sandbox's roots stay inside the directory.
+A command lease with sandbox `none`, which is what `run` and `GrantCommand`
+are today, is refused `exec`. The working directory is not that boundary.
+This slice enforces the boundary on a machine the grantor already runs.
+The cloud agent uses the same resource and is not built here.
 
 Command rules are an ordered allow/deny list on the grant. Cedar matches
 the program by file name, as `command.denied_program` does, and may match
@@ -528,7 +562,12 @@ with one owner.
 ## Gate
 
 A peer granted the directory reads a file inside it and is refused a path
-outside it. A denied program is refused and the audit names the matcher.
+outside it. A command on a sandbox-`none` host is refused `exec` even
+when its working directory is the granted directory. Where the environment
+enforces a filesystem sandbox, the audit names the profile it applied, and
+a path outside that profile's roots is refused. A denied program is
+refused and the audit names the matcher.
+
 An opted-in Claude or Codex harness still runs its own hooks. The gateway
 cannot write a wider `grants.json` than the machine's owner wrote. A
 constraint that must cover every call is still refused when native hooks
@@ -656,19 +695,29 @@ may see.
 Sign with HMAC-SHA256 over the timestamp, the delivery id, and the body,
 the mac algorithm backup manifests use, with this registration's key. The
 key stays out of the body. Retry with bounded backoff and the same
-delivery id. Revoke advances the grant epoch and stops further delivery.
-Each delivery attempt records the target, the delivery id, the grant
-epoch, the outcome of that attempt (sent, retry scheduled, or not sent),
-and the cause. An attempt is one observation of a POST. Stopping delivery
-on revoke records the transition: delivering, then stopped, with the
-revoke as cause and the owner as initiator.
+delivery id while that attempt's epoch still allows delivery.
+
+Revoke and delivery share one permit for the registration. An attempt
+takes the permit, reads the epoch, and only then writes the POST. Revoke
+takes the same permit and, when an attempt holds it, waits until that
+attempt records its outcome. Revoke does not cancel that write. It then
+advances the epoch and records delivering, then stopped, with the revoke
+as cause, the owner as initiator, and the delivery id it waited for.
+A retry is a new admission and is not sent after the epoch advances. An
+attempt that has not taken the permit when revoke commits is not sent.
+Each attempt records the target, the delivery id, the epoch it read, the
+outcome (sent, retry scheduled, or not sent), and the cause.
 
 ## Gate
 
-A webhook granted one chat receives that chat's events and no other. After
-unshare, nothing further is sent. A retry repeats the delivery id and the
-signature. The webhook credential cannot call `conversation.send`. A
-delivery admitted under an older epoch is not sent after revoke.
+A webhook granted one chat receives that chat's events and no other. A
+retry of an attempt that is still at its admitted epoch repeats the
+delivery id and the signature. The webhook credential cannot call
+`conversation.send`. Revoke waits for the one attempt that holds the
+permit; that attempt is recorded under the epoch it read, and the epoch
+then advances. A retry that takes the permit after that advance is not
+sent. An attempt that has not taken the permit when revoke commits is not
+sent.
 
 ## Depends on
 
