@@ -8,6 +8,8 @@ import type { AttachmentDestination } from "./use-file-attachments"
 type HostDropActions = {
   owner: object
   resources: object
+  /** Capture the current destination for a pathless image result. */
+  captureDestination: () => AttachmentDestination
   /** The same call the picker's answer goes through, for a named draft. */
   addChosenFiles: (
     chosen: readonly ChosenFile[],
@@ -93,29 +95,24 @@ export function useHostDrop(actions: HostDropActions) {
       onAttachmentDropped((dropped) => {
         if (!live) return
         setDragging(false)
-        // One lookup for the two answers that land on a draft — the files
-        // and the refusal — because they are about the same draft, the one the
-        // drop landed on. The refusal branch used to skip it and land on
-        // whatever was open.
-        //
-        // The third answer, dragged text, goes to the focused composer and
-        // names no draft, so it does not read this. A drag carrying no paths
-        // is never announced for that reason, which makes this a fallback to
-        // the open tab in that case; nothing below uses it.
-        const destination = latest.current.consumeDropDestination(dropped.batch)
-        if (!destination) return
         if (dropped.refused) {
-          latest.current.refuse(pickerRefusal(dropped.refused), destination)
+          const destination = latest.current.consumeDropDestination(dropped.batch)
+          if (destination)
+            latest.current.refuse(pickerRefusal(dropped.refused), destination)
           return
         }
         if (dropped.files.length > 0) {
-          latest.current.addChosenFiles(dropped.files, destination)
+          const destination = latest.current.consumeDropDestination(dropped.batch)
+          if (destination) latest.current.addChosenFiles(dropped.files, destination)
           return
         }
         const transfer = asTransfer(dropped.text)
         const image = droppedImageUrl(transfer)
         if (image) {
-          latest.current.addImageUrl(image, destination)
+          // The host announces a beginning only when it has paths. This
+          // pathless result first tells us it is an image, then owns the
+          // current destination before the fetch can wait.
+          latest.current.addImageUrl(image, latest.current.captureDestination())
           return
         }
         const text = droppedText(transfer)

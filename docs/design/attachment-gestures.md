@@ -23,6 +23,21 @@ settles. Unknown or already-consumed drop names are ignored rather than
 assigned to the active tab. No epoch, cancellation flag or global registry is
 used.
 
+The host announces drop beginnings only when the operating-system event names
+paths. File and refusal results therefore require a reserved batch destination
+and consume it once. A pathless text drop goes to the focused composer, which
+is the current target for pasted prose. A pathless image URL captures the
+current destination when its terminal event is delivered, before its fetch can
+wait; it does not pretend that the host announced a reservation it never sent.
+
+When the host picker is unavailable, one browser file input stands in for it.
+The originating picker operation remains live until that input emits `change`
+or `cancel`. Its result keeps the operation's captured destination across a
+provider switch. Since the input has one chooser at a time, a second chooser
+attempt while it is outstanding receives the existing picker-unavailable
+refusal and cannot replace the first owner. Cancel releases the slot for a
+later attempt; unmount retires it with the rest of the operation set.
+
 Picker readiness needs a host identity before its first event: picker calls may
 overlap, and the separate batch event has no ordering contract with the command
 result. The panel creates one validated picker request ID at the gesture
@@ -53,6 +68,8 @@ request is refused without replacing that request's captured destination.
 | AG13 | Capture A/c1; replace its provider with B/c1; close A before picker preflight or a held image read settles | A's closed-destination notice is not redirected to B; same-owner closure still uses that owner's active tab as in AG7 | picker preflight and held-read regressions |
 | AG14 | Browser picker verification changes providers before the second gesture | Wait for the committed replacement provider; its empty draft must not start an unrelated upload or rename the attachment control | picker-owner browser scenario |
 | AG15 | 64 drops begin in A/c0; switch to empty B/c0; the 65th is rejected; an older result, duplicate, unknown and post-capacity result arrive | Keep all 64 destinations until terminal results; show the 65th refusal in B; ignore its rejected result and unknown/duplicate results; route the oldest result only to A and consume it once; admit the next batch into B after a slot frees | actual App 65-drop saturation browser scenario |
+| AG16 | A host drop carries text or an image URL without paths and therefore without a batch-begun event | Text is pasted to the focused composer; image fetch is explicitly owned by the current destination at result delivery; path/refusal results still require one reserved batch | actual App host-drop regression |
+| AG17 | Browser picker fallback opens for A; the provider changes to B before `change`; the chooser is attempted again, cancelled, reopened or torn down | A's delayed change attaches to A; a second attempt cannot replace A's owner; cancellation frees the single input; unmount retires its operation and ignores late events | actual App and hook browser-picker regressions |
 
 The host-drop adapter carries the captured destination as one value; it does
 not resolve it to a local string and hand that to a replacement hook. The App

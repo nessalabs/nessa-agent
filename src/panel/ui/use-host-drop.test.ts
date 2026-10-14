@@ -43,9 +43,11 @@ const destination = (conversationId: string) =>
     attachFiles: vi.fn(),
   }) as unknown as AttachmentDestination
 const bound = new Map<string, AttachmentDestination>()
+const currentDestination = destination("focused")
 const actions = {
   owner: {},
   resources: {},
+  captureDestination: vi.fn(() => currentDestination),
   addChosenFiles: vi.fn(),
   consumeDropDestination: vi.fn((batch: string) => {
     const destination = bound.get(batch)
@@ -91,6 +93,7 @@ beforeEach(async () => {
   bound.set("b2", destination("c2"))
   bound.set("b3", destination("c3"))
   actions.addChosenFiles.mockClear()
+  actions.captureDestination.mockClear()
   actions.consumeDropDestination.mockClear()
   actions.addImageUrl.mockClear()
   actions.focusComposer.mockClear()
@@ -139,6 +142,7 @@ it("sends dropped files down the same route a picked selection takes", async () 
 it("pastes dragged prose, which no longer reaches the page any other way", async () => {
   // The page receives no `drop` event at all now, so this is the only route
   // dragged text has. The host read these three off the drag pasteboard.
+  bound.clear()
   await act(async () =>
     deliver(
       dropOf({
@@ -150,10 +154,12 @@ it("pastes dragged prose, which no longer reaches the page any other way", async
   expect(actions.pasteAttachment).toHaveBeenCalledWith("some prose")
   expect(actions.focusComposer).toHaveBeenCalled()
   expect(actions.addChosenFiles).not.toHaveBeenCalled()
+  expect(actions.consumeDropDestination).not.toHaveBeenCalled()
+  expect(actions.captureDestination).not.toHaveBeenCalled()
 })
 
 it("downloads an image dragged off a web page, which also has no other route", async () => {
-  const target = bound.get("b1")
+  bound.clear()
   await act(async () =>
     deliver(
       dropOf({
@@ -166,7 +172,12 @@ it("downloads an image dragged off a web page, which also has no other route", a
     ),
   )
 
-  expect(actions.addImageUrl).toHaveBeenCalledWith("https://example.com/cat.png", target)
+  expect(actions.addImageUrl).toHaveBeenCalledWith(
+    "https://example.com/cat.png",
+    currentDestination,
+  )
+  expect(actions.consumeDropDestination).not.toHaveBeenCalled()
+  expect(actions.captureDestination).toHaveBeenCalledOnce()
   expect(actions.pasteAttachment).not.toHaveBeenCalled()
 })
 

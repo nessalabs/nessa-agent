@@ -55,6 +55,7 @@ const detachedReplies: Array<
 let detached = false
 const sends: unknown[] = []
 let fetchCalls = 0
+let finishDropImage: ((response: Response) => void) | undefined
 const resources = createAttachmentResources()
 const effects = scenarioEffects("echo")
 const store = makeStore({
@@ -105,7 +106,8 @@ window.fetch = (input, init) => {
   )
     return realFetch(input, init)
   fetchCalls++
-  return new Promise<Response>((_resolve, reject) => {
+  return new Promise<Response>((resolve, reject) => {
+    finishDropImage = resolve
     init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
       once: true,
     })
@@ -126,20 +128,23 @@ const probe = {
   readied: undefined as undefined | ((file: PickerReadyEvent) => void),
   pickRequests: [] as { requestId: string; resolve: (files: PickerFile[]) => void }[],
   holdPickers: false,
-  choose: (requestId: string) =>
-    probe.holdPickers
-      ? new Promise<PickerFile[]>((resolve) =>
-          probe.pickRequests.push({ requestId, resolve }),
-        )
-      : Promise.resolve([
-          {
-            path: "/verification/picked.png",
-            name: "picked.png",
-            size: png.length,
-            mimeType: "image/png",
-            ticket: "verification-native-ticket",
-          },
-        ]),
+  browserFallback: false,
+  choose: (requestId: string): Promise<PickerFile[] | null> =>
+    probe.browserFallback
+      ? Promise.resolve(null)
+      : probe.holdPickers
+        ? new Promise<PickerFile[]>((resolve) =>
+            probe.pickRequests.push({ requestId, resolve }),
+          )
+        : Promise.resolve([
+            {
+              path: "/verification/picked.png",
+              name: "picked.png",
+              size: png.length,
+              mimeType: "image/png",
+              ticket: "verification-native-ticket",
+            },
+          ]),
   announcePick: (requestId: string, name: string) => {
     probe.began?.(requestId, "picked")
     probe.readied?.({ id: `${requestId}:0`, name, readying: true })
@@ -155,6 +160,12 @@ const probe = {
       throw new Error("Unexpected native attachment ticket")
     return nativeRead
   },
+  completePathlessImage: () =>
+    finishDropImage?.(
+      new Response(new Blob([png], { type: "image/png" }), {
+        headers: { "content-type": "image/png" },
+      }),
+    ),
   completeRead: () => releaseRead(png.buffer),
   startParentUpload: async (sameParent = false) => {
     const reached = new Promise<void>((resolve) => {

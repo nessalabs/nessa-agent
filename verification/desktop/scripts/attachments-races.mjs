@@ -16,6 +16,8 @@ const scenarios = [
   "second-url",
   "picker-owner-correlation",
   "drop-capacity",
+  "pathless-host-drop",
+  "browser-picker-fallback",
   "upload-parent-success",
   "upload-parent-failure",
   "upload-placement-success",
@@ -518,6 +520,115 @@ try {
             await page.screenshot({
               path: `/tmp/attachment-drop-capacity-after-free-${engine}.png`,
             })
+          } else if (scenario === "pathless-host-drop") {
+            await page.evaluate(() =>
+              window.__attachmentProbe.drop({
+                batch: "no-begin-text",
+                files: [],
+                refused: null,
+                text: { plain: "dropped prose", uriList: "", html: "" },
+              }),
+            )
+            await page.waitForFunction(() =>
+              window.__attachmentProbe
+                .snapshot()
+                .draft.some(
+                  (part) => part.type === "pasted-text" && part.text === "dropped prose",
+                ),
+            )
+            await page.evaluate(() =>
+              window.__attachmentProbe.drop({
+                batch: "no-begin-image",
+                files: [],
+                refused: null,
+                text: {
+                  plain: "",
+                  uriList: "https://attachment-verification.invalid/pathless.png",
+                  html: '<img src="https://attachment-verification.invalid/pathless.png">',
+                },
+              }),
+            )
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().fetchCalls === 1,
+            )
+            await page.evaluate(() => window.__attachmentProbe.swapPickerOwner())
+            await page
+              .locator('[data-attachment-owner="replacement"]')
+              .waitFor({ state: "attached" })
+            assert.deepEqual((await snapshot()).draft, [])
+            await page.evaluate(() => window.__attachmentProbe.completePathlessImage())
+            await page.evaluate(() => window.__attachmentProbe.showOriginalOwner())
+            await page.waitForFunction(() =>
+              window.__attachmentProbe
+                .snapshot()
+                .draft.some(
+                  (part) => part.type === "file" && part.resource.name === "pathless.png",
+                ),
+            )
+            assert.equal(
+              (await snapshot()).draft.filter(
+                (part) => part.type === "file" && part.resource.name === "pathless.png",
+              ).length,
+              1,
+            )
+            await page.screenshot({
+              path: resolve(
+                root,
+                `verification/desktop/evidence/attachment-gesture-owners/pathless-drop-${engine}.png`,
+              ),
+            })
+            await page.evaluate(() => window.__attachmentProbe.showReplacementOwner())
+            assert.deepEqual((await snapshot()).draft, [])
+          } else if (scenario === "browser-picker-fallback") {
+            await page.evaluate(() => (window.__attachmentProbe.browserFallback = true))
+            const firstChooser = page.waitForEvent("filechooser")
+            await page.getByRole(...selectors.addAttachment).click()
+            await page.getByRole(...selectors.addFiles).click()
+            await firstChooser
+            await page.evaluate(() =>
+              document
+                .querySelector('input[type="file"]')
+                ?.dispatchEvent(new Event("cancel")),
+            )
+
+            const secondChooser = page.waitForEvent("filechooser")
+            await page.getByRole(...selectors.addAttachment).click()
+            await page.getByRole(...selectors.addFiles).click()
+            const chooser = await secondChooser
+            await page.evaluate(() => window.__attachmentProbe.swapPickerOwner())
+            await page
+              .locator('[data-attachment-owner="replacement"]')
+              .waitFor({ state: "attached" })
+            await chooser.setFiles({
+              name: "fallback.png",
+              mimeType: "image/png",
+              buffer: Buffer.from(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=",
+                "base64",
+              ),
+            })
+            await page.evaluate(() => window.__attachmentProbe.showOriginalOwner())
+            await page.waitForFunction(() =>
+              window.__attachmentProbe
+                .snapshot()
+                .draft.some(
+                  (part) => part.type === "file" && part.resource.name === "fallback.png",
+                ),
+            )
+            assert.equal(
+              (await snapshot()).draft.filter(
+                (part) => part.type === "file" && part.resource.name === "fallback.png",
+              ).length,
+              1,
+            )
+            await page.screenshot({
+              path: resolve(
+                root,
+                `verification/desktop/evidence/attachment-gesture-owners/browser-picker-${engine}.png`,
+              ),
+            })
+            await page.evaluate(() => window.__attachmentProbe.showReplacementOwner())
+            assert.deepEqual((await snapshot()).draft, [])
           } else {
             for (const name of ["first", "second"]) {
               const batch = `browser-${name}`
