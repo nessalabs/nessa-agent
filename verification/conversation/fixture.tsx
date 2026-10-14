@@ -1,3 +1,4 @@
+import type { ConversationView as PublishedConversationView } from "@nessa/client"
 /** Browser inputs are published gateway views; authority is tested in the server projection. */
 import { configureStore } from "@reduxjs/toolkit"
 import { useState } from "react"
@@ -7,10 +8,11 @@ import { conversationView as decodeView } from "../../packages/nessa-client/src/
 import { makeStore } from "../../src/store"
 import { createDependencies } from "../../src/composition/dependencies"
 import { scenarioEffects } from "../../src/conversation/adapters/scenario/effects"
+import { conversationView as panelView } from "../../src/conversation/adapters/gateway/effects"
 import {
   closeTab,
   followConversation,
-  restoreConversations,
+  openListed,
 } from "../../src/conversation/adapters/store/slice"
 import { conversationTabSnapshot } from "../../src/conversation/application/saved-tabs"
 import { followByReading } from "../../src/conversation/testing"
@@ -36,15 +38,19 @@ const states: ConversationTranscriptState[] = [
   "complete_empty",
   "complete",
 ]
-function view(
+function decodePanelView(value: unknown, id: string): ConversationView {
+  return panelView(decodeView(value, id), 1_700_000_000_000)
+}
+function publishedView(
   state: ConversationTranscriptState,
   liveAuthority: boolean,
-): ConversationView {
+): PublishedConversationView {
   const actionable = state === "complete" && liveAuthority
   return decodeView(
     {
       conversationId: "committed-conversation",
       revision: `${state}:${liveAuthority}`,
+      serverNowMs: 1_700_000_000_000,
       title: "Committed transcript",
       approvalMode: "ask",
       approvalModes: [
@@ -67,6 +73,8 @@ function view(
             ]
           : [],
       pending: [],
+      artifacts: [],
+      notes: [],
       questions: [],
       tools: [],
       permissions: actionable
@@ -99,20 +107,26 @@ function view(
           permissionDeferral: "unsupported_not_implemented",
           elicitationForwarding: "unknown",
           preToolPolicy: "unsupported_not_implemented",
-          policyEndTurn: "unsupported_not_implemented",
-          policyCloseSession: "unsupported_not_implemented",
-          incomingElicitation: "unknown",
+          policyEndTurn: "unsupported",
+          policyCloseSession: "unsupported",
+          incomingElicitation: "unsupported",
         },
       },
       lifecycle: { phase: liveAuthority ? "attached" : "absent" },
-    },
+    } satisfies PublishedConversationView,
     "committed-conversation",
   )
 }
-function questionView(limited: boolean): ConversationView {
+function view(
+  state: ConversationTranscriptState,
+  liveAuthority: boolean,
+): ConversationView {
+  return panelView(publishedView(state, liveAuthority), 1_700_000_000_000)
+}
+function publishedQuestionView(limited: boolean): PublishedConversationView {
   return decodeView(
     {
-      ...view("complete", true),
+      ...publishedView("complete", true),
       revision: `questions:${limited}`,
       truncated: limited,
       interactionViewError: limited
@@ -138,6 +152,9 @@ function questionView(limited: boolean): ConversationView {
     "committed-conversation",
   )
 }
+function questionView(limited: boolean): ConversationView {
+  return panelView(publishedQuestionView(limited), 1_700_000_000_000)
+}
 /** Actual read projection, saved selection and close thunk; the remote port records dispatch. */
 function HistoryTabConsumer() {
   const [result, setResult] = useState<{
@@ -156,9 +173,9 @@ function HistoryTabConsumer() {
     const effects = {
       ...scenarioEffects("echo"),
       follow: followByReading(async (id: string) =>
-        decodeView(
+        decodePanelView(
           {
-            ...view(state, false),
+            ...publishedView(state, false),
             conversationId: id,
             messages: [],
             permissions: [],
@@ -172,8 +189,10 @@ function HistoryTabConsumer() {
       },
     }
     const tabs = makeStore(createDependencies({ conversation: effects }))
-    tabs.dispatch(restoreConversations({ tabs: [{ conversationId: serverId }] }))
-    await tabs.dispatch(followConversation("c0")).unwrap()
+    tabs.dispatch(openListed({ serverConversationId: serverId, title: null }))
+    await tabs
+      .dispatch(followConversation(tabs.getState().conversation.activeId))
+      .unwrap()
     setActive({ store: tabs, closeCalls: () => closes })
     setResult({
       name: `${state}:${truncated}`,
@@ -184,7 +203,8 @@ function HistoryTabConsumer() {
   }
   const close = async () => {
     if (!active) return
-    await active.store.dispatch(closeTab("c0")).unwrap()
+    const closedId = active.store.getState().conversation.activeId
+    await active.store.dispatch(closeTab(closedId)).unwrap()
     setResult(
       (previous) =>
         previous && {
@@ -192,7 +212,7 @@ function HistoryTabConsumer() {
           closes: active.closeCalls(),
           open: active.store
             .getState()
-            .conversation.conversations.some((item) => item.id === "c0"),
+            .conversation.conversations.some((item) => item.id === closedId),
         },
     )
   }

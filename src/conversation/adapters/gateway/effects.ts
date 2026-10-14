@@ -36,7 +36,7 @@ import { shownNote } from "./notes"
  * against the panel's clock does not move with the difference between the two
  * machines' clocks.
  */
-function conversationView(
+export function conversationView(
   { serverNowMs, ...value }: GatewayConversationView,
   receivedAtMs: number,
 ): ConversationView {
