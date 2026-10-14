@@ -36,7 +36,60 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 #[cfg(test)]
-use std::sync::{MutexGuard, PoisonError};
+use std::sync::{Condvar, MutexGuard, PoisonError};
+
+/// A grant write that has entered its blocking task and will not commit
+/// until [`GrantWritePause::release`]. The permit is held across the wait.
+#[cfg(test)]
+pub(super) struct GrantWritePause {
+    entered: Mutex<bool>,
+    entered_cv: Condvar,
+    release: Mutex<bool>,
+    release_cv: Condvar,
+}
+
+#[cfg(test)]
+impl GrantWritePause {
+    pub(super) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            entered: Mutex::new(false),
+            entered_cv: Condvar::new(),
+            release: Mutex::new(false),
+            release_cv: Condvar::new(),
+        })
+    }
+
+    fn block_until_released(&self) {
+        {
+            let mut entered = self.entered.lock().unwrap_or_else(PoisonError::into_inner);
+            *entered = true;
+            self.entered_cv.notify_all();
+        }
+        let mut release = self.release.lock().unwrap_or_else(PoisonError::into_inner);
+        while !*release {
+            release = self
+                .release_cv
+                .wait(release)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    pub(super) fn wait_until_entered(&self) {
+        let mut entered = self.entered.lock().unwrap_or_else(PoisonError::into_inner);
+        while !*entered {
+            entered = self
+                .entered_cv
+                .wait(entered)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    pub(super) fn release(&self) {
+        let mut release = self.release.lock().unwrap_or_else(PoisonError::into_inner);
+        *release = true;
+        self.release_cv.notify_all();
+    }
+}
 
 /// The tables and their version, defined once.
 const DEFINITION: &str = include_str!("schema.sql");
@@ -98,6 +151,10 @@ pub struct LocalConversationStore {
     /// steer drops it after the save and before the provider injection
     /// wait, then compares the revision again.
     grant_gates: Arc<share_grants::GrantGates>,
+    /// When set, the next grant write blocks inside its blocking task,
+    /// still holding the permit, until [`GrantWritePause::release`].
+    #[cfg(test)]
+    grant_write_pause: Mutex<Option<Arc<GrantWritePause>>>,
 }
 impl LocalConversationStore {
     /// Open the database at `path`, in a composition-selected directory that
@@ -112,6 +169,8 @@ impl LocalConversationStore {
             changes: CatalogueChanges::default(),
             access: None,
             grant_gates: share_grants::GrantGates::new(),
+            #[cfg(test)]
+            grant_write_pause: Mutex::new(None),
         })
     }
     /// The access policy a share grant change is admitted by, in its
@@ -122,6 +181,15 @@ impl LocalConversationStore {
     ) -> Self {
         self.access = Some(policy);
         self
+    }
+    /// Hold the next grant write inside its blocking task until `pause` is
+    /// released. The permit stays taken across that wait.
+    #[cfg(test)]
+    pub(super) fn pause_grant_writes(&self, pause: Arc<GrantWritePause>) {
+        *self
+            .grant_write_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(pause);
     }
     #[cfg(test)]
     pub(super) fn hold_mutation(&self) -> MutexGuard<'_, Connection> {
