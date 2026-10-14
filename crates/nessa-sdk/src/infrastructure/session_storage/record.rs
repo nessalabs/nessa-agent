@@ -652,7 +652,6 @@ mod tests {
         stream_fact::{self, FramedFact},
     };
     use super::*;
-    use crate::application::agent_execution::sessions::{ChangeWatchState, SessionSaveBackend};
     use crate::{
         application::agent_execution::{
             agents::AgentError,
@@ -661,8 +660,9 @@ mod tests {
             providers::{ExecutionReport, ProviderIdentity, ProviderSessionState},
             sessions::{
                 records::{self, FactKey, FactKind},
-                InvocationRecord, InvocationSchedulingEvent, ProviderContext, QueueHistoryRecord,
-                SessionChange, SessionLoadState, SubmissionAcknowledgement,
+                ChangeWatchState, InvocationRecord, InvocationSchedulingEvent, ProviderContext,
+                QueueHistoryRecord, SessionChange, SessionLoadState, SessionSaveBackend,
+                SubmissionAcknowledgement,
             },
             tools::ToolReviewInput,
         },
