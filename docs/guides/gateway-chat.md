@@ -861,12 +861,14 @@ finishes, and that digest matches, before an exclusive atomic rename. A generati
 changes, and the service's executable and `--desktop-runtime` argument point only
 at that directory, so replacing `Nessa.app` cannot replace files under that
 gateway. A generation that is not there yet does not block the gateway: that
-registration runs the bundled tree by absolute path — the same fingerprint, still
-on nobody's `PATH` — and the publication runs afterwards on a thread that keeps
-the per-label lock until it finishes. That attempt records the publication plan
-after its other effects, then the copy's result and whether the directory is
-present, before its outcome; the gateway is already reported ready while the
-copy finishes. This process keeps the bundle path for a fingerprint it launched
+registration prepares the data directory and runs the bundled tree by absolute
+path — the same fingerprint, still on nobody's `PATH`. The attempt records the
+empty-cleanup publication plan after its other effects. The copy starts only
+after that plan is accepted, on a thread that keeps the per-label lock until it
+finishes, and the attempt then records the copy's result and whether the
+directory is present, before its outcome. The gateway is already reported ready
+while the copy finishes. A failure after that ready report is published at a
+strictly newer startup revision. This process keeps the bundle path for a fingerprint it launched
 that way while the installed definition still names the bundle, so a later
 reconciliation in the same launch leaves that healthy gateway in place. The
 next launch of the app points the service at the published directory. Until

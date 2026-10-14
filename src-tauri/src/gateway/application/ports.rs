@@ -609,6 +609,17 @@ impl GatewayStartup {
         }
     }
 
+    /// The same phase at `revision`.
+    ///
+    /// Restoring an earlier phase after a newer one was published keeps the
+    /// newer revision, so the next publish stays strictly after it.
+    pub(super) fn at_revision(&self, revision: u64) -> Self {
+        Self {
+            revision,
+            phase: self.phase.clone(),
+        }
+    }
+
     pub fn revision(&self) -> u64 {
         self.revision
     }
@@ -644,6 +655,31 @@ impl DeferredStageReporter {
 
     pub fn finish(self, result: Result<(), String>) {
         let _ = self.result.send(result);
+    }
+}
+
+/// Starts one deferred publication after its plan has been accepted.
+///
+/// Dropping this without [`Self::start`] drops the launch. The copy does not
+/// run, and the label lock held inside the launch is released with it.
+#[cfg(any(target_os = "macos", test))]
+pub struct DeferredStageLaunch {
+    start: Option<Box<dyn FnOnce(DeferredStageReporter) + Send>>,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl DeferredStageLaunch {
+    pub fn new(start: impl FnOnce(DeferredStageReporter) + Send + 'static) -> Self {
+        Self {
+            start: Some(Box::new(start)),
+        }
+    }
+
+    pub(crate) fn start(&mut self, reporter: DeferredStageReporter) {
+        match self.start.take() {
+            Some(start) => start(reporter),
+            None => drop(reporter),
+        }
     }
 }
 
@@ -722,21 +758,23 @@ pub trait GatewayReconciliationProgress: Send + Sync {
         target_artifact_present: bool,
     ) -> Result<LifecycleObservation, GatewayError>;
 
-    /// Authorizes a runtime publication that finishes after this attempt has
+    /// Stores a runtime publication that may finish after this attempt has
     /// reported the gateway ready.
     ///
-    /// `Some` reserves the report. The attempt writes the plan — with no
-    /// cleanup, so recovery will not remove a generation the staging thread
-    /// may still be writing — only once its other effects have completed, then
+    /// The attempt writes the plan — with no cleanup, so recovery settles an
+    /// interrupted copy without pruning a generation the staging thread may
+    /// still be writing — only once its other effects have completed. It calls
+    /// [`DeferredStageLaunch::start`] only after that plan is accepted, then
     /// waits for [`DeferredStageReporter`] and records the completion and
-    /// artifact observation before its outcome. `None` means this progress
-    /// does not journal the copy.
+    /// artifact observation before its outcome. A progress port that does not
+    /// journal the copy drops `launch` here, so the copy never starts.
     #[cfg(any(target_os = "macos", test))]
     fn begin_deferred_stage(
         &self,
         _fingerprint: &str,
-    ) -> Result<Option<DeferredStageReporter>, GatewayError> {
-        Ok(None)
+        _launch: DeferredStageLaunch,
+    ) -> Result<(), GatewayError> {
+        Ok(())
     }
 
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]

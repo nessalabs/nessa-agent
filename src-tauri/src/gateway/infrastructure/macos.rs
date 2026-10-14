@@ -1,7 +1,7 @@
 //! launchd registration and loopback readiness. Service lifetime belongs to launchd.
 use crate::gateway::application::{
-    ClaudeDirectoryReplacement, DeferredStageReporter, GatewayError, GatewayHost,
-    GatewayLifecycleRecovery, GatewayPhysicalResult, GatewayReconciliationAttempt,
+    ClaudeDirectoryReplacement, DeferredStageLaunch, DeferredStageReporter, GatewayError,
+    GatewayHost, GatewayLifecycleRecovery, GatewayPhysicalResult, GatewayReconciliationAttempt,
     GatewayReconciliationIntent, GatewayReconciliationJournalSession,
     GatewayReconciliationProgress, GatewayStopSession, ReconciledGateway,
     ReconciliationHistoryFact, StartupStep,
@@ -1282,8 +1282,8 @@ fn launch_definition(
 ///
 /// A published generation is the immutable copy. Until that directory exists,
 /// the job runs the bundled tree of the same fingerprint so the gateway can
-/// bind, and [`HeldRegistration::defer_stage`] publishes the generation after
-/// this function returns. `keep_bundle` is that same choice for the rest of
+/// bind. The publication starts only after the attempt accepts its plan.
+/// `keep_bundle` is that same choice for the rest of
 /// this process: publication must not replace a healthy bundle-backed job
 /// before the next launch.
 fn registration_runtime<'a>(
@@ -1324,12 +1324,14 @@ struct DeferredStage {
     pause: Option<Arc<StagePause>>,
 }
 
-/// The per-label lock, and a publication this registration did not wait for.
+/// The per-label lock, and a publication a test did not wait for.
 ///
-/// Drop releases the lock. When a publication was deferred, the lock moves to
-/// the thread that runs `stage_runtime` and is released only after that
-/// returns, so pruning — which runs only while the lock is held — cannot
-/// remove the attempt's temporary directory.
+/// Drop releases the lock. A test publication moves the lock to the thread
+/// that runs `stage_runtime`, which releases it only after that returns, so
+/// pruning — which runs only while the lock is held — cannot remove the
+/// attempt's temporary directory. Production moves the lock into
+/// [`DeferredStageLaunch`] instead, and that launch starts the thread only
+/// after the stage plan is accepted.
 struct HeldRegistration {
     lock: Option<control::NamespaceLock>,
     stage: Option<DeferredStage>,
@@ -1341,23 +1343,6 @@ impl HeldRegistration {
             lock: Some(lock_namespace(directory)?),
             stage: None,
         })
-    }
-
-    fn defer_stage(
-        &mut self,
-        source: PathBuf,
-        installations: PathBuf,
-        fingerprint: String,
-        reporter: Option<DeferredStageReporter>,
-    ) {
-        self.arm(DeferredStage {
-            source,
-            installations,
-            fingerprint,
-            reporter,
-            #[cfg(test)]
-            pause: None,
-        });
     }
 
     #[cfg(test)]
@@ -1377,6 +1362,7 @@ impl HeldRegistration {
         });
     }
 
+    #[cfg(test)]
     fn arm(&mut self, stage: DeferredStage) {
         assert!(
             self.stage.is_none(),
@@ -1391,16 +1377,19 @@ impl Drop for HeldRegistration {
         let Some(stage) = self.stage.take() else {
             return;
         };
-        let fingerprint = stage.fingerprint.clone();
-        let lock = self.lock.take();
-        // A failed spawn drops `stage`, and with it the reporter. The attempt
-        // records that missing result as a failed publication.
-        if let Err(error) = std::thread::Builder::new()
-            .name("nessa-stage-runtime".into())
-            .spawn(move || publish_deferred(stage, lock))
-        {
-            eprintln!("[nessa] Could not start publishing gateway runtime {fingerprint}: {error}");
-        }
+        spawn_deferred_publish(stage, self.lock.take());
+    }
+}
+
+fn spawn_deferred_publish(stage: DeferredStage, lock: Option<control::NamespaceLock>) {
+    let fingerprint = stage.fingerprint.clone();
+    // A failed spawn drops `stage`, and with it the reporter. The attempt
+    // records that missing result as a failed publication.
+    if let Err(error) = std::thread::Builder::new()
+        .name("nessa-stage-runtime".into())
+        .spawn(move || publish_deferred(stage, lock))
+    {
+        eprintln!("[nessa] Could not start publishing gateway runtime {fingerprint}: {error}");
     }
 }
 
@@ -1552,8 +1541,9 @@ fn register(
         .join("Library/Application Support/Nessa/gateway-locks")
         .join(&label);
     nessa_local_storage::create_directory(&lock_directory).map_err(|e| e.to_string())?;
-    // Held until this function returns. A deferred publication takes the lock
-    // with it, so the lock is not released between registration and staging.
+    // Held through registration. An unpublished generation moves the lock into
+    // the deferred launch, which keeps it until the accepted plan starts the
+    // copy or the launch is dropped.
     let mut label_lock = HeldRegistration::lock(&lock_directory)?;
     let uid = unsafe { libc::getuid() };
     let domain = format!("gui/{uid}");
@@ -1688,22 +1678,33 @@ fn register(
             },
         )?;
     } else {
-        // The copy stays off this attempt's readiness path. The attempt
-        // journals the plan once its other effects have completed, then the
-        // publication's result and whether the directory is present, before
-        // the outcome. `stage_runtime` still requires private modes,
-        // normalised extended attributes, a matching full-tree digest, and
-        // removal of only this attempt's temporary directory.
+        // The copy stays off this attempt until `stage-runtime` is accepted.
+        // The data directory is prepared here. The plan has no cleanup. The
+        // launch holds the label lock and starts the copy only when the
+        // attempt calls it after that plan. `stage_runtime` still requires
+        // private modes, normalised extended attributes, a matching full-tree
+        // digest, and removal of only this attempt's temporary directory.
         prepare_data_directory(base, stage, instance)?;
-        let reporter = progress
-            .begin_deferred_stage(&fingerprint)
+        let source = runtime.to_path_buf();
+        let stage_installations = installations.clone();
+        let stage_fingerprint = fingerprint.clone();
+        let lock = label_lock.lock.take();
+        let launch = DeferredStageLaunch::new(move |reporter| {
+            spawn_deferred_publish(
+                DeferredStage {
+                    source,
+                    installations: stage_installations,
+                    fingerprint: stage_fingerprint,
+                    reporter: Some(reporter),
+                    #[cfg(test)]
+                    pause: None,
+                },
+                lock,
+            );
+        });
+        progress
+            .begin_deferred_stage(&fingerprint, launch)
             .map_err(RegisterFailure::Audit)?;
-        label_lock.defer_stage(
-            runtime.to_path_buf(),
-            installations.clone(),
-            fingerprint.clone(),
-            reporter,
-        );
     }
     match state {
         ServiceState::ManagedCurrent(running) => {

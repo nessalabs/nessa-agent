@@ -573,13 +573,16 @@ Under its service-label lock, the host copies and verifies the bundle into a
 private version directory outside the app. When that generation is already
 published, launchd arguments name only that directory, and this process validates
 it before the service changes. When it is not published yet, this registration
-launches the bundled tree by absolute path so the gateway can bind, and a
-background thread holding the same lock publishes the generation afterwards.
-That publication flushes files on a bounded pool while it hashes the tree, and
-it still requires a matching digest and durable files and directories before
-the exclusive rename. The attempt journals the publication after its other
-effects and before its outcome, once the gateway is already ready. This
-process keeps the bundle path while the installed definition still names it.
+prepares the data directory and launches the bundled tree by absolute path so
+the gateway can bind. The service-label lock stays with a launch that the
+attempt calls only after it has accepted the empty-cleanup `stage-runtime`
+plan; a slow or rejected plan never starts the copy. That publication flushes
+files on a bounded pool while it hashes the tree, and it still requires a
+matching digest and durable files and directories before the exclusive rename.
+The attempt writes the plan after its other effects and before its outcome,
+once the gateway is already ready. A failure after that ready publish carries
+a strictly newer startup revision. This process keeps the bundle path while
+the installed definition still names it.
 The next launch of the app points the service at that directory.
 Replacing or moving the app while that first job is running from the bundle does
 not retarget it; a copy that observes the change publishes nothing. Exclusive atomic
@@ -622,9 +625,11 @@ bootout contingency for only that target; it retains the registration record
 until readiness succeeds.
 
 The journal is the one owner of whether a cleanup is owed. A declared cleanup —
-the bootout a bootstrap carries, the prune a first staging carries — is owed only
-once the journal holds its step's result and observation and that result is not
-success (`LifecycleEffectPredicate::is_due`). The live path asks that rule before
+the bootout a bootstrap carries — is owed only once the journal holds its step's
+result and observation and that result is not success
+(`LifecycleEffectPredicate::is_due`). The deferred `stage-runtime` plan declares
+no cleanup, so recovery settles it without replay and without pruning a
+directory the staging thread may still hold. The live path asks that rule before
 running a cleanup, so a success leaves nothing pending and nothing runs that the
 journal could not record. A bootstrap launchd refused has its owed bootout run
 and recorded before the failure is reported, beside launchd's own diagnosis; when

@@ -6,8 +6,6 @@
     )
 )]
 
-#[cfg(any(target_os = "macos", test))]
-use super::DeferredStageReporter;
 #[cfg(test)]
 use super::SystemMonotonicClock;
 use super::{
@@ -21,6 +19,8 @@ use super::{
     GatewayStopRequest, GatewayStopSession, LoginShellPath, MonotonicClock, ReconciledGateway,
     ReconciliationHistoryFact, StartupStep,
 };
+#[cfg(any(target_os = "macos", test))]
+use super::{DeferredStageLaunch, DeferredStageReporter};
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, BundledSurface, LifecycleCommandResult, LifecycleEffect,
     LifecycleEffectPredicate, LifecycleFailedPhase, LifecycleObservation,
@@ -371,7 +371,26 @@ struct DeferredStageWait {
     plan_id: String,
     step_id: String,
     fingerprint: String,
-    result: mpsc::Receiver<Result<(), String>>,
+    #[cfg(any(target_os = "macos", test))]
+    launch: DeferredStageLaunch,
+}
+
+impl DeferredStageWait {
+    /// The publication result. The copy starts here, after the plan was accepted.
+    fn publication_result(&mut self) -> Result<(), String> {
+        #[cfg(any(target_os = "macos", test))]
+        {
+            let (reporter, result) = DeferredStageReporter::pair();
+            self.launch.start(reporter);
+            result.recv().unwrap_or_else(|_| {
+                Err("deferred runtime publication ended without a result".into())
+            })
+        }
+        #[cfg(not(any(target_os = "macos", test)))]
+        {
+            Err("deferred runtime publication is unavailable".into())
+        }
+    }
 }
 
 struct StartupRestore {
@@ -692,10 +711,11 @@ impl GatewayReconciliationProgress for StartupProgress {
     fn begin_deferred_stage(
         &self,
         fingerprint: &str,
-    ) -> Result<Option<DeferredStageReporter>, GatewayError> {
+        launch: DeferredStageLaunch,
+    ) -> Result<(), GatewayError> {
         // The plan is written later, after this attempt's other effects. A
         // plan recorded here would stay pending and block every later effect.
-        let (reporter, result) = DeferredStageReporter::pair();
+        // `launch` stays uncalled until that plan is accepted.
         *self
             .deferred_stage
             .lock()
@@ -703,9 +723,9 @@ impl GatewayReconciliationProgress for StartupProgress {
             plan_id: "stage-runtime".into(),
             step_id: "primary".into(),
             fingerprint: fingerprint.to_owned(),
-            result,
+            launch,
         });
-        Ok(Some(reporter))
+        Ok(())
     }
 }
 
@@ -744,7 +764,11 @@ fn publish_ready_while_stage_finishes(
 
 fn restore_startup(executor: &ReconciliationExecutor, previous: StartupRestore) {
     if let Ok(mut current) = executor.lifecycle.lock() {
-        current.startup = previous.startup;
+        // Ready may already have been published at `current`'s revision. The
+        // restored phase keeps that revision so the Failed publish that follows
+        // is strictly newer. This snapshot is not published.
+        let revision = current.startup.revision().max(previous.startup.revision());
+        current.startup = previous.startup.at_revision(revision);
         current.ready_gateway = previous.ready_gateway;
     }
 }
@@ -1986,18 +2010,18 @@ fn execute_attempt(
             "gateway host panicked during reconciliation".into(),
         ))
     });
-    if let Some(deferred) = progress.take_deferred_stage() {
+    if let Some(mut deferred) = progress.take_deferred_stage() {
         let early = physical
             .as_ref()
             .ok()
             .and_then(|gateway| publish_ready_while_stage_finishes(executor, receipt, gateway));
-        // The plan is durable while the copy is still running. Recovery of a
-        // crash in that window settles the unpublished plan without pruning.
+        // The plan is durable before the copy starts. A rejected plan drops
+        // `deferred` with its launch, so nothing is copied without a journal
+        // record. Recovery of a crash after acceptance settles the plan
+        // without pruning.
         let planned = plan_deferred_stage(&progress, &deferred, &physical);
         let recorded = planned.and_then(|()| {
-            let stage_result = deferred.result.recv().unwrap_or_else(|_| {
-                Err("deferred runtime publication ended without a result".into())
-            });
+            let stage_result = deferred.publication_result();
             complete_deferred_stage(
                 &progress,
                 executor.host.as_ref(),

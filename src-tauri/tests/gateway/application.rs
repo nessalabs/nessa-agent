@@ -5110,6 +5110,7 @@ struct DeferredPublicationCapture {
 
 struct DeferredPublicationAudit {
     capture: Arc<DeferredPublicationCapture>,
+    fail_plan: bool,
 }
 
 struct DeferredPublicationJournal {
@@ -5120,6 +5121,7 @@ struct DeferredPublicationJournal {
     history: Mutex<Option<LifecycleHistory>>,
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     sequence: AtomicUsize,
+    fail_plan: bool,
 }
 
 impl DeferredPublicationJournal {
@@ -5268,6 +5270,11 @@ impl GatewayReconciliationJournalSession for DeferredPublicationJournal {
     ) -> Result<AuditDeliveryReceipt, GatewayError> {
         *self.capture.plan_id.lock().expect("plan") = Some(plan_id.to_owned());
         *self.capture.cleanup_steps.lock().expect("cleanup") = cleanup.len();
+        if self.fail_plan {
+            return Err(GatewayError::Registration(
+                "stage plan was not accepted".into(),
+            ));
+        }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
             self.record(
@@ -5372,6 +5379,7 @@ impl GatewayReconciliationAudit for DeferredPublicationAudit {
             history: Mutex::new(None),
             #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             sequence: AtomicUsize::new(0),
+            fail_plan: self.fail_plan,
         }))
     }
 }
@@ -5407,22 +5415,29 @@ fn a_deferred_publication_is_journaled_after_the_gateway_is_ready() {
         ) -> Result<ReconciledGateway, GatewayError> {
             let service = "deferred-stage";
             admit(attempt, progress, service);
-            let reporter = progress
-                .begin_deferred_stage(&"a".repeat(64))?
-                .expect("startup progress journals a deferred publication");
             let ready = self.ready.clone();
             let capture = self.capture.clone();
-            thread::spawn(move || {
-                let guard = ready.ready.lock().expect("publication ready");
-                let (guard, wait) = ready
-                    .cv
-                    .wait_timeout_while(guard, Duration::from_secs(3), |ready| !*ready)
-                    .expect("publication ready");
-                capture
-                    .ready_before_result
-                    .store(!wait.timed_out() && *guard, Ordering::SeqCst);
-                reporter.finish(Err("disk full".into()));
-            });
+            progress.begin_deferred_stage(
+                &"a".repeat(64),
+                DeferredStageLaunch::new(move |reporter| {
+                    assert_eq!(
+                        capture.plan_id.lock().expect("plan").as_deref(),
+                        Some("stage-runtime"),
+                        "the copy starts after the stage plan is accepted"
+                    );
+                    thread::spawn(move || {
+                        let guard = ready.ready.lock().expect("publication ready");
+                        let (guard, wait) = ready
+                            .cv
+                            .wait_timeout_while(guard, Duration::from_secs(3), |ready| !*ready)
+                            .expect("publication ready");
+                        capture
+                            .ready_before_result
+                            .store(!wait.timed_out() && *guard, Ordering::SeqCst);
+                        reporter.finish(Err("disk full".into()));
+                    });
+                }),
+            )?;
             Ok(reconciled(service))
         }
 
@@ -5450,6 +5465,7 @@ fn a_deferred_publication_is_journaled_after_the_gateway_is_ready() {
         testing::sequential_reconciliation_ids(),
         Arc::new(DeferredPublicationAudit {
             capture: capture.clone(),
+            fail_plan: false,
         }),
         "/runtime".into(),
         "ci".into(),
@@ -5467,6 +5483,91 @@ fn a_deferred_publication_is_journaled_after_the_gateway_is_ready() {
     );
     assert_eq!(*capture.artifact_present.lock().unwrap(), Some(false));
     assert!(capture.confirmed.load(Ordering::SeqCst));
+}
+
+#[test]
+fn a_rejected_stage_plan_does_not_start_the_copy_and_fails_newer_than_ready() {
+    let started = Arc::new(AtomicBool::new(false));
+    let events = Arc::new(RecordingEvents::default());
+    let host_started = started.clone();
+    struct Host {
+        started: Arc<AtomicBool>,
+    }
+    impl GatewayHost for Host {
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+            attempt: &GatewayReconciliationAttempt,
+            progress: &dyn GatewayReconciliationProgress,
+        ) -> Result<ReconciledGateway, GatewayError> {
+            let service = "deferred-stage";
+            admit(attempt, progress, service);
+            let started = self.started.clone();
+            progress.begin_deferred_stage(
+                &"a".repeat(64),
+                DeferredStageLaunch::new(move |_reporter| {
+                    started.store(true, Ordering::SeqCst);
+                }),
+            )?;
+            Ok(reconciled(service))
+        }
+
+        fn published_runtime_is_present(&self, _: &str) -> Result<bool, GatewayError> {
+            Ok(false)
+        }
+
+        fn stop_agents(
+            &self,
+            _: &GatewayStopSession,
+            _: &dyn GatewayReconciliationJournalSession,
+            _: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            Err(GatewayError::Stop("unused".into()))
+        }
+    }
+    let gateway = Gateway::bootstrap(
+        Arc::new(Host {
+            started: host_started,
+        }),
+        login_shell("/usr/bin"),
+        events.clone(),
+        testing::sequential_reconciliation_ids(),
+        Arc::new(DeferredPublicationAudit {
+            capture: Arc::new(DeferredPublicationCapture {
+                ready_before_result: AtomicBool::new(false),
+                plan_id: Mutex::new(None),
+                cleanup_steps: Mutex::new(0),
+                completion: Mutex::new(None),
+                artifact_present: Mutex::new(None),
+                confirmed: AtomicBool::new(false),
+            }),
+            fail_plan: true,
+        }),
+        "/runtime".into(),
+        "ci".into(),
+    );
+    assert!(tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)).is_err());
+    assert!(!started.load(Ordering::SeqCst));
+    let observed = events.observations.lock().expect("startup events");
+    let ready = observed
+        .iter()
+        .find(|startup| matches!(startup.phase(), GatewayStartupPhase::Ready))
+        .expect("ready was published before the plan failed");
+    let failed = observed
+        .iter()
+        .rev()
+        .find(|startup| matches!(startup.phase(), GatewayStartupPhase::Failed(_)))
+        .expect("failure was published after the plan was rejected");
+    assert!(failed.revision() > ready.revision());
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|startup| startup.revision() == ready.revision())
+            .count(),
+        1
+    );
 }
 
 #[path = "application/claude_publication.rs"]
