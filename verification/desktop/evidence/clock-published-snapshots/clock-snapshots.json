@@ -1,8 +1,8 @@
 {
   "check": "clock-snapshots",
   "ok": true,
-  "started": "2026-10-14T05:51:51.452Z",
-  "finished": "2026-10-14T05:51:56.966Z",
+  "started": "2026-10-14T09:35:33.203Z",
+  "finished": "2026-10-14T09:35:35.920Z",
   "target": {
     "url": "http://127.0.0.1:1438/desktop.html",
     "mode": "dev"
@@ -12,18 +12,12 @@
       "ok": true,
       "failures": [],
       "engine": "chromium",
-      "layout": "columns",
-      "name": "console",
-      "harmless": [
-        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1438/favicon.ico)"
-      ]
-    },
-    {
-      "ok": true,
-      "failures": [],
-      "engine": "chromium",
       "name": "published-tick-and-cleanup",
       "injectedNow": "999 → 1000",
+      "beforeTick": {
+        "now": 999,
+        "renders": 2
+      },
       "published": {
         "now": 1000,
         "renders": 4
@@ -33,14 +27,16 @@
         "renders": 4,
         "timerStarts": 2,
         "timerTicks": 1,
-        "timerStops": 1
+        "timerStops": 1,
+        "intervals": [1000, 1000]
       },
       "afterUnmount": {
         "nowReads": 4,
         "renders": 4,
         "timerStarts": 2,
         "timerTicks": 1,
-        "timerStops": 2
+        "timerStops": 2,
+        "intervals": [1000, 1000]
       },
       "browserErrors": []
     },
@@ -50,6 +46,10 @@
       "engine": "webkit",
       "name": "published-tick-and-cleanup",
       "injectedNow": "999 → 1000",
+      "beforeTick": {
+        "now": 999,
+        "renders": 2
+      },
       "published": {
         "now": 1000,
         "renders": 4
@@ -59,14 +59,16 @@
         "renders": 4,
         "timerStarts": 2,
         "timerTicks": 1,
-        "timerStops": 1
+        "timerStops": 1,
+        "intervals": [1000, 1000]
       },
       "afterUnmount": {
         "nowReads": 4,
         "renders": 4,
         "timerStarts": 2,
         "timerTicks": 1,
-        "timerStops": 2
+        "timerStops": 2,
+        "intervals": [1000, 1000]
       },
       "browserErrors": []
     }

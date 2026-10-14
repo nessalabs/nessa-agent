@@ -30,11 +30,21 @@ await main(meta, async ({ options, rep, url }) => {
       })
       const { page } = opened
       try {
+        const beforeTick = await page.locator("#clock").evaluate((element) => ({
+          now: Number(element.getAttribute("data-now")),
+          renders: Number(element.getAttribute("data-renders")),
+        }))
+        await page.evaluate(() => {
+          window.__clockProbe.advance()
+          window.__clockProbe.publishTick()
+        })
         await page.waitForFunction(
-          () =>
-            window.__clockProbe?.timerTicks >= 1 &&
-            Number(document.querySelector("#clock")?.getAttribute("data-renders")) >= 3,
-          null,
+          (rendersBeforeTick) =>
+            window.__clockProbe?.timerTicks === 1 &&
+            Number(document.querySelector("#clock")?.getAttribute("data-now")) === 1000 &&
+            Number(document.querySelector("#clock")?.getAttribute("data-renders")) >
+              rendersBeforeTick,
+          beforeTick.renders,
           { timeout: 5000 },
         )
         const published = await page.locator("#clock").evaluate((element) => ({
@@ -56,16 +66,30 @@ await main(meta, async ({ options, rep, url }) => {
           timerStarts: window.__clockProbe.timerStarts,
           timerTicks: window.__clockProbe.timerTicks,
           timerStops: window.__clockProbe.timerStops,
+          intervals: window.__clockProbe.intervals,
         }))
         const failures = []
+        if (beforeTick.now !== 999)
+          failures.push(
+            `the rendered clock before the tick was ${beforeTick.now}, expected 999`,
+          )
         if (published.now !== 1000)
           failures.push(`the rendered clock was ${published.now}, expected 1000`)
-        if (published.renders < 2)
+        if (published.renders <= beforeTick.renders)
           failures.push(
-            `React rendered ${published.renders} times; expected a published tick`,
+            `React rendered ${published.renders} times after starting at ${beforeTick.renders}; expected the published tick to render`,
           )
-        if (beforeUnmount.timerTicks < 1)
-          failures.push("the interval did not publish before unmount")
+        if (beforeUnmount.timerTicks !== 1)
+          failures.push(
+            `the interval published ${beforeUnmount.timerTicks} ticks before unmount, expected 1`,
+          )
+        if (
+          !beforeUnmount.intervals.length ||
+          beforeUnmount.intervals.some((delay) => delay !== 1000)
+        )
+          failures.push(
+            `the clock requested unexpected intervals: ${JSON.stringify(beforeUnmount.intervals)}`,
+          )
         if (
           afterUnmount.timerStarts === 0 ||
           afterUnmount.timerStops !== afterUnmount.timerStarts
@@ -75,6 +99,7 @@ await main(meta, async ({ options, rep, url }) => {
           failures.push(`browser reported errors: ${opened.errors.join("; ")}`)
         return {
           injectedNow: "999 → 1000",
+          beforeTick,
           published,
           beforeUnmount,
           afterUnmount,
