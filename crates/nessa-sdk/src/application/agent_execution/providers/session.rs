@@ -203,10 +203,20 @@ impl ProviderSession {
         self.backend.hold_remembered_allows_for_review_hooks(hold);
     }
 
-    /// Take one parked remembered allow. See
-    /// [`ProviderSessionBackend::take_remembered_allow`].
-    pub(crate) fn take_remembered_allow(&self, id: &PermissionId) -> Option<PermissionAnswer> {
-        self.backend.take_remembered_allow(id)
+    /// See [`ProviderSessionBackend::consult_remembered_allow`].
+    pub(crate) fn consult_remembered_allow(
+        &self,
+        id: &PermissionId,
+    ) -> ProviderOperationFuture<'_, Option<PermissionAnswer>> {
+        self.backend.consult_remembered_allow(id)
+    }
+
+    /// See [`ProviderSessionBackend::release_remembered_review`].
+    pub(crate) fn release_remembered_review(
+        &self,
+        id: &PermissionId,
+    ) -> ProviderOperationFuture<'_, ()> {
+        self.backend.release_remembered_review(id)
     }
 
     pub(crate) fn answer_permission(

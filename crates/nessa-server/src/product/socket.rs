@@ -2646,13 +2646,7 @@ mod tests {
         let board = Arc::new(
             crate::conversation::infrastructure::PermissionMemory::open(
                 &private.join("permission-rules.sqlite3"),
-                Arc::new(
-                    crate::conversation::infrastructure::DurablePermissionRuleRevocationAudit::new(
-                        private.join("revocations"),
-                        clock,
-                    )
-                    .unwrap(),
-                ),
+                clock,
             )
             .unwrap(),
         );
@@ -2691,13 +2685,7 @@ mod tests {
         nessa_local_storage::create_directory(&private).unwrap();
         let board = crate::conversation::infrastructure::PermissionMemory::open(
             &private.join("permission-rules.sqlite3"),
-            Arc::new(
-                crate::conversation::infrastructure::DurablePermissionRuleRevocationAudit::new(
-                    private.join("revocations"),
-                    Arc::new(FixedClock),
-                )
-                .unwrap(),
-            ),
+            Arc::new(FixedClock),
         )
         .unwrap();
         (directory, Arc::new(board))
@@ -2779,7 +2767,6 @@ mod tests {
                 execution_id: &execution,
             })
             .unwrap();
-        board.acknowledge(stored.reference()).unwrap();
         let rule_id = stored.reference().rule_id().to_owned();
         let (state, authority) = fixture(MembershipRole::Member);
         *authority.snapshot.lock().unwrap() = snapshot_with(

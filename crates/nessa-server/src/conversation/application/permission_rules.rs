@@ -9,7 +9,7 @@
 //! stored rows ──▶ PermissionRulePolicyEvaluator ──▶ settle | may
 //! owner turn arm ──▶ PermissionRules::offers_remember
 //! caller ──▶ remember / revoke / list ──▶ Cedar may
-//! revoke ──▶ request record ──▶ delete ──▶ absent record
+//! remember | revoke ──▶ rule row + audit row, one transaction
 //! ```
 
 use nessa_sdk::application::agent_execution::permissions::{ActionContext, PermissionCaller};
@@ -54,8 +54,6 @@ pub struct StoredPermissionRule {
     pub effect: PermissionEffect,
     /// Who granted this revision.
     pub granted_by: ActionContext,
-    /// Stored, and not yet acknowledged. It does not settle a review.
-    pub provisional: bool,
 }
 
 /// What a live rule does to a review. `Ask` means no rule decided it.
@@ -76,10 +74,12 @@ pub struct PermissionRuleUnavailable;
 
 /// Whether stored rules answer a review, and whether the caller may change them.
 pub trait PermissionRulePolicyEvaluator: Send + Sync {
-    /// What `rules` decide for this tool in this workspace. A policy error is
-    /// [`PermissionRuleUnavailable`], which the caller treats as ask.
+    /// What `rules` decide for this tool in this workspace, asked as
+    /// `principal`. A policy error is [`PermissionRuleUnavailable`], which
+    /// the caller treats as ask. `principal` is the caller of the turn.
     fn settle(
         &self,
+        principal: RulePrincipal,
         workspace: &str,
         source: &str,
         tool: &str,
@@ -116,10 +116,8 @@ pub struct ListedPermissionRule {
 pub enum RuleCatalogError {
     /// The caller may not list or revoke. Nothing was read or deleted.
     Refused,
-    /// The store, the policy, or the revocation record could not be asked.
-    /// A failure before the row is deleted leaves the rule. A failure of the
-    /// absent record, after the delete, leaves the rule gone; a retry finishes
-    /// that record.
+    /// The store or the policy could not be asked. The transaction was not
+    /// committed, so the rule is unchanged.
     Unavailable,
 }
 
@@ -131,57 +129,14 @@ pub fn rule_principal(caller: PermissionCaller) -> RulePrincipal {
     }
 }
 
-/// One rule a caller revoked. The record is the rule as it stood, and who
-/// revoked it. The sink assigns the observation time.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PermissionRuleRevocation {
-    /// Rule that was deleted.
-    pub id: String,
-    /// Revision that was deleted.
-    pub revision: String,
-    /// Workspace the rule was scoped to.
-    pub workspace: String,
-    /// `claude` or `codex`.
-    pub source: String,
-    /// Tool the rule named.
-    pub tool: String,
-    /// Allow or deny, as the rule stood.
-    pub effect: PermissionEffect,
-    /// Who revoked it: principal, surface, and the request.
-    pub actor: ActionContext,
-}
-
-/// Immutable evidence that a rule was revoked.
-///
-/// [`Self::requested`] is written before the row is deleted and does not say
-/// the rule is gone. [`Self::record`] is written after the delete and says the
-/// revision is absent. The same rule id, revision, and principal recorded
-/// again is acknowledged, including when the request id differs. A different
-/// principal is refused. [`Self::finish`] writes the absent record when the
-/// row is already gone and the request was stored.
-pub trait PermissionRuleRevocationAudit: Send + Sync {
-    /// The caller asked to revoke this revision. The rule is still present.
-    fn requested(&self, revocation: &PermissionRuleRevocation) -> Result<(), RuleCatalogError>;
-
-    /// The revision is gone. [`RuleCatalogError::Unavailable`] when the sink
-    /// refuses the record or cannot be reached.
-    fn record(&self, revocation: &PermissionRuleRevocation) -> Result<(), RuleCatalogError>;
-
-    /// Write the absent record for a request already stored for `id`, when
-    /// that record is missing. `Ok(false)` when `id` has no request, or the
-    /// absent record is already there. A different principal is refused.
-    fn finish(&self, id: &str, actor: &ActionContext) -> Result<bool, RuleCatalogError>;
-}
-
 /// List and revoke. Cedar admits or refuses `principal`; the owner is not assumed.
 pub trait PermissionRuleCatalog: Send + Sync {
     /// The valid rules, in the order they were stored, at most the response bound.
     fn list(&self, principal: RulePrincipal)
         -> Result<Vec<ListedPermissionRule>, RuleCatalogError>;
-    /// Delete `id` after a request record, then record that it is absent.
-    /// `Ok(false)` when no rule has it and nothing was requested. A retry
-    /// finishes a delete whose absent record was lost. A shared user is
-    /// refused and nothing is deleted.
+    /// Delete `id` and record that it is absent, in one transaction.
+    /// `Ok(false)` when no rule has it. A shared user is refused and nothing
+    /// is deleted. A failure leaves the rule.
     fn revoke(
         &self,
         id: &str,

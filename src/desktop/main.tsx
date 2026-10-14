@@ -28,6 +28,7 @@ import { DesktopIconFamilyProvider } from "./ui/icons"
 import { DesktopWindow } from "./ui/desktop-window"
 import { platformFor, sandboxFor, WidgetRegistryProvider } from "./widgets"
 import { SubagentsProvider } from "./subagents"
+import { bindConversationTitles } from "./workspace/adapters/gateway/review-notices"
 import { ClockProvider, followWorkspace, loadWorkspace } from "./workspace"
 
 import "@fontsource-variable/geist"
@@ -91,6 +92,12 @@ const dependencies = createDesktopDependencies({
   },
 })
 const store = makeDesktopStore(dependencies)
+bindConversationTitles((conversationId) => {
+  const sessions = store.getState().workspace.sessions
+  if (!Object.hasOwn(sessions, conversationId)) return null
+  const title = sessions[conversationId].title.trim()
+  return title.length > 0 ? title : null
+})
 store.dispatch(followWorkspace())
 void store.dispatch(loadWorkspace())
 
