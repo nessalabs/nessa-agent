@@ -60,6 +60,7 @@ const functional = [
   "command-order",
   "published-files",
   "transcript-notes",
+  "turn-outcomes",
 ]
 
 const options = cli({

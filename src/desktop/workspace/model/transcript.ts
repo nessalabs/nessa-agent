@@ -61,6 +61,64 @@ export type Delivery =
   | { readonly state: "failed"; readonly reason: WorkspaceFailureReason }
 
 /**
+ * How an admitted turn ended, as the gateway reported it, when it did not
+ * simply finish or keep running. Separate from `Delivery`, which is only
+ * whether a message written in this window reached the source.
+ */
+export type TurnTerminalStatus = "failed" | "cancelled" | "unresolved"
+
+export interface TurnTerminal {
+  readonly status: TurnTerminalStatus
+  /** The gateway's diagnostic, when it sent one. Shown as it arrived. */
+  readonly error?: string
+}
+
+/** The status word, for the mark beside a turn. The diagnostic stays `error`. */
+export function terminalLabel(status: TurnTerminalStatus): string {
+  switch (status) {
+    case "failed":
+      return "Failed"
+    case "cancelled":
+      return "Cancelled"
+    case "unresolved":
+      return "Unresolved"
+  }
+}
+
+/**
+ * One thing a question asks, in the agent's own words. Answering it
+ * authorises nothing.
+ */
+export interface TranscriptAsked {
+  readonly key: string
+  readonly prompt: string
+  readonly header?: string
+  readonly multiSelect: boolean
+  readonly freeText: boolean
+  readonly required: boolean
+  readonly options: readonly {
+    readonly value: string
+    readonly label: string
+    readonly description?: string
+  }[]
+}
+
+/** A question the agent is waiting on. Identity is the execution and the ask. */
+export interface TranscriptQuestion {
+  readonly executionId: string
+  readonly questionId: string
+  readonly message: string
+  readonly questions: readonly TranscriptAsked[]
+}
+
+/** What was chosen for one field of a question. A null list declines the ask. */
+export interface QuestionChoice {
+  readonly key: string
+  readonly values: readonly string[]
+  readonly ownWords?: string
+}
+
+/**
  * One row of a conversation: a message from the person or the agent, or a
  * note somebody left in it (`NoteMessage`).
  */
@@ -75,6 +133,22 @@ export interface TurnMessage {
   /** Latest published execution observed when this local message began. */
   readonly observedInput?: string | null
   readonly delivery?: Delivery
+  /**
+   * How this turn ended, when the gateway said it ended other than by
+   * finishing. On the agent's reply when there is one, otherwise on the
+   * input, so a turn that said nothing still shows it.
+   */
+  readonly terminal?: TurnTerminal
+  /**
+   * The execution this terminal belongs to, so a surface can match it to
+   * `authenticationRefusal`. Set only with `terminal`.
+   */
+  readonly executionId?: string
+  /**
+   * Independent required work failed on this authentication refusal.
+   * The pane keeps `terminal` beside the sign-in card when this is set.
+   */
+  readonly requiredWorkFailed?: boolean
   /**
    * The MCP App that wrote a message of the person's on their behalf
    * (`ui/message`, #390); absent when the person wrote it.
@@ -234,6 +308,16 @@ export interface Transcript {
   readonly history?: HistoryExtent
   /** A provider's typed authentication refusal on the latest turn. */
   readonly authenticationRefusal?: string
+  /**
+   * Questions the agent is waiting on, as the view listed them. Empty when
+   * it asked none that could be shown.
+   */
+  readonly questions?: readonly TranscriptQuestion[]
+  /**
+   * The gateway's notice that a review or question was left out of the view.
+   * The view's own words; absent when it sent none.
+   */
+  readonly interactionNotice?: string
   /** Raw execution identity of the latest published input, including pending. */
   readonly latestInputId?: string
   /** Authoritative runtime agent; never inferred from the model catalogue. */
