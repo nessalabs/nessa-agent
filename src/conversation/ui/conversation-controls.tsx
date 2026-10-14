@@ -2,7 +2,7 @@ import { deadlinePendingLine, permissionTargets } from "@nessa/client"
 import { historyExtent, historyNotices, type Conversation } from "../model"
 import { controlConversation } from "../adapters/store/slice"
 import { useConversationDispatch } from "../adapters/store/hooks"
-import { useNow } from "./clock"
+import { useNow } from "../../clock"
 
 import { ShieldCheck } from "lucide-react"
 import {

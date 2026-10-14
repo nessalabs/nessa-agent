@@ -6,7 +6,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react"
 import type { WidgetHost } from "../../widgets/ui/plugin"
-import { useNow } from "../../workspace/adapters/dom/clock"
+import { useNow } from "../../../clock"
 import { useSubagentSource } from "../adapters/react/source-context"
 import {
   chooseSubagent,

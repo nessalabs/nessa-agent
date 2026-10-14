@@ -1,5 +1,5 @@
 import { memo, type KeyboardEvent as ReactKeyboardEvent } from "react"
-import { useNow } from "../../adapters/dom/clock"
+import { useNow } from "../../../../clock"
 import { isMac } from "../../../adapters/platform"
 import { matchesChord } from "../../../model/keyboard"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"

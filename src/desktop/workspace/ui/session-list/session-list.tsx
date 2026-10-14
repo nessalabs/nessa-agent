@@ -23,7 +23,7 @@ import {
   selectView,
 } from "../../adapters/store/selectors"
 import { contextMenuFromKey } from "../../adapters/dom/context-menu-key"
-import { useNow } from "../../adapters/dom/clock"
+import { useNow } from "../../../../clock"
 import { sessionTime } from "../../model/time-labels"
 import { sameWords } from "../../model/transcript"
 import { paneItemKey, sessionItem } from "../../model/pane-item"

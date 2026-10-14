@@ -17,7 +17,7 @@ import { selectFocusedPaneKey, selectPanes } from "../../adapters/store/selector
 import { useHeaderImage } from "../../../adapters/header-image"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../../../ui/menu"
 import { PaneMenuItems } from "./pane-menu"
-import { ClockProvider } from "../../adapters/dom/clock"
+import { ClockProvider } from "../../../../clock"
 import { fakeSource, settle, testStore } from "../../testing"
 import { Pane } from "./pane"
 

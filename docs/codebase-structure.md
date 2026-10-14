@@ -177,6 +177,9 @@ writing the full defaults on first launch is buying.
   hook; rendering takes props and has no idea where they came from.
   `src/panel/ui/app.tsx` is the chrome. Conversation UI lives in
   `src/conversation/ui/`. Host subscriptions live in `src/panel/adapters/`.
+  Clock-driven labels share the provider-scoped publication in
+  `src/clock/ui/provider.tsx`; `src/clock/index.ts` is its public module map.
+  Conversation and workspace supply the clock at their composition roots.
 - The Messages tab is panel chrome over a conversation list, like the update
   tab: `src/panel/application/messages-tab.ts` owns its place in the strip and
   its transitions, and `src/panel/ui/messages-tab.tsx` puts
@@ -239,7 +242,7 @@ against a private scripted gateway.
   of conversation views in `gateway/`; the in-memory source in `in-memory/`;
   focus, Escape for the widget in front (`widget-escape.ts`), the panes'
   room, what the workspace adds to a drag, first-send motion (`arrival.ts`),
-  keys and the clock in `dom/`; the
+  keys and focus in `dom/`; the
   host callbacks each place gives a widget's view in
   `store/widget-hosts.ts`) and `ui/` (each component once, and `layouts/`
   that only arrange them; `ui/panes/` a session's pane, a widget's

@@ -9,7 +9,7 @@ import { beginSend, failSend, reattemptSend } from "../../application/usecases/s
 import { emptyLocalTabs } from "../../application/local-tabs"
 import type { ConversationView } from "../../application/view"
 import { textContent, type AgentFeatures, type Conversation } from "../../model"
-import { ClockProvider } from "../../ui/clock"
+import { ClockProvider } from "../../../clock"
 import { Transcript } from "../../ui/transcript"
 class TestResizeObserver {
   observe() {}

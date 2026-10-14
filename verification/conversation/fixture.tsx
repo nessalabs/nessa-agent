@@ -21,7 +21,7 @@ import {
   type Conversation,
   type ConversationTranscriptState,
 } from "../../src/conversation/model"
-import { ClockProvider } from "../../src/conversation/ui/clock"
+import { ClockProvider } from "../../src/clock"
 import { ConversationControls } from "../../src/conversation/ui/conversation-controls"
 import { ConversationQuestions } from "../../src/conversation/ui/conversation-questions"
 import { ConversationNotification } from "../../src/conversation/ui/conversation-notification"
