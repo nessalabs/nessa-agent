@@ -3,13 +3,19 @@ import { onAttachmentDragging, onAttachmentDropped, type ChosenFile } from "../.
 import { droppedImageUrl } from "../adapters/dropped-image"
 import { droppedText } from "../adapters/dropped-text"
 import { pickerRefusal, type AttachmentRefusal } from "../application/attachment-notice"
+import type { AttachmentDestination } from "./use-file-attachments"
 
 type HostDropActions = {
+  /** Capture the current destination for a pathless image result. */
+  captureDestination: () => AttachmentDestination
   /** The same call the picker's answer goes through, for a named draft. */
-  addChosenFiles: (chosen: readonly ChosenFile[], conversationId: string) => void
-  /** The conversation a batch was bound to when it began. */
-  conversationOf: (batch: string) => string
-  addImageUrl: (url: string) => void
+  addChosenFiles: (
+    chosen: readonly ChosenFile[],
+    destination: AttachmentDestination,
+  ) => void
+  /** Consume the destination reserved for this drop when its terminal result arrives. */
+  consumeDropDestination: (batch: string) => AttachmentDestination | undefined
+  addImageUrl: (url: string, destination: AttachmentDestination) => void
   focusComposer: () => void
   pasteAttachment: (text: string) => void
   /**
@@ -21,7 +27,7 @@ type HostDropActions = {
    * told about a file it had never seen. The panel's own refusals have always
    * carried their conversation; only the host's lost it.
    */
-  refuse: (refusal: AttachmentRefusal, conversationId: string) => void
+  refuse: (refusal: AttachmentRefusal, destination: AttachmentDestination) => void
 }
 
 /**
@@ -72,8 +78,8 @@ export function useHostDrop(actions: HostDropActions) {
   // The handlers are read at drop time rather than captured at subscribe time,
   // so a drop reaches whatever the panel's current handlers are rather than
   // the ones that existed when it mounted. *Which draft* it lands on is not
-  // read here at all: that is the drop's own name, resolved by
-  // `conversationOf`, and nothing in this hook consults the open tab.
+  // read here at all: the drop's own name consumes its reserved destination,
+  // and nothing in this hook consults the open tab.
   const latest = React.useRef(actions)
   React.useLayoutEffect(() => {
     latest.current = actions
@@ -87,28 +93,24 @@ export function useHostDrop(actions: HostDropActions) {
       onAttachmentDropped((dropped) => {
         if (!live) return
         setDragging(false)
-        // One lookup for the two answers that land on a draft — the files
-        // and the refusal — because they are about the same draft, the one the
-        // drop landed on. The refusal branch used to skip it and land on
-        // whatever was open.
-        //
-        // The third answer, dragged text, goes to the focused composer and
-        // names no draft, so it does not read this. A drag carrying no paths
-        // is never announced for that reason, which makes this a fallback to
-        // the open tab in that case; nothing below uses it.
-        const target = latest.current.conversationOf(dropped.batch)
         if (dropped.refused) {
-          latest.current.refuse(pickerRefusal(dropped.refused), target)
+          const destination = latest.current.consumeDropDestination(dropped.batch)
+          if (destination)
+            latest.current.refuse(pickerRefusal(dropped.refused), destination)
           return
         }
         if (dropped.files.length > 0) {
-          latest.current.addChosenFiles(dropped.files, target)
+          const destination = latest.current.consumeDropDestination(dropped.batch)
+          if (destination) latest.current.addChosenFiles(dropped.files, destination)
           return
         }
         const transfer = asTransfer(dropped.text)
         const image = droppedImageUrl(transfer)
         if (image) {
-          latest.current.addImageUrl(image)
+          // The host announces a beginning only when it has paths. This
+          // pathless result first tells us it is an image, then owns the
+          // current destination before the fetch can wait.
+          latest.current.addImageUrl(image, latest.current.captureDestination())
           return
         }
         const text = droppedText(transfer)

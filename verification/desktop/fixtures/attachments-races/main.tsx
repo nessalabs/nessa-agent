@@ -22,6 +22,7 @@ import {
   uploadChanged,
   removeFile,
   openConversation,
+  setActive,
 } from "../../../../src/conversation/testing"
 import { sessionReady } from "../../../../src/session/testing"
 import "../../../../src/styles.css"
@@ -78,7 +79,10 @@ const retainedScenario: {
   resources: [],
 }
 const sends: unknown[] = []
+const folderStarts: string[] = []
+const folderReleases = new Map<string, (entries: FileSystemEntry[]) => void>()
 let fetchCalls = 0
+let finishDropImage: ((response: Response) => void) | undefined
 const resources = createAttachmentResources()
 const effects = scenarioEffects("echo")
 const readHeldFile: (typeof effects)["readHeldFile"] = async (id, file, signal) => {
@@ -151,6 +155,8 @@ const store = makeStore({
   },
 })
 let displayStore = store
+let replacementStore = store
+let replacementResources = resources
 store.dispatch(
   sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),
 )
@@ -163,28 +169,141 @@ window.fetch = (input, init) => {
   )
     return realFetch(input, init)
   fetchCalls++
-  return new Promise<Response>((_resolve, reject) => {
+  return new Promise<Response>((resolve, reject) => {
+    finishDropImage = resolve
     init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
       once: true,
     })
   })
 }
+type PickerFile = {
+  path: string
+  name: string
+  size: number
+  mimeType: string
+  ticket: string
+}
+type PickerReadyEvent = { id: string; name: string; readying: boolean }
 const probe = {
   drop: undefined as undefined | ((payload: unknown) => void),
-  choose: async () => [
-    {
-      path: "/verification/picked.png",
-      name: "picked.png",
-      size: png.length,
-      mimeType: "image/png",
-      ticket: "verification-native-ticket",
-    },
-  ],
+  began: undefined as
+    undefined | ((batch: string, gesture: "picked" | "dropped") => void),
+  readied: undefined as undefined | ((file: PickerReadyEvent) => void),
+  pickRequests: [] as { requestId: string; resolve: (files: PickerFile[]) => void }[],
+  holdPickers: false,
+  browserFallback: false,
+  choose: (requestId: string): Promise<PickerFile[] | null> =>
+    probe.browserFallback
+      ? Promise.resolve(null)
+      : probe.holdPickers
+        ? new Promise<PickerFile[]>((resolve) =>
+            probe.pickRequests.push({ requestId, resolve }),
+          )
+        : Promise.resolve([
+            {
+              path: "/verification/picked.png",
+              name: "picked.png",
+              size: png.length,
+              mimeType: "image/png",
+              ticket: "verification-native-ticket",
+            },
+          ]),
+  announcePick: (requestId: string, name: string) => {
+    probe.began?.(requestId, "picked")
+    probe.readied?.({ id: `${requestId}:0`, name, readying: true })
+  },
+  beginDrop: (batch: string) => probe.began?.(batch, "dropped"),
+  dropFolder: (name: string, hold: boolean) => {
+    const fileName = `${name}.txt`
+    const file = new File([`contents of ${fileName}`], fileName, { type: "text/plain" })
+    const fileEntry = {
+      isFile: true,
+      isDirectory: false,
+      name: fileName,
+      fullPath: `/${fileName}`,
+      filesystem: {} as FileSystem,
+      file: (success: (file: File) => void) => success(file),
+    } as FileSystemFileEntry
+    const folder = {
+      isFile: false,
+      isDirectory: true,
+      name,
+      fullPath: `/${name}`,
+      filesystem: {} as FileSystem,
+      createReader: () => {
+        folderStarts.push(name)
+        let firstRead = true
+        return {
+          readEntries: (success: (entries: FileSystemEntry[]) => void) => {
+            if (!firstRead) {
+              success([])
+              return
+            }
+            firstRead = false
+            if (hold) folderReleases.set(name, success)
+            else success([fileEntry])
+          },
+        } as FileSystemDirectoryReader
+      },
+    } as FileSystemDirectoryEntry
+    const transfer = {
+      types: ["Files"],
+      files: [],
+      items: [{ kind: "file", webkitGetAsEntry: () => folder }],
+    } as unknown as DataTransfer
+    const event = new Event("drop", { bubbles: true, cancelable: true })
+    Object.defineProperty(event, "dataTransfer", { value: transfer })
+    const rootElement = document.querySelector<HTMLElement>("[data-nessa-root]")
+    if (!rootElement) throw new Error("Missing App drop boundary")
+    rootElement.dispatchEvent(event)
+  },
+  finishFolder: (name: string) => {
+    const release = folderReleases.get(name)
+    if (!release) throw new Error(`Folder ${name} is not waiting for traversal`)
+    folderReleases.delete(name)
+    release([
+      {
+        isFile: true,
+        isDirectory: false,
+        name: `${name}.txt`,
+        fullPath: `/${name}.txt`,
+        filesystem: {} as FileSystem,
+        file: (success: (file: File) => void) =>
+          success(
+            new File([`contents of ${name}.txt`], `${name}.txt`, { type: "text/plain" }),
+          ),
+      } as FileSystemFileEntry,
+    ])
+  },
+  openAnotherConversation: () => {
+    store.dispatch(openConversation())
+    return store.getState().conversation.activeId
+  },
+  selectConversation: (id: string) => store.dispatch(setActive(id)),
+  finishDropRefusal: (batch: string, reason: string) =>
+    probe.drop?.({
+      batch,
+      files: [],
+      refused: { reason, shown: null, detail: null },
+      text: { plain: "", uriList: "", html: "" },
+    }),
+  settlePick: (requestId: string, files: PickerFile[]) => {
+    const request = probe.pickRequests.find((pending) => pending.requestId === requestId)
+    if (!request) throw new Error(`Unknown picker request ${requestId}`)
+    probe.readied?.({ id: `${requestId}:0`, name: files[0]?.name ?? "", readying: false })
+    request.resolve(files)
+  },
   read: async (ticket: string) => {
     if (ticket !== "verification-native-ticket")
       throw new Error("Unexpected native attachment ticket")
     return nativeRead
   },
+  completePathlessImage: () =>
+    finishDropImage?.(
+      new Response(new Blob([png], { type: "image/png" }), {
+        headers: { "content-type": "image/png" },
+      }),
+    ),
   completeRead: () => releaseRead(png.buffer),
   startParentUpload: async (sameParent = false) => {
     const reached = new Promise<void>((resolve) => {
@@ -337,8 +456,40 @@ const probe = {
       new File([png], "replacement.png", { type: "image/png" }),
     ])
     nextStore.dispatch(attachFiles({ conversationId: "c0", files: [resource!] }))
+    replacementStore = nextStore
+    replacementResources = nextResources
     displayStore = nextStore
     showScope(nextStore, nextResources)
+  },
+  swapPickerOwner: () => {
+    const nextResources = createAttachmentResources()
+    const nextEffects = scenarioEffects("echo")
+    const nextStore = makeStore({
+      attachments: nextResources,
+      canChoosePaths: true,
+      conversation: {
+        ...nextEffects,
+        send: async (input) => {
+          sends.push(input)
+          return nextEffects.send(input)
+        },
+      },
+    })
+    nextStore.dispatch(
+      sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),
+    )
+    replacementStore = nextStore
+    replacementResources = nextResources
+    displayStore = nextStore
+    showScope(nextStore, nextResources)
+  },
+  showOriginalOwner: () => {
+    displayStore = store
+    showScope(store, resources)
+  },
+  showReplacementOwner: () => {
+    displayStore = replacementStore
+    showScope(replacementStore, replacementResources)
   },
   finishOriginalOwner: () =>
     sharedReplies!.get("00000000-0000-4000-8000-000000000001")!.resolve({
@@ -396,6 +547,8 @@ const probe = {
       .conversation.conversations.find(
         (c) => c.id === displayStore.getState().conversation.activeId,
       )?.draft,
+    pickerRequestIds: probe.pickRequests.map((request) => request.requestId),
+    folderStarts,
     terminalRetention: {
       processedSize: png.length,
       acceptedSends: retainedScenario.acceptedSends,
@@ -459,6 +612,10 @@ function showScope(
             }}
           />
         </HeldFilesProvider>
+        <span
+          hidden
+          data-attachment-owner={scopeStore === store ? "original" : "replacement"}
+        />
       </ClockProvider>
     </Provider>,
   )

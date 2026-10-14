@@ -1,0 +1,16 @@
+Source: 7870e750b7483772ebe4ba1a66546660493ef568
+Base: 22f76f61886b05cc598b37ddf3fb3acd9ce124e5
+PASS TypeScript; full Vitest 4190 tests / 322 files
+PASS focused attachment tests 55 / 5 files
+PASS full attachment browser matrix 24 / 24 Chromium and WebKit
+PASS Rust picker-ID argument boundary test 1 / 1
+PASS fresh R3 review: 107 tests, types, architecture, format, Rust and browser picker scenario
+Revert: wrong current-owner routing -> wrong-owner readiness assertion failed
+Revert: registration after invoke -> readiness wait failed
+Revert: settle clears all operations -> held A pending assertion failed
+Revert: currentness blocks result -> original A drop assertion failed
+Revert: bounded picker cache -> first of 65 readiness assertion failed
+Revert: retired picker continuation -> late native read assertion failed
+All probes restored before source freeze.
+Screenshot replay: picker-owner-correlation Chromium and WebKit; only B's b.pdf tile is shown while B is active.
+Native platform matrix and current-main whole-stack gates remain separate.

@@ -26,10 +26,10 @@ export default defineConfig({
         return (
           code +
           `\nexport const hasNativeHost = () => true;
-export const chooseAttachmentFiles = () => window.__attachmentProbe.choose();
+export const chooseAttachmentFiles = (requestId) => window.__attachmentProbe.choose(requestId);
 export const readAttachmentBytes = (ticket) => window.__attachmentProbe.read(ticket);
-export const onAttachmentReadying = () => Promise.resolve(() => {});
-export const onAttachmentBatch = () => Promise.resolve(() => {});
+export const onAttachmentReadying = (handler) => { window.__attachmentProbe.readied = handler; return Promise.resolve(() => {}); };
+export const onAttachmentBatch = (handler) => { window.__attachmentProbe.began = handler; return Promise.resolve(() => {}); };
 export const onAttachmentDragging = () => Promise.resolve(() => {});
 export const onAttachmentDropped = (handler) => { window.__attachmentProbe.drop = handler; return Promise.resolve(() => {}); };`
         )

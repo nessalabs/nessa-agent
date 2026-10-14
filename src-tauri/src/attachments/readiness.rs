@@ -190,8 +190,9 @@ impl Readiness {
 /// identity: two folders can each hold a `report.pdf`, and a panel keyed on
 /// the name had one entry for both — the first to settle took the other's tile
 /// away and let a draft be sent while the second was still being fetched. The
-/// identity is minted here, where the work is, and the panel keys everything
-/// on it and never on what the file is called.
+/// host derives each file identity from its batch and file index. The batch's
+/// origin is defined in [`super::batch`]: host-minted for drops, or the validated
+/// request identity the panel registered for a pick.
 ///
 /// Mechanism-free like the rest of the seam: this says a file needs a moment,
 /// never what is being done about it, so a handler that is not iCloud does not
@@ -199,17 +200,10 @@ impl Readiness {
 pub trait Announce: Send + Sync {
     /// An attach has begun, and this is what it is called.
     ///
-    /// Said at the *gesture* — the drop, or the moment the picker's answer
-    /// comes back — and before any work, because that is the only instant the
-    /// panel can be sure which draft this attach belongs to. Everything after
-    /// it can be three quarters of a minute later, by which time the open tab
-    /// may be a different one.
-    ///
-    /// Both gestures say it. Only the drop did, and a `+` selection therefore
-    /// fell back to whatever tab was open when the host finally spoke: pick two
-    /// placeholders, switch tabs during the first one's fetch, and the second
-    /// file's tile landed on the wrong draft and blocked *its* send while the
-    /// file itself went to the right one.
+    /// Announced before file work. A drop lets the panel register its current
+    /// destination here; a pick carries the request identity the panel registered
+    /// before invoking the chooser. Later readiness and result events correlate
+    /// with that captured operation rather than the tab open when work finishes.
     fn began(&self, batch: &Batch, gesture: Gesture);
     /// This file is being made ready. `id` identifies this waiting, `name` is
     /// what to put on the tile.
@@ -220,14 +214,8 @@ pub trait Announce: Send + Sync {
 
 /// Which gesture an attach began with.
 ///
-/// The panel needs it because the two gestures know their draft at different
-/// moments. A drop *is* the moment — the host says so as it lands, and whatever
-/// tab is open then is the one it landed on. A `+` selection was begun by the
-/// page itself, which captured the draft when the button was pressed and has
-/// held it ever since; the host's word arrives when the picker closes, and the
-/// page should answer with what it already knows rather than reading the tab
-/// again. Saying which gesture it was is the only thing the host knows and the
-/// page does not.
+/// Drops register a destination at the host announcement; picks correlate with
+/// the panel's already registered request. See [`Announce::began`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(super) enum Gesture {

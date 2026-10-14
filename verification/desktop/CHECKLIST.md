@@ -1446,7 +1446,18 @@ zero times, preserves the draft and paints **Attachments still loading**; read
 completion allows one send containing the text and one image. A second URL drop
 while the first fetch is pending paints **Still reading files** and starts no
 second fetch. The JSON reports send, attachment, refusal and page-error counts
-for all twenty-six engine/scenario pairs. A late upload success or failure for a closed
+for all forty engine/scenario pairs. The `drop-capacity` case begins 64
+batches in A/c0, switches to empty B/c0, and checks that the visible 65th-drop
+refusal belongs to B. The rejected overflow and unknown results do nothing;
+the oldest result attaches once to A, a duplicate does nothing, and B accepts a
+new drop after the terminal result frees capacity. Committed feature evidence
+for this flow records the source head, Chromium and WebKit screenshots, the
+concise matrix output and the source-revert result in
+[`attachment-drop-capacity`](evidence/attachment-drop-capacity/README.md).
+Overlapping picker requests are
+announced and resolved in reverse order across two providers with the same
+conversation ID; each readiness tile and returned file stays with the provider
+that started it. A late upload success or failure for a closed
 parent leaves the replacement parent's shared-resource tile uploading (one rendered
 `data-upload="uploading"` tile), per [attachment lifetimes](../../docs/design/attachment-lifetimes.md).
 The same-parent remove/re-add cases also retain one uploading tile after an old
@@ -1459,7 +1470,23 @@ the owner changes, despite matching local conversation/placement numbers. Unmoun
 with three active uploads leaves the fourth queued after a completion; remounting
 resumes that sibling. Native SVG bytes retain their MIME type and render a 4px
 image from the object URL in both engines. This verifies browser interactions with the
-production panel; it does not exercise an operating-system file picker.
+production panel; it does not exercise an operating-system file picker. The
+`folder-owner-send` and `folder-owner-drop` keep a same-ID pending folder walk
+in A from blocking B's immediate send or next folder gesture; each settled walk
+still writes to its captured provider. The JSON reports send, attachment,
+refusal and page-error counts for all forty engine/scenario pairs.
+`pathless-host-drop` case proves prose and image URLs delivered without a batch
+beginning still reach the composer and the destination captured before the image
+fetch waits. `browser-picker-fallback` cancels and reopens the native browser input,
+then resolves its delayed file change after the provider has changed; the original
+owner receives it. Cropped views of both results are retained in
+[`attachment-gesture-owners`](evidence/attachment-gesture-owners/README.md).
+`conversation-refusals` leaves one refused folder in each of two open tabs,
+delivers A's result while B is active, revisits and answers A, and verifies B's
+notice remains. The paired screenshots show each tab's own notice. A delayed
+host-batch registration test also replaces the provider before the subscription
+resolves and verifies the single mounted listener still captures the current
+destination; a retained callback after unmount has no effect.
 AL24 also covers a terminal refusal followed by a restored-draft retry. In each
 engine, the fixture stages a 40 MiB native PNG as a 68 B processed image, refuses
 the first send, retries it successfully, then accepts a second 40 MiB image. Both

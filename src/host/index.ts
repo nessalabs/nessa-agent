@@ -63,6 +63,7 @@ export {
   windowSurface,
   loadShortcuts,
   type ChosenFile,
+  type PickerRequestId,
   type DroppedOnPanel,
   type Downloaded,
   type GatewayStartup,
