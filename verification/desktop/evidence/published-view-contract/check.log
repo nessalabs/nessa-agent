@@ -1,20 +1,20 @@
 #827 published-view verification contract
-Intended base: codex/812-fresh-restored-tab-identities at b7ceafa51e82ec91dc63aa8ba8ed26af42747f4a
-Current-main source: 6c23ca46efad90261f8fb3eebdf30a6a634da68a
-Code head tested: 00c715580184dcac6898597bddeb82280fbdceb2
-The evidence-recording commit changes this file only.
+Base after restack: codex/812-fresh-restored-tab-identities at 6985df620c02f9c593dfc9dde4c89d450111434c
+Current code head tested: a38586c02ddb191514ec3965a070bc323001325b
+The final evidence commit changes only this evidence directory.
 
 Fixture path: SDK conversationView decode -> production gateway conversationView mapper with the fixture's panel clock -> applyView. The typed SDK view supplies required serverNowMs and notes; the production mapper owns SDK-note to panel-note conversion and deadline clock conversion.
 Mode comparison: ignores exactly revision, approvalMode and serverNowMs; all other current and future fields remain semantic content.
 Lease lookup: Object.hasOwn protects prototype keys before indexing the case table.
 
-Checks on the code head above:
+Checks on the code head above, after advancing the owned private UI clone to the pinned revision `30900b8644ce9b1bb49681ed28067dad4537a70d`, running `pnpm install --frozen-lockfile` in that clone, and building both linked packages:
 - TypeScript: node node_modules/typescript/lib/tsc.js --noEmit — passed.
 - ESLint and Prettier checks on changed TypeScript, scripts and docs — passed.
 - Verification script library: 167/167 passed.
 - Architecture tests: 102/102 passed; architecture check passed.
-- lease-details: 108/108 held; Chromium and WebKit; widths 360, 600 and 1440; includes __proto__, constructor, and Run on cases. Output: /tmp/nessa-827-lease-browser-current.json.
-- mode-publication: 2/2 held; Chromium and WebKit; dev mode; reused the current-main native binary at /tmp/nessa-797-combined-cargo-target/debug/nessa. Output: /tmp/nessa-827-mode-browser-current.json.
+- lease-details: 108/108 held; Chromium and WebKit; widths 360, 600 and 1440; includes __proto__, constructor, and Run on cases. Output: /tmp/nessa-836-lease-restack.json.
+- mode-publication: 2/2 held; Chromium and WebKit; dev mode; reused the current-main native binary at /tmp/nessa-797-combined-cargo-target/debug/nessa. Output: /tmp/nessa-836-mode-restack-shots.json; run evidence and gateway log: `/tmp/nessa-836-mode-evidence`.
+- Visual evidence: `mode-publication-auto.png` shows the confirmed Auto setting; `mode-publication-unavailable.png` shows mode controls disabled while the draft is retained.
 
 Revert probes; each source change was restored:
 - Remove serverNowMs from the typed SDK view: TypeScript TS1360, required property missing.
@@ -22,4 +22,4 @@ Revert probes; each source change was restored:
 - Bypass the production mapper and pass SDK view directly to applyView: TypeScript TS2345 because SDK ConversationNote[] lacks the panel Note.id field.
 - Include serverNowMs in mode-independent content: mode-content test failed because the two observation clocks differed.
 - Remove Object.hasOwn from lease case lookup: Chromium reported pageerror Invalid conversation lease state for __proto__; the fixture then failed to render. Output: /tmp/nessa-827-prototype-revert-current.json.
-- Restored source: the full lease-details run above held 108/108; final TypeScript, lint, format, library, architecture and whitespace checks passed.
+- The five source-asserted probes below were performed before restacking at the earlier code head. Restored source was revalidated at the current code head: the full lease-details run above held 108/108; TypeScript, lint, format, library, architecture and whitespace checks passed.
