@@ -1439,7 +1439,7 @@ upload: the old completion leaves its single rendered tile uploading, and only
 its own reply makes that tile stored. An open original preview disappears when
 the owner changes, despite matching local conversation/placement numbers. Unmounting
 with three active uploads leaves the fourth queued after a completion; remounting
-resumes that sibling. Native SVG bytes retain their MIME type and render a4px
+resumes that sibling. Native SVG bytes retain their MIME type and render a 4px
 image from the object URL in both engines. This verifies browser interactions with the
 production panel; it does not exercise an operating-system file picker.
 
