@@ -8,9 +8,20 @@ import { keysWhileRowsArrive, pressMountedOverviewKeys } from "./overview-keyboa
  * Regression of c13a9ed66f (#606): observation and action were separate RPCs.
  * The page completes its next render before the opening-key RPC returns.
  */
-function pageWithFastCompletion({ noPartial = false, openingFailure } = {}) {
+function pageWithFastCompletion({
+  noPartial = false,
+  noActiveFocus = false,
+  outsideFocus = false,
+  openingFailure,
+} = {}) {
   const events = []
-  const view = { visible: false, complete: false, rows: [], focused: undefined }
+  const view = {
+    visible: false,
+    complete: false,
+    rows: [],
+    focused: undefined,
+    listedChecks: [],
+  }
   class Row {
     constructor(id) {
       this.id = id
@@ -33,7 +44,13 @@ function pageWithFastCompletion({ noPartial = false, openingFailure } = {}) {
   }
   view.rows = [new Row("first"), new Row("second")]
   view.focused = view.rows[0]
-  const column = { hasAttribute: () => view.complete, querySelectorAll: () => view.rows }
+  const column = {
+    hasAttribute(name) {
+      view.listedChecks.push(name)
+      return view.complete && name === "data-overview-listed"
+    },
+    querySelectorAll: () => view.rows,
+  }
   const document = {
     querySelector: () => (view.visible ? column : null),
     get activeElement() {
@@ -52,16 +69,20 @@ function pageWithFastCompletion({ noPartial = false, openingFailure } = {}) {
       },
     })
   let observe
+  let timeout
+  let settled = false
   let disposed = false
   const page = {
     waitForFunction(predicate, selectors, options) {
       events.push("arm")
       assert.equal(options.timeout, 2000)
       assert.equal(options.polling, "raf")
-      return new Promise((resolve) => {
+      return new Promise((resolve, reject) => {
+        timeout = reject
         observe = () => {
           const result = browser(predicate, selectors)
           if (!result) return
+          settled = true
           resolve({
             jsonValue: async () => JSON.parse(JSON.stringify(result)),
             dispose: async () => {
@@ -79,10 +100,13 @@ function pageWithFastCompletion({ noPartial = false, openingFailure } = {}) {
         if (openingFailure) throw openingFailure
         view.visible = true
         view.complete = noPartial
+        if (noActiveFocus) view.focused = undefined
+        if (outsideFocus) view.focused = new Row("outside")
         observe?.()
         view.complete = true
         view.rows.push(new Row("third"))
         events.push("complete")
+        if (!settled) timeout?.(new Error("page.waitForFunction timed out"))
       },
     },
   }
@@ -117,6 +141,22 @@ test("reports a genuinely absent partial prefix without inventing measurements",
   const scene = pageWithFastCompletion({ noPartial: true })
   await assert.rejects(keysWhileRowsArrive(scene.page), CannotRun)
   assert.deepEqual(scene.events, ["arm", "open", "complete"])
+  assert.equal(scene.disposed, true)
+})
+
+test("reports a completed list when no row is focused", async () => {
+  const scene = pageWithFastCompletion({ noPartial: true, noActiveFocus: true })
+  await assert.rejects(keysWhileRowsArrive(scene.page), CannotRun)
+  assert.deepEqual(scene.events, ["arm", "open", "complete"])
+  assert.deepEqual(scene.view.listedChecks, ["data-overview-listed"])
+  assert.equal(scene.disposed, true)
+})
+
+test("reports a completed list when focus is outside its column", async () => {
+  const scene = pageWithFastCompletion({ noPartial: true, outsideFocus: true })
+  await assert.rejects(keysWhileRowsArrive(scene.page), CannotRun)
+  assert.deepEqual(scene.events, ["arm", "open", "complete"])
+  assert.deepEqual(scene.view.listedChecks, ["data-overview-listed"])
   assert.equal(scene.disposed, true)
 })
 

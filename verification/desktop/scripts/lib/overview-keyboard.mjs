@@ -5,10 +5,10 @@ import { css, keys } from "./selectors.mjs"
 export function pressMountedOverviewKeys(sel) {
   const column = document.querySelector(sel.column)
   if (!column) return false
+  if (column.hasAttribute("data-overview-listed")) return { missed: true }
   const rows = [...column.querySelectorAll(sel.item)]
   const focused = document.activeElement?.closest(sel.item)
   if (!focused || !rows.includes(focused)) return false
-  if (column.hasAttribute("data-overview-listed")) return { missed: true }
   if (rows.length < 2 || focused === rows[rows.length - 1]) return false
   const ids = rows.map((row) => row.getAttribute("data-overview-item"))
   const press = (code) => {
