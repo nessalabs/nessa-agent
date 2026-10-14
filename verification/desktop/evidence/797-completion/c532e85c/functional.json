@@ -1,0 +1,5540 @@
+{
+  "check": "run-all",
+  "ok": true,
+  "summary": [
+    {
+      "check": "focus",
+      "status": "held",
+      "held": "84/84",
+      "seconds": 314
+    },
+    {
+      "check": "clock-snapshots",
+      "status": "held",
+      "held": "4/4",
+      "seconds": 1
+    },
+    {
+      "check": "app-review",
+      "status": "held",
+      "held": "36/36",
+      "seconds": 179
+    }
+  ],
+  "checks": {
+    "focus": {
+      "check": "focus",
+      "ok": true,
+      "started": "2026-10-14T16:58:16.162Z",
+      "finished": "2026-10-14T17:03:30.345Z",
+      "target": {
+        "url": "http://127.0.0.1:1438/desktop.html",
+        "mode": "dev"
+      },
+      "results": [
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-panes",
+          "engine": "chromium",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "⌘N",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "⇧⌘N (new session beside)",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "2",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "2",
+              "ok": true
+            },
+            {
+              "step": "⌘\\ and a pick",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "⇧⌘\\ (split down)",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⌘1",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "⌘2",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "2",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "2",
+              "ok": true
+            },
+            {
+              "step": "⌘3",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "⌘4",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⇧⌘]",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⇧⌘[",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "⌘W",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⌘K closed without a pick",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "Settings opened and left",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-overview",
+          "engine": "chromium",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "⌘0 then Escape at once",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⌘0 opens",
+              "content": "agents",
+              "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "↓ walks",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⌘0 again keeps it",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "Escape leaves",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⌘ and the focused pane's number, from the overview",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "⇧⌘[ at the first pane, from the overview",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "⌃⌥← at the left edge, from the overview",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "Escape leaves again",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-overview-arriving",
+          "engine": "chromium",
+          "layout": "columns",
+          "missed": false,
+          "first": "retry-budget",
+          "last": "command-order-rtl",
+          "afterEnd": {
+            "focused": "command-order-rtl",
+            "tabbable": "command-order-rtl"
+          },
+          "afterDown": {
+            "focused": "command-order-rtl",
+            "tabbable": "command-order-rtl"
+          },
+          "afterHome": {
+            "focused": "retry-budget",
+            "tabbable": "retry-budget"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-mash",
+          "engine": "chromium",
+          "layout": "columns",
+          "after": {
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "19",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "19"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-bound-keys",
+          "engine": "chromium",
+          "layout": "columns",
+          "records": [
+            {
+              "code": "KeyN",
+              "prevented": true
+            },
+            {
+              "code": "KeyW",
+              "prevented": true
+            },
+            {
+              "code": "KeyX",
+              "prevented": false
+            },
+            {
+              "code": "KeyN",
+              "prevented": true
+            }
+          ],
+          "original": 1,
+          "retained": 1,
+          "ordinary": 2,
+          "modal": true
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-retired-layout",
+          "engine": "chromium",
+          "layout": "columns",
+          "retirement": {
+            "captured": 1,
+            "cancelled": 1,
+            "newRequests": 0
+          },
+          "pending": 0,
+          "after": {
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-home-handoff",
+          "engine": "chromium",
+          "layout": "columns",
+          "counts": [
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1
+          ],
+          "flights": {
+            "first-send-composer": [
+              {
+                "offset": null,
+                "easing": "linear",
+                "composite": "auto",
+                "transform": "translate(0px, -347.832px) scale(0.888889)",
+                "computedOffset": 0
+              },
+              {
+                "offset": null,
+                "easing": "linear",
+                "composite": "auto",
+                "transform": "none",
+                "computedOffset": 1
+              }
+            ],
+            "first-send-message": [
+              {
+                "offset": null,
+                "easing": "linear",
+                "composite": "auto",
+                "transform": "translate(-342.375px, 244.168px)",
+                "computedOffset": 0
+              },
+              {
+                "offset": null,
+                "easing": "linear",
+                "composite": "auto",
+                "transform": "none",
+                "computedOffset": 1
+              }
+            ]
+          },
+          "motionCount": 2,
+          "after": {
+            "content": null,
+            "active": "DIV",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-home-handoff-reduced",
+          "engine": "chromium",
+          "layout": "columns",
+          "counts": [
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1
+          ],
+          "flights": {},
+          "motionCount": 0,
+          "after": {
+            "content": null,
+            "active": "DIV",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-answers-overview",
+          "engine": "chromium",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "held ⌘↩",
+              "before": 6,
+              "after": 5
+            },
+            {
+              "step": "⌘↩ twice, 80ms apart",
+              "before": 5,
+              "after": 4
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-answers-card",
+          "engine": "chromium",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "Allow Once, held ↩",
+              "before": 6,
+              "after": 5,
+              "typed": "keep these words"
+            },
+            {
+              "step": "Deny",
+              "before": 5,
+              "after": 4,
+              "typed": "keep these words"
+            },
+            {
+              "step": "Always Allow",
+              "before": 4,
+              "after": 3,
+              "typed": "keep these words"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-row",
+          "engine": "chromium",
+          "layout": "columns",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "waiting (row)",
+              "on": "row"
+            },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "↓ (or ↑)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-peek",
+          "engine": "chromium",
+          "layout": "columns",
+          "size": "1000x700",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "waiting (peek)",
+              "on": "story"
+            },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "↓ (or ↑)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-away",
+          "engine": "chromium",
+          "layout": "columns",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "waiting (away)",
+              "on": "body"
+            },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BODY",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": null,
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-held",
+          "engine": "chromium",
+          "layout": "columns",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "waiting (held)",
+              "on": "row"
+            },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "↓ (or ↑)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-moved",
+          "engine": "chromium",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "moved its row",
+              "row": "gpt6-catalog"
+            },
+            {
+              "step": "after",
+              "on": "row",
+              "row": "gpt6-catalog"
+            },
+            {
+              "step": "scroll",
+              "was": 684,
+              "now": 684
+            },
+            {
+              "step": "↓ (or ↑)",
+              "on": "row",
+              "row": "split-panes"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-moved-pill",
+          "engine": "chromium",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "moved the row being replied to",
+              "session": "retry-budget",
+              "value": "half-way"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-beside",
+          "engine": "chromium",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "narrowed to 700"
+            },
+            {
+              "step": "after",
+              "on": "row",
+              "row": "retry-budget"
+            },
+            {
+              "step": "↓ (or ↑)",
+              "on": "row",
+              "row": "signing"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-show-all",
+          "engine": "chromium",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "Show All"
+            },
+            {
+              "step": "after",
+              "on": "row",
+              "row": "retry-budget"
+            },
+            {
+              "step": "↓ (or ↑)",
+              "on": "row",
+              "row": "signing"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-home-scene",
+          "engine": "chromium",
+          "layout": "columns",
+          "after": {
+            "content": null,
+            "active": "BUTTON",
+            "activeInPane": "1",
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-reply",
+          "engine": "chromium",
+          "layout": "columns",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "↓ ⌘R and type",
+              "from": "retry-budget",
+              "session": "signing",
+              "value": "status?"
+            },
+            {
+              "step": "sent",
+              "wasRequest": true,
+              "rowLeftNeedsYou": true,
+              "session": "signing",
+              "value": ""
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-reply",
+          "engine": "chromium",
+          "layout": "columns",
+          "size": "1000x700",
+          "trail": [
+            {
+              "step": "↓ ⌘R and type",
+              "from": "retry-budget",
+              "session": "signing",
+              "value": "status?"
+            },
+            {
+              "step": "sent",
+              "wasRequest": true,
+              "rowLeftNeedsYou": true,
+              "session": "signing",
+              "value": ""
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-panes",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "⌘N",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "⇧⌘N (new session beside)",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "2",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "2",
+              "ok": true
+            },
+            {
+              "step": "⌘\\ and a pick",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "⇧⌘\\ (split down)",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⌘1",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "⌘2",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "2",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "2",
+              "ok": true
+            },
+            {
+              "step": "⌘3",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "⌘4",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⇧⌘]",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⇧⌘[",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "⌘W",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⌘K closed without a pick",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "Settings opened and left",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-overview",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "⌘0 then Escape at once",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⌘0 opens",
+              "content": "agents",
+              "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "↓ walks",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⌘0 again keeps it",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "Escape leaves",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⌘ and the focused pane's number, from the overview",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "⇧⌘[ at the first pane, from the overview",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "⌃⌥← at the left edge, from the overview",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "Escape leaves again",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-overview-arriving",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "missed": false,
+          "first": "retry-budget",
+          "last": "command-order-rtl",
+          "afterEnd": {
+            "focused": "command-order-rtl",
+            "tabbable": "command-order-rtl"
+          },
+          "afterDown": {
+            "focused": "command-order-rtl",
+            "tabbable": "command-order-rtl"
+          },
+          "afterHome": {
+            "focused": "retry-budget",
+            "tabbable": "retry-budget"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-mash",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "after": {
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "19",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "19"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-bound-keys",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "records": [
+            {
+              "code": "KeyN",
+              "prevented": true
+            },
+            {
+              "code": "KeyW",
+              "prevented": true
+            },
+            {
+              "code": "KeyX",
+              "prevented": false
+            },
+            {
+              "code": "KeyN",
+              "prevented": true
+            }
+          ],
+          "original": 1,
+          "retained": 1,
+          "ordinary": 2,
+          "modal": true
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-retired-layout",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "retirement": {
+            "captured": 1,
+            "cancelled": 1,
+            "newRequests": 0
+          },
+          "pending": 0,
+          "after": {
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-home-handoff",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "counts": [
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1
+          ],
+          "flights": {
+            "first-send-composer": [
+              {
+                "offset": null,
+                "easing": "linear",
+                "composite": "auto",
+                "transform": "translate(0px, -350.176px) scale(0.888889)",
+                "computedOffset": 0
+              },
+              {
+                "offset": null,
+                "easing": "linear",
+                "composite": "auto",
+                "transform": "none",
+                "computedOffset": 1
+              }
+            ],
+            "first-send-message": [
+              {
+                "offset": null,
+                "easing": "linear",
+                "composite": "auto",
+                "transform": "translate(-342.375px, 241.824px)",
+                "computedOffset": 0
+              },
+              {
+                "offset": null,
+                "easing": "linear",
+                "composite": "auto",
+                "transform": "none",
+                "computedOffset": 1
+              }
+            ]
+          },
+          "motionCount": 2,
+          "after": {
+            "content": null,
+            "active": "BUTTON",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-home-handoff-reduced",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "counts": [
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1
+          ],
+          "flights": {},
+          "motionCount": 0,
+          "after": {
+            "content": null,
+            "active": "BUTTON",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-answers-overview",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "held ⌘↩",
+              "before": 6,
+              "after": 5
+            },
+            {
+              "step": "⌘↩ twice, 80ms apart",
+              "before": 5,
+              "after": 4
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-answers-card",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "Allow Once, held ↩",
+              "before": 6,
+              "after": 5,
+              "typed": "keep these words"
+            },
+            {
+              "step": "Deny",
+              "before": 5,
+              "after": 4,
+              "typed": "keep these words"
+            },
+            {
+              "step": "Always Allow",
+              "before": 4,
+              "after": 3,
+              "typed": "keep these words"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-row",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "waiting (row)",
+              "on": "row"
+            },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "↓ (or ↑)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-peek",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "size": "1000x700",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "waiting (peek)",
+              "on": "story"
+            },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "↓ (or ↑)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-away",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "waiting (away)",
+              "on": "body"
+            },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BODY",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": null,
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-held",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "waiting (held)",
+              "on": "row"
+            },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "↓ (or ↑)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-moved",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "moved its row",
+              "row": "gpt6-catalog"
+            },
+            {
+              "step": "after",
+              "on": "row",
+              "row": "gpt6-catalog"
+            },
+            {
+              "step": "scroll",
+              "was": 684,
+              "now": 684
+            },
+            {
+              "step": "↓ (or ↑)",
+              "on": "row",
+              "row": "split-panes"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-moved-pill",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "moved the row being replied to",
+              "session": "retry-budget",
+              "value": "half-way"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-beside",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "narrowed to 700"
+            },
+            {
+              "step": "after",
+              "on": "row",
+              "row": "retry-budget"
+            },
+            {
+              "step": "↓ (or ↑)",
+              "on": "row",
+              "row": "signing"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-show-all",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "Show All"
+            },
+            {
+              "step": "after",
+              "on": "row",
+              "row": "retry-budget"
+            },
+            {
+              "step": "↓ (or ↑)",
+              "on": "row",
+              "row": "signing"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-home-scene",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "after": {
+            "content": null,
+            "active": "BUTTON",
+            "activeInPane": "1",
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-reply",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "↓ ⌘R and type",
+              "from": "retry-budget",
+              "session": "signing",
+              "value": "status?"
+            },
+            {
+              "step": "sent",
+              "wasRequest": true,
+              "rowLeftNeedsYou": true,
+              "session": "signing",
+              "value": ""
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-reply",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "size": "1000x700",
+          "trail": [
+            {
+              "step": "↓ ⌘R and type",
+              "from": "retry-budget",
+              "session": "signing",
+              "value": "status?"
+            },
+            {
+              "step": "sent",
+              "wasRequest": true,
+              "rowLeftNeedsYou": true,
+              "session": "signing",
+              "value": ""
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-panes",
+          "engine": "webkit",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "⌘N",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "⇧⌘N (new session beside)",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "2",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "2",
+              "ok": true
+            },
+            {
+              "step": "⌘\\ and a pick",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "⇧⌘\\ (split down)",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⌘1",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "⌘2",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "2",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "2",
+              "ok": true
+            },
+            {
+              "step": "⌘3",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "⌘4",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⇧⌘]",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⇧⌘[",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "⌘W",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⌘K closed without a pick",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "Settings opened and left",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-overview",
+          "engine": "webkit",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "⌘0 then Escape at once",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⌘0 opens",
+              "content": "agents",
+              "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "↓ walks",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⌘0 again keeps it",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "Escape leaves",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⌘ and the focused pane's number, from the overview",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "⇧⌘[ at the first pane, from the overview",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "⌃⌥← at the left edge, from the overview",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "Escape leaves again",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-overview-arriving",
+          "engine": "webkit",
+          "layout": "columns",
+          "missed": false,
+          "first": "retry-budget",
+          "last": "command-order-rtl",
+          "afterEnd": {
+            "focused": "command-order-rtl",
+            "tabbable": "command-order-rtl"
+          },
+          "afterDown": {
+            "focused": "command-order-rtl",
+            "tabbable": "command-order-rtl"
+          },
+          "afterHome": {
+            "focused": "retry-budget",
+            "tabbable": "retry-budget"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-mash",
+          "engine": "webkit",
+          "layout": "columns",
+          "after": {
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "19",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "19"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-bound-keys",
+          "engine": "webkit",
+          "layout": "columns",
+          "records": [
+            {
+              "code": "KeyN",
+              "prevented": true
+            },
+            {
+              "code": "KeyW",
+              "prevented": true
+            },
+            {
+              "code": "KeyX",
+              "prevented": false
+            },
+            {
+              "code": "KeyN",
+              "prevented": true
+            }
+          ],
+          "original": 1,
+          "retained": 1,
+          "ordinary": 2,
+          "modal": true
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-retired-layout",
+          "engine": "webkit",
+          "layout": "columns",
+          "retirement": {
+            "captured": 1,
+            "cancelled": 1,
+            "newRequests": 0
+          },
+          "pending": 0,
+          "after": {
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-home-handoff",
+          "engine": "webkit",
+          "layout": "columns",
+          "counts": [
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1
+          ],
+          "flights": {
+            "first-send-composer": [
+              {
+                "composite": "auto",
+                "easing": "linear",
+                "offset": null,
+                "computedOffset": 0,
+                "transform": "translate(0px, -349.832458px) scale(0.888889)"
+              },
+              {
+                "composite": "auto",
+                "easing": "linear",
+                "offset": null,
+                "computedOffset": 1,
+                "transform": "none"
+              }
+            ],
+            "first-send-message": [
+              {
+                "composite": "auto",
+                "easing": "linear",
+                "offset": null,
+                "computedOffset": 0,
+                "transform": "translate(-342.375px, 242.167542px)"
+              },
+              {
+                "composite": "auto",
+                "easing": "linear",
+                "offset": null,
+                "computedOffset": 1,
+                "transform": "none"
+              }
+            ]
+          },
+          "motionCount": 2,
+          "after": {
+            "content": null,
+            "active": "DIV",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-home-handoff-reduced",
+          "engine": "webkit",
+          "layout": "columns",
+          "counts": [
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1
+          ],
+          "flights": {},
+          "motionCount": 0,
+          "after": {
+            "content": null,
+            "active": "DIV",
+            "activeInPane": null,
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-answers-overview",
+          "engine": "webkit",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "held ⌘↩",
+              "before": 6,
+              "after": 5
+            },
+            {
+              "step": "⌘↩ twice, 80ms apart",
+              "before": 5,
+              "after": 4
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-answers-card",
+          "engine": "webkit",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "Allow Once, held ↩",
+              "before": 6,
+              "after": 5,
+              "typed": "keep these words"
+            },
+            {
+              "step": "Deny",
+              "before": 5,
+              "after": 4,
+              "typed": "keep these words"
+            },
+            {
+              "step": "Always Allow",
+              "before": 4,
+              "after": 3,
+              "typed": "keep these words"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-row",
+          "engine": "webkit",
+          "layout": "columns",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "waiting (row)",
+              "on": "row"
+            },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "↓ (or ↑)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-peek",
+          "engine": "webkit",
+          "layout": "columns",
+          "size": "1000x700",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "waiting (peek)",
+              "on": "story"
+            },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "↓ (or ↑)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-away",
+          "engine": "webkit",
+          "layout": "columns",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "waiting (away)",
+              "on": "body"
+            },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BODY",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": null,
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-held",
+          "engine": "webkit",
+          "layout": "columns",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "waiting (held)",
+              "on": "row"
+            },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "↓ (or ↑)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-moved",
+          "engine": "webkit",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "moved its row",
+              "row": "gpt6-catalog"
+            },
+            {
+              "step": "after",
+              "on": "row",
+              "row": "gpt6-catalog"
+            },
+            {
+              "step": "scroll",
+              "was": 684,
+              "now": 684
+            },
+            {
+              "step": "↓ (or ↑)",
+              "on": "row",
+              "row": "split-panes"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-moved-pill",
+          "engine": "webkit",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "moved the row being replied to",
+              "session": "retry-budget",
+              "value": "half-way"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-beside",
+          "engine": "webkit",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "narrowed to 700"
+            },
+            {
+              "step": "after",
+              "on": "row",
+              "row": "retry-budget"
+            },
+            {
+              "step": "↓ (or ↑)",
+              "on": "row",
+              "row": "signing"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-show-all",
+          "engine": "webkit",
+          "layout": "columns",
+          "trail": [
+            {
+              "step": "Show All"
+            },
+            {
+              "step": "after",
+              "on": "row",
+              "row": "retry-budget"
+            },
+            {
+              "step": "↓ (or ↑)",
+              "on": "row",
+              "row": "signing"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-home-scene",
+          "engine": "webkit",
+          "layout": "columns",
+          "after": {
+            "content": null,
+            "active": "BUTTON",
+            "activeInPane": "1",
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-reply",
+          "engine": "webkit",
+          "layout": "columns",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "↓ ⌘R and type",
+              "from": "retry-budget",
+              "session": "signing",
+              "value": "status?"
+            },
+            {
+              "step": "sent",
+              "wasRequest": true,
+              "rowLeftNeedsYou": true,
+              "session": "signing",
+              "value": ""
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-reply",
+          "engine": "webkit",
+          "layout": "columns",
+          "size": "1000x700",
+          "trail": [
+            {
+              "step": "↓ ⌘R and type",
+              "from": "retry-budget",
+              "session": "signing",
+              "value": "status?"
+            },
+            {
+              "step": "sent",
+              "wasRequest": true,
+              "rowLeftNeedsYou": true,
+              "session": "signing",
+              "value": ""
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-panes",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "⌘N",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "⇧⌘N (new session beside)",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "2",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "2",
+              "ok": true
+            },
+            {
+              "step": "⌘\\ and a pick",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "⇧⌘\\ (split down)",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⌘1",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "⌘2",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "2",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "2",
+              "ok": true
+            },
+            {
+              "step": "⌘3",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "⌘4",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⇧⌘]",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⇧⌘[",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "4",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "4",
+              "ok": true
+            },
+            {
+              "step": "⌘W",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⌘K closed without a pick",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "Settings opened and left",
+              "content": null,
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-overview",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "⌘0 then Escape at once",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⌘0 opens",
+              "content": "agents",
+              "active": "DIV[Retry budget for ACP reconnects. Codex wants to run cargo test -p nessa-gateway reconnect -- --nocapture.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "↓ walks",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⌘0 again keeps it",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "Escape leaves",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "6",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "6",
+              "ok": true
+            },
+            {
+              "step": "⌘ and the focused pane's number, from the overview",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "⇧⌘[ at the first pane, from the overview",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "⌃⌥← at the left edge, from the overview",
+              "content": "agents",
+              "active": "DIV[Release build signing fails on CI. Codex wants to run security import build/nessa-dev.p12 -k release.keychain.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "signing",
+              "focusedPane": "1",
+              "ok": true
+            },
+            {
+              "step": "Escape leaves again",
+              "content": "panes",
+              "active": "TEXTAREA[Message]",
+              "activeInPane": "1",
+              "activeIsComposer": true,
+              "activeOverviewItem": null,
+              "focusedPane": "1",
+              "ok": true
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-overview-arriving",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "missed": false,
+          "first": "retry-budget",
+          "last": "command-order-rtl",
+          "afterEnd": {
+            "focused": "command-order-rtl",
+            "tabbable": "command-order-rtl"
+          },
+          "afterDown": {
+            "focused": "command-order-rtl",
+            "tabbable": "command-order-rtl"
+          },
+          "afterHome": {
+            "focused": "retry-budget",
+            "tabbable": "retry-budget"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-mash",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "after": {
+            "content": "panes",
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "19",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "19"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-bound-keys",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "records": [
+            {
+              "code": "KeyN",
+              "prevented": true
+            },
+            {
+              "code": "KeyW",
+              "prevented": true
+            },
+            {
+              "code": "KeyX",
+              "prevented": false
+            },
+            {
+              "code": "KeyN",
+              "prevented": true
+            }
+          ],
+          "original": 1,
+          "retained": 1,
+          "ordinary": 2,
+          "modal": true
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-retired-layout",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "retirement": {
+            "captured": 1,
+            "cancelled": 1,
+            "newRequests": 0
+          },
+          "pending": 0,
+          "after": {
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-home-handoff",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "counts": [
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1
+          ],
+          "flights": {
+            "first-send-composer": [
+              {
+                "composite": "auto",
+                "easing": "linear",
+                "offset": null,
+                "computedOffset": 0,
+                "transform": "translate(0px, -349.425781px) scale(0.888889)"
+              },
+              {
+                "composite": "auto",
+                "easing": "linear",
+                "offset": null,
+                "computedOffset": 1,
+                "transform": "none"
+              }
+            ],
+            "first-send-message": [
+              {
+                "composite": "auto",
+                "easing": "linear",
+                "offset": null,
+                "computedOffset": 0,
+                "transform": "translate(-342.375px, 242.574219px)"
+              },
+              {
+                "composite": "auto",
+                "easing": "linear",
+                "offset": null,
+                "computedOffset": 1,
+                "transform": "none"
+              }
+            ]
+          },
+          "motionCount": 2,
+          "after": {
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-home-handoff-reduced",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "counts": [
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1
+          ],
+          "flights": {},
+          "motionCount": 0,
+          "after": {
+            "content": null,
+            "active": "TEXTAREA[Message]",
+            "activeInPane": "1",
+            "activeIsComposer": true,
+            "activeOverviewItem": null,
+            "focusedPane": "1"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-answers-overview",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "held ⌘↩",
+              "before": 6,
+              "after": 5
+            },
+            {
+              "step": "⌘↩ twice, 80ms apart",
+              "before": 5,
+              "after": 4
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-answers-card",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "Allow Once, held ↩",
+              "before": 6,
+              "after": 5,
+              "typed": "keep these words"
+            },
+            {
+              "step": "Deny",
+              "before": 5,
+              "after": 4,
+              "typed": "keep these words"
+            },
+            {
+              "step": "Always Allow",
+              "before": 4,
+              "after": 3,
+              "typed": "keep these words"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-row",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "waiting (row)",
+              "on": "row"
+            },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "↓ (or ↑)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-peek",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "size": "1000x700",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "waiting (peek)",
+              "on": "story"
+            },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "↓ (or ↑)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-away",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "waiting (away)",
+              "on": "body"
+            },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BODY",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": null,
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-regroup-held",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "replied, Escape",
+              "under": "Working",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "waiting (held)",
+              "on": "row"
+            },
+            {
+              "step": "turn ended",
+              "under": "Finished",
+              "content": "agents",
+              "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "retry-budget",
+              "focusedPane": "1"
+            },
+            {
+              "step": "↓ (or ↑)",
+              "content": "agents",
+              "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+              "activeInPane": null,
+              "activeIsComposer": false,
+              "activeOverviewItem": "gpt6-catalog",
+              "focusedPane": "1"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-moved",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "moved its row",
+              "row": "gpt6-catalog"
+            },
+            {
+              "step": "after",
+              "on": "row",
+              "row": "gpt6-catalog"
+            },
+            {
+              "step": "scroll",
+              "was": 684,
+              "now": 684
+            },
+            {
+              "step": "↓ (or ↑)",
+              "on": "row",
+              "row": "split-panes"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-moved-pill",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "moved the row being replied to",
+              "session": "retry-budget",
+              "value": "half-way"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-beside",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "narrowed to 700"
+            },
+            {
+              "step": "after",
+              "on": "row",
+              "row": "retry-budget"
+            },
+            {
+              "step": "↓ (or ↑)",
+              "on": "row",
+              "row": "signing"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-gives-back-show-all",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "trail": [
+            {
+              "step": "Show All"
+            },
+            {
+              "step": "after",
+              "on": "row",
+              "row": "retry-budget"
+            },
+            {
+              "step": "↓ (or ↑)",
+              "on": "row",
+              "row": "signing"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-home-scene",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "after": {
+            "content": null,
+            "active": "BUTTON",
+            "activeInPane": "1",
+            "activeIsComposer": false,
+            "activeOverviewItem": null,
+            "focusedPane": "1"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-reply",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "size": "1440x900",
+          "trail": [
+            {
+              "step": "↓ ⌘R and type",
+              "from": "retry-budget",
+              "session": "signing",
+              "value": "status?"
+            },
+            {
+              "step": "sent",
+              "wasRequest": true,
+              "rowLeftNeedsYou": true,
+              "session": "signing",
+              "value": ""
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "focus-reply",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "size": "1000x700",
+          "trail": [
+            {
+              "step": "↓ ⌘R and type",
+              "from": "retry-budget",
+              "session": "signing",
+              "value": "status?"
+            },
+            {
+              "step": "sent",
+              "wasRequest": true,
+              "rowLeftNeedsYou": true,
+              "session": "signing",
+              "value": ""
+            }
+          ]
+        }
+      ]
+    },
+    "clock-snapshots": {
+      "check": "clock-snapshots",
+      "ok": true,
+      "started": "2026-10-14T17:03:30.591Z",
+      "finished": "2026-10-14T17:03:31.542Z",
+      "target": {
+        "url": "http://127.0.0.1:1438/desktop.html",
+        "mode": "dev"
+      },
+      "results": [
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "chromium",
+          "name": "consecutive-reads",
+          "injectedReads": [999, 1000],
+          "renderedNow": 1000,
+          "browserErrors": []
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "chromium",
+          "name": "published-tick-and-cleanup",
+          "injectedNow": "999 → 1000",
+          "beforeTick": {
+            "now": 999,
+            "renders": 2
+          },
+          "published": {
+            "now": 1000,
+            "renders": 4
+          },
+          "beforeUnmount": {
+            "nowReads": 4,
+            "renders": 4,
+            "timerStarts": 2,
+            "timerTicks": 1,
+            "timerStops": 1,
+            "intervals": [1000, 1000],
+            "nowValues": [999, 999, 1000, 1000]
+          },
+          "afterUnmount": {
+            "nowReads": 4,
+            "renders": 4,
+            "timerStarts": 2,
+            "timerTicks": 1,
+            "timerStops": 2,
+            "intervals": [1000, 1000],
+            "nowValues": [999, 999, 1000, 1000]
+          },
+          "browserErrors": []
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "webkit",
+          "name": "consecutive-reads",
+          "injectedReads": [999, 1000],
+          "renderedNow": 1000,
+          "browserErrors": []
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "engine": "webkit",
+          "name": "published-tick-and-cleanup",
+          "injectedNow": "999 → 1000",
+          "beforeTick": {
+            "now": 999,
+            "renders": 2
+          },
+          "published": {
+            "now": 1000,
+            "renders": 4
+          },
+          "beforeUnmount": {
+            "nowReads": 4,
+            "renders": 4,
+            "timerStarts": 2,
+            "timerTicks": 1,
+            "timerStops": 1,
+            "intervals": [1000, 1000],
+            "nowValues": [999, 999, 1000, 1000]
+          },
+          "afterUnmount": {
+            "nowReads": 4,
+            "renders": 4,
+            "timerStarts": 2,
+            "timerTicks": 1,
+            "timerStops": 2,
+            "intervals": [1000, 1000],
+            "nowValues": [999, 999, 1000, 1000]
+          },
+          "browserErrors": []
+        }
+      ]
+    },
+    "app-review": {
+      "check": "app-review",
+      "ok": true,
+      "started": "2026-10-14T17:03:31.746Z",
+      "finished": "2026-10-14T17:06:30.599Z",
+      "target": {
+        "url": "http://127.0.0.1:1438/desktop.html",
+        "mode": "dev"
+      },
+      "results": [
+        {
+          "ok": true,
+          "failures": [],
+          "name": "target",
+          "engine": "chromium",
+          "layout": "columns",
+          "outcomes": [
+            {
+              "kind": "tool",
+              "outcome": "refused",
+              "openReview": null
+            },
+            {
+              "kind": "message",
+              "outcome": "refused",
+              "openReview": null
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "review",
+          "engine": "chromium",
+          "layout": "columns",
+          "measured": {
+            "drawnMs": 630,
+            "asksAtRest": 0,
+            "asksUntilDrawn": 0,
+            "asksAfter": 0,
+            "answers": [
+              {
+                "conversationId": "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d",
+                "executionId": "run",
+                "permissionId": "app-review-1",
+                "optionId": "allow"
+              }
+            ],
+            "settled": "ok",
+            "origin": "app",
+            "ask": "tool",
+            "head": "The mcptest app wants to run app_delete_row",
+            "command": "$ app_delete_row {}"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "card",
+          "engine": "chromium",
+          "layout": "columns",
+          "measured": {
+            "origin": "app",
+            "ask": "tool",
+            "head": "The mcptest app wants to run app_delete_row",
+            "command": "$ app_delete_row {}"
+          },
+          "widths": [
+            {
+              "width": 280,
+              "long": false,
+              "toolBytes": 14,
+              "card": 280,
+              "cardHeight": 240,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 340,
+              "long": false,
+              "toolBytes": 14,
+              "card": 340,
+              "cardHeight": 169,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 420,
+              "long": false,
+              "toolBytes": 14,
+              "card": 420,
+              "cardHeight": 169,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 600,
+              "long": false,
+              "toolBytes": 14,
+              "card": 600,
+              "cardHeight": 169,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 900,
+              "long": false,
+              "toolBytes": 14,
+              "card": 652,
+              "cardHeight": 169,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 280,
+              "long": true,
+              "toolBytes": 128,
+              "card": 280,
+              "cardHeight": 411,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 340,
+              "long": true,
+              "toolBytes": 128,
+              "card": 340,
+              "cardHeight": 339,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 420,
+              "long": true,
+              "toolBytes": 128,
+              "card": 420,
+              "cardHeight": 320,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 600,
+              "long": true,
+              "toolBytes": 128,
+              "card": 600,
+              "cardHeight": 282,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 900,
+              "long": true,
+              "toolBytes": 128,
+              "card": 652,
+              "cardHeight": 282,
+              "headPastCard": 0,
+              "overflow": false
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "overview",
+          "engine": "chromium",
+          "layout": "columns",
+          "measured": {
+            "rowName": "Clean up the stale rows. The ⁨mcptest⁩ app wants to run ⁨app_delete_row {}⁩."
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "message",
+          "engine": "chromium",
+          "layout": "columns",
+          "measured": {
+            "contextReads": 0,
+            "drawnMs": 615,
+            "asksUntilDrawn": 0,
+            "asksAfter": 0,
+            "answers": [
+              {
+                "conversationId": "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d",
+                "executionId": "run",
+                "permissionId": "app-review-1",
+                "optionId": "allow"
+              }
+            ],
+            "denied": "refused",
+            "origin": "app",
+            "ask": "message",
+            "head": "The mcptest app wants to send a message as you",
+            "command": "$ show_rows {\"text\":\"Plot May next to April\"}",
+            "landed": {
+              "label": "Sent by show_rows, from mcptest",
+              "words": "Plot May next to April",
+              "rightEdgeApart": 4,
+              "labelRect": {
+                "x": 1141.5625,
+                "y": 383.1875,
+                "w": 184.4375,
+                "h": 18
+              },
+              "bubbleRect": {
+                "x": 1157.421875,
+                "y": 405.1875,
+                "w": 172.578125,
+                "h": 38.46875
+              }
+            }
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "message-card",
+          "engine": "chromium",
+          "layout": "columns",
+          "widths": [
+            {
+              "width": 280,
+              "which": "longestMessage",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 280,
+              "cardHeight": 5785,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 340,
+              "which": "longestMessage",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 340,
+              "cardHeight": 4830,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 420,
+              "which": "longestMessage",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 420,
+              "cardHeight": 3469,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 600,
+              "which": "longestMessage",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 600,
+              "cardHeight": 2318,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 900,
+              "which": "longestMessage",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 652,
+              "cardHeight": 2145,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 280,
+              "which": "longestWord",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 280,
+              "cardHeight": 259,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 340,
+              "which": "longestWord",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 340,
+              "cardHeight": 225,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 420,
+              "which": "longestWord",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 420,
+              "cardHeight": 188,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 600,
+              "which": "longestWord",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 600,
+              "cardHeight": 188,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 900,
+              "which": "longestWord",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 652,
+              "cardHeight": 188,
+              "headPastCard": 0,
+              "overflow": false
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "message-overview",
+          "engine": "chromium",
+          "layout": "columns",
+          "measured": {
+            "rowName": "Clean up the stale rows. The ⁨mcptest⁩ app wants to send a message as you."
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "message-bidi",
+          "engine": "chromium",
+          "layout": "columns",
+          "measured": [
+            {
+              "names": "\"a⁩‮b\"",
+              "where": "head",
+              "characters": 34,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"a⁩‮b\"",
+              "where": "reason",
+              "characters": 40,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"a⁩‮b\"",
+              "where": "command",
+              "characters": 35,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"a⁩‮b\"",
+              "where": "row's command",
+              "characters": 34,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"a⁩‮b\"",
+              "where": "label",
+              "characters": 20,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"evil‮gnp.exe\"",
+              "where": "head",
+              "characters": 42,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"evil‮gnp.exe\"",
+              "where": "reason",
+              "characters": 52,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"evil‮gnp.exe\"",
+              "where": "command",
+              "characters": 39,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"evil‮gnp.exe\"",
+              "where": "row's command",
+              "characters": 38,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"evil‮gnp.exe\"",
+              "where": "label",
+              "characters": 32,
+              "outOfOrder": [],
+              "controls": false
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "message-label",
+          "engine": "chromium",
+          "layout": "columns",
+          "widths": [
+            {
+              "at": "280px column",
+              "long": false,
+              "label": 184,
+              "column": 280,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "340px column",
+              "long": false,
+              "label": 184,
+              "column": 340,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "420px column",
+              "long": false,
+              "label": 184,
+              "column": 420,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "600px column",
+              "long": false,
+              "label": 184,
+              "column": 600,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "900px column",
+              "long": false,
+              "label": 184,
+              "column": 900,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "800×480 window",
+              "long": false,
+              "label": 184,
+              "column": 276,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "280px column",
+              "long": true,
+              "label": 235,
+              "column": 280,
+              "lines": 9,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "at": "340px column",
+              "long": true,
+              "label": 286,
+              "column": 340,
+              "lines": 8,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "at": "420px column",
+              "long": true,
+              "label": 353,
+              "column": 420,
+              "lines": 7,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "at": "600px column",
+              "long": true,
+              "label": 504,
+              "column": 600,
+              "lines": 5,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "at": "900px column",
+              "long": true,
+              "label": 540,
+              "column": 900,
+              "lines": 5,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "at": "800×480 window",
+              "long": true,
+              "label": 232,
+              "column": 276,
+              "lines": 9,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "target",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "outcomes": [
+            {
+              "kind": "tool",
+              "outcome": "refused",
+              "openReview": null
+            },
+            {
+              "kind": "message",
+              "outcome": "refused",
+              "openReview": null
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "review",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "measured": {
+            "drawnMs": 576,
+            "asksAtRest": 0,
+            "asksUntilDrawn": 0,
+            "asksAfter": 0,
+            "answers": [
+              {
+                "conversationId": "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d",
+                "executionId": "run",
+                "permissionId": "app-review-1",
+                "optionId": "allow"
+              }
+            ],
+            "settled": "ok",
+            "origin": "app",
+            "ask": "tool",
+            "head": "The mcptest app wants to run app_delete_row",
+            "command": "$ app_delete_row {}"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "card",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "measured": {
+            "origin": "app",
+            "ask": "tool",
+            "head": "The mcptest app wants to run app_delete_row",
+            "command": "$ app_delete_row {}"
+          },
+          "widths": [
+            {
+              "width": 280,
+              "long": false,
+              "toolBytes": 14,
+              "card": 280,
+              "cardHeight": 240,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 340,
+              "long": false,
+              "toolBytes": 14,
+              "card": 340,
+              "cardHeight": 169,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 420,
+              "long": false,
+              "toolBytes": 14,
+              "card": 420,
+              "cardHeight": 169,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 600,
+              "long": false,
+              "toolBytes": 14,
+              "card": 600,
+              "cardHeight": 169,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 900,
+              "long": false,
+              "toolBytes": 14,
+              "card": 652,
+              "cardHeight": 169,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 280,
+              "long": true,
+              "toolBytes": 128,
+              "card": 280,
+              "cardHeight": 411,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 340,
+              "long": true,
+              "toolBytes": 128,
+              "card": 340,
+              "cardHeight": 339,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 420,
+              "long": true,
+              "toolBytes": 128,
+              "card": 420,
+              "cardHeight": 320,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 600,
+              "long": true,
+              "toolBytes": 128,
+              "card": 600,
+              "cardHeight": 282,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 900,
+              "long": true,
+              "toolBytes": 128,
+              "card": 652,
+              "cardHeight": 282,
+              "headPastCard": 0,
+              "overflow": false
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "overview",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "measured": {
+            "rowName": "Clean up the stale rows. The ⁨mcptest⁩ app wants to run ⁨app_delete_row {}⁩."
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "message",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "measured": {
+            "contextReads": 0,
+            "drawnMs": 595,
+            "asksUntilDrawn": 0,
+            "asksAfter": 0,
+            "answers": [
+              {
+                "conversationId": "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d",
+                "executionId": "run",
+                "permissionId": "app-review-1",
+                "optionId": "allow"
+              }
+            ],
+            "denied": "refused",
+            "origin": "app",
+            "ask": "message",
+            "head": "The mcptest app wants to send a message as you",
+            "command": "$ show_rows {\"text\":\"Plot May next to April\"}",
+            "landed": {
+              "label": "Sent by show_rows, from mcptest",
+              "words": "Plot May next to April",
+              "rightEdgeApart": 4,
+              "labelRect": {
+                "x": 989.5625,
+                "y": 383.1875,
+                "w": 184.4375,
+                "h": 18
+              },
+              "bubbleRect": {
+                "x": 1005.421875,
+                "y": 405.1875,
+                "w": 172.578125,
+                "h": 38.46875
+              }
+            }
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "message-card",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "widths": [
+            {
+              "width": 280,
+              "which": "longestMessage",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 280,
+              "cardHeight": 5785,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 340,
+              "which": "longestMessage",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 340,
+              "cardHeight": 4830,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 420,
+              "which": "longestMessage",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 420,
+              "cardHeight": 3469,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 600,
+              "which": "longestMessage",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 600,
+              "cardHeight": 2318,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 900,
+              "which": "longestMessage",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 652,
+              "cardHeight": 2145,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 280,
+              "which": "longestWord",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 280,
+              "cardHeight": 259,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 340,
+              "which": "longestWord",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 340,
+              "cardHeight": 225,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 420,
+              "which": "longestWord",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 420,
+              "cardHeight": 188,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 600,
+              "which": "longestWord",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 600,
+              "cardHeight": 188,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 900,
+              "which": "longestWord",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 652,
+              "cardHeight": 188,
+              "headPastCard": 0,
+              "overflow": false
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "message-overview",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "measured": {
+            "rowName": "Clean up the stale rows. The ⁨mcptest⁩ app wants to send a message as you."
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "message-bidi",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "measured": [
+            {
+              "names": "\"a⁩‮b\"",
+              "where": "head",
+              "characters": 34,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"a⁩‮b\"",
+              "where": "reason",
+              "characters": 40,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"a⁩‮b\"",
+              "where": "command",
+              "characters": 35,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"a⁩‮b\"",
+              "where": "row's command",
+              "characters": 34,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"a⁩‮b\"",
+              "where": "label",
+              "characters": 20,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"evil‮gnp.exe\"",
+              "where": "head",
+              "characters": 42,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"evil‮gnp.exe\"",
+              "where": "reason",
+              "characters": 52,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"evil‮gnp.exe\"",
+              "where": "command",
+              "characters": 39,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"evil‮gnp.exe\"",
+              "where": "row's command",
+              "characters": 38,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"evil‮gnp.exe\"",
+              "where": "label",
+              "characters": 32,
+              "outOfOrder": [],
+              "controls": false
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "message-label",
+          "engine": "chromium",
+          "layout": "sidebar",
+          "widths": [
+            {
+              "at": "280px column",
+              "long": false,
+              "label": 184,
+              "column": 280,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "340px column",
+              "long": false,
+              "label": 184,
+              "column": 340,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "420px column",
+              "long": false,
+              "label": 184,
+              "column": 420,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "600px column",
+              "long": false,
+              "label": 184,
+              "column": 600,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "900px column",
+              "long": false,
+              "label": 184,
+              "column": 900,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "800×480 window",
+              "long": false,
+              "label": 184,
+              "column": 520,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "280px column",
+              "long": true,
+              "label": 235,
+              "column": 280,
+              "lines": 9,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "at": "340px column",
+              "long": true,
+              "label": 286,
+              "column": 340,
+              "lines": 8,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "at": "420px column",
+              "long": true,
+              "label": 353,
+              "column": 420,
+              "lines": 7,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "at": "600px column",
+              "long": true,
+              "label": 504,
+              "column": 600,
+              "lines": 5,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "at": "900px column",
+              "long": true,
+              "label": 540,
+              "column": 900,
+              "lines": 5,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "at": "800×480 window",
+              "long": true,
+              "label": 437,
+              "column": 520,
+              "lines": 5,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "target",
+          "engine": "webkit",
+          "layout": "columns",
+          "outcomes": [
+            {
+              "kind": "tool",
+              "outcome": "refused",
+              "openReview": null
+            },
+            {
+              "kind": "message",
+              "outcome": "refused",
+              "openReview": null
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "review",
+          "engine": "webkit",
+          "layout": "columns",
+          "measured": {
+            "drawnMs": 576,
+            "asksAtRest": 0,
+            "asksUntilDrawn": 0,
+            "asksAfter": 0,
+            "answers": [
+              {
+                "conversationId": "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d",
+                "executionId": "run",
+                "permissionId": "app-review-1",
+                "optionId": "allow"
+              }
+            ],
+            "settled": "ok",
+            "origin": "app",
+            "ask": "tool",
+            "head": "The mcptest app wants to run app_delete_row",
+            "command": "$ app_delete_row {}"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "card",
+          "engine": "webkit",
+          "layout": "columns",
+          "measured": {
+            "origin": "app",
+            "ask": "tool",
+            "head": "The mcptest app wants to run app_delete_row",
+            "command": "$ app_delete_row {}"
+          },
+          "widths": [
+            {
+              "width": 280,
+              "long": false,
+              "toolBytes": 14,
+              "card": 280,
+              "cardHeight": 240,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 340,
+              "long": false,
+              "toolBytes": 14,
+              "card": 340,
+              "cardHeight": 169,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 420,
+              "long": false,
+              "toolBytes": 14,
+              "card": 420,
+              "cardHeight": 169,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 600,
+              "long": false,
+              "toolBytes": 14,
+              "card": 600,
+              "cardHeight": 169,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 900,
+              "long": false,
+              "toolBytes": 14,
+              "card": 652,
+              "cardHeight": 169,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 280,
+              "long": true,
+              "toolBytes": 128,
+              "card": 280,
+              "cardHeight": 411,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 340,
+              "long": true,
+              "toolBytes": 128,
+              "card": 340,
+              "cardHeight": 339,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 420,
+              "long": true,
+              "toolBytes": 128,
+              "card": 420,
+              "cardHeight": 320,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 600,
+              "long": true,
+              "toolBytes": 128,
+              "card": 600,
+              "cardHeight": 282,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 900,
+              "long": true,
+              "toolBytes": 128,
+              "card": 652,
+              "cardHeight": 282,
+              "headPastCard": 0,
+              "overflow": false
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "overview",
+          "engine": "webkit",
+          "layout": "columns",
+          "measured": {
+            "rowName": "Clean up the stale rows. The ⁨mcptest⁩ app wants to run ⁨app_delete_row {}⁩."
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "message",
+          "engine": "webkit",
+          "layout": "columns",
+          "measured": {
+            "contextReads": 0,
+            "drawnMs": 567,
+            "asksUntilDrawn": 0,
+            "asksAfter": 0,
+            "answers": [
+              {
+                "conversationId": "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d",
+                "executionId": "run",
+                "permissionId": "app-review-1",
+                "optionId": "allow"
+              }
+            ],
+            "denied": "refused",
+            "origin": "app",
+            "ask": "message",
+            "head": "The mcptest app wants to send a message as you",
+            "command": "$ show_rows {\"text\":\"Plot May next to April\"}",
+            "landed": {
+              "label": "Sent by show_rows, from mcptest",
+              "words": "Plot May next to April",
+              "rightEdgeApart": 4,
+              "labelRect": {
+                "x": 1141.59375,
+                "y": 380.4464111328125,
+                "w": 184.40625,
+                "h": 18
+              },
+              "bubbleRect": {
+                "x": 1157.421875,
+                "y": 402.32672119140625,
+                "w": 172.578125,
+                "h": 38.46875
+              }
+            }
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "message-card",
+          "engine": "webkit",
+          "layout": "columns",
+          "widths": [
+            {
+              "width": 280,
+              "which": "longestMessage",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 280,
+              "cardHeight": 5785,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 340,
+              "which": "longestMessage",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 340,
+              "cardHeight": 4830,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 420,
+              "which": "longestMessage",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 420,
+              "cardHeight": 3469,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 600,
+              "which": "longestMessage",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 600,
+              "cardHeight": 2318,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 900,
+              "which": "longestMessage",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 652,
+              "cardHeight": 2145,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 280,
+              "which": "longestWord",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 280,
+              "cardHeight": 259,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 340,
+              "which": "longestWord",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 340,
+              "cardHeight": 225,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 420,
+              "which": "longestWord",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 420,
+              "cardHeight": 188,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 600,
+              "which": "longestWord",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 600,
+              "cardHeight": 188,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 900,
+              "which": "longestWord",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 652,
+              "cardHeight": 188,
+              "headPastCard": 0,
+              "overflow": false
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "message-overview",
+          "engine": "webkit",
+          "layout": "columns",
+          "measured": {
+            "rowName": "Clean up the stale rows. The ⁨mcptest⁩ app wants to send a message as you."
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "message-bidi",
+          "engine": "webkit",
+          "layout": "columns",
+          "measured": [
+            {
+              "names": "\"a⁩‮b\"",
+              "where": "head",
+              "characters": 34,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"a⁩‮b\"",
+              "where": "reason",
+              "characters": 40,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"a⁩‮b\"",
+              "where": "command",
+              "characters": 35,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"a⁩‮b\"",
+              "where": "row's command",
+              "characters": 34,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"a⁩‮b\"",
+              "where": "label",
+              "characters": 20,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"evil‮gnp.exe\"",
+              "where": "head",
+              "characters": 42,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"evil‮gnp.exe\"",
+              "where": "reason",
+              "characters": 52,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"evil‮gnp.exe\"",
+              "where": "command",
+              "characters": 39,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"evil‮gnp.exe\"",
+              "where": "row's command",
+              "characters": 38,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"evil‮gnp.exe\"",
+              "where": "label",
+              "characters": 32,
+              "outOfOrder": [],
+              "controls": false
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "message-label",
+          "engine": "webkit",
+          "layout": "columns",
+          "widths": [
+            {
+              "at": "280px column",
+              "long": false,
+              "label": 184,
+              "column": 280,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "340px column",
+              "long": false,
+              "label": 184,
+              "column": 340,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "420px column",
+              "long": false,
+              "label": 184,
+              "column": 420,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "600px column",
+              "long": false,
+              "label": 184,
+              "column": 600,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "900px column",
+              "long": false,
+              "label": 184,
+              "column": 900,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "800×480 window",
+              "long": false,
+              "label": 184,
+              "column": 276,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "280px column",
+              "long": true,
+              "label": 235,
+              "column": 280,
+              "lines": 9,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "at": "340px column",
+              "long": true,
+              "label": 286,
+              "column": 340,
+              "lines": 8,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "at": "420px column",
+              "long": true,
+              "label": 353,
+              "column": 420,
+              "lines": 7,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "at": "600px column",
+              "long": true,
+              "label": 504,
+              "column": 600,
+              "lines": 5,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "at": "900px column",
+              "long": true,
+              "label": 540,
+              "column": 900,
+              "lines": 5,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "at": "800×480 window",
+              "long": true,
+              "label": 232,
+              "column": 276,
+              "lines": 9,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "target",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "outcomes": [
+            {
+              "kind": "tool",
+              "outcome": "refused",
+              "openReview": null
+            },
+            {
+              "kind": "message",
+              "outcome": "refused",
+              "openReview": null
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "review",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "measured": {
+            "drawnMs": 577,
+            "asksAtRest": 0,
+            "asksUntilDrawn": 0,
+            "asksAfter": 0,
+            "answers": [
+              {
+                "conversationId": "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d",
+                "executionId": "run",
+                "permissionId": "app-review-1",
+                "optionId": "allow"
+              }
+            ],
+            "settled": "ok",
+            "origin": "app",
+            "ask": "tool",
+            "head": "The mcptest app wants to run app_delete_row",
+            "command": "$ app_delete_row {}"
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "card",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "measured": {
+            "origin": "app",
+            "ask": "tool",
+            "head": "The mcptest app wants to run app_delete_row",
+            "command": "$ app_delete_row {}"
+          },
+          "widths": [
+            {
+              "width": 280,
+              "long": false,
+              "toolBytes": 14,
+              "card": 280,
+              "cardHeight": 240,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 340,
+              "long": false,
+              "toolBytes": 14,
+              "card": 340,
+              "cardHeight": 169,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 420,
+              "long": false,
+              "toolBytes": 14,
+              "card": 420,
+              "cardHeight": 169,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 600,
+              "long": false,
+              "toolBytes": 14,
+              "card": 600,
+              "cardHeight": 169,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 900,
+              "long": false,
+              "toolBytes": 14,
+              "card": 652,
+              "cardHeight": 169,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 280,
+              "long": true,
+              "toolBytes": 128,
+              "card": 280,
+              "cardHeight": 411,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 340,
+              "long": true,
+              "toolBytes": 128,
+              "card": 340,
+              "cardHeight": 339,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 420,
+              "long": true,
+              "toolBytes": 128,
+              "card": 420,
+              "cardHeight": 320,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 600,
+              "long": true,
+              "toolBytes": 128,
+              "card": 600,
+              "cardHeight": 282,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 900,
+              "long": true,
+              "toolBytes": 128,
+              "card": 652,
+              "cardHeight": 282,
+              "headPastCard": 0,
+              "overflow": false
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "overview",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "measured": {
+            "rowName": "Clean up the stale rows. The ⁨mcptest⁩ app wants to run ⁨app_delete_row {}⁩."
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "message",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "measured": {
+            "contextReads": 0,
+            "drawnMs": 574,
+            "asksUntilDrawn": 0,
+            "asksAfter": 0,
+            "answers": [
+              {
+                "conversationId": "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d",
+                "executionId": "run",
+                "permissionId": "app-review-1",
+                "optionId": "allow"
+              }
+            ],
+            "denied": "refused",
+            "origin": "app",
+            "ask": "message",
+            "head": "The mcptest app wants to send a message as you",
+            "command": "$ show_rows {\"text\":\"Plot May next to April\"}",
+            "landed": {
+              "label": "Sent by show_rows, from mcptest",
+              "words": "Plot May next to April",
+              "rightEdgeApart": 4,
+              "labelRect": {
+                "x": 989.59375,
+                "y": 381.071533203125,
+                "w": 184.40625,
+                "h": 18
+              },
+              "bubbleRect": {
+                "x": 1005.421875,
+                "y": 402.9429931640625,
+                "w": 172.578125,
+                "h": 38.46875
+              }
+            }
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "message-card",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "widths": [
+            {
+              "width": 280,
+              "which": "longestMessage",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 280,
+              "cardHeight": 5785,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 340,
+              "which": "longestMessage",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 340,
+              "cardHeight": 4830,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 420,
+              "which": "longestMessage",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 420,
+              "cardHeight": 3469,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 600,
+              "which": "longestMessage",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 600,
+              "cardHeight": 2318,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 900,
+              "which": "longestMessage",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 652,
+              "cardHeight": 2145,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 280,
+              "which": "longestWord",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 280,
+              "cardHeight": 259,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 340,
+              "which": "longestWord",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 340,
+              "cardHeight": 225,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 420,
+              "which": "longestWord",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 420,
+              "cardHeight": 188,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 600,
+              "which": "longestWord",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 600,
+              "cardHeight": 188,
+              "headPastCard": 0,
+              "overflow": false
+            },
+            {
+              "width": 900,
+              "which": "longestWord",
+              "bytes": 8192,
+              "reachable": true,
+              "card": 652,
+              "cardHeight": 188,
+              "headPastCard": 0,
+              "overflow": false
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "message-overview",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "measured": {
+            "rowName": "Clean up the stale rows. The ⁨mcptest⁩ app wants to send a message as you."
+          }
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "message-bidi",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "measured": [
+            {
+              "names": "\"a⁩‮b\"",
+              "where": "head",
+              "characters": 34,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"a⁩‮b\"",
+              "where": "reason",
+              "characters": 40,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"a⁩‮b\"",
+              "where": "command",
+              "characters": 35,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"a⁩‮b\"",
+              "where": "row's command",
+              "characters": 34,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"a⁩‮b\"",
+              "where": "label",
+              "characters": 20,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"evil‮gnp.exe\"",
+              "where": "head",
+              "characters": 42,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"evil‮gnp.exe\"",
+              "where": "reason",
+              "characters": 52,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"evil‮gnp.exe\"",
+              "where": "command",
+              "characters": 39,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"evil‮gnp.exe\"",
+              "where": "row's command",
+              "characters": 38,
+              "outOfOrder": [],
+              "controls": false
+            },
+            {
+              "names": "\"evil‮gnp.exe\"",
+              "where": "label",
+              "characters": 32,
+              "outOfOrder": [],
+              "controls": false
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "failures": [],
+          "name": "message-label",
+          "engine": "webkit",
+          "layout": "sidebar",
+          "widths": [
+            {
+              "at": "280px column",
+              "long": false,
+              "label": 184,
+              "column": 280,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "340px column",
+              "long": false,
+              "label": 184,
+              "column": 340,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "420px column",
+              "long": false,
+              "label": 184,
+              "column": 420,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "600px column",
+              "long": false,
+              "label": 184,
+              "column": 600,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "900px column",
+              "long": false,
+              "label": 184,
+              "column": 900,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "800×480 window",
+              "long": false,
+              "label": 184,
+              "column": 520,
+              "lines": 1,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "mcptest/show_rows"
+            },
+            {
+              "at": "280px column",
+              "long": true,
+              "label": 235,
+              "column": 280,
+              "lines": 9,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "at": "340px column",
+              "long": true,
+              "label": 286,
+              "column": 340,
+              "lines": 8,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "at": "420px column",
+              "long": true,
+              "label": 353,
+              "column": 420,
+              "lines": 7,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "at": "600px column",
+              "long": true,
+              "label": 504,
+              "column": 600,
+              "lines": 5,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "at": "900px column",
+              "long": true,
+              "label": 540,
+              "column": 900,
+              "lines": 5,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "at": "800×480 window",
+              "long": true,
+              "label": 437,
+              "column": 520,
+              "lines": 5,
+              "cut": false,
+              "overflow": false,
+              "outside": 0,
+              "pastColumn": 0,
+              "above": true,
+              "rightEdgeApart": 4,
+              "title": null,
+              "app": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
