@@ -1,5 +1,5 @@
 /**
- * Settings › Privacy & Permissions › Access with a gateway connected.
+ * Settings › Privacy & Permissions › Native hooks with a gateway connected.
  * `?state=on` (the default) has Claude's choice on. `?state=unset` leaves
  * Claude out of the catalog. `?state=failed` refuses the next change, so
  * the row says it could not change. Codex stays off and configured.

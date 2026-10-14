@@ -894,10 +894,12 @@ phone's scanner is not this screen.
   remembered-rules row, disabled, and says it is not available in this
   window. _Check:_ `settings-page.mjs --only remembered-rules`; unit test
   `permission-rule-rows.test.tsx`.
-- [ ] **Claude and Codex native hooks rest without a gateway.** Access shows
+- [ ] **Claude and Codex native hooks have their own tab and rest without a gateway.**
+  Access keeps the common controls above the fold; Native hooks shows
   both rows disabled, with no switch, and says hooks can approve, deny, or
   change a tool call and its result without Nessa asking, and can run
-  commands when the agent starts. OpenCode has no row. With a gateway
+  commands when the agent starts. Search for either hook lands on its row
+  in view on Native hooks. OpenCode has no row. With a gateway
   and Claude's choice on, that row's switch is on and says to turn it on
   only for projects you trust, and that the choice applies the next time
   each conversation's agent starts. Claude on but missing from the catalog

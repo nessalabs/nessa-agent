@@ -1,0 +1,334 @@
+{
+  "check": "smoke",
+  "ok": true,
+  "started": "2026-10-14T23:31:10.524Z",
+  "finished": "2026-10-14T23:31:25.339Z",
+  "target": {
+    "url": "http://127.0.0.1:1496/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "loads",
+      "panes": 1
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "ambient-grain",
+      "type": "image/png",
+      "width": 160,
+      "height": 160,
+      "opacity": "0.06",
+      "blend": "normal",
+      "repeat": "repeat"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "draft-unlisted",
+      "rows": {
+        "before": 9,
+        "after": 9
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "send"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "split",
+      "panes": {
+        "before": 1,
+        "after": 2
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "settings",
+      "advanced": {
+        "tabs": [],
+        "dek": "Early features you can try before they are finished.",
+        "text": "SubagentsA panel of the agents a conversation put to work.Side railA strip at the window's edge for places beside Agents.",
+        "controls": 2,
+        "offered": ["true", "false"]
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "overview"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1496/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "loads",
+      "panes": 1
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "ambient-grain",
+      "type": "image/png",
+      "width": 160,
+      "height": 160,
+      "opacity": "0.06",
+      "blend": "normal",
+      "repeat": "repeat"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "draft-unlisted",
+      "rows": {
+        "before": 12,
+        "after": 12
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "send"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "split",
+      "panes": {
+        "before": 1,
+        "after": 2
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "settings",
+      "advanced": {
+        "tabs": [],
+        "dek": "Early features you can try before they are finished.",
+        "text": "SubagentsA panel of the agents a conversation put to work.Side railA strip at the window's edge for places beside Agents.",
+        "controls": 2,
+        "offered": ["true", "false"]
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "overview"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "loads",
+      "panes": 1
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "ambient-grain",
+      "type": "image/png",
+      "width": 160,
+      "height": 160,
+      "opacity": "0.06",
+      "blend": "normal",
+      "repeat": "repeat"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "draft-unlisted",
+      "rows": {
+        "before": 9,
+        "after": 9
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "send"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "split",
+      "panes": {
+        "before": 1,
+        "after": 2
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "settings",
+      "advanced": {
+        "tabs": [],
+        "dek": "Early features you can try before they are finished.",
+        "text": "SubagentsA panel of the agents a conversation put to work.Side railA strip at the window's edge for places beside Agents.",
+        "controls": 2,
+        "offered": ["true", "false"]
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "overview"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "sidebar",
+      "name": "loads",
+      "panes": 1
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "sidebar",
+      "name": "ambient-grain",
+      "type": "image/png",
+      "width": 160,
+      "height": 160,
+      "opacity": "0.06",
+      "blend": "normal",
+      "repeat": "repeat"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "sidebar",
+      "name": "draft-unlisted",
+      "rows": {
+        "before": 12,
+        "after": 12
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "sidebar",
+      "name": "send"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "sidebar",
+      "name": "split",
+      "panes": {
+        "before": 1,
+        "after": 2
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "sidebar",
+      "name": "settings",
+      "advanced": {
+        "tabs": [],
+        "dek": "Early features you can try before they are finished.",
+        "text": "SubagentsA panel of the agents a conversation put to work.Side railA strip at the window's edge for places beside Agents.",
+        "controls": 2,
+        "offered": ["true", "false"]
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "sidebar",
+      "name": "overview"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "sidebar",
+      "name": "console"
+    }
+  ]
+}

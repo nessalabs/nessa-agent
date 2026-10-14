@@ -15,7 +15,7 @@ import type {
 import { Group, ItemRow, Toggle } from "./settings-controls"
 
 /**
- * Settings › Privacy & Permissions › Access: whether the next process start
+ * Settings › Privacy & Permissions › Native hooks: whether the next process start
  * of Claude or Codex omits Nessa's request to leave that harness's own hooks
  * off. With no gateway the rows rest. OpenCode has no row. Another client
  * can change the choice, so the rows read it again when the window regains
@@ -117,7 +117,7 @@ export function NativeHooksRows() {
     })
   }
   return (
-    <Group title="Native hooks" note={warning}>
+    <Group note={warning}>
       {rows.map((row) => (
         <HookRow
           key={row.id}
