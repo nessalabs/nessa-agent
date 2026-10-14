@@ -176,6 +176,17 @@ export type ConversationApi = {
   ) => PreparedSubmission
   /** Submit the exact immutable message prepared before any asynchronous effects. */
   submit: (prepared: PreparedSubmission) => Promise<ConversationSubmission>
+  /**
+   * Leave a note in this conversation: saved with who left it, it starts and
+   * steers no turn. A `record_only` note is only kept; a `next_turn` note
+   * waits for the next turn a person starts while the agent is idle, which
+   * hands it to the model labelled with its author. The same `requestId`
+   * with the same text and delivery answers the first note again, so a
+   * failure's `retry()` saves it at most once.
+   * @param text - 1 to 8 KiB UTF-8, not all blank, kept exactly.
+   * @param delivery - `record_only` or `next_turn`.
+   * @throws TypeError before anything is sent when the text breaks these bounds.
+   */
   message: (
     conversationId: string,
     text: string,
