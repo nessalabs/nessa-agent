@@ -209,7 +209,7 @@ export function App({
   const attachments = useFileAttachments(chat, attachmentResources)
   const uploads = useAttachmentUploads(chat, attachmentResources, digest)
   const folderDrop = useFolderDrop(
-    attachments.captureDestination(),
+    attachments.captureDestination,
     attachments.addFiles,
     attachments.refuse,
   )

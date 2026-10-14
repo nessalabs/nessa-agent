@@ -55,6 +55,8 @@ const detachedReplies: Array<
 > = []
 let detached = false
 const sends: unknown[] = []
+const folderStarts: string[] = []
+const folderReleases = new Map<string, (entries: FileSystemEntry[]) => void>()
 let fetchCalls = 0
 let finishDropImage: ((response: Response) => void) | undefined
 const resources = createAttachmentResources()
@@ -151,6 +153,68 @@ const probe = {
     probe.readied?.({ id: `${requestId}:0`, name, readying: true })
   },
   beginDrop: (batch: string) => probe.began?.(batch, "dropped"),
+  dropFolder: (name: string, hold: boolean) => {
+    const fileName = `${name}.txt`
+    const file = new File([`contents of ${fileName}`], fileName, { type: "text/plain" })
+    const fileEntry = {
+      isFile: true,
+      isDirectory: false,
+      name: fileName,
+      fullPath: `/${fileName}`,
+      filesystem: {} as FileSystem,
+      file: (success: (file: File) => void) => success(file),
+    } as FileSystemFileEntry
+    const folder = {
+      isFile: false,
+      isDirectory: true,
+      name,
+      fullPath: `/${name}`,
+      filesystem: {} as FileSystem,
+      createReader: () => {
+        folderStarts.push(name)
+        let firstRead = true
+        return {
+          readEntries: (success: (entries: FileSystemEntry[]) => void) => {
+            if (!firstRead) {
+              success([])
+              return
+            }
+            firstRead = false
+            if (hold) folderReleases.set(name, success)
+            else success([fileEntry])
+          },
+        } as FileSystemDirectoryReader
+      },
+    } as FileSystemDirectoryEntry
+    const transfer = {
+      types: ["Files"],
+      files: [],
+      items: [{ kind: "file", webkitGetAsEntry: () => folder }],
+    } as unknown as DataTransfer
+    const event = new Event("drop", { bubbles: true, cancelable: true })
+    Object.defineProperty(event, "dataTransfer", { value: transfer })
+    const rootElement = document.querySelector<HTMLElement>("[data-nessa-root]")
+    if (!rootElement) throw new Error("Missing App drop boundary")
+    rootElement.dispatchEvent(event)
+  },
+  finishFolder: (name: string) => {
+    const release = folderReleases.get(name)
+    if (!release) throw new Error(`Folder ${name} is not waiting for traversal`)
+    folderReleases.delete(name)
+    release([
+      {
+        isFile: true,
+        isDirectory: false,
+        name: `${name}.txt`,
+        fullPath: `/${name}.txt`,
+        filesystem: {} as FileSystem,
+        file: (success: (file: File) => void) =>
+          success(
+            new File([`contents of ${name}.txt`], `${name}.txt`, { type: "text/plain" }),
+          ),
+      } as FileSystemFileEntry,
+    ])
+  },
   openAnotherConversation: () => {
     store.dispatch(openConversation())
     return store.getState().conversation.activeId
@@ -339,10 +403,17 @@ const probe = {
   },
   swapPickerOwner: () => {
     const nextResources = createAttachmentResources()
+    const nextEffects = scenarioEffects("echo")
     const nextStore = makeStore({
       attachments: nextResources,
       canChoosePaths: true,
-      conversation: scenarioEffects("echo"),
+      conversation: {
+        ...nextEffects,
+        send: async (input) => {
+          sends.push(input)
+          return nextEffects.send(input)
+        },
+      },
     })
     nextStore.dispatch(
       sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),
@@ -388,6 +459,7 @@ const probe = {
         (c) => c.id === displayStore.getState().conversation.activeId,
       )?.draft,
     pickerRequestIds: probe.pickRequests.map((request) => request.requestId),
+    folderStarts,
   }),
 }
 ;(window as unknown as { __attachmentProbe: typeof probe }).__attachmentProbe = probe

@@ -9,7 +9,7 @@ import type { AttachmentDestination } from "./use-file-attachments"
 
 /** Preserve the receiving draft and block its submission until traversal settles. */
 export function useFolderDrop(
-  destination: AttachmentDestination,
+  captureDestination: () => AttachmentDestination,
   addFiles: (files: readonly File[], destination: AttachmentDestination) => void,
   /** Named, not assumed: a walk can finish after somebody has changed tabs. */
   refuse: (refusal: AttachmentRefusal, destination: AttachmentDestination) => void,
@@ -20,7 +20,7 @@ export function useFolderDrop(
       destination: AttachmentDestination
     }>(),
   )
-  const [active, setActive] = React.useState<
+  const [, setActive] = React.useState<
     ReadonlySet<{
       controller: AbortController
       destination: AttachmentDestination
@@ -34,6 +34,9 @@ export function useFolderDrop(
     [],
   )
   function addFolderEntries(entries: FileSystemEntry[]) {
+    // The DOM event can arrive after a provider commit but before this hook's
+    // render-time owner would have been refreshed. Own the walk at the drop.
+    const destination = captureDestination()
     if (
       [...operations.current].some(
         (operation) =>
@@ -73,12 +76,14 @@ export function useFolderDrop(
   }
   return {
     addFolderEntries,
-    isPending: (id: string) =>
-      [...active].some(
+    isPending: (id: string) => {
+      const destination = captureDestination()
+      return [...operations.current].some(
         (operation) =>
           operation.destination.store === destination.store &&
           operation.destination.resources === destination.resources &&
           operation.destination.conversationId === id,
-      ),
+      )
+    },
   }
 }

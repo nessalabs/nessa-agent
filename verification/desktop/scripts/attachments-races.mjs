@@ -15,6 +15,8 @@ const scenarios = [
   "native-read",
   "second-url",
   "picker-owner-correlation",
+  "folder-owner-send",
+  "folder-owner-drop",
   "drop-capacity",
   "conversation-refusals",
   "pathless-host-drop",
@@ -382,6 +384,97 @@ try {
               ).length,
               1,
             )
+          } else if (scenario === "folder-owner-send") {
+            await page.evaluate(() =>
+              window.__attachmentProbe.dropFolder("folder-a", true),
+            )
+            await page.waitForFunction(() =>
+              window.__attachmentProbe.snapshot().folderStarts.includes("folder-a"),
+            )
+            await page.evaluate(() => window.__attachmentProbe.swapPickerOwner())
+            await page
+              .locator('[data-attachment-owner="replacement"]')
+              .waitFor({ state: "attached" })
+
+            // Keep the mounted editor's actual text while the store/resources
+            // provider changes; Enter is the next user action after commit.
+            await page.locator(selectors.editor).press("Enter")
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().sends.length === 1,
+            )
+            assert.equal((await snapshot()).sends[0].text, "include this image")
+            assert.deepEqual((await snapshot()).draft, [])
+            await page.screenshot({
+              path: resolve(
+                root,
+                `verification/desktop/evidence/attachment-gesture-owners/folder-owner-send-b-${engine}.png`,
+              ),
+            })
+
+            await page.evaluate(() => window.__attachmentProbe.finishFolder("folder-a"))
+            await page.evaluate(() => window.__attachmentProbe.showOriginalOwner())
+            await page.waitForFunction(() =>
+              window.__attachmentProbe
+                .snapshot()
+                .draft.some(
+                  (part) => part.type === "file" && part.resource.name === "folder-a.txt",
+                ),
+            )
+            await page.screenshot({
+              path: resolve(
+                root,
+                `verification/desktop/evidence/attachment-gesture-owners/folder-owner-send-a-${engine}.png`,
+              ),
+            })
+          } else if (scenario === "folder-owner-drop") {
+            await page.evaluate(() =>
+              window.__attachmentProbe.dropFolder("folder-a", true),
+            )
+            await page.waitForFunction(() =>
+              window.__attachmentProbe.snapshot().folderStarts.includes("folder-a"),
+            )
+            await page.evaluate(() => window.__attachmentProbe.swapPickerOwner())
+            await page
+              .locator('[data-attachment-owner="replacement"]')
+              .waitFor({ state: "attached" })
+
+            // The second folder gesture arrives on the first committed render
+            // for B, while A's reader still owns the only pending operation.
+            await page.evaluate(() =>
+              window.__attachmentProbe.dropFolder("folder-b", false),
+            )
+            await page.waitForFunction(() =>
+              window.__attachmentProbe.snapshot().folderStarts.includes("folder-b"),
+            )
+            await page.waitForFunction(() =>
+              window.__attachmentProbe
+                .snapshot()
+                .draft.some(
+                  (part) => part.type === "file" && part.resource.name === "folder-b.txt",
+                ),
+            )
+            await page.screenshot({
+              path: resolve(
+                root,
+                `verification/desktop/evidence/attachment-gesture-owners/folder-owner-drop-b-${engine}.png`,
+              ),
+            })
+
+            await page.evaluate(() => window.__attachmentProbe.finishFolder("folder-a"))
+            await page.evaluate(() => window.__attachmentProbe.showOriginalOwner())
+            await page.waitForFunction(() =>
+              window.__attachmentProbe
+                .snapshot()
+                .draft.some(
+                  (part) => part.type === "file" && part.resource.name === "folder-a.txt",
+                ),
+            )
+            await page.screenshot({
+              path: resolve(
+                root,
+                `verification/desktop/evidence/attachment-gesture-owners/folder-owner-drop-a-${engine}.png`,
+              ),
+            })
           } else if (scenario === "drop-capacity") {
             const dropFile = (name) => ({
               path: `/verification/${name}`,

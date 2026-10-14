@@ -1443,7 +1443,7 @@ zero times, preserves the draft and paints **Attachments still loading**; read
 completion allows one send containing the text and one image. A second URL drop
 while the first fetch is pending paints **Still reading files** and starts no
 second fetch. The JSON reports send, attachment, refusal and page-error counts
-for all thirty-two engine/scenario pairs. The `drop-capacity` case begins 64
+for all thirty-six engine/scenario pairs. The `drop-capacity` case begins 64
 batches in A/c0, switches to empty B/c0, and checks that the visible 65th-drop
 refusal belongs to B. The rejected overflow and unknown results do nothing;
 the oldest result attaches once to A, a duplicate does nothing, and B accepts a
@@ -1468,6 +1468,10 @@ with three active uploads leaves the fourth queued after a completion; remountin
 resumes that sibling. Native SVG bytes retain their MIME type and render a4px
 image from the object URL in both engines. This verifies browser interactions with the
 production panel; it does not exercise an operating-system file picker. The
+`folder-owner-send` and `folder-owner-drop` keep a same-ID pending folder walk
+in A from blocking B's immediate send or next folder gesture; each settled walk
+still writes to its captured provider. The JSON reports send, attachment,
+refusal and page-error counts for all thirty-six engine/scenario pairs.
 `pathless-host-drop` case proves prose and image URLs delivered without a batch
 beginning still reach the composer and the destination captured before the image
 fetch waits. `browser-picker-fallback` cancels and reopens the native browser input,
