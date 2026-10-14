@@ -473,9 +473,12 @@ impl ShareGrants for LocalConversationStore {
     fn grants<'a>(&'a self, id: &'a ConversationId) -> ConversationFuture<'a, ShareGrantList> {
         let id = id.clone();
         self.run(move |connection| {
-            // The same connection the grant rows are read on, so a writer
-            // cannot land between the revision and the list.
-            let revision: i64 = connection
+            // One read transaction. This store holds its own connection one
+            // call at a time; another opener of the file can still commit
+            // between two statements, and the revision would then name a
+            // different catalogue than the grants.
+            let transaction = connection.transaction().map_err(failed)?;
+            let revision: i64 = transaction
                 .query_row(
                     "SELECT change_revision FROM conversations WHERE id = ?1",
                     [id.to_string()],
@@ -485,46 +488,50 @@ impl ShareGrants for LocalConversationStore {
             let change_revision = time(revision)
                 .filter(|value| *value <= MAX_POLICY_REVISION)
                 .ok_or_else(|| unreadable("conversations", &id.to_string()))?;
-            let mut statement = connection
-                .prepare(&format!(
-                    "SELECT receiver_id, {}, role, {}, policy_revision, granted_at_ms
-                     FROM share_grants
-                     WHERE conversation_id = ?1 ORDER BY granted_at_ms, credential_id",
-                    super::acquisition::text("credential_id", MAX_IDENTIFIER_BYTES, false),
-                    super::acquisition::text("policy", MAX_POLICY_TEXT_BYTES, true),
-                ))
-                .map_err(failed)?;
-            let mut rows = statement.query([id.to_string()]).map_err(failed)?;
-            let mut grants = Vec::new();
-            while let Some(row) = rows.next().map_err(failed)? {
-                let stored = cells((|| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                        row.get::<_, i64>(4)?,
-                        row.get::<_, i64>(5)?,
+            let grants = {
+                let mut statement = transaction
+                    .prepare(&format!(
+                        "SELECT receiver_id, {}, role, {}, policy_revision, granted_at_ms
+                         FROM share_grants
+                         WHERE conversation_id = ?1 ORDER BY granted_at_ms, credential_id",
+                        super::acquisition::text("credential_id", MAX_IDENTIFIER_BYTES, false),
+                        super::acquisition::text("policy", MAX_POLICY_TEXT_BYTES, true),
                     ))
-                })())?;
-                let grant = stored.and_then(
-                    |(receiver_id, credential, role, policy, policy_revision, granted_at)| {
-                        let policy = match policy {
-                            Some(text) => Some(policy_from(&text)?),
-                            None => None,
-                        };
-                        Some(ShareGrant {
-                            conversation_id: id.clone(),
-                            receiver_id,
-                            credential_id: CredentialId::new(credential).ok()?,
-                            access: ShareAccess::new(role_named(&role)?, policy).ok()?,
-                            policy_revision: sequence(policy_revision)?,
-                            granted_at_ms: time(granted_at)?,
-                        })
-                    },
-                );
-                grants.push(grant.ok_or_else(|| unreadable("share_grants", &id.to_string()))?);
-            }
+                    .map_err(failed)?;
+                let mut rows = statement.query([id.to_string()]).map_err(failed)?;
+                let mut grants = Vec::new();
+                while let Some(row) = rows.next().map_err(failed)? {
+                    let stored = cells((|| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                            row.get::<_, i64>(4)?,
+                            row.get::<_, i64>(5)?,
+                        ))
+                    })())?;
+                    let grant = stored.and_then(
+                        |(receiver_id, credential, role, policy, policy_revision, granted_at)| {
+                            let policy = match policy {
+                                Some(text) => Some(policy_from(&text)?),
+                                None => None,
+                            };
+                            Some(ShareGrant {
+                                conversation_id: id.clone(),
+                                receiver_id,
+                                credential_id: CredentialId::new(credential).ok()?,
+                                access: ShareAccess::new(role_named(&role)?, policy).ok()?,
+                                policy_revision: sequence(policy_revision)?,
+                                granted_at_ms: time(granted_at)?,
+                            })
+                        },
+                    );
+                    grants.push(grant.ok_or_else(|| unreadable("share_grants", &id.to_string()))?);
+                }
+                grants
+            };
+            transaction.commit().map_err(failed)?;
             Ok(ShareGrantList {
                 grants,
                 change_revision,
