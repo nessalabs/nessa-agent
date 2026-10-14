@@ -3222,20 +3222,24 @@ async fn an_unmarked_chat_cannot_be_read_and_can_be_deleted() {
         let id = id.clone();
         let action = action.to_owned();
         async move {
-            assert!(metadata
-                .change(ShareGrantChange {
-                    transition: ShareGrantTransition::Grant(
-                        crate::conversation::domain::ShareAccess::read()
-                    ),
-                    conversation_id: id,
-                    receiver_id: Some("phone".into()),
-                    credential_id: nessa_auth::domain::CredentialId::new("phone-credential")
-                        .unwrap(),
-                    initiator: caller(&action),
-                    at_ms: 7,
-                })
-                .await
-                .unwrap());
+            assert!(
+                metadata
+                    .change(ShareGrantChange {
+                        transition: ShareGrantTransition::Grant(
+                            crate::conversation::domain::ShareAccess::read()
+                        ),
+                        conversation_id: id,
+                        receiver_id: Some("phone".into()),
+                        credential_id: nessa_auth::domain::CredentialId::new("phone-credential")
+                            .unwrap(),
+                        expected_policy_revision: None,
+                        initiator: caller(&action),
+                        at_ms: 7,
+                    })
+                    .await
+                    .unwrap()
+                    .applied
+            );
         }
     };
     grant(&sibling, "grant-sibling").await;

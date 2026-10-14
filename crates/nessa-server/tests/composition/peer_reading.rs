@@ -298,13 +298,14 @@ impl Peer {
         id: &ConversationId,
         reader: &(String, String),
     ) {
-        ShareGrants::change(
+        let receipt = ShareGrants::change(
             self.metadata.as_ref(),
             ShareGrantChange {
                 transition,
                 conversation_id: id.clone(),
                 receiver_id: Some(reader.0.clone()),
                 credential_id: CredentialId::new(reader.1.clone()).unwrap(),
+                expected_policy_revision: None,
                 initiator: ConversationCaller {
                     organization_id: OrganizationId::new(self.organization.clone()).unwrap(),
                     principal_id: PrincipalId::new(self.owner.clone()).unwrap(),
@@ -316,6 +317,7 @@ impl Peer {
         )
         .await
         .unwrap();
+        assert!(receipt.applied);
     }
 }
 

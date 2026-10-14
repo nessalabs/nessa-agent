@@ -29,7 +29,7 @@ use super::{
 use crate::conversation::application::{
     binding_of, error_code, paired_facts, AccessAction, ConversationAccessPolicyEvaluator,
     ConversationError, PairedAccess, PairedParty, PairedRefusal, ReceiverBinding, RequestShape,
-    ShareConversation, ShareGrant,
+    ShareConversation, ShareGrant, MAX_POLICY_REVISION,
 };
 use crate::conversation::domain::{
     CommandHosts, ShareRole, ToolChoice, ToolPolicy, ToolPreset, ToolRules,
@@ -39,8 +39,9 @@ use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
 use nessa_protocol::product::generated::{
     action_for_method, ConversationMutationResult, ConversationShare, ConversationShareParams,
-    ConversationShareRole, ConversationSharesParams, ConversationSharesResult,
-    ConversationToolPolicy, ConversationToolPreset, ConversationUnshareParams,
+    ConversationShareResult, ConversationShareRole, ConversationSharesParams,
+    ConversationSharesResult, ConversationToolPolicy, ConversationToolPreset,
+    ConversationUnshareParams,
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
@@ -367,14 +368,23 @@ pub(super) async fn dispatch_share(
                     .map_err(|_| ConversationError::InvalidInput)?;
                 let policy = params.policy.map(tool_policy).transpose()?;
                 let caller = caller(session, params.request_id.clone());
-                let applied = shares
-                    .share(caller, id, credential, role(params.role), policy, now)
+                let granted = shares
+                    .share(
+                        caller,
+                        id,
+                        credential,
+                        role(params.role),
+                        policy,
+                        expected_revision(params.expected_policy_revision)?,
+                        now,
+                    )
                     .await?;
                 Ok(success(
                     &frame.id,
-                    &ConversationMutationResult {
+                    &ConversationShareResult {
                         request_id: params.request_id,
-                        applied,
+                        applied: granted.applied,
+                        policy_revision: granted.policy_revision,
                     },
                 ))
             }
@@ -385,7 +395,15 @@ pub(super) async fn dispatch_share(
                 let credential = CredentialId::new(params.credential_id)
                     .map_err(|_| ConversationError::InvalidInput)?;
                 let caller = caller(session, params.request_id.clone());
-                let applied = shares.unshare(caller, id, credential, now).await?;
+                let applied = shares
+                    .unshare(
+                        caller,
+                        id,
+                        credential,
+                        expected_revision(params.expected_policy_revision)?,
+                        now,
+                    )
+                    .await?;
                 Ok(success(
                     &frame.id,
                     &ConversationMutationResult {
@@ -487,6 +505,15 @@ fn wire_preset(preset: ToolPreset) -> ConversationToolPreset {
         ToolPreset::NoShell => ConversationToolPreset::NoShell,
         ToolPreset::AskEverything => ConversationToolPreset::AskEverything,
         ToolPreset::All => ConversationToolPreset::All,
+    }
+}
+
+/// The policy revision a share or revoke was built on, held to the schema's
+/// bound; past it is `InvalidInput` (row J30). 0 names no grant held.
+fn expected_revision(value: Option<u64>) -> Result<Option<u64>, ConversationError> {
+    match value {
+        Some(revision) if revision > MAX_POLICY_REVISION => Err(ConversationError::InvalidInput),
+        _ => Ok(value),
     }
 }
 

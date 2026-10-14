@@ -2451,12 +2451,13 @@ async fn revoke_grant(fixture: &WatchFixture) {
             conversation_id: fixture.id.clone(),
             receiver_id: None,
             credential_id: CredentialId::new("receiver-credential").unwrap(),
+            expected_policy_revision: None,
             initiator: crate::product::conversation::caller(&fixture.session, "unshare".into()),
             at_ms: 1,
         })
         .await
         .unwrap();
-    assert!(revoked);
+    assert!(revoked.applied);
 }
 
 /// Read grants row G1: a records watch on a conversation the device was not

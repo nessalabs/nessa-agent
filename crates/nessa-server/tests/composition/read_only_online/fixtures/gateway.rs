@@ -724,7 +724,7 @@ pub(super) async fn share_with_devices(
             .zip(setup.second_credential.clone()),
     ];
     for (receiver, credential) in devices.into_iter().flatten() {
-        crate::conversation::application::ShareGrants::change(
+        let receipt = crate::conversation::application::ShareGrants::change(
             metadata,
             crate::conversation::application::ShareGrantChange {
                 transition: crate::conversation::application::ShareGrantTransition::Grant(
@@ -733,6 +733,7 @@ pub(super) async fn share_with_devices(
                 conversation_id: id.clone(),
                 receiver_id: Some(receiver),
                 credential_id: nessa_auth::domain::CredentialId::new(credential).unwrap(),
+                expected_policy_revision: None,
                 initiator: crate::conversation::application::ConversationCaller {
                     organization_id: OrganizationId::new(setup.organization.clone()).unwrap(),
                     principal_id: PrincipalId::new(setup.owner.clone()).unwrap(),
@@ -744,5 +745,6 @@ pub(super) async fn share_with_devices(
         )
         .await
         .unwrap();
+        assert!(receipt.applied);
     }
 }

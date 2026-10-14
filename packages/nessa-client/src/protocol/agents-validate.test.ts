@@ -32,6 +32,7 @@ describe("the agent catalog's places", () => {
       agentsList({
         agents: [],
         environments: places(24),
+        commandHosts: places(24),
         nativeHooks: { claude: "off", codex: "off" },
       }).environments,
     ).toHaveLength(24)
@@ -42,6 +43,7 @@ describe("the agent catalog's places", () => {
       agentsList({
         agents: [],
         environments: places(25),
+        commandHosts: [],
         nativeHooks: { claude: "off", codex: "off" },
       }),
     ).toThrow("Invalid agent catalog environments")

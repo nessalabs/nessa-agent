@@ -259,9 +259,9 @@ pub use service::{
 };
 pub(crate) use session_key::conversation_session;
 pub use share_grants::{
-    binding_of, note_candidates, paired_facts, HeldGrant, Reader, ShareConversation, ShareGrant,
-    ShareGrantChange, ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
-    MAX_SHARE_GRANTS_PER_CONVERSATION,
+    binding_of, note_candidates, paired_facts, GrantedShare, HeldGrant, Reader, ShareConversation,
+    ShareGrant, ShareGrantChange, ShareGrantReceipt, ShareGrantTransition, ShareGrants,
+    MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_POLICY_REVISION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 pub use tool_policy::{ToolDecision, ToolInitiator, ToolPolicyEvaluator, ToolPolicyUnavailable};
 
@@ -295,4 +295,4 @@ mod local_golden_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/leases.rs"]
-mod lease_tests;
+pub(crate) mod lease_tests;

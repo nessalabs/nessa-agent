@@ -277,7 +277,7 @@ async fn seed(store: &Arc<LocalConversationStore>, size: usize) -> Result<String
         } else {
             ShareRole::Comment
         };
-        store
+        let receipt = store
             .change(ShareGrantChange {
                 transition: ShareGrantTransition::Grant(
                     ShareAccess::new(role, None).map_err(|error| format!("{error:?}"))?,
@@ -285,10 +285,14 @@ async fn seed(store: &Arc<LocalConversationStore>, size: usize) -> Result<String
                 conversation_id: id.clone(),
                 receiver_id: Some(RECEIVER.into()),
                 credential_id: CredentialId::new(format!("{RECEIVER}-credential"))?,
+                expected_policy_revision: None,
                 initiator: caller(),
                 at_ms: at,
             })
             .await?;
+        if !receipt.applied {
+            return Err("a grant the bench makes changed nothing".into());
+        }
         if index % 10 == 9 {
             store
                 .record_deletion(

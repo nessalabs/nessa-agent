@@ -2667,6 +2667,7 @@ fn grant_change(
         conversation_id: id.clone(),
         receiver_id: receiver.map(str::to_owned),
         credential_id: nessa_auth::domain::CredentialId::new(credential).unwrap(),
+        expected_policy_revision: None,
         initiator: crate::conversation::application::ConversationCaller {
             organization_id: org(),
             principal_id: alice(),
@@ -2688,6 +2689,7 @@ async fn grant(store: &LocalConversationStore, id: &ConversationId, receiver: &s
         ))
         .await
         .unwrap()
+        .applied
 }
 async fn revoke(store: &LocalConversationStore, id: &ConversationId, receiver: &str) -> bool {
     use crate::conversation::application::{ShareGrantTransition, ShareGrants};
@@ -2701,6 +2703,7 @@ async fn revoke(store: &LocalConversationStore, id: &ConversationId, receiver: &
         ))
         .await
         .unwrap()
+        .applied
 }
 fn device(receiver: &str) -> Reader {
     Reader::PairedDevice {
@@ -3023,7 +3026,7 @@ async fn a_retried_share_that_changed_nothing_never_undoes_a_later_unshare() {
             "share-again",
         )
     };
-    assert!(!opened.store.change(share()).await.unwrap());
+    assert!(!opened.store.change(share()).await.unwrap().applied);
     assert!(revoke(&opened.store, &id, "phone").await);
     let head = opened
         .store
@@ -3035,7 +3038,7 @@ async fn a_retried_share_that_changed_nothing_never_undoes_a_later_unshare() {
         .await
         .unwrap()
         .revision;
-    assert!(!opened.store.change(share()).await.unwrap());
+    assert!(!opened.store.change(share()).await.unwrap().applied);
     assert!(!opened.store.is_granted(&id, "phone").await.unwrap());
     assert_eq!(
         opened
@@ -3070,9 +3073,9 @@ async fn a_retried_share_replays_its_answer_and_never_undoes_a_later_unshare() {
             "share-1",
         )
     };
-    assert!(opened.store.change(share()).await.unwrap());
+    assert!(opened.store.change(share()).await.unwrap().applied);
     assert!(revoke(&opened.store, &id, "phone").await);
-    assert!(opened.store.change(share()).await.unwrap());
+    assert!(opened.store.change(share()).await.unwrap().applied);
     assert!(!opened.store.is_granted(&id, "phone").await.unwrap());
     for (transition, credential) in [
         (ShareGrantTransition::Revoke, "phone-credential"),
@@ -3210,17 +3213,20 @@ async fn every_grant_change_is_journaled_with_its_initiator() {
             ),
             (ShareGrantTransition::Revoke, None, "unshare"),
         ] {
-            assert!(opened
-                .store
-                .change(grant_change(
-                    transition,
-                    &id,
-                    receiver,
-                    "phone-credential",
-                    request
-                ))
-                .await
-                .unwrap());
+            assert!(
+                opened
+                    .store
+                    .change(grant_change(
+                        transition,
+                        &id,
+                        receiver,
+                        "phone-credential",
+                        request
+                    ))
+                    .await
+                    .unwrap()
+                    .applied
+            );
         }
     }
     let head = opened
@@ -3314,6 +3320,7 @@ async fn share_as(
             request,
         ))
         .await
+        .map(|receipt| receipt.applied)
 }
 /// The one grant on `id`.
 async fn only_grant(
@@ -3563,6 +3570,321 @@ async fn a_retried_share_replays_its_role_and_policy_or_is_refused() {
     assert_eq!(only_grant(store, &id).await.access, ShareAccess::read());
 }
 
+/// Apply `transition` to `receiver`'s grant on `id` under request
+/// `request`, built on the grant at `expected` when it names one.
+async fn change_from(
+    store: &LocalConversationStore,
+    id: &ConversationId,
+    receiver: &str,
+    transition: crate::conversation::application::ShareGrantTransition,
+    request: &str,
+    expected: Option<u64>,
+) -> Result<
+    crate::conversation::application::ShareGrantReceipt,
+    crate::conversation::application::ConversationError,
+> {
+    use crate::conversation::application::{ShareGrantTransition, ShareGrants};
+    let named = match transition {
+        ShareGrantTransition::Grant(_) => Some(receiver),
+        ShareGrantTransition::Revoke => None,
+    };
+    store
+        .change(crate::conversation::application::ShareGrantChange {
+            expected_policy_revision: expected,
+            ..grant_change(
+                transition,
+                id,
+                named,
+                &format!("{receiver}-credential"),
+                request,
+            )
+        })
+        .await
+}
+
+/// Row J29: a share answers the policy revision the grant holds once it is
+/// made — the new one when applied, the one kept when not — and a revoke
+/// names none. A retried request answers what its first answer did, after
+/// later changes too, and a grant made after a revoke takes a revision past
+/// every one before it.
+#[tokio::test]
+async fn a_share_answers_the_policy_revision_it_left_and_a_retry_answers_the_same() {
+    use crate::conversation::application::{ShareGrantReceipt, ShareGrantTransition};
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    let grant = |access: ShareAccess| ShareGrantTransition::Grant(access);
+    let read = change_from(store, &id, "phone", grant(ShareAccess::read()), "s1", None)
+        .await
+        .unwrap();
+    let first = only_grant(store, &id).await.policy_revision;
+    assert_eq!(
+        read,
+        ShareGrantReceipt {
+            applied: true,
+            policy_revision: Some(first)
+        }
+    );
+    let again = change_from(store, &id, "phone", grant(ShareAccess::read()), "s2", None)
+        .await
+        .unwrap();
+    assert_eq!(
+        again,
+        ShareGrantReceipt {
+            applied: false,
+            policy_revision: Some(first)
+        }
+    );
+    let driving = change_from(store, &id, "phone", grant(no_shell()), "s3", None)
+        .await
+        .unwrap();
+    let second = only_grant(store, &id).await.policy_revision;
+    assert!(second > first);
+    assert_eq!(driving.policy_revision, Some(second));
+    // Each retry answers its first answer, not what the grant holds now.
+    for (request, access, answered) in [
+        ("s1", ShareAccess::read(), read),
+        ("s2", ShareAccess::read(), again),
+        ("s3", no_shell(), driving),
+    ] {
+        assert_eq!(
+            change_from(store, &id, "phone", grant(access), request, None)
+                .await
+                .unwrap(),
+            answered,
+            "{request}"
+        );
+    }
+    let revoked = change_from(
+        store,
+        &id,
+        "phone",
+        ShareGrantTransition::Revoke,
+        "r1",
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        revoked,
+        ShareGrantReceipt {
+            applied: true,
+            policy_revision: None
+        }
+    );
+    let anew = change_from(store, &id, "phone", grant(ShareAccess::read()), "s4", None)
+        .await
+        .unwrap();
+    let third = only_grant(store, &id).await.policy_revision;
+    assert!(third > second, "a revision is never reused");
+    assert_eq!(anew.policy_revision, Some(third));
+    assert_eq!(
+        change_from(
+            store,
+            &id,
+            "phone",
+            ShareGrantTransition::Revoke,
+            "r1",
+            None
+        )
+        .await
+        .unwrap(),
+        revoked
+    );
+    assert!(store_granted(store, &id, "phone").await);
+}
+
+/// Whether `receiver` holds a grant on `id`.
+async fn store_granted(
+    store: &LocalConversationStore,
+    id: &ConversationId,
+    receiver: &str,
+) -> bool {
+    use crate::conversation::application::ShareGrants;
+    store.is_granted(id, receiver).await.unwrap()
+}
+
+/// Row J30: a share or revoke naming the policy revision the grant holds is
+/// made, and the share answers the new revision; naming any other — the
+/// grant changed or revoked since, or none held — is refused
+/// `ShareGrantChanged`, and nothing is written: not the grant, the journal,
+/// or the catalogue. Naming none makes the change whatever is held, as
+/// before. A retry is answered before the comparison, so a change whose
+/// answer was lost — a share's or a revoke's — is not refused by the
+/// revision it moved itself.
+#[tokio::test]
+async fn a_change_naming_a_revision_the_grant_no_longer_holds_is_refused_and_writes_nothing() {
+    use crate::conversation::application::{ConversationError, ShareGrantTransition};
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    let grant = |access: ShareAccess| ShareGrantTransition::Grant(access);
+    let read = change_from(store, &id, "phone", grant(ShareAccess::read()), "s1", None)
+        .await
+        .unwrap()
+        .policy_revision;
+    // Built on what it read: made, and answers the revision it left.
+    let driving = change_from(store, &id, "phone", grant(no_shell()), "s2", read)
+        .await
+        .unwrap();
+    assert!(driving.applied);
+    let held = only_grant(store, &id).await;
+    assert_eq!(driving.policy_revision, Some(held.policy_revision));
+    assert!(held.policy_revision > read.unwrap());
+    // Another window's read, now stale: refused, whatever it asks.
+    let journal = role_journal(&opened.path).len();
+    let head = owner_head(store).await;
+    for (transition, request) in [
+        (grant(rules()), "stale-share"),
+        (grant(no_shell()), "stale-same"),
+        (ShareGrantTransition::Revoke, "stale-revoke"),
+    ] {
+        let refused = change_from(store, &id, "phone", transition, request, read).await;
+        assert!(
+            matches!(refused, Err(ConversationError::ShareGrantChanged)),
+            "{request}: {:?}",
+            refused.map_err(|error| error.to_string())
+        );
+        assert_eq!(only_grant(store, &id).await, held, "{request}");
+    }
+    assert_eq!(role_journal(&opened.path).len(), journal);
+    assert_eq!(owner_head(store).await, head);
+    // A retry of the change that moved the grant is answered, not refused.
+    assert_eq!(
+        change_from(store, &id, "phone", grant(no_shell()), "s2", read)
+            .await
+            .unwrap(),
+        driving
+    );
+    // A revoke built on what is held is made.
+    let revoked = change_from(
+        store,
+        &id,
+        "phone",
+        ShareGrantTransition::Revoke,
+        "r1",
+        driving.policy_revision,
+    )
+    .await
+    .unwrap();
+    assert!(revoked.applied);
+    assert!(!store_granted(store, &id, "phone").await);
+    // Its retry names the revision it took away, which no grant holds now:
+    // answered from its journal row, not refused.
+    assert_eq!(
+        change_from(
+            store,
+            &id,
+            "phone",
+            ShareGrantTransition::Revoke,
+            "r1",
+            driving.policy_revision,
+        )
+        .await
+        .unwrap(),
+        revoked
+    );
+    // None held: any expected revision but 0 is stale.
+    let journal = role_journal(&opened.path).len();
+    for (transition, request) in [
+        (grant(ShareAccess::read()), "gone-share"),
+        (ShareGrantTransition::Revoke, "gone-revoke"),
+    ] {
+        let refused = change_from(
+            store,
+            &id,
+            "phone",
+            transition,
+            request,
+            driving.policy_revision,
+        )
+        .await;
+        assert!(
+            matches!(refused, Err(ConversationError::ShareGrantChanged)),
+            "{request}: {:?}",
+            refused.map_err(|error| error.to_string())
+        );
+    }
+    assert!(!store_granted(store, &id, "phone").await);
+    assert_eq!(role_journal(&opened.path).len(), journal);
+    // Naming none: made whatever is held, as before.
+    assert!(
+        change_from(store, &id, "phone", grant(rules()), "s3", None)
+            .await
+            .unwrap()
+            .applied
+    );
+    assert!(
+        change_from(store, &id, "phone", grant(ShareAccess::read()), "s4", None)
+            .await
+            .unwrap()
+            .applied
+    );
+    assert_eq!(only_grant(store, &id).await.access, ShareAccess::read());
+}
+
+/// Row J30: revision 0 names no grant held — a revision is a journal
+/// sequence, which starts at 1. A first grant naming it is made; a second
+/// first grant naming it, built on the same list, is refused
+/// `ShareGrantChanged` and writes nothing, so neither window overwrites a
+/// grant it never saw.
+#[tokio::test]
+async fn a_first_grant_naming_no_revision_is_refused_once_another_landed() {
+    use crate::conversation::application::{ConversationError, ShareGrantTransition};
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    let first = change_from(
+        store,
+        &id,
+        "phone",
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        "first",
+        Some(0),
+    )
+    .await
+    .unwrap();
+    assert!(first.applied);
+    assert!(first.policy_revision.is_some_and(|revision| revision > 0));
+    let held = only_grant(store, &id).await;
+    let journal = role_journal(&opened.path).len();
+    let head = owner_head(store).await;
+    let second = change_from(
+        store,
+        &id,
+        "phone",
+        ShareGrantTransition::Grant(no_shell()),
+        "second",
+        Some(0),
+    )
+    .await;
+    assert!(
+        matches!(second, Err(ConversationError::ShareGrantChanged)),
+        "{:?}",
+        second.map_err(|error| error.to_string())
+    );
+    assert_eq!(only_grant(store, &id).await, held);
+    assert_eq!(role_journal(&opened.path).len(), journal);
+    assert_eq!(owner_head(store).await, head);
+    // A revoke naming 0 meets a grant, so it is refused too.
+    assert!(matches!(
+        change_from(
+            store,
+            &id,
+            "phone",
+            ShareGrantTransition::Revoke,
+            "gone",
+            Some(0),
+        )
+        .await,
+        Err(ConversationError::ShareGrantChanged)
+    ));
+    assert_eq!(only_grant(store, &id).await, held);
+}
+
 /// Row J8: a revoke ends a grant of any role, journaled with the role and
 /// policy it took away.
 #[tokio::test]
@@ -3805,16 +4127,19 @@ async fn a_revisions_policy_is_read_from_its_journal_entry() {
     assert_eq!(at(other.clone(), "phone", ruled).await, None);
     assert_eq!(at(id.clone(), "phone", ruled + 100).await, None);
     assert_eq!(at(id.clone(), "phone", u64::MAX).await, None);
-    store
-        .change(grant_change(
-            ShareGrantTransition::Revoke,
-            &id,
-            Some("phone"),
-            "phone-credential",
-            "revoke",
-        ))
-        .await
-        .unwrap();
+    assert!(
+        store
+            .change(grant_change(
+                ShareGrantTransition::Revoke,
+                &id,
+                Some("phone"),
+                "phone-credential",
+                "revoke",
+            ))
+            .await
+            .unwrap()
+            .applied
+    );
     assert_eq!(
         at(id.clone(), "phone", shell_less).await,
         no_shell().policy().cloned()

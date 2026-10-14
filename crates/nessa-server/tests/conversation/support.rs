@@ -1889,7 +1889,7 @@ impl crate::conversation::application::ShareGrants for EveryConversationGranted 
     fn change(
         &self,
         _: crate::conversation::application::ShareGrantChange,
-    ) -> ConversationFuture<'_, bool> {
+    ) -> ConversationFuture<'_, crate::conversation::application::ShareGrantReceipt> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
     fn grants<'a>(
@@ -1937,7 +1937,7 @@ pub(crate) async fn grant_as(
         .await
         .unwrap()
         .expect("a conversation to share");
-    crate::conversation::application::ShareGrants::change(
+    let receipt = crate::conversation::application::ShareGrants::change(
         store,
         crate::conversation::application::ShareGrantChange {
             transition: crate::conversation::application::ShareGrantTransition::Grant(access),
@@ -1945,6 +1945,7 @@ pub(crate) async fn grant_as(
             receiver_id: Some(receiver.to_owned()),
             credential_id: nessa_auth::domain::CredentialId::new(format!("{receiver}-credential"))
                 .unwrap(),
+            expected_policy_revision: None,
             initiator: crate::conversation::application::ConversationCaller {
                 organization_id: conversation.organization().clone(),
                 principal_id: conversation.owner().clone(),
@@ -1956,6 +1957,7 @@ pub(crate) async fn grant_as(
     )
     .await
     .unwrap();
+    assert!(receipt.applied);
 }
 
 /// A Comment grant and a Drive grant under a preset policy: every role
