@@ -1233,13 +1233,37 @@ fn bootstrap_service(
         || disabled_services.is_disabled(domain, label),
     );
     match (finished, cleanup) {
-        (Ok(()), Ok(())) => {}
-        (Ok(()), Err(cleanup)) => {
-            return Err(format!("predeclared bootstrap cleanup: {cleanup}").into())
+        (Ok(()), Ok(())) => {
+            tracing::info!(
+                target: "nessa.login_item",
+                "background service registered"
+            );
         }
-        (Err(failure), Ok(())) => return Err(failure.into()),
+        (Ok(()), Err(cleanup)) => {
+            let cause = format!("predeclared bootstrap cleanup: {cleanup}");
+            tracing::warn!(
+                target: "nessa.login_item",
+                cause = %cause,
+                "background service registration failed"
+            );
+            return Err(cause.into());
+        }
+        (Err(failure), Ok(())) => {
+            tracing::warn!(
+                target: "nessa.login_item",
+                cause = %failure,
+                "background service registration failed"
+            );
+            return Err(failure.into());
+        }
         (Err(failure), Err(cleanup)) => {
-            return Err(format!("{failure}; predeclared bootstrap cleanup: {cleanup}").into())
+            let cause = format!("{failure}; predeclared bootstrap cleanup: {cleanup}");
+            tracing::warn!(
+                target: "nessa.login_item",
+                cause = %cause,
+                "background service registration failed"
+            );
+            return Err(cause.into());
         }
     }
     bootstrap_succeeded(progress);

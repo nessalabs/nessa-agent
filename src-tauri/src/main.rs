@@ -10,6 +10,7 @@ mod diagnostics;
 mod gateway;
 mod gateway_endpoint;
 mod host;
+mod host_log;
 mod host_refusal;
 mod launch;
 mod linger;
@@ -45,15 +46,20 @@ use std::{
 use tauri::{Manager, WindowEvent};
 
 fn main() {
+    host_log::install(startup_log_directory().as_deref());
+    log_process_started();
+
     if let Err(error) = launch::accept(std::env::args_os().skip(1)) {
-        eprintln!("[nessa] {error}");
+        tracing::error!(target: "nessa.launch", cause = %error, "launch refused");
+        host_log::flush();
         std::process::exit(2);
     }
 
     let stage = match local_data::process_stage() {
         Ok(stage) => stage,
         Err(error) => {
-            eprintln!("[nessa] {error}");
+            tracing::error!(target: "nessa.launch", cause = %error, "stage refused");
+            host_log::flush();
             std::process::exit(1);
         }
     };
@@ -85,9 +91,18 @@ fn main() {
                 request.uri().query(),
             )
         })
-        .on_page_load(move |webview, payload| {
-            if payload.event() == tauri::webview::PageLoadEvent::Started {
+        .on_page_load(move |webview, payload| match payload.event() {
+            tauri::webview::PageLoadEvent::Started => {
                 observed.observe(webview.label(), payload.url().as_str());
+            }
+            tauri::webview::PageLoadEvent::Finished => {
+                tracing::info!(
+                    target: "nessa.window",
+                    label = webview.label(),
+                    url = %payload.url(),
+                    since_process_start_ms = host_log::since_process_start_ms(),
+                    "page load finished"
+                );
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -138,7 +153,11 @@ fn main() {
             let deps = match assemble_host(app.handle(), &stage) {
                 Ok(deps) => deps,
                 Err(refusal) => {
-                    eprintln!("[nessa] Nessa could not start: {refusal}");
+                    tracing::error!(
+                        target: "nessa.launch",
+                        cause = %refusal,
+                        "Nessa could not start"
+                    );
                     app.manage(startup::HostStartup::Refused(refusal));
                     startup::show_refusal(app.handle());
                     return Ok(());
@@ -151,11 +170,18 @@ fn main() {
             // either webview so setup can subscribe to progress before a
             // credential request, and keep setup/window presentation unblocked.
             if let Some(gateway) = deps.gateway.clone() {
+                tracing::info!(target: "nessa.launch", "gateway startup began");
                 tauri::async_runtime::spawn(async move {
                     if let Err(error) = gateway.start().await {
-                        eprintln!("[nessa] gateway startup failed: {error}");
+                        tracing::error!(
+                            target: "nessa.launch",
+                            cause = %error,
+                            "gateway startup failed"
+                        );
                     }
                 });
+            } else {
+                tracing::info!(target: "nessa.launch", "gateway startup skipped");
             }
 
             platform::current().configure_app(app.handle());
@@ -166,7 +192,7 @@ fn main() {
             let tray_present = match tray::create(app.handle(), &deps) {
                 Ok(()) => true,
                 Err(error) => {
-                    eprintln!("[nessa] could not create the tray: {error}");
+                    host_log::warn(format!("could not create the tray: {error}"));
                     if let Some(window) = app.get_webview_window("main") {
                         let _ = window.set_skip_taskbar(false);
                     }
@@ -187,7 +213,7 @@ fn main() {
 
             if let Some(window) = app.get_webview_window("main") {
                 if let Err(error) = panel::apply_configured_size(&window, &settings) {
-                    eprintln!("[nessa] could not size the panel: {error}");
+                    host_log::warn(format!("could not size the panel: {error}"));
                 }
                 platform::bind_window(&window, &settings);
             }
@@ -217,7 +243,7 @@ fn main() {
                 #[cfg(all(debug_assertions, feature = "custom-protocol"))]
                 if let Some(window) = app.get_webview_window(panel::MAIN_WINDOW) {
                     if let Err(error) = panel::show(&window, &settings) {
-                        eprintln!("[nessa] could not reveal the debug panel: {error}");
+                        host_log::warn(format!("could not reveal the debug panel: {error}"));
                     }
                 }
             }
@@ -287,7 +313,9 @@ fn main() {
                         desktop_window::OnClose::Hide => {
                             api.prevent_close();
                             if let Err(error) = window.hide() {
-                                eprintln!("[nessa] could not hide the desktop window: {error}");
+                                host_log::warn(format!(
+                                    "could not hide the desktop window: {error}"
+                                ));
                             }
                         }
                         desktop_window::OnClose::Quit => window.app_handle().exit(0),
@@ -326,6 +354,51 @@ fn main() {
                 }
             }
         });
+}
+
+/// The default data directory's `logs` folder, before settings can name another.
+fn startup_log_directory() -> Option<std::path::PathBuf> {
+    let home = host_log::absolute_home(
+        std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).as_deref(),
+    )?;
+    surface_credential::service_namespace(
+        Some(home.join(".nessa")),
+        env!("NESSA_BUNDLE_STAGE"),
+        None,
+    )
+    .map(|namespace| namespace.log_directory())
+}
+
+/// Process start, with the build facts that do not need a subprocess.
+fn log_process_started() {
+    let executable = std::env::current_exe().ok();
+    let signing = executable
+        .as_deref()
+        .map(host_log::signing_facts)
+        .unwrap_or(host_log::SigningFacts {
+            app_bundle: false,
+            app_translocated: false,
+        });
+    let executable = executable
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let log = host_log::current_path()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "not open".to_string());
+    tracing::info!(
+        target: "nessa.launch",
+        version = env!("CARGO_PKG_VERSION"),
+        profile = if cfg!(debug_assertions) { "debug" } else { "release" },
+        os = std::env::consts::OS,
+        arch = std::env::consts::ARCH,
+        stage = env!("NESSA_BUNDLE_STAGE"),
+        packaged = !cfg!(debug_assertions),
+        exe = %executable,
+        app_bundle = signing.app_bundle,
+        app_translocated = signing.app_translocated,
+        log = %log,
+        "process started"
+    );
 }
 
 /// The plugins `setup` registers and the dependency bundle, or why not.

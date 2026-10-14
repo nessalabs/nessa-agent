@@ -35,6 +35,11 @@ getrandom = "0.3"
 # needs a timer the async runtime is already driving. Nothing new is compiled
 # into the binary.
 tokio = { version = "1", features = ["time"] }
+# Startup lines have to outlive a Finder launch, which keeps no stderr.
+# `tracing` is the record; `tracing-appender` is the file it lands in.
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = "0.3"
 
 # The frosted surface is a native NSVisualEffectView rather than a CSS
 # `backdrop-filter`: on a transparent, undecorated macOS window the CSS filter

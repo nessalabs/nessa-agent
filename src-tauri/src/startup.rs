@@ -89,6 +89,15 @@ pub fn host_startup(startup: State<'_, HostStartup>) -> host::HostStartup {
 /// start, which is the only retry a refused setup has.
 #[tauri::command]
 pub fn restart_nessa(app: AppHandle) {
+    tracing::info!(target: "nessa.retry", command = "restart_nessa", "attempt");
+    crate::host_log::flush();
+    tracing::info!(
+        target: "nessa.retry",
+        command = "restart_nessa",
+        outcome = "restarting",
+        "outcome"
+    );
+    crate::host_log::flush();
     app.restart();
 }
 
@@ -104,7 +113,7 @@ pub fn quit_nessa(app: AppHandle) {
 /// Without a tray the panel has to be findable, so it joins the taskbar.
 pub fn show_refusal(app: &AppHandle) {
     let Some(window) = app.get_webview_window(crate::panel::MAIN_WINDOW) else {
-        eprintln!("[nessa] no panel to show the startup refusal in");
+        crate::host_log::error("no panel to show the startup refusal in");
         return;
     };
     let shown = window
@@ -112,7 +121,9 @@ pub fn show_refusal(app: &AppHandle) {
         .and_then(|()| window.show())
         .and_then(|()| window.set_focus());
     if let Err(error) = shown {
-        eprintln!("[nessa] could not show the startup refusal: {error}");
+        crate::host_log::warn(format!("could not show the startup refusal: {error}"));
+    } else {
+        crate::host_log::window_shown(crate::panel::MAIN_WINDOW);
     }
 }
 

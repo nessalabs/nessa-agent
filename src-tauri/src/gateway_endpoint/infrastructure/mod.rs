@@ -12,10 +12,10 @@ use unavailable::UnavailableEndpointDiscovery;
 /// Build discovery for composition's already-resolved service namespace.
 pub fn endpoint_discovery(namespace: Option<ServiceNamespace>) -> Arc<dyn EndpointDiscovery> {
     match namespace {
-        Some(namespace) => Arc::new(FileEndpointDiscovery::new(
-            namespace.root,
-            namespace.relative.join("logs"),
-        )),
+        Some(namespace) => {
+            let directory = namespace.logs_relative();
+            Arc::new(FileEndpointDiscovery::new(namespace.root, directory))
+        }
         None => Arc::new(UnavailableEndpointDiscovery),
     }
 }

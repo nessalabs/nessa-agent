@@ -197,6 +197,27 @@ impl HostDependencies {
             service_configuration.stage(),
             service_configuration.instance(),
         );
+        if let Some(namespace) = &service_namespace {
+            let logs = namespace.log_directory();
+            match crate::host_log::open(&logs) {
+                Ok(path) => tracing::info!(
+                    target: "nessa.launch",
+                    log = %path.display(),
+                    "startup log"
+                ),
+                Err(error) => tracing::warn!(
+                    target: "nessa.launch",
+                    directory = %logs.display(),
+                    %error,
+                    "could not open the startup log"
+                ),
+            }
+        } else {
+            tracing::warn!(
+                target: "nessa.launch",
+                "startup log stayed in the default directory; the service namespace was not usable"
+            );
+        }
         let credential_save_audit: Arc<dyn CredentialSaveAudit> = app
             .path()
             .app_config_dir()
