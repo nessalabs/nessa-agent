@@ -49,6 +49,7 @@ afterEach(async () => {
   await act(async () => root.unmount())
   host.remove()
   platform.mac = true
+  vi.unstubAllGlobals()
 })
 
 let setOpen: (open: boolean) => void = () => {}
@@ -214,6 +215,41 @@ describe("Advanced", () => {
     await act(async () => setOpen(true))
     await act(async () => navItem("General")?.click())
     expect(tabNames()).not.toContain("Experimental")
+  })
+})
+
+describe("Privacy & Permissions", () => {
+  it("keeps common access controls on Access and offers hooks on their own tab", async () => {
+    vi.stubGlobal("Notification", { permission: "default", requestPermission: vi.fn() })
+    await mount()
+    await act(async () => setOpen(true))
+    const privacy = [
+      ...document.querySelectorAll<HTMLButtonElement>(".settings-nav-item"),
+    ].find((item) => item.textContent?.trim() === "Privacy & Permissions")
+    expect(privacy).toBeDefined()
+    await act(async () => privacy?.click())
+    expect(
+      document.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
+    ).toBe("Access")
+    for (const id of ["default-access", "remembered-rules", "review-notices"])
+      expect(document.querySelector(`[data-setting="${id}"]`), id).not.toBeNull()
+    for (const id of ["claude-native-hooks", "codex-native-hooks"])
+      expect(document.querySelector(`[data-setting="${id}"]`), id).toBeNull()
+    const hooks = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
+      (tab) => tab.textContent?.trim() === "Native hooks",
+    )
+    expect(hooks).toBeDefined()
+    await act(async () => hooks?.click())
+    for (const id of ["claude-native-hooks", "codex-native-hooks"]) {
+      const row = document.querySelector(`[data-setting="${id}"]`)
+      expect(row, id).not.toBeNull()
+      expect(row?.hasAttribute("data-disabled"), id).toBe(true)
+      expect(row?.querySelector('[role="switch"]'), id).toBeNull()
+    }
+    expect(document.querySelector('[data-setting="default-access"]')).toBeNull()
+    expect(document.querySelector("#settings-panel")?.textContent).toContain(
+      "Hooks can approve, deny, or change a tool call and its result without Nessa asking",
+    )
   })
 })
 

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * Settings › Access native hooks: the rows rest without a gateway, and with
+ * Settings › Native hooks: the rows rest without a gateway, and with
  * one they show the catalog's choice and send a change.
  */
 import { act } from "react"

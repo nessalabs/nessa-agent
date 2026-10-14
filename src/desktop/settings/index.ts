@@ -30,7 +30,7 @@
  *    fingerprint)                                            hash is model/device-key.ts)
  *
  *   ui/native-hooks-rows.tsx ──▶ adapters/native-hooks-gateway.ts
- *   (Access: Claude and Codex     (`client.agents` list and
+ *   (Native hooks: Claude/Codex   (`client.agents` list and
  *    hook switches)                setNativeHooks)
  *
  *   ui/permission-rule-rows.tsx ──▶ adapters/permission-rules-gateway.ts

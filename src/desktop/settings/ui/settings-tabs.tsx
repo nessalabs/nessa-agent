@@ -64,7 +64,7 @@ import { ReviewNoticeRows } from "./review-notice-rows"
  * gateway, and pending where it has none (`integrations-tab.tsx`).
  * Linked devices pairs and revokes where the window has a gateway, and is
  * pending where it has none (`linked-devices-tab.tsx`).
- * Access lists Claude and Codex native hooks where the window has a gateway,
+ * Native hooks lists Claude and Codex native hooks where the window has a gateway,
  * and rests those rows where it has none (`native-hooks-rows.tsx`).
  */
 export const settingsTabPages: Record<SettingsTabId, ComponentType> = {
@@ -84,6 +84,7 @@ export const settingsTabPages: Record<SettingsTabId, ComponentType> = {
   integrations: IntegrationsTab,
   devices: LinkedDevicesTab,
   access: AccessTab,
+  "native-hooks": NativeHooksRows,
   data: DataTab,
   experimental: ExperimentalTab,
   about: AboutTab,
@@ -520,7 +521,6 @@ function AccessTab() {
       </Group>
       <PermissionRuleRows />
       <ReviewNoticeRows />
-      <NativeHooksRows />
     </>
   )
 }
