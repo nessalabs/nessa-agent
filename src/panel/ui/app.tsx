@@ -290,7 +290,7 @@ export function App({
       if (attachments.isCurrent(destination)) revealDraft(destination.conversationId)
       void attachments.addImageUrl(url, destination)
     },
-    destinationOf: attachments.destinationOf,
+    consumeDropDestination: attachments.consumeDropDestination,
     focusComposer: focusRevealed,
     pasteAttachment,
     refuse: attachments.refuse,
