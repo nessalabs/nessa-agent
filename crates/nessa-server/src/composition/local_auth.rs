@@ -36,11 +36,13 @@ use crate::{
         infrastructure::{LocalAgentCredentials, LocalAgentProbe},
     },
     attachments::application::{AttachmentService, HeldReads},
+    backup::infrastructure::CommittedInventory,
     browser_session::adapters::PersistentSessions,
     conversation::{
         application::{
             ConversationAccessPolicyEvaluator, ConversationRepository, ConversationService,
-            McpAppAudit, ReceiverAuthority, ShareGrants, WatchCatalogue, WatchRecords,
+            FenceCapture, McpAppAudit, ReceiverAuthority, ShareGrants, WatchCatalogue,
+            WatchRecords,
         },
         infrastructure::{
             CedarConversationAccessPolicy, LocalReceiverAuthority, NessaCatalogueReadSource,
@@ -216,6 +218,7 @@ pub(super) async fn product_state(
     let namespace = directory
         .parent()
         .ok_or_else(|| setup_error("invalid data root"))?;
+    let inventory = Arc::new(CommittedInventory::open(namespace).map_err(setup_error)?);
     // One receiver authority, shared by conversations' passive reads and by
     // native pairing, which pairs and fences receivers (design row S7).
     let receivers = if settings.agents.is_some() || settings.native.is_some() {
@@ -294,6 +297,9 @@ pub(super) async fn product_state(
                     },
                 )
                 .await?;
+                built
+                    .service
+                    .bind_fence_capture(inventory.clone() as Arc<dyn FenceCapture>);
                 (
                     Some((
                         built.service,
@@ -331,6 +337,7 @@ pub(super) async fn product_state(
         };
     let admin = Arc::new(LocalAdmin {
         store: store.clone(),
+        inventory: Some(inventory.clone()),
     });
     let caller_kinds = store.clone();
     let mut product = ProductRouteState::new(
@@ -348,6 +355,7 @@ pub(super) async fn product_state(
     )
     .with_caller_kinds(caller_kinds)
     .with_admin(admin)
+    .with_fence_capture(inventory)
     .with_settings(settings.session()?)
     .with_limits(limits)
     .with_browser_sessions(Arc::new({
@@ -1478,6 +1486,7 @@ fn wire_mode_choice(choice: ApprovalModeChoice) -> WireApprovalModeChoice {
 /// mutations; cancellation never rolls back a committed write.
 struct LocalAdmin {
     store: Arc<LocalCredentialStore>,
+    inventory: Option<Arc<dyn FenceCapture>>,
 }
 impl CredentialAdmin for LocalAdmin {
     fn issue<'a>(
@@ -1509,11 +1518,21 @@ impl CredentialAdmin for LocalAdmin {
         request: RevokeCredentialRequest,
     ) -> PortFuture<'a, RevokeCredentialOutcome, CredentialAdminError> {
         let store = self.store.clone();
+        let inventory = self.inventory.clone();
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || store.revoke_sync(request))
+            let outcome = tokio::task::spawn_blocking(move || store.revoke_sync(request))
                 .await
                 .map_err(|_| CredentialAdminError::Unavailable)?
-                .map_err(CredentialAdminError::from)
+                .map_err(CredentialAdminError::from)?;
+            if let Some(inventory) = inventory {
+                if let Err(error) = inventory.capture().await {
+                    tracing::warn!(
+                        ?error,
+                        "the deletion inventory was not updated after a credential revocation"
+                    );
+                }
+            }
+            Ok(outcome)
         })
     }
 }

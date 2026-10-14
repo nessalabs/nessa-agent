@@ -156,6 +156,13 @@ or credential fence the winner stored stays. `a_stale_log_is_reconciled_again`,
 `a_stale_writer_does_not_replace_the_log`, and
 `concurrent_stores_keep_one_complete_log`.
 
+A command that has already committed a fence records it without taking
+admission and without publishing a bundle. The gateway asks Cedar, then
+reconciles. A refusal or a failed append leaves the fence and the previous
+log, and the command's result is unchanged. A device, peer, environment
+peer, or worker is refused and nothing is written. A person or the
+gateway's own surface may capture when they ask.
+
 Either fence source failing leaves the log
 unwritten, including when the other source already has rows. A metadata
 tombstone or revocation that cannot be decoded or named fails that fence
@@ -180,3 +187,5 @@ sequences 1, 2, 3, … and are still matched by key.
 | Directory sync fails after rename | The new file is already at the inventory path | The previous bytes are restored, or the new file is removed when the path was absent, before the error is returned. `a_directory_sync_failure_restores_the_previous_log`, `a_directory_sync_failure_removes_a_log_that_was_absent` |
 | Two inventory writers | Each read the log, then both store | One store lands a complete log. The other is refused and reconciles again, so a conversation or credential fence already stored stays. `concurrent_stores_keep_one_complete_log`, `a_stale_writer_does_not_replace_the_log`, `a_stale_log_is_reconciled_again` |
 | Capture during export | During the brief hold, after the append | The manifest's deletion-inventory watermark is the log after that append. `the_cut_includes_the_deletion_inventory` |
+| Command, then inventory | After a deletion, unshare, or credential revocation commits | The gateway asks Cedar, then reconciles. It does not take admission and does not publish a bundle. A refusal or a failed append leaves the fence and the previous log. The command's result is unchanged. A worker enrollment names an `environment.serve` credential as `worker`; a device or peer id in that file stays what the registry said. A damaged enrollment commits nothing from that read. `a_failed_inventory_capture_leaves_the_deletion`, `a_revoked_worker_credential_is_inventoried`, `a_damaged_worker_enrollment_does_not_commit_fences`, `an_unshare_reconciles_the_revoked_grant` |
+| Who may record | Before the log is read | Cedar permits the gateway to record a committed fence, and a person or the gateway's own surface to capture when they ask. A device, peer, environment peer, or worker is refused and nothing is written. `the_gateway_may_record_a_committed_fence`, `a_device_peer_environment_or_worker_may_not_capture`, `a_denied_capture_does_not_write` |

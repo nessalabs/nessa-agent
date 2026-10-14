@@ -19,7 +19,7 @@ use super::{
     ConversationFileLinkCause, ConversationFileLinkState, ConversationListing,
     ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
     ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
-    ConversationRepository, ConversationSummaries, DeletionFailures, FetchRequests,
+    ConversationRepository, ConversationSummaries, DeletionFailures, FenceCapture, FetchRequests,
     ListedConversation, ObservationCursor, ObservedConversations, OwnerAccess, PublishRequests,
     RevisionHold, RuntimeReadiness, ShareGrants, StopFailure, SubmittedMessage,
     UnfinishedDeletions,
@@ -777,6 +777,9 @@ struct Inner {
     /// Remembered permission rules. Unbound, no turn is offered a remember
     /// choice and no review is answered by a rule.
     permission_rules: Arc<OnceLock<Arc<dyn PermissionRules>>>,
+    /// The deletion inventory, asked after a tombstone commits. Unbound, a
+    /// delete still fences and finishes; the inventory is unchanged.
+    fence_capture: Arc<OnceLock<Arc<dyn FenceCapture>>>,
 }
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
@@ -1119,6 +1122,7 @@ impl ConversationService {
                 note_authors: Arc::new(OnceLock::new()),
                 drive: Arc::new(OnceLock::new()),
                 permission_rules: Arc::new(OnceLock::new()),
+                fence_capture: Arc::new(OnceLock::new()),
             }),
         })
     }
@@ -2749,6 +2753,12 @@ impl ConversationService {
         let _ = self.inner.permission_rules.set(rules);
     }
 
+    /// Bind the deletion inventory recorded after a tombstone commits. A
+    /// second bind is ignored. Unbound, a delete still fences and finishes.
+    pub fn bind_fence_capture(&self, capture: Arc<dyn FenceCapture>) {
+        let _ = self.inner.fence_capture.set(capture);
+    }
+
     pub(super) async fn submit_as(
         &self,
         id: ConversationId,
@@ -3904,6 +3914,10 @@ impl ConversationService {
             // admission lock before cleanup so repeat deletes preserve their
             // own ordering under the deletion lock.
             drop(mode);
+            // The fence is committed, including when another attempt wrote it.
+            // Capture does not take admission, and its failure leaves this
+            // delete's result alone.
+            service.record_inventory().await;
             let (record, applied, _deleting) = match fenced {
                 Fence::Written {
                     record,
@@ -3946,6 +3960,20 @@ impl ConversationService {
             }
         })
         .await
+    }
+
+    /// Reconcile the deletion inventory. A refusal or a failed append is
+    /// logged. The tombstone is unchanged, and the caller keeps its result.
+    async fn record_inventory(&self) {
+        let Some(capture) = self.inner.fence_capture.get() else {
+            return;
+        };
+        if let Err(error) = capture.capture().await {
+            tracing::warn!(
+                ?error,
+                "the deletion inventory was not updated after a committed fence"
+            );
+        }
     }
 
     /// Everything a delete does up to and including its own tombstone write:

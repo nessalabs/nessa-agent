@@ -131,6 +131,75 @@ pub trait Authenticator: Send + Sync {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MacKey(pub [u8; 32]);
 
+/// Who is asking to write the deletion inventory. A fact, not a verdict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InventoryCause {
+    /// A deletion, unshare, or credential revocation has committed.
+    CommittedFence,
+    /// The principal asked for a capture.
+    Operator,
+}
+
+impl InventoryCause {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CommittedFence => "committed-fence",
+            Self::Operator => "operator",
+        }
+    }
+}
+
+/// Which write was asked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InventoryAction {
+    /// Record fences a command just committed.
+    Record,
+    /// Capture because the principal asked.
+    Capture,
+}
+
+impl InventoryAction {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Record => "deletion.inventory.record",
+            Self::Capture => "deletion.inventory.capture",
+        }
+    }
+}
+
+/// Facts Cedar sees for one inventory write. `kind` is who is asking:
+/// `gateway`, `person`, `surface`, `device`, `peer`, `environment-peer`,
+/// or `worker`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InventoryFacts<'a> {
+    pub kind: &'a str,
+    pub cause: InventoryCause,
+    pub action: InventoryAction,
+}
+
+/// Cedar's answer, naming the policies that decided it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InventoryDecision {
+    Allow { policies: Vec<String> },
+    Deny(InventoryDenial),
+}
+
+/// Why a write was not allowed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InventoryDenial {
+    /// A forbid policy named these ids.
+    Forbidden { policies: Vec<String> },
+    /// No policy permitted it.
+    NotPermitted,
+    /// The policy could not be evaluated. Nothing is written.
+    Unavailable,
+}
+
+/// Whether this principal may write the deletion inventory.
+pub trait InventoryCapturePolicyEvaluator: Send + Sync {
+    fn evaluate(&self, facts: &InventoryFacts<'_>) -> InventoryDecision;
+}
+
 impl Authenticator for MacKey {
     /// HMAC-SHA256 of `canonical`. The key stays in `self`.
     fn mac(&self, canonical: &str) -> Result<Fingerprint, MacError> {

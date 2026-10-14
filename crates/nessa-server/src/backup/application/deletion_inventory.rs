@@ -5,7 +5,10 @@
 use std::collections::HashSet;
 
 use super::super::domain::{DeletionFence, DeletionLog, FenceKind};
-use super::ports::{DeletionLogStore, FenceSource, LogStoreError};
+use super::ports::{
+    DeletionLogStore, FenceSource, InventoryCapturePolicyEvaluator, InventoryDecision,
+    InventoryDenial, InventoryFacts, LogStoreError,
+};
 
 /// How many times a writer reconciles again after another writer stored first.
 const REPLACE_ATTEMPTS: u32 = 8;
@@ -17,6 +20,42 @@ pub enum InventoryFailure {
     Unreadable,
     /// This attempt did not replace the log.
     NotStored,
+}
+
+/// Why a capture was not written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CaptureError {
+    /// Cedar refused. The log was not read.
+    Denied(InventoryDenial),
+    /// The fences or the log could not be written.
+    Inventory(InventoryFailure),
+}
+
+/// Ask `policy`, then reconcile `fences` into `store`.
+///
+/// A denial returns before the log is read. [`CaptureError::Inventory`] leaves
+/// the log as [`capture_fences`] left it: the previous bytes, or nothing new.
+pub async fn capture_inventory(
+    facts: &InventoryFacts<'_>,
+    policy: &dyn InventoryCapturePolicyEvaluator,
+    fences: &[&dyn FenceSource],
+    store: &dyn DeletionLogStore,
+) -> Result<DeletionLog, CaptureError> {
+    match policy.evaluate(facts) {
+        InventoryDecision::Allow { .. } => capture_fences(fences, store)
+            .await
+            .map_err(CaptureError::Inventory),
+        InventoryDecision::Deny(reason) => {
+            tracing::warn!(
+                ?reason,
+                kind = facts.kind,
+                cause = facts.cause.as_str(),
+                action = facts.action.as_str(),
+                "the deletion inventory was not written"
+            );
+            Err(CaptureError::Denied(reason))
+        }
+    }
 }
 
 /// Read `fences` and append any that are not already in the log.

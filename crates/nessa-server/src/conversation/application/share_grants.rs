@@ -47,7 +47,7 @@ use super::metadata_target::load_conversation;
 use super::{
     AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
     ConversationAccessPolicyEvaluator, ConversationCaller, ConversationError, ConversationFuture,
-    ConversationRepository, OwnerAccess, PairedRefusal, RequestShape, ShareTarget,
+    ConversationRepository, FenceCapture, OwnerAccess, PairedRefusal, RequestShape, ShareTarget,
 };
 use crate::conversation::application::ReceiverAuthority;
 use crate::conversation::domain::{
@@ -431,6 +431,9 @@ pub struct ShareConversation<'a> {
     pub gateway: &'a Resource,
     /// The access policy, asked whether the caller may share, and with whom.
     pub policy: &'a dyn ConversationAccessPolicyEvaluator,
+    /// The deletion inventory, reconciled after an unshare commits. Absent,
+    /// the grant is still revoked and the inventory is unchanged.
+    pub inventory: Option<&'a dyn FenceCapture>,
 }
 
 impl ShareConversation<'_> {
@@ -565,7 +568,7 @@ impl ShareConversation<'_> {
         at_ms: u64,
     ) -> Result<bool, ConversationError> {
         caller.actor()?;
-        Ok(self
+        let applied = self
             .grants
             .change(ShareGrantChange {
                 transition: ShareGrantTransition::Revoke,
@@ -577,7 +580,18 @@ impl ShareConversation<'_> {
                 at_ms,
             })
             .await?
-            .applied)
+            .applied;
+        // A retry reconciles too: the revoke fence is already committed, and
+        // a later re-grant drops it when this read no longer names it.
+        if let Some(inventory) = self.inventory {
+            if let Err(error) = inventory.capture().await {
+                tracing::warn!(
+                    ?error,
+                    "the deletion inventory was not updated after an unshare"
+                );
+            }
+        }
+        Ok(applied)
     }
 
     /// The grants on `id`, for its owner.

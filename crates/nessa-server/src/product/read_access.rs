@@ -443,6 +443,7 @@ pub(super) async fn dispatch_share(
         access: state.access.as_ref(),
         gateway: &state.gateway,
         policy,
+        inventory: state.fence_capture.as_deref(),
     };
     // Sharing is the owner's: a paired device signs in as its owner's
     // principal, so the policy is asked about it as the paired party it is,
