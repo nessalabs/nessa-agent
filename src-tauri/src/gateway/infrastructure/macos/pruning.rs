@@ -99,7 +99,9 @@ impl RetainedRuntimes {
 /// A published version is named by its runtime fingerprint, and is removable
 /// only when no retained fingerprint names it. An interrupted staging attempt is
 /// removable whenever we are here at all: the per-label reconciliation lock is
-/// held, and holding it means no other host is staging into this directory.
+/// held, and holding it means no other registration is staging into this
+/// directory. A publication that continues after `register` returns keeps that
+/// same lock on its own thread, so its temporary directory is not listed here.
 /// Anything whose name we did not write — an unexpected file, a directory that
 /// is not a fingerprint, a staging name that is not one of ours — is left alone.
 fn removable(name: &str, retained: &RetainedRuntimes) -> bool {

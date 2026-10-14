@@ -13,7 +13,12 @@ use crate::mcp_servers::domain::{
 use crate::{core::RunError, desktop_runtime::domain::RunningRuntime};
 use nessa_protocol::agents::AgentId;
 use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 /// The agent the desktop starts with when nothing else has been chosen.
@@ -208,6 +213,11 @@ fn unusable_runtime(error: impl std::fmt::Display) -> RunError {
 mod tests;
 
 /// Match process configuration to the actual bundle before publishing desktop health.
+///
+/// The manifest field and `NESSA_RUNTIME_FINGERPRINT` can still name the
+/// fingerprint the host recorded while the tree underneath has been replaced.
+/// Health is that fingerprint only when the packaging digest of this tree is
+/// the same value.
 pub(super) fn runtime_identity(
     bundle: &Path,
     configured: String,
@@ -227,5 +237,136 @@ pub(super) fn runtime_identity(
             "configured desktop fingerprint differs from installed runtime manifest",
         ));
     }
+    if installed_tree_fingerprint(bundle).map_err(unusable_runtime)? != configured {
+        return Err(unusable_runtime(
+            "configured desktop fingerprint differs from installed runtime tree",
+        ));
+    }
     RunningRuntime::new(configured, instance, process_id, generation).map_err(unusable_runtime)
+}
+
+/// Packaging digest of a prepared runtime.
+///
+/// The byte sequence is the one `scripts/desktop/runtime-fingerprint.mjs`
+/// writes into `manifest.json`: framed names, kinds, executable bits, and
+/// lengths, then file bytes, in UTF-16 entry order. The root manifest is not
+/// part of the digest. Absolute link targets and links that resolve outside
+/// the tree are refused.
+pub(super) fn installed_tree_fingerprint(directory: &Path) -> Result<String, String> {
+    let root = directory
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let mut hash = Sha256::new();
+    hash_runtime_entry(&root, &root, "", &mut hash)?;
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+fn hash_runtime_entry(
+    root: &Path,
+    path: &Path,
+    name: &str,
+    hash: &mut Sha256,
+) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if metadata.file_type().is_symlink() {
+        let target = std::fs::read_link(path).map_err(|error| error.to_string())?;
+        let target = target
+            .into_os_string()
+            .into_string()
+            .map_err(|_| "Runtime names must be UTF-8".to_string())?;
+        let resolved = path.canonicalize().map_err(|error| error.to_string())?;
+        if Path::new(&target).is_absolute() || !resolved.starts_with(root) {
+            return Err("Runtime link must stay inside the bundle".into());
+        }
+        frame_runtime(hash, serde_json::json!([name, "link", target]))?;
+    } else if metadata.is_dir() {
+        frame_runtime(hash, serde_json::json!([name, "directory"]))?;
+        let mut entries = std::fs::read_dir(path)
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        entries.sort_by(|left, right| {
+            left.file_name()
+                .to_string_lossy()
+                .encode_utf16()
+                .cmp(right.file_name().to_string_lossy().encode_utf16())
+        });
+        for entry in entries {
+            let child = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| "Runtime names must be UTF-8")?;
+            if name.is_empty() && child == "manifest.json" {
+                continue;
+            }
+            let relative = if name.is_empty() {
+                child
+            } else {
+                format!("{name}/{child}")
+            };
+            hash_runtime_entry(root, &entry.path(), &relative, hash)?;
+        }
+    } else if metadata.is_file() {
+        hash_runtime_file(hash, path, name)?;
+    } else {
+        return Err("Unsupported runtime entry".into());
+    }
+    Ok(())
+}
+
+fn hash_runtime_file(hash: &mut Sha256, path: &Path, name: &str) -> Result<(), String> {
+    let mut file = open_runtime_file(path)?;
+    let metadata = file.metadata().map_err(|error| error.to_string())?;
+    if !metadata.is_file() {
+        return Err("Runtime changed during fingerprinting".into());
+    }
+    frame_runtime(
+        hash,
+        serde_json::json!([name, "file", executable_bits(&metadata), metadata.len()]),
+    )?;
+    let expected = metadata.len();
+    let mut bytes = [0_u8; 65_536];
+    let mut count = 0_u64;
+    loop {
+        let read = file.read(&mut bytes).map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        count += read as u64;
+        hash.update(&bytes[..read]);
+    }
+    if count != expected {
+        return Err("Runtime file changed while hashing".into());
+    }
+    Ok(())
+}
+
+fn frame_runtime(hash: &mut Sha256, value: serde_json::Value) -> Result<(), String> {
+    hash.update(serde_json::to_vec(&value).map_err(|error| error.to_string())?);
+    hash.update(b"\n");
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_runtime_file(path: &Path) -> Result<File, String> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(unix))]
+fn open_runtime_file(path: &Path) -> Result<File, String> {
+    File::open(path).map_err(|error| error.to_string())
+}
+
+#[cfg(unix)]
+fn executable_bits(metadata: &std::fs::Metadata) -> u32 {
+    metadata.permissions().mode() & 0o111
+}
+
+#[cfg(not(unix))]
+fn executable_bits(_metadata: &std::fs::Metadata) -> u32 {
+    0
 }

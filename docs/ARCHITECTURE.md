@@ -570,14 +570,36 @@ get an ADR explaining why not.
 
 **Desktop host ↔ gateway runtime.** The prepared runtime tree has one fingerprint.
 Under its service-label lock, the host copies and verifies the bundle into a
-private version directory outside the app before any service mutation. Exclusive
-atomic publication prevents replacing an existing version; launchd arguments name
-only the staged directory, and no search path derives from it — the service runs
-everything in that directory by absolute path, so neither the gateway's `PATH`
-nor the agent's contains it. A host process fully validates a published version
-before first use, then caches only that exact path, fingerprint, and private root
-directory identity; later reconciliation still checks the complete definition and
-live process identity without hashing the whole runtime again. Published versions
+private version directory outside the app. When that generation is already
+published, launchd arguments name only that directory, and this process validates
+it before the service changes. When it is not published yet, this registration
+prepares the data directory and launches the bundled tree by absolute path so
+the gateway can bind. The server advertises that fingerprint only when it is
+also the packaging digest of the tree it is about to serve, so a bundle
+changed after the host read the manifest cannot confirm the old identity,
+including when launchd restarts the job. The service-label lock stays with a launch that the
+attempt calls only after it has accepted the empty-cleanup `stage-runtime`
+plan; a slow or rejected plan never starts the copy. That publication flushes
+files on a bounded pool while it hashes the tree, and it still requires a
+matching digest and durable files and directories before the exclusive rename.
+The attempt writes the plan after its other effects. Ready is published only
+after that plan is accepted, and endpoint and credential reads return then,
+before the copy starts. Desktop quit against that ready gateway sends the
+agent stop without waiting for the copy. While the copy runs, a join onto
+that attempt takes the writer gate back for its journal append. The attempt still waits for the copy and records its
+real result and observation before the outcome. A failure after that ready
+publish carries a strictly newer startup revision. This process keeps the bundle path while
+the installed definition still names it.
+The next launch of the app points the service at that directory.
+Replacing or moving the app while that first job is running from the bundle does
+not retarget it; a copy that observes the change publishes nothing. Exclusive atomic
+publication prevents replacing an existing version, and no search path derives
+from either directory — the service runs `nessa`, `node`, and `nessa-mcp` by
+absolute path, so neither the gateway's `PATH` nor the agent's contains that
+directory. A host process fully validates a published version before first use,
+then caches only that exact path, fingerprint, and private root directory
+identity; later reconciliation still checks the complete definition and live
+process identity without hashing the whole runtime again. Published versions
 are retained and never repaired or garbage-collected automatically.
 The desktop compares it with health's fingerprint, persisted service generation,
 and canonical runtime-instance UUID, requiring the advertised process ID to match
@@ -610,9 +632,11 @@ bootout contingency for only that target; it retains the registration record
 until readiness succeeds.
 
 The journal is the one owner of whether a cleanup is owed. A declared cleanup —
-the bootout a bootstrap carries, the prune a first staging carries — is owed only
-once the journal holds its step's result and observation and that result is not
-success (`LifecycleEffectPredicate::is_due`). The live path asks that rule before
+the bootout a bootstrap carries — is owed only once the journal holds its step's
+result and observation and that result is not success
+(`LifecycleEffectPredicate::is_due`). The deferred `stage-runtime` plan declares
+no cleanup, so recovery settles it without replay and without pruning a
+directory the staging thread may still hold. The live path asks that rule before
 running a cleanup, so a success leaves nothing pending and nothing runs that the
 journal could not record. A bootstrap launchd refused has its owed bootout run
 and recorded before the failure is reported, beside launchd's own diagnosis; when
