@@ -1,3 +1,4 @@
+import { AttachmentResource } from "../../conversation/testing"
 // @vitest-environment jsdom
 /**
  * What a tile says about its own upload.
@@ -29,13 +30,15 @@ import { AttachmentTile } from "./attachment-tile"
 
 const file = (upload: FileAttachment["upload"]): FileAttachment => ({
   type: "file",
-  id: "f",
-  name: "photo.png",
-  mimeType: "image/png",
-  size: 3,
-  path: null,
-  previewUrl: "blob:test",
+  placementId: "f",
   upload,
+  resource: AttachmentResource.create({
+    name: "photo.png",
+    mimeType: "image/png",
+    size: 3,
+    previewUrl: "blob:test",
+    path: null,
+  }),
 })
 
 let container: HTMLDivElement

@@ -16,7 +16,7 @@ import {
   storedImages,
   type CommandFailure,
   type ConversationSelection,
-  type FileAttachment,
+  type AttachmentResource,
   type MessageContent,
   type ReadFailure,
   type Turn,
@@ -25,7 +25,6 @@ import {
 import {
   createAsyncThunk,
   createSlice,
-  current as snapshot,
   type GetThunkAPI,
   type PayloadAction,
 } from "@reduxjs/toolkit"
@@ -245,16 +244,20 @@ export const takeUploadStep =
 
 export const stageAttachment = createAsyncThunk<
   void,
-  { id: string; fileId: string; file: UploadedFile; bytes: Blob },
+  { id: string; placementId: string; file: UploadedFile; bytes: Blob },
   ThunkConfig
 >(
   "conversation/stageAttachment",
   async (input, { dispatch, getState, extra, signal }) => {
-    const target = { conversationId: input.id, fileId: input.fileId }
+    const target = { conversationId: input.id, placementId: input.placementId }
     const current = getState().conversation.conversations.find(
       (item) => item.id === target.conversationId,
     )
-    if (!current?.draft.some((part) => part.type === "file" && part.id === target.fileId))
+    if (
+      !current?.draft.some(
+        (part) => part.type === "file" && part.placementId === target.placementId,
+      )
+    )
       return
     const serverId = current.serverConversationId ?? crypto.randomUUID()
     dispatch(bindConversation({ id: target.conversationId, serverId }))
@@ -668,16 +671,6 @@ export const stopGenerating = createAsyncThunk<
   )
 })
 
-/**
- * Apply the sent-preview bound to a draft state these reducers have already
- * changed. The rule itself is pure and returns new tabs; a reducer that has
- * touched its draft may not also return a value, so the result is written back.
- */
-function releaseOldPreviews(state: LocalTabs) {
-  const bounded = boundSentPreviews(snapshot(state), MAX_SENT_PREVIEW_BYTES)
-  state.conversations = bounded.conversations
-}
-
 const conversationSlice = createSlice({
   name: "conversation",
   initialState: emptyLocalTabs(),
@@ -702,7 +695,7 @@ const conversationSlice = createSlice({
     },
     attachFiles(
       state,
-      action: PayloadAction<{ files: FileAttachment[]; conversationId: string }>,
+      action: PayloadAction<{ files: AttachmentResource[]; conversationId: string }>,
     ) {
       return gateway.attachFiles(
         state,
@@ -783,8 +776,6 @@ const conversationSlice = createSlice({
         turn.error = undefined
       }
       if (current) current.readRequest = undefined
-      // The gateway has the message: its originals are only previews from here.
-      releaseOldPreviews(state)
     },
     submissionFailed(
       state,
@@ -855,8 +846,6 @@ const conversationSlice = createSlice({
           ...applyView(current, view),
           readRequest: requestId,
         }
-        // A view can be what first says a turn was taken.
-        releaseOldPreviews(state)
       }
     },
     controlStarted(state, action: PayloadAction<string>) {
@@ -909,6 +898,17 @@ export const {
   controlStarted,
   controlFinished,
 } = conversationSlice.actions
-export const conversationReducer = conversationSlice.reducer
+/** Reconcile all reference-changing publications through the one preview bound. */
+export const conversationReducer: typeof conversationSlice.reducer = (state, action) => {
+  const next = conversationSlice.reducer(state, action)
+  return next.conversations === state?.conversations
+    ? next
+    : boundSentPreviews(next, MAX_SENT_PREVIEW_BYTES)
+}
 // Mounted beside the tabs by the store, which reaches this vertical through this module alone.
 export { conversationHistoryReducer } from "./history"
+
+// Narrow composition entry: the store mounts reducers without loading UI barrels.
+export { attachmentResourceUsage } from "../../application/queries/attachment-resources"
+
+export { AttachmentResource } from "../../model"

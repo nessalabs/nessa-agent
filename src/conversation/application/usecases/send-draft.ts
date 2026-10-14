@@ -38,9 +38,10 @@ export function beginSend(
   // Beginning a send empties the draft. A file the draft holds and the message
   // does not would vanish without having gone anywhere, so that is no send.
   const sent = new Set(
-    input.content.flatMap((part) => (part.type === "file" ? [part.id] : [])),
+    input.content.flatMap((part) => (part.type === "file" ? [part.placementId] : [])),
   )
-  if (conv.draft.some((part) => part.type === "file" && !sent.has(part.id))) return tabs
+  if (conv.draft.some((part) => part.type === "file" && !sent.has(part.placementId)))
+    return tabs
   const sendable = messageImages(input.content)
   if (!sendable.ok) return tabs
   const text = contentText(input.content)
@@ -238,9 +239,9 @@ export function declineReason(
   // a caller's copy of a file part is never what gets sent — and one the draft
   // does not hold is refused rather than dropped from the message.
   const held = new Set(
-    conv.draft.flatMap((part) => (part.type === "file" ? [part.id] : [])),
+    conv.draft.flatMap((part) => (part.type === "file" ? [part.placementId] : [])),
   )
-  if (input.content.some((part) => part.type === "file" && !held.has(part.id)))
+  if (input.content.some((part) => part.type === "file" && !held.has(part.placementId)))
     return {
       kind: "unknown-attachment",
       message: "An attachment is no longer in this draft. Attach it again.",

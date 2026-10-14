@@ -17,8 +17,9 @@
  *
  * The gateway Agent owns work. Local tabs only retain drafts, server identity,
  * and displayed receipts; closing a tab never stops another surface's Agent.
- * application/saved-tabs restores remote references under fresh local names from
- * the existing allocator, fencing retired callbacks (restored-lifetimes tests).
+ * attachFiles owns placement identity; resources.ts exposes immutable resource values.
+ * queries/attachment-resources owns shared original retention classification
+ * and resource-wide preview eviction.
  */
 export { AGENT_HUES, questionAnswerReady, questionChoices } from "./model"
 export { ConversationNotification } from "./ui/conversation-notification"
@@ -65,6 +66,8 @@ export { fromEditor, toEditor, pastedTextLabel } from "./ui/composer-content"
 
 export {
   type FileAttachment,
+  AttachmentResource,
+  type AttachmentResourceData,
   type ImageReference,
   type UploadFailure,
   MAX_ATTACHMENT_BYTES,
@@ -98,3 +101,8 @@ export {
   type SavedConversationTab,
   type SavedConversationTabs,
 } from "./application/saved-tabs"
+
+export {
+  attachmentResourceUsage,
+  type AttachmentResourceUsage,
+} from "./application/queries/attachment-resources"
