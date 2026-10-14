@@ -6,9 +6,12 @@ use nessa_auth::{
     adapters::local::{
         DurableCredentialRegistryRefusalAudit, LocalCredentialStore, LocalStoreConfig,
     },
-    application::credential_registry::{
-        CredentialRegistryRefusal, CredentialRegistryRefusalAudit, CredentialRegistryRefusalCause,
-        CredentialRegistryRefusalInitiator,
+    application::{
+        credential_registry::{
+            CredentialRegistryRefusal, CredentialRegistryRefusalAudit,
+            CredentialRegistryRefusalCause, CredentialRegistryRefusalInitiator,
+        },
+        ports::GrantPolicyEvaluator,
     },
 };
 use std::{path::Path, sync::Arc};
@@ -23,9 +26,10 @@ pub(super) enum RegistryOpenContext {
 pub(super) fn open(
     directory: &Path,
     config: LocalStoreConfig,
+    grants: Arc<dyn GrantPolicyEvaluator>,
     context: RegistryOpenContext,
 ) -> Result<LocalCredentialStore, RunError> {
-    match LocalCredentialStore::open_with_config(directory, "credentials.v1.json", config) {
+    match LocalCredentialStore::open_with_config(directory, "credentials.v1.json", config, grants) {
         Ok(store) => Ok(store),
         Err(error) => {
             let audit_failure = error.invalid_registry().and_then(|(target, fault)| {

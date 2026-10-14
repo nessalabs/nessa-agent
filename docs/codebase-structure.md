@@ -25,7 +25,9 @@ Upload progress is owned by the conversation application and carries its local
 conversation and admitted placement together; see [attachment lifetimes](design/attachment-lifetimes.md).
 The panel carries that target through hashing and the store through staging.
 The conversation application mints placements and publishes one resource-usage
-snapshot for retention and preview eviction; resource IDs identify shared bytes.
+snapshot for retention and preview eviction. The immutable resource value carries
+byte identity and authoritative metadata together; storage and accounting use
+that value's object identity.
 
 ## Today
 
@@ -240,7 +242,8 @@ against a private scripted gateway.
   [adr/0002-conversation-vertical-and-gateway.md](adr/done/0002-conversation-vertical-and-gateway.md).
 - The desktop window's workspace is its own vertical, nested in the window:
   `src/desktop/workspace/` with `model/` (index, conversations,
-  revisions, how the window fits the side columns, failures, retention,
+  revisions, the history extent a bounded view left out — classified once in
+  `src/conversation/model/history.ts` — how the window fits the side columns, failures, retention,
   session groups, the new-session lifecycle, and what a pane shows —
   `pane-item.ts`, a session or a widget, with the one codec to split panes'
   opaque key), `application/` (the

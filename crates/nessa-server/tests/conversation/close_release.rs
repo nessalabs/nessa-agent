@@ -61,6 +61,7 @@ fn invocation(
         },
         actor: ActionContext::new("person", "panel", "turn-1").unwrap(),
         initiation: Initiation::owner(),
+        notes: Vec::new(),
         acknowledgement: SubmissionAcknowledgement::Acknowledged,
         events: Vec::new(),
         scheduling: vec![InvocationSchedulingEvent {

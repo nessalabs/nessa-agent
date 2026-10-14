@@ -467,6 +467,8 @@ struct ProviderCalls {
     executions: AtomicUsize,
     closes: Mutex<Vec<SessionCloseRequest>>,
     order: Mutex<Vec<String>>,
+    /// Every request handed to `execute`, as the provider received it.
+    inputs: Mutex<Vec<ExecutionRequest>>,
 }
 struct TestProvider {
     identity: ProviderIdentity,
@@ -546,6 +548,7 @@ impl ProviderSessionBackend for TestBackend {
                 async move {
                     self.calls.executions.fetch_add(1, Ordering::SeqCst);
                     self.calls.order.lock().unwrap().push("execute".into());
+                    self.calls.inputs.lock().unwrap().push(input.clone());
                     let sender = self
                         .sender
                         .lock()
@@ -707,6 +710,135 @@ async fn invocation_drains_and_persists_without_any_subscriber() {
             .invocations
             .len(),
         2
+    );
+    agent.close(close_action()).await.unwrap();
+}
+
+fn next_turn_note(
+    request: &str,
+    text: &str,
+) -> nessa_sdk::application::agent_execution::sessions::NoteRequest {
+    use nessa_sdk::application::agent_execution::sessions::{NoteDelivery, NoteRequest, NoteText};
+    NoteRequest {
+        text: NoteText::new(text).unwrap(),
+        delivery: NoteDelivery::NextTurn,
+        actor: ActionContext::new("person", "phone", request).unwrap(),
+        author: nessa_sdk::domain::agent_execution::executions::Initiator::Owner,
+    }
+}
+
+/// Row J24: a queued turn admitted while the agent is idle takes the notes
+/// the host authorized; the provider is handed them with the message, and
+/// the saved message holds the person's words alone.
+#[tokio::test]
+async fn an_idle_queued_turn_hands_the_provider_the_notes_it_took() {
+    use nessa_sdk::application::agent_execution::sessions::NoteCandidates;
+    let storage = MemoryStorage::default();
+    let provider = TestProvider::new();
+    let agent = attached_agent(provider.clone(), storage.manager().await)
+        .await
+        .unwrap();
+    let manager = agent.session_manager();
+    let taken = manager
+        .record_note(next_turn_note("a", "use May"))
+        .await
+        .unwrap();
+    let unchecked = manager
+        .record_note(next_turn_note("b", "wait"))
+        .await
+        .unwrap();
+    let receipt = agent
+        .enqueue_with_notes(
+            request("first"),
+            Submitter::owner(actor()),
+            NoteCandidates {
+                authorized: vec![taken.id.clone()],
+                revoked: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.wait().await, Ok(ExecutionOutcome::Completed));
+    let inputs = provider.calls.inputs.lock().unwrap().clone();
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0].user_message.notes(), &[taken.context().unwrap()]);
+    assert_eq!(
+        inputs[0].user_message.text(),
+        request("first").user_message.text()
+    );
+    let saved = storage.snapshot();
+    assert!(saved.invocations[0].request.user_message.notes().is_empty());
+    assert_eq!(saved.invocations[0].notes, vec![taken.id.clone()]);
+    // A plain enqueue takes none, and the note no host checked still waits.
+    finish_plain(&agent, "second").await;
+    assert!(provider.calls.inputs.lock().unwrap()[1]
+        .user_message
+        .notes()
+        .is_empty());
+    let saved = storage.snapshot();
+    let waiting = saved
+        .notes
+        .iter()
+        .find(|note| note.id == unchecked.id)
+        .unwrap();
+    assert_eq!(
+        saved.note_state(waiting),
+        nessa_sdk::application::agent_execution::sessions::NoteState::Pending
+    );
+    agent.close(close_action()).await.unwrap();
+}
+
+async fn finish_plain(agent: &Agent, id: &str) {
+    assert_eq!(
+        agent
+            .enqueue(request(id), Submitter::owner(actor()))
+            .await
+            .unwrap()
+            .wait()
+            .await,
+        Ok(ExecutionOutcome::Completed)
+    );
+}
+
+/// Row J23: a queued turn admitted behind a running one takes no notes, so
+/// none waits behind a turn that never saw it.
+#[tokio::test]
+async fn a_turn_queued_behind_another_takes_no_notes() {
+    use nessa_sdk::application::agent_execution::sessions::NoteCandidates;
+    let storage = MemoryStorage::default();
+    let mut provider = TestProvider::new();
+    Arc::get_mut(&mut provider).unwrap().wait_for_close = true;
+    let agent = attached_agent(provider.clone(), storage.manager().await)
+        .await
+        .unwrap();
+    let note = agent
+        .session_manager()
+        .record_note(next_turn_note("a", "use May"))
+        .await
+        .unwrap();
+    let _running = agent
+        .enqueue(request("running"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let _behind = agent
+        .enqueue_with_notes(
+            request("behind"),
+            Submitter::owner(actor()),
+            NoteCandidates {
+                authorized: vec![note.id.clone()],
+                revoked: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    let saved = storage.snapshot();
+    assert!(saved
+        .invocations
+        .iter()
+        .all(|record| record.notes.is_empty()));
+    assert_eq!(
+        saved.note_state(&saved.notes[0]),
+        nessa_sdk::application::agent_execution::sessions::NoteState::Pending
     );
     agent.close(close_action()).await.unwrap();
 }
@@ -970,6 +1102,7 @@ async fn unfinished_saved_invocations_are_retained_without_automatic_replay() {
             request: request("interrupted"),
             actor: actor(),
             initiation: Initiation::owner(),
+            notes: Vec::new(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             result: None,
@@ -1096,6 +1229,7 @@ async fn restored_unresolved_admission_is_never_redispatched_by_retry() {
                 request: request("interrupted"),
                 actor: actor(),
                 initiation: Initiation::owner(),
+                notes: Vec::new(),
                 acknowledgement: SubmissionAcknowledgement::Pending,
                 events: Vec::new(),
                 scheduling,

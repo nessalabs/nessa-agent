@@ -111,6 +111,7 @@ function conversation(artifacts: PublishedFile[]): Conversation {
     ],
     remote: {
       artifacts,
+      notes: [],
       approvalMode: "ask",
       approvalModes: [{ id: "ask", name: "Provider asks", description: "Asks." }],
       questions: [],

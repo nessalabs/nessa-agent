@@ -10,13 +10,15 @@
 //! gets, once `approval.rs` has seen its owner approve it through an
 //! [`EnvironmentPairing`], which `enrollment.rs` pairs once through an
 //! [`EnrollingPairing`]; `grants.rs` is where serving reads what this
-//! host's owner grants each gateway, through [`PeerGrants`]. All three wait
-//! on a [`crate::timer::Timer`].
+//! host's owner grants each gateway, through [`PeerGrants`], and asks
+//! `lease_policy.rs`'s [`LeasePolicyEvaluator`] whether a lease is allowed
+//! under it. All three wait on a [`crate::timer::Timer`].
 mod approval;
 mod artifacts;
 mod enrollment;
 mod fetches;
 mod grants;
+mod lease_policy;
 mod redial;
 mod serve;
 mod wire;
@@ -35,6 +37,7 @@ pub(crate) use grants::{
     change_grant, Applied, ChangeFailed, GrantAudit, GrantChange, GrantOutcome, GrantStore,
     PeerGrants,
 };
+pub(crate) use lease_policy::{Denial, LeaseAsk, LeaseDecision, LeaseFacts, LeasePolicyEvaluator};
 pub(crate) use redial::{redial, stop_past_deadline, Backoff};
 pub(crate) use serve::{
     refuse, serve, CommandRan, CommandRunner, CommandStop, HarnessLauncher, LeaseLedger,

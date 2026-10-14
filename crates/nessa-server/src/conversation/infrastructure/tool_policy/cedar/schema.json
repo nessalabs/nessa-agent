@@ -1,0 +1,173 @@
+{
+  "Nessa": {
+    "entityTypes": {
+      "Owner": {},
+      "Grant": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "toolPreset": {
+              "type": "String",
+              "required": true
+            },
+            "commandHosts": {
+              "type": "Set",
+              "element": {
+                "type": "String"
+              },
+              "required": false
+            }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "Tool": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "name": {
+              "type": "String",
+              "required": true
+            },
+            "source": {
+              "type": "String",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "Gateway": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "commandHosts": {
+              "type": "Set",
+              "element": {
+                "type": "String"
+              },
+              "required": true
+            },
+            "allowListed": {
+              "type": "Boolean",
+              "required": true
+            },
+            "allowPrograms": {
+              "type": "Set",
+              "element": {
+                "type": "String"
+              },
+              "required": true
+            },
+            "denyPrograms": {
+              "type": "Set",
+              "element": {
+                "type": "String"
+              },
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "Host": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "name": {
+              "type": "String",
+              "required": true
+            },
+            "gateway": {
+              "type": "Entity",
+              "name": "Gateway",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "McpServer": {},
+      "App": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "server": {
+              "type": "Entity",
+              "name": "McpServer",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "McpTool": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "name": {
+              "type": "String",
+              "required": true
+            },
+            "server": {
+              "type": "Entity",
+              "name": "McpServer",
+              "required": true
+            },
+            "visibleToApp": {
+              "type": "Boolean",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      }
+    },
+    "actions": {
+      "tool.call": {
+        "appliesTo": {
+          "principalTypes": ["Owner", "Grant"],
+          "resourceTypes": ["Tool"]
+        }
+      },
+      "command.host": {
+        "appliesTo": {
+          "principalTypes": ["Owner", "Grant"],
+          "resourceTypes": ["Host"]
+        }
+      },
+      "command.run": {
+        "appliesTo": {
+          "principalTypes": ["Owner", "Grant"],
+          "resourceTypes": ["Host"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "program": {
+                "type": "String",
+                "required": true
+              },
+              "programName": {
+                "type": "String",
+                "required": true
+              }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "app.reach": {
+        "appliesTo": {
+          "principalTypes": ["App"],
+          "resourceTypes": ["McpServer"]
+        }
+      },
+      "app.callTool": {
+        "appliesTo": {
+          "principalTypes": ["App"],
+          "resourceTypes": ["McpTool"]
+        }
+      }
+    }
+  }
+}

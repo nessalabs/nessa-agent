@@ -258,6 +258,7 @@ pub(super) enum ChangeUndo {
     Lease(Option<super::CurrentLease>),
     Artifact,
     Note,
+    NoteRetired(usize),
 }
 
 impl continuation::Continuation {
@@ -393,6 +394,9 @@ impl continuation::Continuation {
                     },
                 )
                 .map_err(corrupt)?;
+                // Saving this record assigns its notes: each must be pending
+                // as the records stood when it was saved.
+                super::notes::admit_taken(snapshot, &record.notes)?;
                 if !record.events.is_empty()
                     || record.provider_report.is_some()
                     || record.local_cancellation.is_some()
@@ -679,6 +683,14 @@ impl continuation::Continuation {
                 snapshot.notes.push(record.clone());
                 undo.push(ChangeUndo::Note);
             }
+            SessionChange::NoteRetired(record) => {
+                let snapshot = candidate
+                    .as_mut()
+                    .ok_or_else(|| corrupt("note retirement precedes session open"))?;
+                let index = super::notes::admit_retired(snapshot, record)?;
+                snapshot.notes[index].retired = Some(record.retirement);
+                undo.push(ChangeUndo::NoteRetired(index));
+            }
         }
 
         Ok(())
@@ -861,6 +873,9 @@ impl continuation::Continuation {
                 self.snapshot_bytes = self
                     .snapshot_bytes
                     .saturating_sub(super::retained::note(&record));
+            }
+            ChangeUndo::NoteRetired(index) => {
+                self.snapshot.as_mut().expect("open").notes[index].retired = None;
             }
         }
     }

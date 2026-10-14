@@ -18,7 +18,10 @@ use crate::application::agent_execution::{
         validate_configured_input, CloseOutcome, ProviderOperationFailure, ProviderSessionState,
         SessionCloseRequest, SteeringOutcome,
     },
-    sessions::{InvocationSchedulingEvent, StorageError, SubmissionAcknowledgement},
+    sessions::{
+        InvocationSchedulingEvent, NoteCandidates, NoteIntake, StorageError,
+        SubmissionAcknowledgement,
+    },
 };
 use crate::domain::agent_execution::executions::{
     ExecutionId, ExecutionOutcome, InvocationKind, InvocationQueue, InvocationStage, QueueMutation,
@@ -415,7 +418,44 @@ impl Agent {
         input: ExecutionRequest,
         submitter: Submitter,
     ) -> Result<QueueAdmission, AgentError> {
-        self.enqueue_kind(input, submitter, InvocationKind::Queued)
+        self.enqueue_kind(
+            input,
+            submitter,
+            InvocationKind::Queued,
+            NoteCandidates::default(),
+        )
+        .await
+    }
+
+    /// [`Self::enqueue`], with the host's verdict on the conversation's
+    /// pending `next_turn` notes: which authors it checked and still allows,
+    /// and which lost the right to leave them.
+    ///
+    /// Admitted while the agent is idle (nothing running, nothing queued),
+    /// the turn takes up to eight pending notes `candidates` authorizes, in
+    /// the order they were left, and the model is given them with its message,
+    /// each labelled with its author. Admitted behind other work, it takes
+    /// none: they wait for a turn that starts from them. Either way the
+    /// admission retires, in the same save, each pending note past its 24-hour
+    /// lifetime and each `candidates` names as revoked. A note in neither list
+    /// waits. A retry of the same submission answers from its first admission
+    /// and selects nothing again; `candidates` is not part of what a retry
+    /// must repeat.
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::enqueue`].
+    pub async fn enqueue_with_notes(
+        &self,
+        input: ExecutionRequest,
+        submitter: Submitter,
+        candidates: NoteCandidates,
+    ) -> Result<QueueAdmission, AgentError> {
+        self.enqueue_kind(input, submitter, InvocationKind::Queued, candidates)
             .await
     }
 
@@ -432,8 +472,13 @@ impl Agent {
         input: ExecutionRequest,
         submitter: Submitter,
     ) -> Result<QueueAdmission, AgentError> {
-        self.enqueue_kind(input, submitter, InvocationKind::Steering)
-            .await
+        self.enqueue_kind(
+            input,
+            submitter,
+            InvocationKind::Steering,
+            NoteCandidates::default(),
+        )
+        .await
     }
 
     /// Copy pending IDs in dispatch order under the scheduler's admission lock.
@@ -777,12 +822,15 @@ impl Agent {
         input: ExecutionRequest,
         submitter: Submitter,
         kind: InvocationKind,
+        candidates: NoteCandidates,
     ) -> Result<QueueAdmission, AgentError> {
         let agent = self.clone();
         let waiter = CallerWaiter::Admission(input.execution_id.clone());
         contain_caller_wake(
             waiter,
-            tokio::spawn(async move { agent.accept_work(input, submitter, kind).await }),
+            tokio::spawn(
+                async move { agent.accept_work(input, submitter, kind, candidates).await },
+            ),
         )
         .await
         .map_err(|_| AgentError::SubmissionUnresolved)?
@@ -793,6 +841,7 @@ impl Agent {
         input: ExecutionRequest,
         submitter: Submitter,
         kind: InvocationKind,
+        candidates: NoteCandidates,
     ) -> Result<QueueAdmission, AgentError> {
         validate_configured_input(self.capabilities(), &input)?;
         let mut scheduler = self.inner.scheduler.lock().await;
@@ -823,6 +872,12 @@ impl Agent {
             .queue
             .validate_enqueue(&input.execution_id)
             .map_err(AgentError::Scheduling)?;
+        // Asked under the scheduler lock that admits it: a queued turn that
+        // starts from an idle agent takes notes, and one behind other work
+        // does not, so nothing it takes waits behind a turn that never saw it.
+        let takes_notes = kind == InvocationKind::Queued
+            && scheduler.is_idle()
+            && self.inner.lifecycle.active().is_none();
         let index = self
             .inner
             .manager
@@ -838,6 +893,10 @@ impl Agent {
                     Some(submitter.context.clone()),
                 ),
                 mode,
+                NoteIntake {
+                    candidates,
+                    takes_notes,
+                },
             )
             .await?;
         // The scheduler lock spans validation and persistence, so no admission
@@ -1357,7 +1416,9 @@ impl Agent {
     }
 
     /// Attempts native steering of the active execution using `input` and verified
-    /// `submitter`. Idle inputs run at the next invocation boundary. Unsupported native
+    /// `submitter`. Idle inputs run at the next invocation boundary, and so does
+    /// input whose submitter's initiator is not the one the active turn was saved
+    /// with: a turn is never steered by anyone but who started it. Unsupported native
     /// steering returns Unsupported; callers can explicitly choose enqueue_steering.
     ///
     /// A message the selected model cannot take is refused before anything is
@@ -1455,6 +1516,18 @@ impl Agent {
             .validate_enqueue(&input.execution_id)
             .map_err(AgentError::Scheduling)?;
         let target = self.inner.lifecycle.active();
+        // A turn's calls are judged under the initiation its record saved, so
+        // input from anyone else is never injected into it: it waits for a
+        // turn of its own. A target whose record cannot be read is not joined.
+        let joins_target = match &target {
+            Some(target) => self
+                .inner
+                .manager
+                .initiation_of(target)
+                .await
+                .is_some_and(|saved| saved.initiator() == submitter.initiation.initiator()),
+            None => true,
+        };
         let index = self
             .inner
             .manager
@@ -1470,6 +1543,7 @@ impl Agent {
                     Some(submitter.context.clone()),
                 ),
                 SubmissionMode::Steering,
+                NoteIntake::default(),
             )
             .await?;
         // WorkStatus persistence can be overtaken by close or provider settlement.
@@ -1479,7 +1553,7 @@ impl Agent {
             || close_notice.has_changed().unwrap_or(true)
         {
             Err(AgentError::Closed)
-        } else if self.inner.lifecycle.active().as_ref() != target.as_ref() {
+        } else if self.inner.lifecycle.active().as_ref() != target.as_ref() || !joins_target {
             Ok(SteeringOutcome::PromptRequired)
         } else {
             match &target {

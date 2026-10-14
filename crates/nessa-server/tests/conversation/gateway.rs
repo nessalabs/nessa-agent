@@ -128,6 +128,7 @@ mod gateway {
         state.with_agents_catalog(
             serde_json::from_value(serde_json::json!({
                 "environments": [],
+                "commandHosts": [],
                 "agents": [{
                     "agent": "claude",
                     "defaultModel": "test",
@@ -149,7 +150,10 @@ mod gateway {
             .unwrap(),
         )
     }
-    pub(super) async fn chat_session(state: &ProductRouteState, credential: &str) -> AuthenticatedSession {
+    pub(super) async fn chat_session(
+        state: &ProductRouteState,
+        credential: &str,
+    ) -> AuthenticatedSession {
         AuthenticateSession {
             verifier: state.verifier.as_ref(),
             access: state.access.as_ref(),
@@ -241,11 +245,7 @@ mod gateway {
     #[tokio::test]
     async fn the_agent_catalog_requires_the_gateway_read_grant() {
         let state = chat_state();
-        for (credential, allowed) in [
-            ("reader", true),
-            ("owner-phone", true),
-            ("foreign", false),
-        ] {
+        for (credential, allowed) in [("reader", true), ("owner-phone", true), ("foreign", false)] {
             let session = chat_session(&state, credential).await;
             let response = chat_request(&state, &session, "agents.list", json!({})).await;
             assert_eq!(response.ok, allowed, "{credential}");
@@ -263,14 +263,13 @@ mod gateway {
     async fn the_agent_catalog_lists_the_paired_environments_connected_when_asked() {
         let connected = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let listed = connected.clone();
-        let state = chat_state().with_connected_environments(crate::product::ConnectedEnvironments {
-            names: Arc::new(move || listed.lock().unwrap().clone()),
-            changes: tokio::sync::watch::Sender::new(0).subscribe(),
-        });
+        let state =
+            chat_state().with_connected_environments(crate::product::ConnectedEnvironments {
+                names: Arc::new(move || listed.lock().unwrap().clone()),
+                changes: tokio::sync::watch::Sender::new(0).subscribe(),
+            });
         let session = chat_session(&state, "owner-phone").await;
-        let places = |response: ResponseFrame| {
-            response.payload.unwrap()["environments"].clone()
-        };
+        let places = |response: ResponseFrame| response.payload.unwrap()["environments"].clone();
         let before = places(chat_request(&state, &session, "agents.list", json!({})).await);
         let peer = format!("peer:{}", "ab".repeat(32));
         connected.lock().unwrap().push(peer.clone());
@@ -285,6 +284,33 @@ mod gateway {
             places(chat_request(&state, &session, "agents.list", json!({})).await),
             before
         );
+    }
+    /// nessa_ui#129: `agents.list` names, beside its places, the ones the
+    /// owner's turns may run commands on, read from the conversation service
+    /// as the catalog is read; and none where the gateway runs no
+    /// conversations, so a share dialog offers a Drive grant no host.
+    #[tokio::test]
+    async fn the_agent_catalog_names_the_places_that_take_the_owners_commands() {
+        let state = chat_state();
+        let session = chat_session(&state, "owner-phone").await;
+        let hosts =
+            |response: ResponseFrame| response.payload.unwrap()["commandHosts"].clone();
+        assert_eq!(
+            hosts(chat_request(&state, &session, "agents.list", json!({})).await),
+            json!([])
+        );
+        let mut catalog = serde_json::to_value(state.agents_catalog.as_deref().unwrap()).unwrap();
+        catalog["environments"] = json!(["agentbox", "build.example", "devbox"]);
+        let root = tempfile::tempdir().unwrap();
+        let service =
+            crate::conversation::application::lease_tests::service_with_command_hosts(root.path());
+        let state = state
+            .with_agents_catalog(serde_json::from_value(catalog).unwrap())
+            .with_conversations(Arc::new(service));
+        let response = chat_request(&state, &session, "agents.list", json!({})).await;
+        let payload = response.payload.unwrap();
+        assert_eq!(payload["environments"], json!(["agentbox", "build.example", "devbox"]));
+        assert_eq!(payload["commandHosts"], json!(["devbox"]));
     }
     pub(super) fn send_command(peer: &TestPeer, id: &str, method: &str, params: serde_json::Value) {
         peer.input
@@ -359,9 +385,7 @@ mod gateway {
         let session = chat_session(&state, "owner-phone").await;
         let (socket, mut peer) = test_socket(None);
         let task = tokio::spawn(run_authenticated(socket, state.clone(), session));
-        let target = |request: &str| {
-            json!({"conversationId":"00000000-0000-4000-8000-000000000001","requestId":request})
-        };
+        let target = |request: &str| json!({"conversationId":"00000000-0000-4000-8000-000000000001","requestId":request});
         let answer = json!({"conversationId":"00000000-0000-4000-8000-000000000001","requestId":"answer","executionId":"turn","permissionId":"p","optionId":"allow"});
         let cancel = json!({"conversationId":"00000000-0000-4000-8000-000000000001","requestId":"cancel","executionId":"turn","permissionId":"p","reason":"no"});
 
@@ -450,8 +474,7 @@ mod gateway {
     }
     #[tokio::test]
     async fn authenticated_surfaces_share_one_agent_but_other_owners_cannot_read() {
-        let (service, provider, repository, _) =
-            chat_fixture();
+        let (service, provider, repository, _) = chat_fixture();
         let state = chat_state().with_conversations(Arc::new(service));
         let id = "00000000-0000-4000-8000-000000000002";
         let phone = chat_session(&state, "owner-phone").await;
@@ -519,10 +542,10 @@ mod gateway {
 
     #[tokio::test]
     async fn read_joins_the_fixed_selection_to_the_authenticated_catalog() {
-        let (_, provider, repository, storage) =
-            chat_fixture();
+        let (_, provider, repository, storage) = chat_fixture();
         let service = crate::conversation::application::ConversationService::new(
             crate::conversation::application::ConversationDependencies {
+                access_policy: crate::conversation_test_support::access_policy(),
                 agents: conversation_support::only(Arc::new(conversation_support::Provider::new(
                     provider,
                 ))),
@@ -530,9 +553,7 @@ mod gateway {
                 metadata: repository.clone(),
                 creation_audit: Arc::new(conversation_support::AcceptingCreationAudit),
                 mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
-                file_link_audit: Arc::new(
-                    conversation_support::RecordingFileLinkAudit::default(),
-                ),
+                file_link_audit: Arc::new(conversation_support::RecordingFileLinkAudit::default()),
                 deletion_audit: Arc::new(conversation_support::AcceptingDeletionAudit),
                 attachments: None,
                 summaries: Arc::new(conversation_support::MemorySummaries::default()),
@@ -540,7 +561,9 @@ mod gateway {
                 provider_sessions:
                     crate::conversation::application::ProviderSessionErasers::default(),
                 deletion_budgets: conversation_support::DELETION_BUDGETS,
-                message_commit_clock: Arc::new(nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new()),
+                message_commit_clock: Arc::new(
+                    nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+                ),
                 clock: Arc::new(conversation_support::TestClock),
                 environment: crate::conversation::infrastructure::in_process_environment().into(),
             },
@@ -558,14 +581,16 @@ mod gateway {
             .with_conversations(Arc::new(service));
         let owner = chat_session(&state, "owner-phone").await;
         let id = "00000000-0000-4000-8000-000000000010";
-        assert!(chat_request(
-            &state,
-            &owner,
-            "conversation.create",
-            json!({"conversationId": id, "requestId": "create"}),
-        )
-        .await
-        .ok);
+        assert!(
+            chat_request(
+                &state,
+                &owner,
+                "conversation.create",
+                json!({"conversationId": id, "requestId": "create"}),
+            )
+            .await
+            .ok
+        );
         let response = chat_request(
             &state,
             &owner,
@@ -598,8 +623,7 @@ mod gateway {
         payload["revision"] = "00000000-0000-4000-8000-000000000000:1".into();
         let served = serde_json::to_string_pretty(&payload).unwrap() + "\n";
         if std::env::var_os("NESSA_UPDATE_GOLDEN").is_some() {
-            std::fs::create_dir_all(std::path::Path::new(SERVED_VIEW).parent().unwrap())
-                .unwrap();
+            std::fs::create_dir_all(std::path::Path::new(SERVED_VIEW).parent().unwrap()).unwrap();
             std::fs::write(SERVED_VIEW, &served).unwrap();
         }
         let sample = std::fs::read_to_string(SERVED_VIEW).expect("the served view is checked in");
@@ -608,8 +632,7 @@ mod gateway {
 
     #[tokio::test]
     async fn listing_answers_each_caller_with_their_own_conversations_only() {
-        let (service, provider, _, _) =
-            chat_fixture();
+        let (service, provider, _, _) = chat_fixture();
         let state = chat_state().with_conversations(Arc::new(service));
         let owner = chat_session(&state, "owner-phone").await;
         let id = "00000000-0000-4000-8000-000000000007";
@@ -630,7 +653,13 @@ mod gateway {
             listed.payload.unwrap(),
             json!({"conversations": [], "complete": true})
         );
-        let read = chat_request(&state, &owner, "conversation.read", json!({"conversationId":id})).await;
+        let read = chat_request(
+            &state,
+            &owner,
+            "conversation.read",
+            json!({"conversationId":id}),
+        )
+        .await;
         let view = read.payload.unwrap();
         assert_eq!(view["title"], serde_json::Value::Null);
         assert_eq!(view["approvalMode"], "ask");
@@ -694,8 +723,7 @@ mod gateway {
 
     #[tokio::test]
     async fn archive_and_delete_answer_as_mutations_and_a_deleted_id_is_refused_by_name() {
-        let (service, provider, _, _) =
-            chat_fixture();
+        let (service, provider, _, _) = chat_fixture();
         let state = chat_state().with_conversations(Arc::new(service));
         let owner = chat_session(&state, "owner-phone").await;
         let id = "00000000-0000-4000-8000-000000000009";
@@ -774,7 +802,11 @@ mod gateway {
             ("conversation.archive", target("archive-3")),
         ] {
             let refused = chat_request(&state, &panel, method, params).await;
-            assert_eq!(refused.error.unwrap().code, "conversation_deleted", "{method}");
+            assert_eq!(
+                refused.error.unwrap().code,
+                "conversation_deleted",
+                "{method}"
+            );
         }
         for archived in [false, true] {
             let listed = chat_request(
@@ -785,9 +817,9 @@ mod gateway {
             )
             .await;
             assert_eq!(
-            listed.payload.unwrap(),
-            json!({"conversations": [], "complete": true})
-        );
+                listed.payload.unwrap(),
+                json!({"conversations": [], "complete": true})
+            );
         }
         // The deciding request, repeated, answers as it did; a later one did
         // not delete it.
@@ -840,8 +872,7 @@ mod gateway {
             // A name beside the path would be a second thing to disagree with it.
             json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello","attachments":[],"files":[{"path":"/tmp/a.pdf","name":"a.pdf"}]}),
         ] {
-            let response =
-                chat_request(&state, &session, "conversation.send", params).await;
+            let response = chat_request(&state, &session, "conversation.send", params).await;
             assert!(!response.ok);
             assert_eq!(response.error.unwrap().code, "invalid_request");
         }
@@ -859,8 +890,7 @@ mod gateway {
 
     #[tokio::test]
     async fn disconnect_keeps_admitted_open_after_request_capacity_is_released() {
-        let (service, provider, _, _) =
-            chat_fixture();
+        let (service, provider, _, _) = chat_fixture();
         let state = chat_state().with_conversations(Arc::new(service));
         let (release, gate) = oneshot::channel();
         *provider.open_gate.lock().unwrap() = Some(gate);
@@ -919,19 +949,20 @@ mod gateway {
 
     #[tokio::test]
     async fn same_socket_stalled_response_does_not_hold_close_effect() {
-        let (service, provider, _, _) =
-            chat_fixture();
+        let (service, provider, _, _) = chat_fixture();
         let state = chat_state().with_conversations(Arc::new(service));
         let session = chat_session(&state, "owner-phone").await;
         let id = "00000000-0000-4000-8000-000000000009";
-        assert!(chat_request(
-            &state,
-            &session,
-            "conversation.create",
-            json!({"conversationId":id,"requestId":"create"}),
-        )
-        .await
-        .ok);
+        assert!(
+            chat_request(
+                &state,
+                &session,
+                "conversation.create",
+                json!({"conversationId":id,"requestId":"create"}),
+            )
+            .await
+            .ok
+        );
         timeout(Duration::from_secs(1), async {
             loop {
                 let read = chat_request(
@@ -941,7 +972,11 @@ mod gateway {
                     json!({"conversationId":id}),
                 )
                 .await;
-                if read.payload.as_ref().is_some_and(|value| value["lifecycle"]["phase"] == "attached") {
+                if read
+                    .payload
+                    .as_ref()
+                    .is_some_and(|value| value["lifecycle"]["phase"] == "attached")
+                {
                     break;
                 }
                 tokio::task::yield_now().await;
@@ -982,8 +1017,7 @@ mod gateway {
 
     #[tokio::test]
     async fn reads_during_startup_return_without_consuming_control_capacity() {
-        let (service, provider, _, _) =
-            chat_fixture();
+        let (service, provider, _, _) = chat_fixture();
         let state = chat_state().with_conversations(Arc::new(service));
         let (release, gate) = oneshot::channel();
         *provider.open_gate.lock().unwrap() = Some(gate);
@@ -1039,8 +1073,7 @@ mod gateway {
     }
     #[tokio::test]
     async fn authenticated_reorder_changes_provider_dispatch_order_atomically() {
-        let (service, provider, _, _) =
-            chat_fixture();
+        let (service, provider, _, _) = chat_fixture();
         let state = chat_state().with_conversations(Arc::new(service));
         let session = chat_session(&state, "owner-phone").await;
         let (socket, mut peer) = test_socket(None);
@@ -1177,7 +1210,11 @@ mod gateway {
             json!({"conversationId":id,"requestId":"create","operation":"create"}),
         )
         .await;
-        assert_eq!(created.payload.as_ref().unwrap()["found"], true, "{created:?}");
+        assert_eq!(
+            created.payload.as_ref().unwrap()["found"],
+            true,
+            "{created:?}"
+        );
         let elsewhere = chat_request(
             &state,
             &session,

@@ -4,6 +4,7 @@ use super::{
     ConversationError, ConversationId, ConversationService, SubmissionMode, SubmissionReceipt,
     SubmitFailure, SubmittedMessage, Writer,
 };
+use crate::conversation::domain::ConversationRefusal;
 use nessa_sdk::application::agent_execution::agents::{AgentError, QueueRemoval};
 use nessa_sdk::application::agent_execution::commands::{
     CreationFuture, CreationInitializationFailure, CreationStorage, CreationTaskFault,
@@ -442,11 +443,12 @@ async fn refuse_deleted(
     let Some(record) = load_conversation(service.inner.metadata.as_ref(), id).await? else {
         return Ok(());
     };
-    match record.check_access(&caller.organization_id, &caller.principal_id) {
-        Err(crate::conversation::domain::ConversationRefusal::Deleted) => {
-            Err(ConversationError::Deleted)
-        }
-        _ => Ok(()),
+    match service.access().admit(&record, caller) {
+        Err(ConversationRefusal::Deleted) => Err(ConversationError::Deleted),
+        // A policy that cannot decide refuses, rather than letting a
+        // deleted conversation through as one it could not tell about.
+        Err(ConversationRefusal::Unavailable) => Err(ConversationError::Metadata),
+        Ok(()) | Err(ConversationRefusal::NotFound) => Ok(()),
     }
 }
 
@@ -458,7 +460,7 @@ async fn ensure_live(
     let record = load_conversation(service.inner.metadata.as_ref(), id)
         .await?
         .ok_or(ConversationError::NotFound)?;
-    record.check_access(&caller.organization_id, &caller.principal_id)?;
+    service.access().admit(&record, caller)?;
     Ok(())
 }
 

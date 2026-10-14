@@ -1,6 +1,9 @@
-//! Whether an MCP App may make the call it asks for (#348): the policy rows,
-//! as pure rules over what the conversation's view says of the app and what
-//! its server's session listed.
+//! What of an MCP App's call (#348) is not policy, as pure rules over what
+//! the conversation's view says of the app and what its server's session
+//! listed: whether it is an app at all, whether the tool was listed, how
+//! large its arguments are, and whether a person must review it. Which
+//! server it may reach and which tools it may call there are Cedar's
+//! (`conversation::application::AppCallPolicyEvaluator`, ADR 803 step 4).
 use nessa_sdk::domain::mcp_apps::ListedTool;
 
 /// The most an app's tool arguments may be, encoded. The SDK's
@@ -46,21 +49,25 @@ pub enum AppCallAdmission {
     Approve,
 }
 
-/// Whether the app `app` may call `tool` on `server`, given the tool as the
-/// conversation's own session last listed it (`None` when it did not) and
-/// the arguments' encoded size.
-pub fn admit_tool_call(
-    app: Option<&AppFacts>,
-    server: &str,
-    tool: Option<&ListedTool>,
+/// The app `app` names, if it is one at all: an MCP tool call in this
+/// conversation that declared a UI. A lookup, asked before the policy is.
+pub fn known_app(app: Option<&AppFacts>) -> Result<&AppFacts, AppRefusal> {
+    app.filter(|app| app.has_ui).ok_or(AppRefusal::AppUnknown)
+}
+
+/// The tool as the conversation's own session last listed it; `None` when
+/// it did not, which no app may call. A lookup, asked before the policy is.
+pub fn listed_tool(tool: Option<&ListedTool>) -> Result<&ListedTool, AppRefusal> {
+    tool.ok_or(AppRefusal::ToolNotForApp)
+}
+
+/// What a listed tool's call that the policy allowed needs before it is
+/// sent, given its arguments' encoded size: capacity, then whether a person
+/// must review it.
+pub fn admit_listed_call(
+    tool: &ListedTool,
     arguments_bytes: usize,
 ) -> Result<AppCallAdmission, AppRefusal> {
-    admit_app(app, server)?;
-    let tool = tool.ok_or(AppRefusal::ToolNotForApp)?;
-    // With a UI or without one: a tool that says nothing is for both.
-    if !tool.ui().visibility().app() {
-        return Err(AppRefusal::ToolNotForApp);
-    }
     if arguments_bytes > MAX_APP_ARGUMENTS_BYTES {
         return Err(AppRefusal::RequestTooLarge);
     }
@@ -69,16 +76,6 @@ pub fn admit_tool_call(
     } else {
         AppCallAdmission::Send
     })
-}
-
-/// Whether `app` is an app at all, asking of its own `server`: all a
-/// resource read needs, and the first of what a tool call does.
-pub fn admit_app(app: Option<&AppFacts>, server: &str) -> Result<(), AppRefusal> {
-    let app = app.filter(|app| app.has_ui).ok_or(AppRefusal::AppUnknown)?;
-    if app.server != server {
-        return Err(AppRefusal::ServerMismatch);
-    }
-    Ok(())
 }
 
 #[cfg(test)]

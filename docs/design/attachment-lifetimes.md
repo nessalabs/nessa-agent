@@ -58,7 +58,6 @@ Resource construction captures and validates scalar metadata once, normalizes it
 | AL14 | Remove, close, delete or replace the final needed reference | Newly preview-only resources obey the bound immediately | Reducer publication reconciliation tests |
 | AL15 | Coordinator unmounts while three active uploads hold a queued sibling | Physical uploads settle without starting the sibling; remount resumes it | Owner-scoped pump subscription and tests |
 | AL16 | Preview is open while owner changes or placement disappears | No retired preview is rendered; current descriptor follows its placement | Owner/placement selection tests |
-
 | AL17 | Spread/copy a resource or fabricate its prototype with different metadata | Neither is an issued value nor addresses original bytes; a separately minted value addresses no original bytes | Private runtime construction brand, manager object keys, negative TS/runtime tests |
 | AL18 | Try to change original size, MIME type, path, name or URL after issuance | Immutable resource remains one authoritative metadata value | Frozen resource and primitive constructor tests |
 | AL19 | Resource crosses Redux/Immer admission, upload, send and refusal recovery | Same reference survives and cannot be redrafted/mutated; same-resource draft dedup holds | Non-draftable resource and public-store reference tests |
@@ -88,11 +87,14 @@ Redux serializability recognizes ordinary `isPlain` data or this exact immutable
 value class and retains normal recursive traversal; no general ignore is added.
 
 A resource manager belongs to one store lifetime; normal composition creates one
-per store. Scheduler bookkeeping is weakly keyed by that existing owner, so local
-placement numbers may repeat in another store without sharing slots or settlements.
-Each mounted coordinator subscribes one pump callback to its resource owner and disposes that subscription on cleanup. Completion signals only the currently attached subscriber; queue capacity survives detached intervals. Preview selection retains the owner and placement, and resolves the current descriptor from the draft on every render.
-Already admitted uploads retain their original store and queue across a component
-unmount; React ownership changes confer no authority over the replacement owner.
+per store. Scheduler bookkeeping is weakly keyed by that owner, so another store
+can repeat placement numbers without sharing slots or settlements. Admitted
+uploads retain their original store and queue when the coordinator unmounts.
+Each mounted coordinator subscribes one pump callback to its owner and disposes
+that subscription on cleanup. Completion signals only the currently attached
+subscriber; physical queue capacity survives detached intervals. Preview
+selection retains its owner and placement, and resolves the current descriptor
+from the draft on each render.
 
 No upload attempt state or global seen-ID registry is introduced. The guarantee is
 about an admitted placement's lifetime, not arbitrary fabricated progress histories

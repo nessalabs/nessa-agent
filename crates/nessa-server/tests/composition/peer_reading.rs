@@ -12,7 +12,7 @@
 use crate::app::dependencies::RuntimeDependencies;
 use crate::composition::local_auth::SystemClock;
 use crate::composition::native_pairing::{bind, prepare, start, NativeInputs, RunningNative};
-use crate::composition::runtime_config::NativeConfig;
+use crate::composition::runtime_config::{NativeConfig, RelayAddress};
 use crate::conversation::application::{
     ConversationCaller, ConversationRepository, ShareGrantChange, ShareGrantTransition, ShareGrants,
 };
@@ -95,7 +95,14 @@ pub(super) async fn owned(
     organization: &str,
 ) -> (Arc<LocalCredentialStore>, AuthenticatedSession, String) {
     nessa_local_storage::create_directory(root).unwrap();
-    let auth = Arc::new(LocalCredentialStore::open(root, "credentials.json").unwrap());
+    let auth = Arc::new(
+        LocalCredentialStore::open(
+            root,
+            "credentials.json",
+            std::sync::Arc::new(nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap()),
+        )
+        .unwrap(),
+    );
     let owner = uuid();
     let grant = |action: &str| CredentialGrantDto {
         action: action.into(),
@@ -182,6 +189,10 @@ struct Peer {
 }
 impl Peer {
     async fn start(root: &Path) -> Self {
+        Self::start_with(root, None).await
+    }
+    /// A, serving through `relay` too when one is given.
+    async fn start_with(root: &Path, relay: Option<RelayAddress>) -> Self {
         let (gateway, organization) = (uuid(), uuid());
         let (auth, session, owner) = owned(root, &gateway, &organization).await;
         let receivers = Arc::new(
@@ -195,14 +206,17 @@ impl Peer {
         let (prepared, commands, _peers) = prepare(
             &NativeConfig {
                 listen_address: "127.0.0.1:0".parse().unwrap(),
-                relay: None,
+                relay,
             },
             inputs(root, &auth, receivers.clone(), &gateway, &organization),
         )
         .await
         .unwrap();
-        let metadata =
-            Arc::new(LocalConversationStore::open(&root.join("metadata.sqlite3")).unwrap());
+        let metadata = Arc::new(
+            LocalConversationStore::open(&root.join("metadata.sqlite3"))
+                .unwrap()
+                .with_access_policy(crate::conversation_test_support::access_policy()),
+        );
         let storage = Arc::new(RecordStorage::new(root.join("source")).unwrap());
         storage.initialize().await.unwrap();
         let state = ProductRouteState::new(
@@ -218,7 +232,12 @@ impl Peer {
                 agent_probe: Arc::new(NoAgents),
             },
         )
-        .with_passive_read(receivers, metadata.clone(), metadata.clone())
+        .with_passive_read(
+            receivers,
+            metadata.clone(),
+            metadata.clone(),
+            crate::conversation_test_support::access_policy(),
+        )
         .with_record_source(Arc::new(NessaRecordReadSource::new(
             storage.clone(),
             Id::new(&gateway).unwrap(),
@@ -226,6 +245,7 @@ impl Peer {
         )))
         .with_catalogue_source(Arc::new(NessaCatalogueReadSource::new(
             metadata.clone(),
+            crate::conversation_test_support::access_policy(),
             Id::new(&gateway).unwrap(),
         )));
         let bound = bind(prepared, RuntimeDependencies::default().clock, state)
@@ -278,13 +298,14 @@ impl Peer {
         id: &ConversationId,
         reader: &(String, String),
     ) {
-        ShareGrants::change(
+        let receipt = ShareGrants::change(
             self.metadata.as_ref(),
             ShareGrantChange {
                 transition,
                 conversation_id: id.clone(),
                 receiver_id: Some(reader.0.clone()),
                 credential_id: CredentialId::new(reader.1.clone()).unwrap(),
+                expected_policy_revision: None,
                 initiator: ConversationCaller {
                     organization_id: OrganizationId::new(self.organization.clone()).unwrap(),
                     principal_id: PrincipalId::new(self.owner.clone()).unwrap(),
@@ -296,6 +317,7 @@ impl Peer {
         )
         .await
         .unwrap();
+        assert!(receipt.applied);
     }
 }
 
@@ -796,7 +818,11 @@ async fn enroll(
         .await
         .unwrap();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
-    let pending = b.peers.enroll(relay.address, code, &b.owner).await.unwrap();
+    let pending = b
+        .peers
+        .enroll(relay.address, None, code, &b.owner)
+        .await
+        .unwrap();
     let key = *pending.key();
     let id = created.record().id();
     if !approve {
@@ -1134,6 +1160,62 @@ async fn stop(mut a: Peer) {
         .unwrap();
 }
 
+/// Issue #266, slice R2b-2: once the address B enrolled at stops answering,
+/// B's poller reaches A through the relay kept for it, A registered there:
+/// its status dial and its read both go through the relay, and it reads
+/// what A grants as it would directly.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_peer_whose_address_stops_answering_is_read_through_its_relay() {
+    use crate::relay::{
+        application::{Relay as RelayService, RelayLimits},
+        infrastructure::{serve_tcp, Ed25519Proofs, OsRelayEntropy},
+    };
+    use crate::timer::{Timer, TokioTimer};
+    let socket = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let relay_address = RelayAddress::try_from(socket.local_addr().unwrap().to_string()).unwrap();
+    let timer: Arc<dyn Timer> = Arc::new(TokioTimer::new());
+    let service = RelayService::new(
+        timer.clone(),
+        Arc::new(OsRelayEntropy),
+        Arc::new(Ed25519Proofs),
+        RelayLimits::default(),
+    );
+    let (stop_relay, relay_stopped) = tokio::sync::oneshot::channel::<()>();
+    let relay_task = tokio::spawn(serve_tcp(socket, service, timer, async {
+        relay_stopped.await.ok();
+    }));
+
+    let directory = tempfile::tempdir().unwrap();
+    let a = Peer::start_with(&directory.path().join("a"), Some(relay_address.clone())).await;
+    let b = Reader::prepare(&directory.path().join("b"), false).await;
+    // B enrolls at an address in front of A, which then goes away.
+    let front = Relay::start(a.native).await;
+    let (key, reader) = enroll(&a, &b, &front, true).await;
+    let reader = reader.unwrap();
+    synced_with(&b, 0).await;
+    drop(front);
+
+    let kept = b
+        .peers
+        .relay(key, Some(relay_address.clone()), &b.owner)
+        .await
+        .unwrap();
+    assert!(matches!(&kept, PeerEntry::Readable(record) if record.relay() == Some(&relay_address)));
+    let x = a.conversation().await;
+    a.grant(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &x,
+        &reader,
+    )
+    .await;
+    synced_with(&b, 1).await;
+    assert_eq!(b.cached(&key, &reader.0), vec![x.to_string()]);
+
+    stop(a).await;
+    stop_relay.send(()).unwrap();
+    relay_task.await.unwrap();
+}
+
 /// R18: with the durable audit, records land in the order the turn was
 /// held. A cycle's change is handed over while it holds the turn, so the
 /// forget that stops it comes after it, though the forget's intent is kept
@@ -1319,9 +1401,10 @@ async fn a_full_queue_refuses_the_owner_and_drops_the_poller_record() {
         .await
         .unwrap();
     let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
-    let enrolled = tokio::time::timeout(PROMPT, b.peers.enroll(relay.address, code, &b.owner))
-        .await
-        .expect("a full queue answers at once");
+    let enrolled =
+        tokio::time::timeout(PROMPT, b.peers.enroll(relay.address, None, code, &b.owner))
+            .await
+            .expect("a full queue answers at once");
     assert_eq!(enrolled.err(), Some(PeerError::AuditUnavailable));
     let forgotten = tokio::time::timeout(PROMPT, b.peers.forget(key, &b.owner))
         .await

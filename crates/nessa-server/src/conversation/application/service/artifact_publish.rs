@@ -71,6 +71,10 @@ pub enum PublishCallRefusal {
     EnvironmentNotLeased,
     /// A publish for the same tool call is already under way.
     DuplicateRequest,
+    /// The running turn's Drive grant does not allow `artifacts_publish`
+    /// (row J28), or its decision could not be recorded in the Drive tool
+    /// audit. Nothing was published.
+    NotAllowed,
     /// Where the agent runs publishes no files: this gateway's own machine.
     PublishUnavailable,
     /// The environment did not publish it, with its reason.
@@ -106,13 +110,26 @@ impl ConversationService {
         let Some(snapshot) = live.agent.session_manager().snapshot().await else {
             return refused(PublishCallRefusal::NoTurn);
         };
-        let Some((lease, turn, actor)) =
+        let Some((lease, turn, actor, initiation)) =
             super::environment_tools::running_turn(&snapshot, &call.call)
         else {
             return refused(PublishCallRefusal::NoTurn);
         };
         if &lease != live.lease.id() || !live.lease.is_live() {
             return refused(PublishCallRefusal::NoTurn);
+        }
+        let checked = super::environment_tools::GatewayToolCall {
+            conversation: id,
+            turn: &turn,
+            actor: &actor,
+            initiation: &initiation,
+            tool: "artifacts_publish",
+        };
+        if let Some(reason) =
+            super::environment_tools::drive_refusal(&self.inner.drive, &live, checked).await
+        {
+            tracing::warn!(conversation_id = %id, %reason, "a Drive grant's tool call was refused");
+            return refused(PublishCallRefusal::NotAllowed);
         }
         let environments = &self.inner.environment;
         // Where the agent runs now is the only lease it holds; the name is

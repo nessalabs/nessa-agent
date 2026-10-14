@@ -57,6 +57,7 @@ use nessa_protocol::product::generated::{
     PASSIVE_MIN_REQUEST_TIMEOUT_MS,
 };
 use nessa_protocol::product_contract::generated::RecordReadErrorCode;
+use nessa_protocol::relay::{host_port, RelayAddress, RelayRefusal, DIRECT_HEAD_START};
 use nessa_sync::replication::{
     application::{StoreError, SyncError},
     catalogue::{
@@ -64,14 +65,14 @@ use nessa_sync::replication::{
     },
     domain::{Id, Limits, Scope},
 };
-use relay::{race, relay_leg, RelayRoute, HEAD_START};
+use relay::{connect_any, race, relay_leg, RelayRoute};
 use std::cell::Cell;
 use std::io::{Read, Result as IoResult, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod active;
 mod device;
@@ -132,7 +133,7 @@ pub struct ReaderAccess<'a> {
     /// The relay is asked for the pinned key and joins nothing it cannot
     /// prove; what crosses it is the same pinned TLS. `None` dials directly
     /// only.
-    pub relay: Option<&'a str>,
+    pub relay: Option<&'a RelayAddress>,
     /// The reader's own key.
     pub identity: &'a NativeIdentity,
     /// The gateway key pinned at enrollment.
@@ -172,6 +173,12 @@ pub enum ReadFailure {
     /// answered is not the pinned one, or the read's budget ran out before
     /// it saved anything.
     Unreachable,
+    /// The direct dial did not connect and the reader's relay answered that
+    /// the gateway is not registered with it: asleep, quit or offline, as
+    /// far as the relay can tell. Nothing authenticates that answer, so it
+    /// is no more than the relay's word; the cache is unchanged and
+    /// readable, and the read is backed off as for `Unreachable`.
+    Away,
     /// What the cache holds cannot continue against what the gateway now
     /// serves (another incarnation, epoch or scope, or a head behind the
     /// cache). Only emptying the cache helps.
@@ -261,29 +268,107 @@ impl Cancellation for Stopping {
         Some(self.until)
     }
 }
+/// Connect to the gateway at `address` (`host:port`, each address it
+/// resolves to tried in turn) within `timeout`, the same way a retained read
+/// does: direct, then, with a `relay`, through that relay for the gateway
+/// whose key is the pin beside it (`docs/design/auth/relay.md`, "Direct, then relay"). What
+/// connects is a plain stream; the caller's pinned TLS decides whether the
+/// gateway is the one it paired with. A paired environment dials its
+/// gateway with it.
+///
+/// # Errors
+/// `address` is not `host:port`, or the pin beside a relay is not a key
+/// (`InvalidInput`, whatever the relay would say), or neither route connected in time: the relay's answer where it was asked
+/// ([`RelayRefusal::carried`] tells its refusals apart), else the direct
+/// dial's error.
+pub fn dial_gateway(
+    address: &str,
+    relay: Option<(&RelayAddress, &[u8; 44])>,
+    timeout: Duration,
+) -> IoResult<TcpStream> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    // An address that is not `host:port` fails on every dial: said as such,
+    // never hidden behind the relay's answer.
+    if host_port(address).is_none() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "the gateway's address is not host:port",
+        ));
+    }
+    let Some((relay, pin)) = relay else {
+        return connect_any(address, deadline);
+    };
+    // A pin that is no Ed25519 key fails TLS whatever the route, and
+    // dialing again cannot change it: said now, not left to a direct dial
+    // that may never connect.
+    let key = relay_key(pin).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "the gateway's pin is not a key",
+        )
+    })?;
+    let route = RelayRoute {
+        address: relay.clone(),
+        key,
+    };
+    let address = address.to_owned();
+    race(
+        move |left| connect_any(&address, Instant::now() + left),
+        move |left| relay_leg(&route, left),
+        timeout,
+        DIRECT_HEAD_START,
+        &|| false,
+    )
+}
+
 struct StoppableConnector {
     /// The read's stop and its budget on the injected clock.
     ending: Arc<Stopping>,
     relay: Option<RelayRoute>,
+    /// Set when the last connect failed and its relay leg had answered
+    /// `Offline` by then, and cleared when a connect succeeds. A race that
+    /// ends at its budget or its stop still keeps the relay's word.
+    offline: Arc<AtomicBool>,
 }
 impl GatewayConnector for StoppableConnector {
     fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<Box<dyn GatewayStream>> {
         // A dial itself cannot be stopped; it is bounded by `timeout`, at
         // most [`HANDSHAKE`]. With a relay the race between the two dials
         // asks the stop and the injected clock's budget as it waits.
-        let socket = match &self.relay {
-            None => TcpStream::connect_timeout(&address, timeout)?,
+        // This connect's own flag: a relay leg still running after the race
+        // is decided writes only to it, never to a later connect's answer.
+        let offline = Arc::new(AtomicBool::new(false));
+        let connected = match &self.relay {
+            None => TcpStream::connect_timeout(&address, timeout),
             Some(route) => {
                 let route = route.clone();
+                let offline = offline.clone();
                 race(
                     move |left| TcpStream::connect_timeout(&address, left),
-                    move |left| relay_leg(&route, left),
+                    move |left| {
+                        let joined = relay_leg(&route, left);
+                        if let Err(error) = &joined {
+                            if RelayRefusal::carried(error) == Some(RelayRefusal::Offline) {
+                                offline.store(true, Ordering::SeqCst);
+                            }
+                        }
+                        joined
+                    },
                     timeout,
-                    HEAD_START,
+                    DIRECT_HEAD_START,
                     &|| self.ending.cancelled(),
-                )?
+                )
             }
         };
+        // Read once the race is decided: a failed connect keeps what its
+        // relay said, a successful one clears it.
+        self.offline.store(
+            connected.is_err() && offline.load(Ordering::SeqCst),
+            Ordering::SeqCst,
+        );
+        let socket = connected?;
         self.ending.stop.register(&socket)?;
         Ok(Box::new(Socket::new(socket, self.ending.stop.clone())))
     }
@@ -430,7 +515,8 @@ impl RetainedCache {
     ///
     /// A read that reaches its budget having saved something ends `Ok` and
     /// incomplete, with what it saved kept; one that saved nothing ends
-    /// `Unreachable`. One stopped by `stop` ends `Stopped`. A full cache
+    /// `Unreachable`, or `Away` when it never connected and its relay said
+    /// the gateway is not registered with it. One stopped by `stop` ends `Stopped`. A full cache
     /// (`Quota`) or one that could not be written (`Cache`) still withdraws
     /// every conversation the gateway no longer grants before it ends so.
     pub fn read(
@@ -452,10 +538,12 @@ impl RetainedCache {
         });
         let before = withdrawn.len();
         self.progressed = false;
-        let result = self.read_inner(access, &ending, max_withdrawn, withdrawn);
+        let offline = Arc::new(AtomicBool::new(false));
+        let result = self.read_inner(access, &ending, &offline, max_withdrawn, withdrawn);
         stop.release();
         let progressed = self.progressed || withdrawn.len() > before;
-        match read_end(result, stop.is_stopped(), ending.spent(), progressed) {
+        let end = read_end(result, stop.is_stopped(), ending.spent(), progressed);
+        match away(end, offline.load(Ordering::SeqCst)) {
             ReadEnd::Read(report) => Ok(report),
             ReadEnd::Incomplete => Ok(ReadReport {
                 moved: true,
@@ -470,6 +558,7 @@ impl RetainedCache {
         &mut self,
         access: ReaderAccess<'_>,
         ending: &Arc<Stopping>,
+        offline: &Arc<AtomicBool>,
         max_withdrawn: usize,
         withdrawn: &mut Vec<String>,
     ) -> Result<ReadReport, ReadFailure> {
@@ -493,10 +582,11 @@ impl RetainedCache {
                 // A pin that is no Ed25519 key fails TLS whatever the route.
                 relay: access.relay.and_then(|address| {
                     Some(RelayRoute {
-                        address: address.to_owned(),
+                        address: address.clone(),
                         key: relay_key(&access.pin)?,
                     })
                 }),
+                offline: offline.clone(),
             },
             self.clock.clone(),
             ending.clone(),
@@ -760,13 +850,23 @@ fn walked(
 
 /// How a read that has returned ends, from what it returned, whether it was
 /// stopped, whether its budget is spent, and whether it saved anything.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum ReadEnd {
     Read(ReadReport),
     /// Cut short by the budget after saving something: what it saved stands
     /// and the next read carries on from it.
     Incomplete,
     Failed(ReadFailure),
+}
+/// `end`, reported as `Away` when the read never reached its gateway and
+/// the relay said the gateway is not registered with it (`offline`). A
+/// read that connected clears `offline`, so a session that fails later is
+/// `Unreachable` as before.
+fn away(end: ReadEnd, offline: bool) -> ReadEnd {
+    match end {
+        ReadEnd::Failed(ReadFailure::Unreachable) if offline => ReadEnd::Failed(ReadFailure::Away),
+        end => end,
+    }
 }
 fn read_end(
     result: Result<ReadReport, ReadFailure>,

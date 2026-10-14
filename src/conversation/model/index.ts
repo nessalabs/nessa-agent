@@ -76,3 +76,19 @@ export {
   type PublishedFile,
   type PublishedPlacement,
 } from "./held-files"
+
+export {
+  noteAuthorLabel,
+  noteStateLabel,
+  placeNotes,
+  type Note,
+  type NoteAuthor,
+  type NotePlacement,
+} from "./notes"
+
+export {
+  historyExtent,
+  historyNotices,
+  type HistoryExtent,
+  type HistoryNotice,
+} from "./history"

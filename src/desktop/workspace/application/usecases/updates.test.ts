@@ -8,7 +8,7 @@ import {
   paneShowingSession,
   type WorkspaceState,
 } from "../workspace-state"
-import { closePane, createDraft, openBeside } from "./panes"
+import { closePane, createDraft, openBeside, openSession } from "./panes"
 import { chooseModel, messageSent } from "./sessions"
 import {
   indexFailed,
@@ -183,14 +183,17 @@ describe("updates from the source", () => {
     expect(remembered.removed).toEqual([{ sessionId: "missing", revision: 1 }])
   })
 
-  it("remembers why a conversation could not be read, until it is", () => {
+  it("remembers why a conversation could not be read, until a read it can hold arrives", () => {
     const failed = transcriptFailed(loaded(), {
       sessionId: "a",
       reason: "unknown-session",
     })
     expect(failed.transcriptFailures.a).toBe("unknown-session")
-    const read = transcriptLoaded(failed, { transcript: emptyTranscript("a") })
+    // Revision 0 is the window's own, not a conversation the source sent.
+    expect(transcriptLoaded(failed, { transcript: emptyTranscript("a") })).toBe(failed)
+    const read = transcriptLoaded(failed, { transcript: transcript("a", 1) })
     expect(read.transcriptFailures).toEqual({})
+    expect(read.transcripts.a?.revision).toBe(1)
   })
 
   it("lists only the shown sessions the source has, drafts never among them", () => {
@@ -702,6 +705,56 @@ describe("the index read again: the resync", () => {
   })
 })
 
+describe("a bounded view replaced by the next", () => {
+  it("keeps the next view's messages once, and drops the omitted-history mark when the next view is whole", () => {
+    const bounded = transcriptLoaded(loaded(), {
+      transcript: {
+        ...transcript("a", 4, "recent"),
+        history: { omitted: true, unconfirmed: false },
+      },
+    })
+    const next = updateReceived(bounded, {
+      update: {
+        kind: "transcript",
+        transcript: {
+          ...transcript("a", 5, "recent"),
+          messages: [
+            {
+              id: "m5",
+              role: "agent",
+              at: 5,
+              parts: [{ kind: "text", text: "recent" }],
+            },
+            {
+              id: "m6",
+              role: "user",
+              at: 6,
+              parts: [{ kind: "text", text: "next" }],
+            },
+          ],
+        },
+      },
+    })
+    const messages = next.transcripts.a?.messages ?? []
+    expect(messages.map((message) => message.id)).toEqual(["m5", "m6"])
+    expect(new Set(messages.map((message) => message.id)).size).toBe(messages.length)
+    expect(next.transcripts.a?.history).toBeUndefined()
+  })
+
+  it("leaves a summary at its own revision as it is", () => {
+    const state = loaded()
+    const held = state.sessions.a
+    const again = updateReceived(state, {
+      update: {
+        kind: "session",
+        session: { ...held, title: "Replaced", revision: held.revision },
+      },
+    })
+    expect(again).toBe(state)
+    expect(again.sessions.a.title).toBe(held.title)
+  })
+})
+
 describe("a removal's revision", () => {
   it("is counted against the summary's revision, never the conversation's", () => {
     // The summary is at 1 and the conversation at 5: a removal at 2 outranks the summary.
@@ -776,10 +829,47 @@ describe("what is kept of sessions no pane shows", () => {
     expect(evicted.transcripts.s0).toBeUndefined()
     expect(evicted.conversationRevisions.s0).toBe(10)
     const late = transcriptLoaded(evicted, { transcript: transcript("s0", 2) })
+    expect(late).toBe(evicted)
     expect(late.transcripts.s0).toBeUndefined()
     expect(late.conversationRevisions.s0).toBe(10)
-    // A newer one than it had is still taken (and, the oldest, let go again).
+    // Shown, with a failed read already on screen: the older answer leaves
+    // that failure, so Try Again stays.
+    const showing = openSession(evicted, { sessionId: "s0" })
+    const failed = transcriptFailed(showing, { sessionId: "s0", reason: "unavailable" })
+    expect(failed.transcriptFailures.s0).toBe("unavailable")
+    expect(transcriptLoaded(failed, { transcript: transcript("s0", 2) })).toBe(failed)
+    // Shown again, the same revision is that conversation: its messages,
+    // approval and activity come back. An older one, above, does not.
+    const again = transcript("s0", 10, "s0-message")
+    const reread = transcriptLoaded(failed, {
+      transcript: {
+        ...again,
+        activity: { label: "Thinking", since: 10 },
+        approval: {
+          id: "ap",
+          command: "cargo test",
+          reason: "Runs the tests.",
+          origin: { kind: "agent" },
+          options: [],
+          ask: "tool",
+        },
+      },
+    })
+    expect(reread.transcripts.s0?.messages).toEqual(again.messages)
+    expect(reread.transcripts.s0?.activity).toEqual({ label: "Thinking", since: 10 })
+    expect(reread.transcripts.s0?.approval?.id).toBe("ap")
+    expect(reread.conversationRevisions.s0).toBe(10)
+    expect(reread.transcriptFailures.s0).toBeUndefined()
+    // Held at that revision, the same revision changes nothing, even a different body.
+    const heldBody = reread.transcripts.s0
+    const same = transcriptLoaded(reread, {
+      transcript: transcript("s0", 10, "replaced"),
+    })
+    expect(same.transcripts.s0).toBe(heldBody)
+    // A newer one than it had is still taken. s0 is the oldest unshown
+    // session, so retention lets the body go again and keeps the revision.
     const newer = transcriptLoaded(evicted, { transcript: transcript("s0", 11) })
+    expect(newer.transcripts.s0).toBeUndefined()
     expect(newer.conversationRevisions.s0).toBe(11)
     // Let go with its session.
     const gone = sessionRemoved(evicted, {

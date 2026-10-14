@@ -94,7 +94,7 @@ fn both_dials_failing_returns_the_relays_error() {
         &never,
     )
     .unwrap_err();
-    assert_eq!(refusal(&refused), Some(RelayRefusal::Offline));
+    assert_eq!(RelayRefusal::carried(&refused), Some(RelayRefusal::Offline));
 }
 
 #[test]
@@ -136,13 +136,6 @@ fn a_stop_ends_the_race_while_both_dials_hang() {
     assert!(started.elapsed() < LONG / 2);
 }
 
-fn refusal(error: &Error) -> Option<RelayRefusal> {
-    error
-        .get_ref()
-        .and_then(|inner| inner.downcast_ref::<RelayRefusal>())
-        .copied()
-}
-
 /// A relay that reads one `Connect`, checks its key, and answers `answer`
 /// followed by `after` in the same write.
 fn scripted_relay(
@@ -151,7 +144,7 @@ fn scripted_relay(
 ) -> (RelayRoute, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let route = RelayRoute {
-        address: listener.local_addr().unwrap().to_string(),
+        address: RelayAddress::try_from(listener.local_addr().unwrap().to_string()).unwrap(),
         key: [9; 32],
     };
     let serving = thread::spawn(move || {
@@ -189,7 +182,7 @@ fn a_relay_that_does_not_join_refuses_with_its_reason() {
         let (route, serving) = scripted_relay(answer, b"");
         let refused = relay_leg(&route, LONG).unwrap_err();
         assert_eq!(refused.kind(), ErrorKind::ConnectionRefused);
-        assert_eq!(refusal(&refused), Some(reason));
+        assert_eq!(RelayRefusal::carried(&refused), Some(reason));
         serving.join().unwrap();
     }
 }
@@ -206,7 +199,7 @@ fn a_relay_answering_a_gateways_frame_is_refused_as_invalid() {
 fn a_silent_relay_ends_the_leg_at_its_budget() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let route = RelayRoute {
-        address: listener.local_addr().unwrap().to_string(),
+        address: RelayAddress::try_from(listener.local_addr().unwrap().to_string()).unwrap(),
         key: [9; 32],
     };
     let started = Instant::now();

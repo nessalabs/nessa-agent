@@ -71,6 +71,10 @@ pub(crate) async fn dispatch(
         .passive_read
         .as_ref()
         .ok_or(RecordReadErrorCode::TemporarilyUnavailable)?;
+    let access_policy = state
+        .conversation_access
+        .as_ref()
+        .ok_or(RecordReadErrorCode::TemporarilyUnavailable)?;
     let source = state
         .record_source
         .as_ref()
@@ -87,6 +91,7 @@ pub(crate) async fn dispatch(
             conversations: repository.as_ref(),
             grants: &PUBLISHED_PASSIVE_READ_GRANTS,
             share_grants: share_grants.as_ref(),
+            access_policy: access_policy.as_ref(),
         },
         source: source.as_ref(),
     };
