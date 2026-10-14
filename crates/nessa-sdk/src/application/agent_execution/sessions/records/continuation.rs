@@ -26,9 +26,9 @@ impl Continuation {
     /// Validate one complete caller-selected checkpoint without rebuilding prior history.
     pub(crate) fn apply_unit(&mut self, changes: &[SessionChange]) -> Result<(), StorageError> {
         let mut undo = Vec::new();
-        if let Err(error) = self.stage(changes, &mut undo) {
+        if let Err(refusal) = self.stage(changes, &mut undo) {
             self.rollback(undo);
-            return Err(error);
+            return Err(refusal.error);
         }
         Ok(())
     }

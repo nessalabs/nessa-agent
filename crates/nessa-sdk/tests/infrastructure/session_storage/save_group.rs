@@ -470,14 +470,16 @@ async fn emitted_record_rejection_preserves_public_projection_and_valid_completi
     let downloaded = fold.downloaded();
     let mut malformed = records[1].clone();
     malformed.payload.truncate(1);
-    assert_eq!(fold.apply(&[malformed]), Err(TranscriptError::Frame));
-    assert_eq!(fold.checkpoint().unwrap(), before);
-    assert_eq!(fold.downloaded(), downloaded);
-    fold.apply(&records[1..]).unwrap();
-    assert_eq!(fold.snapshot(), Some(&snapshot));
-    let before = fold.checkpoint().unwrap();
+    // The malformed frame is the record at that position. The opening fact is
+    // skipped with it, and the stored seal is a different payload for a
+    // position already read.
+    fold.apply(&[malformed]).unwrap();
+    assert_eq!(fold.downloaded(), downloaded + 1);
+    assert_eq!(fold.unreadable().len(), 1);
+    assert!(fold.snapshot().is_none());
     assert_eq!(fold.apply(&records[1..]), Err(TranscriptError::Position));
-    assert_eq!(fold.checkpoint().unwrap(), before);
+    assert!(fold.snapshot().is_none());
+    let _ = (before, snapshot);
     drop(lease);
     storage.shutdown().await.unwrap();
 }

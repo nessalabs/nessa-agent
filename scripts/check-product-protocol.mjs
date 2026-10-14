@@ -259,6 +259,53 @@ for (const invalid of [
   if (validateView(JSON.parse(JSON.stringify(invalid))))
     throw new Error("Product conversation view accepts an invalid note")
 }
+// Records this read could not apply: required, at most 32, each a decimal
+// position and, when present, the turn the line follows.
+const gap = { id: "12", afterExecutionId: "run-0" }
+for (const valid of [
+  { ...view, unreadable: [] },
+  {
+    ...view,
+    unreadable: Array.from({ length: 32 }, (_, index) => ({ id: String(index) })),
+  },
+  { ...view, unreadable: [{ id: "0" }] },
+  { ...view, unreadable: [gap] },
+  { ...view, unreadable: [{ id: "9".repeat(20) }] },
+]) {
+  if (!validateView(JSON.parse(JSON.stringify(valid))))
+    throw new Error("Product conversation view rejects a bounded unreadable list")
+}
+for (const invalid of [
+  { ...view, unreadable: undefined },
+  {
+    ...view,
+    unreadable: Array.from({ length: 33 }, (_, index) => ({ id: String(index) })),
+  },
+  { ...view, unreadable: [{ id: "01" }] },
+  { ...view, unreadable: [{ id: "" }] },
+  { ...view, unreadable: [{ id: "x" }] },
+  { ...view, unreadable: [{ ...gap, report: true }] },
+  { ...view, unreadable: [{ id: "12", afterExecutionId: "" }] },
+]) {
+  if (validateView(JSON.parse(JSON.stringify(invalid))))
+    throw new Error("Product conversation view accepts an invalid unreadable record")
+}
+// Past 32 gaps the list stays at 32 and the view says it was cut.
+for (const valid of [
+  { ...view, unreadableTruncated: false },
+  { ...view, unreadableTruncated: true },
+]) {
+  if (!validateView(JSON.parse(JSON.stringify(valid))))
+    throw new Error("Product conversation view rejects unreadableTruncated")
+}
+for (const invalid of [
+  { ...view, unreadableTruncated: undefined },
+  { ...view, unreadableTruncated: "true" },
+  { ...view, unreadableTruncated: 1 },
+]) {
+  if (validateView(JSON.parse(JSON.stringify(invalid))))
+    throw new Error("Product conversation view accepts an invalid unreadableTruncated")
+}
 // A deadline's dueAtMs and the view's serverNowMs are compared in a client's
 // numbers, so both stop at the largest integer a client reads exactly.
 const validateDeadline = ajv.getSchema(

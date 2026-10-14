@@ -10,11 +10,15 @@ use super::{
 };
 use crate::{
     application::agent_execution::sessions::{
-        records::FactKind, CommittedFreshness, CommittedSession, CommittedStatus,
-        CommittedTransactionState, CommittedTranscript, CommittedViewState, SessionSnapshot,
-        StorageError,
+        records::{affected_execution, FactKind},
+        CommittedFreshness, CommittedSession, CommittedStatus, CommittedTransactionState,
+        CommittedTranscript, CommittedViewState, LeaseRecord, SessionChange, SessionSnapshot,
+        StorageError, UnreadablePart,
     },
-    domain::agent_execution::sessions::{ProviderContext, SessionId},
+    domain::agent_execution::{
+        executions::ExecutionId,
+        sessions::{ProviderContext, SessionId},
+    },
 };
 use event_stream::{EventId, NewEvent, Payload};
 use nessa_sync::replication::domain::{Id, Record, Scope};
@@ -29,7 +33,10 @@ pub use checkpoint::{TranscriptCheckpoint, MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES
 /// A rejected receiver input. No part of a rejected batch is published.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TranscriptError {
-    /// Receiver, source, incarnation, authorization epoch or schema differs.
+    /// The fold was asked to take another chat: a different physical schema,
+    /// an observation or checkpoint for another scope, or a decoded open
+    /// that names another session. A record whose own scope differs is not
+    /// this error; that record is one gap.
     Scope,
     /// Physical positions are missing, reordered or already applied.
     Position,
@@ -61,6 +68,10 @@ struct SavedFold<S = snapshot::checkpoint::Snapshot> {
     facts: u64,
     snapshot: Option<S>,
     group: Option<GroupCheckpoint>,
+    unread: Vec<UnreadablePart>,
+    /// Required. A checkpoint that does not say whether the gap list was cut
+    /// is reread from the records.
+    unreadable_truncated: bool,
 }
 
 /// One source-scoped, effect-free semantic transcript receiver. `apply` stages
@@ -80,6 +91,20 @@ pub struct TranscriptFold {
     groups: GroupProgress,
     pending: PendingBody,
     frames: FrameValidator,
+    /// Every gap noted so far, oldest first, including the unpublished suffix.
+    /// `published_unread` is the prefix the last save completion published.
+    /// A checkpoint stores that prefix; replaying the suffix notes the rest again.
+    unread: Vec<UnreadablePart>,
+    /// Length of the published prefix of `unread`.
+    published_unread: usize,
+    /// A record past [`UnreadablePart::MAX_PER_CONVERSATION`] was also skipped.
+    /// The transcript ends with one line for that; the list itself stays at 32.
+    unreadable_truncated: bool,
+    /// `unreadable_truncated` as of the last save completion. An overflow in
+    /// the unpublished suffix stays off the checkpoint until that save completes.
+    published_unreadable_truncated: bool,
+    /// A run of physical frames that are not frames. One line covers the run.
+    resyncing: bool,
     #[cfg(test)]
     semantic_decodes: usize,
     loaded: bool,
@@ -104,6 +129,11 @@ impl TranscriptFold {
             groups: GroupProgress::after(0),
             pending: PendingBody::default(),
             frames: FrameValidator::after(0),
+            unread: Vec::new(),
+            published_unread: 0,
+            unreadable_truncated: false,
+            published_unreadable_truncated: false,
+            resyncing: false,
             #[cfg(test)]
             semantic_decodes: 0,
             loaded: false,
@@ -188,8 +218,11 @@ impl TranscriptFold {
     }
 
     /// Apply the next contiguous physical suffix. The receiver journal owns
-    /// exact duplicate byte validation; already downloaded positions, gaps and
-    /// invalid facts leave this fold unchanged.
+    /// exact duplicate byte validation; already downloaded positions and gaps
+    /// leave this fold unchanged.
+    /// A record that cannot be read is skipped. The chat keeps every record
+    /// that can, and the skipped record becomes one gap line. Pieces of that
+    /// record, and a later record whose turn was never accepted, stay out.
     /// Complete units update only the private canonical continuation. The outer
     /// save completion advances `applied` and its public snapshot together.
     /// A physical abort publishes no semantic progress.
@@ -197,7 +230,10 @@ impl TranscriptFold {
     /// remain unconfirmed until an explicit authenticated source-head observation.
     ///
     /// # Errors
-    /// Returns the typed scope, position, frame or SDK decision refusal.
+    /// Returns [`TranscriptError::Scope`] when a decoded open names a
+    /// different session, and [`TranscriptError::Position`] when the suffix
+    /// is not contiguous. A record that cannot be read, including one whose
+    /// scope is another stream, is not an error.
     pub fn apply(&mut self, batch: &[Record]) -> Result<(), TranscriptError> {
         let mut transaction = self.transaction();
         transaction.apply(batch)?;
@@ -240,6 +276,11 @@ impl TranscriptFold {
             published_facts: self.published_facts,
             groups: self.groups.clone(),
             pending: self.pending.clone(),
+            unread: self.unread.clone(),
+            published_unread: self.published_unread,
+            unreadable_truncated: self.unreadable_truncated,
+            published_unreadable_truncated: self.published_unreadable_truncated,
+            resyncing: self.resyncing,
             loaded: self.loaded,
             freshness: self.freshness,
             #[cfg(test)]
@@ -257,9 +298,6 @@ impl TranscriptFold {
         record: &Record,
         semantic: &mut CommittedTransactionState,
     ) -> Result<(), TranscriptError> {
-        if record.scope != self.scope {
-            return Err(TranscriptError::Scope);
-        }
         if record.position == 0 {
             return Err(TranscriptError::Position);
         }
@@ -272,19 +310,39 @@ impl TranscriptFold {
         if record.position != downloaded.checked_add(1).ok_or(TranscriptError::Position)? {
             return Err(TranscriptError::Position);
         }
-        let (&tag, bytes) = record.payload.split_first().ok_or(TranscriptError::Frame)?;
-        let schema = stream_fact::schema_for_tag(tag).map_err(|_| TranscriptError::Frame)?;
+        if record.scope != self.scope {
+            self.skip_other_scope(record.position);
+            return Ok(());
+        }
+        let Some((&tag, bytes)) = record.payload.split_first() else {
+            self.skip_frame(record.position);
+            return Ok(());
+        };
+        let Ok(schema) = stream_fact::schema_for_tag(tag) else {
+            self.skip_frame(record.position);
+            return Ok(());
+        };
+        let Ok(id) = EventId::new(record.id.as_str()) else {
+            self.skip_frame(record.position);
+            return Ok(());
+        };
         let event = NewEvent {
-            id: EventId::new(record.id.as_str()).map_err(|_| TranscriptError::Frame)?,
+            id,
             schema,
             payload: Payload::copy_from_slice(bytes),
         };
-        match self
-            .frames
-            .push(&event, record.position)
-            .map_err(|_| TranscriptError::Frame)?
-        {
+        let step = match self.frames.push(&event, record.position) {
+            Ok(step) => step,
+            Err(_) => {
+                self.skip_frame(record.position);
+                return Ok(());
+            }
+        };
+        match step {
             FrameStep::Pending(piece) => {
+                // A valid frame, including one whose body is still arriving,
+                // ends the bad-frame run. The next malformed piece is its own line.
+                self.resyncing = false;
                 if let Some(piece) = piece {
                     self.pending.push(piece);
                 }
@@ -292,11 +350,13 @@ impl TranscriptFold {
             FrameStep::Aborted => {
                 self.pending.clear();
                 self.groups.reset_frame();
+                self.resyncing = false;
             }
             FrameStep::Complete {
                 key: physical_key,
                 body,
             } => {
+                self.resyncing = false;
                 let assembled;
                 let body = match body {
                     Some(inline) => inline,
@@ -305,52 +365,7 @@ impl TranscriptFold {
                         &assembled
                     }
                 };
-                self.groups.piece(body).map_err(TranscriptError::Decision)?;
-                let header = self
-                    .groups
-                    .complete(&physical_key, record.position)
-                    .map_err(TranscriptError::Decision)?;
-                if !header.identity.matches_scope(
-                    self.scope.stream().as_str(),
-                    self.scope.incarnation().as_str(),
-                ) {
-                    return Err(TranscriptError::Scope);
-                }
-                match physical_key.kind() {
-                    FactKind::SaveUnit => {
-                        let context = self
-                            .committed
-                            .snapshot()
-                            .map_or(ProviderContext::Absent, |state| {
-                                state.provider_context.clone()
-                            });
-                        #[cfg(test)]
-                        {
-                            self.semantic_decodes += 1;
-                        }
-                        let changes =
-                            snapshot::decode_semantic_batch(&body[HEADER_BYTES..], &context)
-                                .map_err(TranscriptError::Decision)?;
-                        self.committed
-                            .stage_apply(record.position, &changes, semantic)
-                            .map_err(TranscriptError::Decision)?;
-                        if self
-                            .committed
-                            .snapshot()
-                            .is_some_and(|state| state.id.as_str() != self.scope.stream().as_str())
-                        {
-                            return Err(TranscriptError::Scope);
-                        }
-                    }
-                    FactKind::SaveComplete => {
-                        // One immutable publication per outer save. Units mutate
-                        // only the private canonical continuation with touched undo.
-                        self.published = self.committed.snapshot_handle();
-                        self.published_facts = self.committed.fact_count();
-                        self.committed.abort(record.position);
-                    }
-                }
-                self.pending.clear();
+                self.finish_fact(&physical_key, body, record.position, semantic)?;
             }
         }
         self.loaded = true;
@@ -358,6 +373,256 @@ impl TranscriptFold {
             self.freshness = CommittedFreshness::Unknown;
         }
         Ok(())
+    }
+
+    fn skip_frame(&mut self, position: u64) {
+        self.frames.skip(position);
+        self.pending.clear();
+        self.groups.reset_frame();
+        if !self.resyncing {
+            self.note_unreadable(position);
+            self.resyncing = true;
+        }
+        self.loaded = true;
+        if self.freshness == CommittedFreshness::Current {
+            self.freshness = CommittedFreshness::Unknown;
+        }
+    }
+
+    /// A record delivered for another scope. It is invalid data of this
+    /// stream: one line at its position, and the next record is read.
+    fn skip_other_scope(&mut self, position: u64) {
+        self.frames.skip(position);
+        self.pending.clear();
+        self.groups.reset_frame();
+        self.note_unreadable(position);
+        self.resyncing = false;
+        self.loaded = true;
+        if self.freshness == CommittedFreshness::Current {
+            self.freshness = CommittedFreshness::Unknown;
+        }
+    }
+
+    fn note_unreadable(&mut self, position: u64) {
+        let id = position.to_string();
+        if self.unread.iter().any(|part| part.id() == id) {
+            return;
+        }
+        if self.unread.len() >= UnreadablePart::MAX_PER_CONVERSATION {
+            self.unreadable_truncated = true;
+            return;
+        }
+        let after = self.committed.snapshot().and_then(|snapshot| {
+            snapshot
+                .invocations
+                .last()
+                .map(|record| record.request.execution_id.as_str().to_owned())
+        });
+        self.unread.push(UnreadablePart::at(position, after));
+    }
+
+    fn finish_fact(
+        &mut self,
+        key: &crate::application::agent_execution::sessions::records::FactKey,
+        body: &[u8],
+        position: u64,
+        semantic: &mut CommittedTransactionState,
+    ) -> Result<(), TranscriptError> {
+        if self.groups.piece(body).is_err() {
+            self.skip_fact(position);
+            return Ok(());
+        }
+        let Ok(header) = self.groups.sound_header(key) else {
+            self.skip_fact(position);
+            return Ok(());
+        };
+        if !header.identity.matches_scope(
+            self.scope.stream().as_str(),
+            self.scope.incarnation().as_str(),
+        ) {
+            self.skip_fact(position);
+            return Ok(());
+        }
+        if self.groups.complete(key, position).is_err() {
+            let adopted = self
+                .groups
+                .adopt(key, position, self.committed.fact_count().max(1));
+            if adopted.is_err() {
+                self.skip_fact(position);
+                return Ok(());
+            }
+        }
+        match key.kind() {
+            FactKind::SaveUnit => {
+                self.committed
+                    .count_unit()
+                    .map_err(TranscriptError::Decision)?;
+                self.apply_unit(&body[HEADER_BYTES..], position, semantic)?;
+            }
+            FactKind::SaveComplete => {
+                if self.committed.fact_count() == 0 {
+                    self.committed
+                        .count_unit()
+                        .map_err(TranscriptError::Decision)?;
+                }
+                self.published = self.committed.snapshot_handle();
+                self.published_facts = self.committed.fact_count();
+                self.published_unread = self.unread.len();
+                self.published_unreadable_truncated = self.unreadable_truncated;
+                self.committed.abort(position);
+            }
+        }
+        self.pending.clear();
+        Ok(())
+    }
+
+    fn skip_fact(&mut self, position: u64) {
+        self.groups.reset_frame();
+        self.note_unreadable(position);
+        self.pending.clear();
+    }
+
+    fn apply_unit(
+        &mut self,
+        payload: &[u8],
+        position: u64,
+        semantic: &mut CommittedTransactionState,
+    ) -> Result<(), TranscriptError> {
+        let context = self
+            .committed
+            .snapshot()
+            .map_or(ProviderContext::Absent, |state| {
+                state.provider_context.clone()
+            });
+        #[cfg(test)]
+        {
+            self.semantic_decodes += 1;
+        }
+        let read = match snapshot::read_batch(payload, &context) {
+            snapshot::BatchRead::Changes(read) => read,
+            // A lease object that does not survive the batch walk. A note
+            // that fails the same walk leaves a held lease alone.
+            snapshot::BatchRead::Whole { lease } => {
+                if lease {
+                    self.committed.lose_held_lease(semantic);
+                }
+                self.note_unreadable(position);
+                return Ok(());
+            }
+        };
+        if read
+            .iter()
+            .any(|change| matches!(change, snapshot::ReadChange::Failed { .. }))
+        {
+            if read
+                .iter()
+                .any(|change| matches!(change, snapshot::ReadChange::Failed { lease: true }))
+            {
+                self.committed.lose_held_lease(semantic);
+            }
+            self.note_unreadable(position);
+            return Ok(());
+        }
+        let decoded: Vec<SessionChange> = read
+            .into_iter()
+            .filter_map(|change| match change {
+                snapshot::ReadChange::Decoded(change) => Some(*change),
+                snapshot::ReadChange::Failed { .. } => None,
+            })
+            .collect();
+        let unknown_lease = decoded
+            .iter()
+            .any(|change| matches!(change, SessionChange::Lease(LeaseRecord::Unreadable { .. })));
+        let mut applicable = Vec::with_capacity(decoded.len());
+        for change in decoded {
+            // A turn this unit already accepted is in the snapshot only after
+            // the unit stages. Judge the rest of the unit against that prefix.
+            if self.hides_with_gap(&change, &applicable) {
+                continue;
+            }
+            applicable.push(change);
+        }
+        if applicable.is_empty() {
+            if unknown_lease {
+                self.note_unreadable(position);
+            }
+            return Ok(());
+        }
+        // A decoded open the session would accept, naming another chat, is
+        // the one saved record that refuses the page. It would make this
+        // stream that other session. An open that does not decode never
+        // reaches here. A later open the session fold refuses is a skip.
+        if self.committed.snapshot().is_none()
+            && applicable.iter().any(|change| {
+                matches!(
+                    change,
+                    SessionChange::Opened { id, .. }
+                        if id.as_str() != self.scope.stream().as_str()
+                )
+            })
+        {
+            return Err(TranscriptError::Scope);
+        }
+        let mark = semantic.undo_len();
+        if let Err(refusal) = self.committed.stage_apply(position, &applicable, semantic) {
+            self.committed.abandon_staged(semantic, mark);
+            // The change the session fold refused. A note beside a refused
+            // lease does not keep the held lease. A refused note does not
+            // retire a lease that was not that change.
+            if refusal
+                .index
+                .is_some_and(|index| matches!(applicable.get(index), Some(SessionChange::Lease(_))))
+            {
+                self.committed.lose_held_lease(semantic);
+            }
+            self.note_unreadable(position);
+            return Ok(());
+        }
+        if self
+            .committed
+            .snapshot()
+            .is_some_and(|state| state.id.as_str() != self.scope.stream().as_str())
+        {
+            // The unit staged a snapshot for another session without being
+            // the open checked above. Drop it and keep reading.
+            self.committed.abandon_staged(semantic, mark);
+            self.note_unreadable(position);
+            return Ok(());
+        }
+        if unknown_lease {
+            self.note_unreadable(position);
+        }
+        Ok(())
+    }
+
+    fn hides_with_gap(&self, change: &SessionChange, kept: &[SessionChange]) -> bool {
+        let gap = !self.unread.is_empty();
+        let session_open = self.committed.snapshot().is_some()
+            || kept
+                .iter()
+                .any(|prior| matches!(prior, SessionChange::Opened { .. }));
+        let accepted_here = |id: &ExecutionId| {
+            kept.iter().any(|prior| {
+                matches!(
+                    prior,
+                    SessionChange::InputAccepted(record)
+                        if &record.request.execution_id == id
+                )
+            })
+        };
+        // A new turn is the acceptance. It is hidden only when the chat was
+        // never opened and that open is already a gap. A later record of a
+        // turn that was never accepted, in this unit or before it, belongs
+        // to the skipped record.
+        match change {
+            SessionChange::Opened { .. } => false,
+            SessionChange::InputAccepted(_) => !session_open && gap,
+            _ => match affected_execution(change) {
+                Some(id) if self.committed.accepts_execution(id) || accepted_here(id) => false,
+                Some(_) => gap || !session_open,
+                None => !session_open && gap,
+            },
+        }
     }
 
     #[cfg(test)]
@@ -378,7 +643,19 @@ impl TranscriptFold {
             self.applied(),
             self.published.clone(),
             self.status(),
+            self.unread.clone(),
+            self.unreadable_truncated,
         )
+    }
+
+    /// Records this fold could not read, oldest first, at most 32.
+    pub fn unreadable(&self) -> &[UnreadablePart] {
+        &self.unread
+    }
+
+    /// A record past the 32 kept gaps was also skipped.
+    pub fn unreadable_truncated(&self) -> bool {
+        self.unreadable_truncated
     }
 
     #[cfg(test)]
@@ -409,6 +686,11 @@ impl TranscriptFold {
             .saturating_add(self.pending.retained_bytes())
             .saturating_add(self.frames.allocation_bytes())
             .saturating_add(self.groups.allocation_bytes())
+            .saturating_add(self.unread.iter().fold(0usize, |total, part| {
+                total
+                    .saturating_add(part.id().len())
+                    .saturating_add(part.after_execution_id().map_or(0, str::len))
+            }))
     }
 
     /// Exact receiver/source identity used for this fold.
@@ -516,6 +798,10 @@ impl TranscriptFold {
             facts: self.fact_count(),
             snapshot: self.snapshot().map(snapshot::checkpoint::SnapshotRef),
             group: self.groups.checkpoint(),
+            // The published cursor is `applied`. Gaps noted after that save
+            // are not part of it; the suffix notes them again on replay.
+            unread: self.unread[..self.published_unread].to_vec(),
+            unreadable_truncated: self.published_unreadable_truncated,
         };
         let mut output = ChunkWriter::with_limit(max_bytes);
         if serde_json::to_writer(&mut output, &saved).is_err() {
@@ -578,8 +864,17 @@ impl TranscriptFold {
             return Err(TranscriptError::Scope);
         }
         if (saved.applied == 0 && (snapshot.is_some() || saved.facts != 0))
-            || (saved.facts == 0) != snapshot.is_none()
+            || (snapshot.is_some() && saved.facts == 0)
             || (!saved.loaded && saved.applied != 0)
+            || !UnreadablePart::valid_list(&saved.unread)
+            || saved.unread.iter().any(|part| {
+                part.id()
+                    .parse::<u64>()
+                    .is_ok_and(|position| position > saved.applied)
+            })
+            || gap_anchor_missing(snapshot.as_ref(), &saved.unread)
+            || (saved.unreadable_truncated
+                && saved.unread.len() != UnreadablePart::MAX_PER_CONVERSATION)
         {
             return Err(TranscriptError::Checkpoint);
         }
@@ -599,10 +894,29 @@ impl TranscriptFold {
         // Pending downloaded frames belong to the receiver journal. Resume at
         // A, then drain that journal through D before requesting a new page.
         fold.frames = FrameValidator::after(saved.applied);
+        fold.published_unread = saved.unread.len();
+        fold.published_unreadable_truncated = saved.unreadable_truncated;
+        fold.unread = saved.unread;
+        fold.unreadable_truncated = saved.unreadable_truncated;
         fold.loaded = saved.loaded;
         fold.mark_stale();
         Ok(fold)
     }
+}
+
+/// A saved gap names a turn the restored snapshot did not accept. The
+/// transcript would draw that line before the first turn.
+fn gap_anchor_missing(snapshot: Option<&SessionSnapshot>, unread: &[UnreadablePart]) -> bool {
+    unread.iter().any(|part| {
+        part.after_execution_id().is_some_and(|anchor| {
+            !snapshot.is_some_and(|state| {
+                state
+                    .invocations
+                    .iter()
+                    .any(|record| record.request.execution_id.as_str() == anchor)
+            })
+        })
+    })
 }
 
 struct ReceiverBackup {
@@ -612,6 +926,11 @@ struct ReceiverBackup {
     published_facts: u64,
     groups: GroupProgress,
     pending: PendingBody,
+    unread: Vec<UnreadablePart>,
+    published_unread: usize,
+    unreadable_truncated: bool,
+    published_unreadable_truncated: bool,
+    resyncing: bool,
     loaded: bool,
     freshness: CommittedFreshness,
     #[cfg(test)]
@@ -645,6 +964,11 @@ impl TranscriptTransaction<'_> {
             self.fold.published_facts = backup.published_facts;
             self.fold.groups = backup.groups;
             self.fold.pending = backup.pending;
+            self.fold.unread = backup.unread;
+            self.fold.published_unread = backup.published_unread;
+            self.fold.unreadable_truncated = backup.unreadable_truncated;
+            self.fold.published_unreadable_truncated = backup.published_unreadable_truncated;
+            self.fold.resyncing = backup.resyncing;
             self.fold.loaded = backup.loaded;
             self.fold.freshness = backup.freshness;
             #[cfg(test)]
@@ -817,6 +1141,31 @@ mod tests {
         }
     }
 
+    /// The last record again, one position later, for another incarnation.
+    /// That record is one gap; the records ahead of it stay.
+    fn with_foreign_tail(mut page: Vec<Record>) -> Vec<Record> {
+        let mut poison = page.last().expect("page").clone();
+        poison.position += 1;
+        poison.scope = Scope::new(
+            poison.scope.receiver().clone(),
+            poison.scope.origin().clone(),
+            poison.scope.stream().clone(),
+            id("other"),
+            poison.scope.schema().clone(),
+            poison.scope.access_epoch().clone(),
+        );
+        page.push(poison);
+        page
+    }
+
+    fn contradictory_open() -> SessionChange {
+        SessionChange::Opened {
+            id: SessionId::new("other-conversation").unwrap(),
+            provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
+            context: ProviderContext::Absent,
+        }
+    }
+
     // Actual current grouped wire evidence for checkpoint representation fixtures.
     // Unlike the cache-allocation helper, this produces real publication lineage.
     fn save_frames(change: SessionChange, base: u64, generation: u64) -> Vec<NewEvent> {
@@ -824,7 +1173,21 @@ mod tests {
         save_payload_frames(&payload, base, generation)
     }
 
+    fn save_frames_at(
+        change: SessionChange,
+        base: u64,
+        generation: u64,
+        start: u64,
+    ) -> Vec<NewEvent> {
+        let payload = snapshot::encode_semantic_batch(&[change]).unwrap();
+        framed_save(&payload, base, generation, start)
+    }
+
     fn save_payload_frames(payload: &[u8], base: u64, generation: u64) -> Vec<NewEvent> {
+        framed_save(payload, base, generation, base + 1)
+    }
+
+    fn framed_save(payload: &[u8], base: u64, generation: u64, start: u64) -> Vec<NewEvent> {
         let scope = scope();
         let binding = SessionSaveGeneration::new(
             SessionSaveBackend::Record {
@@ -843,7 +1206,7 @@ mod tests {
                 key: FactKey::new(FactKind::SaveUnit, None, 0).unwrap(),
                 body: unit.encode(payload),
             },
-            base + 1,
+            start,
         )
         .unwrap();
         let terminal = Header::unit(identity, 1, unit.chain(payload.len() as u64), &[]);
@@ -853,7 +1216,7 @@ mod tests {
                     key: FactKey::new(FactKind::SaveComplete, None, 1).unwrap(),
                     body: terminal.encode(&[]),
                 },
-                base + frames.len() as u64 + 1,
+                start + frames.len() as u64,
             )
             .unwrap(),
         );
@@ -1005,9 +1368,13 @@ mod tests {
         }));
         assert!(unwind.is_err());
         assert_eq!(fold.checkpoint().unwrap(), before);
-        let mut late_invalid = suffix.clone();
-        late_invalid.extend(records(&scope, 5, &save_frames(opened(), 4, 2)));
-        assert!(fold.apply(&late_invalid).is_err());
+        let late_invalid = with_foreign_tail(suffix.clone());
+        {
+            let mut staged = fold.transaction();
+            staged.apply(&late_invalid).unwrap();
+            assert_eq!(staged.snapshot().unwrap().invocations.len(), 1);
+            assert_eq!(staged.unreadable().len(), 1);
+        }
         assert_eq!(fold.checkpoint().unwrap(), before);
         assert_eq!(fold.status(), status);
         fold.committed.assert_retained_accounting();
@@ -1196,18 +1563,28 @@ mod tests {
             assert_eq!(fold.snapshot().unwrap().invocations[0].events.len(), total);
         }
         let before = fold.checkpoint().unwrap();
-        let rejected = group_suffix(
+        let events_before = fold.snapshot().unwrap().invocations[0].events.len();
+        let unread_before = fold.unreadable().len();
+        let rejected = with_foreign_tail(group_suffix(
             &fold,
             (0..64)
                 .map(|_| message(4096))
-                .chain(std::iter::once(opened())),
+                .chain(std::iter::once(contradictory_open())),
             7,
             false,
-        );
+        ));
         MESSAGE_CLONES.with(|counter| counter.set((0, 0)));
         VALIDATION_CALLS.with(|counter| counter.set((0, 0)));
         SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.set(0));
-        assert!(fold.apply(&rejected).is_err());
+        {
+            let mut guard = fold.transaction();
+            guard.apply(&rejected).unwrap();
+            assert_eq!(
+                guard.snapshot().unwrap().invocations[0].events.len(),
+                events_before
+            );
+            assert!(guard.unreadable().len() > unread_before);
+        }
         assert_eq!(
             MESSAGE_CLONES.with(|counter| counter.get()),
             (64, 64 * 4096)
@@ -1337,23 +1714,15 @@ mod tests {
             4,
             true,
         );
-        assert!(matches!(
-            fold.apply(&both),
-            Err(TranscriptError::Decision(_))
-        ));
-        assert_eq!(
-            (fold.applied(), fold.downloaded(), fold.fact_count()),
-            (applied, downloaded, facts)
-        );
-        assert_eq!(fold.snapshot().unwrap().invocations[0].events.len(), 2);
+        // The later close can be read. The earlier close cannot, so it is one
+        // line and the later close stays.
+        fold.apply(&both).unwrap();
+        assert!(fold.applied() > applied);
+        assert!(fold.downloaded() > downloaded);
+        assert!(fold.fact_count() > facts);
+        assert_eq!(fold.snapshot().unwrap().invocations[0].events.len(), 3);
+        assert_eq!(fold.unreadable().len(), 1);
         fold.committed.assert_retained_accounting();
-        let accepted_later = group_suffix(
-            &fold,
-            [SessionChange::ProviderObservation(close_later)],
-            4,
-            true,
-        );
-        fold.apply(&accepted_later).unwrap();
         let after_later = fold.applied();
         let rejected_earlier = group_suffix(
             &fold,
@@ -1361,12 +1730,10 @@ mod tests {
             5,
             true,
         );
-        assert!(matches!(
-            fold.apply(&rejected_earlier),
-            Err(TranscriptError::Decision(_))
-        ));
-        assert_eq!(fold.applied(), after_later);
+        fold.apply(&rejected_earlier).unwrap();
+        assert!(fold.applied() > after_later);
         assert_eq!(fold.snapshot().unwrap().invocations[0].events.len(), 3);
+        assert_eq!(fold.unreadable().len(), 2);
         fold.committed.assert_retained_accounting();
     }
 
@@ -1443,21 +1810,26 @@ mod tests {
             value["changes"][0]["ReceiptUpdated"]["after"]["Failed"]["storage"]
                 ["ShutdownFailures"]["read"] = invalid;
             let frames = save_payload_frames(&serde_json::to_vec(&value).unwrap(), 4, 2);
-            let before = fold.snapshot().unwrap() as *const SessionSnapshot;
-            assert!(fold.apply(&records(&scope, 5, &frames)).is_err());
-            assert_eq!(fold.applied(), 4);
-            assert_eq!(fold.downloaded(), 4);
-            assert_eq!(fold.snapshot().unwrap() as *const SessionSnapshot, before);
-            assert_eq!(fold.status().freshness(), CommittedFreshness::Current);
+            let mut attempt = fold.clone();
+            attempt.apply(&records(&scope, 5, &frames)).unwrap();
+            assert!(matches!(
+                &attempt.snapshot().unwrap().invocations[0].acknowledgement,
+                SubmissionAcknowledgement::Pending
+            ));
+            assert_eq!(attempt.unreadable().len(), 1);
+            assert!(attempt.downloaded() > 4);
         }
         let mut oversized_ack: Value = serde_json::from_slice(&body).unwrap();
         oversized_ack["changes"][0]["ReceiptUpdated"]["after"]["Failed"]["storage"] =
             serde_json::json!({"Io": diagnostic});
         let frames = save_payload_frames(&serde_json::to_vec(&oversized_ack).unwrap(), 4, 2);
-        let before = fold.snapshot().unwrap() as *const SessionSnapshot;
-        assert!(fold.apply(&records(&scope, 5, &frames)).is_err());
-        assert_eq!((fold.applied(), fold.downloaded()), (4, 4));
-        assert_eq!(fold.snapshot().unwrap() as *const SessionSnapshot, before);
+        let mut attempt = fold.clone();
+        attempt.apply(&records(&scope, 5, &frames)).unwrap();
+        assert!(matches!(
+            &attempt.snapshot().unwrap().invocations[0].acknowledgement,
+            SubmissionAcknowledgement::Pending
+        ));
+        assert_eq!(attempt.unreadable().len(), 1);
         let valid = save_frames(change, 4, 2);
         fold.apply(&records(&scope, 5, &valid)).unwrap();
         assert!(
@@ -1586,17 +1958,16 @@ mod tests {
         zero.position = 0;
         assert_eq!(fold.apply(&[zero]), Err(TranscriptError::Position));
 
+        // Opening the same chat again is a record that cannot be applied. The
+        // first open stays, and the chat gains one line.
         let second = records(&scope, 3, &save_frames(opened(), 2, 1));
-        assert!(matches!(
-            fold.apply(&second),
-            Err(TranscriptError::Decision(_))
-        ));
-        assert_eq!(fold.downloaded(), 2);
-        assert_eq!(fold.applied(), 2);
+        fold.apply(&second).unwrap();
+        assert!(fold.downloaded() > 2);
         assert_eq!(fold.snapshot().unwrap().invocations.len(), 0);
+        assert_eq!(fold.unreadable().len(), 1);
 
         let mut foreign_scope = first[0].clone();
-        foreign_scope.position = 3;
+        foreign_scope.position = fold.downloaded() + 1;
         foreign_scope.scope = Scope::new(
             id("receiver"),
             id("origin"),
@@ -1605,12 +1976,16 @@ mod tests {
             physical_record_schema(),
             id("access"),
         );
-        assert_eq!(fold.apply(&[foreign_scope]), Err(TranscriptError::Scope));
+        let downloaded = fold.downloaded();
+        fold.apply(&[foreign_scope]).unwrap();
+        assert_eq!(fold.downloaded(), downloaded + 1);
+        assert_eq!(fold.unreadable().len(), 2);
         let mut unknown_schema = first[0].clone();
-        unknown_schema.position = 3;
+        unknown_schema.position = fold.downloaded() + 1;
         unknown_schema.payload[0] = 99;
-        assert_eq!(fold.apply(&[unknown_schema]), Err(TranscriptError::Frame));
-        assert_eq!(fold.downloaded(), 2);
+        fold.apply(&[unknown_schema]).unwrap();
+        assert_eq!(fold.downloaded(), downloaded + 2);
+        assert_eq!(fold.unreadable().len(), 3);
     }
 
     #[test]
@@ -1919,32 +2294,29 @@ mod tests {
         let before = fold.clone();
         let mut invalid = seal.clone();
         invalid[0].payload[1] ^= 1;
-        assert_eq!(fold.apply(&invalid), Err(TranscriptError::Frame));
-        assert_eq!(fold.downloaded(), before.downloaded());
-        assert_eq!(
-            fold.pending.retained_bytes(),
-            before.pending.retained_bytes()
-        );
+        // A seal that is not a seal is that record. The fact it belonged to
+        // is skipped, and a later save still applies.
+        fold.apply(&invalid).unwrap();
+        assert_eq!(fold.downloaded(), position);
+        assert_eq!(fold.unreadable().len(), 1);
         assert_eq!(fold.semantic_decodes, 1);
-        fold.apply(&seal).unwrap();
-        assert_eq!(fold.semantic_decodes, 2);
-        assert_eq!(fold.pending.retained_bytes(), 0);
-        assert_eq!(fold.frames.allocation_bytes(), 0);
         assert!(!fold.frames.is_pending());
-        assert_eq!(fold.applied(), 2);
         assert_eq!(fold.snapshot().unwrap().invocations.len(), 0);
-        let completion_position = fold.downloaded() + 1;
-        fold.apply(&records(
-            &scope,
-            completion_position,
-            &frames[frames.len() - 1..],
-        ))
-        .unwrap();
-        assert_eq!(fold.applied(), completion_position);
-        assert_eq!(fold.snapshot().unwrap().invocations.len(), 1);
-        assert_eq!(fold.semantic_decodes, 2);
+        let context = SessionChange::ProviderContext {
+            before: ProviderContext::Absent,
+            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+        };
+        let start = fold.downloaded() + 1;
+        let later = save_frames_at(context, fold.applied(), 1, start);
+        fold.apply(&records(&scope, start, &later)).unwrap();
+        assert!(matches!(
+            fold.snapshot().unwrap().provider_context,
+            ProviderContext::Recorded(_)
+        ));
+        assert_eq!(fold.unreadable().len(), 1);
         assert!(before.frames.is_pending());
         drop(before);
+        let _ = seal;
     }
 
     /// A replica that checkpoints a conversation opened a second time reads
@@ -2445,18 +2817,12 @@ mod tests {
             8,
             &save_frames(accepted_input("input-0"), 7, 2),
         ));
-        assert!(matches!(
-            fold.apply(&invalid),
-            Err(TranscriptError::Decision(StorageError::Corrupt(_)))
-        ));
-        assert_eq!(fold.checkpoint().unwrap(), checkpoint);
-        assert_eq!(
-            (fold.applied(), fold.downloaded(), fold.fact_count()),
-            (2, 2, 1)
-        );
+        // The four inputs can be read. The repeated input is one line.
+        fold.apply(&invalid).unwrap();
+        assert_eq!(fold.snapshot().unwrap().invocations.len(), 4);
+        assert_eq!(fold.unreadable().len(), 1);
         fold.committed.assert_retained_accounting();
-        fold.apply(&suffix).unwrap();
-        fold.committed.assert_retained_accounting();
+        let _ = (checkpoint, suffix);
     }
 
     #[test]
@@ -2737,12 +3103,14 @@ mod tests {
                 let generation = prefix_generation + 1;
                 let unpublished = group_suffix(&fold, changes.clone(), generation, false);
                 let suffix = group_suffix(&fold, changes.clone(), generation, true);
-                let semantic_refusal = group_suffix(
+                let semantic_refusal = with_foreign_tail(group_suffix(
                     &fold,
-                    changes.into_iter().chain(std::iter::once(opened())),
+                    changes
+                        .into_iter()
+                        .chain(std::iter::once(contradictory_open())),
                     generation,
                     false,
-                );
+                ));
                 for _ in 0..3 {
                     for refusal in 0..3 {
                         MESSAGE_CLONES.with(|counter| counter.set((0, 0)));
@@ -2758,10 +3126,10 @@ mod tests {
                             invalid.push(unpublished.last().unwrap().clone());
                             assert_eq!(fold.apply(&invalid), Err(TranscriptError::Position));
                         } else {
-                            assert!(matches!(
-                                fold.apply(&semantic_refusal),
-                                Err(TranscriptError::Decision(StorageError::Corrupt(_)))
-                            ));
+                            let mut guard = fold.transaction();
+                            guard.apply(&semantic_refusal).unwrap();
+                            assert_eq!(guard.snapshot(), Some(published.as_ref()));
+                            assert!(!guard.unreadable().is_empty());
                         }
                         assert_eq!(VALIDATION_CALLS.with(|counter| counter.get()).0, 0);
                         assert_eq!(SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.get()), 0);
@@ -2934,5 +3302,923 @@ mod tests {
             fold.snapshot().unwrap().invocations[3].result,
             Some(Err(_))
         ));
+    }
+
+    fn recorded_context() -> SessionChange {
+        SessionChange::ProviderContext {
+            before: ProviderContext::Absent,
+            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+        }
+    }
+
+    #[test]
+    fn a_corrupt_unit_between_two_saves_keeps_both_saves_and_one_line() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let torn = save_payload_frames(b"{", fold.applied(), 1);
+        let after_open = fold.downloaded();
+        fold.apply(&records(&scope, after_open + 1, &torn)).unwrap();
+        assert_eq!(fold.unreadable().len(), 1);
+        assert_eq!(fold.snapshot().unwrap().invocations.len(), 0);
+        assert!(matches!(
+            fold.snapshot().unwrap().provider_context,
+            ProviderContext::Absent
+        ));
+        let later = save_frames(recorded_context(), fold.applied(), 2);
+        fold.apply(&records(&scope, fold.downloaded() + 1, &later))
+            .unwrap();
+        assert!(matches!(
+            fold.snapshot().unwrap().provider_context,
+            ProviderContext::Recorded(_)
+        ));
+        assert_eq!(fold.unreadable().len(), 1);
+        let restored =
+            TranscriptFold::restore(scope, fold.applied(), &fold.checkpoint().unwrap()).unwrap();
+        assert_eq!(restored.unreadable(), fold.unreadable());
+        assert_eq!(restored.snapshot(), fold.snapshot());
+    }
+
+    /// A save unit and the completion that publishes it. `hole` is the number
+    /// of physical positions left between them; the completion frames name
+    /// their own positions, so a caller can fill that hole with another record.
+    fn save_without_completion(
+        fold: &TranscriptFold,
+        changes: &[SessionChange],
+        generation: u64,
+        hole: u64,
+    ) -> (Vec<Record>, Vec<Record>) {
+        let payload = snapshot::encode_semantic_batch(changes).unwrap();
+        let binding = SessionSaveGeneration::new(
+            SessionSaveBackend::Record {
+                stream: fold.scope.stream().clone(),
+                incarnation: *Uuid::parse_str(fold.scope.incarnation().as_str())
+                    .unwrap()
+                    .as_bytes(),
+            },
+            fold.applied(),
+            generation,
+        );
+        let identity = SaveIdentity::binding(&binding).unwrap();
+        let unit = Header::unit(identity.clone(), 0, EMPTY_CHAIN, &payload);
+        let start = fold.downloaded() + 1;
+        let frames = stream_fact::frame_fact(
+            &FramedFact {
+                key: FactKey::new(FactKind::SaveUnit, None, 0).unwrap(),
+                body: unit.encode(&payload),
+            },
+            start,
+        )
+        .unwrap();
+        let saved = records(&fold.scope, start, &frames);
+        let terminal = Header::unit(identity, 1, unit.chain(payload.len() as u64), &[]);
+        let complete_at = start + frames.len() as u64 + hole;
+        let complete = stream_fact::frame_fact(
+            &FramedFact {
+                key: FactKey::new(FactKind::SaveComplete, None, 1).unwrap(),
+                body: terminal.encode(&[]),
+            },
+            complete_at,
+        )
+        .unwrap();
+        (saved, records(&fold.scope, complete_at, &complete))
+    }
+
+    #[test]
+    fn a_checkpoint_leaves_out_a_gap_the_published_save_has_not_reached() {
+        let scope = scope();
+        let mut live = TranscriptFold::new(scope.clone()).unwrap();
+        // The observation names no accepted turn, so the unit is one gap and
+        // the open is abandoned with it. A checkpoint taken before the
+        // completion must not carry that gap: replaying it with the gap
+        // already present would hide the observation and keep the open.
+        let (unit, complete) = save_without_completion(
+            &live,
+            &[opened(), accepted_input("kept"), text_observation("never")],
+            0,
+            0,
+        );
+        live.apply(&unit).unwrap();
+        assert_eq!(live.applied(), 0);
+        assert!(live.snapshot().is_none());
+        assert_eq!(live.unreadable().len(), 1);
+        let checkpoint = live.checkpoint().unwrap();
+        let mut restored = TranscriptFold::restore(scope.clone(), 0, &checkpoint).unwrap();
+        assert!(restored.unreadable().is_empty());
+        assert!(!restored.unreadable_truncated());
+        restored.apply(&unit).unwrap();
+        live.apply(&complete).unwrap();
+        restored.apply(&complete).unwrap();
+        assert!(live.snapshot().is_none());
+        assert_eq!(restored.snapshot(), live.snapshot());
+        assert_eq!(restored.unreadable(), live.unreadable());
+        assert!(!restored.unreadable_truncated());
+    }
+
+    #[test]
+    fn a_turn_ahead_of_an_unpublished_gap_survives_suffix_replay() {
+        let scope = scope();
+        let mut live = TranscriptFold::new(scope.clone()).unwrap();
+        live.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let published = live.applied();
+        let (unit, complete) = save_without_completion(&live, &[accepted_input("kept")], 1, 1);
+        let torn_at = complete[0].position - 1;
+        let torn = Record {
+            position: torn_at,
+            id: id("torn-frame"),
+            scope: scope.clone(),
+            payload: vec![0xff],
+        };
+        live.apply(&unit).unwrap();
+        live.apply(std::slice::from_ref(&torn)).unwrap();
+        assert_eq!(live.applied(), published);
+        assert!(live
+            .unreadable()
+            .iter()
+            .any(|part| part.id() == torn_at.to_string()));
+        let checkpoint = live.checkpoint().unwrap();
+        {
+            let mut staged = live.transaction();
+            staged.apply(&complete).unwrap();
+        }
+        assert_eq!(live.checkpoint().unwrap(), checkpoint);
+        let mut restored = TranscriptFold::restore(scope, published, &checkpoint).unwrap();
+        assert!(restored.unreadable().is_empty());
+        assert!(!restored.unreadable_truncated());
+        restored.apply(&unit).unwrap();
+        restored.apply(std::slice::from_ref(&torn)).unwrap();
+        live.apply(&complete).unwrap();
+        restored.apply(&complete).unwrap();
+        assert_eq!(live.snapshot().unwrap().invocations.len(), 1);
+        assert_eq!(restored.snapshot(), live.snapshot());
+        assert_eq!(
+            restored
+                .unreadable()
+                .iter()
+                .map(UnreadablePart::id)
+                .collect::<Vec<_>>(),
+            vec![torn_at.to_string().as_str()]
+        );
+    }
+
+    #[test]
+    fn an_unpublished_overflow_stays_off_the_published_gap_list() {
+        let scope = scope();
+        let mut live = TranscriptFold::new(scope.clone()).unwrap();
+        let foreign = Scope::new(
+            scope.receiver().clone(),
+            scope.origin().clone(),
+            scope.stream().clone(),
+            id("other"),
+            scope.schema().clone(),
+            scope.access_epoch().clone(),
+        );
+        // Each foreign record is its own gap, and none of them is a save
+        // completion, so the cut flag is still unpublished.
+        let batch: Vec<_> = (1..=33)
+            .map(|position| Record {
+                position,
+                id: id(&format!("bad{position}")),
+                scope: foreign.clone(),
+                payload: vec![1],
+            })
+            .collect();
+        live.apply(&batch).unwrap();
+        assert_eq!(live.unreadable().len(), 32);
+        assert!(live.unreadable_truncated());
+        assert_eq!(live.applied(), 0);
+        let mut restored = TranscriptFold::restore(scope, 0, &live.checkpoint().unwrap()).unwrap();
+        assert!(restored.unreadable().is_empty());
+        assert!(!restored.unreadable_truncated());
+        restored.apply(&batch).unwrap();
+        assert_eq!(restored.unreadable(), live.unreadable());
+        assert!(restored.unreadable_truncated());
+    }
+
+    #[test]
+    fn a_checkpoint_refuses_an_unordered_or_impossible_gap_id() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let checkpoint = fold.checkpoint().unwrap();
+        let value: Value = serde_json::from_reader(checkpoint.reader()).unwrap();
+        for unread in [
+            serde_json::json!([{"id": "4"}, {"id": "2"}]),
+            serde_json::json!([{"id": "18446744073709551616"}]),
+            serde_json::json!([{"id": "999"}]),
+        ] {
+            let mut changed = value.clone();
+            changed["unread"] = unread;
+            let malformed =
+                TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&changed).unwrap()])
+                    .unwrap();
+            assert!(matches!(
+                TranscriptFold::restore(scope.clone(), fold.applied(), &malformed),
+                Err(TranscriptError::Checkpoint)
+            ));
+        }
+        let mut at_cursor = value;
+        at_cursor["unread"] = serde_json::json!([{ "id": fold.applied().to_string() }]);
+        let at_cursor =
+            TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&at_cursor).unwrap()])
+                .unwrap();
+        let restored = TranscriptFold::restore(scope, fold.applied(), &at_cursor).unwrap();
+        assert_eq!(restored.unreadable()[0].id(), fold.applied().to_string());
+    }
+
+    #[test]
+    fn a_checkpoint_refuses_a_truncated_flag_without_a_full_gap_list() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let checkpoint = fold.checkpoint().unwrap();
+        let value: Value = serde_json::from_reader(checkpoint.reader()).unwrap();
+        for unread in [serde_json::json!([]), serde_json::json!([{ "id": "1" }])] {
+            let mut changed = value.clone();
+            changed["unread"] = unread;
+            changed["unreadable_truncated"] = serde_json::json!(true);
+            let malformed =
+                TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&changed).unwrap()])
+                    .unwrap();
+            assert!(matches!(
+                TranscriptFold::restore(scope.clone(), fold.applied(), &malformed),
+                Err(TranscriptError::Checkpoint)
+            ));
+        }
+    }
+
+    #[test]
+    fn a_checkpoint_refuses_a_gap_anchor_absent_from_the_snapshot() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        fold.apply(&records(
+            &scope,
+            fold.downloaded() + 1,
+            &save_frames(accepted_input("driven"), fold.applied(), 1),
+        ))
+        .unwrap();
+        let checkpoint = fold.checkpoint().unwrap();
+        let value: Value = serde_json::from_reader(checkpoint.reader()).unwrap();
+        let applied = fold.applied().to_string();
+        let accepted = fold.snapshot().unwrap().invocations[0]
+            .request
+            .execution_id
+            .as_str()
+            .to_owned();
+        for unread in [
+            serde_json::json!([{ "id": applied, "after_execution_id": "missing" }]),
+            serde_json::json!([{ "id": applied, "after_execution_id": "drive" }]),
+            serde_json::json!([
+                { "id": "1", "after_execution_id": accepted },
+                { "id": applied, "after_execution_id": "missing" }
+            ]),
+        ] {
+            let mut changed = value.clone();
+            changed["unread"] = unread;
+            let malformed =
+                TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&changed).unwrap()])
+                    .unwrap();
+            assert!(matches!(
+                TranscriptFold::restore(scope.clone(), fold.applied(), &malformed),
+                Err(TranscriptError::Checkpoint)
+            ));
+        }
+        let mut held = value.clone();
+        held["unread"] = serde_json::json!([{ "id": applied, "after_execution_id": accepted }]);
+        let held =
+            TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&held).unwrap()]).unwrap();
+        let restored = TranscriptFold::restore(scope.clone(), fold.applied(), &held).unwrap();
+        assert_eq!(
+            restored.unreadable()[0].after_execution_id(),
+            Some(accepted.as_str())
+        );
+        let mut open_only = TranscriptFold::new(scope.clone()).unwrap();
+        open_only
+            .apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let open_checkpoint = open_only.checkpoint().unwrap();
+        let mut open_value: Value = serde_json::from_reader(open_checkpoint.reader()).unwrap();
+        open_value["unread"] = serde_json::json!([{
+            "id": open_only.applied().to_string(),
+            "after_execution_id": "missing"
+        }]);
+        let open_malformed =
+            TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&open_value).unwrap()])
+                .unwrap();
+        assert!(matches!(
+            TranscriptFold::restore(scope, open_only.applied(), &open_malformed),
+            Err(TranscriptError::Checkpoint)
+        ));
+    }
+
+    #[test]
+    fn a_later_save_applies_when_its_chain_does_not_follow() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        // Base 1 and generation 5 do not follow the open. The header still
+        // names this chat, so the context is kept.
+        let start = fold.downloaded() + 1;
+        let later = save_frames_at(recorded_context(), 1, 5, start);
+        fold.apply(&records(&scope, start, &later)).unwrap();
+        assert!(matches!(
+            fold.snapshot().unwrap().provider_context,
+            ProviderContext::Recorded(_)
+        ));
+    }
+
+    #[test]
+    fn an_open_for_another_session_refuses_the_chat() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        assert_eq!(
+            fold.apply(&records(
+                &scope,
+                1,
+                &save_frames(contradictory_open(), 0, 0)
+            )),
+            Err(TranscriptError::Scope)
+        );
+        assert_eq!(fold.downloaded(), 0);
+        assert!(fold.snapshot().is_none());
+        assert!(fold.unreadable().is_empty());
+    }
+
+    #[test]
+    fn a_tool_call_of_a_skipped_turn_adds_no_second_line() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        let mut open = opened();
+        let SessionChange::Opened { context, .. } = &mut open else {
+            unreachable!()
+        };
+        *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+        fold.apply(&records(&scope, 1, &save_frames(open, 0, 0)))
+            .unwrap();
+        let torn = save_payload_frames(b"{", fold.applied(), 1);
+        fold.apply(&records(&scope, fold.downloaded() + 1, &torn))
+            .unwrap();
+        let observation = SessionChange::ProviderObservation(ExecutionEvent::new(
+            ExecutionId::new("never-accepted").unwrap(),
+            ExecutionUpdate::Tool(ToolCallUpdate::new(
+                ToolCallId::new("call").unwrap(),
+                Some("run".into()),
+                None,
+                None,
+                None,
+                None,
+            )),
+        ));
+        let later = save_frames(observation, fold.applied(), 2);
+        fold.apply(&records(&scope, fold.downloaded() + 1, &later))
+            .unwrap();
+        assert_eq!(fold.snapshot().unwrap().invocations.len(), 0);
+        assert_eq!(fold.unreadable().len(), 1);
+    }
+
+    #[test]
+    fn a_save_unit_with_a_repeated_json_field_is_one_gap() {
+        use crate::application::agent_execution::sessions::{
+            NoteDelivery, NoteId, NoteRecord, NoteText,
+        };
+        use crate::domain::agent_execution::executions::{GrantInitiator, Initiator};
+        let note = |text: &str| {
+            SessionChange::Note(NoteRecord {
+                id: NoteId::mint(),
+                text: NoteText::new(text).unwrap(),
+                delivery: NoteDelivery::RecordOnly,
+                actor: ActionContext::new("person", "phone", "note").unwrap(),
+                author: Initiator::Grant(GrantInitiator::new("receiver", 7).unwrap()),
+                accepted_at_ms: 1_700_000_000_000,
+                after_execution: None,
+                retired: None,
+            })
+        };
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let first = snapshot::encode_semantic_batch(&[note("first")]).unwrap();
+        let last = snapshot::encode_semantic_batch(&[note("last definition")]).unwrap();
+        let last_text = String::from_utf8(last).unwrap();
+        let changes_at = last_text.find("\"changes\":").unwrap();
+        let mut repeated = String::from_utf8(first.clone()).unwrap();
+        repeated.pop();
+        repeated.push(',');
+        repeated.push_str(&last_text[changes_at..last_text.len() - 1]);
+        repeated.push('}');
+        let nested = String::from_utf8(first).unwrap().replacen(
+            "\"text\":\"first\"",
+            "\"text\":\"first\",\"\\u0074ext\":\"last definition\"",
+            1,
+        );
+        for (generation, payload) in [(1, repeated.into_bytes()), (2, nested.into_bytes())] {
+            let start = fold.downloaded() + 1;
+            let frames = framed_save(&payload, fold.applied(), generation, start);
+            fold.apply(&records(&scope, start, &frames)).unwrap();
+        }
+        assert!(fold.snapshot().unwrap().notes.is_empty());
+        assert_eq!(fold.unreadable().len(), 2);
+    }
+
+    #[test]
+    fn a_refused_lease_in_a_mixed_unit_becomes_unreadable() {
+        use crate::application::agent_execution::sessions::{
+            CurrentLeaseState, LeaseRecord, NoteDelivery, NoteId, NoteRecord, NoteText,
+        };
+        use crate::domain::agent_execution::{
+            executions::{GrantInitiator, Initiator},
+            leases::{
+                AgentWork, EnvironmentRef, LeaseDeadline, LeaseEndCause, LeaseGrants, LeaseId,
+                LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile,
+            },
+        };
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let held = LeaseId::new("lease-1").unwrap();
+        let issued = LeaseRecord::Issued {
+            lease: held,
+            revision: LeaseRevision::FIRST,
+            terms: LeaseTerms {
+                environment: EnvironmentRef::Here,
+                work: LeaseWork::Agent(AgentWork::new("claude", "sonnet").unwrap()),
+                sandbox: SandboxProfile::HarnessDefault,
+                grants: LeaseGrants::Opening,
+                deadline: LeaseDeadline::UntilEnded,
+            },
+            actor: ActionContext::new("person", "desktop", "send").unwrap(),
+        };
+        fold.apply(&one_unit(&fold, &[SessionChange::Lease(issued)], 1))
+            .unwrap();
+        assert!(matches!(
+            fold.snapshot().unwrap().lease.as_ref().unwrap().state(),
+            CurrentLeaseState::Held(_)
+        ));
+        // A later open the session refuses is not the lease. The held lease stays.
+        fold.apply(&one_unit(&fold, &[contradictory_open()], 2))
+            .unwrap();
+        assert!(matches!(
+            fold.snapshot().unwrap().lease.as_ref().unwrap().state(),
+            CurrentLeaseState::Held(_)
+        ));
+        let refused = LeaseRecord::Ending {
+            lease: LeaseId::new("other-lease").unwrap(),
+            cause: LeaseEndCause::Closed,
+            actor: None,
+        };
+        let note = NoteRecord {
+            id: NoteId::mint(),
+            text: NoteText::new("beside the lease").unwrap(),
+            delivery: NoteDelivery::RecordOnly,
+            actor: ActionContext::new("person", "phone", "note").unwrap(),
+            author: Initiator::Grant(GrantInitiator::new("receiver", 7).unwrap()),
+            accepted_at_ms: 1_700_000_000_000,
+            after_execution: None,
+            retired: None,
+        };
+        fold.apply(&one_unit(
+            &fold,
+            &[SessionChange::Lease(refused), SessionChange::Note(note)],
+            3,
+        ))
+        .unwrap();
+        assert!(fold.snapshot().unwrap().notes.is_empty());
+        assert!(matches!(
+            fold.snapshot().unwrap().lease.as_ref().unwrap().state(),
+            CurrentLeaseState::Unreadable { kind } if kind == "record"
+        ));
+    }
+
+    #[test]
+    fn a_lease_the_preflight_refuses_retires_the_held_lease() {
+        use crate::application::agent_execution::sessions::{CurrentLeaseState, LeaseRecord};
+        use crate::domain::agent_execution::leases::{
+            AgentWork, EnvironmentRef, LeaseDeadline, LeaseGrants, LeaseId, LeaseRevision,
+            LeaseTerms, LeaseWork, SandboxProfile,
+        };
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let issued = LeaseRecord::Issued {
+            lease: LeaseId::new("lease-1").unwrap(),
+            revision: LeaseRevision::FIRST,
+            terms: LeaseTerms {
+                environment: EnvironmentRef::Here,
+                work: LeaseWork::Agent(AgentWork::new("claude", "sonnet").unwrap()),
+                sandbox: SandboxProfile::HarnessDefault,
+                grants: LeaseGrants::Opening,
+                deadline: LeaseDeadline::UntilEnded,
+            },
+            actor: ActionContext::new("person", "desktop", "send").unwrap(),
+        };
+        fold.apply(&one_unit(&fold, &[SessionChange::Lease(issued)], 1))
+            .unwrap();
+        assert!(matches!(
+            fold.snapshot().unwrap().lease.as_ref().unwrap().state(),
+            CurrentLeaseState::Held(_)
+        ));
+        let note = serde_json::json!({
+            "schemaVersion": StorageError::SCHEMA_VERSION,
+            "changes": [{ "Note": { "extra": true } }]
+        });
+        let frames = save_payload_frames(&serde_json::to_vec(&note).unwrap(), fold.applied(), 2);
+        fold.apply(&records(&scope, fold.downloaded() + 1, &frames))
+            .unwrap();
+        assert!(matches!(
+            fold.snapshot().unwrap().lease.as_ref().unwrap().state(),
+            CurrentLeaseState::Held(_)
+        ));
+        let oversized = "x".repeat(LeaseRecord::MAX_UNREADABLE_BODY_BYTES + 1);
+        let repeated = serde_json::to_string(&serde_json::json!({
+            "schemaVersion": StorageError::SCHEMA_VERSION,
+            "changes": [{ "Lease": { "kind": "issued", "body": "{}" } }]
+        }))
+        .unwrap()
+        .replacen("\"kind\":", "\"kind\":\"issued\",\"kind\":", 1);
+        let retiring = [
+            serde_json::json!({
+                "schemaVersion": StorageError::SCHEMA_VERSION,
+                "changes": [{ "Lease": { "kind": "issued", "body": "{}", "extra": true } }]
+            })
+            .to_string(),
+            serde_json::json!({
+                "schemaVersion": StorageError::SCHEMA_VERSION,
+                "changes": [{ "Lease": { "kind": "issued", "body": oversized } }]
+            })
+            .to_string(),
+            repeated,
+        ];
+        for (offset, payload) in retiring.into_iter().enumerate() {
+            let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+            fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+                .unwrap();
+            let issued = LeaseRecord::Issued {
+                lease: LeaseId::new("lease-1").unwrap(),
+                revision: LeaseRevision::FIRST,
+                terms: LeaseTerms {
+                    environment: EnvironmentRef::Here,
+                    work: LeaseWork::Agent(AgentWork::new("claude", "sonnet").unwrap()),
+                    sandbox: SandboxProfile::HarnessDefault,
+                    grants: LeaseGrants::Opening,
+                    deadline: LeaseDeadline::UntilEnded,
+                },
+                actor: ActionContext::new("person", "desktop", "send").unwrap(),
+            };
+            fold.apply(&one_unit(&fold, &[SessionChange::Lease(issued)], 1))
+                .unwrap();
+            let frames = save_payload_frames(payload.as_bytes(), fold.applied(), 2 + offset as u64);
+            fold.apply(&records(&scope, fold.downloaded() + 1, &frames))
+                .unwrap();
+            assert!(
+                matches!(
+                    fold.snapshot().unwrap().lease.as_ref().unwrap().state(),
+                    CurrentLeaseState::Unreadable { kind } if kind == "record"
+                ),
+                "{payload}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unreadable_lease_does_not_refuse_the_chat() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let lease = serde_json::json!({
+            "schemaVersion": StorageError::SCHEMA_VERSION,
+            "changes": [{ "Lease": { "kind": "not-a-lease-kind", "body": "{}" } }]
+        });
+        let frames = save_payload_frames(&serde_json::to_vec(&lease).unwrap(), fold.applied(), 1);
+        fold.apply(&records(&scope, fold.downloaded() + 1, &frames))
+            .unwrap();
+        assert_eq!(fold.unreadable().len(), 1);
+        assert!(matches!(
+            fold.snapshot().unwrap().lease.as_ref().unwrap().state(),
+            crate::application::agent_execution::sessions::CurrentLeaseState::Unreadable { kind } if kind == "not-a-lease-kind"
+        ));
+        let later = save_frames(recorded_context(), fold.applied(), 2);
+        fold.apply(&records(&scope, fold.downloaded() + 1, &later))
+            .unwrap();
+        assert!(matches!(
+            fold.snapshot().unwrap().provider_context,
+            ProviderContext::Recorded(_)
+        ));
+    }
+
+    #[test]
+    fn a_chat_keeps_at_most_32_unreadable_lines() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        for index in 0..32 {
+            let torn = save_payload_frames(b"{", fold.applied(), index + 1);
+            fold.apply(&records(&scope, fold.downloaded() + 1, &torn))
+                .unwrap();
+        }
+        assert_eq!(fold.unreadable().len(), 32);
+        assert!(!fold.unreadable_truncated());
+        for index in 32..34 {
+            let torn = save_payload_frames(b"{", fold.applied(), index + 1);
+            fold.apply(&records(&scope, fold.downloaded() + 1, &torn))
+                .unwrap();
+        }
+        assert_eq!(fold.unreadable().len(), 32);
+        assert!(fold.unreadable_truncated());
+        assert_eq!(fold.snapshot().unwrap().invocations.len(), 0);
+        let restored =
+            TranscriptFold::restore(scope, fold.applied(), &fold.checkpoint().unwrap()).unwrap();
+        assert_eq!(restored.unreadable().len(), 32);
+        assert!(restored.unreadable_truncated());
+    }
+
+    #[test]
+    fn a_record_from_another_stream_is_a_gap_and_the_chat_continues() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        let open = records(&scope, 1, &save_frames(opened(), 0, 0));
+        fold.apply(&open).unwrap();
+        let mut foreign = open[0].clone();
+        foreign.position = fold.downloaded() + 1;
+        foreign.scope = Scope::new(
+            foreign.scope.receiver().clone(),
+            foreign.scope.origin().clone(),
+            foreign.scope.stream().clone(),
+            id("other"),
+            foreign.scope.schema().clone(),
+            foreign.scope.access_epoch().clone(),
+        );
+        fold.apply(std::slice::from_ref(&foreign)).unwrap();
+        assert_eq!(fold.unreadable().len(), 1);
+        assert!(!fold.unreadable_truncated());
+        assert_eq!(fold.snapshot().unwrap().id.as_str(), "conversation");
+        let start = fold.downloaded() + 1;
+        let later = save_frames_at(recorded_context(), fold.applied(), 1, start);
+        fold.apply(&records(&scope, start, &later)).unwrap();
+        assert!(matches!(
+            fold.snapshot().unwrap().provider_context,
+            ProviderContext::Recorded(_)
+        ));
+        assert_eq!(fold.unreadable().len(), 1);
+        assert_eq!(fold.snapshot().unwrap().id.as_str(), "conversation");
+    }
+
+    #[test]
+    fn a_later_open_for_another_session_is_a_gap() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let start = fold.downloaded() + 1;
+        fold.apply(&records(
+            &scope,
+            start,
+            &save_frames_at(contradictory_open(), fold.applied(), 1, start),
+        ))
+        .unwrap();
+        assert_eq!(fold.snapshot().unwrap().id.as_str(), "conversation");
+        assert_eq!(fold.unreadable().len(), 1);
+        assert!(!fold.unreadable_truncated());
+    }
+
+    #[test]
+    fn a_chat_of_only_gaps_still_opens() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        let torn = save_payload_frames(b"{", 0, 0);
+        fold.apply(&records(&scope, 1, &torn)).unwrap();
+        fold.observe_source_head(&scope, fold.downloaded()).unwrap();
+        assert!(fold.snapshot().is_none());
+        assert_eq!(fold.unreadable().len(), 1);
+        assert_eq!(fold.view_state(), CommittedViewState::CompleteEmpty);
+    }
+
+    fn open_recorded() -> SessionChange {
+        let mut open = opened();
+        let SessionChange::Opened { context, .. } = &mut open else {
+            unreachable!()
+        };
+        *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+        open
+    }
+
+    fn one_unit(fold: &TranscriptFold, changes: &[SessionChange], generation: u64) -> Vec<Record> {
+        let payload = snapshot::encode_semantic_batch(changes).unwrap();
+        let start = fold.downloaded() + 1;
+        let frames = framed_save(&payload, fold.applied(), generation, start);
+        records(&fold.scope, start, &frames)
+    }
+
+    fn text_observation(name: &str) -> SessionChange {
+        SessionChange::ProviderObservation(ExecutionEvent::new(
+            ExecutionId::new(name).unwrap(),
+            ExecutionUpdate::Message(MessageChunk::text("kept")),
+        ))
+    }
+
+    fn permission_cancellation(name: &str) -> (ExecutionEvent, ExecutionEvent) {
+        let options = PermissionOptions::new(
+            vec![PermissionOption::new(
+                PermissionOptionId::new("allow").unwrap(),
+                "Allow",
+                PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request()),
+            )
+            .unwrap()],
+            &PermissionOfferPolicy::once_only(),
+        )
+        .unwrap();
+        let requested = ExecutionEvent::new(
+            ExecutionId::new("output").unwrap(),
+            ExecutionUpdate::PermissionRequested {
+                id: PermissionId::new(name).unwrap(),
+                tool_id: ToolCallId::new(name).unwrap(),
+                observation: ToolObservation::default(),
+                input: ToolReviewInput {
+                    name: "tool".into(),
+                    arguments_json: "{}".into(),
+                },
+                options: options.clone(),
+                deadline: None,
+            },
+        );
+        let ExecutionUpdate::PermissionRequested {
+            id,
+            tool_id,
+            input,
+            options,
+            ..
+        } = requested.update()
+        else {
+            unreachable!()
+        };
+        let mut domain = ExecutionSession::new(ExecutionSessionId::new("remote").unwrap());
+        domain
+            .begin_execution(requested.execution_id().clone())
+            .unwrap();
+        domain
+            .observe_tool(
+                requested.execution_id(),
+                ToolCallUpdate::new(tool_id.clone(), None, None, None, None, None),
+            )
+            .unwrap();
+        domain
+            .request_permission(PermissionRequest::new(
+                id.clone(),
+                requested.execution_id().clone(),
+                tool_id.clone(),
+                options.clone(),
+            ))
+            .unwrap();
+        let record = domain
+            .cancel_permission(
+                requested.execution_id(),
+                id,
+                PermissionCancellationReason::provider_withdrawal(),
+            )
+            .unwrap()
+            .unwrap();
+        let cancelled = ExecutionEvent::new(
+            requested.execution_id().clone(),
+            ExecutionUpdate::PermissionCancelled(
+                PermissionCancellation::from_record(
+                    ExecutionSessionId::new("remote").unwrap(),
+                    record,
+                    input.clone(),
+                    CancellationOrigin::Provider,
+                )
+                .unwrap(),
+            ),
+        );
+        (requested, cancelled)
+    }
+
+    #[test]
+    fn an_abandoned_cancellation_does_not_keep_its_witness() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(open_recorded(), 0, 0)))
+            .unwrap();
+        let input = one_unit(&fold, &[accepted_input("output")], 1);
+        fold.apply(&input).unwrap();
+        let (requested, cancelled) = permission_cancellation("review");
+        let abandoned = one_unit(
+            &fold,
+            &[
+                SessionChange::ProviderObservation(requested),
+                SessionChange::ProviderObservation(cancelled),
+                contradictory_open(),
+            ],
+            2,
+        );
+        fold.apply(&abandoned).unwrap();
+        assert_eq!(fold.unreadable().len(), 1);
+        assert!(fold.snapshot().unwrap().invocations[0].events.is_empty());
+        assert!(matches!(
+            fold.snapshot().unwrap().provider_context,
+            ProviderContext::Recorded(_)
+        ));
+        let clear = SessionChange::ProviderContext {
+            before: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+            after: ProviderContext::Absent,
+        };
+        fold.apply(&one_unit(&fold, &[clear], 3)).unwrap();
+        assert!(matches!(
+            fold.snapshot().unwrap().provider_context,
+            ProviderContext::Absent
+        ));
+        assert!(fold.snapshot().unwrap().invocations[0].events.is_empty());
+        assert_eq!(fold.unreadable().len(), 1);
+        fold.committed.assert_retained_accounting();
+    }
+
+    #[test]
+    fn a_valid_pending_frame_ends_an_unreadable_run() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&[Record {
+            position: 1,
+            id: id("torn"),
+            scope: scope.clone(),
+            payload: vec![0xff],
+        }])
+        .unwrap();
+        assert_eq!(fold.unreadable().len(), 1);
+        let frames = stream_fact::frame_fact(
+            &stream_fact::FramedFact {
+                key: FactKey::new(FactKind::SaveUnit, None, 0).unwrap(),
+                body: vec![7; 70 * 1024],
+            },
+            2,
+        )
+        .unwrap();
+        assert!(frames.len() > 2);
+        fold.apply(&records(&scope, 2, &frames[..1])).unwrap();
+        assert_eq!(
+            fold.unreadable().len(),
+            1,
+            "a valid start frame is not another gap"
+        );
+        let mut piece = records(&scope, 3, &frames[1..2]);
+        piece[0].payload[1] ^= 0xff;
+        fold.apply(&piece).unwrap();
+        assert_eq!(
+            fold.unreadable()
+                .iter()
+                .map(UnreadablePart::id)
+                .collect::<Vec<_>>(),
+            ["1", "3"]
+        );
+    }
+
+    #[test]
+    fn a_turn_accepted_in_a_gapped_unit_keeps_its_observation() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(open_recorded(), 0, 0)))
+            .unwrap();
+        let torn = save_payload_frames(b"{", fold.applied(), 1);
+        fold.apply(&records(&scope, fold.downloaded() + 1, &torn))
+            .unwrap();
+        assert_eq!(fold.unreadable().len(), 1);
+        fold.apply(&one_unit(
+            &fold,
+            &[accepted_input("kept"), text_observation("kept")],
+            2,
+        ))
+        .unwrap();
+        assert_eq!(fold.snapshot().unwrap().invocations.len(), 1);
+        assert_eq!(fold.snapshot().unwrap().invocations[0].events.len(), 1);
+        assert_eq!(fold.unreadable().len(), 1);
+    }
+
+    #[test]
+    fn an_opening_unit_keeps_the_turn_it_introduces() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&one_unit(
+            &fold,
+            &[
+                open_recorded(),
+                accepted_input("kept"),
+                text_observation("kept"),
+            ],
+            0,
+        ))
+        .unwrap();
+        assert!(fold.unreadable().is_empty());
+        assert_eq!(fold.snapshot().unwrap().id.as_str(), "conversation");
+        assert_eq!(fold.snapshot().unwrap().invocations.len(), 1);
+        assert_eq!(fold.snapshot().unwrap().invocations[0].events.len(), 1);
     }
 }

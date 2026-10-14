@@ -3111,9 +3111,11 @@ async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
 }
 
 /// A chat whose only history is a batch main wrote, with no `schemaVersion`,
-/// cannot be read or attached, and can be deleted. A sibling written by this
-/// build still opens, and its read grant stays. Deleting the unmarked chat
-/// resets its stream and wakes a record subscription on it.
+/// is one gap on a committed read and has no snapshot. Opening it to attach
+/// still refuses, because a writer cannot continue that batch, and it can be
+/// deleted. A sibling written by this build still opens, and its read grant
+/// stays. Deleting the unmarked chat resets its stream and wakes a record
+/// subscription on it.
 #[tokio::test]
 async fn an_unmarked_chat_cannot_be_read_and_can_be_deleted() {
     use crate::conversation::application::error_code::error_code;
@@ -3199,15 +3201,20 @@ async fn an_unmarked_chat_cannot_be_read_and_can_be_deleted() {
         .await
         .unwrap();
     // The live agent holds the history. Stop it, drop what this build wrote,
-    // and leave only the batch main writes. The next open cannot read it.
+    // and leave only the batch main writes. A committed read keeps that batch
+    // as one gap. A writer still cannot continue it.
     service.stop_active_agents().await.unwrap();
     storage.discard_unreadable(session(&id)).await.unwrap();
     storage
         .append_encoded_batch(session(&id), UNMARKED_SESSION_BATCH)
         .await
         .unwrap();
+    let unmarked = storage.read_committed(session(&id)).await.unwrap().unwrap();
+    assert!(unmarked.snapshot().is_none());
+    assert_eq!(unmarked.unreadable().len(), 1);
+    assert!(!unmarked.unreadable_truncated());
     assert!(matches!(
-        storage.read_committed(session(&id)).await,
+        storage.open_existing(session(&id)).await,
         Err(StorageError::AnotherVersion { found: None })
     ));
     let sibling_history = storage
@@ -3486,8 +3493,14 @@ async fn an_unreadable_chat_stays_until_its_deletion_is_recorded() {
     let failures = incomplete(service.delete(id.clone(), caller("delete")).await);
     assert!(matches!(failures.audit, Some(ConversationError::Audit)));
     assert!(failures.history.is_none() && !failures.history_leased_elsewhere);
+    // The audit refused, so the unmarked batch is still the history: one gap
+    // on a committed read, and a writer that still cannot continue it.
+    let unmarked = storage.read_committed(session(&id)).await.unwrap().unwrap();
+    assert!(unmarked.snapshot().is_none());
+    assert_eq!(unmarked.unreadable().len(), 1);
+    assert!(!unmarked.unreadable_truncated());
     assert!(matches!(
-        storage.read_committed(session(&id)).await,
+        storage.open_existing(session(&id)).await,
         Err(StorageError::AnotherVersion { found: None })
     ));
 

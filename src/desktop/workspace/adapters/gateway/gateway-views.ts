@@ -235,6 +235,15 @@ export const publishedAfterId = "/published"
  * (ending `/reply`) or published files' (`/published…`) can be.
  */
 export const noteId = (messageId: string) => `/note:${encodeId(messageId)}`
+/**
+ * The line for a record this read could not apply, under that record's
+ * position. `/unreadable:` and no other `/`, which no input, reply, note or
+ * published-files id can be.
+ */
+export const unreadableId = (id: string) => `/unreadable:${encodeId(id)}`
+
+/** The final line when the gap list was cut. Not a record position. */
+export const unreadableOverflowId = "/unreadable-more"
 
 /** A file the agent published, as the part a message shows it by. */
 function publishedPart(artifact: ConversationView["artifacts"][number]): Part {
@@ -297,7 +306,8 @@ function writtenBy(app: ConversationMessageApp | undefined): { app?: MessageApp 
  * gateway holds it. A note somebody left is a message of its own right after
  * the turn it followed, or the input still waiting it followed; one left
  * before any turn, or after a turn the bounded view left out, is first
- * (`placeNotes`).
+ * (`placeNotes`). A record this read could not apply is a line of its own
+ * in the same places.
  *
  * The view's `truncated` and `transcriptState` are carried as `history`.
  * This surface does not fold committed records to fill in what the view
@@ -319,14 +329,12 @@ export function transcriptFrom(
   // The inputs still waiting that the view lists apart from its turns: drawn
   // after every turn, as the panel draws them.
   const unlisted = view.pending.filter((waiting) => !listed.has(waiting.executionId))
+  const waitingIds = unlisted.map((waiting) => waiting.executionId)
   // Recovery owns a typed refusal only while that turn is still the latest
   // input. A later turn or a later waiting input leaves the older mark.
   const latestInputId = unlisted.at(-1)?.executionId ?? view.messages.at(-1)?.executionId
-  const notes = placeNotes(
-    view.notes,
-    listed,
-    unlisted.map((waiting) => waiting.executionId),
-  )
+  const notes = placeNotes(view.notes, listed, waitingIds)
+  const unreadable = placeNotes(view.unreadable, listed, waitingIds)
   const messages: Message[] = []
   const pushNotes = (left: readonly ConversationView["notes"][number][]) => {
     for (const note of left) {
@@ -334,6 +342,24 @@ export function transcriptFrom(
       messages.push({ id, role: "note", at: seen(id), parts: [], note: shownNote(note) })
     }
   }
+  const pushUnreadable = (left: readonly ConversationView["unreadable"][number][]) => {
+    for (const part of left) {
+      const id = unreadableId(part.id)
+      messages.push({
+        id,
+        role: "unreadable",
+        at: seen(id),
+        parts: [],
+        unreadable: {
+          id: part.id,
+          ...(part.afterExecutionId === undefined
+            ? {}
+            : { afterExecutionId: part.afterExecutionId }),
+        },
+      })
+    }
+  }
+  pushUnreadable(unreadable.before)
   pushNotes(notes.before)
   if (published.before.length > 0)
     messages.push({
@@ -397,6 +423,7 @@ export function transcriptFrom(
       messages.push(user)
       messages.push(marked ? { ...agent, ...marked } : agent)
     } else messages.push(marked ? { ...user, ...marked } : user)
+    pushUnreadable(unreadable.byExecution.get(turn.executionId) ?? [])
     pushNotes(notes.byExecution.get(turn.executionId) ?? [])
     // A turn at work with nothing streaming yet: what it is doing, and since it was asked.
     if (
@@ -422,8 +449,16 @@ export function transcriptFrom(
       // Waiting, it is labelled as it will be once it is a turn (D-H).
       ...writtenBy(waiting.app),
     })
+    pushUnreadable(unreadable.byWaiting.get(waiting.executionId) ?? [])
     pushNotes(notes.byWaiting.get(waiting.executionId) ?? [])
   }
+  if (view.unreadableTruncated)
+    messages.push({
+      id: unreadableOverflowId,
+      role: "unreadable-overflow",
+      at: seen(unreadableOverflowId),
+      parts: [],
+    })
   const latestTurn = view.messages.at(-1)
   const history = historyExtent(view)
   // What runs is the tool and its exact input, which the gateway offers a

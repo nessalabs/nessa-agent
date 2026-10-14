@@ -34,6 +34,7 @@ This skill is how to use them; it restates neither.
 | `index.html`'s load fallback, the panel's stage and window size | `load-fallback.mjs` |
 | where the window's workspace comes from (`main.tsx`, `model/workspace-backend.ts`, `adapters/host-gateway.ts`), the gateway source's connect and reconnect wait (`workspace/adapters/gateway/gateway-source.ts`), the index's failure sentences (`readFailureCopy` for `"index"` in `workspace/ui/failure-copy.ts`), the empty workspace. A `?seeded` page is the seeded large workspace row | `gateway-states.mjs` |
 | a conversation the window listed but could not read (`readFailureCopy` for `"conversation"` in `workspace/ui/failure-copy.ts`, the transcript note, the Agents peek) | `conversation-unread.mjs` |
+| a saved record the open chat could not read (`UnreadablePartLine` in `src/conversation/ui/unreadable-part.tsx`, placed with `placeNotes` on the panel and the desktop) | `transcript-unreadable.mjs --shots <dir>` |
 | the same, once the window does read a gateway: its handshake, the conversation list, a transcript, a turn made elsewhere (needs the agent signed in on this machine, or `--scripted` for none; not in `run-all.mjs`) | `gateway-window.mjs` |
 | UI, gateway, ACP, or MCP behavior, signed out: a permission, a failed turn, a cancel, in Chromium and WebKit, with one verdict and an evidence directory | `pnpm test:e2e:scripted` (`scripted-e2e.mjs`; `--mode prod` for a production build) |
 | motion, FLIP, rendering, selectors, anything on the budget's list, or a perf claim | `perf-budget.mjs` (production build) |

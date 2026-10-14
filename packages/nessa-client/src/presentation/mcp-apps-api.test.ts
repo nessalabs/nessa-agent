@@ -255,6 +255,8 @@ function viewWithAppReview(argumentsJson: string) {
     transcriptState: "complete",
     artifacts: [],
     notes: [],
+    unreadable: [],
+    unreadableTruncated: false,
     messages: [
       {
         executionId: app.executionId,

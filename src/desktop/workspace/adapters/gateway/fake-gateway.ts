@@ -141,6 +141,8 @@ export function view(
     tools: [],
     artifacts: [],
     notes: [],
+    unreadable: [],
+    unreadableTruncated: false,
     capabilities: {
       queue: true,
       steer: true,
