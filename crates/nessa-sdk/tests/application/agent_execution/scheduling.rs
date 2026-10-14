@@ -30,6 +30,11 @@ struct GatedProvider {
     /// check still holding whatever it kept.
     hold_before_handoff: Mutex<Option<oneshot::Receiver<()>>>,
     entered_before_handoff: Notify,
+    /// Panic in `steer` before `started`, so cleanup is the only wait left.
+    panic_before_started: AtomicBool,
+    /// Park `close` after it has begun, so a test can see cleanup still waiting.
+    close_hold: Mutex<Option<oneshot::Receiver<()>>>,
+    close_entered: Notify,
 }
 struct GatedBackend {
     provider: Arc<GatedProvider>,
@@ -138,6 +143,9 @@ impl ProviderSessionBackend for GatedBackend {
         Box::pin(async move {
             let result: Result<SteeringOutcome, AgentError> = {
                 async move {
+                    if self.provider.panic_before_started.load(Ordering::SeqCst) {
+                        panic!("native steer panicked before the provider took it");
+                    }
                     let hold = self.provider.hold_before_handoff.lock().unwrap().take();
                     if let Some(hold) = hold {
                         self.provider.entered_before_handoff.notify_one();
@@ -203,6 +211,11 @@ impl ProviderSessionBackend for GatedBackend {
     }
     fn close(&self, _: SessionCloseRequest) -> CleanupFuture<'_> {
         Box::pin(async move {
+            let hold = self.provider.close_hold.lock().unwrap().take();
+            if let Some(hold) = hold {
+                self.provider.close_entered.notify_one();
+                let _ = hold.await;
+            }
             let result: Result<CloseOutcome, AgentError> = {
                 async move {
                     self.provider.closed.fetch_add(1, Ordering::SeqCst);
@@ -246,6 +259,9 @@ async fn fixture(
         steering_started: Notify::new(),
         hold_before_handoff: Mutex::new(None),
         entered_before_handoff: Notify::new(),
+        panic_before_started: AtomicBool::new(false),
+        close_hold: Mutex::new(None),
+        close_entered: Notify::new(),
     });
     let agent = attached_agent(
         Arc::new(GatedFactory(provider.clone())),
@@ -548,6 +564,87 @@ async fn scheduling_a_saved_check_releases_when_the_provider_takes_the_steer() {
         Err(error) => panic!("steer failed: {error}"),
     }
     complete(running);
+    within(first.wait()).await.unwrap();
+    agent.close(close_action()).await.unwrap();
+}
+
+/// The save check stands in for the grant permit an unshare has to take.
+/// It keeps that permit until the provider operation starts.
+struct HoldForUnshare {
+    gate: Arc<tokio::sync::Mutex<()>>,
+    permit: Mutex<Option<tokio::sync::OwnedMutexGuard<()>>>,
+    released: AtomicBool,
+}
+
+impl AfterSaveCheck for HoldForUnshare {
+    fn after_save<'a>(
+        &'a self,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), AfterSaveRefusal>> + Send + 'a>> {
+        Box::pin(async move {
+            let permit = Arc::clone(&self.gate).lock_owned().await;
+            *self.permit.lock().unwrap() = Some(permit);
+            Ok(())
+        })
+    }
+
+    fn provider_operation_started(&self) {
+        drop(self.permit.lock().unwrap().take());
+        self.released.store(true, Ordering::SeqCst);
+    }
+}
+
+/// A native steer that panics before the provider calls `started` releases
+/// the save check before cleanup waits. An unshare of that grant, which
+/// needs the same permit, proceeds while cleanup is still blocked.
+#[tokio::test]
+async fn scheduling_a_panicked_native_steer_does_not_block_unshare() {
+    let (agent, _storage, provider, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
+    provider.panic_before_started.store(true, Ordering::SeqCst);
+    let (close_release, close_hold) = oneshot::channel();
+    *provider.close_hold.lock().unwrap() = Some(close_hold);
+    let first = agent
+        .enqueue(request("active"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let running = started(&mut calls, "active").await;
+    let gate = Arc::new(tokio::sync::Mutex::new(()));
+    let check = Arc::new(HoldForUnshare {
+        gate: Arc::clone(&gate),
+        permit: Mutex::new(None),
+        released: AtomicBool::new(false),
+    });
+    let mut steer = Box::pin(agent.steer(
+        request("correction"),
+        Submitter::owner(actor()).with_after_save(check.clone()),
+    ));
+    within(async {
+        tokio::select! {
+            _ = provider.close_entered.notified() => {}
+            _ = &mut steer => panic!("steer finished before cleanup began"),
+        }
+    })
+    .await;
+    assert!(
+        check.released.load(Ordering::SeqCst),
+        "the save check still held its permit when cleanup began"
+    );
+    assert_eq!(provider.closed.load(Ordering::SeqCst), 0);
+    let unshare = tokio::time::timeout(Duration::from_millis(200), gate.lock()).await;
+    assert!(
+        unshare.is_ok(),
+        "unshare blocked while the panicked steer's cleanup waited"
+    );
+    drop(unshare);
+    close_release.send(()).unwrap();
+    match within(&mut steer).await {
+        Err(AgentError::Protocol(message)) if message == "steering delivery panicked" => {}
+        Ok(_) => panic!("a panicked steer was delivered"),
+        Err(error) => panic!("steer failed as {error}"),
+    }
+    assert_eq!(provider.closed.load(Ordering::SeqCst), 1);
+    assert!(provider.steered.lock().unwrap().is_empty());
+    // Cleanup already closed the provider, which cancels the running turn.
+    let _ = running.release.send(Ok(ExecutionOutcome::Completed));
     within(first.wait()).await.unwrap();
     agent.close(close_action()).await.unwrap();
 }

@@ -1917,6 +1917,8 @@ impl Agent {
                             cleanup_needed = true;
                             // run_control holds the admission read fence while polling.
                             // Raise the barrier before that fence can accept_work another control.
+                            // The save check's hold is released after this future is
+                            // dropped, before cleanup waits.
                             Poll::Ready(Err(ProviderOperationFailure::new(
                                 AgentError::Protocol("steering delivery panicked".into()),
                                 ProviderSessionState::CleanupRequired,
@@ -1930,6 +1932,12 @@ impl Agent {
         if !cleanup_needed {
             return outcome;
         }
+        // A panic before the provider calls `started` never reaches that
+        // callback, and `complete_stop` can wait. Release the save check
+        // before that wait so an unshare of this grant is not blocked for
+        // the cleanup. A provider that already called `started` makes this
+        // a second, empty call.
+        started();
         // Only this operation's typed failure owns cleanup here. An unrelated
         // stop already has an owner and must not delay an interrupted response.
         // The scheduler is held, so join cleanup without acquiring it again.
