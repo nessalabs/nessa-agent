@@ -10,25 +10,16 @@ import {
   draftPatternCount,
   emptyDraft,
   hostFits,
-  hostRoom,
   patternCount,
   patternsFrom,
   requestFrom,
   type ShareGrant,
 } from "./sharing"
 
-const limits = { patterns: 16, hosts: 16, hostBytes: 96, entries: 32 }
+const limits = { patterns: 16, hosts: 16, hostBytes: 96 }
 const none: readonly ShareGrant[] = []
 
 describe("a Drive grant's hosts", () => {
-  it("have the hosts' own bound, or what the patterns leave, never below zero", () => {
-    expect(hostRoom(limits, 0)).toBe(16)
-    expect(hostRoom(limits, 16)).toBe(16)
-    expect(hostRoom(limits, 17)).toBe(15)
-    expect(hostRoom(limits, 32)).toBe(0)
-    expect(hostRoom(limits, 40)).toBe(0)
-  })
-
   it("fit by UTF-8 bytes, not characters", () => {
     expect(hostFits(limits, "a".repeat(96))).toBe(true)
     expect(hostFits(limits, "a".repeat(97))).toBe(false)
@@ -139,14 +130,16 @@ describe("a draft's request", () => {
     })
   })
 
-  it("D9: holds the hosts to the room the patterns leave", () => {
-    const hosts = Array.from({ length: 16 }, (_, at) => `h${at}`)
+  it("D9: holds the hosts to their own bound, however full the patterns are", () => {
+    const hosts = Array.from({ length: limits.hosts }, (_, at) => `h${at}`)
     const draft = drive({ preset: "custom", hosts })
     const patterns = (count: number) =>
       Array.from({ length: count }, (_, at) => `p${at}`).join(",")
-    expect(requestFrom({ ...draft, allow: patterns(16) }, none, limits).ok).toBe(true)
     expect(
-      requestFrom({ ...draft, allow: patterns(16), deny: "x" }, none, limits),
+      requestFrom({ ...draft, allow: patterns(16), deny: patterns(16) }, none, limits).ok,
+    ).toBe(true)
+    expect(
+      requestFrom({ ...draft, allow: "Read", hosts: [...hosts, "extra"] }, none, limits),
     ).toEqual({
       ok: false,
       reason: "too-many-hosts",

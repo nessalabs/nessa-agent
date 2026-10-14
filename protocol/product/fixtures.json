@@ -292,6 +292,36 @@
     "requestId": "reorder-1",
     "outcome": "applied"
   },
+  "ConversationSharesCursor": {
+    "grantedAtMs": 1,
+    "credentialId": "phone"
+  },
+  "ConversationSharesParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "pageSize": 8,
+    "cursor": {
+      "grantedAtMs": 1,
+      "credentialId": "phone"
+    }
+  },
+  "ConversationSharesResult": {
+    "items": [
+      {
+        "credentialId": "phone",
+        "role": "drive",
+        "policy": {
+          "preset": "read_only_tools",
+          "commandHosts": ["devbox"]
+        },
+        "policyRevision": 1,
+        "grantedAtMs": 1
+      }
+    ],
+    "cursor": {
+      "grantedAtMs": 1,
+      "credentialId": "phone"
+    }
+  },
   "ConversationAnswerQuestionParams": {
     "conversationId": "00000000-0000-4000-8000-000000000001",
     "requestId": "action",

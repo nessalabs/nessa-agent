@@ -42,7 +42,7 @@ function storeWith(sharing: SharingSource | undefined) {
   })
 }
 
-const limits = { patterns: 16, hosts: 16, hostBytes: 96, entries: 32 }
+const limits = { patterns: 16, hosts: 16, hostBytes: 96 }
 const choices: SharingChoices = {
   targets: [{ credentialId: "sample-phone", issuedAt: 1 }],
   commandHosts: [],

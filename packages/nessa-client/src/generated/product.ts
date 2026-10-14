@@ -965,7 +965,7 @@ export interface ConversationToolPolicy {
   allow?: string[]
   /** Tools the holder's turns may never call. Present with allow, without preset. */
   deny?: string[]
-  /** The hosts the holder's turns may run commands on with run, by the name environments_list gives them: an SSH destination or a paired environment's peer: name, never here, each named once and at most 96 bytes. Beside either preset or allow and deny; a policy's hosts and patterns together are at most 32. A host is used only where the gateway also grants commands on it. Absent or empty, the holder's turns run commands nowhere: a drive grant never inherits the owner's hosts. A host that is no such name, one named twice, more than 16, or more than the patterns leave room for is refused invalid_request: a policy whose allow and deny already hold 32 patterns can name no hosts, and an SSH destination longer than 96 bytes cannot be granted (paging conversation.shares to lift both is issue #832). Listed only when it names a host. */
+  /** The hosts the holder's turns may run commands on with run, by the name environments_list gives them: an SSH destination or a paired environment's peer: name, never here, each named once and at most 253 bytes, the longest destination config.json accepts. Beside either preset or allow and deny, and not counted against the patterns: a policy may name 16 hosts however full its allow and deny lists are. A host is used only where the gateway also grants commands on it. Absent or empty, the holder's turns run commands nowhere: a drive grant never inherits the owner's hosts. A host that is no such name, one named twice, one longer than 253 bytes, or more than 16 is refused invalid_request. Listed only when it names a host. */
   commandHosts?: string[]
 }
 /** Grant (conversation.share) one paired device or peer gateway a role on one of the caller's conversations, or change the role and policy it already holds there. Nothing is granted by default or by list: a paired party sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and not watchable. Every role reads; drive needs a policy and read and comment take none, and either mistake is refused invalid_request. A grant is refused share_target_not_paired unless the credential is an active paired device or peer gateway of the conversation's owner that holds conversation.read (an environment's credential never does), and conversation_deleted on a deleted conversation. The result names the grant's policyRevision once the share is made; applied is false when nothing changed: granting the role and policy already held, whose revision is kept. With expectedPolicyRevision, a grant that is no longer at that revision (changed or revoked since) is refused share_grant_changed, and nothing is changed. A conversation holds at most 64 grants, and at most 8 drive grants; one more is refused invalid_request. A retried requestId answers what it answered the first time, its policyRevision included, before expectedPolicyRevision is compared, so a share retried after a later unshare grants nothing; the same requestId naming another device, another role or policy, or the other change is refused invalid_request. A retried share is checked like a new one first, so once the conversation is deleted or the device unpaired it is refused conversation_deleted or share_target_not_paired and changes nothing. */
@@ -994,10 +994,21 @@ export interface ConversationUnshareParams {
   /** The policyRevision of the grant this change was made from, as conversation.shares or an earlier share's result named it. When given, the change is made only while the device's grant is still at that revision, decided in the same transaction that writes it; otherwise it is refused share_grant_changed and nothing is changed. 0 names no grant held (revisions start at 1): a first grant built on a list without one is refused once another lands. Absent, the change is made whatever the device holds. */
   expectedPolicyRevision?: number
 }
-/** List the paired devices one of the caller's conversations is granted to. */
+/** Where a conversation.shares page resumes: the last grant the previous page returned. The next page is the grants after it in oldest-first order, grantedAtMs then credentialId. */
+export interface ConversationSharesCursor {
+  /** When that grant was made, Unix milliseconds, as the previous page listed it. */
+  grantedAtMs: number
+  /** The paired device's credential, as the previous page listed it. */
+  credentialId: string
+}
+/** One page of the grants on one of the caller's conversations, oldest first. The first page names no cursor. A later page echoes the cursor the previous page returned, and is the grants after that one. */
 export interface ConversationSharesParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
+  /** Absent on the first page. Later pages echo the cursor the previous page returned. */
+  cursor?: ConversationSharesCursor
+  /** How many grants this page may hold, from 1 through the published page size. A page of that many grants, each at its largest, fits one frame. */
+  pageSize: number
 }
 /** One grant on a conversation. */
 export interface ConversationShare {
@@ -1012,10 +1023,12 @@ export interface ConversationShare {
   /** When the grant was made, Unix milliseconds. */
   grantedAtMs: number
 }
-/** Result of conversation.shares: the conversation's grants, oldest first. */
+/** One page of conversation.shares: this page's grants, oldest first, and a cursor when further grants remain. A conversation holds at most 64 grants; one page holds at most its page size. */
 export interface ConversationSharesResult {
-  /** Every grant on the conversation; a conversation holds at most 64. */
+  /** This page's grants, oldest first, at most the page size asked for. A conversation's grants may take more than one page. */
   items: ConversationShare[]
+  /** Present when further grants remain after this page. Absent when this page finishes the list. The next page echoes it. */
+  cursor?: ConversationSharesCursor
 }
 /** Result of conversation.share: whether it changed anything, and the grant's policy revision once it was made. */
 export interface ConversationShareResult {
@@ -2570,9 +2583,9 @@ export const bounds = {
   maxToolPolicyPatterns: 16,
   maxToolPatternBytes: 48,
   maxCommandHosts: 16,
-  maxCommandHostBytes: 96,
-  maxToolPolicyEntries: 32,
+  maxCommandHostBytes: 253,
   maxShareGrants: 64,
+  maxSharePage: 8,
   maxAgentInstallVersionBytes: 128,
   maxImageBytes: 5242880,
   imageMimeTypes: ["image/png", "image/jpeg", "image/gif", "image/webp"],

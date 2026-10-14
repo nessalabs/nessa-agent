@@ -4048,14 +4048,9 @@ async fn a_revisions_command_hosts_are_read_from_its_journal_entry() {
     use crate::conversation::application::ShareGrants;
     use crate::conversation::domain::CommandHosts;
     let on = |hosts: &[&str]| {
-        drive_with(
-            ToolPolicy::preset(ToolPreset::All)
-                .with_command_hosts(
-                    CommandHosts::new(hosts.iter().map(|host| (*host).to_owned()).collect())
-                        .unwrap(),
-                )
-                .unwrap(),
-        )
+        drive_with(ToolPolicy::preset(ToolPreset::All).with_command_hosts(
+            CommandHosts::new(hosts.iter().map(|host| (*host).to_owned()).collect()).unwrap(),
+        ))
     };
     let peer = format!("peer:{}", "ab".repeat(32));
     let opened = opened();

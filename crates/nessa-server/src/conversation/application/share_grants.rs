@@ -257,16 +257,15 @@ impl ShareGrantTransition {
 /// refused `InvalidInput` (row J30).
 pub const MAX_POLICY_REVISION: u64 = 9_007_199_254_740_991;
 
-/// The most grants one conversation holds, so its `conversation.shares`
-/// answer always fits one socket frame. A grant past it is refused
-/// `InvalidInput` (`docs/limits.md`).
+/// The most grants one conversation holds. A grant past it is refused
+/// `InvalidInput`. `conversation.shares` returns them a page at a time, so
+/// one answer does not have to hold all of them (`docs/limits.md`).
 pub const MAX_SHARE_GRANTS_PER_CONVERSATION: i64 = 64;
 
-/// The most Drive grants one conversation holds. A Drive grant carries a tool
-/// policy, and this bound is what keeps a `conversation.shares` answer of
-/// [`MAX_SHARE_GRANTS_PER_CONVERSATION`] grants inside one frame with every
-/// policy at its largest (rows J9, J10). A grant or change past it is refused
-/// `InvalidInput` (`docs/limits.md`).
+/// The most Drive grants one conversation holds. A grant or change past it
+/// is refused `InvalidInput` (row J9, `docs/limits.md`). One
+/// `conversation.shares` page fits the frame because of its page size, not
+/// because of this bound (row J10).
 pub const MAX_DRIVE_GRANTS_PER_CONVERSATION: i64 = 8;
 
 /// One owner decision about one paired party and one conversation, with who

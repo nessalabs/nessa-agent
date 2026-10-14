@@ -27,7 +27,7 @@ use nessa_protocol::lease::{
 use nessa_protocol::product::generated::{
     MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_CONNECTION_LIST_SUBSCRIPTIONS,
     MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
-    MAX_RECORD_RESPONSE_BYTES, SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
+    MAX_RECORD_RESPONSE_BYTES, MAX_SHARE_PAGE, SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
 };
 use nessa_protocol::protocol::MAX_PAYLOAD_BYTES;
 use nessa_sdk::application::agent_execution::sessions::{ArtifactRecord, NoteRecord, NoteText};
@@ -208,14 +208,20 @@ fn catalogue() -> &'static [Limit] {
         Limit {
             id: "conversation.share_grants",
             tier: "fixed",
-            owner: "MAX_SHARE_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/share_grants.rs, the schema's ConversationSharesResult maxItems",
-            meaning: "the paired parties one conversation is shared with, any role; one more conversation.share is refused invalid_request, so a conversation.shares answer always fits one frame",
+            owner: "MAX_SHARE_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/share_grants.rs, the schema's ConversationSharesResult x-maxGrants",
+            meaning: "the paired parties one conversation is shared with, any role; one more conversation.share is refused invalid_request. conversation.shares returns them a page at a time",
+        },
+        Limit {
+            id: "conversation.share_page",
+            tier: "fixed",
+            owner: "MAX_SHARE_PAGE in the generated product protocol, the schema's ConversationSharesParams pageSize",
+            meaning: "the grants one conversation.shares answer holds; a pageSize outside 1 through this is refused invalid_request, and a page of this many grants, each at its largest policy, fits one frame",
         },
         Limit {
             id: "conversation.drive_grants",
             tier: "fixed",
             owner: "MAX_DRIVE_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/share_grants.rs",
-            meaning: "the drive grants one conversation holds; one more conversation.share naming drive is refused invalid_request, so a conversation.shares answer with every policy at its largest still fits one frame",
+            meaning: "the drive grants one conversation holds; one more conversation.share naming drive is refused invalid_request",
         },
         Limit {
             id: "conversation.drive_policies",
@@ -275,13 +281,13 @@ fn catalogue() -> &'static [Limit] {
             id: "conversation.tool_policy_command_hosts",
             tier: "fixed",
             owner: "CommandHosts::MAX_HOSTS in crates/nessa-server/src/conversation/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
-            meaning: "the hosts a drive grant's policy names for its turns' commands, which with its patterns are at most 32, so a policy whose allow and deny already hold 32 patterns names none; a conversation.share with more is refused invalid_request, and a grant naming none runs commands nowhere",
+            meaning: "the hosts a drive grant's policy names for its turns' commands, apart from its allow and deny patterns; a conversation.share with more is refused invalid_request, and a grant naming none runs commands nowhere",
         },
         Limit {
             id: "conversation.tool_policy_command_host_bytes",
             tier: "fixed",
             owner: "CommandHosts::MAX_HOST_BYTES in crates/nessa-server/src/conversation/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
-            meaning: "the longest command host a drive grant's policy names, in bytes, so a host is never longer on the wire than a pattern; a conversation.share with a longer one is refused invalid_request, so an SSH destination longer than this cannot be granted until conversation.shares pages (issue #832)",
+            meaning: "the longest command host a drive grant's policy names, in bytes, the longest SSH destination config.json accepts; a conversation.share with a longer one is refused invalid_request",
         },
         Limit {
             id: "record.read_work_budget",
@@ -589,6 +595,7 @@ pub(crate) fn effective_json(
         "conversation.share_grants",
         MAX_SHARE_GRANTS_PER_CONVERSATION.unsigned_abs(),
     );
+    put("conversation.share_page", count(MAX_SHARE_PAGE));
     put(
         "conversation.drive_grants",
         MAX_DRIVE_GRANTS_PER_CONVERSATION.unsigned_abs(),

@@ -5667,14 +5667,12 @@ fn on_hosts(
     policy: crate::conversation::domain::ToolPolicy,
     hosts: &[&str],
 ) -> crate::conversation::domain::ToolPolicy {
-    policy
-        .with_command_hosts(
-            crate::conversation::domain::CommandHosts::new(
-                hosts.iter().map(|host| (*host).to_owned()).collect(),
-            )
-            .unwrap(),
+    policy.with_command_hosts(
+        crate::conversation::domain::CommandHosts::new(
+            hosts.iter().map(|host| (*host).to_owned()).collect(),
         )
-        .unwrap()
+        .unwrap(),
+    )
 }
 
 /// ADR 803 step 4: a Drive grant's turn whose policy allows `run` runs a

@@ -458,8 +458,12 @@ const catalogueDecimalFields = [
   schema.$defs.ConversationObserveCursor.properties.creation,
 ]
 const toolPolicy = schema.$defs.ConversationToolPolicy.properties
-if (!Number.isSafeInteger(schema.$defs.ConversationToolPolicy["x-maxEntries"]))
-  throw new Error("ConversationToolPolicy must publish x-maxEntries")
+const sharePage = agreeing("conversation.shares page size", [
+  schema.$defs.ConversationSharesParams.properties.pageSize.maximum,
+  schema.$defs.ConversationSharesResult.properties.items.maxItems,
+])
+if (!Number.isSafeInteger(schema.$defs.ConversationSharesResult["x-maxGrants"]))
+  throw new Error("ConversationSharesResult must publish x-maxGrants")
 const bounds = {
   maxOrdinaryResponseBytes,
   // The same gateway limit, read where it bites a client: the gateway takes no
@@ -489,7 +493,7 @@ const bounds = {
   ]),
   maxConfiguredAgents: schema.$defs.AgentsListResult.properties.agents.maxItems,
   // A drive grant's tool policy, as the share dialog budgets it: each list of
-  // patterns and the hosts on their own, and all of them together.
+  // patterns, and the hosts on their own.
   maxToolPolicyPatterns: agreeing("tool policy allow and deny lengths", [
     toolPolicy.allow.maxItems,
     toolPolicy.deny.maxItems,
@@ -500,8 +504,8 @@ const bounds = {
   ]),
   maxCommandHosts: toolPolicy.commandHosts.maxItems,
   maxCommandHostBytes: toolPolicy.commandHosts.items["x-utf8MaxBytes"],
-  maxToolPolicyEntries: schema.$defs.ConversationToolPolicy["x-maxEntries"],
-  maxShareGrants: schema.$defs.ConversationSharesResult.properties.items.maxItems,
+  maxShareGrants: schema.$defs.ConversationSharesResult["x-maxGrants"],
+  maxSharePage: sharePage,
   maxAgentInstallVersionBytes: agreeing("native installation version bytes", [
     schema.$defs.AgentInstallOffer.properties.version["x-utf8MaxBytes"],
     schema.$defs.AgentInstallResult.properties.version["x-utf8MaxBytes"],
@@ -641,6 +645,7 @@ for (const name of [
   "maxRecordPageRecords",
   "maxRecordPagePayloadBytes",
   "maxRecordResponseBytes",
+  "maxSharePage",
   // Each part of an app's context past it is refused at the wire, before
   // anything is recorded; both together are the gateway's to bound.
   "maxMcpContextBytes",

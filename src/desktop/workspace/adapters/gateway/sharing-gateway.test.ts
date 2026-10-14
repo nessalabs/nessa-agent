@@ -7,6 +7,7 @@ import {
   NessaConversationControlError,
   NessaConversationMutationError,
   NessaRpcError,
+  sharePage,
   toolPolicyBounds,
   type AgentsListResult,
   type ConversationSharesResult,
@@ -117,7 +118,9 @@ describe("reading a session's sharing", () => {
     const source = sharingGateway({ connected: async () => gateway })
     const grants = await source.grants("c1")
     const read = await source.choices()
-    expect(gateway.conversation.shares).toHaveBeenCalledWith("c1")
+    expect(gateway.conversation.shares).toHaveBeenCalledWith("c1", {
+      pageSize: sharePage.pageSize,
+    })
     expect(grants).toEqual([
       { credentialId: "phone", role: "read", policyRevision: 1, grantedAtMs: 5 },
       {
@@ -139,12 +142,78 @@ describe("reading a session's sharing", () => {
     expect(read.targets.map((target) => target.credentialId)).toEqual(["phone", "tablet"])
     expect(read.commandHosts).toEqual(["devbox"])
     expect(read.limits).toBe(toolPolicyBounds)
-    expect(read.limits).toMatchObject({
+    expect(read.limits).toEqual({
       patterns: 16,
+      patternBytes: 48,
       hosts: 16,
-      hostBytes: 96,
-      entries: 32,
+      hostBytes: 253,
     })
+  })
+
+  it("D12: reads every page of grants and stops when the list finishes", async () => {
+    const first = shares.items[0]
+    const rest = shares.items.slice(1)
+    const pages = vi.fn(
+      async (_id: string, options: { cursor?: { credentialId: string } }) => {
+        if (options.cursor === undefined)
+          return {
+            items: [first],
+            cursor: {
+              grantedAtMs: first.grantedAtMs,
+              credentialId: first.credentialId,
+            },
+          }
+        return { items: rest }
+      },
+    )
+    const gateway = client({ shares: pages })
+    const source = sharingGateway({ connected: async () => gateway })
+    await expect(source.grants("c1")).resolves.toHaveLength(3)
+    expect(pages).toHaveBeenCalledTimes(2)
+    expect(pages).toHaveBeenLastCalledWith("c1", {
+      pageSize: sharePage.pageSize,
+      cursor: { grantedAtMs: first.grantedAtMs, credentialId: first.credentialId },
+    })
+  })
+
+  it("D12: is unanswered when a later page repeats a grant or passes the grant cap", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const repeated = shares.items[0]
+      const source = sharingGateway({
+        connected: async () =>
+          client({
+            shares: async () => ({
+              items: [repeated],
+              cursor: {
+                grantedAtMs: repeated.grantedAtMs,
+                credentialId: repeated.credentialId,
+              },
+            }),
+          }),
+      })
+      await expect(source.grants("c1")).rejects.toEqual(new SharingError("unanswered"))
+      let n = 0
+      const endless = sharingGateway({
+        connected: async () =>
+          client({
+            shares: async () => {
+              n += 1
+              const credentialId = `c${n}`
+              return {
+                items: [
+                  { credentialId, role: "read", policyRevision: 1, grantedAtMs: n },
+                ],
+                cursor: { credentialId, grantedAtMs: n },
+              }
+            },
+          }),
+      })
+      await expect(endless.grants("c1")).rejects.toEqual(new SharingError("unanswered"))
+      expect(n).toBe(sharePage.grants + 1)
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it("is refused as a typed kind when a part is, and the other part still reads", async () => {

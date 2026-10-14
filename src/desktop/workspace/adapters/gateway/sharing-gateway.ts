@@ -5,6 +5,8 @@
  * which Settings reads too), and `client.agents.list()`'s `commandHosts`,
  * read into the model's words (`model/sharing.ts`). The bounds a Drive
  * grant is held to are the ones the schema publishes (`toolPolicyBounds`).
+ * Grants are read a page at a time (`sharePage`) on one connection until a
+ * page names no cursor.
  *
  * Who may be granted what is the gateway's to say, by its answers. Each
  * refusal is mapped by total tables — one over the conversation codes, one
@@ -25,11 +27,13 @@ import {
   NessaConversationControlError,
   NessaConversationMutationError,
   NessaRpcError,
+  sharePage,
   toolPolicyBounds,
   type AgentsApi,
   type AuthApi,
   type ConversationApi,
   type ConversationShare,
+  type ConversationSharesCursor,
   type ConversationToolPolicy,
   type CredentialApi,
 } from "@nessa/client"
@@ -238,10 +242,27 @@ export function sharingGateway(options: {
 }): SharingSource {
   const { connected } = options
   return {
-    grants: async (sessionId) =>
-      (
-        await typed(async () => (await connected()).conversation.shares(sessionId))
-      ).items.map(grantOf),
+    grants: (sessionId) =>
+      typed(async () => {
+        const client = await connected()
+        const grants: ShareGrant[] = []
+        const seen = new Set<string>()
+        let cursor: ConversationSharesCursor | undefined
+        for (;;) {
+          const page = await client.conversation.shares(sessionId, {
+            pageSize: sharePage.pageSize,
+            ...(cursor === undefined ? {} : { cursor }),
+          })
+          for (const item of page.items) {
+            if (seen.has(item.credentialId) || grants.length >= sharePage.grants)
+              throw new Error("conversation.shares page did not advance")
+            seen.add(item.credentialId)
+            grants.push(grantOf(item))
+          }
+          if (page.cursor === undefined) return grants
+          cursor = page.cursor
+        }
+      }),
     choices: async () =>
       choicesOf(await typed(async () => choicesFor(await connected()))),
     share: async (sessionId, request: ShareRequest, requestId) => {

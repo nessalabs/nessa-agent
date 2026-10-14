@@ -16,7 +16,7 @@ use conversation_support::{
     TestClock, DELETION_BUDGETS,
 };
 use nessa_protocol::product::generated::{
-    AgentsListResult, AgentsListed, MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS,
+    AgentsListResult, AgentsListed, MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_SHARE_PAGE,
     SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
 };
 use nessa_sdk::application::agent_execution::sessions::ChangeWatchError;
@@ -2117,7 +2117,7 @@ async fn a_paired_device_on_the_socket_sees_only_what_it_was_granted() {
     let shared = fixture
         .call(
             "conversation.shares",
-            json!({"conversationId": fixture.id.to_string()}),
+            json!({"conversationId": fixture.id.to_string(), "pageSize": MAX_SHARE_PAGE}),
         )
         .await;
     assert_eq!(shared["error"]["code"], "forbidden", "{shared}");
@@ -2429,7 +2429,7 @@ async fn share_refuses_what_the_owner_cannot_grant() {
     let shares = fixture
         .call(
             "conversation.shares",
-            json!({"conversationId": fixture.id.to_string()}),
+            json!({"conversationId": fixture.id.to_string(), "pageSize": MAX_SHARE_PAGE}),
         )
         .await;
     assert_eq!(shares["payload"]["items"], json!([]), "{shares}");
@@ -2440,7 +2440,7 @@ async fn share_refuses_what_the_owner_cannot_grant() {
     let shares = fixture
         .call(
             "conversation.shares",
-            json!({"conversationId": fixture.id.to_string()}),
+            json!({"conversationId": fixture.id.to_string(), "pageSize": MAX_SHARE_PAGE}),
         )
         .await;
     assert_eq!(shares["payload"]["items"][0]["credentialId"], "phone");
@@ -2492,7 +2492,10 @@ async fn share_answers_its_revision_and_refuses_a_stale_expected_one() {
     let id = fixture.id.to_string();
     let listed = || async {
         fixture
-            .call("conversation.shares", json!({"conversationId": id}))
+            .call(
+                "conversation.shares",
+                json!({"conversationId": id, "pageSize": MAX_SHARE_PAGE}),
+            )
             .await["payload"]["items"]
             .clone()
     };
@@ -2938,7 +2941,10 @@ async fn a_paired_device_shares_nothing_whatever_id_it_names() {
                 "conversation.unshare",
                 json!({"conversationId": id, "requestId": "unshare", "credentialId": "credential"}),
             ),
-            ("conversation.shares", json!({"conversationId": id})),
+            (
+                "conversation.shares",
+                json!({"conversationId": id, "pageSize": MAX_SHARE_PAGE}),
+            ),
         ] {
             let answer = fixture.call(method, params).await;
             assert_eq!(
@@ -2999,7 +3005,7 @@ async fn a_share_the_policy_cannot_decide_is_unavailable() {
     let shares = fixture
         .call(
             "conversation.shares",
-            json!({"conversationId": fixture.id.to_string()}),
+            json!({"conversationId": fixture.id.to_string(), "pageSize": MAX_SHARE_PAGE}),
         )
         .await;
     assert_eq!(shares["payload"]["items"], json!([]), "{shares}");
@@ -3787,7 +3793,7 @@ async fn a_share_whose_role_and_policy_do_not_fit_is_refused_and_writes_nothing(
     let shares = fixture
         .call(
             "conversation.shares",
-            json!({"conversationId": fixture.id.to_string()}),
+            json!({"conversationId": fixture.id.to_string(), "pageSize": MAX_SHARE_PAGE}),
         )
         .await;
     assert_eq!(shares["payload"]["items"], json!([]), "{shares}");
@@ -3823,9 +3829,10 @@ async fn a_share_whose_role_and_policy_do_not_fit_is_refused_and_writes_nothing(
 /// ADR 803 step 4: a Drive grant's `commandHosts` goes through
 /// `conversation.share` into the store and back out of `conversation.shares`
 /// as named; an empty list is a policy naming none, accepted and listed
-/// without the key. `here`, a host named twice, more than
-/// `CommandHosts::MAX_HOSTS`, and hosts past the room a policy's patterns
-/// leave are refused `invalid_request` and change nothing.
+/// without the key. A full allow and deny list may still name a host at the
+/// longest destination `config.json` accepts. `here`, a host named twice,
+/// more than `CommandHosts::MAX_HOSTS`, and a host one byte past that
+/// destination are refused `invalid_request` and change nothing.
 #[tokio::test]
 async fn a_drive_grants_command_hosts_round_trip_and_their_bounds_are_refused() {
     use crate::conversation::application::ShareGrants;
@@ -3846,7 +3853,7 @@ async fn a_drive_grants_command_hosts_round_trip_and_their_bounds_are_refused() 
             let shares = fixture
                 .call(
                     "conversation.shares",
-                    json!({"conversationId": fixture.id.to_string()}),
+                    json!({"conversationId": fixture.id.to_string(), "pageSize": MAX_SHARE_PAGE}),
                 )
                 .await;
             shares["payload"]["items"]
@@ -3891,8 +3898,29 @@ async fn a_drive_grants_command_hosts_round_trip_and_their_bounds_are_refused() 
     assert_eq!(answer["payload"]["applied"], true, "{answer}");
     assert_eq!(policy_of("tablet").await, json!({"preset": "no_shell"}));
 
-    let pattern = |n: usize| format!("t{n}");
+    fn pattern(n: usize) -> String {
+        format!("t{n}")
+    }
     let full = ToolRules::MAX_RULES;
+    let longest_host = format!("h{}", "a".repeat(CommandHosts::MAX_HOST_BYTES - 1));
+    let full_policy = json!({
+        "allow": (0..full).map(pattern).collect::<Vec<_>>(),
+        "deny": (0..full).map(pattern).collect::<Vec<_>>(),
+        "commandHosts": [longest_host],
+    });
+    let answer = fixture
+        .call(
+            "conversation.share",
+            share("full-hosts", "tablet", full_policy.clone()),
+        )
+        .await;
+    assert_eq!(answer["payload"]["applied"], true, "{answer}");
+    assert_eq!(
+        policy_of("tablet").await["commandHosts"][0],
+        longest_host
+    );
+
+    let too_long = format!("h{}", "a".repeat(CommandHosts::MAX_HOST_BYTES));
     let refused = [
         json!({"preset": "all", "commandHosts": ["here"]}),
         json!({"preset": "all", "commandHosts": ["devbox", "devbox"]}),
@@ -3902,18 +3930,7 @@ async fn a_drive_grants_command_hosts_round_trip_and_their_bounds_are_refused() 
                 .map(|n| format!("host{n}"))
                 .collect::<Vec<_>>(),
         }),
-        json!({
-            "allow": (0..full).map(pattern).collect::<Vec<_>>(),
-            "deny": (0..full).map(pattern).collect::<Vec<_>>(),
-            "commandHosts": ["devbox"],
-        }),
-        json!({
-            "allow": (0..full).map(pattern).collect::<Vec<_>>(),
-            "deny": [pattern(0)],
-            "commandHosts": (0..full)
-                .map(|n| format!("host{n}"))
-                .collect::<Vec<_>>(),
-        }),
+        json!({"preset": "all", "commandHosts": [too_long]}),
     ];
     for (n, policy) in refused.into_iter().enumerate() {
         let answer = fixture
@@ -3928,6 +3945,67 @@ async fn a_drive_grants_command_hosts_round_trip_and_their_bounds_are_refused() 
         );
     }
     assert_eq!(policy_of("phone").await, named);
+}
+
+/// `conversation.shares` returns one page and resumes after the cursor it
+/// named. A page size outside 1 through the published page size, and a
+/// request that names none, are `invalid_request`.
+#[tokio::test]
+async fn shares_returns_one_page_and_refuses_a_page_size_past_its_bound() {
+    let fixture = sharing_fixture().await;
+    let id = fixture.id.to_string();
+    let share = |request: &str, credential: &str| {
+        json!({
+            "conversationId": id,
+            "requestId": request,
+            "credentialId": credential,
+            "role": "read",
+        })
+    };
+    for (request, credential) in [("phone", "phone"), ("tablet", "tablet")] {
+        let answer = fixture
+            .call("conversation.share", share(request, credential))
+            .await;
+        assert_eq!(answer["payload"]["applied"], true, "{answer}");
+    }
+    let first = fixture
+        .call(
+            "conversation.shares",
+            json!({"conversationId": id, "pageSize": 1}),
+        )
+        .await;
+    let items = first["payload"]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{first}");
+    let cursor = first["payload"]["cursor"].clone();
+    assert_eq!(cursor["credentialId"], items[0]["credentialId"]);
+    let second = fixture
+        .call(
+            "conversation.shares",
+            json!({"conversationId": id, "pageSize": 1, "cursor": cursor}),
+        )
+        .await;
+    assert_eq!(second["payload"]["items"].as_array().unwrap().len(), 1);
+    assert!(second["payload"].get("cursor").is_none(), "{second}");
+    assert_ne!(
+        second["payload"]["items"][0]["credentialId"],
+        items[0]["credentialId"]
+    );
+    for size in [0, MAX_SHARE_PAGE + 1] {
+        let answer = fixture
+            .call(
+                "conversation.shares",
+                json!({"conversationId": id, "pageSize": size}),
+            )
+            .await;
+        assert_eq!(
+            answer["error"]["code"], "invalid_request",
+            "{size}: {answer}"
+        );
+    }
+    let missing = fixture
+        .call("conversation.shares", json!({"conversationId": id}))
+        .await;
+    assert_eq!(missing["error"]["code"], "invalid_request", "{missing}");
 }
 
 /// Row J7: `conversation.shares` reports each grant's role, its policy when
@@ -3963,7 +4041,7 @@ async fn shares_reports_each_grants_role_policy_and_policy_revision() {
         let shares = fixture
             .call(
                 "conversation.shares",
-                json!({"conversationId": fixture.id.to_string()}),
+                json!({"conversationId": fixture.id.to_string(), "pageSize": MAX_SHARE_PAGE}),
             )
             .await;
         let items = shares["payload"]["items"].as_array().unwrap().clone();

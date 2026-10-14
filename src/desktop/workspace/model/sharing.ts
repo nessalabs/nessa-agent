@@ -4,8 +4,8 @@
  * has for the hosts it may run commands on. The gateway owns every rule
  * here — whether a device may be granted, what a policy may hold — and
  * refuses past them; this model holds what it answered, and budgets the
- * hosts a person may pick against the bounds the gateway's schema publishes
- * (`SharingLimits`), never numbers of its own.
+ * hosts a person may pick against the host bound the gateway's schema
+ * publishes (`SharingLimits`), never numbers of its own.
  *
  * Words a person reads for each failure are the UI's
  * (`ui/share/share-copy.ts`); state keeps the kind.
@@ -58,13 +58,12 @@ export type ShareTarget = LinkedDevice
 /**
  * A tool policy's bounds as the gateway's schema publishes them: each of
  * allow and deny holds at most `patterns`; at most `hosts` hosts of at most
- * `hostBytes` UTF-8 bytes; and hosts and patterns together at most `entries`.
+ * `hostBytes` UTF-8 bytes. Hosts are apart from the patterns.
  */
 export interface SharingLimits {
   readonly patterns: number
   readonly hosts: number
   readonly hostBytes: number
-  readonly entries: number
 }
 
 /**
@@ -134,18 +133,9 @@ export type SharingFailure =
   | "other"
   | "unanswered"
 
-/** The patterns a policy names, which take room from its hosts. */
+/** The patterns a custom policy names. A preset names none. */
 export function patternCount(policy: ToolPolicy): number {
   return policy.kind === "rules" ? policy.allow.length + policy.deny.length : 0
-}
-
-/**
- * How many hosts a policy with `patterns` patterns may name: the hosts'
- * own bound, or what the patterns leave of the policy's, whichever is less.
- * Never below zero: a policy whose patterns fill it names no host.
- */
-export function hostRoom(limits: SharingLimits, patterns: number): number {
-  return Math.max(0, Math.min(limits.hosts, limits.entries - patterns))
 }
 
 const utf8 = new TextEncoder()
@@ -258,8 +248,8 @@ export type DraftHold =
  * The grant a draft asks for, or why it cannot be sent yet: no device; the
  * device's grant changed since the draft started from it; a custom policy
  * naming no pattern, or more in one list than the schema allows; more hosts
- * than its patterns leave room for. Nothing else is checked here: the
- * gateway says the rest.
+ * than the host bound allows. Nothing else is checked here: the gateway
+ * says the rest.
  */
 export function requestFrom(
   draft: ShareDraft,
@@ -288,8 +278,7 @@ export function requestFrom(
     if (Math.max(policy.allow.length, policy.deny.length) > limits.patterns)
       return { ok: false, reason: "too-many-patterns" }
   }
-  if (commandHosts.length > hostRoom(limits, patternCount(policy)))
-    return { ok: false, reason: "too-many-hosts" }
+  if (commandHosts.length > limits.hosts) return { ok: false, reason: "too-many-hosts" }
   return {
     ok: true,
     request: { credentialId: draft.credentialId, role: "drive", policy, ...expected },

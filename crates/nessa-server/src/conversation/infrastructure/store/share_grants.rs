@@ -331,17 +331,18 @@ fn policy_from(text: &str) -> Option<ToolPolicy> {
         .map(ToolPolicy::rules),
         _ => None,
     }?;
-    tools.with_command_hosts(hosts).ok()
+    Some(tools.with_command_hosts(hosts))
 }
 
 /// The longest policy text a valid policy writes: every pattern at its
 /// longest and every byte of it a quote or backslash, which JSON writes in two
 /// (a control character, which it writes in six, is refused by `ToolRules`),
-/// a command host in place of any pattern (a host has nothing JSON escapes,
-/// so at its longest it is written in no more than a pattern), and the object
-/// around them. A stored text past it is read as damage before it is parsed.
-const MAX_POLICY_TEXT_BYTES: usize =
-    ToolPolicy::MAX_ENTRIES * (2 * ToolRules::MAX_RULE_BYTES + 3) + 64;
+/// every command host at its longest beside those patterns (a host has nothing
+/// JSON escapes), and the object around them. A stored text past it is read as
+/// damage before it is parsed.
+const MAX_POLICY_TEXT_BYTES: usize = 2 * ToolRules::MAX_RULES * (2 * ToolRules::MAX_RULE_BYTES + 3)
+    + CommandHosts::MAX_HOSTS * (CommandHosts::MAX_HOST_BYTES + 3)
+    + 64;
 
 /// A stored journal sequence, which SQLite numbers from 1.
 fn sequence(value: i64) -> Option<u64> {
