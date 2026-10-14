@@ -270,7 +270,14 @@ try {
             )
             const idA = (await snapshot()).pickerRequestIds[0]
 
-            await page.evaluate(() => window.__attachmentProbe.swapOwner())
+            await page.evaluate(() => window.__attachmentProbe.swapPickerOwner())
+            // The replacement must be committed before the next gesture. The
+            // upload-owner fixture seeds an image, creates a server conversation,
+            // and changes this tray's name to More options; it is not this setup.
+            await page
+              .locator('[data-attachment-owner="replacement"]')
+              .waitFor({ state: "attached" })
+            assert.deepEqual((await snapshot()).draft, [])
             await page.getByRole(...selectors.addAttachment).click()
             await page.getByRole(...selectors.addFiles).click()
             await page.waitForFunction(
