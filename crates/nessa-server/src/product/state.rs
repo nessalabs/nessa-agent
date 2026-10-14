@@ -115,7 +115,7 @@ pub struct ProductRouteState {
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) policy: Arc<dyn PolicyEvaluator>,
     pub(crate) conversations: Option<Arc<ConversationService>>,
-    /// Remembered permission rules, and the board a waiting review notifies.
+    /// Remembered permission rules.
     pub(crate) permission_rules: Option<Arc<crate::conversation::infrastructure::PermissionMemory>>,
     /// Passive reads use these independent authorities without opening an Agent.
     /// The read grants are also what every socket read asks for a paired
@@ -377,7 +377,7 @@ impl ProductRouteState {
         self
     }
 
-    /// Bind the remembered permission rules and the waiting-review notices.
+    /// Bind the remembered permission rules.
     pub fn with_permission_rules(
         mut self,
         rules: Arc<crate::conversation::infrastructure::PermissionMemory>,

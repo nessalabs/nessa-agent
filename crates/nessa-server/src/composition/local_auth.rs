@@ -511,7 +511,7 @@ struct BuiltConversations {
     /// in: the store the conversation service issues on, and the audit it
     /// records an app's calls in. `None` without MCP servers.
     resource_route: Option<(Arc<ResourceTicketStore>, Arc<dyn McpAppAudit>)>,
-    /// The rules Claude and Codex remember, and the notices a waiting review raises.
+    /// The rules Claude and Codex remember.
     permission_memory: Arc<crate::conversation::infrastructure::PermissionMemory>,
     /// The paired environments the native listener serves, when it does,
     /// and the names of those connected now, for the catalog.

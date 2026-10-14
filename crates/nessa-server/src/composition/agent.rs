@@ -914,7 +914,7 @@ pub(super) struct ConfiguredAgents {
     /// The choice Claude and Codex launches read. The same value is given to
     /// later provider builds and to the product command that changes it.
     pub native_hooks: Arc<NativeHooksPreferences>,
-    /// Rules Claude and Codex remember, and the notices a waiting review raises.
+    /// Rules Claude and Codex remember.
     pub permission_memory: Arc<crate::conversation::infrastructure::PermissionMemory>,
 }
 
