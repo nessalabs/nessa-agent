@@ -11,7 +11,7 @@ only.
 
 `fixture.html` mounts the production `ConversationControls` and `applyView` with
 current published gateway views. Every case passes the actual client decoder
-before `applyView`; its review has a correlated running message and offered mode. Server projection tests own exact live execution
+and the production gateway-to-panel conversion before `applyView`; its review has a correlated running message and offered mode. Server projection tests own exact live execution
 and command authority. This fixture checks the browser's presentation of their
 published result, including re-enabling controls after an incomplete view.
 
@@ -35,3 +35,10 @@ and close thunk after decoding each published history state. The browser measure
 saved-reference counts and external close-port invocations, with complete-empty
 as the permitted counterpart. It proves the UI consumer's dispatch decision;
 it does not run a gateway or establish physical provider cleanup.
+
+`lifetime-fixture.html?same` restores the same remote conversation; without the
+query it restores another. Both mount the production `useConversation` follow
+and controls over a gated close port. `local-tab-lifetimes.mjs` measures fresh
+local identity, old follow cleanup, replacement follow, original close target,
+and replacement notices at 360, 600 and 1440 pixels in both engines. The
+fixture is served in development and is excluded from product assets.

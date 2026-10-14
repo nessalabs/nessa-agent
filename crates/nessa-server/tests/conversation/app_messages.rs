@@ -25,7 +25,7 @@ use crate::conversation::application::{
 use crate::conversation::domain::ConversationDeletion;
 use crate::conversation_test_support::DELETION_BUDGETS;
 use nessa_auth::domain::PrincipalId;
-use nessa_protocol::conversation::domain::ConversationApprovalMode;
+use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationId};
 use nessa_protocol::conversation::view::{
     ConversationMessageApp, ConversationMessageStatus, ConversationPermissionOrigin,
     SubmissionReceipt,
@@ -2478,6 +2478,205 @@ async fn c13_a_context_carried_by_a_turn_that_then_fails_is_lost() {
     assert!(fixture.held_now().is_empty());
     fixture.person_sends("p2", "second").await;
     assert!(fixture.contexts_given("p2").await.is_empty());
+}
+
+/// The hold before the save succeeds. The save check, the second hold, fails
+/// with `after_save`.
+struct SecondHoldRevokes {
+    holds: std::sync::atomic::AtomicUsize,
+    after_save: ConversationError,
+}
+
+impl crate::conversation::application::ShareGrants for SecondHoldRevokes {
+    fn held_grant<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+    ) -> crate::conversation::application::ConversationFuture<
+        'a,
+        Option<crate::conversation::application::HeldGrant>,
+    > {
+        Box::pin(async { Ok(None) })
+    }
+    fn change(
+        &self,
+        _: crate::conversation::application::ShareGrantChange,
+    ) -> crate::conversation::application::ConversationFuture<
+        '_,
+        crate::conversation::application::ShareGrantReceipt,
+    > {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+    fn grants<'a>(
+        &'a self,
+        _: &'a ConversationId,
+    ) -> crate::conversation::application::ConversationFuture<
+        'a,
+        Vec<crate::conversation::application::ShareGrant>,
+    > {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+    fn policy_at<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> crate::conversation::application::ConversationFuture<
+        'a,
+        Option<crate::conversation::domain::ToolPolicy>,
+    > {
+        use crate::conversation::domain::{ToolPolicy, ToolPreset};
+        let policy = ToolPolicy::preset(ToolPreset::All);
+        Box::pin(async move { Ok(Some(policy)) })
+    }
+    fn hold_revision<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> crate::conversation::application::ConversationFuture<
+        'a,
+        crate::conversation::application::RevisionHold,
+    > {
+        use std::sync::atomic::Ordering;
+        let holds = self.holds.fetch_add(1, Ordering::SeqCst);
+        let after_save = self.after_save.clone();
+        Box::pin(async move {
+            if holds == 0 {
+                Ok(crate::conversation::application::RevisionHold::vacant())
+            } else {
+                Err(after_save)
+            }
+        })
+    }
+}
+
+struct SilentDriveAudit;
+
+impl crate::conversation::application::DriveToolAudit for SilentDriveAudit {
+    fn record(
+        &self,
+        _: crate::conversation::application::DriveToolAuditRecord,
+    ) -> crate::conversation::application::ConversationFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// C13: an idle Drive native steer that saves its carried contexts and is then
+/// refused keeps those contexts with the turn. They are not reported dropped unsent.
+#[tokio::test]
+async fn c13_a_saved_steer_refused_after_save_does_not_drop_the_contexts_it_carried() {
+    use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
+    use std::sync::atomic::Ordering;
+    let fixture = Fixture::new().await;
+    fixture.idle().await;
+    fixture
+        .update_context(INSTANCE, Some("ctx"), None)
+        .await
+        .unwrap();
+    assert_eq!(fixture.held_now(), ["ctx"]);
+    fixture
+        .provider
+        .native_steering
+        .store(true, Ordering::SeqCst);
+    let grants = Arc::new(SecondHoldRevokes {
+        holds: std::sync::atomic::AtomicUsize::new(0),
+        after_save: ConversationError::Revoked,
+    });
+    fixture
+        .service
+        .bind_drive_tools(crate::conversation::application::DriveTools {
+            grants: Arc::clone(&grants) as Arc<dyn crate::conversation::application::ShareGrants>,
+            evaluator: Arc::new(
+                crate::conversation::infrastructure::CedarToolPolicyEvaluator::new().unwrap(),
+            ),
+            audit: Arc::new(SilentDriveAudit),
+        });
+    let sent = fixture
+        .service
+        .submit_as(
+            fixture.id.clone(),
+            fixture.caller("driven"),
+            "driven".into(),
+            SubmittedMessage {
+                text: "hello".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Steer,
+            super::super::Writer::Person(Initiation::grant(
+                GrantInitiator::new("phone", 1).unwrap(),
+            )),
+        )
+        .await;
+    match sent {
+        Err(super::super::SubmitFailure::Asked(ConversationError::RevokedAfterSave)) => {}
+        other => panic!("the saved steer was not revoked after save, got {other:?}"),
+    }
+    assert_eq!(grants.holds.load(Ordering::SeqCst), 2);
+    assert!(fixture.held_now().is_empty());
+    assert!(
+        drops(&fixture).await.is_empty(),
+        "saved contexts were reported dropped unsent"
+    );
+}
+
+/// C13: an idle Drive native steer that saves its carried contexts and then
+/// cannot be checked keeps those contexts with the turn. They are not
+/// reported dropped unsent.
+#[tokio::test]
+async fn c13_a_saved_steer_unavailable_after_save_does_not_drop_the_contexts_it_carried() {
+    use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
+    use std::sync::atomic::Ordering;
+    let fixture = Fixture::new().await;
+    fixture.idle().await;
+    fixture
+        .update_context(INSTANCE, Some("ctx"), None)
+        .await
+        .unwrap();
+    assert_eq!(fixture.held_now(), ["ctx"]);
+    fixture
+        .provider
+        .native_steering
+        .store(true, Ordering::SeqCst);
+    let grants = Arc::new(SecondHoldRevokes {
+        holds: std::sync::atomic::AtomicUsize::new(0),
+        after_save: ConversationError::Metadata,
+    });
+    fixture
+        .service
+        .bind_drive_tools(crate::conversation::application::DriveTools {
+            grants: Arc::clone(&grants) as Arc<dyn crate::conversation::application::ShareGrants>,
+            evaluator: Arc::new(
+                crate::conversation::infrastructure::CedarToolPolicyEvaluator::new().unwrap(),
+            ),
+            audit: Arc::new(SilentDriveAudit),
+        });
+    let sent = fixture
+        .service
+        .submit_as(
+            fixture.id.clone(),
+            fixture.caller("driven"),
+            "driven".into(),
+            SubmittedMessage {
+                text: "hello".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Steer,
+            super::super::Writer::Person(Initiation::grant(
+                GrantInitiator::new("phone", 1).unwrap(),
+            )),
+        )
+        .await;
+    match sent {
+        Err(super::super::SubmitFailure::Asked(ConversationError::UnavailableAfterSave)) => {}
+        other => panic!("the saved steer was not unavailable after save, got {other:?}"),
+    }
+    assert_eq!(grants.holds.load(Ordering::SeqCst), 2);
+    assert!(fixture.held_now().is_empty());
+    assert!(
+        drops(&fixture).await.is_empty(),
+        "saved contexts were reported dropped unsent"
+    );
 }
 
 #[tokio::test]

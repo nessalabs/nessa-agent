@@ -58,6 +58,10 @@ const REFUSALS: Partial<Record<ConversationErrorCode, string>> = {
     "Nessa could not install itself on the SSH host this conversation runs on: the copy did not verify, did not run there, or could not be stored, so nothing was sent. Retry; the gateway's environment audit says which.",
   linked_file_unreachable:
     "This conversation runs on an SSH host, which cannot read files on this computer, so the message was not sent. Remove the linked files, or attach images, whose bytes are sent with them.",
+  revoked_after_save:
+    "The message was saved, then refused because its access changed before it reached the agent. Sending it again needs a new message.",
+  unavailable_after_save:
+    "The message was saved, then could not be checked because its access record could not be read. Sending it again needs a new message.",
 }
 
 /**
@@ -169,6 +173,12 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     // refused before anything of it is saved or sent.
     case ConversationErrorCode.DrivePolicyUnenforceable:
       return true
+    // A Drive grant's send, or a steer that is queued rather than injected,
+    // whose grant was revoked or changed before the turn was saved. Nothing
+    // was saved. The command receipt is settled, so the same request is
+    // answered revoked again.
+    case ConversationErrorCode.Revoked:
+      return true
     // `temporarily_unavailable` is the one worth naming: a supervising task
     // also reports it when work it had already admitted was lost, so it is not
     // a refusal at all. The rest are either certainly after dispatch, or not
@@ -182,6 +192,20 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.AuditUnavailable:
     case ConversationErrorCode.SubmissionConflict:
     case ConversationErrorCode.SubmissionUnresolved:
+      return false
+    // A native steer was saved, then refused because the grant moved before
+    // injection. The saved attempt is settled as refused and nothing reached
+    // the agent. Retrying that same execution is answered the same way and
+    // is not a clean retry of a command that was never saved.
+    case ConversationErrorCode.RevokedAfterSave:
+      return false
+    // A native steer was saved, then could not be checked because the grant
+    // record could not be read before injection. The saved attempt is
+    // settled as unavailable, and nothing reached the agent. Retrying that
+    // same execution is answered the same way and is not a clean retry of a
+    // command that was never saved.
+    case ConversationErrorCode.UnavailableAfterSave:
+      return false
     case ConversationErrorCode.StalePermission:
     case ConversationErrorCode.AgentOperationFailed:
     case ConversationErrorCode.AttachmentCapacity:

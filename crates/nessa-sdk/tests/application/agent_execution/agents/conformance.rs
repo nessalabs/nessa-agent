@@ -230,13 +230,15 @@ impl ProviderSessionBackend for WorkflowBackend {
             }
         })
     }
-    fn steer(
-        &self,
+    fn steer<'a>(
+        &'a self,
         target: ExecutionId,
         input: ExecutionRequest,
-    ) -> ProviderOperationFuture<'_, SteeringOutcome> {
+        started: &'a (dyn Fn() + Send + Sync),
+    ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {
             if self.target.lock().unwrap().as_ref() != Some(&target) {
+                started();
                 return Ok(SteeringOutcome::PromptRequired);
             }
             // WorkStatus is recorded independently of the response future's life.
@@ -247,6 +249,8 @@ impl ProviderSessionBackend for WorkflowBackend {
             let gate = self.steering_gate.lock().unwrap().take();
             let mut closed = self.closed.subscribe();
             self.steering_admitted.notify_one();
+            // The fixture has the steer. Release before the response wait.
+            started();
             if let Some(gate) = gate {
                 tokio::select! { _ = gate => {}, _ = closed.changed() => {} }
             }

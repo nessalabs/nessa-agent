@@ -113,6 +113,11 @@ const conversationFailure: Record<ConversationErrorCode, SharingFailure> = {
   [ConversationErrorCode.McpInsufficientScope]: "other",
   [ConversationErrorCode.IdempotencyConflict]: "other",
   [ConversationErrorCode.MessageQuotaExceeded]: "other",
+  // A Drive turn's grant moved. Sharing does not send or steer, so these
+  // are not a share or an unshare.
+  [ConversationErrorCode.Revoked]: "other",
+  [ConversationErrorCode.RevokedAfterSave]: "other",
+  [ConversationErrorCode.UnavailableAfterSave]: "other",
 }
 
 /**

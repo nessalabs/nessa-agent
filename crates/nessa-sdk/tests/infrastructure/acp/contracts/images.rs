@@ -380,6 +380,7 @@ async fn steering_carries_images_the_same_way_a_prompt_does() {
         .steer(
             ExecutionId::new("first").unwrap(),
             message("bad", Some("adjust"), vec![missing]),
+            &|| {},
         )
         .await
         .unwrap_err();
@@ -394,6 +395,7 @@ async fn steering_carries_images_the_same_way_a_prompt_does() {
         .steer(
             ExecutionId::new("first").unwrap(),
             message("good", Some("adjust"), vec![image]),
+            &|| {},
         )
         .await;
     assert_eq!(outcome.unwrap(), SteeringOutcome::Injected);
@@ -467,7 +469,7 @@ async fn an_image_outside_the_models_limits_or_the_frame_is_refused_without_a_re
         let result = if steering {
             opened
                 .session
-                .steer(ExecutionId::new("none").unwrap(), sent)
+                .steer(ExecutionId::new("none").unwrap(), sent, &|| {})
                 .await
                 .map(|_| ExecutionOutcome::Completed)
                 .map_err(|failure| failure.into_error())
@@ -645,7 +647,7 @@ async fn a_steering_read_that_never_answers_does_not_hold_up_the_active_executio
     );
     let steering = tokio::spawn(async move {
         session
-            .steer(ExecutionId::new("first").unwrap(), stalled)
+            .steer(ExecutionId::new("first").unwrap(), stalled, &|| {})
             .await
     });
     begins.recv().await.unwrap();
@@ -655,9 +657,11 @@ async fn a_steering_read_that_never_answers_does_not_hold_up_the_active_executio
     // execution settles.
     let outcome = timeout(
         Duration::from_secs(5),
-        opened
-            .session
-            .steer(ExecutionId::new("first").unwrap(), prompt("text steering")),
+        opened.session.steer(
+            ExecutionId::new("first").unwrap(),
+            prompt("text steering"),
+            &|| {},
+        ),
     )
     .await
     .expect("a stalled steering read blocked the worker");
@@ -709,7 +713,7 @@ async fn a_steering_read_that_never_answers_is_unavailable_at_the_steering_bound
     );
     let steering = tokio::spawn(async move {
         session
-            .steer(ExecutionId::new("first").unwrap(), stalled)
+            .steer(ExecutionId::new("first").unwrap(), stalled, &|| {})
             .await
     });
     begins.recv().await.unwrap();
@@ -731,7 +735,11 @@ async fn a_steering_read_that_never_answers_is_unavailable_at_the_steering_bound
     assert!(!active.is_finished());
     let outcome = opened
         .session
-        .steer(ExecutionId::new("first").unwrap(), prompt("text steering"))
+        .steer(
+            ExecutionId::new("first").unwrap(),
+            prompt("text steering"),
+            &|| {},
+        )
         .await;
     assert_eq!(outcome.unwrap(), SteeringOutcome::Injected);
     assert_eq!(active.await.unwrap(), Ok(ExecutionOutcome::Completed));
@@ -801,7 +809,7 @@ async fn reading_a_steerings_images_spends_the_steering_deadline_rather_than_add
     let sent = message("stalled", Some("adjust"), vec![image]);
     let steering = tokio::spawn(async move {
         session
-            .steer(ExecutionId::new("first").unwrap(), sent)
+            .steer(ExecutionId::new("first").unwrap(), sent, &|| {})
             .await
             .map_err(|failure| failure.into_error())
     });

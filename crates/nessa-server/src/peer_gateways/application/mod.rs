@@ -183,7 +183,8 @@ pub enum PeerAuditRecord {
     },
 }
 
-/// The bounded future an audit port answers with.
+/// The bounded future an audit port answers with. It does not borrow the
+/// audit: [`PeerAudit::record`] has already handed the record over.
 pub type PeerAuditFuture<'a> =
     Pin<Box<dyn Future<Output = Result<(), PeerAuditUnavailable>> + Send + 'a>>;
 
@@ -194,8 +195,11 @@ pub type PeerAuditFuture<'a> =
 /// whose future is dropped unpolled is still kept. The poller relies on that
 /// to place its records in the order it held the turn
 /// (`records_land_in_turn_order`, `an_unpolled_poller_record_is_still_written`).
+/// The future does not borrow the audit, so a caller can keep waiting on it
+/// after its own deadline
+/// (`an_owner_place_stays_until_the_queued_record_leaves`).
 pub trait PeerAudit: Send + Sync {
-    fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'_>;
+    fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'static>;
 }
 
 /// The bounded future a connector answers with.

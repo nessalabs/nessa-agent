@@ -168,7 +168,7 @@ it("AL9/AL10: placement numbering is store-local, survives restoration and rejec
   expect(attachFiles(first, [input, input], "c0")).toBe(first)
   const restored = restoreConversationTabs(first, { tabs: [] })
   const next = attachFiles(restored, [input], restored.activeId)
-  expect(placed(next).placementId).not.toBe(placed(first).placementId)
+  expect(placed(next, next.activeId).placementId).not.toBe(placed(first).placementId)
   expect(next.nextPlacementId).toBe(first.nextPlacementId + 1)
 })
 

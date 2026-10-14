@@ -310,6 +310,11 @@ _ADR 238 › Focus follows the focused pane_; keys in
   held callbacks after the old workspace unmounts; they enqueue zero new frame
   work, and the current layout still focuses its composer. _Check:_ `focus.mjs`
   (`focus-retired-layout`); [frame lifetime](../../docs/design/ui-workspace-load.md#focus-frame-lifetime-730), #730.
+- [ ] **Bound workspace keys stay consumed while their actions are unavailable.**
+  With the quick switcher open, ⌘N and ⌘W prevent the native default, leave the
+  panes unchanged, and retain the switcher. An unbound key remains unconsumed;
+  closing the switcher restores ordinary split commands.
+  _Check:_ `focus.mjs` (`focus-bound-keys`), [workspace shortcuts](../../docs/design/workspace-shortcuts.md).
 - [ ] **A burst of keys leaves a working window**: no error, a focused pane.
   _Check:_ `focus.mjs` (`focus-mash`).
 - [ ] **A pane command from the overview**: one that is a navigation leaves
@@ -693,7 +698,11 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   each between FSI and PDI. _#436_ (`appCall` in
   `gateway-source.ts`, the `callTool` routing in `dependencies.ts`;
   `approvalHead` and `approvalAsker` in `approval-request.tsx`).
-  _Check:_ `app-review.mjs --shots <dir>`.
+  Other conversation, turn or review answers leave the original simulated
+  request waiting; its own Deny settles tool and message requests. Answer
+  records and callbacks use the SDK method's parameter/result types
+  (`fake-gateway.test.ts`, fixture typecheck).
+  _Check:_ `app-review.mjs --shots <dir>` (including `target`).
 - [ ] **An app's message is reviewed as a message, and lands labelled** (#390,
   rows D9, D17, D18, D19), in the same fixture: a context the app gives is
   taken at once, draws no card and starts no read; the app's message is read
@@ -1346,6 +1355,16 @@ says why where the conversations would be.
   on the row, and nothing scrolls sideways. The tray is the only place a host
   is chosen; the gateway refuses a host its `config.json` does not name, and a
   paired machine that is not connected.
+
+## Restored local tab lifetimes
+
+- [ ] **Restoration creates a fresh local tab while preserving its durable target.**
+  Finishing the original close affects the original remote conversation; the
+  replacement owns its follow and has no old cancellation notice. Same-remote
+  and different-remote replacements are measured at 360, 600 and 1440 pixels
+  in both engines.
+  _Check:_ `local-tab-lifetimes.mjs`; ordering rows LT1/LT6/LT7 in
+  [local tab lifetimes](../../docs/design/local-tab-identities.md).
 
 ## Committed transcript controls
 
