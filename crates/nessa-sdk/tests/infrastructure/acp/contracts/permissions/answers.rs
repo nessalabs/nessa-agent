@@ -1,6 +1,9 @@
 //! Answer selection and delivery must survive lost callers and failed effects.
 use super::*;
+use crate::application::agent_execution::hooks::{HookError, InvocationHook, ToolVerdict};
 use crate::application::agent_execution::providers::ProviderOperationFuture;
+use crate::domain::agent_execution::sessions::SessionId;
+use crate::infrastructure::session_storage::{InMemoryStorage, RuntimeMessageCommitClock};
 use std::task::{Context, Waker};
 use tokio::sync::oneshot;
 
@@ -1171,4 +1174,113 @@ async fn a_settled_rule_is_not_withdrawn_when_the_answer_audit_fails() {
         .shutdown(SessionCloseRequest::Explicit(close_action()))
         .await;
     assert_gone(&root, "pid");
+}
+
+/// A permission-review hook is the per-turn tool policy. It refuses this call.
+struct RefusingReview;
+impl InvocationHook for RefusingReview {
+    fn before_permission_review(
+        &self,
+        _call: &crate::application::agent_execution::hooks::ProposedToolCall<'_>,
+        _observations: &crate::application::agent_execution::hooks::InvocationObservationWindow<'_>,
+    ) -> Result<ToolVerdict, HookError> {
+        Ok(ToolVerdict::refuse(
+            "the grant does not allow this tool",
+            RefusalOutcome::Continue,
+        ))
+    }
+}
+
+/// A permission-review hook that admits the call.
+struct AllowingReview;
+impl InvocationHook for AllowingReview {
+    fn before_permission_review(
+        &self,
+        _call: &crate::application::agent_execution::hooks::ProposedToolCall<'_>,
+        _observations: &crate::application::agent_execution::hooks::InvocationObservationWindow<'_>,
+    ) -> Result<ToolVerdict, HookError> {
+        Ok(ToolVerdict::Allow)
+    }
+}
+
+async fn agent_with_live_allow(hook: Arc<dyn InvocationHook>) -> (TempDir, Agent) {
+    let rules = Arc::new(RememberingRules {
+        live: Mutex::new(vec![SettledRule::new(
+            ApprovalRuleReference::new("pr_live", "4", attribution().actor().clone()).unwrap(),
+            PermissionEffect::Allow,
+        )]),
+        withdrawn: Mutex::new(Vec::new()),
+    });
+    let (root, mut config, model) = test_acp_configuration("permission", 16);
+    config.shutdown_grace = Duration::from_secs(2);
+    config.execution_timeout = None;
+    config.permission_rules = rules;
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        Arc::new(AcceptingAudit),
+    )
+    .unwrap();
+    let manager = SessionManager::open(
+        Some(SessionId::new("remembered-allow").unwrap()),
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(RuntimeMessageCommitClock::new()),
+    )
+    .await
+    .unwrap();
+    let agent = attached_agent(Arc::new(binding), manager).await.unwrap();
+    agent.add_invocation_hook(hook);
+    (root, agent)
+}
+
+struct AcceptingAudit;
+impl ExecutionAudit for AcceptingAudit {
+    fn record(&self, _record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+async fn finish_turn(
+    agent: &Agent,
+) -> Result<Result<ExecutionOutcome, AgentError>, tokio::time::error::Elapsed> {
+    timeout(
+        Duration::from_secs(20),
+        agent.invoke(prompt("write"), Submitter::owner(close_action())),
+    )
+    .await
+}
+
+/// A remembered allow must not start the tool before the permission-review
+/// hook refuses it. The fixture writes `fixture.txt` only when it is told to
+/// allow the write.
+#[tokio::test]
+async fn a_review_hook_refusal_stops_a_remembered_allow_before_the_tool_starts() {
+    let _slot = process_test_slot().await;
+    let (root, agent) = agent_with_live_allow(Arc::new(RefusingReview)).await;
+    let finished = finish_turn(&agent).await;
+    let wrote = root.path().join("fixture.txt").exists();
+    let _ = agent.close(close_action()).await;
+    assert_gone(&root, "pid");
+    let finished = finished.expect("the turn did not finish");
+    assert!(
+        !wrote,
+        "the tool started before the review hook refused it: {finished:?}"
+    );
+    assert!(finished.is_ok(), "{finished:?}");
+}
+
+/// The same remembered allow is sent once the hook admits the call, and the
+/// tool then runs.
+#[tokio::test]
+async fn a_review_hook_allow_sends_the_remembered_allow() {
+    let _slot = process_test_slot().await;
+    let (root, agent) = agent_with_live_allow(Arc::new(AllowingReview)).await;
+    let finished = finish_turn(&agent).await;
+    let wrote = root.path().join("fixture.txt").exists();
+    let _ = agent.close(close_action()).await;
+    assert_gone(&root, "pid");
+    let finished = finished.expect("the turn did not finish");
+    assert!(finished.is_ok(), "{finished:?}");
+    assert!(wrote);
 }

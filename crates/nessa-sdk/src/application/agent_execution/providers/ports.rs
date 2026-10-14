@@ -1,6 +1,8 @@
 #![deny(missing_docs)]
 
-use crate::domain::agent_execution::permissions::{PermissionAuthority, PermissionAuthorityError};
+use crate::domain::agent_execution::permissions::{
+    PermissionAuthority, PermissionAuthorityError, PermissionId,
+};
 
 use super::{
     CleanupFuture, HarnessHost, ProviderExecutionFuture, ProviderIdentity,
@@ -155,6 +157,31 @@ pub trait ProviderSessionBackend: Send + Sync {
         &self,
         answer: PermissionAnswer,
     ) -> ProviderOperationFuture<'_, PermissionResolution>;
+    /// Hold remembered allows until permission-review hooks have decided.
+    ///
+    /// `hold` is set for an invocation whose hooks review permissions, before
+    /// that invocation's provider work is polled, and cleared when the
+    /// invocation ends, including when its future is dropped. While it is
+    /// set, a remembered allow is retained and announced, and is not sent to
+    /// the provider. The invocation takes it with
+    /// [`Self::take_remembered_allow`] and sends it only if the hooks allow
+    /// the tool; a refusal drops it and answers with the hook's own decision.
+    /// A remembered deny is sent immediately either way, because it does not
+    /// start the tool. The default holds nothing: a session used without
+    /// those hooks answers before it announces the review.
+    ///
+    /// The call is synchronous. It does not wait on the provider, and
+    /// concurrent calls are last-write-wins.
+    fn hold_remembered_allows_for_review_hooks(&self, _hold: bool) {}
+    /// Take the remembered allow parked for `id`, at most once.
+    ///
+    /// `id` is the review the invocation is deciding. The returned answer is
+    /// sent with [`Self::answer_permission`] only after permission-review
+    /// hooks allow the tool, and dropped when they do not. This call does not
+    /// answer the provider. A backend that does not park returns `None`.
+    fn take_remembered_allow(&self, _id: &PermissionId) -> Option<PermissionAnswer> {
+        None
+    }
     /// Cancel the identified review with its supplied cause and attribution.
     /// Once admitted, preserve the transition and its audit evidence independently
     /// of caller waits and observation delivery. Audit failure prevents successful

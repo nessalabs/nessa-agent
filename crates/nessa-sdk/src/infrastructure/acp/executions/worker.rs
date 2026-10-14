@@ -72,11 +72,15 @@ use std::{
     future::{poll_fn, Future},
     panic::{catch_unwind, AssertUnwindSafe},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
     task::Poll,
 };
+
+/// Remembered allows waiting on the invocation's permission-review hooks.
+pub(in crate::infrastructure::acp) type ParkedRememberedAllows =
+    Arc<std::sync::Mutex<HashMap<PermissionId, PermissionAnswer>>>;
 use tokio::sync::{mpsc, oneshot, watch, Semaphore};
 
 /// What this client says about itself in `initialize`, on every connection
@@ -445,6 +449,12 @@ struct Worker<P> {
     permission_context: HashMap<PermissionId, PermissionContext>,
     /// Reviews waiting on a person, and the moment the deadline answers them.
     armed_permissions: HashMap<PermissionId, ArmedPermission>,
+    /// When set, a remembered allow is parked until the invocation's
+    /// permission-review hooks release it. A direct session execution leaves
+    /// this clear and answers immediately.
+    hold_remembered_allows: Arc<AtomicBool>,
+    /// Remembered allows this generation has not sent yet.
+    parked_allows: ParkedRememberedAllows,
     /// One path classification at a time. A read that outlasts its wait keeps
     /// the permit until the read returns, so the next review does not start
     /// another (`a_classification_still_running_is_not_started_again`).
@@ -547,7 +557,15 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
     launch_id: u64,
     launch_cause: NativeHooksLaunchCause,
     session_key: Option<String>,
+    hold_remembered_allows: Arc<AtomicBool>,
+    parked_allows: ParkedRememberedAllows,
 ) {
+    // A new process drops an allow the previous one parked, so this process
+    // does not send it.
+    parked_allows
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
     let reader = Reader::new(
         scope.stdout.take().expect("owned stdout"),
         config.max_incoming_frame_bytes,
@@ -575,6 +593,8 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         permissions: HashMap::new(),
         permission_context: HashMap::new(),
         armed_permissions: HashMap::new(),
+        hold_remembered_allows,
+        parked_allows,
         path_classification: Arc::new(Semaphore::new(1)),
         startup_advisory_session: None,
         questions: HashMap::new(),
@@ -2862,9 +2882,14 @@ impl<P: AcpProfile> Worker<P> {
             PermissionEffect::Allow => once_allow.clone(),
             PermissionEffect::Deny => once_deny.clone(),
         });
-        // A live rule answers before anyone is asked: no deadline, no card,
-        // no notice. The once option is what the harness is sent. The rule's
-        // own id, revision, and grantor are the audit basis.
+        // A live rule answers with the harness once option. The rule's own
+        // id, revision, and grantor are the audit basis. A deny is sent
+        // before the review is announced: it does not start the tool. An
+        // allow is sent the same way unless this invocation is holding
+        // allows until its permission-review hooks decide
+        // (`a_review_hook_refusal_stops_a_remembered_allow_before_the_tool_starts`).
+        // Those hooks are the per-turn tool policy. Sending the allow first
+        // would start the tool before they can refuse it.
         if let Some((rule, once)) = ruled.zip(once) {
             let event = execution.request_permission(
                 &asked,
@@ -2891,9 +2916,27 @@ impl<P: AcpProfile> Worker<P> {
                     ApprovalBasis::Rule(rule.reference().clone()),
                 ),
                 execution_id: asked,
-                id: permission_id,
+                id: permission_id.clone(),
                 option_id: once,
             };
+            let hold_allow = matches!(rule.effect(), PermissionEffect::Allow)
+                && self.hold_remembered_allows.load(Ordering::Acquire);
+            if hold_allow {
+                // Insert before the announcement, so the invocation can take
+                // the allow as soon as it sees the review.
+                self.parked_allows
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(permission_id.clone(), answer);
+                if let Err(error) = self.emit(event) {
+                    self.parked_allows
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .remove(&permission_id);
+                    return Err(WorkerFailure::from(error));
+                }
+                return Ok(());
+            }
             let (reply, _waiting) = oneshot::channel();
             let answered = self.answer_permission(execution, answer, reply).await;
             self.emit(event).map_err(WorkerFailure::from)?;

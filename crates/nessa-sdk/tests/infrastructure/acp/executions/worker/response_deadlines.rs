@@ -137,6 +137,8 @@ async fn blocked_worker(
         launch_id: 0,
         launch_cause: crate::application::agent_execution::executions::NativeHooksLaunchCause::Open,
         session_key: None,
+        hold_remembered_allows: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        parked_allows: Arc::new(std::sync::Mutex::new(HashMap::new())),
     };
     (worker, execution, receiver, recovery, clock)
 }

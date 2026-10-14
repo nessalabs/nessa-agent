@@ -15,7 +15,9 @@ use crate::application::agent_execution::executions::{
     ExecutionAudit, ExecutionEvent, ExecutionRequest, NativeHooksLaunchCause,
     PermissionAuthoritySource,
 };
-use crate::domain::agent_execution::permissions::{PermissionAuthority, PermissionAuthorityError};
+use crate::domain::agent_execution::permissions::{
+    PermissionAuthority, PermissionAuthorityError, PermissionId,
+};
 
 use crate::application::agent_execution::permissions::{
     PermissionAnswer, PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
@@ -37,6 +39,7 @@ use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::infrastructure::clock::ClockInstant;
 use crate::infrastructure::process::{ProcessScope, ProcessStartFailure};
 use std::{
+    collections::HashMap,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex as ControlMutex,
@@ -102,6 +105,8 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         session_key,
         permission_sequence: Arc::new(AtomicU64::new(0)),
         question_sequence: Arc::new(AtomicU64::new(0)),
+        hold_remembered_allows: Arc::new(AtomicBool::new(false)),
+        parked_allows: Arc::new(std::sync::Mutex::new(HashMap::new())),
         _stand_in_grant: stand_in_grant,
     };
     // Only an open for a named session belongs to an attachment.
@@ -182,6 +187,11 @@ struct WorkerFactory<P> {
     /// The conversation this factory was opened for, when the request named one.
     session_key: Option<String>,
     permission_sequence: Arc<AtomicU64>,
+    /// While set, a remembered allow waits for the invocation's permission-review hooks.
+    hold_remembered_allows: Arc<AtomicBool>,
+    /// Allows parked for those hooks. Shared with the worker; cleared when a
+    /// new process starts so a restart cannot send a stale one.
+    parked_allows: worker::ParkedRememberedAllows,
     /// Question identities, minted here for the same reason review identities
     /// are: they outlive any one provider request, including across restarts
     /// of the worker that holds them.
@@ -308,6 +318,8 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
                 launch_id,
                 cause,
                 self.session_key.clone(),
+                self.hold_remembered_allows.clone(),
+                self.parked_allows.clone(),
             )
             .in_current_span(),
         );
@@ -710,6 +722,20 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
     }
 }
 impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
+    fn hold_remembered_allows_for_review_hooks(&self, hold: bool) {
+        self.factory
+            .hold_remembered_allows
+            .store(hold, Ordering::Release);
+    }
+
+    fn take_remembered_allow(&self, id: &PermissionId) -> Option<PermissionAnswer> {
+        self.factory
+            .parked_allows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id)
+    }
+
     fn set_approval_mode(
         &self,
         mode: crate::application::agent_execution::providers::ApprovalMode,
