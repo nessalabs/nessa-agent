@@ -1552,7 +1552,15 @@ async fn metadata_query_target_fences_passive_admission_and_shares() {
         shares.shares(&caller, &fixture.id).await,
         Err(ConversationError::Storage(StorageError::IdentityMismatch))
     ));
-    assert_eq!(shares.shares(&caller, &fixture.id).await.unwrap().len(), 1);
+    assert_eq!(
+        shares
+            .shares(&caller, &fixture.id)
+            .await
+            .unwrap()
+            .grants
+            .len(),
+        1
+    );
 }
 
 /// A paired read the access policy cannot decide is unverifiable, never a

@@ -30,7 +30,7 @@ import {
   waitingOn,
 } from "./sharing"
 
-const limits = { patterns: 16, hosts: 16, hostBytes: 96, entries: 32 }
+const limits = { patterns: 16, hosts: 16, hostBytes: 96 }
 const grant = (
   credentialId: string,
   policyRevision = 1,

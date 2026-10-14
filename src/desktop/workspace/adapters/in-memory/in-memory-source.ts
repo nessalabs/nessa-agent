@@ -19,7 +19,9 @@ import {
   type Message,
   type MessageApp,
   type Part,
+  type QuestionChoice,
   type Transcript,
+  type TranscriptQuestion,
 } from "../../model/transcript"
 import {
   failureReason,
@@ -31,6 +33,7 @@ import {
   type WorkspaceUpdate,
 } from "../../application/ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
+import { acceptedQuestionChoices } from "./question-answer"
 import { sampleWorkspace } from "./sample-workspace"
 import {
   approvedReply,
@@ -58,7 +61,12 @@ export interface AuditedState {
  * session, by whom and when — on record as the source begins to carry it out,
  * before the effect, and in that carry-out order — then the session as it
  * stood (`before`), what became of it and when, and, taken, the revision it
- * produced (`after`: the new summary's, or the removal's). Calls asked in one
+ * produced (`after`: the new summary's, the removal's, or, for a question
+ * answered or declined, the transcript revision that dropped it — the
+ * summary does not move). An answer keeps the ask as it was held and the
+ * structured choices, including the answerer's own words. Those words stay
+ * on this record: they are not copied onto the session, the transcript, or
+ * a log. Calls asked in one
  * tick are carried out in the order they were asked, so a message and the
  * answer it overtakes stay in that order. This source refuses only by type;
  * it has no faults of its own to tell apart. Kept in memory only, for as long
@@ -68,9 +76,27 @@ export interface AuditEntry {
   readonly sessionId: string
   /** `let-go`: a message sent while an approval waited moved the turn on without it. */
   readonly action:
-    "allow-once" | "allow-always" | "deny" | "pin" | "unpin" | "archive" | "let-go"
+    | "allow-once"
+    | "allow-always"
+    | "deny"
+    | "pin"
+    | "unpin"
+    | "archive"
+    | "let-go"
+    | "answer-question"
+    | "decline-question"
   /** The approval answered, or let go. */
   readonly approvalId?: string
+  /** The question answered or declined, and the execution it belongs to. */
+  readonly questionId?: string
+  readonly executionId?: string
+  /** The ask as held when it was answered, declined, or the answer was refused. */
+  readonly question?: TranscriptQuestion
+  /**
+   * Structured choices for an answer, including own words. Absent when the
+   * ask was declined. Own words are this controlled record's only copy.
+   */
+  readonly choices?: readonly QuestionChoice[]
   /** The message that let an approval go, for a `let-go`. */
   readonly messageId?: string
   readonly initiator: Initiator
@@ -78,7 +104,10 @@ export interface AuditEntry {
   /** The session when the source came to carry the call out, if it held it; absent until then. */
   readonly before?: AuditedState | null
   readonly outcome: "asked" | "taken" | { readonly refused: WorkspaceFailureReason }
-  /** The revision the call produced, once taken. */
+  /**
+   * The revision the call produced, once taken: the summary's, the removal's,
+   * or the transcript's when a question was answered or declined.
+   */
   readonly after?: number
   readonly settledAt?: number
 }
@@ -139,8 +168,11 @@ export function inMemorySource(
   }
   /** Runs a consequential call; `work` answers with the revision it produced. */
   const audited = (
-    asked: Pick<AuditEntry, "sessionId" | "action" | "approvalId" | "initiator">,
-    work: () => number,
+    asked: Pick<
+      AuditEntry,
+      "sessionId" | "action" | "approvalId" | "questionId" | "executionId" | "initiator"
+    >,
+    work: (record: (change: Partial<AuditEntry>) => void) => number,
   ): Promise<void> => {
     let entry: AuditEntry | undefined
     const replace = (change: Partial<AuditEntry>) => {
@@ -159,7 +191,7 @@ export function inMemorySource(
       entries = Object.freeze([...entries, opened])
       guard()
       replace({ before: stateOf(asked.sessionId) })
-      return work()
+      return work(replace)
     }).then(
       (after) => replace({ outcome: "taken", after, settledAt: schedule.now() }),
       (error: unknown) => {
@@ -199,7 +231,7 @@ export function inMemorySource(
     return session
   }
 
-  const putTranscript = (change: Transcript) => {
+  const putTranscript = (change: Transcript): Transcript => {
     const transcript = {
       ...change,
       // Counted from what a read would have said, so no two contents share a revision.
@@ -207,6 +239,7 @@ export function inMemorySource(
     }
     transcripts.set(transcript.sessionId, transcript)
     emit({ kind: "transcript", transcript })
+    return transcript
   }
 
   const transcriptOf = (sessionId: string): Transcript =>
@@ -406,6 +439,21 @@ export function inMemorySource(
     return transcript
   }
 
+  const waitingQuestion = (
+    sessionId: string,
+    executionId: string,
+    questionId: string,
+  ) => {
+    known(sessionId)
+    const transcript = transcriptOf(sessionId)
+    const asked = transcript.questions?.some(
+      (question) =>
+        question.executionId === executionId && question.questionId === questionId,
+    )
+    if (!asked) throw new WorkspaceSourceError("not-waiting")
+    return transcript
+  }
+
   /** An option the review does not offer, or of another choice, is not supported. */
   const offered = (transcript: Transcript, choice: ApprovalChoice, optionId: string) => {
     const option = transcript.approval?.options.find((each) => each.id === optionId)
@@ -490,6 +538,55 @@ export function inMemorySource(
             settle(sessionId, reply.preview)
           })
           return known(sessionId).revision
+        },
+      ),
+    answerQuestion: (sessionId, executionId, questionId, choices, initiator) =>
+      audited(
+        {
+          sessionId,
+          action: choices === null ? "decline-question" : "answer-question",
+          executionId,
+          questionId,
+          initiator,
+        },
+        (record) => {
+          const transcript = waitingQuestion(sessionId, executionId, questionId)
+          const held = transcript.questions?.find(
+            (question) =>
+              question.executionId === executionId && question.questionId === questionId,
+          )
+          if (!held) throw new WorkspaceSourceError("not-waiting")
+          record({ question: Object.freeze(structuredClone(held)) })
+          if (choices !== null) {
+            let accepted: readonly QuestionChoice[]
+            try {
+              accepted = acceptedQuestionChoices(held, choices)
+            } catch (error) {
+              record({
+                choices: Object.freeze(
+                  choices.map((choice) =>
+                    Object.freeze({
+                      key: choice.key,
+                      values: Object.freeze([...choice.values]),
+                      ...(choice.ownWords === undefined
+                        ? {}
+                        : { ownWords: choice.ownWords }),
+                    }),
+                  ),
+                ),
+              })
+              throw error
+            }
+            record({ choices: accepted })
+          }
+          return putTranscript({
+            ...transcript,
+            questions: (transcript.questions ?? []).filter(
+              (question) =>
+                question.executionId !== executionId ||
+                question.questionId !== questionId,
+            ),
+          }).revision
         },
       ),
     deny: (sessionId, approvalId, initiator, optionId) =>

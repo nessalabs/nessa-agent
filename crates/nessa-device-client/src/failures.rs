@@ -69,7 +69,9 @@ copied_enum!(
         CacheUncertain,
         CacheDamaged,
         Quota,
-        Stopped
+        Stopped,
+        CursorAhead,
+        SubscriptionCapacity
     ]
 );
 copied_enum!(

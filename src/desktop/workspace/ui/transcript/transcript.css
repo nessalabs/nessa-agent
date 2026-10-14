@@ -188,6 +188,41 @@
   font-size: var(--desktop-text-footnote);
 }
 
+/* How the gateway said a turn ended. The diagnostic is its own words. */
+.workspace-turn-terminal {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin-top: 6px;
+  color: var(--desktop-needs);
+  font-size: var(--desktop-text-footnote);
+}
+
+.workspace-turn-terminal-error {
+  color: var(--desktop-muted);
+}
+
+/* A review or question the gateway left out of the view, in its own words. */
+.workspace-transcript-notice {
+  margin: 0;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  overflow-wrap: anywhere;
+}
+
+.workspace-question-failure {
+  margin: 0;
+  color: var(--desktop-needs);
+  font-size: var(--desktop-text-footnote);
+}
+
+.workspace-question-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .workspace-link-button {
   padding: 0;
   border: 0;

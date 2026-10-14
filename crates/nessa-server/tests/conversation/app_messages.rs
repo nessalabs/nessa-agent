@@ -2512,9 +2512,14 @@ impl crate::conversation::application::ShareGrants for SecondHoldRevokes {
         _: &'a ConversationId,
     ) -> crate::conversation::application::ConversationFuture<
         'a,
-        Vec<crate::conversation::application::ShareGrant>,
+        crate::conversation::application::ShareGrantList,
     > {
-        Box::pin(async { Ok(Vec::new()) })
+        Box::pin(async {
+            Ok(crate::conversation::application::ShareGrantList {
+                grants: Vec::new(),
+                change_revision: 0,
+            })
+        })
     }
     fn policy_at<'a>(
         &'a self,

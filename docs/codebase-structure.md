@@ -267,7 +267,21 @@ against a private scripted gateway.
   share one header bar (`pane-header-frame.tsx`);
   `ui/overview/` the Agents overview, with its rules in `model/overview/`),
   with `testing.ts` the fake source, the store, and the animation frames its
-  tests share. The window has its own store (`src/desktop/store.ts`) and composition
+  tests share. A failed, cancelled, or unresolved turn keeps the gateway's
+  status and diagnostic on the message, including an earlier authentication
+  refusal. While Claude or Codex recovery is showing, the pane omits that
+  refusal's terminal. The transcript keeps the mark, so a local retry that
+  hides the card shows the failure. OpenCode, an unknown agent, and
+  no agent keep the failure, because they have no sign-in card. An independent
+  required-work failure on that
+  refusal is the protocol's `requiredWorkFailed` flag; the terminal keeps the
+  gateway's diagnostic. Questions the view lists, and the
+  gateway's `interactionViewError`, are on the transcript; answering a
+  question checks it is on screen, then that the view still lists it, then
+  sends `answerQuestion`. A second card joins that send when its choices and
+  initiator match. A different answer is not sent and is not reported as
+  delivered. Those orderings are
+  [desktop question flights](design/desktop-question-flights.md). The next frame drops the question. The window has its own store (`src/desktop/store.ts`) and composition
   (`src/desktop/dependencies.ts`). Where its workspace comes from is the
   window's too: the host's gateway, a browser's, a seeded run, or the sample, by
   `src/desktop/model/workspace-backend.ts`, with the desktop app's connection
@@ -666,6 +680,11 @@ enclosing read. The factory's tests sit beside it, and panel routing/interleavin
 tests live in `src/conversation/adapters/store/permission-targets.test.ts`.
 See [permission targets](design/permission-targets.md) for the ordering table and
 the distinction between captured intent and server-owned authorization.
+Question answers use the adjacent `application/question-target.ts`, including
+the immutable published ask rendered by `src/conversation/ui/conversation-questions.tsx`.
+Client regressions sit beside the factory and panel routing tests live in
+`src/conversation/adapters/store/question-targets.test.ts`; see
+[question targets](design/question-targets.md) for ownership and orderings.
 
 `crates/nessa-server/src/conversation/` groups durable conversation ownership and
 access (domain), shared Agent orchestration (application), and private
@@ -956,7 +975,9 @@ and stable execution-scoped identity. The gateway upserts selection with its lat
 local write evidence before the agent-stream adapter renders it; it is not a
 permission decision, provider message, tool failure, or execution status.
 `ui/transcript.tsx` renders a turn's terminal status once at row level,
-independently of whether that turn contains text.
+independently of whether that turn contains text. The desktop transcript
+keeps that status and the gateway's diagnostic as separate marks
+(`workspace/model/transcript.ts`).
 
 ### Packaged gateway lifecycle
 
@@ -1766,7 +1787,9 @@ gate refuses any client dependency path to `nessa-server`, including renamed
 and transitive edges. Both ends depend on `nessa-protocol` for shared rules.
 
 The public `retained` library selects owner-device or granted-peer catalogue reads
-through the existing source authorizer. `retained/saved.rs` maps saved scope,
+through the existing source authorizer. `retained/subscribe.rs` is the live
+`conversation.subscribe` feed on a new pinned session to the same gateway; it does not write
+the checkpoint `RetainedCache::read` still copies. `retained/saved.rs` maps saved scope,
 catalogue pages and transcript/progress/deletion values through the existing
 private cache and passive projection, with no CLI, second fold or receiver.
 Scope discovery and each page have separate snapshots; pages carry their actual
@@ -1901,12 +1924,14 @@ surfaces: the refused execution must be the latest published input, and no retai
 local submission may have begun after observing that input. Local sends retain
 that observed identity (null before any input); repeated views preserve it.
 An older delivery failure cannot hide a newly observed refusal. A local send made
-after observing a refusal retires its recovery even if delivery fails; `ui/transcript/transcript.test.tsx` and the
+after observing a refusal retires its recovery even if delivery fails, and the
+pane shows the refusal's terminal that the card had replaced; `ui/transcript/transcript.test.tsx` and the
 provider-sign-in browser fixture exercise both states and the accepted queued,
 running and output transitions.
 The floating panel carries the same typed fact through `applyView` and replaces
-that turn's error divider with the shared card; its App receives the login action
-from composition. The card imports neither a store nor a host. See [ADR 501](adr/todo/501-provider-authentication-recovery.md)
+that turn's error divider with the shared card. It shows the required-work
+diagnostic beside the card only when that turn's `requiredWorkFailed` is set.
+Its App receives the login action from composition. The card imports neither a store nor a host. See [ADR 501](adr/todo/501-provider-authentication-recovery.md)
 for states and the Claude internal-error limitation.
 
 The panel's causal recovery integration test is

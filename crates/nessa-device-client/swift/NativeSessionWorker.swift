@@ -141,6 +141,25 @@ public final class NativeSessionWorker: @unchecked Sendable {
             try capture(try session.status())
         }
     }
+    public func follow(
+        conversation: String, afterIncarnation: String?, afterPosition: String?
+    ) async throws -> NativeFollow {
+        try await follow(
+            conversation: conversation, afterIncarnation: afterIncarnation,
+            afterPosition: afterPosition, capture: { $0 })
+    }
+    /// Capture a bounded passive value off UI before releasing admission.
+    public func follow<Value: Sendable>(
+        conversation: String, afterIncarnation: String?, afterPosition: String?,
+        capture: @escaping @Sendable (NativeFollow) throws -> Value
+    ) async throws -> Value {
+        try await perform { session, stop in
+            try capture(
+                try session.follow(
+                    conversation: conversation, afterIncarnation: afterIncarnation,
+                    afterPosition: afterPosition, stop: stop))
+        }
+    }
     public func refresh() async throws -> NativeRefresh {
         try await refresh(capture: { $0 })
     }

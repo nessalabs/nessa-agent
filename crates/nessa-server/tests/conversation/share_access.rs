@@ -116,19 +116,26 @@ fn command_hosts_are_bounded_and_named_as_run_names_them() {
         Err(ToolPolicyError::MalformedHost)
     );
     assert!(CommandHosts::new(vec!["h".repeat(CommandHosts::MAX_HOST_BYTES)]).is_ok());
-    // Hosts take the room of patterns: with both lists full, none fits.
+    // Hosts have their own budget: both pattern lists full, and every host.
     let full: Vec<String> = (0..ToolRules::MAX_RULES).map(|n| format!("t{n}")).collect();
     let rules = ToolPolicy::rules(ToolRules::new(full.clone(), full).unwrap());
+    let hosts = CommandHosts::new(
+        (0..CommandHosts::MAX_HOSTS)
+            .map(|n| format!("h{n}"))
+            .collect(),
+    )
+    .unwrap();
+    let with_hosts = rules.clone().with_command_hosts(hosts.clone());
+    assert_eq!(with_hosts.command_hosts(), &hosts);
     assert_eq!(
         rules
-            .clone()
-            .with_command_hosts(CommandHosts::new(names(&["devbox"])).unwrap()),
-        Err(ToolPolicyError::TooManyHosts)
+            .with_command_hosts(CommandHosts::none())
+            .command_hosts(),
+        &CommandHosts::none()
     );
-    assert!(rules.with_command_hosts(CommandHosts::none()).is_ok());
     let policy = ToolPolicy::preset(ToolPreset::NoShell);
     assert!(policy.command_hosts().is_empty());
-    let on = policy.clone().with_command_hosts(kept.clone()).unwrap();
+    let on = policy.clone().with_command_hosts(kept.clone());
     assert_eq!(on.command_hosts(), &kept);
     assert_eq!(on.tools(), policy.tools());
     assert_ne!(on, policy);

@@ -430,14 +430,41 @@ rs += `pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = ${subscriptionLimits
 rs += `pub const SUBSCRIPTION_DELIVERY_TIMEOUT_MS: u64 = ${subscriptionLimits.deliveryTimeoutMs};\n`
 ts += `export const subscriptionLimits = ${JSON.stringify(subscriptionLimits)} as const\n`
 const subscriptionId = schema.$defs.ConversationSubscriptionId
-if (typeof subscriptionId.pattern !== "string")
+if (
+  typeof subscriptionId.pattern !== "string" ||
+  !Number.isSafeInteger(subscriptionId.minLength) ||
+  !Number.isSafeInteger(subscriptionId.maxLength) ||
+  subscriptionId.minLength < 1 ||
+  subscriptionId.maxLength < subscriptionId.minLength
+)
   throw new Error("Invalid subscription ID publication")
-// Published so the client checks the identities a frame names.
+// Published so the client checks the identities a frame names. Rust and
+// TypeScript both read these; neither retypes the schema.
 ts += `export const conversationSubscriptionIdPattern = ${JSON.stringify(subscriptionId.pattern)} as const\n`
+rs += `pub const CONVERSATION_SUBSCRIPTION_ID_PATTERN: &str = ${JSON.stringify(subscriptionId.pattern)};\n`
+rs += `pub const MIN_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS: usize = ${subscriptionId.minLength};\n`
+rs += `pub const MAX_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS: usize = ${subscriptionId.maxLength};\n`
 const incarnation = schema.$defs.ConversationViewCursor.properties.incarnation
-if (!Number.isSafeInteger(incarnation.maxLength))
+if (
+  !Number.isSafeInteger(incarnation.minLength) ||
+  !Number.isSafeInteger(incarnation.maxLength) ||
+  incarnation.minLength < 1 ||
+  incarnation.maxLength < incarnation.minLength
+)
   throw new Error("Invalid view cursor publication")
 ts += `export const maxViewCursorIncarnationLength = ${incarnation.maxLength} as const\n`
+rs += `pub const MIN_VIEW_CURSOR_INCARNATION_CHARACTERS: usize = ${incarnation.minLength};\n`
+rs += `pub const MAX_VIEW_CURSOR_INCARNATION_CHARACTERS: usize = ${incarnation.maxLength};\n`
+const transcriptStates = schema.$defs.ConversationView.properties.transcriptState.enum
+if (
+  !Array.isArray(transcriptStates) ||
+  transcriptStates.length === 0 ||
+  transcriptStates.some((state) => typeof state !== "string" || state.length === 0) ||
+  new Set(transcriptStates).size !== transcriptStates.length
+)
+  throw new Error("Invalid transcript state publication")
+ts += `export const transcriptStates = ${JSON.stringify(transcriptStates)} as const\n`
+rs += `/// Published \`transcriptState\` values. A view carrying any other is outside the contract.\npub const TRANSCRIPT_STATES: &[&str] = &[${transcriptStates.map((state) => JSON.stringify(state)).join(", ")}];\n`
 const image = schema.$defs.ImageAttachment.properties
 const mcpCall = schema.$defs.McpCallToolParams.properties
 const mcpRead = schema.$defs.McpReadResourceParams.properties
@@ -458,8 +485,12 @@ const catalogueDecimalFields = [
   schema.$defs.ConversationObserveCursor.properties.creation,
 ]
 const toolPolicy = schema.$defs.ConversationToolPolicy.properties
-if (!Number.isSafeInteger(schema.$defs.ConversationToolPolicy["x-maxEntries"]))
-  throw new Error("ConversationToolPolicy must publish x-maxEntries")
+const sharePage = agreeing("conversation.shares page size", [
+  schema.$defs.ConversationSharesParams.properties.pageSize.maximum,
+  schema.$defs.ConversationSharesResult.properties.items.maxItems,
+])
+if (!Number.isSafeInteger(schema.$defs.ConversationSharesResult["x-maxGrants"]))
+  throw new Error("ConversationSharesResult must publish x-maxGrants")
 const bounds = {
   maxOrdinaryResponseBytes,
   // The same gateway limit, read where it bites a client: the gateway takes no
@@ -489,7 +520,7 @@ const bounds = {
   ]),
   maxConfiguredAgents: schema.$defs.AgentsListResult.properties.agents.maxItems,
   // A drive grant's tool policy, as the share dialog budgets it: each list of
-  // patterns and the hosts on their own, and all of them together.
+  // patterns, and the hosts on their own.
   maxToolPolicyPatterns: agreeing("tool policy allow and deny lengths", [
     toolPolicy.allow.maxItems,
     toolPolicy.deny.maxItems,
@@ -500,8 +531,8 @@ const bounds = {
   ]),
   maxCommandHosts: toolPolicy.commandHosts.maxItems,
   maxCommandHostBytes: toolPolicy.commandHosts.items["x-utf8MaxBytes"],
-  maxToolPolicyEntries: schema.$defs.ConversationToolPolicy["x-maxEntries"],
-  maxShareGrants: schema.$defs.ConversationSharesResult.properties.items.maxItems,
+  maxShareGrants: schema.$defs.ConversationSharesResult["x-maxGrants"],
+  maxSharePage: sharePage,
   maxAgentInstallVersionBytes: agreeing("native installation version bytes", [
     schema.$defs.AgentInstallOffer.properties.version["x-utf8MaxBytes"],
     schema.$defs.AgentInstallResult.properties.version["x-utf8MaxBytes"],
@@ -532,6 +563,7 @@ const bounds = {
     pageRequest.target.pattern,
     schema.$defs.RecordWireRecord.properties.position.pattern,
     schema.$defs.ConversationRecordsHeadResult.properties.head.pattern,
+    schema.$defs.ConversationViewCursor.properties.position.pattern,
     ...catalogueDecimalFields.map((field) => field.pattern),
   ]),
   maxDecimalU64Characters: agreeing("decimal u64 width", [
@@ -539,6 +571,7 @@ const bounds = {
     pageRequest.target.maxLength,
     schema.$defs.RecordWireRecord.properties.position.maxLength,
     schema.$defs.ConversationRecordsHeadResult.properties.head.maxLength,
+    schema.$defs.ConversationViewCursor.properties.position.maxLength,
     ...catalogueDecimalFields.map((field) => field.maxLength),
   ]),
   positiveEpochPattern: agreeing(
@@ -641,6 +674,7 @@ for (const name of [
   "maxRecordPageRecords",
   "maxRecordPagePayloadBytes",
   "maxRecordResponseBytes",
+  "maxSharePage",
   // Each part of an app's context past it is refused at the wire, before
   // anything is recorded; both together are the gateway's to bound.
   "maxMcpContextBytes",
@@ -651,6 +685,8 @@ for (const name of [
   rs += `/// Published bound from the product schema.\npub const ${snake(name).toUpperCase()}: usize = ${bounds[name]};\n`
 }
 rs += `/// Published request-frame maximum from the product schema, in bytes.\npub const MAX_PAYLOAD_BYTES: i64 = ${maxOrdinaryResponseBytes};\n`
+rs += `/// Published decimal shape from the product schema, including a view cursor position.\npub const DECIMAL_U64_PATTERN: &str = ${JSON.stringify(bounds.decimalU64Pattern)};\n`
+rs += `/// Published decimal width from the product schema, in characters.\npub const MAX_DECIMAL_U64_CHARACTERS: usize = ${bounds.maxDecimalU64Characters};\n`
 // An app's message past it is refused at the wire, before anything is
 // recorded; and the conversation's own input bound is never larger, which the
 // gateway's configuration holds to it — so it sits with the contract.

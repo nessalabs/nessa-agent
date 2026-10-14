@@ -43,7 +43,7 @@ impl ShareGrants for Scripted {
     ) -> ConversationFuture<'_, crate::conversation::application::ShareGrantReceipt> {
         unreachable!("a verdict changes no grant")
     }
-    fn grants<'a>(&'a self, _: &'a ConversationId) -> ConversationFuture<'a, Vec<ShareGrant>> {
+    fn grants<'a>(&'a self, _: &'a ConversationId) -> ConversationFuture<'a, ShareGrantList> {
         unreachable!("a verdict lists no grants")
     }
     fn policy_at<'a>(

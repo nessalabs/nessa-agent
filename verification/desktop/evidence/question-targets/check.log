@@ -1,0 +1,38 @@
+ok    question-target-identities [chromium 360]
+ok    question-target-identities [chromium 600]
+ok    question-target-identities [chromium 1440]
+ok    question-target-identities [webkit 360]
+ok    question-target-identities [webkit 600]
+ok    question-target-identities [webkit 1440]
+committed-transcript: 121/121 held
+Source-asserted revert: full-question-identity
+FAIL  question-target-identities [chromium 360]
+        - another conversation inherited the original answer draft
+Source-asserted revert: native-group-owner
+ERROR question-target-identities [chromium 360]
+locator.check: Clicking the checkbox did not change its state
+Source-asserted revert: queued choice values snapshot
+FAIL QT11: queued serialization retains the exact answer snapshot that passed correlation
+-         "value-a",
++         "value-b",
+Source-asserted reverts: caller array/record hooks and question command ownership
+FAIL QT12: array subclass hooks cannot keep caller-owned answer values behind capture
+FAIL QT12: overridden projection map cannot retain mutable offered options
+FAIL QT12: serialization hooks on source records do not replace captured choice data
+FAIL QT13: a pending answer retains its original target and choices when the caller replaces the command
+Source-asserted reverts: primitive scalar capture guards
+FAIL QT14: mutable own-words serialization is refused before queued RPC
+FAIL QT14: target capture rejects mutable required representation rather than retaining its reference
+Current-head browser matrix (f0da23bbb, production fixture)
+ok    question-target-identities [chromium 360]
+ok    question-target-identities [chromium 600]
+ok    question-target-identities [chromium 1440]
+ok    question-target-identities [webkit 360]
+ok    question-target-identities [webkit 600]
+ok    question-target-identities [webkit 1440]
+committed-transcript: 121/121 held
+Normal signed-out runner on the same source and Rust baseline9e00
+mcp-apps-gateway: 16/16 held
+gateway-window: 14/14 held
+scripted-scenarios: 9/9 held
+Verdict: pass (Chromium and WebKit)
