@@ -49,6 +49,8 @@ Checks, per engine and layout (--only <names> to pick):
              for that review, the card offers only the review's options
              (no Always Allow), the card goes, the app's call is answered
              ok, and nothing more is asked
+  target     tool/message reviews survive other conversation, turn and review
+             answers, then Deny settles only the original request
   card       at 280/340/420/600/900 px, with the tool's name short and as one
              word as long as the gateway allows, the head stays inside the
              card and the card does not overflow
@@ -320,6 +322,57 @@ const cardFits = (page) =>
   }, card)
 
 const checks = {
+  async target({ browser, url, layout }) {
+    const opened = await onConversation(browser, url, layout)
+    const { page } = opened
+    const failures = []
+    const outcomes = []
+    try {
+      for (const kind of ["tool", "message"]) {
+        const drawn =
+          kind === "tool"
+            ? await asked(page, appReview.tool)
+            : await messaged(page, appReview.message)
+        if (!drawn) {
+          failures.push(`${kind}: ${notDrawn}`)
+          continue
+        }
+        const original = await snapshot(page)
+        let retained = true
+        for (const field of ["conversationId", "executionId", "permissionId"]) {
+          await page.evaluate((field) => window.__appReview.answerOther(field), field)
+          const held = await snapshot(page)
+          if (held.openReview !== original.openReview || held.settled !== "waiting") {
+            failures.push(`${kind}: another ${field} settled the original review`)
+            retained = false
+            break
+          }
+        }
+        if (!retained) continue
+        const deny = offeredLabel(original.openOptions, "deny")
+        if (!deny) {
+          failures.push(`${kind}: no offered deny`)
+          continue
+        }
+        await page
+          .locator(css.approvalCard)
+          .first()
+          .getByRole("button", { name: deny, exact: true })
+          .click()
+        const outcome = await settledAs(page)
+        const after = await snapshot(page)
+        outcomes.push({ kind, outcome, openReview: after.openReview })
+        if (outcome !== "refused" || after.openReview !== null)
+          failures.push(
+            `${kind}: Deny left outcome ${outcome}, review ${after.openReview}`,
+          )
+      }
+    } finally {
+      failures.push(...opened.errors)
+      await opened.close()
+    }
+    return { outcomes, failures }
+  },
   async review({ browser, url, layout }) {
     const opened = await onConversation(browser, url, layout)
     const { page } = opened
@@ -370,7 +423,14 @@ const checks = {
         )
         if (!gone) failures.push(`the card is still drawn 5 s after ${allow ?? "allow"}`)
         answered = await snapshot(page)
-        const expected = [[appReview.sessionId, "run", waiting.openReview, "allow"]]
+        const expected = [
+          {
+            conversationId: appReview.sessionId,
+            executionId: "run",
+            permissionId: waiting.openReview,
+            optionId: "allow",
+          },
+        ]
         if (JSON.stringify(answered.answers) !== JSON.stringify(expected))
           failures.push(
             `the gateway was sent ${JSON.stringify(answered.answers)}, not ${JSON.stringify(expected)}`,
@@ -591,7 +651,14 @@ Object.assign(checks, {
         if (!gone) failures.push("the card is still drawn 5 s after Allow")
         const outcome = await settledAs(page)
         answered = await snapshot(page)
-        const expected = [[appReview.sessionId, "run", waiting.openReview, "allow"]]
+        const expected = [
+          {
+            conversationId: appReview.sessionId,
+            executionId: "run",
+            permissionId: waiting.openReview,
+            optionId: "allow",
+          },
+        ]
         if (JSON.stringify(answered.answers) !== JSON.stringify(expected))
           failures.push(
             `the gateway was sent ${JSON.stringify(answered.answers)}, not ${JSON.stringify(expected)}`,

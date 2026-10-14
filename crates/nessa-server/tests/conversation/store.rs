@@ -4145,3 +4145,204 @@ async fn a_revisions_policy_is_read_from_its_journal_entry() {
         no_shell().policy().cloned()
     );
 }
+
+/// Row J31: a Drive turn's save keeps the admitted revision, and a grant
+/// change waits until that hold is dropped. A missing grant, another
+/// revision, or a revision cell that is not a journal sequence is `revoked`.
+#[tokio::test]
+async fn a_turn_is_saved_only_while_its_grant_stays_at_the_admitted_revision() {
+    use crate::conversation::application::{ShareGrantTransition, ShareGrants};
+    use tokio::sync::Notify;
+    let opened = opened();
+    let Opened {
+        _directory,
+        path,
+        store,
+    } = opened;
+    let store = Arc::new(store);
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    assert!(share_as(&store, &id, "phone", no_shell(), "share")
+        .await
+        .unwrap());
+    let revision = only_grant(&store, &id).await.policy_revision;
+    assert!(matches!(
+        ShareGrants::hold_revision(&*store, &id, "other", revision).await,
+        Err(ConversationError::Revoked)
+    ));
+    assert!(matches!(
+        ShareGrants::hold_revision(&*store, &id, "phone", revision + 1).await,
+        Err(ConversationError::Revoked)
+    ));
+
+    let hold = ShareGrants::hold_revision(&*store, &id, "phone", revision)
+        .await
+        .unwrap();
+    let started = Arc::new(Notify::new());
+    let revoking = Arc::clone(&store);
+    let revoke_id = id.clone();
+    let started_in_task = Arc::clone(&started);
+    let mut revoke = tokio::spawn(async move {
+        started_in_task.notify_one();
+        revoking
+            .change(grant_change(
+                ShareGrantTransition::Revoke,
+                &revoke_id,
+                Some("phone"),
+                "phone-credential",
+                "revoke-during-hold",
+            ))
+            .await
+    });
+    started.notified().await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), &mut revoke)
+            .await
+            .is_err(),
+        "a revoke committed while the revision was held"
+    );
+    // Another conversation's grant is not this permit. Its revoke finishes
+    // while the first conversation's revision is still held.
+    let other = new_id();
+    store.create(owned(&other)).await.unwrap();
+    assert!(share_as(&store, &other, "phone", no_shell(), "other-share")
+        .await
+        .unwrap());
+    let other_store = Arc::clone(&store);
+    let other_id = other.clone();
+    let other_revoke = tokio::spawn(async move {
+        other_store
+            .change(grant_change(
+                ShareGrantTransition::Revoke,
+                &other_id,
+                Some("phone"),
+                "phone-credential",
+                "revoke-other",
+            ))
+            .await
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), other_revoke)
+            .await
+            .expect("another conversation's revoke is not blocked by this hold")
+            .expect("the other revoke task")
+            .unwrap()
+            .applied
+    );
+    drop(hold);
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), &mut revoke)
+            .await
+            .expect("the revoke finishes")
+            .expect("the revoke task")
+            .unwrap()
+            .applied
+    );
+    assert!(matches!(
+        ShareGrants::hold_revision(&*store, &id, "phone", revision).await,
+        Err(ConversationError::Revoked)
+    ));
+
+    let again = new_id();
+    store.create(owned(&again)).await.unwrap();
+    assert!(share_as(&store, &again, "phone", no_shell(), "share-again")
+        .await
+        .unwrap());
+    let live = only_grant(&store, &again).await.policy_revision;
+    let connection = raw(&path);
+    connection
+        .execute_batch("PRAGMA foreign_keys = OFF;")
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE share_grants SET policy_revision = 0 WHERE conversation_id = ?1",
+            params![again.to_string()],
+        )
+        .unwrap();
+    assert!(matches!(
+        ShareGrants::hold_revision(&*store, &again, "phone", live).await,
+        Err(ConversationError::Revoked)
+    ));
+}
+
+/// Releases a paused grant write when the test future is dropped.
+struct ReleaseOnDrop(Arc<super::store::GrantWritePause>);
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+/// Row J31: cancelling a grant change while its write is in flight does not
+/// drop the permit. A hold of the revision that write is about to replace
+/// waits until the write finishes, then sees the grant gone.
+#[tokio::test]
+async fn a_cancelled_grant_change_keeps_its_permit_until_the_write_finishes() {
+    use crate::conversation::application::{ShareGrantTransition, ShareGrants};
+    let opened = opened();
+    let store = Arc::new(opened.store);
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    assert!(share_as(&store, &id, "phone", no_shell(), "share")
+        .await
+        .unwrap());
+    let revision = only_grant(&store, &id).await.policy_revision;
+    let pause = super::store::GrantWritePause::new();
+    // A failed assertion still lets the blocked write finish, so the runtime
+    // is not left waiting on that task.
+    let _release = ReleaseOnDrop(Arc::clone(&pause));
+    store.pause_grant_writes(Arc::clone(&pause));
+    let revoking = Arc::clone(&store);
+    let revoke_id = id.clone();
+    let change = tokio::spawn(async move {
+        revoking
+            .change(grant_change(
+                ShareGrantTransition::Revoke,
+                &revoke_id,
+                Some("phone"),
+                "phone-credential",
+                "revoke-cancelled",
+            ))
+            .await
+    });
+    let entered = {
+        let pause = Arc::clone(&pause);
+        tokio::task::spawn_blocking(move || pause.wait_until_entered())
+    };
+    tokio::time::timeout(Duration::from_secs(5), entered)
+        .await
+        .expect("the write entered")
+        .expect("the write's wait");
+    change.abort();
+    assert!(change
+        .await
+        .expect_err("the change task was cancelled")
+        .is_cancelled());
+    let mut holding = {
+        let store = Arc::clone(&store);
+        let id = id.clone();
+        tokio::spawn(
+            async move { ShareGrants::hold_revision(&*store, &id, "phone", revision).await },
+        )
+    };
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), &mut holding)
+            .await
+            .is_err(),
+        "hold_revision read the revision while the cancelled change's write still held the gate"
+    );
+    pause.release();
+    let held = tokio::time::timeout(Duration::from_secs(5), holding)
+        .await
+        .expect("the hold finishes once the write does")
+        .expect("the hold task");
+    assert!(
+        matches!(held, Err(ConversationError::Revoked)),
+        "the hold kept a revision the cancelled write replaced"
+    );
+    assert!(
+        ShareGrants::grants(&*store, &id).await.unwrap().is_empty(),
+        "the detached write did not revoke the grant"
+    );
+}

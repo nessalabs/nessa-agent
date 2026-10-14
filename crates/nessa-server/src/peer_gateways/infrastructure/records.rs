@@ -39,7 +39,10 @@ use std::{
     io::{self, Read, Write},
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, PoisonError},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, PoisonError,
+    },
 };
 use subtle::ConstantTimeEq;
 
@@ -206,6 +209,9 @@ pub struct PeerRecords {
     gateway: AudienceId,
     clock: Arc<dyn Clock>,
     operation: Mutex<()>,
+    /// Bumped when a record is written or removed, so a reader can notice a
+    /// change without scanning the directory.
+    listed: AtomicU64,
 }
 impl PeerRecords {
     /// Open `directory`, already private, beneath the trusted absolute `root`.
@@ -224,7 +230,16 @@ impl PeerRecords {
             gateway,
             clock,
             operation: Mutex::new(()),
+            listed: AtomicU64::new(0),
         })
+    }
+    /// How many times a record has been written or removed. A listing taken
+    /// against an earlier value is stale.
+    pub fn listed_generation(&self) -> u64 {
+        self.listed.load(Ordering::Acquire)
+    }
+    fn note_listed(&self) {
+        self.listed.fetch_add(1, Ordering::Release);
     }
     /// A slot for a new enrollment dialed at `address`, its record to keep
     /// `relay`.
@@ -306,6 +321,8 @@ impl PeerRecords {
         self.directory
             .remove_file(&name, &file)
             .map_err(|error| ForgetFailure::Record(storage_error(error)))?;
+        // The file is gone even when the directory sync is not confirmed.
+        self.note_listed();
         self.directory
             .sync()
             .map_err(|_| ForgetFailure::Record(PrivateStateError::Uncertain))?;
@@ -481,9 +498,15 @@ impl PeerRecords {
             temporary.publish_new(&name)
         };
         match published {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                self.note_listed();
+                Ok(())
+            }
             // Renamed, then not acknowledged: the record may be there.
-            Err(failure) if failure.published().is_some() => Err(PrivateStateError::Uncertain),
+            Err(failure) if failure.published().is_some() => {
+                self.note_listed();
+                Err(PrivateStateError::Uncertain)
+            }
             Err(_) => Err(PrivateStateError::Unavailable),
         }
     }

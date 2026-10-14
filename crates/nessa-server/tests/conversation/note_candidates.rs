@@ -54,6 +54,14 @@ impl ShareGrants for Scripted {
     ) -> ConversationFuture<'a, Option<crate::conversation::domain::ToolPolicy>> {
         unreachable!("a verdict reads no policy")
     }
+    fn hold_revision<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> ConversationFuture<'a, RevisionHold> {
+        unreachable!("a verdict holds no revision")
+    }
 }
 
 fn note(id: &str, author: Initiator) -> NoteRecord {
