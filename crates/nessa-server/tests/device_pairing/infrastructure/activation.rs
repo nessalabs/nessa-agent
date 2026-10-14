@@ -42,8 +42,8 @@ use nessa_server::{
     },
     device_pairing::{
         application::{
-            ActivationError, Approval, CleanupError, PairingReceivers, ReceiverError,
-            ReceiverRequest,
+            ActivationError, Approval, CleanupError, PairingReceivers, PublicationGuard,
+            ReceiverError, ReceiverRequest,
         },
         infrastructure::{
             ConversationReceivers, NativeConnectionFailure, NativeEnrollmentConnections,
@@ -101,6 +101,10 @@ impl Receivers {
     }
 }
 impl PairingReceivers for Receivers {
+    fn lock_publication(&self) -> Result<PublicationGuard, ReceiverError> {
+        Ok(PublicationGuard::none())
+    }
+
     fn pair(&self, request: &ReceiverRequest) -> Result<ReceiverOutcome, ReceiverError> {
         self.pairs.fetch_add(1, Ordering::SeqCst);
         let outcome = self.real.pair(request)?;
