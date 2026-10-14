@@ -130,9 +130,6 @@ export function useFileAttachments(
   // Picker identity and lifetime are retained by their live operation values
   // above; this map owns only host-minted drops.
   const dropDestinations = React.useRef(new Map<string, AttachmentDestination>())
-  const refuseRef = React.useRef<
-    (refusal: AttachmentRefusal, target: AttachmentDestination | string) => void
-  >(() => {})
   const mounted = React.useRef(true)
   /**
    * Why the last thing offered was not taken, and which conversation it was
@@ -158,6 +155,30 @@ export function useFileAttachments(
     destination: AttachmentDestination
     placementId: string
   } | null>(null)
+  /**
+   * Say why something was not taken. Defaults to the active conversation; a
+   * folder walk that finishes after somebody has moved on names the one it was
+   * dropped into, so its refusal is not shown above another draft quoting
+   * another draft's bounds.
+   *
+   * Replaces whatever was there. There is one of these at a time, and it is
+   * always the most recent thing the panel turned away.
+   */
+  const refuse = React.useCallback(
+    (
+      refusal: AttachmentRefusal,
+      target: AttachmentDestination | string = currentDestination(),
+    ) => {
+      const destination = typeof target === "string" ? currentDestination(target) : target
+      if (
+        !destinationIsCurrent(destination) ||
+        destination.conversationId !== activeId.current
+      )
+        return
+      setRefused({ destination, refusal })
+    },
+    [currentDestination, destinationIsCurrent],
+  )
   React.useEffect(() => {
     const operations = operationsRef.current
     const drops = dropDestinations.current
@@ -201,7 +222,7 @@ export function useFileAttachments(
       const held = dropDestinations.current
       if (gesture === "picked" || held.has(named)) return
       if (held.size >= MAX_ACTIVE_DROP_BATCHES) {
-        refuseRef.current({ reason: "too-many-selections" }, currentDestination())
+        refuse({ reason: "too-many-selections" }, currentDestination())
         return
       }
       held.set(named, currentDestination())
@@ -226,7 +247,7 @@ export function useFileAttachments(
       void batch.then((stop) => stop())
       void subscription.then((stop) => stop())
     }
-  }, [currentDestination, destinationForBatch, resources, store])
+  }, [currentDestination, destinationForBatch, refuse, resources, store])
   React.useEffect(() => {
     if (
       viewed &&
@@ -252,33 +273,6 @@ export function useFileAttachments(
   const files = chat.active.draft.filter(
     (part): part is FileAttachment => part.type === "file",
   )
-  /**
-   * Say why something was not taken. Defaults to the active conversation; a
-   * folder walk that finishes after somebody has moved on names the one it was
-   * dropped into, so its refusal is not shown above another draft quoting
-   * another draft's bounds.
-   *
-   * Replaces whatever was there. There is one of these at a time, and it is
-   * always the most recent thing the panel turned away.
-   */
-  const refuse = React.useCallback(
-    (
-      refusal: AttachmentRefusal,
-      target: AttachmentDestination | string = currentDestination(),
-    ) => {
-      const destination = typeof target === "string" ? currentDestination(target) : target
-      if (
-        !destinationIsCurrent(destination) ||
-        destination.conversationId !== activeId.current
-      )
-        return
-      setRefused({ destination, refusal })
-    },
-    [currentDestination, destinationIsCurrent],
-  )
-  React.useLayoutEffect(() => {
-    refuseRef.current = refuse
-  }, [refuse])
   /**
    * A closed tab in the current owner has nobody left to tell, so its notice
    * goes to that owner's active tab. A retired owner must not notify the
