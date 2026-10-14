@@ -1,0 +1,15 @@
+R5 source commit: 3930817d8456cef018d19039891d361e06f45e36
+Regression: f87d9a2a44bb693daca5e9e879d88476131320e2 (GitHub review comment 4266683474)
+PASS direct Node TypeScript: node node_modules/typescript/bin/tsc --noEmit --pretty false
+PASS changed-source ESLint: node node_modules/eslint/bin/eslint.js (6 TS/TSX/MJS files)
+PASS `node --test scripts/architecture/*.test.mjs`: 104 tests
+PASS architecture policy: node scripts/check-architecture.mjs
+PASS UI dependency check: node scripts/ensure-nessa-ui.mjs --check
+PASS full Vitest: node node_modules/vitest/vitest.mjs run --config vitest.config.ts --silent, 4,387 tests / 331 files
+PASS focused attachment Vitest: 56 tests / 5 files
+PASS formatting: direct Node Prettier check on all changed text files
+PASS `node verification/desktop/scripts/attachments-races.mjs`: 36 / 36 Chromium and WebKit engine/scenario pairs
+PASS isolated folder-owner scenarios after evidence capture: 4 / 4 Chromium and WebKit engine/scenario pairs
+Revert: render-time folder destination capture -> both actual-App AG20 regressions fail after provider replacement.
+All source-probe edits restored before commit.
+The full matrix exercises the actual panel, Redux providers and Markdown editor with controlled folder traversals; it does not call a real provider or system file picker.

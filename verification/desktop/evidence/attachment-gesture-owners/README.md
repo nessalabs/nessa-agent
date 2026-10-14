@@ -86,6 +86,9 @@ Geist Mono dependencies inside this checkout.
 
 ## R5 folder-operation scope
 
+R5 product source is frozen at
+`3930817d8456cef018d19039891d361e06f45e36`.
+
 The `folder-owner-send` and `folder-owner-drop` cases keep A's folder traversal
 pending while replacing the provider with B's store and resources under the
 same local `c0`. The next committed B render can send immediately and start its
