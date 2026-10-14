@@ -14,9 +14,12 @@ import {
   conversationReducer,
 } from "./conversation/adapters/store/slice"
 import { sessionReducer } from "./session/adapters/store/slice"
-import { PreparedOperationTable } from "./conversation/adapters/store/prepared-operation-table"
 
-import { createDependencies, type AppDependencies } from "./composition/dependencies"
+import {
+  createDependencies,
+  createPreparedOperationTable,
+  type AppDependencies,
+} from "./composition/dependencies"
 
 /** The dependencies the store itself owns and passes to conversation commands. */
 export type StoreDependencies = Pick<
@@ -25,7 +28,7 @@ export type StoreDependencies = Pick<
 >
 
 export function makeStore(dependencies: StoreDependencies = createDependencies()) {
-  const preparedOperations = new PreparedOperationTable()
+  const preparedOperations = createPreparedOperationTable()
   const store = configureStore({
     middleware: (getDefaultMiddleware) =>
       getDefaultMiddleware({
