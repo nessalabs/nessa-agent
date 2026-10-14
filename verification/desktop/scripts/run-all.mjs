@@ -188,6 +188,7 @@ try {
     const args = [...passThrough(), "--out", out]
     if (!sharesPage(check)) {
       if (check === "perf-budget" && options.url) args.push("--url", options.url)
+      if (check === "committed-transcript" && options.url) args.push("--url", options.url)
       if (options.runs) args.push("--runs", options.runs)
       if (check === "message-sync" || check === "committed-transcript")
         args.push("--mode", "prod")
