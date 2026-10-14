@@ -18,6 +18,9 @@ pub enum OutboxError {
     Unavailable,
     /// A commit's acknowledgement was lost. The gateway was not asked after it.
     Uncertain,
+    /// The gateway was asked, and saving that answer failed. The message may
+    /// already have been delivered. Keep this command id.
+    Unsaved,
     /// Stored bytes are not a phone send. They were left as they were.
     Corrupt,
     /// A new draft's ids could not be made.
@@ -30,6 +33,9 @@ impl fmt::Display for OutboxError {
             Self::Conflict => output.write_str("phone command id already stores different bytes"),
             Self::Unavailable => output.write_str("phone outbox store is unavailable"),
             Self::Uncertain => output.write_str("phone outbox commit was not acknowledged"),
+            Self::Unsaved => {
+                output.write_str("phone send may have been delivered and its outcome was not saved")
+            }
             Self::Corrupt => output.write_str("phone outbox bytes are corrupt"),
             Self::Id(error) => write!(output, "phone command id was refused: {error:?}"),
         }

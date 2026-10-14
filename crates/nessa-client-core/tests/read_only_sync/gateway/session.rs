@@ -1335,6 +1335,34 @@ fn a_typed_send_refusal_keeps_the_session_for_the_receipt() {
     peer.join().unwrap();
 }
 
+#[test]
+fn an_unknown_send_refusal_closes_the_session() {
+    let intent = PhoneIntent::new(
+        "01234567-89ab-4cde-8f01-23456789abcd",
+        PhoneCommandId::new("command-1").unwrap(),
+        ExecutionId::new("turn-1").unwrap(),
+        "hello from the phone",
+        Vec::new(),
+    )
+    .unwrap();
+    let (endpoint, peer) = peer(|socket| {
+        let sent = request(socket);
+        assert_eq!(sent.method, product_method::CONVERSATION_SEND);
+        send(
+            socket,
+            OutgoingMessage::Response(ResponseFrame::failure(&sent.id, "not_a_real_code", "no")),
+        );
+    });
+    let mut session = connect(&endpoint);
+    assert_eq!(
+        PhoneGateway::send(&mut session, &intent),
+        SendAnswer::Broken
+    );
+    assert_eq!(session.begin(), Err(GatewayError::Transport));
+    drop(session);
+    peer.join().unwrap();
+}
+
 #[path = "session/held_files.rs"]
 mod held_files;
 #[path = "session/subscribe.rs"]

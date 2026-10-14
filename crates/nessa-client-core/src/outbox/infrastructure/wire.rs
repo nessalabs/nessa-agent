@@ -38,8 +38,11 @@ pub fn receipt_params(intent: &PhoneIntent) -> ConversationReceiptParams {
 }
 
 /// A `conversation.send` payload, or a broken answer.
-pub fn send_answer(receipt: ConversationReceipt) -> Result<SendAnswer, ()> {
-    if receipt.execution_id.is_empty() {
+///
+/// The receipt's execution must be this intent's turn. Another turn's
+/// disposition is not applied.
+pub fn send_answer(intent: &PhoneIntent, receipt: ConversationReceipt) -> Result<SendAnswer, ()> {
+    if receipt.execution_id != intent.turn().as_str() {
         return Err(());
     }
     let delivery = match receipt.disposition {
@@ -50,8 +53,17 @@ pub fn send_answer(receipt: ConversationReceipt) -> Result<SendAnswer, ()> {
     Ok(SendAnswer::Receipt(delivery))
 }
 
-/// A `conversation.receipt` payload. A missing stage when `found` is true is broken.
-pub fn lookup_answer(result: ConversationReceiptResult) -> Result<LookupAnswer, ()> {
+/// A `conversation.receipt` payload for a submit lookup.
+///
+/// `ready` is creation's terminal stage, so a submit receipt that carries it
+/// is a protocol failure. The request id must be this intent's command.
+pub fn lookup_answer(
+    intent: &PhoneIntent,
+    result: ConversationReceiptResult,
+) -> Result<LookupAnswer, ()> {
+    if result.request_id != intent.command().as_str() {
+        return Err(());
+    }
     if !result.found {
         if result.stage.is_some() || result.outcome.is_some() {
             return Err(());
@@ -61,9 +73,8 @@ pub fn lookup_answer(result: ConversationReceiptResult) -> Result<LookupAnswer, 
     let stage = match result.stage {
         Some(ConversationCommandStage::Accepted) => ReceiptStage::Accepted,
         Some(ConversationCommandStage::Attempted) => ReceiptStage::Attempted,
-        Some(ConversationCommandStage::Ready) => ReceiptStage::Ready,
+        Some(ConversationCommandStage::Ready) | None => return Err(()),
         Some(ConversationCommandStage::Settled) => ReceiptStage::Settled,
-        None => return Err(()),
     };
     let effect = match result.outcome {
         None => None,

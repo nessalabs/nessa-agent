@@ -63,14 +63,19 @@ fn a_disposition_is_the_contract_delivery_and_a_blank_execution_is_not() {
         disposition: ConversationDisposition::Injected,
     };
     assert_eq!(
-        send_answer(receipt).unwrap(),
+        send_answer(&intent(), receipt).unwrap(),
         SendAnswer::Receipt(Delivery::Injected)
     );
     let blank = ConversationReceipt {
         execution_id: String::new(),
         disposition: ConversationDisposition::Settled,
     };
-    assert!(send_answer(blank).is_err());
+    assert!(send_answer(&intent(), blank).is_err());
+    let other_turn = ConversationReceipt {
+        execution_id: "turn-other".to_owned(),
+        disposition: ConversationDisposition::Injected,
+    };
+    assert!(send_answer(&intent(), other_turn).is_err());
 }
 
 #[test]
@@ -81,7 +86,10 @@ fn a_receipt_result_keeps_found_stage_and_effect_together() {
         stage: None,
         outcome: None,
     };
-    assert_eq!(lookup_answer(missing).unwrap(), LookupAnswer::NotFound);
+    assert_eq!(
+        lookup_answer(&intent(), missing).unwrap(),
+        LookupAnswer::NotFound
+    );
     let settled = ConversationReceiptResult {
         found: true,
         request_id: "command-1".to_owned(),
@@ -89,7 +97,7 @@ fn a_receipt_result_keeps_found_stage_and_effect_together() {
         outcome: Some(ConversationCommandOutcome::UnavailableAfterSave),
     };
     assert_eq!(
-        lookup_answer(settled).unwrap(),
+        lookup_answer(&intent(), settled).unwrap(),
         LookupAnswer::Found {
             stage: ReceiptStage::Settled,
             effect: Some(ReceiptEffect::UnavailableAfterSave),
@@ -101,14 +109,28 @@ fn a_receipt_result_keeps_found_stage_and_effect_together() {
         stage: Some(ConversationCommandStage::Accepted),
         outcome: None,
     };
-    assert!(lookup_answer(staged).is_err());
+    assert!(lookup_answer(&intent(), staged).is_err());
     let early_effect = ConversationReceiptResult {
         found: true,
         request_id: "command-1".to_owned(),
         stage: Some(ConversationCommandStage::Accepted),
         outcome: Some(ConversationCommandOutcome::Dispatched),
     };
-    assert!(lookup_answer(early_effect).is_err());
+    assert!(lookup_answer(&intent(), early_effect).is_err());
+    let other_command = ConversationReceiptResult {
+        found: false,
+        request_id: "command-other".to_owned(),
+        stage: None,
+        outcome: None,
+    };
+    assert!(lookup_answer(&intent(), other_command).is_err());
+    let ready = ConversationReceiptResult {
+        found: true,
+        request_id: "command-1".to_owned(),
+        stage: Some(ConversationCommandStage::Ready),
+        outcome: None,
+    };
+    assert!(lookup_answer(&intent(), ready).is_err());
 }
 
 #[test]

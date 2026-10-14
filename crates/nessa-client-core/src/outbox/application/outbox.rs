@@ -108,11 +108,12 @@ where
         }
         let answer = self.gateway.lookup(record.intent());
         if matches!(answer, LookupAnswer::NotFound) {
-            let reset = record
+            let looked = record
                 .clone()
-                .with_sends(0)
                 .with_outcome(PhoneOutcome::Unknown(UnknownCause::NotAdmitted));
-            self.persist(&record, &reset, Cause::ExplicitRetry, by)?;
+            self.persist_asked(&record, &looked, Cause::Lookup, by)?;
+            let reset = looked.clone().with_sends(0);
+            self.persist_asked(&looked, &reset, Cause::ExplicitRetry, by)?;
             return self.foreground(reset, by, Cause::ExplicitRetry);
         }
         self.apply_lookup(record, answer, by, false)
@@ -150,7 +151,7 @@ where
                 let next = record
                     .clone()
                     .with_outcome(PhoneOutcome::Unknown(UnknownCause::NotAdmitted));
-                self.persist(&record, &next, Cause::Bound, by)?;
+                self.persist_asked(&record, &next, Cause::Bound, by)?;
                 tracing::warn!(
                     limit = "client.foreground_sends",
                     "product session hit an operational limit"
@@ -160,7 +161,7 @@ where
             let answer = self.gateway.send(record.intent());
             match after_send(record.clone(), answer) {
                 Step::Done(next) => {
-                    self.persist(&record, &next, cause, by)?;
+                    self.persist_asked(&record, &next, cause, by)?;
                     return Ok(next.view());
                 }
                 Step::ReturnToDraft(next) => return self.return_to_draft(&record, next, by),
@@ -173,7 +174,7 @@ where
                     } else {
                         Cause::Unreadable
                     };
-                    self.persist(&record, &bumped, lost, by)?;
+                    self.persist_asked(&record, &bumped, lost, by)?;
                     let looked = self.gateway.lookup(bumped.intent());
                     match after_lookup(bumped.clone(), looked, resend) {
                         Step::Done(next) => {
@@ -183,21 +184,21 @@ where
                                     "product session hit an operational limit"
                                 );
                             }
-                            self.persist(&bumped, &next, Cause::Lookup, by)?;
+                            self.persist_asked(&bumped, &next, Cause::Lookup, by)?;
                             return Ok(next.view());
                         }
                         Step::ReturnToDraft(next) => {
                             return self.return_to_draft(&bumped, next, by)
                         }
                         Step::Send(next) => {
-                            self.persist(&bumped, &next, Cause::ForegroundSend, by)?;
+                            self.persist_asked(&bumped, &next, Cause::ForegroundSend, by)?;
                             record = next;
                             cause = Cause::ForegroundSend;
                         }
-                        Step::Lookup { .. } => return Err(OutboxError::Unavailable),
+                        Step::Lookup { .. } => return Err(OutboxError::Unsaved),
                     }
                 }
-                Step::Send(_) => return Err(OutboxError::Unavailable),
+                Step::Send(_) => return Err(OutboxError::Unsaved),
             }
         }
     }
@@ -211,15 +212,15 @@ where
     ) -> Result<PhoneView, OutboxError> {
         match after_lookup(record.clone(), answer, allow_send) {
             Step::Done(next) => {
-                self.persist(&record, &next, Cause::Lookup, by)?;
+                self.persist_asked(&record, &next, Cause::Lookup, by)?;
                 Ok(next.view())
             }
             Step::ReturnToDraft(next) => self.return_to_draft(&record, next, by),
             Step::Send(next) => {
-                self.persist(&record, &next, Cause::Lookup, by)?;
+                self.persist_asked(&record, &next, Cause::Lookup, by)?;
                 self.foreground(next, by, Cause::ForegroundSend)
             }
-            Step::Lookup { .. } => Err(OutboxError::Unavailable),
+            Step::Lookup { .. } => Err(OutboxError::Unsaved),
         }
     }
 
@@ -230,7 +231,7 @@ where
         by: Initiator,
     ) -> Result<PhoneView, OutboxError> {
         if failed.successor().is_some() {
-            self.persist(previous, &failed, Cause::ReturnedToDraft, by)?;
+            self.persist_asked(previous, &failed, Cause::ReturnedToDraft, by)?;
             return Ok(failed.view());
         }
         let (command, turn) = self.ids.mint()?;
@@ -244,7 +245,8 @@ where
         let failed_event = self.event(Cause::ReturnedToDraft, failed.outcome(), by);
         let draft_event = self.event(Cause::Held, draft.outcome(), by);
         self.store
-            .replace_and_insert(previous, &failed, &draft, failed_event, draft_event)?;
+            .replace_and_insert(previous, &failed, &draft, failed_event, draft_event)
+            .map_err(|error| asked(OutboxError::from(error)))?;
         Ok(failed.view())
     }
 
@@ -260,6 +262,18 @@ where
         Ok(())
     }
 
+    /// The gateway has already been asked. A failed save must not be reported
+    /// as [`OutboxError::Unavailable`], which means nothing was sent.
+    fn persist_asked(
+        &mut self,
+        previous: &PhoneRecord,
+        next: &PhoneRecord,
+        cause: Cause,
+        by: Initiator,
+    ) -> Result<(), OutboxError> {
+        self.persist(previous, next, cause, by).map_err(asked)
+    }
+
     fn event(&self, cause: Cause, outcome: PhoneOutcome, initiator: Initiator) -> IntentEvent {
         IntentEvent {
             cause,
@@ -267,6 +281,13 @@ where
             initiator,
             observed_at_ms: self.clock.unix_milliseconds(),
         }
+    }
+}
+
+fn asked(error: OutboxError) -> OutboxError {
+    match error {
+        OutboxError::Unavailable | OutboxError::Uncertain => OutboxError::Unsaved,
+        other => other,
     }
 }
 

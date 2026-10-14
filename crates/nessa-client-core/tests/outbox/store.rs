@@ -84,6 +84,7 @@ impl PhoneGateway for Scripted {
 struct Memory {
     rows: BTreeMap<String, PhoneRecord>,
     uncertain_depart: bool,
+    fail_answer: Option<StoreError>,
 }
 impl IntentStore for Memory {
     fn load(&mut self, id: &PhoneCommandId) -> Result<Option<PhoneRecord>, StoreError> {
@@ -104,6 +105,11 @@ impl IntentStore for Memory {
     ) -> Result<(), StoreError> {
         if self.uncertain_depart && !previous.departed() && next.departed() {
             return Err(StoreError::Uncertain);
+        }
+        if let Some(error) = self.fail_answer {
+            if previous.departed() && next.outcome() != previous.outcome() {
+                return Err(error);
+            }
         }
         self.rows
             .insert(next.intent().command().as_str().to_owned(), next.clone());
@@ -330,6 +336,7 @@ fn an_uncertain_departure_does_not_send() {
         Memory {
             rows: BTreeMap::new(),
             uncertain_depart: true,
+            fail_answer: None,
         },
         gateway,
         SeqIds::default(),
@@ -342,6 +349,52 @@ fn an_uncertain_departure_does_not_send() {
     let still = outbox.list().unwrap();
     assert_eq!(still[0].outcome(), PhoneOutcome::Draft);
     assert!(!still[0].claims_submission());
+}
+
+#[test]
+fn a_failed_save_after_a_send_keeps_possible_delivery() {
+    for store_error in [StoreError::Unavailable, StoreError::Uncertain] {
+        let gateway = Scripted::new(
+            vec![SendAnswer::Receipt(Delivery::Queued)],
+            vec![LookupAnswer::NotFound],
+        );
+        let seen = gateway.clone();
+        let mut outbox = PhoneOutbox::new(
+            Memory {
+                rows: BTreeMap::new(),
+                uncertain_depart: false,
+                fail_answer: Some(store_error),
+            },
+            gateway,
+            SeqIds::default(),
+            clock(),
+        );
+        person_hold(&mut outbox, text_intent("command-1", "hello"));
+        assert_eq!(
+            outbox
+                .send(&command("command-1"), Initiator::Person)
+                .unwrap_err(),
+            OutboxError::Unsaved
+        );
+        let still = outbox.list().unwrap();
+        assert_eq!(still.len(), 1);
+        assert_eq!(
+            still[0].outcome(),
+            PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+        );
+        assert!(!still[0].claims_submission());
+        assert_eq!(still[0].intent().text(), "hello");
+        let again = outbox
+            .send(&command("command-1"), Initiator::Person)
+            .unwrap();
+        assert_eq!(
+            again.outcome(),
+            PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+        );
+        let body = seen.body();
+        assert_eq!(body.sent.len(), 1);
+        assert_eq!(body.order, ["send", "lookup"]);
+    }
 }
 
 fn accepted_send(delivery: Delivery, outcome: PhoneOutcome) {
@@ -786,10 +839,34 @@ fn an_explicit_retry_looks_up_before_it_sends() {
         .retry(&command("command-1"), Initiator::Person)
         .unwrap();
     assert_eq!(view.outcome(), PhoneOutcome::Accepted);
-    let body = seen.body();
-    assert_eq!(body.order, ["lookup", "send"]);
-    assert_eq!(body.sent[0], canonical);
-    assert_eq!(body.looked[0], canonical);
+    {
+        let body = seen.body();
+        assert_eq!(body.order, ["lookup", "send"]);
+        assert_eq!(body.sent[0], canonical);
+        assert_eq!(body.looked[0], canonical);
+    }
+    drop(outbox);
+    let mut store = SqliteIntents::open(&path).unwrap();
+    let events = store.events("command-1").unwrap();
+    let causes: Vec<_> = events.iter().map(|event| event.cause).collect();
+    assert_eq!(
+        causes,
+        [
+            Cause::Departed,
+            Cause::Lookup,
+            Cause::ExplicitRetry,
+            Cause::ExplicitRetry,
+        ]
+    );
+    assert_eq!(
+        events[1].outcome,
+        PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+    );
+    assert_eq!(
+        events[2].outcome,
+        PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+    );
+    assert_eq!(events[3].outcome, PhoneOutcome::Accepted);
 }
 
 #[test]

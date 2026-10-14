@@ -23,15 +23,16 @@ impl PhoneGateway for Session {
     fn send(&mut self, intent: &PhoneIntent) -> SendAnswer {
         match self.exchange(product_method::CONVERSATION_SEND, &send_params(intent)) {
             Ok(value) => match serde_json::from_value::<ConversationReceipt>(value) {
-                Ok(receipt) => match send_answer(receipt) {
+                Ok(receipt) => match send_answer(intent, receipt) {
                     Ok(answer) => answer,
                     Err(()) => self.broken(),
                 },
                 Err(_) => self.broken(),
             },
-            Err(CommandExchange::Refused(code)) => {
-                command_failure(&code).map_or(SendAnswer::Broken, SendAnswer::Refused)
-            }
+            Err(CommandExchange::Refused(code)) => match command_failure(&code) {
+                Ok(failure) => SendAnswer::Refused(failure),
+                Err(()) => self.broken(),
+            },
             Err(CommandExchange::Lost(_)) => SendAnswer::Lost,
         }
     }
@@ -42,7 +43,7 @@ impl PhoneGateway for Session {
             &receipt_params(intent),
         ) {
             Ok(value) => match serde_json::from_value::<ConversationReceiptResult>(value) {
-                Ok(result) => match lookup_answer(result) {
+                Ok(result) => match lookup_answer(intent, result) {
                     Ok(answer) => answer,
                     Err(()) => {
                         self.fail(GatewayError::Protocol);
@@ -54,9 +55,13 @@ impl PhoneGateway for Session {
                     LookupAnswer::Broken
                 }
             },
-            Err(CommandExchange::Refused(code)) => command_failure(&code)
-                .map(LookupAnswer::Refused)
-                .unwrap_or(LookupAnswer::Broken),
+            Err(CommandExchange::Refused(code)) => match command_failure(&code) {
+                Ok(failure) => LookupAnswer::Refused(failure),
+                Err(()) => {
+                    self.fail(GatewayError::Protocol);
+                    LookupAnswer::Broken
+                }
+            },
             Err(CommandExchange::Lost(_)) => LookupAnswer::Lost,
         }
     }

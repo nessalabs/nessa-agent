@@ -30,6 +30,7 @@ Cedar admits the session. This outbox does not decide who may send.
 | S7 | Send returns `conversation_deleted` | Failed with that code. The typed text remains readable | `a_deleted_conversation_keeps_the_typed_text` |
 | S8 | Send returns `submission_unresolved` | Unknown, cause unresolved. The same id is not sent again | `submission_unresolved_is_not_sent_again` |
 | S9 | Send answer is not a receipt or a known refusal | The receipt is read. The same bytes are not sent again in that call | `an_unreadable_send_answer_is_not_sent_again` |
+| S10 | The send is answered and saving that answer fails | The error says the message may have been delivered. The saved row stays unknown and does not claim submission. A later send reads the receipt | `a_failed_save_after_a_send_keeps_possible_delivery` |
 | L1 | Send answer lost, lookup finds `accepted` | Accepted. No further send | `a_lost_answer_with_an_accepted_receipt_is_not_sent_again` |
 | L2 | Send answer lost, lookup finds `attempted` | Unknown, cause attempted. No further send | `an_attempted_receipt_is_unknown_and_not_sent_again` |
 | L3 | Send answer lost, lookup finds settled `dispatched` | Done | `a_dispatched_receipt_is_done` |
@@ -40,7 +41,7 @@ Cedar admits the session. This outbox does not decide who may send.
 | L8 | Lookup returns `submission_conflict` | Failed with that code. `found` is not treated as a receipt | `a_conflicting_lookup_is_failed` |
 | R1 | Restart after departure, lookup finds nothing | Unknown. `conversation.send` is not asked | `recovery_does_not_send_when_the_receipt_is_absent` |
 | R2 | Restart after departure, lookup finds settled `dispatched` | Done. `conversation.send` is not asked | `recovery_adopts_a_dispatched_receipt_without_sending` |
-| R3 | Explicit retry after a lookup that found nothing | One new foreground budget of the same bytes | `an_explicit_retry_looks_up_before_it_sends` |
+| R3 | Explicit retry after a lookup that found nothing | The lookup is recorded as unknown, not admitted, then one new foreground budget of the same bytes | `an_explicit_retry_looks_up_before_it_sends` |
 | R4 | Explicit retry of unresolved, attempted, failed, or done | No send | `an_explicit_retry_does_not_send_an_uncertain_or_finished_command` |
 | C1 | Stored canonical bytes do not decode | Corrupt. The row is not rewritten | `corrupt_canonical_bytes_are_left_in_place` |
 | C2 | Each transition | The event records the command, the outcome, the cause, and the initiator | `a_transition_keeps_its_cause_and_initiator` |
