@@ -160,6 +160,8 @@ export async function keysWhileRowsArrive(page) {
     cleanupFailures.push(error)
   }
   if (retirement.kind === "unsafe") {
+    for (const error of cleanupFailures) logCleanupFailure(error)
+    logCleanupFailure(retirement.error)
     const cause = outcome.kind === "failure" ? outcome.error : disarmFailure
     throw new UnsafeToContinueError(
       `overview observer disarm failed and page retirement also failed: ${failureDescription(retirement.error)}`,

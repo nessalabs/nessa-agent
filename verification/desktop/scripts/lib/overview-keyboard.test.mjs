@@ -1,7 +1,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { runInNewContext } from "node:vm"
-import { attempt, CannotRun, UnsafeToContinueError } from "./cli.mjs"
+import { attempt, CannotRun, resultOfThrown, UnsafeToContinueError } from "./cli.mjs"
+import { runAndClose, withCleanup } from "./browser.mjs"
 import { keysWhileRowsArrive, pressMountedOverviewKeys } from "./overview-keyboard.mjs"
 
 const noRetirementFailure = Symbol("no retirement failure")
@@ -275,6 +276,82 @@ test("does not continue the driver when observer disarm and page retirement both
   )
   assert.deepEqual(scene.events, ["arm", "open", "delivered", "close"])
   assert.equal(scene.closed, false)
+})
+
+test("preserves fatal observer failure through context and browser cleanup into the result", async () => {
+  const readFailure = new Error("could not read browser result")
+  const disarmFailure = new Error("observer disarm failed")
+  const retirementFailure = new Error("page close failed")
+  const disposeFailure = new Error("result disposal failed")
+  const contextFailure = new Error("context close failed")
+  const browserFailure = new Error("browser close failed")
+  const scene = pageWithFastCompletion({
+    disarmFailure,
+    retirementFailure,
+    disposeFailure,
+    jsonValueFailure: readFailure,
+  })
+  let contextClosed = false
+  let browserClosed = false
+  let escaped
+  const diagnostics = []
+  const write = process.stderr.write
+  process.stderr.write = (chunk) => (diagnostics.push(String(chunk)), true)
+  try {
+    try {
+      await runAndClose(
+        {
+          close: async () => {
+            browserClosed = true
+            throw browserFailure
+          },
+        },
+        () =>
+          withCleanup(
+            () => keysWhileRowsArrive(scene.page),
+            async () => {
+              contextClosed = true
+              throw contextFailure
+            },
+          ),
+      )
+    } catch (error) {
+      escaped = error
+    }
+    assert.ok(escaped instanceof UnsafeToContinueError)
+    assert.equal(escaped.cause, readFailure)
+    const result = resultOfThrown({ name: "focus-overview-arriving" }, escaped)
+    assert.equal(result.name, "focus-overview-arriving")
+    assert.equal(result.cannotRun, false)
+    assert.equal(
+      result.error,
+      "overview observer disarm failed and page retirement also failed: page close failed (caused by: Error: could not read browser result)",
+    )
+  } finally {
+    process.stderr.write = write
+  }
+  assert.equal(contextClosed, true)
+  assert.equal(browserClosed, true)
+  assert.equal(scene.closed, false)
+  assert.deepEqual(scene.events, [
+    "arm",
+    "open",
+    "End",
+    "ArrowDown",
+    "Home",
+    "complete",
+    "close",
+  ])
+  const output = diagnostics.join("")
+  for (const message of [
+    "observer disarm failed",
+    "page close failed",
+    "result disposal failed",
+    "context close failed",
+    "browser close failed",
+    "caused by: Error: could not read browser result",
+  ])
+    assert.ok(output.includes(message), `expected diagnostic ${message} in ${output}`)
 })
 
 test("treats nullish and empty page-close rejections as unsafe while the page is live", async () => {

@@ -22,7 +22,7 @@
  * band (focus-home-scene).
  */
 import { attempt, CannotRun } from "./lib/cli.mjs"
-import { need, openPage, withEngines } from "./lib/browser.mjs"
+import { need, openPage, withCleanup, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { keysWhileRowsArrive } from "./lib/overview-keyboard.mjs"
 import { content, css, keys, names, preferenceEvents, storage } from "./lib/selectors.mjs"
@@ -1118,66 +1118,67 @@ await main(meta, async ({ options, rep, url }) => {
   await withEngines(options, rep, async (engine, browser) => {
     for (const layout of options.layouts) {
       const opened = await openPage(browser, { url, layout, width: 1440, height: 900 })
-      try {
-        await need(opened.page, css.composer, "a composer")
-        const page = opened.page
-        await hideColumns(page, layout)
-        await focusComposer(page)
-        for (const [group, steps] of [
-          ["panes", paneSteps()],
-          ["overview", overviewSteps()],
-        ])
-          await attempt(rep, { name: `focus-${group}`, engine, layout }, async () => {
-            const failures = []
-            const trail = []
-            for (const [label, act, check] of steps) {
-              await act(page)
-              await settled(page)
-              // The caret lands a frame or two after what moved it.
+      await withCleanup(
+        async () => {
+          await need(opened.page, css.composer, "a composer")
+          const page = opened.page
+          await hideColumns(page, layout)
+          await focusComposer(page)
+          for (const [group, steps] of [
+            ["panes", paneSteps()],
+            ["overview", overviewSteps()],
+          ])
+            await attempt(rep, { name: `focus-${group}`, engine, layout }, async () => {
+              const failures = []
+              const trail = []
+              for (const [label, act, check] of steps) {
+                await act(page)
+                await settled(page)
+                // The caret lands a frame or two after what moved it.
+                await frames(page, 3)
+                const s = await state(page)
+                const problem = check(s)
+                trail.push({ step: label, ...s, ok: !problem })
+                if (problem) failures.push(`${label}: ${problem}`)
+              }
+              return { trail, failures }
+            })
+
+          await attempt(rep, { name: "focus-overview-arriving", engine, layout }, () =>
+            keysWhileRowsArrive(page),
+          )
+
+          const mash = Number(options.mash)
+          if (mash > 0)
+            await attempt(rep, { name: "focus-mash", engine, layout }, async () => {
+              const chords = [
+                keys.newSession,
+                keys.closePane,
+                keys.focusPane(2),
+                keys.newSessionBeside,
+                keys.toggleSidebar,
+                keys.toggleSessionList,
+                keys.focusPane(1),
+                keys.closePane,
+                keys.switcher,
+                keys.escape,
+                keys.focusPrevious,
+                keys.moveRight,
+                keys.focusPane(3),
+              ]
+              for (let i = 0; i < mash; i++)
+                await page.keyboard.press(chords[(i * 7 + (i >> 2)) % chords.length])
+              await settled(page, 5000)
               await frames(page, 3)
               const s = await state(page)
-              const problem = check(s)
-              trail.push({ step: label, ...s, ok: !problem })
-              if (problem) failures.push(`${label}: ${problem}`)
-            }
-            return { trail, failures }
-          })
-
-        await attempt(rep, { name: "focus-overview-arriving", engine, layout }, () =>
-          keysWhileRowsArrive(page),
-        )
-
-        const mash = Number(options.mash)
-        if (mash > 0)
-          await attempt(rep, { name: "focus-mash", engine, layout }, async () => {
-            const chords = [
-              keys.newSession,
-              keys.closePane,
-              keys.focusPane(2),
-              keys.newSessionBeside,
-              keys.toggleSidebar,
-              keys.toggleSessionList,
-              keys.focusPane(1),
-              keys.closePane,
-              keys.switcher,
-              keys.escape,
-              keys.focusPrevious,
-              keys.moveRight,
-              keys.focusPane(3),
-            ]
-            for (let i = 0; i < mash; i++)
-              await page.keyboard.press(chords[(i * 7 + (i >> 2)) % chords.length])
-            await settled(page, 5000)
-            await frames(page, 3)
-            const s = await state(page)
-            const failures = []
-            if (!(await paneCount(page))) failures.push("no panes after the burst")
-            if (!s.focusedPane) failures.push("no focused pane after the burst")
-            return { after: s, failures }
-          })
-      } finally {
-        await opened.close()
-      }
+              const failures = []
+              if (!(await paneCount(page))) failures.push("no panes after the burst")
+              if (!s.focusedPane) failures.push("no focused pane after the burst")
+              return { after: s, failures }
+            })
+        },
+        () => opened.close(),
+      )
       await attempt(rep, { name: "focus-bound-keys", engine, layout }, async () => {
         const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
         try {
