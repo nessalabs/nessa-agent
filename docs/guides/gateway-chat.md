@@ -11,7 +11,7 @@ attach an Agent. The separate passive receiver admission uses `conversation.read
 as an authorization action; its bounded source routes follow in #296 and #297.
 
 ```text
-Panel Send -> NessaClient.conversation.send -> authorized gateway command
+Panel Send -> conversation.prepare -> conversation.submit -> authorized gateway command
   -> shared ConversationService -> prepared Agent queue
   -> retained attachment task -> this conversation's ACP process
   <- bounded conversation.read view <- live SDK observations + saved history
@@ -236,9 +236,9 @@ input cannot be approved through a truncated view.
 ## Images in a message (panel and client)
 
 This section describes the panel and `@nessa/client` side of the product
-contract's `attachment.begin`, `PUT /attachments`, and the `attachments` list on
-`conversation.send` / `conversation.steer`. It claims nothing about the gateway
-beyond that contract.
+contract's `attachment.begin`, `PUT /attachments`, and the `attachments` list in
+the gateway's `conversation.send` / `conversation.steer` command payloads. It
+claims nothing about the gateway beyond that contract.
 
 A message is text plus image references; bytes never ride in a conversation
 command, whose socket message is capped at 64 KiB. The panel uploads at attach
@@ -249,7 +249,8 @@ attach -> SHA-256 of the original -> conversation.create (idempotent)
        -> attachment.begin -> stored { digest, mimeType, size }
                            -> upload_required -> PUT /attachments with the ticket
                                               -> 200 { digest, mimeType, size }
-send   -> conversation.send { text, attachments: [the returned references] }
+send   -> conversation.prepare(id, text, [the returned references])
+       -> conversation.submit(prepared)
 ```
 
 - **The gateway normalizes; the panel does not.** Converting, scaling, and

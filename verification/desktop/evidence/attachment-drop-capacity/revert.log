@@ -1,0 +1,5 @@
+Feature source head: f7fb12c2de2a9a39c025a32d7fd7b555ea8196d6
+Probe: restore oldest-entry eviction at the 64-batch admission boundary.
+Command: node verification/desktop/scripts/attachments-races.mjs --only drop-capacity
+Expected failure: exit 1; Chromium timed out waiting for visible “Too many selections”.
+Observed body had no refusal; no page errors. The source was restored before the final 26/26 browser run.

@@ -54,13 +54,9 @@ const store = makeStore(
         dispatched++
         return effects.create(...args)
       },
-      send: (...args) => {
+      submit: (...args) => {
         dispatched++
-        return effects.send(...args)
-      },
-      steer: (...args) => {
-        dispatched++
-        return effects.steer(...args)
+        return effects.submit(...args)
       },
     },
   }),

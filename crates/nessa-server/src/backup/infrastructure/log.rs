@@ -1,16 +1,16 @@
 //! The deletion inventory on disk. The mac key sits beside it and is not
 //! part of an export bundle.
 
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use nessa_local_storage::sync_directory;
+use nessa_local_storage::{create_directory, open, sync_directory, OpenMode, PrivateTempFile};
 
 use async_trait::async_trait;
 
-use crate::backup::application::{Authenticator, DeletionLogStore, MacKey};
+use crate::backup::application::{Authenticator, DeletionLogStore, LogStoreError, MacKey};
 use crate::backup::domain::{
     CredentialKind, DeletionEntry, DeletionFence, DeletionLog, Fingerprint, GrantRole,
 };
@@ -26,7 +26,7 @@ impl FileDeletionLog {
     /// Open or create `directory`. The mac key is created when absent.
     pub fn open(directory: impl Into<PathBuf>) -> std::io::Result<Self> {
         let directory = directory.into();
-        fs::create_dir_all(&directory)?;
+        create_directory(&directory)?;
         let key_path = directory.join("mac.key");
         let key = if key_path.is_file() {
             let bytes = fs::read(&key_path)?;
@@ -59,20 +59,39 @@ impl DeletionLogStore for FileDeletionLog {
         let path = self.path();
         let key = self.key;
         let gate = self.gate.lock().map_err(|_| ())?;
+        let _file = exclusive(&self.directory).map_err(|_| ())?;
         let log = read_log(&path, key)?;
         drop(gate);
         Ok(log)
     }
 
-    async fn store(&self, next: &DeletionLog) -> Result<(), ()> {
+    async fn store(&self, base: &DeletionLog, next: &DeletionLog) -> Result<(), LogStoreError> {
         let path = self.path();
+        let directory = self.directory.clone();
         let key = self.key;
         let text = sealed(next, key);
-        let gate = self.gate.lock().map_err(|_| ())?;
-        let stored = persist(&self.directory, &path, &text);
+        let expected = base.canonical();
+        let gate = self.gate.lock().map_err(|_| LogStoreError::Failed)?;
+        let _file = exclusive(&directory).map_err(|_| LogStoreError::Failed)?;
+        let current = read_log(&path, key).map_err(|_| LogStoreError::Failed)?;
+        if current.canonical() != expected {
+            return Err(LogStoreError::Stale);
+        }
+        persist(&directory, &path, &text).map_err(|_| LogStoreError::Failed)?;
         drop(gate);
-        stored.map_err(|_| ())
+        Ok(())
     }
+}
+
+/// One writer at a time for this directory, including another `FileDeletionLog`
+/// opened on the same path. The lock lasts until the file is dropped.
+fn exclusive(directory: &Path) -> std::io::Result<File> {
+    let file = open(
+        &directory.join("deletion-inventory.lock"),
+        OpenMode::OpenOrCreate,
+    )?;
+    file.lock()?;
+    Ok(file)
 }
 
 /// Write a new mac key and sync the file and its directory before the key
@@ -81,10 +100,7 @@ impl DeletionLogStore for FileDeletionLog {
 fn create_key(directory: &Path, key_path: &Path) -> std::io::Result<MacKey> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).map_err(|error| std::io::Error::other(error.to_string()))?;
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(key_path)?;
+    let mut file = open(key_path, OpenMode::CreateNew)?;
     let written = (|| {
         file.write_all(&bytes)?;
         file.sync_all()?;
@@ -100,30 +116,53 @@ fn create_key(directory: &Path, key_path: &Path) -> std::io::Result<MacKey> {
     Ok(MacKey(bytes))
 }
 
-/// Write `text` to a temporary file, sync that file, rename it over `path`,
-/// then sync `directory`. Success means the rename is durable. A failure
-/// before the rename removes the temporary file and leaves `path` as it was.
+/// Write `text` to a private temporary file, sync that file, rename it over
+/// `path`, then sync `directory`. Success means the rename is durable.
+///
+/// The temporary name is this attempt's. A directory sync that fails after
+/// the rename puts the previous bytes back, or removes `path` when it was
+/// absent, before the error is returned.
 fn persist(directory: &Path, path: &Path, text: &str) -> std::io::Result<()> {
-    let temporary = path.with_extension("txt.partial");
-    let written = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&temporary)?;
-        file.write_all(text.as_bytes())?;
-        file.sync_all()?;
-        Ok(())
-    })();
-    if let Err(error) = written {
-        let _ = fs::remove_file(&temporary);
+    persist_with(directory, path, text, &sync_directory)
+}
+
+fn persist_with(
+    directory: &Path,
+    path: &Path,
+    text: &str,
+    sync_dir: &dyn Fn(&Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    PrivateTempFile::clear_stale(directory)?;
+    let mut temporary = PrivateTempFile::new_in(directory)?;
+    temporary.as_file_mut().write_all(text.as_bytes())?;
+    temporary.as_file().sync_all()?;
+    let previous = preserve_previous(directory, path)?;
+    temporary.persist(path)?;
+    if let Err(error) = sync_dir(directory) {
+        restore_previous(path, previous)?;
         return Err(error);
     }
-    if let Err(error) = fs::rename(&temporary, path) {
-        let _ = fs::remove_file(&temporary);
-        return Err(error);
+    Ok(())
+}
+
+/// A private copy of `path`, synced, so a failed directory sync can put it
+/// back. `None` means `path` was absent.
+fn preserve_previous(directory: &Path, path: &Path) -> std::io::Result<Option<PrivateTempFile>> {
+    if !path.is_file() {
+        return Ok(None);
     }
-    sync_directory(directory)
+    let bytes = fs::read(path)?;
+    let mut copy = PrivateTempFile::new_in(directory)?;
+    copy.as_file_mut().write_all(&bytes)?;
+    copy.as_file().sync_all()?;
+    Ok(Some(copy))
+}
+
+fn restore_previous(path: &Path, previous: Option<PrivateTempFile>) -> std::io::Result<()> {
+    match previous {
+        Some(copy) => copy.persist(path),
+        None => fs::remove_file(path),
+    }
 }
 
 fn sealed(log: &DeletionLog, key: MacKey) -> String {
@@ -246,4 +285,145 @@ fn decode(value: &str) -> Result<String, ()> {
         }
     }
     String::from_utf8(out).map_err(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::backup::domain::DeletionFence;
+
+    fn inventory() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("inventory");
+        create_directory(&directory).unwrap();
+        let path = directory.join("deletion-inventory.txt");
+        (root, directory, path)
+    }
+
+    #[test]
+    fn a_directory_sync_failure_restores_the_previous_log() {
+        let (_root, directory, path) = inventory();
+        persist_with(&directory, &path, "previous\n", &sync_directory).unwrap();
+        let error = persist_with(&directory, &path, "replacement\n", &|_| {
+            Err(std::io::Error::other("directory sync failed"))
+        });
+        assert!(error.is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "previous\n");
+    }
+
+    #[test]
+    fn a_directory_sync_failure_removes_a_log_that_was_absent() {
+        let (_root, directory, path) = inventory();
+        let error = persist_with(&directory, &path, "replacement\n", &|_| {
+            Err(std::io::Error::other("directory sync failed"))
+        });
+        assert!(error.is_err());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_stored_log_is_synced_before_it_is_acknowledged() {
+        let (_root, directory, path) = inventory();
+        let synced = Mutex::new(false);
+        persist_with(&directory, &path, "body\n", &|directory| {
+            *synced.lock().unwrap() = true;
+            sync_directory(directory)
+        })
+        .unwrap();
+        assert!(*synced.lock().unwrap());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "body\n");
+    }
+
+    #[tokio::test]
+    async fn a_stale_writer_does_not_replace_the_log() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("inventory");
+        let first = FileDeletionLog::open(&directory).unwrap();
+        let second = FileDeletionLog::open(&directory).unwrap();
+        let base = first.load().await.unwrap();
+        let kept = DeletionFence::conversation("kept").unwrap();
+        let (next, _) = base.append(kept);
+        first.store(&base, &next).await.unwrap();
+        let lost = DeletionFence::conversation("lost").unwrap();
+        let (other, _) = base.append(lost);
+        let error = second.store(&base, &other).await.unwrap_err();
+        assert_eq!(error, LogStoreError::Stale);
+        let loaded = second.load().await.unwrap();
+        assert!(loaded.canonical().contains("conversation kept"));
+        assert!(!loaded.canonical().contains("conversation lost"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_stores_keep_one_complete_log() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("inventory");
+        let first = FileDeletionLog::open(&directory).unwrap();
+        let second = FileDeletionLog::open(&directory).unwrap();
+        let base = first.load().await.unwrap();
+        let (next_a, _) = base.append(DeletionFence::conversation("writer-a").unwrap());
+        let (next_b, _) = base.append(DeletionFence::conversation("writer-b").unwrap());
+        let base_for_b = base.clone();
+        let left = tokio::spawn(async move { first.store(&base, &next_a).await });
+        let right = tokio::spawn(async move { second.store(&base_for_b, &next_b).await });
+        let (left, right) = tokio::join!(left, right);
+        let left = left.unwrap();
+        let right = right.unwrap();
+        let results = [left, right];
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Err(LogStoreError::Stale)))
+                .count(),
+            1
+        );
+        let text = FileDeletionLog::open(&directory)
+            .unwrap()
+            .load()
+            .await
+            .unwrap()
+            .canonical();
+        let has_a = text.contains("writer-a");
+        let has_b = text.contains("writer-b");
+        assert!(has_a ^ has_b);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_store_waits_while_the_directory_lock_is_held() {
+        use std::time::Duration;
+
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("inventory");
+        let log = FileDeletionLog::open(&directory).unwrap();
+        let held = open(
+            &directory.join("deletion-inventory.lock"),
+            OpenMode::OpenOrCreate,
+        )
+        .unwrap();
+        held.lock().unwrap();
+        let base = DeletionLog::default();
+        let (next, _) = base.append(DeletionFence::conversation("waiting").unwrap());
+        let task = tokio::spawn(async move { log.store(&base, &next).await });
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert!(
+            !task.is_finished(),
+            "store must wait while deletion-inventory.lock is held"
+        );
+        drop(held);
+        task.await.unwrap().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_inventory_directory_and_key_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("inventory");
+        FileDeletionLog::open(&directory).unwrap();
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&directory), 0o700);
+        assert_eq!(mode(&directory.join("mac.key")), 0o600);
+    }
 }

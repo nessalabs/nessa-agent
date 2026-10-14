@@ -282,7 +282,7 @@ it("AL19/AL21: resource references survive refused recovery and Redux still reje
   const dependencies = createDependencies({
     conversation: {
       ...scenarioEffects("echo"),
-      send: async () => {
+      submit: async () => {
         throw new SubmissionRefusedError("attachment-not-found")
       },
     },

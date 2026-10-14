@@ -1,3 +1,4 @@
+import { prepareSubmission } from "@nessa/client"
 import { expect, it, vi } from "vitest"
 import { makeStore } from "../../../store"
 import { createDependencies } from "../../../composition/dependencies"
@@ -22,12 +23,12 @@ import { conversationNotice } from "../../ui/notification"
 
 it("a failed creation cannot make an unattempted message admission uncertain", async () => {
   const effects = scenarioEffects("echo")
-  const send = vi.fn(effects.send)
+  const send = vi.fn(effects.submit)
   const store = makeStore(
     createDependencies({
       conversation: {
         ...effects,
-        send,
+        submit: send,
         create: async () => {
           throw new Error("creation acknowledgement lost")
         },
@@ -60,7 +61,7 @@ function refusingCreation(code: string) {
       create: () =>
         Promise.reject(
           new NessaConversationMutationError(
-            "server",
+            "00000000-0000-4000-8000-000000000001",
             "action",
             undefined,
             new NessaRpcError(code, "agent_startup_deadline"),
@@ -97,10 +98,14 @@ it("carries the gateway's startup deadline into the notice as the panel's own re
   store.dispatch(
     submissionStarted({
       conversationId: tab.id,
-      executionId: "execution",
-      actionId: "action",
       content: textContent("retry"),
-      mode: "queued",
+      prepared: prepareSubmission({
+        conversationId: tab.serverConversationId!,
+        executionId: "execution",
+        requestId: "action",
+        text: "retry",
+        mode: "queued",
+      }),
     }),
   )
   const retried = store.getState().conversation.conversations[0]!
@@ -125,17 +130,21 @@ it("leaves a rejection this build has no word for untyped, and its sentence alon
 })
 it("client loss after cached creation is known unsent rather than an uncertain admission", async () => {
   let client: NessaClient | null = {
-    conversation: { create: async () => ({ conversationId: "server" }) },
+    conversation: {
+      create: async () => ({ conversationId: "00000000-0000-4000-8000-000000000001" }),
+    },
   } as unknown as NessaClient
   const effects = gatewayEffects(
     () => client,
     () => Promise.reject(new Error("no wait expected")),
     () => 0,
   )
-  await effects.create("server")
+  await effects.create("00000000-0000-4000-8000-000000000001")
   client = null
   const store = makeStore(createDependencies({ conversation: effects }))
-  store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
+  store.dispatch(
+    bindConversation({ id: "c0", serverId: "00000000-0000-4000-8000-000000000001" }),
+  )
   await store.dispatch(sendDraft({ content: textContent("offline") }))
   const tab = store.getState().conversation.conversations[0]!
   expect(tab.turns[0]).toMatchObject({
@@ -154,7 +163,7 @@ it("known-unsent follow-up does not settle the earlier running invocation before
           throw new Error("offline")
         },
         follow: followByReading(async () => ({
-          conversationId: "server",
+          conversationId: "00000000-0000-4000-8000-000000000001",
           artifacts: [],
           notes: [],
           unreadable: [],
@@ -214,7 +223,9 @@ it("known-unsent follow-up does not settle the earlier running invocation before
       },
     }),
   )
-  store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
+  store.dispatch(
+    bindConversation({ id: "c0", serverId: "00000000-0000-4000-8000-000000000001" }),
+  )
   await store.dispatch(followConversation("c0"))
   await store.dispatch(sendDraft({ content: textContent("follow-up") }))
   const tab = store.getState().conversation.conversations[0]!
@@ -236,14 +247,17 @@ it("a reconnecting client rejects locally without attempting a message RPC", asy
   )
   await expect(
     Promise.resolve().then(() =>
-      effects.send({
-        conversationId: "server",
-        executionId: "e",
-        actionId: "a",
-        text: "unsent",
-        attachments: [],
-        files: [],
-      }),
+      effects.submit(
+        prepareSubmission({
+          mode: "queued",
+          conversationId: "00000000-0000-4000-8000-000000000001",
+          executionId: "e",
+          requestId: "a",
+          text: "unsent",
+          attachments: [],
+          files: [],
+        }),
+      ),
     ),
   ).rejects.toThrow("was not sent")
   expect(send).not.toHaveBeenCalled()

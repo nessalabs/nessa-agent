@@ -180,7 +180,9 @@ export type {
   ConversationActionOptions,
   ConversationCreateOptions,
   ConversationListOptions,
-  ConversationSendOptions,
+  ConversationPrepareOptions,
+  PreparedSubmission,
+  SubmissionInput,
   ConversationShareOptions,
   ConversationSubmission,
 } from "./presentation/conversation-api.js"
@@ -385,3 +387,13 @@ export type {
   ConversationCatalogueResolveResult,
 } from "./generated/product.js"
 export { CatalogueReadErrorCode } from "./generated/product.js"
+
+export {
+  prepareSubmission,
+  preparedSubmissionFields,
+} from "./presentation/conversation-api.js"
+export {
+  executionTargets,
+  executionTargetConversation,
+  type ExecutionTarget,
+} from "./application/execution-target.js"

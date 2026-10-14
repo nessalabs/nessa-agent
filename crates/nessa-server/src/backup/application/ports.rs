@@ -74,14 +74,26 @@ pub trait FenceSource: Send + Sync {
     async fn fences(&self) -> Result<Vec<DeletionFence>, ()>;
 }
 
+/// Why a deletion log was not replaced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogStoreError {
+    /// The write did not replace the log.
+    Failed,
+    /// `base` is not the log on disk. Another writer stored first.
+    Stale,
+}
+
 /// The deletion inventory file.
 #[async_trait]
 pub trait DeletionLogStore: Send + Sync {
     async fn load(&self) -> Result<DeletionLog, ()>;
 
-    /// Replace the log with `next` only when `next` was produced by appending
-    /// to the loaded log. A failure leaves the previous log in place.
-    async fn store(&self, next: &DeletionLog) -> Result<(), ()>;
+    /// Replace the log with `next` when the stored log is still `base`.
+    ///
+    /// [`LogStoreError::Failed`] means this attempt did not replace the log.
+    /// [`LogStoreError::Stale`] means another writer stored after `base` was
+    /// read; the caller reconciles against the log now stored and tries again.
+    async fn store(&self, base: &DeletionLog, next: &DeletionLog) -> Result<(), LogStoreError>;
 }
 
 /// Where a successful cut is written. Not called on abort.

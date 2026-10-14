@@ -39,7 +39,6 @@ use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::infrastructure::clock::ClockInstant;
 use crate::infrastructure::process::{ProcessScope, ProcessStartFailure};
 use std::{
-    collections::HashMap,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex as ControlMutex,
@@ -106,7 +105,6 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         permission_sequence: Arc::new(AtomicU64::new(0)),
         question_sequence: Arc::new(AtomicU64::new(0)),
         hold_remembered_allows: Arc::new(AtomicBool::new(false)),
-        parked_allows: Arc::new(std::sync::Mutex::new(HashMap::new())),
         _stand_in_grant: stand_in_grant,
     };
     // Only an open for a named session belongs to an attachment.
@@ -187,11 +185,8 @@ struct WorkerFactory<P> {
     /// The conversation this factory was opened for, when the request named one.
     session_key: Option<String>,
     permission_sequence: Arc<AtomicU64>,
-    /// While set, a remembered allow waits for the invocation's permission-review hooks.
+    /// While set, a remembered rule is not read until permission-review hooks allow.
     hold_remembered_allows: Arc<AtomicBool>,
-    /// Allows parked for those hooks. Shared with the worker; cleared when a
-    /// new process starts so a restart cannot send a stale one.
-    parked_allows: worker::ParkedRememberedAllows,
     /// Question identities, minted here for the same reason review identities
     /// are: they outlive any one provider request, including across restarts
     /// of the worker that holds them.
@@ -319,7 +314,6 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
                 cause,
                 self.session_key.clone(),
                 self.hold_remembered_allows.clone(),
-                self.parked_allows.clone(),
             )
             .in_current_span(),
         );
@@ -728,12 +722,58 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
             .store(hold, Ordering::Release);
     }
 
-    fn take_remembered_allow(&self, id: &PermissionId) -> Option<PermissionAnswer> {
-        self.factory
-            .parked_allows
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(id)
+    fn consult_remembered_allow(
+        &self,
+        id: &PermissionId,
+    ) -> ProviderOperationFuture<'_, Option<PermissionAnswer>> {
+        let id = id.clone();
+        Box::pin(async move {
+            let (sender, receiver) = oneshot::channel();
+            {
+                let generation = self.generation.lock().await;
+                if generation.stopped() {
+                    return Err(ProviderOperationFailure::new(
+                        AgentError::Closed,
+                        ProviderSessionState::CleanupRequired,
+                    ));
+                }
+                enqueue(&generation.commands, Command::ConsultRemembered(id, sender)).map_err(
+                    |error| ProviderOperationFailure::new(error, ProviderSessionState::Usable),
+                )?;
+            }
+            match receiver.await {
+                Ok(answer) => Ok(answer),
+                Err(_) => Err(ProviderOperationFailure::new(
+                    AgentError::Closed,
+                    ProviderSessionState::CleanupRequired,
+                )),
+            }
+        })
+    }
+
+    fn release_remembered_review(&self, id: &PermissionId) -> ProviderOperationFuture<'_, ()> {
+        let id = id.clone();
+        Box::pin(async move {
+            let (sender, receiver) = oneshot::channel();
+            {
+                let generation = self.generation.lock().await;
+                if generation.stopped() {
+                    return Err(ProviderOperationFailure::new(
+                        AgentError::Closed,
+                        ProviderSessionState::CleanupRequired,
+                    ));
+                }
+                enqueue(&generation.commands, Command::ReleaseConsult(id, sender)).map_err(
+                    |error| ProviderOperationFailure::new(error, ProviderSessionState::Usable),
+                )?;
+            }
+            receiver.await.unwrap_or_else(|_| {
+                Err(ProviderOperationFailure::new(
+                    AgentError::Closed,
+                    ProviderSessionState::CleanupRequired,
+                ))
+            })
+        })
     }
 
     fn set_approval_mode(
@@ -1274,6 +1314,13 @@ pub(crate) enum Command {
         PermissionAnswer,
         oneshot::Sender<ProviderOperationResult<PermissionResolution>>,
     ),
+    /// Read a remembered rule after permission-review hooks have allowed the
+    /// tool. The worker does not send the answer; the caller does, and only
+    /// when this returns one.
+    ConsultRemembered(PermissionId, oneshot::Sender<Option<PermissionAnswer>>),
+    /// The hooks allowed the tool and no rule answered it. The deadline may
+    /// run, and the waiting notice is published.
+    ReleaseConsult(PermissionId, oneshot::Sender<ProviderOperationResult<()>>),
 }
 #[derive(Clone)]
 pub(crate) struct Completion {

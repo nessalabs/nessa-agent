@@ -18,6 +18,7 @@ import { ClockProvider } from "../../../../src/clock"
 import { followWorkspace, loadWorkspace } from "../../../../src/desktop/workspace"
 import {
   fakeGateway,
+  gatewayConversationIds,
   row,
   view,
 } from "../../../../src/desktop/workspace/adapters/gateway/fake-gateway"
@@ -37,8 +38,7 @@ import "@fontsource-variable/geist"
 import "@fontsource-variable/geist-mono"
 import "../../../../src/desktop/styles.css"
 
-const fast = "fast",
-  slow = "slow"
+const { fast, slow } = gatewayConversationIds
 const gateway = fakeGateway()
 const approvalModes = view(fast).approvalModes
 let revision = 1,

@@ -47,6 +47,7 @@ decline for the first. This recorder does not authenticate a server or establish
 current authority. The cropped screenshot lives in
 `verification/desktop/evidence/question-targets/question-targets.png`.
 
+
 `lifetime-fixture.html?same` restores the same remote conversation; without the
 query it restores another. Both mount the production `useConversation` follow
 and controls over a gated close port. `local-tab-lifetimes.mjs` measures fresh

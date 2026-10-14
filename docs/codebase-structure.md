@@ -689,6 +689,19 @@ Client regressions sit beside the factory and panel routing tests live in
 `src/conversation/adapters/store/question-targets.test.ts`; see
 [question targets](design/question-targets.md) for ownership and orderings.
 
+Client message preparation in `presentation/conversation-api.ts` issues copied
+`PreparedSubmission` values before effects and consumes them through `submit`.
+`application/execution-target.ts` captures read-only conversation/execution intent
+for stop/remove from those values or an enclosing view.
+`adapters/store/prepared-operation-table.ts` owns the panel's internal prepared
+operation table and retention rule; composition's `createPreparedOperationTable`
+factory creates one per Redux store. `src/store.ts` injects it into
+`adapters/store/slice.ts` thunks and reconciles it on publication, outside
+serializable state. Client regressions live in
+`presentation/prepared-submission.test.ts`; panel interleavings in
+`adapters/store/prepared-operations.test.ts`. See
+[prepared submissions](design/prepared-submissions.md) for ordering and ownership.
+
 `crates/nessa-server/src/conversation/` groups durable conversation ownership and
 access (domain), shared Agent orchestration (application), and private
 metadata/audit adapters (infrastructure). The conversation's identity and summary,
@@ -1436,11 +1449,15 @@ folder is walked here under `MOST_FOLDER_FILES` and `MOST_FOLDER_ENTRIES`
 instead of by the page, and a `dragging` event tells the panel when to draw the
 drop target.
 
-Both gestures name themselves, through `Announce::began` — a drop when it lands,
-a `+` selection the moment the picker's answer comes back — and that name is a
-`Batch`: a private-field newtype minted in `attachments/batch.rs` and nowhere
-else, so no answer can be built without one. Dropping `Default` alone had been a
-speed bump, since a struct literal with `String::new()` still compiled.
+Both gestures name themselves through `Announce::began`. A drop receives a
+host-minted `Batch` when it lands; a `+` selection receives a `Batch` that wraps
+the panel's validated picker request ID, registered before the command starts.
+That identity travels through the picked event and every readiness event, so
+overlapping picker calls need no invocation or delivery order assumption.
+Unknown and retired batch names have no destination and are ignored instead of
+falling back to the active tab. The
+[attachment gesture design](design/attachment-gestures.md) records the panel's
+destination ownership and race table.
 
 A **drop** gives one of three answers, and two of them land on a draft: the
 files and the refusal. Both travel back on the `Dropped` with the name attached,
@@ -1450,27 +1467,20 @@ announced, and the name it is given anyway is never looked up. That is
 `attach_begun_by`, and it is a rule with a test rather than a condition inside a
 function that needs a window.
 
-A **`+`** differs in what needs the name, not in where the name comes from. The
-page begins that gesture, so it captured the draft at the press and passes it
-straight to `addChosenFiles`; the name is what the *tile* needs, because the
-host draws that mid-call and has nothing else to go on. `began` says
-`gesture: "picked"`, and the panel answers with the draft it is already holding
-rather than reading the open tab a second time — one capture either way. Two
-reads of one fact agreed only while nothing could change between them, and what
-guaranteed that was the picker being modal: rfd's presentation choice, not a
-promise. `readiness.rs` has the seam test that pins `"picked"`, because that
-literal is the whole of what makes the distinction work and nothing else checked
-it.
+A **`+`** captures the whole destination at the gesture boundary: the Redux
+store, conversation ID, resource manager, and attach command. It registers a
+picker request ID before invoking the host and uses the captured destination
+for the returned files. Readiness events use that same request ID to find their
+captured destination, even if another picker started or settled in between.
+`gesture: "picked"` remains part of the event contract; its seam is in
+`readiness.rs`.
 
 The name exists because an attach can be three quarters of a minute behind its
-gesture, and by then the open tab is no evidence of anything. Only the drop
-announced itself for a while, so a `+` selection of two placeholders put its
-second tile on whichever tab was open when the second file finished; and the
-refusal branch read the open tab even for a drop that had a name, so a folder
-refused late took a tile off one draft and told a different one about a file it
-had never seen. Neither guesses now. A drag of text is deliberately not named:
-it pastes into the focused composer and never looks a name up, and naming it
-spent one of the sixty-four the panel remembers.
+gesture, and by then the open tab is no evidence of anything. Picker readiness,
+returned files, refusals, and drops keep the destination captured for their
+gesture; an older completion cannot clear a newer pending operation. A drag of
+text is deliberately not named: it pastes into the focused composer and never
+looks a name up.
 
 `attachments/readiness.rs` is the seam for a file that is not readable yet. A
 file iCloud is keeping answers a `stat` with a real name, type and length and

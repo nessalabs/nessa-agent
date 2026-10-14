@@ -12,6 +12,13 @@ const scenarios = [
   "control",
   "native-read",
   "second-url",
+  "picker-owner-correlation",
+  "folder-owner-send",
+  "folder-owner-drop",
+  "drop-capacity",
+  "conversation-refusals",
+  "pathless-host-drop",
+  "browser-picker-fallback",
   "upload-parent-success",
   "upload-parent-failure",
   "upload-placement-success",
@@ -410,12 +417,540 @@ try {
             const sent = (await snapshot()).sends[0]
             assert.equal(sent.text, "include this image")
             assert.equal(sent.attachments.length, 1)
+          } else if (scenario === "picker-owner-correlation") {
+            await page.evaluate(() => (window.__attachmentProbe.holdPickers = true))
+            await page.getByRole(...selectors.addAttachment).click()
+            await page.getByRole(...selectors.addFiles).click()
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().pickerRequestIds.length === 1,
+            )
+            const idA = (await snapshot()).pickerRequestIds[0]
+
+            await page.evaluate(() => window.__attachmentProbe.swapPickerOwner())
+            // The replacement must be committed before the next gesture. The
+            // upload-owner fixture seeds an image, creates a server conversation,
+            // and changes this tray's name to More options; it is not this setup.
+            await page
+              .locator('[data-attachment-owner="replacement"]')
+              .waitFor({ state: "attached" })
+            assert.deepEqual((await snapshot()).draft, [])
+            await page.getByRole(...selectors.addAttachment).click()
+            await page.getByRole(...selectors.addFiles).click()
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().pickerRequestIds.length === 2,
+            )
+            const idB = (await snapshot()).pickerRequestIds.find((id) => id !== idA)
+            assert.ok(idA && idB && idA !== idB)
+
+            // Deliver B's readiness first, then A's. B is the visible owner;
+            // neither event may be assigned by whichever picker was latest.
+            await page.evaluate(
+              ({ idA, idB }) => {
+                window.__attachmentProbe.announcePick(idB, "b.pdf")
+                window.__attachmentProbe.announcePick(idA, "a.pdf")
+              },
+              { idA, idB },
+            )
+            await page.waitForFunction(() =>
+              document.querySelector('[aria-label="Getting b.pdf ready"]'),
+            )
+            assert.equal(
+              await page.locator('[aria-label="Getting b.pdf ready"]').count(),
+              1,
+            )
+            assert.equal(
+              await page.locator('[aria-label="Getting a.pdf ready"]').count(),
+              0,
+            )
+
+            await page.evaluate(() => window.__attachmentProbe.showOriginalOwner())
+            await page.waitForFunction(() =>
+              document.querySelector('[aria-label="Getting a.pdf ready"]'),
+            )
+            assert.equal(
+              await page.locator('[aria-label="Getting a.pdf ready"]').count(),
+              1,
+            )
+            assert.equal(
+              await page.locator('[aria-label="Getting b.pdf ready"]').count(),
+              0,
+            )
+
+            const chosen = (name) => [
+              {
+                path: `/verification/${name}`,
+                name,
+                size: 1,
+                mimeType: "application/pdf",
+                ticket: `ticket-${name}`,
+              },
+            ]
+            await page.evaluate(
+              ({ idB, files }) => window.__attachmentProbe.settlePick(idB, files),
+              { idB, files: chosen("b.pdf") },
+            )
+            await page.evaluate(() => window.__attachmentProbe.showReplacementOwner())
+            await page.waitForFunction(() =>
+              window.__attachmentProbe
+                .snapshot()
+                .draft.some(
+                  (part) =>
+                    part.type === "file" && part.resource.path === "/verification/b.pdf",
+                ),
+            )
+            assert.equal(
+              (await snapshot()).draft.filter(
+                (part) =>
+                  part.type === "file" && part.resource.path === "/verification/b.pdf",
+              ).length,
+              1,
+            )
+
+            await page.evaluate(() => window.__attachmentProbe.showOriginalOwner())
+            assert.equal(
+              (await snapshot()).draft.some(
+                (part) =>
+                  part.type === "file" && part.resource.path === "/verification/b.pdf",
+              ),
+              false,
+            )
+            await page.evaluate(
+              ({ idA, files }) => window.__attachmentProbe.settlePick(idA, files),
+              { idA, files: chosen("a.pdf") },
+            )
+            await page.evaluate(() => window.__attachmentProbe.showOriginalOwner())
+            await page.waitForFunction(() =>
+              window.__attachmentProbe
+                .snapshot()
+                .draft.some(
+                  (part) =>
+                    part.type === "file" && part.resource.path === "/verification/a.pdf",
+                ),
+            )
+            assert.equal(
+              (await snapshot()).draft.filter(
+                (part) =>
+                  part.type === "file" && part.resource.path === "/verification/a.pdf",
+              ).length,
+              1,
+            )
+          } else if (scenario === "folder-owner-send") {
+            await page.evaluate(() =>
+              window.__attachmentProbe.dropFolder("folder-a", true),
+            )
+            await page.waitForFunction(() =>
+              window.__attachmentProbe.snapshot().folderStarts.includes("folder-a"),
+            )
+            await page.evaluate(() => window.__attachmentProbe.swapPickerOwner())
+            await page
+              .locator('[data-attachment-owner="replacement"]')
+              .waitFor({ state: "attached" })
+
+            // Keep the mounted editor's actual text while the store/resources
+            // provider changes; Enter is the next user action after commit.
+            await page.locator(selectors.editor).press("Enter")
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().sends.length === 1,
+            )
+            assert.equal((await snapshot()).sends[0].text, "include this image")
+            assert.deepEqual((await snapshot()).draft, [])
+            await page.screenshot({
+              path: resolve(
+                root,
+                `verification/desktop/evidence/attachment-gesture-owners/folder-owner-send-b-${engine}.png`,
+              ),
+            })
+
+            await page.evaluate(() => window.__attachmentProbe.finishFolder("folder-a"))
+            await page.evaluate(() => window.__attachmentProbe.showOriginalOwner())
+            await page.waitForFunction(() =>
+              window.__attachmentProbe
+                .snapshot()
+                .draft.some(
+                  (part) => part.type === "file" && part.resource.name === "folder-a.txt",
+                ),
+            )
+            await page.screenshot({
+              path: resolve(
+                root,
+                `verification/desktop/evidence/attachment-gesture-owners/folder-owner-send-a-${engine}.png`,
+              ),
+            })
+          } else if (scenario === "folder-owner-drop") {
+            await page.evaluate(() =>
+              window.__attachmentProbe.dropFolder("folder-a", true),
+            )
+            await page.waitForFunction(() =>
+              window.__attachmentProbe.snapshot().folderStarts.includes("folder-a"),
+            )
+            await page.evaluate(() => window.__attachmentProbe.swapPickerOwner())
+            await page
+              .locator('[data-attachment-owner="replacement"]')
+              .waitFor({ state: "attached" })
+
+            // The second folder gesture arrives on the first committed render
+            // for B, while A's reader still owns the only pending operation.
+            await page.evaluate(() =>
+              window.__attachmentProbe.dropFolder("folder-b", false),
+            )
+            await page.waitForFunction(() =>
+              window.__attachmentProbe.snapshot().folderStarts.includes("folder-b"),
+            )
+            await page.waitForFunction(() =>
+              window.__attachmentProbe
+                .snapshot()
+                .draft.some(
+                  (part) => part.type === "file" && part.resource.name === "folder-b.txt",
+                ),
+            )
+            await page.screenshot({
+              path: resolve(
+                root,
+                `verification/desktop/evidence/attachment-gesture-owners/folder-owner-drop-b-${engine}.png`,
+              ),
+            })
+
+            await page.evaluate(() => window.__attachmentProbe.finishFolder("folder-a"))
+            await page.evaluate(() => window.__attachmentProbe.showOriginalOwner())
+            await page.waitForFunction(() =>
+              window.__attachmentProbe
+                .snapshot()
+                .draft.some(
+                  (part) => part.type === "file" && part.resource.name === "folder-a.txt",
+                ),
+            )
+            await page.screenshot({
+              path: resolve(
+                root,
+                `verification/desktop/evidence/attachment-gesture-owners/folder-owner-drop-a-${engine}.png`,
+              ),
+            })
+          } else if (scenario === "drop-capacity") {
+            const dropFile = (name) => ({
+              path: `/verification/${name}`,
+              name,
+              size: 1,
+              mimeType: "application/pdf",
+              ticket: `ticket-${name}`,
+            })
+            const deliver = async (batch, result) =>
+              page.evaluate(
+                ({ batch, result }) =>
+                  window.__attachmentProbe.drop({
+                    batch,
+                    files: result.files ?? [],
+                    refused: result.refused ?? null,
+                    text: { plain: "", uriList: "", html: "" },
+                  }),
+                { batch, result },
+              )
+
+            await page.evaluate(() => {
+              for (let index = 0; index < 64; index++)
+                window.__attachmentProbe.began?.(`capacity-${index}`, "dropped")
+            })
+            assert.equal(
+              await page.getByText("Too many selections", { exact: true }).count(),
+              0,
+            )
+            await page.evaluate(() => window.__attachmentProbe.swapPickerOwner())
+            await page
+              .locator('[data-attachment-owner="replacement"]')
+              .waitFor({ state: "attached" })
+            assert.deepEqual((await snapshot()).draft, [])
+
+            await page.evaluate(() =>
+              window.__attachmentProbe.began?.("capacity-overflow", "dropped"),
+            )
+            await page.getByText("Too many selections", { exact: true }).waitFor()
+            refusalCount = await page
+              .getByText("Too many selections", { exact: true })
+              .count()
+            assert.equal(refusalCount, 1)
+            await page.screenshot({
+              path: `/tmp/attachment-drop-capacity-refusal-${engine}.png`,
+            })
+
+            // A rejected overflow result and an unrelated host result have no
+            // captured destination. Both are ignored while B/c0 is visible.
+            await deliver("capacity-overflow", {
+              refused: { reason: "folder-empty", shown: null, detail: null },
+            })
+            await deliver("capacity-unknown", { files: [dropFile("unknown.pdf")] })
+            assert.deepEqual((await snapshot()).draft, [])
+            assert.equal(
+              await page.getByText("Too many selections", { exact: true }).count(),
+              1,
+            )
+
+            await page.evaluate(() => window.__attachmentProbe.showOriginalOwner())
+            assert.deepEqual((await snapshot()).draft, [
+              { type: "text", text: "include this image" },
+            ])
+            await deliver("capacity-0", { files: [dropFile("oldest.pdf")] })
+            await page.waitForFunction(() =>
+              window.__attachmentProbe
+                .snapshot()
+                .draft.some(
+                  (part) =>
+                    part.type === "file" &&
+                    part.resource.path === "/verification/oldest.pdf",
+                ),
+            )
+            await page
+              .getByRole("button", { name: "Open oldest.pdf", exact: true })
+              .waitFor()
+            await deliver("capacity-0", { files: [dropFile("duplicate.pdf")] })
+            const original = await snapshot()
+            assert.equal(
+              original.draft.filter(
+                (part) =>
+                  part.type === "file" &&
+                  part.resource.path === "/verification/oldest.pdf",
+              ).length,
+              1,
+            )
+            assert.equal(
+              original.draft.some(
+                (part) =>
+                  part.type === "file" &&
+                  part.resource.path === "/verification/duplicate.pdf",
+              ),
+              false,
+            )
+            await page.screenshot({
+              path: `/tmp/attachment-drop-capacity-original-${engine}.png`,
+            })
+
+            await page.evaluate(() => window.__attachmentProbe.showReplacementOwner())
+            assert.deepEqual((await snapshot()).draft, [])
+            await page.evaluate(() =>
+              window.__attachmentProbe.began?.("capacity-after-free", "dropped"),
+            )
+            await deliver("capacity-after-free", { files: [dropFile("after-free.pdf")] })
+            await page.waitForFunction(() =>
+              window.__attachmentProbe
+                .snapshot()
+                .draft.some(
+                  (part) =>
+                    part.type === "file" &&
+                    part.resource.path === "/verification/after-free.pdf",
+                ),
+            )
+            await page
+              .getByRole("button", { name: "Open after-free.pdf", exact: true })
+              .waitFor()
+            const replacement = await snapshot()
+            assert.equal(
+              replacement.draft.filter(
+                (part) =>
+                  part.type === "file" &&
+                  part.resource.path === "/verification/after-free.pdf",
+              ).length,
+              1,
+            )
+            assert.equal(
+              replacement.draft.some(
+                (part) =>
+                  part.type === "file" &&
+                  part.resource.path === "/verification/oldest.pdf",
+              ),
+              false,
+            )
+            assert.equal(
+              await page.getByText("Too many selections", { exact: true }).count(),
+              0,
+            )
+            await page.screenshot({
+              path: `/tmp/attachment-drop-capacity-after-free-${engine}.png`,
+            })
+          } else if (scenario === "conversation-refusals") {
+            const firstId = (await snapshot()).tabs[0].id
+            await page.evaluate(() => window.__attachmentProbe.beginDrop("refusal-a"))
+            const secondId = await page.evaluate(() =>
+              window.__attachmentProbe.openAnotherConversation(),
+            )
+            assert.ok(secondId && secondId !== firstId)
+            await page.evaluate(() => window.__attachmentProbe.beginDrop("refusal-b"))
+            await page.evaluate(() =>
+              window.__attachmentProbe.finishDropRefusal("refusal-b", "folder-empty"),
+            )
+            await page.getByText("Folder has no files", { exact: true }).waitFor()
+            await page.evaluate(() =>
+              window.__attachmentProbe.finishDropRefusal("refusal-a", "folder-too-large"),
+            )
+            assert.equal(
+              await page.getByText("Folder has no files", { exact: true }).count(),
+              1,
+            )
+            assert.equal(
+              await page.getByText("Folder is too big to read", { exact: true }).count(),
+              0,
+            )
+            await page.screenshot({ path: `/tmp/attachment-refusal-b-${engine}.png` })
+
+            await page.evaluate(
+              (id) => window.__attachmentProbe.selectConversation(id),
+              firstId,
+            )
+            await page.getByText("Folder is too big to read", { exact: true }).waitFor()
+            assert.equal(
+              await page.getByText("Folder has no files", { exact: true }).count(),
+              0,
+            )
+            await page.screenshot({ path: `/tmp/attachment-refusal-a-${engine}.png` })
+            await page.evaluate(() => window.__attachmentProbe.beginDrop("answer-a"))
+            await page.evaluate(() =>
+              window.__attachmentProbe.drop({
+                batch: "answer-a",
+                files: [
+                  {
+                    path: "/verification/answer.pdf",
+                    name: "answer.pdf",
+                    size: 1,
+                    mimeType: "application/pdf",
+                    ticket: "answer-a",
+                  },
+                ],
+                refused: null,
+                text: { plain: "", uriList: "", html: "" },
+              }),
+            )
+            await page.waitForFunction(() =>
+              window.__attachmentProbe
+                .snapshot()
+                .draft.some((part) => part.type === "file"),
+            )
+            assert.equal(
+              await page.getByText("Folder is too big to read", { exact: true }).count(),
+              0,
+            )
+            await page.evaluate(
+              (id) => window.__attachmentProbe.selectConversation(id),
+              secondId,
+            )
+            await page.getByText("Folder has no files", { exact: true }).waitFor()
+            assert.equal(
+              await page.getByText("Folder has no files", { exact: true }).count(),
+              1,
+            )
+          } else if (scenario === "pathless-host-drop") {
+            await page.evaluate(() =>
+              window.__attachmentProbe.drop({
+                batch: "no-begin-text",
+                files: [],
+                refused: null,
+                text: { plain: "dropped prose", uriList: "", html: "" },
+              }),
+            )
+            await page.waitForFunction(() =>
+              window.__attachmentProbe
+                .snapshot()
+                .draft.some(
+                  (part) => part.type === "pasted-text" && part.text === "dropped prose",
+                ),
+            )
+            await page.evaluate(() =>
+              window.__attachmentProbe.drop({
+                batch: "no-begin-image",
+                files: [],
+                refused: null,
+                text: {
+                  plain: "",
+                  uriList: "https://attachment-verification.invalid/pathless.png",
+                  html: '<img src="https://attachment-verification.invalid/pathless.png">',
+                },
+              }),
+            )
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().fetchCalls === 1,
+            )
+            await page.evaluate(() => window.__attachmentProbe.swapPickerOwner())
+            await page
+              .locator('[data-attachment-owner="replacement"]')
+              .waitFor({ state: "attached" })
+            assert.deepEqual((await snapshot()).draft, [])
+            await page.evaluate(() => window.__attachmentProbe.completePathlessImage())
+            await page.evaluate(() => window.__attachmentProbe.showOriginalOwner())
+            await page.waitForFunction(() =>
+              window.__attachmentProbe
+                .snapshot()
+                .draft.some(
+                  (part) => part.type === "file" && part.resource.name === "pathless.png",
+                ),
+            )
+            assert.equal(
+              (await snapshot()).draft.filter(
+                (part) => part.type === "file" && part.resource.name === "pathless.png",
+              ).length,
+              1,
+            )
+            await page.screenshot({
+              path: resolve(
+                root,
+                `verification/desktop/evidence/attachment-gesture-owners/pathless-drop-${engine}.png`,
+              ),
+            })
+            await page.evaluate(() => window.__attachmentProbe.showReplacementOwner())
+            assert.deepEqual((await snapshot()).draft, [])
+          } else if (scenario === "browser-picker-fallback") {
+            await page.evaluate(() => (window.__attachmentProbe.browserFallback = true))
+            const firstChooser = page.waitForEvent("filechooser")
+            await page.getByRole(...selectors.addAttachment).click()
+            await page.getByRole(...selectors.addFiles).click()
+            await firstChooser
+            await page.evaluate(() =>
+              document
+                .querySelector('input[type="file"]')
+                ?.dispatchEvent(new Event("cancel")),
+            )
+
+            const secondChooser = page.waitForEvent("filechooser")
+            await page.getByRole(...selectors.addAttachment).click()
+            await page.getByRole(...selectors.addFiles).click()
+            const chooser = await secondChooser
+            await page.evaluate(() => window.__attachmentProbe.swapPickerOwner())
+            await page
+              .locator('[data-attachment-owner="replacement"]')
+              .waitFor({ state: "attached" })
+            await chooser.setFiles({
+              name: "fallback.png",
+              mimeType: "image/png",
+              buffer: Buffer.from(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=",
+                "base64",
+              ),
+            })
+            await page.evaluate(() => window.__attachmentProbe.showOriginalOwner())
+            await page.waitForFunction(() =>
+              window.__attachmentProbe
+                .snapshot()
+                .draft.some(
+                  (part) => part.type === "file" && part.resource.name === "fallback.png",
+                ),
+            )
+            assert.equal(
+              (await snapshot()).draft.filter(
+                (part) => part.type === "file" && part.resource.name === "fallback.png",
+              ).length,
+              1,
+            )
+            await page.screenshot({
+              path: resolve(
+                root,
+                `verification/desktop/evidence/attachment-gesture-owners/browser-picker-${engine}.png`,
+              ),
+            })
+            await page.evaluate(() => window.__attachmentProbe.showReplacementOwner())
+            assert.deepEqual((await snapshot()).draft, [])
           } else {
             for (const name of ["first", "second"]) {
+              const batch = `browser-${name}`
               await page.evaluate(
-                (name) =>
+                ({ name, batch }) => {
+                  window.__attachmentProbe.began?.(batch, "dropped")
                   window.__attachmentProbe.drop({
-                    batch: `browser-${name}`,
+                    batch,
                     files: [],
                     refused: null,
                     text: {
@@ -423,8 +958,9 @@ try {
                       uriList: `https://attachment-verification.invalid/${name}.png`,
                       html: `<img src="https://attachment-verification.invalid/${name}.png">`,
                     },
-                  }),
-                name,
+                  })
+                },
+                { name, batch },
               )
               if (name === "first")
                 await page.waitForFunction(

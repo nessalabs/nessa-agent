@@ -94,6 +94,7 @@
  * app's calls go on that client too (`connected`).
  */
 import {
+  prepareSubmission,
   permissionTargets,
   questionTargets,
   ConversationErrorCode,
@@ -146,7 +147,7 @@ import { waitingReviews, type WaitingReview } from "./review-notices"
 export interface GatewayClient {
   readonly conversation: Pick<
     ConversationApi,
-    "observe" | "create" | "send" | "answer" | "answerQuestion" | "archive"
+    "observe" | "create" | "submit" | "answer" | "answerQuestion" | "archive"
   >
   readonly subscriptions: Pick<SubscriptionApi, "view" | "list">
   readonly connectionState: ConnectionState
@@ -446,6 +447,32 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   let current: { client: C; off: () => void } | undefined
   let connecting: Promise<C> | undefined
   let connectedBefore = false
+  // The last waiting-review snapshot this source applied, and how many have
+  // been applied. A socket that is down publishes an empty set. The server's
+  // next frame can be dispatched before the replacement listener exists, and
+  // a frame with no listener is dropped, so coming back republishes this set
+  // when nothing newer was applied after that clear
+  // (`a reconnect restores waiting reviews the snapshot missed`).
+  let retainedReviews: readonly WaitingReview[] = []
+  let reviewsApplied = 0
+  let reviewsClearedAt = -1
+  const publishReviews = (reviews: readonly WaitingReview[]) => {
+    options.onReviewWaiting?.(reviews)
+  }
+  const noteReviews = (reviews: readonly WaitingReview[]) => {
+    retainedReviews = reviews.slice()
+    reviewsApplied += 1
+    publishReviews(retainedReviews.slice())
+  }
+  const clearReviews = () => {
+    reviewsClearedAt = reviewsApplied
+    publishReviews([])
+  }
+  const restoreReviews = () => {
+    if (reviewsApplied !== reviewsClearedAt || retainedReviews.length === 0) return
+    reviewsClearedAt = -1
+    publishReviews(retainedReviews.slice())
+  }
   // After a connect that failed — refused, or out of time — nothing in the
   // background connects again until `waitUntil` (#419): each connect asks
   // the host for the gateway and its credential, and the gateway to
@@ -470,7 +497,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     const offReviews =
       connected.onEvent?.("permission.reviewWaiting", (payload) => {
         const reviews = waitingReviews(payload)
-        if (reviews) options.onReviewWaiting?.(reviews)
+        if (reviews) noteReviews(reviews)
       }) ?? (() => {})
     const off = connected.onConnectionStateChange((state) => {
       if (current?.client !== connected) return
@@ -478,13 +505,21 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         // Back: every subscription ended `disconnected` with the connection.
         restore()
         resync()
-      } else if (state.status === "closed") {
-        // Gone for good: the next call connects again. That next client
-        // resyncs when one had connected before (C3). The close is not a
-        // gap. A list frame already applied stays.
-        current.off()
-        current = undefined
-        scheduleRetry()
+        restoreReviews()
+      } else if (state.status === "reconnecting" || state.status === "closed") {
+        // A review cannot be answered while this socket is down. An empty
+        // snapshot closes the notice (`a connection that is not up clears
+        // waiting-review notices`). The set still waiting is put back when
+        // this socket is usable again, unless a newer snapshot arrived.
+        clearReviews()
+        if (state.status === "closed") {
+          // Gone for good: the next call connects again. That next client
+          // resyncs when one had connected before (C3). The close is not a
+          // gap. A list frame already applied stays.
+          current.off()
+          current = undefined
+          scheduleRetry()
+        }
       }
     })
     const state = connected.connectionState
@@ -505,6 +540,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     if (connectedBefore) {
       restore()
       resync()
+      restoreReviews()
     }
     connectedBefore = true
     return undefined
@@ -1224,52 +1260,64 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         if (listeners.size === 0) stopStreams()
       }
     },
-    send: (message) =>
-      within(async (live) => {
+    send: (message) => {
+      // Capture before connection/create: the caller may reuse its mutable
+      // draft or model object while either effect is pending (PS16).
+      const model = Object.freeze({ ...message.model })
+      const start = message.start !== undefined
+      let prepared
+      try {
+        prepared = prepareSubmission({
+          conversationId: message.sessionId,
+          executionId: message.messageId,
+          requestId: message.messageId,
+          text: message.text,
+          mode: "queued",
+        })
+      } catch (error) {
+        if (error instanceof TypeError)
+          return Promise.reject(new WorkspaceSourceError("not-supported"))
+        throw error
+      }
+      return within(async (live) => {
         // Only a first message opens its conversation, on the model chosen for it.
-        if (message.start) {
-          const agent = agentForProvider(message.model.provider)
+        if (start) {
+          const agent = agentForProvider(model.provider)
           await dispatch(live, (connected) => {
-            held(message.sessionId)
+            held(prepared.conversationId)
             return connected.conversation.create({
-              conversationId: message.sessionId,
+              conversationId: prepared.conversationId,
               ...(agent ? { agent } : {}),
-              model: message.model.modelId,
+              model: model.modelId,
             })
           })
         }
         await dispatch(live, (connected) => {
-          held(message.sessionId)
+          held(prepared.conversationId)
           // The gateway keeps a conversation on the model it was created with:
           // a message asking for another than the one it says it runs is
           // refused rather than sent on the old one, checked here, at the
           // send (W8). Not said yet, it cannot be told.
-          const known = knownModel(message.sessionId)
+          const known = knownModel(prepared.conversationId)
           if (
             known &&
-            (known.provider !== message.model.provider ||
-              known.modelId !== message.model.modelId)
+            (known.provider !== model.provider || known.modelId !== model.modelId)
           )
             throw new WorkspaceSourceError("not-supported")
           try {
-            return connected.conversation.send(message.sessionId, message.text, [], [], {
-              // The message's id names the same turn however often it is sent.
-              executionId: message.messageId,
-              requestId: message.messageId,
-            })
+            return connected.conversation.submit(prepared)
           } catch (error) {
-            // The client refuses a message past its bounds before sending it,
-            // by throwing `TypeError` at once (`ConversationApi.send`): sent
-            // again, it is refused again (F5).
+            // A client argument refusal is explicit, unlike a lost acknowledgement.
             if (error instanceof TypeError)
               throw new WorkspaceSourceError("not-supported")
             throw error
           }
         })
         // Taken out while it was on its way: sent, but not followed (R8).
-        if (!takenOut(message.sessionId)) follow(message.sessionId, "held")
-        publish(message.sessionId)
-      }),
+        if (!takenOut(prepared.conversationId)) follow(prepared.conversationId, "held")
+        publish(prepared.conversationId)
+      })
+    },
     approve: (sessionId, approvalId, scope, _initiator, optionId) =>
       scope === "always" && optionId !== REMEMBER_ALLOW_OPTION
         ? // Any other always is refused before a read. The projection offers

@@ -9,8 +9,8 @@ use tokio::sync::{OwnedRwLockWriteGuard, RwLock};
 
 use crate::backup::application::{
     capture_export, AdmissionFailure, AdmissionLease, Authenticator, DeletionLogStore, ExportClock,
-    ExportFailure, ExportRequest, ExportSource, MacError, ManifestPublisher, MutationAdmission,
-    PinnedStore, PublishedRecord,
+    ExportFailure, ExportRequest, ExportSource, LogStoreError, MacError, ManifestPublisher,
+    MutationAdmission, PinnedStore, PublishedRecord,
 };
 use crate::backup::domain::{
     AuthenticatedManifest, CapturedRecord, DeletionLog, Fingerprint, Sensitivity, SkipReason,
@@ -823,7 +823,7 @@ impl DeletionLogStore for EmptyLog {
         Ok(DeletionLog::default())
     }
 
-    async fn store(&self, _next: &DeletionLog) -> Result<(), ()> {
+    async fn store(&self, _base: &DeletionLog, _next: &DeletionLog) -> Result<(), LogStoreError> {
         Ok(())
     }
 }

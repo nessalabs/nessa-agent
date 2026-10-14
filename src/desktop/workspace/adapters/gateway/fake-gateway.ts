@@ -12,6 +12,7 @@
  * app's review and of message sync (`verification/desktop/fixtures/`).
  */
 import {
+  preparedSubmissionFields,
   NessaRpcError,
   createSubscriptionGate,
   subscriptionLimits,
@@ -43,6 +44,15 @@ export type FakeGatewayClient = GatewayClient & {
 }
 
 const notShared = () => Promise.reject(new Error("the fake gateway does not share"))
+
+/** Canonical identities for named test conversations; display names stay separate. */
+export const gatewayConversationIds = {
+  a: "00000000-0000-4000-8000-000000000001",
+  b: "00000000-0000-4000-8000-000000000002",
+  s: "00000000-0000-4000-8000-000000000003",
+  fast: "00000000-0000-4000-8000-000000000004",
+  slow: "00000000-0000-4000-8000-000000000005",
+} as const
 
 type Method =
   | "subscribe"
@@ -99,7 +109,7 @@ export function row(
 ): ConversationSummary {
   return {
     conversationId,
-    title: `Title of ${conversationId}`,
+    title: `Title of ${Object.entries(gatewayConversationIds).find(([, id]) => id === conversationId)?.[0] ?? conversationId}`,
     preview: "Last said",
     createdAtMs: 1_000,
     updatedAtMs: 2_000,
@@ -225,6 +235,8 @@ export interface FakeGateway {
   rewind(conversationId: string, position: number): void
   /** Moves the connection to `state`, telling every observer; any but connected ends every subscription. */
   setState(state: ConnectionState): void
+  /** Delivers a server push to the handlers registered on the client. A push with no handler is dropped. */
+  publishEvent(event: string, payload: unknown): void
   readonly closed: () => boolean
   readonly count: (method: Method) => number
 }
@@ -258,6 +270,7 @@ export function fakeGateway(
   const overrides = new Map<Exclude<Method, "answer">, Behaviour[]>()
   const answerOverrides: AnswerBehaviour[] = []
   const observers = new Set<(state: ConnectionState) => void>()
+  const eventListeners = new Map<string, Set<(payload: unknown) => void>>()
   const positions = new Map<string, number>()
   const subscriptions = new Map<string, Live>()
   // View subscribes on their way, which the gateway counts against its limit.
@@ -398,12 +411,26 @@ export function fakeGateway(
             views.set(conversationId, view(conversationId, { revision: "created" }))
           return { conversationId }
         }) as never,
-      send: (...args) =>
-        answer("send", args, () => ({
-          executionId: args[4]?.executionId ?? "",
-          disposition: "queued",
-          requestId: args[4]?.requestId ?? "",
-        })) as never,
+      submit: (prepared) => {
+        preparedSubmissionFields(prepared)
+        return answer(
+          "send",
+          [
+            prepared.conversationId,
+            prepared.text,
+            prepared.attachments,
+            prepared.files,
+            { executionId: prepared.executionId, requestId: prepared.requestId },
+          ],
+          () => ({
+            conversationId: prepared.conversationId,
+            target: prepared.target,
+            executionId: prepared.executionId,
+            disposition: "queued",
+            requestId: prepared.requestId,
+          }),
+        ) as never
+      },
       answer: (...args) => {
         calls.push({ method: "answer", args })
         const normal = (): AnswerResult => ({ requestId: "answer", applied: true })
@@ -494,6 +521,14 @@ export function fakeGateway(
       observers.add(handler)
       return () => observers.delete(handler)
     },
+    onEvent(event: string, handler: (payload: unknown) => void) {
+      const handlers = eventListeners.get(event) ?? new Set()
+      handlers.add(handler)
+      eventListeners.set(event, handlers)
+      return () => {
+        handlers.delete(handler)
+      }
+    },
     close() {
       closed = true
       endAll(undefined, { reason: "disconnected" })
@@ -532,6 +567,11 @@ export function fakeGateway(
       // The client ends its subscriptions before anyone hears the state.
       if (next.status !== "connected") endAll(undefined, { reason: "disconnected" })
       for (const observer of [...observers]) observer(next)
+    },
+    publishEvent(event: string, payload: unknown) {
+      const handlers = eventListeners.get(event)
+      if (!handlers) return
+      for (const handler of [...handlers]) handler(payload)
     },
     closed: () => closed,
     count: (method: Method) => calls.filter((call) => call.method === method).length,

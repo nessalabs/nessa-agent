@@ -1,3 +1,4 @@
+import { executionTargets } from "@nessa/client"
 import { useState } from "react"
 import {
   Sheet,
@@ -112,10 +113,18 @@ export function ConversationQueue({
                     !gatewayAvailable || conversation.controlPending
                       ? undefined
                       : () => {
+                          const target = conversation.serverConversationId
+                            ? executionTargets({
+                                conversationId: conversation.serverConversationId,
+                                messages: [],
+                                pending: conversation.remote?.pending ?? [],
+                              }).find((target) => target.executionId === turn.executionId)
+                            : undefined
+                          if (!target) return
                           void dispatch(
                             controlConversation({
                               id: conversation.id,
-                              control: { kind: "remove", executionId: turn.executionId },
+                              control: { kind: "remove", target },
                             }),
                           )
                         }
