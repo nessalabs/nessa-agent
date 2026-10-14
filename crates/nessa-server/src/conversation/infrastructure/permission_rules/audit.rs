@@ -57,8 +57,10 @@ impl PermissionRuleRevocationAudit for DurablePermissionRuleRevocationAudit {
         let mut wrote = false;
         for value in pending_requests(&self.directory, id)? {
             let principal = value["initiator"]["principalId"].as_str().unwrap_or("");
+            // Another principal's request is theirs to finish. It does not
+            // block this caller's revision, and this caller does not write it.
             if principal != actor.principal_id() {
-                return Err(RuleCatalogError::Unavailable);
+                continue;
             }
             let revocation = revocation_from(&value)?;
             let removed = removed_name(&revocation.id, &revocation.revision);
@@ -359,6 +361,51 @@ mod tests {
         assert_eq!(removed, 2, "both revisions still lacked an absent record");
         assert!(!audit.finish("pr_rule", &first.actor).unwrap());
         assert_eq!(absent_files(root.path()), 2);
+    }
+
+    #[test]
+    fn a_different_principals_request_does_not_block_finishing_this_one() {
+        let root = tempfile::tempdir().unwrap();
+        let audit = DurablePermissionRuleRevocationAudit::new(
+            root.path().join("revocations"),
+            Arc::new(TestClock(AtomicU64::new(10))),
+        )
+        .unwrap();
+        let mut earlier = revocation("owner-a");
+        earlier.revision = "1".into();
+        let mut later = revocation("owner-b");
+        later.revision = "2".into();
+        audit.requested(&earlier).unwrap();
+        audit.requested(&later).unwrap();
+        assert!(
+            audit.finish("pr_rule", &later.actor).unwrap(),
+            "the retrying principal finishes its own revision"
+        );
+        assert_eq!(absent_revisions(root.path()), vec!["2".to_owned()]);
+        assert!(audit.finish("pr_rule", &earlier.actor).unwrap());
+        assert_eq!(
+            absent_revisions(root.path()),
+            vec!["1".to_owned(), "2".to_owned()]
+        );
+    }
+
+    fn absent_revisions(root: &std::path::Path) -> Vec<String> {
+        let mut revisions = std::fs::read_dir(root.join("revocations"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry.file_name().to_str().is_some_and(|name| {
+                    name.starts_with("permission-rule-revoke-") && !name.contains("requested")
+                })
+            })
+            .map(|entry| {
+                let value: serde_json::Value =
+                    serde_json::from_str(&std::fs::read_to_string(entry.path()).unwrap()).unwrap();
+                value["target"]["revision"].as_str().unwrap().to_owned()
+            })
+            .collect::<Vec<_>>();
+        revisions.sort();
+        revisions
     }
 
     fn absent_files(root: &std::path::Path) -> usize {
