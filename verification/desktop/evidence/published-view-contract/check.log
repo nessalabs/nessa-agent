@@ -1,7 +1,7 @@
 #827 published-view verification contract
 Base after restack: codex/812-fresh-restored-tab-identities at 6985df620c02f9c593dfc9dde4c89d450111434c
 Current code head tested: a38586c02ddb191514ec3965a070bc323001325b
-The final evidence commit changes this file only.
+The final evidence commit changes only this evidence directory.
 
 Fixture path: SDK conversationView decode -> production gateway conversationView mapper with the fixture's panel clock -> applyView. The typed SDK view supplies required serverNowMs and notes; the production mapper owns SDK-note to panel-note conversion and deadline clock conversion.
 Mode comparison: ignores exactly revision, approvalMode and serverNowMs; all other current and future fields remain semantic content.
