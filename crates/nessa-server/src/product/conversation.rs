@@ -415,8 +415,17 @@ pub(super) async fn dispatch(
             }
             "conversation.answer" => {
                 let params = params!(ConversationAnswerParams);
-                let permission_caller = match authenticated_rule_principal(state, session).await {
-                    Ok(principal) => noted_permission_caller(principal),
+                // Only a remember choice reads the membership. An ordinary
+                // once answer does not fail when that read is unavailable.
+                let permission_caller = match permission_caller_for_option(
+                    &params.option_id,
+                    if is_remember_option(&params.option_id) {
+                        authenticated_rule_principal(state, session).await
+                    } else {
+                        Ok(RulePrincipal::Grant)
+                    },
+                ) {
+                    Ok(caller) => caller,
                     Err(code) => return Ok(failure(&frame.id, code)),
                 };
                 // Cedar admits or refuses the caller who is answering. A grant
@@ -609,6 +618,20 @@ async fn authenticated_rule_principal(
         MembershipRole::Admin => RulePrincipal::Owner,
         MembershipRole::Member => RulePrincipal::Grant,
     })
+}
+
+/// Who an answer is recorded as.
+///
+/// A remember choice needs the authenticated membership. Any other option
+/// does not: a failed membership read must not refuse an ordinary once answer.
+fn permission_caller_for_option(
+    option_id: &str,
+    principal: Result<RulePrincipal, &'static str>,
+) -> Result<PermissionCaller, &'static str> {
+    if !is_remember_option(option_id) {
+        return Ok(PermissionCaller::Grant);
+    }
+    principal.map(noted_permission_caller)
 }
 
 fn noted_permission_caller(principal: RulePrincipal) -> PermissionCaller {
@@ -1146,6 +1169,36 @@ fn agent_read_hint(error: &AgentError) -> Option<&'static str> {
         AgentError::Backpressure => Some("backpressure"),
         AgentError::AttachmentUnavailable(_) => Some("attachment"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod permission_caller {
+    use super::{permission_caller_for_option, RulePrincipal};
+    use nessa_sdk::application::agent_execution::permissions::{PermissionCaller, REMEMBER_ALLOW};
+
+    #[test]
+    fn an_ordinary_answer_does_not_need_the_membership_read() {
+        assert_eq!(
+            permission_caller_for_option("allow", Err("temporarily_unavailable")),
+            Ok(PermissionCaller::Grant)
+        );
+    }
+
+    #[test]
+    fn a_remember_answer_still_needs_the_membership_read() {
+        assert_eq!(
+            permission_caller_for_option(REMEMBER_ALLOW, Err("temporarily_unavailable")),
+            Err("temporarily_unavailable")
+        );
+        assert_eq!(
+            permission_caller_for_option(REMEMBER_ALLOW, Ok(RulePrincipal::Owner)),
+            Ok(PermissionCaller::Owner)
+        );
+        assert_eq!(
+            permission_caller_for_option(REMEMBER_ALLOW, Ok(RulePrincipal::Grant)),
+            Ok(PermissionCaller::Grant)
+        );
     }
 }
 
