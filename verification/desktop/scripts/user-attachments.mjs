@@ -104,7 +104,10 @@ await main(
               .locator(ui.case("restored", "mixed"))
               .screenshot({ path: join(options.shots, `${engine}-restored-input.png`) })
           }
-          await attempt(rep, { engine, width, name: "console" }, async () => ({}))
+          await opened.settleRequests()
+          await attempt(rep, { engine, width, name: "console" }, async () => ({
+            failures: opened.errors.map((line) => `page error: ${line}`),
+          }))
         } finally {
           await opened.close()
         }
