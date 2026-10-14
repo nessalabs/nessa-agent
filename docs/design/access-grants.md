@@ -207,15 +207,16 @@ policy engine, a new crate, or a grant-by-list.
 | Tool policy and `commandHosts` | Stay as constraints on a grant that has `drive`. |
 | `policy_revision` | Stays, under the name grant epoch. |
 | `paired.peer_gateway` | Deleted. `grant.comment` and `grant.drive` require the capability and, until the peer-write slice, a principal signed in as the binding owner. One condition, on the permit. |
-| A stored Drive role that a peer cannot use | The share use case refuses to write `comment` or `drive` for a gateway principal. Cedar denies a row that has them anyway. |
+| A stored Drive role that a peer cannot use | `conversation.share` asks those permits before it writes. A denial writes nothing and returns the policy ids. The use case does not match a gateway principal on its own. The same permits deny a hand-built row at admission. |
+| `share_grants` key `(receiver_id, conversation_id)` | Becomes `(principal_id, conversation_id)` in the refactor, one metadata version bump. `receiver_id` stays for a paired device or gateway, because admission is still `Initiation::grant(receiver, epoch)`. An integration, and a later agent, store the principal and no receiver. |
 | Credential `conversation.read`, `conversation.write`, `environment.serve` | Stay. They say whether this credential may read, may be the conversation authority, or may serve. They do not name a conversation or a directory. `hold.peer` stays as written. |
 | `grants.json` on the environment | Stays on that machine, so the gateway cannot widen it. The same capability and constraint words. `domain::unwritten` stays the default facts (an absent ssh entry is the host's own set; an absent dialed gateway is empty). |
 | Gateway `denyPrograms` / `allowPrograms` | Stay the host's own program list in `commands.cedar`. A grant's command rules are a further constraint, deny wins. |
 | Remembered permission rules | Stay the owner's. `rules.cedar` already refuses a grant. |
 | `#797` targets | Stay a caller contract. |
 | `#811` owner phone | Left to that issue. Pairing classes are unchanged here. |
-| `PeerPoller` timer for an Active peer | Deleted. Grant add, revoke, and epoch changes arrive on a grant subscription. Chat views arrive on `conversation.subscribe`. Both use the cursor and resume rules in [record subscriptions](record-subscriptions.md). One connection follows at most eight chats. |
-| `conversation.watchRecords` | Stays the retained phone path ([#851](https://github.com/nessalabs/nessa-agent/issues/851)). Peers use `conversation.subscribe`. |
+| `PeerPoller` timer for an Active peer | Deleted. Grant add, revoke, and epoch changes arrive on a grant subscription. Chat views arrive on `conversation.subscribe`. Both use the cursor and resume rules in [record subscriptions](record-subscriptions.md). One connection follows at most eight chats. The record copy stays `conversation.recordsHead` and `recordsPage`, woken by a frame, not by the timer. |
+| `conversation.watchRecords` | Stays the retained phone path ([#851](https://github.com/nessalabs/nessa-agent/issues/851)). Peers use `conversation.subscribe` as the wake, and `recordsHead` / `recordsPage` as the copy. |
 | Grant by channel, folder-of-chats, or default sync | Already refused. Stays refused. |
 | A webhook-only access list | Not added. The webhook's share grant is the list. |
 | Nessa copies of Claude or Codex hooks | Not added. |
@@ -250,11 +251,17 @@ The resource is one canonical directory in an environment the grantor
 enforces. The environment is this gateway's own machine, a remote
 environment it already leases over SSH or a paired connection, or a cloud
 environment a later agent slice will run. The grant names the environment
-and the directory. `read` lists and reads named paths under that directory. `write` creates
-and edits named paths under it. A path with `..`, or a symlink that
-resolves outside the directory, is outside the grant. The environment
-checks a path where it sees one: publish, a file tool that names a path,
-and the working directory of a command.
+and the directory. `read` lists and reads named paths under that directory.
+`write` creates and edits named paths under it. The open is the check.
+The environment walks from a directory handle on the granted directory,
+and opens each component no-follow against the parent handle: publish, a
+file tool that names a path, and the working directory of a command. A
+component that is `..`, a symlink, or otherwise leaves that directory is
+refused. Resolving the path and then opening the resolved name is not the
+boundary. The grantee can replace a symlink or an ancestor after that
+resolve and before the open. A replacement during the walk still cannot
+leave the directory, because the open holds the parent handle and does
+not follow the new name.
 
 `exec` is the process. A working directory inside the grant does not
 confine it. The settled command lease runs with sandbox `none`: nothing
@@ -333,10 +340,27 @@ It receives no frames until it is opened again, and then
 There is no second connection and no poller for the chat that was let go.
 A grant change still arrives while eight chats are live.
 
+`conversation.subscribe` is a bounded view, the same shape as
+`conversation.read`. It is not a record stream.
+[Record subscriptions](record-subscriptions.md) keep the checkpoint copy
+on `conversation.recordsHead` and `recordsPage`, and say the view is not
+that copy. The local replica is the retained peer cache, which slice 2
+reads. Deleting the poller timer does not delete the copy.
+
+A frame that changes a followed view, and a grant frame that adds a chat
+the follower has chosen to follow, wake that copy. The copy reads
+`recordsHead` and then `recordsPage` from the cursor the cache last
+applied, and writes the records into the cache. Turns the view omits are
+still copied. The walk is not `catalogueHead` and not `peer.poll_interval`.
+A chat let go past the eight-cap keeps its cursor and is not walked until
+it is opened again. After a disconnect the follower resumes the
+subscriptions and the record cursor from what it last applied.
+
 The `PeerPoller` timer goes away for an Active peer. `peer.poll_interval`
-no longer wakes a `catalogueHead` or a record walk. After a disconnect the
-follower opens a new pinned session and resumes both subscriptions from
-the cursors it last applied, the same way the sync engine resumes a pass.
+no longer wakes a `catalogueHead`. The record copy above is the walk, and
+a frame wakes it. After a disconnect the follower opens a new pinned
+session and resumes both subscriptions from the cursors it last applied,
+the same way the sync engine resumes a pass.
 
 Two waits are not that timer:
 
@@ -388,8 +412,9 @@ turn's rule: admitted work finishes, and the next command is refused.
   POST. An epoch that no longer allows delivery records `not sent` and
   writes nothing.
 - Revoke takes the same permit. When an attempt holds it, revoke waits
-  until that attempt records its outcome and drops the permit. Revoke does
-  not cancel that write. It then advances the epoch and records the
+  until that attempt records its outcome and drops the permit, and no
+  longer than `webhook.post_deadline`. Revoke does not cancel a write that
+  finishes inside the deadline. It then advances the epoch and records the
   transition: delivering, then stopped, with the revoke as cause and the
   owner as initiator. The record names the delivery id it waited for, when
   there was one.
@@ -397,11 +422,20 @@ turn's rule: admitted work finishes, and the next command is refused.
   epoch and is not sent.
 - When revoke commits before an attempt takes the permit, that attempt is
   not sent.
+- The attempt holds the permit only until `webhook.post_deadline`, a row
+  this slice adds to [limits](../limits.md). The clock starts when the
+  attempt takes the permit. At the deadline the sender closes its side of
+  the POST, records `timed out`, and drops the permit. Revoke waits for
+  the attempt's outcome or for that deadline, whichever comes first, and
+  does not wait longer. Revoke still does not cancel a write that finishes
+  inside the deadline. Bytes already written may still reach the receiver
+  after the deadline. That late arrival is not recorded as `sent` and does
+  not schedule a retry. A retry is a new admission.
 
 One POST that already holds the permit can still reach the receiver. No
 later attempt is sent. Each attempt records the target, the delivery id,
 the grant epoch it read, the outcome of that attempt (sent, retry
-scheduled, or not sent), and the cause. An attempt is one observation of
+scheduled, timed out, or not sent), and the cause. An attempt is one observation of
 a POST.
 
 ## LAN announcement
@@ -497,16 +531,27 @@ Part of the access-grant proposal in `docs/design/access-grants.md`.
 
 ## Deliver
 
-Make the conversation share row the access grant: the paired receiver, one
-conversation id, a capability set (`read`, and for a device also `comment`
-and `drive`), constraints (the tool policy and `commandHosts` a `drive`
-grant already carries), and the grant epoch (today's `policy_revision`).
+Make the conversation share row the access grant. The primary key is
+`(principal_id, conversation_id)`, replacing `(receiver_id, conversation_id)`.
+`receiver_id` is no longer the key and is no longer required. A paired
+device or gateway still stores the receiver its credential is bound to,
+because admission returns `Initiation::grant(receiver, epoch)`. An
+integration principal, and a later agent principal, store no receiver.
+Webhook and agent slices insert into this key. They do not migrate
+identity again. The directory slice adds its resource on this same
+principal key.
+
+The capability set is `read`, and for a principal Cedar permits, `comment`
+and `drive`. Constraints are the tool policy and `commandHosts` a `drive`
+grant already carries. The grant epoch is today's `policy_revision`.
 
 Cedar's `grant.read`, `grant.comment`, and `grant.drive` permits read those
 capabilities. `grant.comment` and `grant.drive` also require a principal
 signed in as the binding owner, which is the device case. Delete
-`paired.peer_gateway`. `conversation.share` refuses `comment` and `drive`
-for a gateway principal and writes nothing.
+`paired.peer_gateway`. `conversation.share` asks `grant.comment` and
+`grant.drive` before it writes those capabilities. A denial writes nothing
+and the answer carries the policy ids. The use case does not match a
+gateway principal on its own.
 
 The wire field is `capabilities`. The role enum goes. Alpha: bump the
 metadata database version once, from whatever it is on main, and refuse a
@@ -522,8 +567,12 @@ with the owner as initiator.
 
 A device with `drive` sends on that conversation and is refused on another.
 A peer with `read` still reads, and comment and drive are refused. Sharing
-`drive` with a peer is refused and the row is unchanged. A hand-built row
-that gives a gateway `comment` is denied by Cedar. A retry journals before
+`drive` with a peer is refused, the row is unchanged, and the refusal names
+the Cedar policy ids. The share path has no principal-kind match of its
+own. A hand-built row that gives a gateway `comment` is denied by the same
+permits. A grant with a principal and no receiver can be stored, and a
+paired grant is still found by its receiver. Two rows for the same
+principal and conversation cannot both exist. A retry journals before
 equal to after. The previous metadata version is refused. A test fails if
 the capability check is removed from the permit.
 
@@ -543,6 +592,8 @@ Part of docs/design/access-grants.md.
 On the follower, a conversation a peer has granted opens as a local
 conversation. It is a replica of the grantor's chat, shown through the
 existing conversation view, from the records the peer cache already holds.
+The cache is filled by `conversation.recordsHead` and `recordsPage`. The
+subscribe view is not the replica.
 The follower's store is not the authority and is not merged with the
 grantor's. The chat is read-only until the peer-write slice. An id with no
 grant answers the same way a missing conversation does.
@@ -569,6 +620,8 @@ Part of docs/design/access-grants.md.
 The owner can put `comment` or `drive` on a gateway principal's grant for
 one conversation. Remove the signed-in-as-owner requirement from
 `grant.comment` and `grant.drive`, so the capability is the decision.
+`conversation.share` already asks those permits, so this slice does not
+add or delete a separate gateway-kind check.
 `admit_request` keeps returning `Initiation::grant(receiver, epoch)`: the
 turn's caller is the grant, not the owner.
 
@@ -606,8 +659,11 @@ A grant resource is one directory in an environment the grantor enforces:
 this gateway's machine, a remote environment it already leases, or a cloud
 environment a later agent uses. The grant names the environment and the
 directory. Capabilities are `read`, `write`, and `exec`. `read` and
-`write` refuse a named path outside the directory, including `..` and a
-symlink that resolves outside. `exec` is admitted only when that
+`write` open a named path by walking from a directory handle on the
+granted directory, no-follow against each parent handle. A component that
+is `..`, a symlink, or otherwise leaves the directory is refused.
+Resolving the path and then opening the resolved name is not the boundary.
+`exec` is admitted only when that
 environment enforces a filesystem sandbox around the process (the harness
 sandbox or a container) and the sandbox's roots stay inside the directory.
 A command lease with sandbox `none`, which is what `run` and `GrantCommand`
@@ -631,7 +687,10 @@ with one owner.
 ## Gate
 
 A peer granted the directory reads a file inside it and is refused a path
-outside it. A command on a sandbox-`none` host is refused `exec` even
+outside it. Replacing a symlink or an ancestor while the open is in
+progress still cannot leave the directory: the opened file is inside it,
+or the open is refused. A resolve-then-open is not accepted as the check.
+A command on a sandbox-`none` host is refused `exec` even
 when its working directory is the granted directory. Where the environment
 enforces a filesystem sandbox, the audit names the profile it applied, and
 a path outside that profile's roots is refused. A denied program is
@@ -683,7 +742,8 @@ Part of docs/design/access-grants.md.
 ## Deliver
 
 Delete the `PeerPoller` timer for an Active peer. `peer.poll_interval` no
-longer wakes a `catalogueHead` or a record walk.
+longer wakes a `catalogueHead`. The record copy stays, and a frame wakes
+it.
 
 Push grant changes on a grant subscription for this receiver, on the same
 subscription machinery as `conversation.subscribe` (#851). The cursor is
@@ -711,11 +771,18 @@ resumes with `after` from the cursor last applied. There is no second
 connection and no poller for that chat. A grant change still arrives while
 eight chats are live.
 
+`conversation.subscribe` wakes the copy. It is a bounded view, not a
+record stream, and it is not written into the cache as the replica. The
+copy is `conversation.recordsHead` and `recordsPage` from the cursor the
+cache last applied, the checkpoint path in `docs/design/record-subscriptions.md`.
+Turns the view omits are still copied. A chat let go past the eight-cap
+keeps that cursor and is not walked until it is opened again.
+
 Two waits stay, and neither reads the catalogue on a timer. Until the
 enrollment is Active there is no session, so the existing status dial runs
 until Active or ended, then stops. After the subscription connection
 drops, a failed connect waits on the existing connect backoff and then
-resumes both subscriptions from their cursors. The environment serving
+resumes both subscriptions and the record cursor. The environment serving
 connection's silence bound stays; it carries leases and is not this poller.
 
 ## Gate
@@ -723,8 +790,11 @@ connection's silence bound stays; it carries leases and is not this poller.
 A new share, a revoke, and an epoch change each arrive on the grant
 subscription with no `catalogueHead` from `peer.poll_interval`. A new
 message on an opened chat arrives on `conversation.subscribe` the same
-way. Reconnect resumes both cursors and does not move either backwards in
-the same incarnation. An Active peer has no poller timer. A pending
+way, and the record-page walk that the frame wakes has put the new
+records in the cache, including a turn the view omitted. Reconnect resumes
+the subscription cursors and the record cursor, and does not move any of
+them backwards in the same incarnation. An Active peer has no poller
+timer. A pending
 enrollment still completes through the status dial, and that dial stops
 at Active. The follower does not call `conversation.watchRecords`.
 Following nine chats leaves the least recently opened one unsubscribed,
@@ -784,7 +854,8 @@ it. The credential has no product session and no receiver binding, so it
 is not admitted as a paired reader.
 
 `conversation.share` gains that credential as a target beside a paired
-receiver. The grant row is the same fact. The gateway POSTs events for
+receiver. The grant row is the same fact, keyed by the integration
+principal, with no receiver. The gateway POSTs events for
 the granted conversation only. The payload is what that capability set
 may see.
 
@@ -800,15 +871,21 @@ are written on that POST and are not sent to another origin. A redirect
 to HTTPS is still not followed.
 
 Revoke and delivery share one permit for the registration. An attempt
-takes the permit, reads the epoch, and only then writes the POST. Revoke
-takes the same permit and, when an attempt holds it, waits until that
-attempt records its outcome. Revoke does not cancel that write. It then
-advances the epoch and records delivering, then stopped, with the revoke
-as cause, the owner as initiator, and the delivery id it waited for.
+takes the permit, reads the epoch, and only then writes the POST. The
+attempt holds the permit at most until `webhook.post_deadline`, a row
+this slice adds to `docs/limits.md`. The clock starts when the attempt
+takes the permit. At the deadline the sender closes its side of the POST,
+records `timed out`, and drops the permit. Bytes already written may still
+reach the receiver. That late arrival is not recorded as `sent` and does
+not schedule a retry. Revoke waits for the attempt's outcome or for that
+deadline, whichever comes first. Revoke does not cancel a write that
+finishes inside the deadline. It then advances the epoch and records
+delivering, then stopped, with the revoke as cause, the owner as
+initiator, and the delivery id it waited for.
 A retry is a new admission and is not sent after the epoch advances. An
 attempt that has not taken the permit when revoke commits is not sent.
 Each attempt records the target, the delivery id, the epoch it read, the
-outcome (sent, retry scheduled, or not sent), and the cause.
+outcome (sent, retry scheduled, timed out, or not sent), and the cause.
 
 ## Gate
 
@@ -819,8 +896,10 @@ delivery id and the signature. The webhook credential cannot call
 permit; that attempt is recorded under the epoch it read, and the epoch
 then advances. A retry that takes the permit after that advance is not
 sent. An attempt that has not taken the permit when revoke commits is not
-sent. A 3xx is not followed and is not a delivery. The signature is not
-sent to the redirect target.
+sent. A POST that does not finish within `webhook.post_deadline` records
+`timed out`, drops the permit, and revoke then advances the epoch without
+waiting further. A 3xx is not followed and is not a delivery. The
+signature is not sent to the redirect target.
 
 ## Depends on
 
