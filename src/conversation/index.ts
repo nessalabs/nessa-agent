@@ -24,8 +24,6 @@ export { ConversationQueue } from "./ui/conversation-queue"
 export { ConversationList } from "./ui/conversation-list"
 export { commandErrorCleared } from "./adapters/store/history"
 export { Transcript } from "./ui/transcript"
-// The time a transcript's countdowns read: composition supplies it.
-export { ClockProvider } from "../clock"
 // Files a conversation holds, read back verified and shown: the panel's
 // transcripts and the desktop window's alike.
 export { HeldFilesProvider } from "./ui/held-files"

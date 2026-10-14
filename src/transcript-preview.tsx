@@ -11,7 +11,8 @@ import "@fontsource-variable/geist-mono"
 import "./styles.css"
 
 import { makeStore } from "./store"
-import { ClockProvider, Transcript } from "./conversation"
+import { ClockProvider } from "./clock"
+import { Transcript } from "./conversation"
 
 /** The barrel is the door; a preview has no more business past it than the app. */
 type Conversation = React.ComponentProps<typeof Transcript>["conversation"]

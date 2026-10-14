@@ -14,11 +14,8 @@ import { makeDesktopStore } from "../../../../src/desktop/store"
 import { DesktopWindow } from "../../../../src/desktop/ui/desktop-window"
 import { DesktopIconFamilyProvider } from "../../../../src/desktop/ui/icons"
 import { WidgetRegistryProvider } from "../../../../src/desktop/widgets"
-import {
-  ClockProvider,
-  followWorkspace,
-  loadWorkspace,
-} from "../../../../src/desktop/workspace"
+import { ClockProvider } from "../../../../src/clock"
+import { followWorkspace, loadWorkspace } from "../../../../src/desktop/workspace"
 import {
   fakeGateway,
   row,

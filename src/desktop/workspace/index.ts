@@ -58,7 +58,6 @@
 export { SessionsInSidebar } from "./ui/layouts/sessions-in-sidebar"
 export { ThreeColumns } from "./ui/layouts/three-columns"
 export { shortcutNames, workspaceShortcuts } from "./ui/layouts/shortcuts"
-export { ClockProvider } from "../../clock"
 export { focusInFront } from "./adapters/dom/focus"
 export { measureWorkspace } from "./adapters/dom/measure"
 export {
