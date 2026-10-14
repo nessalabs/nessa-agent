@@ -5,8 +5,8 @@ main `79c2eca773e79e5f41f4a0f0fcc2e860f5191b97` (#846) and the published
 #823 `22fa4831`, #828 `e980b792`, #834 `0daa8ad1`, #838 `d320d5ec`,
 #859 `fef42a36`, #871 `5f5f21e3`.
 Runtime source matches `0c08be9f`; the final parent merge adds only a Rust test
-fixture correction. #871 has a subsequently reported test scheduling review
-finding still being addressed. This evidence does not establish green CI or
+fixture correction. #871 had a subsequently reported test scheduling review finding; the test-only
+follow-up is recorded below. This evidence does not establish green CI or
 review closure for any PR.
 
 ## Executed checks
@@ -39,3 +39,17 @@ unidentified Fastify error window also remain without causal attribution.
 These are local results. Supported-platform CI and review closure are separate
 merge gates, tracked in the PR completion document. Earlier directories retain
 historical source attribution rather than being relabeled as current.
+
+## Test-only follow-up
+
+Published #871 `6608f4b16c23b177407d50c4ca41532fcc8ce1af` resolves the
+pre-read scheduling finding by pausing Tokio time and advancing it only after
+read entry. Author targeted test, 250 ms wall-delay adversarial probe and
+timeout/cancellation negative controls pass; fresh full source review is clean.
+The thread is resolved; current-head CI remains a separate pending gate.
+
+Combined merge `33651c10084f7eabe3c494a76721020e627c58fd` incorporates it.
+Against the checked runtime `e27b1752`, only that five-line test correction and
+this evidence directory differ. Each feature head's three-way merge preview
+inherits the correction cleanly; this does not substitute for checking the actual
+main tree once the merges land.
