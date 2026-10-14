@@ -1,4 +1,4 @@
-import { useNow } from "../../adapters/dom/clock"
+import { useNow } from "../../../../clock"
 import type { Activity } from "../../model/transcript"
 import { elapsed } from "../../model/time-labels"
 import { StatusGlyph } from "../chrome/status-glyph"

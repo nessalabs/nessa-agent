@@ -3,7 +3,7 @@ import { useGreetingPreference } from "../adapters/window-preferences"
 import { Composer } from "./composer"
 import { HeaderArt } from "./header-art"
 import { greetingAt } from "../model/greeting"
-import { useNow } from "../workspace/adapters/dom/clock"
+import { useNow } from "../../clock"
 
 /**
  * The first thing the window shows: a rainy night scene across the top, or a

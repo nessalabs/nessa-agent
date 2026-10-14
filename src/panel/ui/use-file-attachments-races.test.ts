@@ -48,7 +48,7 @@ vi.mock("../../host", async (importOriginal) => ({
 }))
 
 import { App } from "./app"
-import { ClockProvider } from "../../conversation"
+import { ClockProvider } from "../../clock"
 import { createAttachmentResources } from "../adapters/attachment-resources"
 import { makeStore, type AppStore } from "../../store"
 import {

@@ -1,0 +1,49 @@
+{
+  "check": "clock-snapshots",
+  "ok": false,
+  "started": "2026-10-14T05:53:24.499Z",
+  "finished": "2026-10-14T05:53:37.422Z",
+  "target": {
+    "url": "http://127.0.0.1:1438/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "ok": false,
+      "failures": [
+        "console.error: The result of getSnapshot should be cached to avoid an infinite loop (http://127.0.0.1:1438/node_modules/.vite/deps/react-dom_client.js?v=6731f9bd)"
+      ],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1438/favicon.ico)"
+      ]
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "engine": "chromium",
+      "name": "published-tick-and-cleanup",
+      "cannotRun": false,
+      "error": "page.waitForFunction: Timeout 5000ms exceeded."
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: The result of getSnapshot should be cached to avoid an infinite loop (http://127.0.0.1:1438/node_modules/.vite/deps/react-dom_client.js?v=6731f9bd)"
+      ],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "engine": "webkit",
+      "name": "published-tick-and-cleanup",
+      "cannotRun": false,
+      "error": "page.waitForFunction: Timeout 5000ms exceeded."
+    }
+  ]
+}

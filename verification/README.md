@@ -43,6 +43,7 @@ verification/
       provider-sign-in/     real transcript with typed auth refusal and controlled login launch
       message-sync/         real window over controlled active and stalled gateway reads
       app-review/           real window over a typed fake gateway whose app's call asks for a review
+      clock-snapshots/      public ClockProvider/useNow with injected time crossing a bucket between React reads
     scripts/
       provider-sign-in.mjs compact login recovery geometry, keyboard launch and replacement
       attachments-races.mjs pending image admission and concurrent URL-drop refusals
@@ -73,6 +74,7 @@ verification/
       app-review.mjs        an MCP App's review: read while the app's call waits, drawn and answered, the card and the overview row naming the app (dev server)
       lib/mode-content.mjs  compares semantic view content independently of approval mode, revision and observation clock; bare-Node tests preserve all remaining fields (#827)
       approval-deadline.mjs an armed review's countdown on the approval card, then the automatic notice at expiry (dev server)
+      clock-snapshots.mjs   a public clock hook across a published tick and last-subscriber cleanup (dev server)
       mcp-apps.mjs          MCP Apps: each place, tools/call allowed and refused, CSP, isolation, escapes, forgery, departures and departures-back, the test server's chart app going live (dev server: the sandbox proxy starts in configureServer, so a preview cannot mount the fixture and run-all --mode prod leaves the check out; departures, departures-back and chart import the host's own builder), teardown
       mcp-apps-gateway.mjs  MCP Apps over a real gateway (#384): the test MCP server's app, its reviews, refusals and release; with `--scripted`, also an app's message and context update, and no model key (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in, or `--scripted` for none)
       mcp-servers-gateway.mjs Settings › Integrations over a real gateway (#391): add, inspect, focus, toggle, rename, narrow, conflict, remove, reconnect, non-admin, and the chart's app from a server added there (starts its own gateway and dev server; done-when needs the agent signed in)

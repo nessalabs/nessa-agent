@@ -322,7 +322,8 @@ not reading the session, which stays unread.
   focus following the focused pane and owning its queued settlement for the mounted
   subscription (`focus.ts`, [frame lifetime](design/ui-workspace-load.md#focus-frame-lifetime-730)), the page's measure of the
   panes' room (`measure.ts`, injected into the commands), the arrival of a
-  first message, and the clock's ticks. `adapters/storage/` keeps the Agents overview's
+  first message. `src/clock/` owns the shared published clock ticks used by
+  conversation and workspace readers. `adapters/storage/` keeps the Agents overview's
   filter between launches (`remembered-filter.ts`).
 - `ui/` holds each component once — source list (two variants of one
   component), session list, pane grid, pane, pane header, transcript, message,
@@ -482,6 +483,7 @@ opinion rather than the product's.
 | Path | Owns |
 | --- | --- |
 | `main.tsx`, `store.ts` | Composition root. Mounts the panel, the session lifecycle, and product projections. |
+| `clock/` | Shared UI clock publication (`ui/provider.tsx`). Each injected provider and label interval has one stable published revision and subscriber-owned timer lifecycle; conversation and workspace own the labels that consume it. |
 | `conversation/` | The conversation vertical. See the table below. |
 | `session/` | Authenticated wire session to `nessa-server` via `@nessa/client`, including verified local endpoint discovery, health, and reconnect lifecycle. |
 | `panel/` | The floating-window chrome. See the table below. |
@@ -790,6 +792,7 @@ are written here.
 | A new host event or payload | `host.rs` and `src/host/window.ts` together |
 | Leftover transcript tiles on a layout compositor | `flush_compositor` in `platform/` plus `useFlushOnTurn` in `src/panel/adapters/` |
 | The conversation surface (tabs, drafts, empty transcript) | `src/conversation/application/usecases/` (commands), `adapters/gateway/` (local session), `adapters/store/` (projection) |
+| Shared clock publication for aging labels | `src/clock/`; conversation and workspace own their label consumers |
 | The transcript chrome | `src/conversation/ui/` |
 | The panel chrome or composer | `src/panel/ui/app.tsx` |
 | Resize jitter, the pinned webview | `platform/{macos,linux,other}/viewport.rs` |

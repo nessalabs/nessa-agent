@@ -29,12 +29,15 @@ import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import { conversationView } from "../../../../packages/nessa-client/src/protocol/conversation-validate"
 import {
-  ClockProvider as ConversationClockProvider,
   HeldFilesProvider,
   Transcript,
   shownNote,
   type HeldFileReader,
 } from "../../../../src/conversation"
+import {
+  ClockProvider,
+  ClockProvider as ConversationClockProvider,
+} from "../../../../src/clock"
 import { applyView } from "../../../../src/conversation/application/usecases/apply-view"
 import { conversation as newConversation } from "../../../../src/conversation/model"
 import { createDesktopDependencies } from "../../../../src/desktop/dependencies"
@@ -42,11 +45,7 @@ import { makeDesktopStore } from "../../../../src/desktop/store"
 import { DesktopIconFamilyProvider } from "../../../../src/desktop/ui/icons"
 import { DesktopWindow } from "../../../../src/desktop/ui/desktop-window"
 import { WidgetRegistryProvider } from "../../../../src/desktop/widgets"
-import {
-  ClockProvider,
-  followWorkspace,
-  loadWorkspace,
-} from "../../../../src/desktop/workspace"
+import { followWorkspace, loadWorkspace } from "../../../../src/desktop/workspace"
 import {
   fakeGateway,
   note,

@@ -1,0 +1,29 @@
+Mutation:           // source-revert probe: omit active listener notification
+Command: node verification/desktop/scripts/clock-snapshots.mjs --mode dev --engine chromium,webkit --channel bundled --only published-tick-and-cleanup
+Exit: 1
+starting the dev server (pnpm desktop:dev)…
+warmed 1157 modules in 1522 ms
+page.waitForFunction: Timeout 5000ms exceeded.
+    at /Users/nessa/.codex/worktrees/clock-published-snapshots/nessa-agent/verification/desktop/scripts/clock-snapshots.mjs:80:22
+    at async attempt (/Users/nessa/.codex/worktrees/clock-published-snapshots/nessa-agent/verification/desktop/scripts/lib/cli.mjs:346:20)
+    at async file:///Users/nessa/.codex/worktrees/clock-published-snapshots/nessa-agent/verification/desktop/scripts/clock-snapshots.mjs:34:7
+    at async runAndClose (/Users/nessa/.codex/worktrees/clock-published-snapshots/nessa-agent/verification/desktop/scripts/lib/browser.mjs:475:12)
+    at async withEngines (/Users/nessa/.codex/worktrees/clock-published-snapshots/nessa-agent/verification/desktop/scripts/lib/browser.mjs:494:5)
+    at async file:///Users/nessa/.codex/worktrees/clock-published-snapshots/nessa-agent/verification/desktop/scripts/clock-snapshots.mjs:27:3
+    at async main (/Users/nessa/.codex/worktrees/clock-published-snapshots/nessa-agent/verification/desktop/scripts/lib/run.mjs:23:5)
+    at async file:///Users/nessa/.codex/worktrees/clock-published-snapshots/nessa-agent/verification/desktop/scripts/clock-snapshots.mjs:26:1
+ERROR published-tick-and-cleanup [chromium]
+        ! page.waitForFunction: Timeout 5000ms exceeded.
+page.waitForFunction: Timeout 5000ms exceeded.
+    at /Users/nessa/.codex/worktrees/clock-published-snapshots/nessa-agent/verification/desktop/scripts/clock-snapshots.mjs:80:22
+    at async attempt (/Users/nessa/.codex/worktrees/clock-published-snapshots/nessa-agent/verification/desktop/scripts/lib/cli.mjs:346:20)
+    at async file:///Users/nessa/.codex/worktrees/clock-published-snapshots/nessa-agent/verification/desktop/scripts/clock-snapshots.mjs:34:7
+    at async runAndClose (/Users/nessa/.codex/worktrees/clock-published-snapshots/nessa-agent/verification/desktop/scripts/lib/browser.mjs:475:12)
+    at async withEngines (/Users/nessa/.codex/worktrees/clock-published-snapshots/nessa-agent/verification/desktop/scripts/lib/browser.mjs:494:5)
+    at async file:///Users/nessa/.codex/worktrees/clock-published-snapshots/nessa-agent/verification/desktop/scripts/clock-snapshots.mjs:27:3
+    at async main (/Users/nessa/.codex/worktrees/clock-published-snapshots/nessa-agent/verification/desktop/scripts/lib/run.mjs:23:5)
+    at async file:///Users/nessa/.codex/worktrees/clock-published-snapshots/nessa-agent/verification/desktop/scripts/clock-snapshots.mjs:26:1
+ERROR published-tick-and-cleanup [webkit]
+        ! page.waitForFunction: Timeout 5000ms exceeded.
+wrote /Users/nessa/.codex/worktrees/clock-published-snapshots/nessa-agent/verification/desktop/evidence/clock-published-snapshots/source-revert-no-notify.json
+clock-snapshots: 0/2 held

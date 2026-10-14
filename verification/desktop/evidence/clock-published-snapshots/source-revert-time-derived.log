@@ -1,0 +1,15 @@
+Mutation:   useSyncExternalStore(subscribe, () => Math.floor(clock.now() / interval))
+Command: node verification/desktop/scripts/clock-snapshots.mjs --mode dev --engine chromium,webkit --channel bundled --only consecutive-reads
+Exit: 1
+starting the dev server (pnpm desktop:dev)…
+warmed 1157 modules in 1480 ms
+FAIL  console [chromium columns]
+        - console.error: The result of getSnapshot should be cached to avoid an infinite loop (http://127.0.0.1:1438/node_modules/.vite/deps/react-dom_client.js?v=faff8891)
+FAIL  consecutive-reads [chromium]
+        - browser reported errors: console.error: The result of getSnapshot should be cached to avoid an infinite loop (http://127.0.0.1:1438/node_modules/.vite/deps/react-dom_client.js?v=faff8891)
+FAIL  console [webkit columns]
+        - console.error: The result of getSnapshot should be cached to avoid an infinite loop (http://127.0.0.1:1438/node_modules/.vite/deps/react-dom_client.js?v=faff8891)
+FAIL  consecutive-reads [webkit]
+        - browser reported errors: console.error: The result of getSnapshot should be cached to avoid an infinite loop (http://127.0.0.1:1438/node_modules/.vite/deps/react-dom_client.js?v=faff8891)
+wrote /Users/nessa/.codex/worktrees/clock-published-snapshots/nessa-agent/verification/desktop/evidence/clock-published-snapshots/source-revert-time-derived.json
+clock-snapshots: 0/4 held

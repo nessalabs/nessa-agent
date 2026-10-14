@@ -18,7 +18,7 @@ import {
 import { transcriptFrom } from "../../adapters/gateway/gateway-views"
 import { GATEWAY_NOW_MS, view } from "../../adapters/gateway/fake-gateway"
 import { workspaceActions } from "../../adapters/store/slice"
-import { ClockProvider } from "../../adapters/dom/clock"
+import { ClockProvider } from "../../../../clock"
 import {
   emptyTranscript,
   type Transcript as TranscriptValue,
