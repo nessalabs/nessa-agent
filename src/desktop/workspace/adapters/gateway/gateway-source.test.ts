@@ -593,8 +593,24 @@ describe("conversations", () => {
         },
       ],
     }
+    const otherQuestion = {
+      ...question,
+      questionId: "q2",
+      message: "What priority should this have?",
+      questions: [
+        {
+          ...question.questions[0],
+          key: "priority",
+          prompt: "Pick a priority",
+          options: [{ value: "high", label: "High" }],
+        },
+      ],
+    }
     gateway.rows.set("a", row("a", { running: true }))
-    gateway.views.set("a", view("a", { messages: [running()], questions: [question] }))
+    gateway.views.set(
+      "a",
+      view("a", { messages: [running()], questions: [question, otherQuestion] }),
+    )
     await source.index()
     follow()
     await source.transcript("a")
@@ -604,6 +620,10 @@ describe("conversations", () => {
     })
     expect(transcriptsOf(updates, "a").at(-1)?.questions).toEqual([
       expect.objectContaining({ questionId: "q1", message: "Where should this land?" }),
+      expect.objectContaining({
+        questionId: "q2",
+        message: "What priority should this have?",
+      }),
     ])
     await source.answerQuestion(
       "a",
@@ -612,15 +632,20 @@ describe("conversations", () => {
       [{ key: "where", values: ["here"] }],
       "person",
     )
-    expect(gateway.calls.find((call) => call.method === "answerQuestion")?.args).toEqual([
-      "a",
-      "turn",
-      "q1",
-      [{ key: "where", values: ["here"], ownWords: null }],
+    const answerCall = gateway.calls.find((call) => call.method === "answerQuestion")
+    expect(answerCall?.args[0]).toMatchObject({
+      conversationId: "a",
+      executionId: "turn",
+      questionId: "q1",
+    })
+    expect(answerCall?.args[1]).toEqual([
+      { key: "where", values: ["here"], ownWords: null },
     ])
     gateway.publish("a")
     await flush()
-    expect(transcriptsOf(updates, "a").at(-1)?.questions).toEqual([])
+    expect(transcriptsOf(updates, "a").at(-1)?.questions).toEqual([
+      expect.objectContaining({ questionId: "q2" }),
+    ])
   })
 
   it("declines a question with a null answer and refuses one the view does not list", async () => {
@@ -650,11 +675,13 @@ describe("conversations", () => {
     )
     await source.transcript("a")
     await source.answerQuestion("a", "turn", "q1", null, "agent")
-    expect(gateway.calls.find((call) => call.method === "answerQuestion")?.args[3]).toBe(
+    expect(gateway.calls.find((call) => call.method === "answerQuestion")?.args[1]).toBe(
       null,
     )
+    gateway.publish("a")
+    await flush()
     await expect(
-      source.answerQuestion("a", "turn", "gone", null, "person"),
+      source.answerQuestion("a", "turn", "q1", null, "person"),
     ).rejects.toMatchObject({ reason: "not-waiting" })
     expect(gateway.count("answerQuestion")).toBe(1)
   })

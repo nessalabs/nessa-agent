@@ -52,13 +52,19 @@ type Method =
 
 type AnswerArgs = Parameters<ConversationApi["answer"]>
 type AnswerResult = Awaited<ReturnType<ConversationApi["answer"]>>
+type AnswerQuestionArgs = Parameters<ConversationApi["answerQuestion"]>
+type AnswerQuestionResult = Awaited<ReturnType<ConversationApi["answerQuestion"]>>
 type AnswerBehaviour = (
   normal: () => AnswerResult,
   args: AnswerArgs,
 ) => Promise<AnswerResult>
 type Call =
   | { readonly method: "answer"; readonly args: AnswerArgs }
-  | { readonly method: Exclude<Method, "answer">; readonly args: readonly unknown[] }
+  | { readonly method: "answerQuestion"; readonly args: AnswerQuestionArgs }
+  | {
+      readonly method: Exclude<Method, "answer" | "answerQuestion">
+      readonly args: readonly unknown[]
+    }
 
 /** How one call is answered instead: given the normal answer, the promise to return. */
 type Behaviour = (normal: () => unknown) => Promise<unknown>
@@ -310,7 +316,7 @@ export function fakeGateway(
     }
   }
   const answer = (
-    method: Exclude<Method, "answer">,
+    method: Exclude<Method, "answer" | "answerQuestion">,
     args: readonly unknown[],
     normal: () => unknown,
   ) => {
@@ -395,11 +401,11 @@ export function fakeGateway(
         const behaviour = answerOverrides.shift()
         return behaviour ? behaviour(normal, args) : Promise.resolve().then(normal)
       },
-      answerQuestion: (...args) =>
-        answer("answerQuestion", args, () => {
-          const conversationId = args[0]
-          const executionId = args[1]
-          const questionId = args[2]
+      answerQuestion: (...args) => {
+        calls.push({ method: "answerQuestion", args })
+        const normal = (): AnswerQuestionResult => {
+          const [target] = args
+          const { conversationId, executionId, questionId } = target
           const current = views.get(conversationId)
           if (current)
             views.set(conversationId, {
@@ -411,7 +417,10 @@ export function fakeGateway(
               ),
             })
           return { requestId: "answer-question", applied: true }
-        }) as never,
+        }
+        const behaviour = overrides.get("answerQuestion")?.shift()
+        return (behaviour ? behaviour(normal) : Promise.resolve().then(normal)) as never
+      },
       archive: (...args) =>
         answer("archive", args, () => {
           rows.delete(args[0])
