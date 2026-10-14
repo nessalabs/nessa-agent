@@ -464,6 +464,70 @@ fn deadline_answer_value(
 }
 
 #[test]
+fn audit_maps_a_rule_answer_exactly() {
+    use serde_json::json;
+
+    let id = ExecutionId::new("execution").unwrap();
+    let permission = PermissionId::new("permission").unwrap();
+    let tool = ToolCallId::new("tool").unwrap();
+    let session = ExecutionSessionId::new("session").unwrap();
+    let input = ToolReviewInput {
+        name: "Write".into(),
+        arguments_json: r#"{"path":"reviewed-file"}"#.into(),
+    };
+    let choices = PermissionOptions::new(
+        vec![PermissionOption::new(
+            PermissionOptionId::new("allow-once").unwrap(),
+            "Allow once",
+            PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request()),
+        )
+        .unwrap()],
+        &PermissionOfferPolicy::once_only(),
+    )
+    .unwrap();
+    let mut controller = ExecutionController::new(session);
+    controller.begin_execution(id.clone()).unwrap();
+    controller
+        .request_permission(
+            &id,
+            permission.clone(),
+            ToolCallUpdate::new(tool, Some("Write file".into()), None, None, None, None),
+            input,
+            choices,
+            None,
+        )
+        .unwrap();
+    let grantor = ActionContext::new("owner", "desktop", "grant-request").unwrap();
+    let rule = ApprovalRuleReference::new("pr_rule", "2", grantor.clone()).unwrap();
+    let answer = controller
+        .answer_permission(PermissionAnswer {
+            attribution: ApprovalAttribution::new(grantor, ApprovalBasis::Rule(rule)),
+            execution_id: id,
+            id: permission,
+            option_id: PermissionOptionId::new("allow-once").unwrap(),
+        })
+        .unwrap();
+    let value = record_value(&ExecutionAuditRecord::Answered(
+        PermissionAnswerRecord::new(answer, PermissionAnswerDelivery::Selected),
+    ));
+    assert_eq!(
+        value["basis"],
+        json!({
+            "kind": "rule",
+            "ruleId": "pr_rule",
+            "revision": "2",
+            "grantedBy": {
+                "principalId": "owner",
+                "surfaceId": "desktop",
+                "requestId": "grant-request",
+            },
+        })
+    );
+    assert_eq!(value["request"]["transition"]["optionId"], "allow-once");
+    assert_eq!(value["actor"]["principalId"], "owner");
+}
+
+#[test]
 fn audit_maps_a_deadline_answer_exactly() {
     use nessa_sdk::domain::agent_execution::permissions::{
         PermissionReviewDeadline, PermissionToolClass, STANDARD_DENY_REASON,

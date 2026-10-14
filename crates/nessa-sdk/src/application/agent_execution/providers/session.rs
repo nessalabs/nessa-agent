@@ -14,7 +14,9 @@ use crate::application::agent_execution::{
         QuestionAnswer,
     },
 };
-use crate::domain::agent_execution::permissions::{PermissionAuthority, PermissionAuthorityError};
+use crate::domain::agent_execution::permissions::{
+    PermissionAuthority, PermissionAuthorityError, PermissionId,
+};
 use crate::domain::{
     agent_execution::{
         executions::ExecutionId, permissions::PermissionStateView, sessions::ExecutionSessionId,
@@ -194,6 +196,19 @@ impl ProviderSession {
     ) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async move { self.backend.answer_question(answer).await })
     }
+    /// Ask the backend to hold remembered allows for permission-review hooks.
+    ///
+    /// See [`ProviderSessionBackend::hold_remembered_allows_for_review_hooks`].
+    pub(crate) fn hold_remembered_allows_for_review_hooks(&self, hold: bool) {
+        self.backend.hold_remembered_allows_for_review_hooks(hold);
+    }
+
+    /// Take one parked remembered allow. See
+    /// [`ProviderSessionBackend::take_remembered_allow`].
+    pub(crate) fn take_remembered_allow(&self, id: &PermissionId) -> Option<PermissionAnswer> {
+        self.backend.take_remembered_allow(id)
+    }
+
     pub(crate) fn answer_permission(
         &self,
         answer: PermissionAnswer,

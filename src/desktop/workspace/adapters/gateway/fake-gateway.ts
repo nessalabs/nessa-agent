@@ -30,11 +30,16 @@ import type { GatewayClient } from "./gateway-source"
 import type { SharingClient } from "./sharing-gateway"
 
 /**
- * The fake's client: the source's, and sharing's conversation methods, which
- * reject — no test of the source shares, and one that did would say so.
+ * The fake's client: the source's, sharing's conversation methods (which
+ * reject — no test of the source shares), and the permission-rule calls
+ * Settings makes on the same conversation. The workspace adapter never calls
+ * those. A window fake still has to answer, because the window's client
+ * requires them.
  */
 export type FakeGatewayClient = GatewayClient & {
-  readonly conversation: GatewayClient["conversation"] & SharingClient["conversation"]
+  readonly conversation: GatewayClient["conversation"] &
+    SharingClient["conversation"] &
+    Pick<ConversationApi, "permissionRules" | "revokePermissionRule">
 }
 
 const notShared = () => Promise.reject(new Error("the fake gateway does not share"))
@@ -49,16 +54,24 @@ type Method =
   | "answer"
   | "answerQuestion"
   | "archive"
+  | "permissionRules"
+  | "revokePermissionRule"
 
 type AnswerArgs = Parameters<ConversationApi["answer"]>
 type AnswerResult = Awaited<ReturnType<ConversationApi["answer"]>>
+type AnswerQuestionArgs = Parameters<ConversationApi["answerQuestion"]>
+type AnswerQuestionResult = Awaited<ReturnType<ConversationApi["answerQuestion"]>>
 type AnswerBehaviour = (
   normal: () => AnswerResult,
   args: AnswerArgs,
 ) => Promise<AnswerResult>
 type Call =
   | { readonly method: "answer"; readonly args: AnswerArgs }
-  | { readonly method: Exclude<Method, "answer">; readonly args: readonly unknown[] }
+  | { readonly method: "answerQuestion"; readonly args: AnswerQuestionArgs }
+  | {
+      readonly method: Exclude<Method, "answer" | "answerQuestion">
+      readonly args: readonly unknown[]
+    }
 
 /** How one call is answered instead: given the normal answer, the promise to return. */
 type Behaviour = (normal: () => unknown) => Promise<unknown>
@@ -312,7 +325,7 @@ export function fakeGateway(
     }
   }
   const answer = (
-    method: Exclude<Method, "answer">,
+    method: Exclude<Method, "answer" | "answerQuestion">,
     args: readonly unknown[],
     normal: () => unknown,
   ) => {
@@ -397,8 +410,9 @@ export function fakeGateway(
         const behaviour = answerOverrides.shift()
         return behaviour ? behaviour(normal, args) : Promise.resolve().then(normal)
       },
-      answerQuestion: (...args) =>
-        answer("answerQuestion", args, () => {
+      answerQuestion: (...args) => {
+        calls.push({ method: "answerQuestion", args })
+        const normal = (): AnswerQuestionResult => {
           const [target] = args
           const current = views.get(target.conversationId)
           if (current)
@@ -411,12 +425,22 @@ export function fakeGateway(
               ),
             })
           return { requestId: "answer-question", applied: true }
-        }) as never,
+        }
+        const behaviour = overrides.get("answerQuestion")?.shift()
+        return (behaviour ? behaviour(normal) : Promise.resolve().then(normal)) as never
+      },
       archive: (...args) =>
         answer("archive", args, () => {
           rows.delete(args[0])
           return { requestId: "archive", applied: true }
         }) as never,
+      permissionRules: () =>
+        answer("permissionRules", [], () => ({ requestId: "rules", rules: [] })) as never,
+      revokePermissionRule: (...args) =>
+        answer("revokePermissionRule", args, () => ({
+          requestId: "revoke",
+          applied: false,
+        })) as never,
     },
     subscriptions: {
       view: (conversationId, handlers, { signal, ...options } = {}) =>

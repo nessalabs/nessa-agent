@@ -777,7 +777,7 @@ while True:
                 # decision a host could have made.
                 update({"sessionUpdate": "tool_call", **tool("Write")})
                 call = {key: value for key, value in tool().items() if key != "title"}
-                options = [{"optionId": "always", "kind": "allow_always", "name": "Always"}]
+                options = [{"optionId": "always", "kind": "not_a_kind", "name": "Always"}]
             elif mode == "declined-write-failure":
                 # Nothing can be written back: the refusal cannot reach the
                 # agent, and that has to be recorded as what it is.

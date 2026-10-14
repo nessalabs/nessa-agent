@@ -69,6 +69,13 @@
 //! `DurableDriveToolAudit` keeps each of the tool policy's decisions on the
 //! gateway's own tools for a Drive turn, one immutable file per conversation,
 //! call, tool and outcome.
+//! `PermissionMemory` keeps an owner's remembered permission rules in
+//! `permission-rules.sqlite3` and answers them through
+//! `CedarPermissionRuleEvaluator` (`permission_rules/cedar/`). A miss asks
+//! the person. The same memory is the board a waiting review notifies, and
+//! clears when the review ends. `DurablePermissionRuleRevocationAudit` keeps
+//! each revocation, one immutable file per rule revision, written before the
+//! row is deleted.
 mod change_watch;
 pub use change_watch::{NessaRecordWatches, UuidWatchNamespaces};
 // Composed only by the Unix gateway (`composition/local_auth.rs`), as
@@ -139,6 +146,13 @@ pub use access_policy::CedarConversationAccessPolicy;
 mod tool_policy;
 pub use tool_policy::{
     CedarAppCallPolicyEvaluator, CedarCommandPolicyEvaluator, CedarToolPolicyEvaluator,
+};
+
+mod permission_rules;
+#[cfg(unix)]
+pub(crate) use permission_rules::CedarPermissionRuleEvaluator;
+pub use permission_rules::{
+    DurablePermissionRuleRevocationAudit, PermissionMemory, PublishedReview,
 };
 
 mod deletion_audit;

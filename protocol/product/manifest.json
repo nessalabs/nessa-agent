@@ -277,6 +277,14 @@
     "conversation.shares": {
       "params": "ConversationSharesParams",
       "grant": "credential.manage"
+    },
+    "conversation.permissionRules": {
+      "params": "ConversationPermissionRulesParams",
+      "grant": "conversation.write"
+    },
+    "conversation.revokePermissionRule": {
+      "params": "ConversationRevokePermissionRuleParams",
+      "grant": "conversation.write"
     }
   },
   "events": {
@@ -286,7 +294,8 @@
     "conversation.view": "ConversationViewed",
     "conversation.listed": "ConversationListed",
     "agents.listed": "AgentsListed",
-    "conversation.subscriptionEnded": "ConversationSubscriptionEnded"
+    "conversation.subscriptionEnded": "ConversationSubscriptionEnded",
+    "permission.reviewWaiting": "PermissionReviewWaiting"
   },
   "handshakeMethod": "session.authenticate"
 }

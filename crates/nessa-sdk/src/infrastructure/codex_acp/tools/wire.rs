@@ -518,6 +518,32 @@ pub(in crate::infrastructure::codex_acp) fn tool_call(
     Ok(update)
 }
 
+/// Whether the review names one tool, rather than only an ACP kind.
+///
+/// A kind such as `execute` is every shell command. A project rule needs the
+/// harness's own tool name (`exec_command`, an MCP tool). The kind remains
+/// the review's name when nothing more specific was given.
+pub(in crate::infrastructure::codex_acp) fn names_a_tool(
+    request: &Value,
+    tools: &ObservedTools,
+) -> bool {
+    let Some(tool) = request.get("toolCall") else {
+        return false;
+    };
+    let Ok(id) = identifier(tool, "toolCallId") else {
+        return false;
+    };
+    if tools
+        .entries
+        .get(id)
+        .and_then(|tool| tool.name.as_deref())
+        .is_some()
+    {
+        return true;
+    }
+    matches!(declared_name(tool), Ok(Some(_)))
+}
+
 /// What the host is being asked to authorize, named as precisely as Codex named
 /// it: its own tool name when it gave one, and the kind of action otherwise.
 fn review_name(tool: &Value, observed: Option<&ObservedTool>) -> Result<String, AgentError> {

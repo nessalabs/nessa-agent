@@ -318,6 +318,23 @@ fn resolver_from(root: &Path, input: ResolverTestInput) -> CurrentAgentResolver 
             Arc::new(SystemClock),
         )
         .unwrap(),
+        permission_memory: {
+            let rules = root.join("permission-rules");
+            nessa_local_storage::create_directory(&rules).unwrap();
+            Arc::new(
+                crate::conversation::infrastructure::PermissionMemory::open(
+                    &rules.join("permission-rules.sqlite3"),
+                    Arc::new(
+                        crate::conversation::infrastructure::DurablePermissionRuleRevocationAudit::new(
+                            rules.join("revocations"),
+                            Arc::new(SystemClock),
+                        )
+                        .unwrap(),
+                    ),
+                )
+                .unwrap(),
+            )
+        },
         warm_up: CurrentOpenCodeWarmUp::new(
             Arc::new(FileWarmUpRecords::new(root.join("warm-up-records")).unwrap()),
             Arc::new(DurableWarmUpAudit::new(root.join("warm-up-audit")).unwrap()),

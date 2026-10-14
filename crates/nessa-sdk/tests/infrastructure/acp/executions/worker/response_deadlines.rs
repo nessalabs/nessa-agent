@@ -113,6 +113,7 @@ async fn blocked_worker(
         permission_authority: PermissionAuthoritySource::default(),
         operation_capabilities,
         permissions: HashMap::new(),
+        permission_context: HashMap::new(),
         armed_permissions: HashMap::new(),
         path_classification: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
         startup_advisory_session: None,
@@ -136,6 +137,8 @@ async fn blocked_worker(
         launch_id: 0,
         launch_cause: crate::application::agent_execution::executions::NativeHooksLaunchCause::Open,
         session_key: None,
+        hold_remembered_allows: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        parked_allows: Arc::new(std::sync::Mutex::new(HashMap::new())),
     };
     (worker, execution, receiver, recovery, clock)
 }

@@ -63,8 +63,10 @@
  *   `connect`, so a revoked credential stays `signed-out`. The background
  *   retry wait starts as for any failed connect; a person's next call
  *   connects again.
- * - **What the gateway does not keep**: pins and "always" answers are
- *   refused as `not-supported`, and so is a message asking a conversation
+ * - **What the gateway does not keep**: pins are refused as `not-supported`.
+ *   An always answer is sent only for `nessa.remember.allow` when the review
+ *   offers it; any other always is refused as `not-supported` before a read.
+ *   A message asking a conversation
  *   for another model than the one the gateway says it runs (before a frame
  *   says, it cannot be told, and the message goes); there is no unread
  *   mark, so `markRead` has nothing to do. Nor does it take an initiator: it
@@ -131,12 +133,14 @@ import {
   gatewayChannel,
   gatewaySection,
   modelFor,
+  REMEMBER_ALLOW_OPTION,
   reviewOf,
   runningModel,
   sameSummary,
   summaryFrom,
   transcriptFrom,
 } from "./gateway-views"
+import { waitingReviews, type WaitingReview } from "./review-notices"
 
 /** What the adapter asks of a gateway client: its conversations, its subscriptions, and how its connection stands. */
 export interface GatewayClient {
@@ -147,6 +151,8 @@ export interface GatewayClient {
   readonly subscriptions: Pick<SubscriptionApi, "view" | "list">
   readonly connectionState: ConnectionState
   onConnectionStateChange(handler: (state: ConnectionState) => void): () => void
+  /** Server pushes, when the client has them. Absent on a client that only answers calls. */
+  onEvent?(event: string, handler: (payload: unknown) => void): () => void
   close(): void
 }
 
@@ -329,6 +335,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   readonly timing?: GatewayTiming
   /** Told each view applied and each conversation deleted: the window's MCP Apps. */
   readonly apps?: GatewayViewObserver
+  /** The reviews still waiting, each time the gateway says so. An empty list means none. */
+  readonly onReviewWaiting?: (reviews: readonly WaitingReview[]) => void
 }): GatewaySource<C> {
   const { clock } = options
   const timing = options.timing ?? defaultGatewayTiming
@@ -459,6 +467,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
    * that failure. The caller closes the client and fails the attempt.
    */
   const adopt = (connected: C): WorkspaceSourceError | undefined => {
+    const offReviews =
+      connected.onEvent?.("permission.reviewWaiting", (payload) => {
+        const reviews = waitingReviews(payload)
+        if (reviews) options.onReviewWaiting?.(reviews)
+      }) ?? (() => {})
     const off = connected.onConnectionStateChange((state) => {
       if (current?.client !== connected) return
       if (state.status === "connected") {
@@ -477,9 +490,16 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     const state = connected.connectionState
     if (state.status === "closed") {
       off()
+      offReviews()
       return connectFailure(state.error)
     }
-    current = { client: connected, off }
+    current = {
+      client: connected,
+      off: () => {
+        off()
+        offReviews()
+      },
+    }
     waitUntil = 0
     // A connection after another is a reconnect: what it missed is read again.
     if (connectedBefore) {
@@ -1251,10 +1271,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         publish(message.sessionId)
       }),
     approve: (sessionId, approvalId, scope, _initiator, optionId) =>
-      scope === "always"
-        ? // No option the gateway shows reaches past its request: the projection
-          // offers no review with one (nessa-server's projection test
-          // `a_review_reaching_beyond_its_request_is_not_offered`).
+      scope === "always" && optionId !== REMEMBER_ALLOW_OPTION
+        ? // Any other always is refused before a read. The projection offers
+          // no review whose scope reaches past this request; Nessa's project
+          // rule is an allow option the review lists, not a wider scope.
           Promise.reject(new WorkspaceSourceError("not-supported"))
         : answer(sessionId, approvalId, optionId, "allow"),
     deny: (sessionId, approvalId, _initiator, optionId) =>
@@ -1270,18 +1290,27 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
               asked.executionId === executionId && asked.questionId === questionId,
           )
         if (!target) throw new WorkspaceSourceError("not-waiting")
-        await dispatch(live, (connected) =>
-          connected.conversation.answerQuestion(
-            target,
-            choices === null
-              ? null
-              : choices.map((choice) => ({
-                  key: choice.key,
-                  values: [...choice.values],
-                  ownWords: choice.ownWords ?? null,
-                })),
-          ),
-        )
+        await dispatch(live, (connected) => {
+          try {
+            return connected.conversation.answerQuestion(
+              target,
+              choices === null
+                ? null
+                : choices.map((choice) => ({
+                    key: choice.key,
+                    values: [...choice.values],
+                    ownWords: choice.ownWords ?? null,
+                  })),
+            )
+          } catch (error) {
+            // The SDK validates the captured target and offered choices
+            // before it sends anything. Its TypeError means this answer is
+            // stale locally, not that an unanswered RPC has an unknown
+            // outcome.
+            if (error instanceof TypeError) throw new WorkspaceSourceError("not-waiting")
+            throw error
+          }
+        })
       }),
     // The gateway keeps no pin.
     setPinned: () => Promise.reject(new WorkspaceSourceError("not-supported")),

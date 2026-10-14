@@ -34,7 +34,7 @@ use crate::application::agent_execution::providers::{
     validate_configured_input, AgentProvider, ApprovalMode, CleanupReport, CloseOutcome,
     ExecutionEventStream, ExecutionReportSource, ObservationFailure, ObservationFailureCause,
     OperationCapabilities, ProviderExecutionReply, ProviderOperationFailure,
-    ProviderOperationResult, ProviderSessionState, SessionCloseRequest,
+    ProviderOperationResult, ProviderSession, ProviderSessionState, SessionCloseRequest,
 };
 use crate::application::agent_execution::sessions::{
     AttachmentOpenFailureSource, InvocationCancellationEvent, MessageCommitSleep, ProviderContext,
@@ -314,6 +314,26 @@ fn checked_tools_unsupported(
         ));
     }
     Ok(())
+}
+
+/// Clears the remembered-allow hold when the invocation ends, including on drop.
+struct RememberedAllowHold {
+    session: ProviderSession,
+}
+
+impl Drop for RememberedAllowHold {
+    fn drop(&mut self) {
+        self.session.hold_remembered_allows_for_review_hooks(false);
+    }
+}
+
+fn remembered_review_id(event: &ExecutionEvent, execution: &ExecutionId) -> Option<PermissionId> {
+    match event.update() {
+        ExecutionUpdate::PermissionRequested { id, .. } if event.execution_id() == execution => {
+            Some(id.clone())
+        }
+        _ => None,
+    }
 }
 
 fn deny_option(event: &ExecutionEvent) -> Option<PermissionOptionId> {
@@ -1606,6 +1626,17 @@ impl Agent {
                     .await;
             }
         };
+        // Permission-review hooks are this turn's tool policy. A remembered
+        // allow stays parked until they decide, and the hold ends with the
+        // invocation so a later turn without those hooks answers immediately.
+        let _remembered_allow_hold = hooks.reviews_permissions().then(|| {
+            attached
+                .session
+                .hold_remembered_allows_for_review_hooks(true);
+            RememberedAllowHold {
+                session: attached.session.clone(),
+            }
+        });
         let mut events = attached.events.lock().await;
         let mut execution = Box::pin(async {
             self.inner.manager.begin_dispatch(&input.execution_id);
@@ -1909,6 +1940,7 @@ impl Agent {
                                 .await;
                                 events = attached.events.lock().await;
                             }
+                            let review_id = remembered_review_id(&event, &input.execution_id);
                             match await_supervised_save(
                                 self.inner.manager.event(event.clone()),
                                 execution.as_mut(),
@@ -1918,6 +1950,13 @@ impl Agent {
                                 result.is_some(),
                             ).await {
                                 Ok(()) => {
+                                    // A refusal, a stop, or a failed hook drops a parked
+                                    // allow. It is not sent after that decision.
+                                    if !matches!(decision.verdict, ToolVerdict::Allow) {
+                                        if let Some(id) = review_id.as_ref() {
+                                            let _ = attached.session.take_remembered_allow(id);
+                                        }
+                                    }
                                     if let ToolVerdict::Refuse(_) = &decision.verdict {
                                         drop(events);
                                         let applied = self
@@ -1957,11 +1996,46 @@ impl Agent {
                                     // A refused review is already answered or
                                     // withdrawn, and a stopping one is not for a
                                     // person: only an allowed review is published.
+                                    // A remembered allow is sent before the review is
+                                    // published
+                                    // (`a_review_hook_refusal_stops_a_remembered_allow_before_the_tool_starts`).
                                     if matches!(decision.verdict, ToolVerdict::Allow) {
-                                        let _ = self.inner.updates.send(event);
+                                        let mut released = true;
+                                        if let Some(id) = review_id.as_ref() {
+                                            if let Some(answer) = attached.session.take_remembered_allow(id) {
+                                                drop(events);
+                                                let delivered = SupervisedWait {
+                                                    execution: execution.as_mut(),
+                                                    stop_notice: &mut stop_notice,
+                                                    stop_observed: &mut stop_observed,
+                                                    pending_provider_outcome: &mut pending_provider_outcome,
+                                                    result_known: result.is_some(),
+                                                }
+                                                .run(self.answer_permission(answer))
+                                                .await;
+                                                if let Err(failure) = delivered {
+                                                    let failure = failure.into_parts().0;
+                                                    refusal_failure = Some(match refusal_failure.take() {
+                                                        None => failure,
+                                                        Some(first) => AgentError::MultipleOperationFailures {
+                                                            first_error: Box::new(first),
+                                                            subsequent_error: Box::new(failure),
+                                                        },
+                                                    });
+                                                    released = false;
+                                                }
+                                                events = attached.events.lock().await;
+                                            }
+                                        }
+                                        if released {
+                                            let _ = self.inner.updates.send(event);
+                                        }
                                     }
                                 }
                                 Err(error) => {
+                                    if let Some(id) = review_id.as_ref() {
+                                        let _ = attached.session.take_remembered_allow(id);
+                                    }
                                     pending_save_failure = Some(error);
                                 }
                             }
