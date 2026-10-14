@@ -1,0 +1,12 @@
+diff --git a/src/desktop/settings/ui/settings-tabs.tsx b/src/desktop/settings/ui/settings-tabs.tsx
+index 5d911561e..91231f227 100644
+--- a/src/desktop/settings/ui/settings-tabs.tsx
++++ b/src/desktop/settings/ui/settings-tabs.tsx
+@@ -521,6 +521,7 @@ function AccessTab() {
+       </Group>
+       <PermissionRuleRows />
+       <ReviewNoticeRows />
++      <NativeHooksRows />
+     </>
+   )
+ }
