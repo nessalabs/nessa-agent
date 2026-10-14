@@ -33,8 +33,9 @@ function createClockStore(interval: number): ClockStore {
         const listeners = new Set<Listener>()
         activeListeners = listeners
         timer = window.setInterval(() => {
-          // A callback already queued by a retired timer cannot publish into a
-          // later subscription, even if the store has since been reused.
+          // The "retires the timer and ignores its late callback after a remount"
+          // test in provider.test.tsx verifies a retired timer cannot publish
+          // into a later subscription, even if the store has since been reused.
           if (activeListeners !== listeners) return
           revision += 1
           listeners.forEach((each) => each())
