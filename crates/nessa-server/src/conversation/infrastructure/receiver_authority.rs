@@ -27,6 +27,10 @@ const DEFINITION: &str = include_str!("receiver_authority.sql");
 pub struct LocalReceiverAuthority {
     connection: Arc<Mutex<Connection>>,
     clock: Arc<dyn Clock>,
+    /// `publication.lock` beside the database. Device pairing holds it from
+    /// the receiver write through the credential publish. Export holds it
+    /// while it snapshots both.
+    publication_lock: std::path::PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,6 +49,7 @@ impl LocalReceiverAuthority {
     ) -> Result<Self, OpenError> {
         Self::opened(
             nessa_local_database::open(path, &Schema::new(DEFINITION)?)?,
+            path,
             policy_revision,
             clock,
         )
@@ -58,6 +63,7 @@ impl LocalReceiverAuthority {
     ) -> Result<Self, OpenError> {
         Self::opened(
             nessa_local_database::open_existing(path, &Schema::new(DEFINITION)?)?,
+            path,
             policy_revision,
             clock,
         )
@@ -65,6 +71,7 @@ impl LocalReceiverAuthority {
 
     fn opened(
         mut connection: Connection,
+        path: &Path,
         policy_revision: &str,
         clock: Arc<dyn Clock>,
     ) -> Result<Self, OpenError> {
@@ -77,7 +84,20 @@ impl LocalReceiverAuthority {
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
             clock,
+            publication_lock: path.with_file_name("publication.lock"),
         })
+    }
+
+    /// Exclusive hold of [`Self`]'s publication lock. The caller keeps the
+    /// file until the credential that belongs with this receiver write is
+    /// published. Closing the file releases the lock.
+    pub fn lock_publication(&self) -> std::io::Result<std::fs::File> {
+        let file = nessa_local_storage::open(
+            &self.publication_lock,
+            nessa_local_storage::OpenMode::OpenOrCreate,
+        )?;
+        file.lock()?;
+        Ok(file)
     }
 
     /// Pair a server-minted receiver with a verified credential. The caller of

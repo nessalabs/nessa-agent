@@ -372,6 +372,90 @@ async fn an_environment_grant_cut_waits_for_the_writer_lock() {
 }
 
 #[tokio::test]
+async fn a_publication_lock_snapshots_the_credential_and_the_receiver_together() {
+    use std::time::Duration;
+
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let access = root.join("receiver-access");
+    fs::create_dir_all(&access).unwrap();
+    fs::create_dir_all(root.join("auth")).unwrap();
+    write_registry(root, "before-device");
+    write_receiver(&access, "before-receiver", "before-device");
+    let lock = nessa_local_storage::open(
+        &access.join("publication.lock"),
+        nessa_local_storage::OpenMode::OpenOrCreate,
+    )
+    .unwrap();
+    lock.lock().unwrap();
+    let captured = root.to_path_buf();
+    let task = tokio::spawn(async move { publish_cut(&captured).await });
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(
+        !task.is_finished(),
+        "the cut must wait while publication.lock is held"
+    );
+    write_registry(root, "after-device");
+    write_receiver(&access, "after-receiver", "after-device");
+    drop(lock);
+    let published = task.await.unwrap();
+    assert!(holds(&published.bytes, b"after-device"));
+    assert!(holds(&published.bytes, b"after-receiver"));
+    assert!(!holds(&published.bytes, b"before-device"));
+    assert!(!holds(&published.bytes, b"before-receiver"));
+}
+
+fn write_registry(root: &Path, id: &str) {
+    let registry = serde_json::json!({
+        "credentials": [{
+            "metadata": {
+                "id": id,
+                "principalId": "user:one",
+                "organizationId": "org",
+                "audienceId": "gateway",
+                "issuedAt": 1,
+                "expiresAt": null,
+                "revokedAt": null,
+                "grants": [{"action": "server.read", "resource": {"organizationId": "org", "id": "gateway"}}]
+            },
+            "verifier": "SECRET-VERIFIER"
+        }]
+    });
+    fs::write(
+        root.join("auth/credentials.v1.json"),
+        serde_json::to_vec(&registry).unwrap(),
+    )
+    .unwrap();
+}
+
+fn write_receiver(access: &Path, receiver_id: &str, credential_id: &str) {
+    let path = access.join("receiver-access.sqlite3");
+    let _ = fs::remove_file(&path);
+    let database = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    database
+        .execute_batch(
+            "CREATE TABLE receiver_transitions(sequence INTEGER);
+             CREATE TABLE receivers(
+                receiver_id TEXT,
+                credential_id TEXT,
+                access_epoch INTEGER,
+                active INTEGER
+             );",
+        )
+        .unwrap();
+    database
+        .execute("INSERT INTO receiver_transitions(sequence) VALUES (1)", [])
+        .unwrap();
+    database
+        .execute(
+            "INSERT INTO receivers(receiver_id, credential_id, access_epoch, active)
+             VALUES (?1, ?2, 1, 1)",
+            [receiver_id, credential_id],
+        )
+        .unwrap();
+}
+
+#[tokio::test]
 async fn a_public_file_over_the_bound_is_named_and_not_read() {
     let namespace = tempfile::tempdir().unwrap();
     let root = namespace.path();

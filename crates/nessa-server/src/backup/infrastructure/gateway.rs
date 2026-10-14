@@ -58,6 +58,10 @@ pub async fn capture_namespace(
     ));
     let credentials = Arc::new(CredentialCache::new(
         namespace.join("auth").join("credentials.v1.json"),
+        namespace.join("receiver-access").join("publication.lock"),
+        namespace
+            .join("receiver-access")
+            .join("receiver-access.sqlite3"),
     ));
     let environment_grants = Arc::new(GrantFiles::new(namespace.join("environment")));
     let inventory_cut = InventoryCut { log: inventory };
@@ -222,11 +226,7 @@ pub async fn capture_namespace(
             credentials: credentials.clone(),
             wanted: None,
         }),
-        Box::new(Receivers::new(
-            namespace
-                .join("receiver-access")
-                .join("receiver-access.sqlite3"),
-        )),
+        Box::new(Receivers::new(credentials.clone())),
         Box::new(inventory_cut),
     ];
     let source_refs: Vec<&dyn ExportSource> =
@@ -482,7 +482,10 @@ impl SessionFiles {
 
 struct CredentialCache {
     path: PathBuf,
+    lock_path: PathBuf,
+    receiver_path: PathBuf,
     slot: Mutex<Option<CredState>>,
+    receivers: Arc<Mutex<ReceiverState>>,
 }
 
 #[derive(Clone)]
@@ -493,34 +496,93 @@ enum CredState {
 }
 
 impl CredentialCache {
-    fn new(path: PathBuf) -> Self {
+    fn new(path: PathBuf, lock_path: PathBuf, receiver_path: PathBuf) -> Self {
         Self {
             path,
+            lock_path,
+            receiver_path,
             slot: Mutex::new(None),
+            receivers: Arc::new(Mutex::new(ReceiverState::Cold)),
         }
     }
 
+    /// Read the registry and open the receiver snapshot while
+    /// `publication.lock` is held, when that directory exists. A later call
+    /// returns the same pair.
     fn load(&self) -> CredState {
         if let Some(cached) = self.slot.lock().ok().and_then(|slot| slot.clone()) {
             return cached;
         }
-        let state = if !self.path.exists() {
-            CredState::Absent
-        } else {
-            match fs::read(&self.path) {
-                Ok(bytes) => match read_credentials(&bytes) {
-                    Ok(read) => CredState::Read(read),
-                    Err(CredentialReadError::NotARegistry | CredentialReadError::Record) => {
-                        CredState::Unreadable
-                    }
-                },
-                Err(_) => CredState::Unreadable,
+        let path = self.path.clone();
+        let lock_path = self.lock_path.clone();
+        let receiver_path = self.receiver_path.clone();
+        let (credentials, receivers) = snapshot_paired(&lock_path, &path, &receiver_path);
+        if let Ok(mut slot) = self.receivers.lock() {
+            if matches!(*slot, ReceiverState::Cold) {
+                *slot = receivers;
             }
-        };
-        if let Ok(mut slot) = self.slot.lock() {
-            *slot = Some(state.clone());
         }
-        state
+        if let Ok(mut slot) = self.slot.lock() {
+            if slot.is_none() {
+                *slot = Some(credentials.clone());
+            }
+            return slot.clone().unwrap_or(credentials);
+        }
+        credentials
+    }
+}
+
+fn snapshot_paired(
+    lock_path: &Path,
+    credentials: &Path,
+    receivers: &Path,
+) -> (CredState, ReceiverState) {
+    // `None` means the receiver directory is absent, so no pairing writer can
+    // sit between the two stores. A lock error makes both stores unreadable.
+    let lock = match publication_lock(lock_path) {
+        Ok(file) => file,
+        Err(()) => return (CredState::Unreadable, ReceiverState::Failed),
+    };
+    let credentials = read_credential_state(credentials);
+    let receivers = open_receiver_state(receivers);
+    drop(lock);
+    (credentials, receivers)
+}
+
+fn publication_lock(path: &Path) -> Result<Option<File>, ()> {
+    let Some(parent) = path.parent() else {
+        return Err(());
+    };
+    if !parent.is_dir() {
+        return Ok(None);
+    }
+    let file = open(path, OpenMode::OpenOrCreate).map_err(|_| ())?;
+    file.lock().map_err(|_| ())?;
+    Ok(Some(file))
+}
+
+fn read_credential_state(path: &Path) -> CredState {
+    if !path.exists() {
+        return CredState::Absent;
+    }
+    match fs::read(path) {
+        Ok(bytes) => match read_credentials(&bytes) {
+            Ok(read) => CredState::Read(read),
+            Err(CredentialReadError::NotARegistry | CredentialReadError::Record) => {
+                CredState::Unreadable
+            }
+        },
+        Err(_) => CredState::Unreadable,
+    }
+}
+
+fn open_receiver_state(path: &Path) -> ReceiverState {
+    if !path.is_file() {
+        return ReceiverState::Absent;
+    }
+    match ReceiverSnapshot::open(path) {
+        Ok(snapshot) => ReceiverState::Open(snapshot),
+        Err(ReceiverSnapshotError::Unavailable) => ReceiverState::Failed,
     }
 }
 
@@ -1101,9 +1163,22 @@ impl ExportSource for CredentialStore {
     }
 
     async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
-        // The registry file is small. Copying it here, while admission is
-        // held, is what a later read of this pin returns.
-        copied(self.cut())
+        // The registry and the receiver snapshot are taken together under
+        // publication.lock. That wait stays off the async worker.
+        let kind = self.kind;
+        let credentials = self.credentials.clone();
+        let wanted = self.wanted;
+        let cut = tokio::task::spawn_blocking(move || {
+            CredentialStore {
+                kind,
+                credentials,
+                wanted,
+            }
+            .cut()
+        })
+        .await
+        .map_err(|_| ())?;
+        copied(cut)
     }
 }
 
@@ -1148,8 +1223,8 @@ impl CredentialStore {
 }
 
 struct Receivers {
-    path: PathBuf,
     state: Arc<Mutex<ReceiverState>>,
+    credentials: Arc<CredentialCache>,
 }
 
 enum ReceiverState {
@@ -1160,10 +1235,10 @@ enum ReceiverState {
 }
 
 impl Receivers {
-    fn new(path: PathBuf) -> Self {
+    fn new(credentials: Arc<CredentialCache>) -> Self {
         Self {
-            path,
-            state: Arc::new(Mutex::new(ReceiverState::Cold)),
+            state: credentials.receivers.clone(),
+            credentials,
         }
     }
 }
@@ -1175,29 +1250,12 @@ impl ExportSource for Receivers {
     }
 
     async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
-        {
-            let guard = self.state.lock().map_err(|_| ())?;
-            if !matches!(*guard, ReceiverState::Cold) {
-                return Ok(Box::new(ReceiverPin {
-                    state: self.state.clone(),
-                }));
-            }
-        }
-        if !self.path.is_file() {
-            *self.state.lock().map_err(|_| ())? = ReceiverState::Absent;
-        } else {
-            let path = self.path.clone();
-            let opened = tokio::task::spawn_blocking(move || ReceiverSnapshot::open(&path))
-                .await
-                .map_err(|_| ())?;
-            let mut guard = self.state.lock().map_err(|_| ())?;
-            if matches!(*guard, ReceiverState::Cold) {
-                *guard = match opened {
-                    Ok(snapshot) => ReceiverState::Open(snapshot),
-                    Err(ReceiverSnapshotError::Unavailable) => ReceiverState::Failed,
-                };
-            }
-        }
+        let credentials = self.credentials.clone();
+        tokio::task::spawn_blocking(move || {
+            let _state = credentials.load();
+        })
+        .await
+        .map_err(|_| ())?;
         Ok(Box::new(ReceiverPin {
             state: self.state.clone(),
         }))
@@ -1299,6 +1357,11 @@ impl FenceSource for NamespaceFences {
         }
         match self.credentials.load() {
             CredState::Read(read) => {
+                // A skipped row may be a revoked credential. Leaving it out
+                // would authenticate an inventory that restore could undo.
+                if !read.skipped.is_empty() {
+                    failed = true;
+                }
                 for credential in read
                     .credentials
                     .iter()

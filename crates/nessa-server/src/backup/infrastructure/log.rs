@@ -35,11 +35,7 @@ impl FileDeletionLog {
                 .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "mac key"))?;
             MacKey(bytes)
         } else {
-            let mut bytes = [0u8; 32];
-            getrandom::fill(&mut bytes)
-                .map_err(|error| std::io::Error::other(error.to_string()))?;
-            fs::write(&key_path, bytes)?;
-            MacKey(bytes)
+            create_key(&directory, &key_path)?
         };
         Ok(Self {
             directory,
@@ -77,6 +73,31 @@ impl DeletionLogStore for FileDeletionLog {
         drop(gate);
         stored.map_err(|_| ())
     }
+}
+
+/// Write a new mac key and sync the file and its directory before the key
+/// is returned. A crash after `open` returns cannot leave a sealed inventory
+/// whose key is missing.
+fn create_key(directory: &Path, key_path: &Path) -> std::io::Result<MacKey> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|error| std::io::Error::other(error.to_string()))?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(key_path)?;
+    let written = (|| {
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    if let Err(error) = written {
+        drop(file);
+        let _ = fs::remove_file(key_path);
+        return Err(error);
+    }
+    drop(file);
+    sync_directory(directory)?;
+    Ok(MacKey(bytes))
 }
 
 /// Write `text` to a temporary file, sync that file, rename it over `path`,

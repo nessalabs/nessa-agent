@@ -1,9 +1,12 @@
 //! The published bundle: a manifest and one file per public record.
 //! Redacted records have no file.
 
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use nessa_local_storage::sync_directory;
 
 use async_trait::async_trait;
 
@@ -47,13 +50,43 @@ fn write_bundle(root: &Path, manifest: &str, records: &[PublishedRecord]) -> Res
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|_| ())?;
         }
-        fs::write(&path, &record.bytes).map_err(|_| ())?;
+        write_synced(&path, &record.bytes)?;
     }
-    fs::write(staging.path().join("manifest.txt"), manifest).map_err(|_| ())?;
+    write_synced(&staging.path().join("manifest.txt"), manifest.as_bytes())?;
+    // Directory entries, then the rename, then the parent. Success means the
+    // published root is durable.
+    sync_tree(staging.path())?;
     if root.exists() {
         return Err(());
     }
-    fs::rename(staging.path(), root).map_err(|_| ())
+    let parent = root.parent().ok_or(())?;
+    fs::rename(staging.path(), root).map_err(|_| ())?;
+    sync_directory(parent).map_err(|_| ())
+}
+
+fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), ()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .map_err(|_| ())?;
+    file.write_all(bytes).map_err(|_| ())?;
+    file.sync_all().map_err(|_| ())
+}
+
+fn sync_tree(dir: &Path) -> Result<(), ()> {
+    let mut children = Vec::new();
+    for entry in fs::read_dir(dir).map_err(|_| ())? {
+        let path = entry.map_err(|_| ())?.path();
+        if path.is_dir() {
+            children.push(path);
+        }
+    }
+    for child in children {
+        sync_tree(&child)?;
+    }
+    sync_directory(dir).map_err(|_| ())
 }
 
 /// Removed on drop, including when publish fails. A successful rename moves

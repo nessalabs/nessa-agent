@@ -318,6 +318,52 @@ async fn a_damaged_fence_row_leaves_the_stored_revoke() {
     assert_eq!(std::fs::read_to_string(&log_path).unwrap(), before);
 }
 
+#[tokio::test]
+async fn a_skipped_credential_row_does_not_commit_fences() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    fs_create(root.join("auth").as_path());
+    let registry = serde_json::json!({
+        "credentials": [
+            {"metadata": {
+                "id": "kept-device",
+                "principalId": "user:one",
+                "organizationId": "org",
+                "audienceId": "gateway",
+                "issuedAt": 1,
+                "expiresAt": null,
+                "revokedAt": 9,
+                "grants": [{"action": "server.read", "resource": {"organizationId": "org", "id": "gateway"}}]
+            }, "verifier": "SECRET-VERIFIER"},
+            {"metadata": "not-a-credential"}
+        ]
+    });
+    std::fs::write(
+        root.join("auth/credentials.v1.json"),
+        serde_json::to_vec(&registry).unwrap(),
+    )
+    .unwrap();
+    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let manifest = capture_namespace(
+        root,
+        &FenceAdmission,
+        &inventory,
+        &DirectoryPublisher::new(bundle.path().join("cut")),
+        &FenceClock,
+        &inventory.key(),
+    )
+    .await
+    .unwrap();
+    let text = manifest.encoded();
+    assert!(text.contains("skipped deletion-inventory append unavailable"));
+    assert!(text.contains("skipped device-credentials row-2"));
+    let log =
+        std::fs::read_to_string(root.join("backup/deletion-inventory.txt")).unwrap_or_default();
+    assert!(!log.contains("kept-device"));
+    assert!(!log.contains("credential "));
+}
+
 fn fs_create(path: &std::path::Path) {
     std::fs::create_dir_all(path).unwrap();
 }

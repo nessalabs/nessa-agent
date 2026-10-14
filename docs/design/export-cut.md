@@ -36,6 +36,12 @@ takes admission's write guard and never takes a grant gate. It does not
 call into a command, and a command does not call into the cut while it
 holds a grant gate.
 
+Device pairing does not take conversation admission. It holds
+`receiver-access/publication.lock` from the receiver write through the
+credential publish. During the pin, after admission, the cut holds that
+same lock while it reads the credential registry and opens the receiver
+snapshot. Pairing does not take admission while it holds the lock.
+
 ## Writer inventory
 
 The cut names every store below. A store that is absent is an empty
@@ -105,14 +111,18 @@ nothing and releases the hold too. A later attempt starts from Idle.
 ## Deletion inventory
 
 Authenticated with the same mac key the cut uses. The key stays beside the
-inventory and is not part of the bundle. A fence already committed is the
-input. A failed append leaves the file and the fence as they were. The
+inventory and is not part of the bundle. A new key is synced, file then
+directory, before it is used to seal anything. The published bundle syncs
+each staged file and its directories before the rename, then the parent
+directory after the rename. A fence already committed is the input.
+A failed append leaves the file and the fence as they were. The
 replacement is synced — the temporary file, then its directory — before the
 append is acknowledged. Either fence source failing leaves the log
 unwritten, including when the other source already has rows. A metadata
 tombstone or revocation that cannot be decoded or named fails that fence
 source the same way. Absence of the row would be read as a re-grant. The
-metadata and grant cuts still name the row. A share-grant
+metadata and grant cuts still name the row. A credential row the registry
+read skips fails that fence source the same way. A share-grant
 fence is removed when a later read's latest journal row is a grant again.
 Conversation and credential fences stay. Survivors are rewritten at
 sequences 1, 2, 3, … and are still matched by key.
@@ -123,6 +133,8 @@ sequences 1, 2, 3, … and are still matched by key.
 | Re-grant | A later journal row grants that receiver again | The revoke fence is not in the cut. Other fences stay. `a_regrant_drops_the_revoke_fence_and_keeps_other_fences` |
 | One fence source fails | Metadata or the credential registry cannot be read | No fence from the other source is committed. The cut names the append unavailable. `a_failed_fence_source_does_not_commit_the_other_source` |
 | Damaged fence row | A tombstone or revocation cannot be decoded or named | The fence source fails. A revoke already in the log stays. The grant cut names the row. `a_damaged_fence_row_leaves_the_stored_revoke` |
+| Damaged credential row | The registry parses and one credential row does not | The fence source fails. No credential fence from that read is committed. The credential cut names the row. `a_skipped_credential_row_does_not_commit_fences` |
+| Device pairing | A receiver is written, then its credential is published, without conversation admission | The cut reads both under `publication.lock`, which pairing holds across those two writes. `a_publication_lock_snapshots_the_credential_and_the_receiver_together` |
 | Revoked device, peer, environment-serve, or worker credential | After the registry fence | The entry names the kind and a fingerprint, never a verifier or private key. `revoked_credentials_are_inventoried_without_secrets` |
 | Same fence again | A later capture | The original sequence is kept. `a_repeated_fence_does_not_advance_the_sequence` |
 | Append fails | The fence is already committed | The failure is returned. The previous inventory and the fence stay. `a_failed_inventory_append_leaves_the_fence_and_the_log` |

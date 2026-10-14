@@ -10,7 +10,9 @@ use crate::conversation::{
     domain::{PairedReceiver, ReceiverBinding},
     infrastructure::{LocalReceiverAuthority, ReceiverChangeError},
 };
-use crate::device_pairing::application::{PairingReceivers, ReceiverError, ReceiverRequest};
+use crate::device_pairing::application::{
+    PairingReceivers, PublicationGuard, ReceiverError, ReceiverRequest,
+};
 use nessa_auth::{application::pairing::ReceiverOutcome, domain::ResourceId};
 use std::sync::Arc;
 
@@ -71,6 +73,13 @@ fn outcome(
 }
 
 impl PairingReceivers for ConversationReceivers {
+    fn lock_publication(&self) -> Result<PublicationGuard, ReceiverError> {
+        self.0
+            .lock_publication()
+            .map(PublicationGuard::held)
+            .map_err(|_| ReceiverError::Unavailable)
+    }
+
     fn pair(&self, request: &ReceiverRequest) -> Result<ReceiverOutcome, ReceiverError> {
         let binding = self
             .0
