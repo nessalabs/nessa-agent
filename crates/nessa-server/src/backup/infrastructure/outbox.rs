@@ -5,7 +5,8 @@
 //!   outbox.lock shared, for the whole read
 //!   directory absent ──▶ watermark absent, no rows
 //!   not a directory, a symlink, a short read, a file past the artifact
-//!   bound, or a name this cut cannot keep ──▶ fail the source
+//!   bound, more files or bytes than one lease may keep, or a name this
+//!   cut cannot keep ──▶ fail the source
 //!   each regular file ──▶ open without following a link, read the
 //!   length just recorded, keep those bytes
 //!   watermark = outbox_watermark(identity, length)
@@ -19,6 +20,9 @@
 //! a lease close, and the sweep when serving starts, so this read does not
 //! observe a copy in progress or a row removed halfway through.
 //! `an_environment_outbox_cut_waits_for_the_writer_lock`.
+//! The files and bytes kept are at most what one lease may keep
+//! (`ArtifactBudget::LEASE`); past that the source fails before those
+//! bodies are read. `an_outbox_past_the_lease_budget_aborts_the_cut`.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
@@ -31,6 +35,7 @@ use nessa_protocol::lease::MAX_ARTIFACT_BYTES;
 use super::gateway::content_is_secret;
 use crate::backup::application::{CopiedStore, ExportSource, PinnedStore};
 use crate::backup::domain::{outbox_watermark, CapturedRecord, Sensitivity, SourceCut, StoreKind};
+use crate::conversation::application::ArtifactBudget;
 
 /// One outbox directory. `kind` is the device outbox or the environment outbox.
 pub(crate) struct OutboxDirectory {
@@ -98,6 +103,18 @@ fn read_outbox(kind: StoreKind, root: &Path) -> Result<SourceCut, ()> {
 }
 
 fn collect(root: &Path, directory: &Path, rows: &mut Vec<Row>) -> Result<(), ()> {
+    let mut pending = Vec::new();
+    let mut total = 0u64;
+    list_rows(directory, &mut pending, &mut total)?;
+    for path in pending {
+        rows.push(read_row(root, &path)?);
+    }
+    Ok(())
+}
+
+/// Names and lengths only. A directory past the lease budget fails here,
+/// before any body is read.
+fn list_rows(directory: &Path, pending: &mut Vec<PathBuf>, total: &mut u64) -> Result<(), ()> {
     let entries = fs::read_dir(directory).map_err(|_| ())?;
     for entry in entries {
         let entry = entry.map_err(|_| ())?;
@@ -107,14 +124,32 @@ fn collect(root: &Path, directory: &Path, rows: &mut Vec<Row>) -> Result<(), ()>
             return Err(());
         }
         if meta.is_dir() {
-            collect(root, &path, rows)?;
+            list_rows(&path, pending, total)?;
             continue;
         }
         if !meta.is_file() {
             return Err(());
         }
-        rows.push(read_row(root, &path)?);
+        count_toward_budget(pending.len(), total, meta.len())?;
+        pending.push(path);
     }
+    Ok(())
+}
+
+/// Count one more file toward the snapshot copied while admission is held.
+///
+/// The ceiling is the files and bytes one lease may keep. Past either, the
+/// body is not read. `an_outbox_past_the_lease_budget_aborts_the_cut`.
+fn count_toward_budget(counted: usize, total: &mut u64, len: u64) -> Result<(), ()> {
+    let files = usize::try_from(ArtifactBudget::LEASE.files).map_err(|_| ())?;
+    if counted >= files {
+        return Err(());
+    }
+    let next = total.checked_add(len).ok_or(())?;
+    if next > ArtifactBudget::LEASE.bytes {
+        return Err(());
+    }
+    *total = next;
     Ok(())
 }
 

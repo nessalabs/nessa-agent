@@ -5,6 +5,7 @@ use std::fs;
 use std::path::Path;
 
 use async_trait::async_trait;
+use nessa_protocol::lease::MAX_ARTIFACT_BYTES;
 
 use crate::backup::application::{
     ExportClock, ExportFailure, ManifestPublisher, MutationAdmission, PublishedRecord,
@@ -13,6 +14,7 @@ use crate::backup::domain::{outbox_watermark, Sensitivity, SkipReason, StoreKind
 use crate::backup::infrastructure::{
     capture_namespace, jsonl_cut, path_sensitivity, DirectoryPublisher, FileDeletionLog,
 };
+use crate::conversation::application::ArtifactBudget;
 
 #[test]
 fn an_unreadable_jsonl_line_is_named_and_the_rest_are_kept() {
@@ -306,6 +308,69 @@ async fn refuse_a_dangling_outbox_link() {
 
 #[cfg(not(any(unix, windows)))]
 async fn refuse_a_dangling_outbox_link() {}
+
+#[tokio::test]
+async fn an_outbox_past_the_lease_budget_aborts_the_cut() {
+    let files = usize::try_from(ArtifactBudget::LEASE.files).unwrap();
+    let too_many = tempfile::tempdir().unwrap();
+    stage_device_marker(too_many.path());
+    let crowded = too_many.path().join("environment/outbox/aa");
+    fs::create_dir_all(&crowded).unwrap();
+    for index in 0..=files {
+        fs::write(crowded.join(index.to_string()), b"x").unwrap();
+    }
+    assert_outbox_cut_refused(too_many.path()).await;
+
+    let too_large = tempfile::tempdir().unwrap();
+    stage_device_marker(too_large.path());
+    let heavy = too_large.path().join("environment/outbox/aa");
+    fs::create_dir_all(&heavy).unwrap();
+    let mut left = ArtifactBudget::LEASE.bytes;
+    let mut index = 0u32;
+    while left > 0 {
+        let len = left.min(MAX_ARTIFACT_BYTES);
+        let file = fs::File::create(heavy.join(index.to_string())).unwrap();
+        file.set_len(len).unwrap();
+        left -= len;
+        index += 1;
+    }
+    let extra = fs::File::create(heavy.join(index.to_string())).unwrap();
+    extra.set_len(1).unwrap();
+    assert!(
+        usize::try_from(index).unwrap() < files,
+        "the byte case has to stay inside the file budget"
+    );
+    assert_outbox_cut_refused(too_large.path()).await;
+}
+
+fn stage_device_marker(root: &Path) {
+    let device = root.join("device/outbox");
+    fs::create_dir_all(&device).unwrap();
+    fs::write(device.join("intent.json"), b"DEVICE-MARKER-NOT-PUBLISHED").unwrap();
+}
+
+async fn assert_outbox_cut_refused(root: &Path) {
+    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    let log = root.join("backup/deletion-inventory.txt");
+    assert!(!log.exists());
+    let bundle = tempfile::tempdir().unwrap();
+    let outcome = capture_namespace(
+        root,
+        &OpenAdmission,
+        &inventory,
+        &DirectoryPublisher::new(bundle.path().join("cut")),
+        &Clock(8),
+        &inventory.key(),
+    )
+    .await;
+    assert_eq!(outcome, Err(ExportFailure::Outbox));
+    assert!(!bundle.path().join("cut").exists());
+    assert!(!log.exists());
+    assert!(!holds(
+        &read_tree(bundle.path()),
+        b"DEVICE-MARKER-NOT-PUBLISHED"
+    ));
+}
 
 #[tokio::test]
 async fn an_outbox_private_key_is_fingerprinted_and_the_cut_continues() {
