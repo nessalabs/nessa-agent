@@ -7,10 +7,11 @@ use super::{
 use crate::conversation::application::{
     error_code, rule_principal, ConversationCaller, ConversationError, ConversationService,
     ListedPermissionRule, PermissionRuleCatalog, QuestionChoiceInput, ReadOpening, RequestedAgent,
-    RequestedConversation, RuleCatalogError, RuleChange, SubmissionMode, SubmittedFile,
-    SubmittedImage, SubmittedMessage,
+    RequestedConversation, RuleCatalogError, RuleChange, RulePrincipal, SubmissionMode,
+    SubmittedFile, SubmittedImage, SubmittedMessage,
 };
-use nessa_auth::application::session::AuthenticatedSession;
+use nessa_auth::application::session::{AuthenticatedSession, ReadCurrentSession};
+use nessa_auth::domain::MembershipRole;
 use nessa_protocol::conversation::projection::CommittedCursor;
 use nessa_protocol::conversation::view::{
     ConversationList, ConversationObservation, ConversationObservationCursor,
@@ -53,7 +54,7 @@ use nessa_sdk::application::agent_execution::{
     permissions::{is_remember_option, PermissionCaller, PermissionSelectionState},
     sessions::{NoteDelivery, NoteRetirementReason, NoteState},
 };
-use nessa_sdk::domain::agent_execution::executions::{Initiation, Initiator};
+use nessa_sdk::domain::agent_execution::executions::Initiation;
 use serde_json::{json, Value};
 
 /// `initiation` is who a turn this request starts is saved as started by,
@@ -64,6 +65,12 @@ pub(super) async fn dispatch(
     frame: RequestFrame,
     initiation: Initiation,
 ) -> OutgoingMessage {
+    if matches!(
+        frame.method.as_str(),
+        "conversation.permissionRules" | "conversation.revokePermissionRule"
+    ) {
+        return dispatch_permission_rules(state, session, frame).await;
+    }
     // This build runs no conversations at all, which is not the same fact as a
     // caller naming an agent this one is not configured for. Sharing a code
     // between them made the panel tell someone with a working Claude that the
@@ -401,7 +408,10 @@ pub(super) async fn dispatch(
             }
             "conversation.answer" => {
                 let params = params!(ConversationAnswerParams);
-                let permission_caller = permission_caller(initiation.initiator());
+                let permission_caller = match authenticated_rule_principal(state, session).await {
+                    Ok(principal) => noted_permission_caller(principal),
+                    Err(code) => return Ok(failure(&frame.id, code)),
+                };
                 // Cedar admits or refuses the caller who is answering. A grant
                 // is not rewritten as the owner, and a refusal writes nothing.
                 if is_remember_option(&params.option_id) {
@@ -483,45 +493,6 @@ pub(super) async fn dispatch(
                     },
                 ))
             }
-            "conversation.permissionRules" => {
-                let params = params!(ConversationPermissionRulesParams);
-                let rules = match remembered_rules(state, &frame.id) {
-                    Ok(rules) => rules,
-                    Err(response) => return Ok(*response),
-                };
-                match rules.list(rule_principal(permission_caller(initiation.initiator()))) {
-                    Ok(listed) => Ok(success(
-                        &frame.id,
-                        &ConversationPermissionRulesResult {
-                            request_id: params.request_id,
-                            rules: listed.into_iter().filter_map(listed_rule).collect(),
-                        },
-                    )),
-                    Err(error) => Ok(failure(&frame.id, catalog_code(error))),
-                }
-            }
-            "conversation.revokePermissionRule" => {
-                let params = params!(ConversationRevokePermissionRuleParams);
-                let rules = match remembered_rules(state, &frame.id) {
-                    Ok(rules) => rules,
-                    Err(response) => return Ok(*response),
-                };
-                let actor = caller(params.request_id.clone()).actor()?;
-                match rules.revoke(
-                    &params.rule_id,
-                    rule_principal(permission_caller(initiation.initiator())),
-                    &actor,
-                ) {
-                    Ok(applied) => Ok(success(
-                        &frame.id,
-                        &ConversationRevokePermissionRuleResult {
-                            request_id: params.request_id,
-                            applied,
-                        },
-                    )),
-                    Err(error) => Ok(failure(&frame.id, catalog_code(error))),
-                }
-            }
             "conversation.delete" => {
                 let params = params!(ConversationDeleteParams);
                 let applied = service
@@ -554,10 +525,96 @@ pub(super) async fn dispatch(
     }
 }
 
+/// List and revoke remembered rules. Who may is the authenticated
+/// membership, not the turn-initiation category admission used.
+async fn dispatch_permission_rules(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+) -> OutgoingMessage {
+    let principal = match authenticated_rule_principal(state, session).await {
+        Ok(principal) => principal,
+        Err(code) => return failure(&frame.id, code),
+    };
+    let rules = match remembered_rules(state, &frame.id) {
+        Ok(rules) => rules,
+        Err(response) => return *response,
+    };
+    match frame.method.as_str() {
+        "conversation.permissionRules" => {
+            let Ok(params) =
+                serde_json::from_value::<ConversationPermissionRulesParams>(frame.params)
+            else {
+                return failure(&frame.id, ConversationErrorCode::InvalidRequest.as_str());
+            };
+            match rules.list(principal) {
+                Ok(listed) => success(
+                    &frame.id,
+                    &ConversationPermissionRulesResult {
+                        request_id: params.request_id,
+                        rules: listed.into_iter().filter_map(listed_rule).collect(),
+                    },
+                ),
+                Err(error) => failure(&frame.id, catalog_code(error)),
+            }
+        }
+        "conversation.revokePermissionRule" => {
+            let Ok(params) =
+                serde_json::from_value::<ConversationRevokePermissionRuleParams>(frame.params)
+            else {
+                return failure(&frame.id, ConversationErrorCode::InvalidRequest.as_str());
+            };
+            let Ok(actor) = caller(session, params.request_id.clone()).actor() else {
+                return failure(&frame.id, ConversationErrorCode::InvalidRequest.as_str());
+            };
+            match rules.revoke(&params.rule_id, principal, &actor) {
+                Ok(applied) => success(
+                    &frame.id,
+                    &ConversationRevokePermissionRuleResult {
+                        request_id: params.request_id,
+                        applied,
+                    },
+                ),
+                Err(error) => failure(&frame.id, catalog_code(error)),
+            }
+        }
+        _ => failure(&frame.id, ConversationErrorCode::UnknownMethod.as_str()),
+    }
+}
+
+/// The membership Cedar's rule policy is asked about.
+///
+/// An admin is the local owner or one of that owner's surfaces. A member is
+/// a grant, which the rule policy refuses. Admission maps every unpaired
+/// session to an owner turn; that category is not this decision.
+async fn authenticated_rule_principal(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<RulePrincipal, &'static str> {
+    let snapshot = ReadCurrentSession {
+        access: state.access.as_ref(),
+        clock: state.clock.as_ref(),
+    }
+    .execute(session)
+    .await
+    .map_err(|_| "temporarily_unavailable")?;
+    Ok(match snapshot.membership.role() {
+        MembershipRole::Admin => RulePrincipal::Owner,
+        MembershipRole::Member => RulePrincipal::Grant,
+    })
+}
+
+fn noted_permission_caller(principal: RulePrincipal) -> PermissionCaller {
+    match principal {
+        RulePrincipal::Owner => PermissionCaller::Owner,
+        RulePrincipal::Grant => PermissionCaller::Grant,
+    }
+}
+
 /// The remembered rules, or the refusal when this gateway has none.
 ///
-/// Who may read or change them is Cedar's answer, from the caller the
-/// request was admitted as. This does not decide that.
+/// Who may read or change them is Cedar's answer, from the authenticated
+/// membership. This does not decide that.
 fn remembered_rules<'a>(
     state: &'a ProductRouteState,
     request_id: &str,
@@ -568,14 +625,6 @@ fn remembered_rules<'a>(
             ConversationErrorCode::ConversationsNotConfigured.as_str(),
         ))
     })
-}
-
-/// Who the admitted turn says is calling, as a fact Cedar can be asked about.
-fn permission_caller(initiator: &Initiator) -> PermissionCaller {
-    match initiator {
-        Initiator::Owner => PermissionCaller::Owner,
-        Initiator::Grant(_) => PermissionCaller::Grant,
-    }
 }
 
 fn catalog_code(error: RuleCatalogError) -> &'static str {
