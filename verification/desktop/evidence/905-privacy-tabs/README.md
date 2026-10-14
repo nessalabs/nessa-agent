@@ -37,6 +37,27 @@ preserves it. Copying the prepared fonts into the checkout's ignored vendor
 folder, using local font links and restarting Vite fixes that verification
 setup. No product, budget, console allowlist or Vite configuration changed.
 
+## Commands
+
+The owned dev server was port 1495. A fresh Vite production build went to
+`/tmp/nessa-905-prod-final`, previewed on 1496. Both servers are retired.
+
+```sh
+node_modules/.bin/vitest run --config vitest.config.ts src/desktop/settings
+node_modules/.bin/tsc --noEmit
+node_modules/.bin/eslint src/desktop/settings verification/desktop/scripts/settings-page.mjs verification/desktop/fixtures/native-hooks-on/main.tsx
+node verification/desktop/scripts/settings-page.mjs --url http://127.0.0.1:1495/desktop.html --mode dev --engine chromium,webkit --out /tmp/nessa-905-settings-dev-final.json
+node_modules/.bin/vite build --outDir /tmp/nessa-905-prod-final --emptyOutDir
+node verification/desktop/scripts/settings-page.mjs --url http://127.0.0.1:1496/desktop.html --mode prod --engine chromium,webkit --only masthead,condense,arrive,search,review-notices,remembered-rules,native-hooks,focus-ring --out /tmp/nessa-905-settings-prod-final.json
+node verification/desktop/scripts/smoke.mjs --url http://127.0.0.1:1496/desktop.html --mode prod --engine chromium,webkit --out /tmp/nessa-905-smoke-prod.json
+node verification/desktop/scripts/safe-area.mjs --url http://127.0.0.1:1496/desktop.html --mode prod --engine chromium,webkit --only settings,settings-sidebar-return --out /tmp/nessa-905-safe-area-prod.json
+```
+
+The browser reinsertion/restoration uses the same Settings command with
+`--only masthead`. Source-only edits were performed one at a time in the
+owned checkout, with restoration before the next check. Scoped formatting
+checks cover every edited TypeScript/script file; `git diff --check` passes.
+
 ## Reproduction and probes
 
 `baseline-settings-masthead.json` is the unmodified owner script/product on
