@@ -147,6 +147,13 @@ pub(in crate::infrastructure::claude_acp) enum ObservedTool {
 }
 
 impl ObservedTool {
+    fn name(&self) -> Option<&str> {
+        match self {
+            Self::Reviewable { name, .. } => Some(name),
+            Self::Declined => None,
+        }
+    }
+
     fn arguments_json(&self) -> Option<&str> {
         match self {
             Self::Reviewable { arguments_json, .. } => arguments_json.as_deref(),
@@ -172,6 +179,26 @@ impl ObservedTool {
 
 /// How much original tool input one execution may retain for later reviews.
 const MAX_RETAINED_INPUT_BYTES: usize = 1024 * 1024;
+
+pub(in crate::infrastructure::claude_acp) fn retained_tool_name(
+    names: &HashMap<String, ObservedTool>,
+    id: &str,
+) -> Option<String> {
+    names
+        .get(id)
+        .and_then(ObservedTool::name)
+        .map(str::to_owned)
+}
+
+pub(in crate::infrastructure::claude_acp) fn retained_tool_arguments(
+    names: &HashMap<String, ObservedTool>,
+    id: &str,
+) -> Option<String> {
+    names
+        .get(id)
+        .and_then(ObservedTool::arguments_json)
+        .map(str::to_owned)
+}
 
 pub(in crate::infrastructure::claude_acp) fn tool_call(
     value: &Value,
@@ -525,3 +552,7 @@ pub(in crate::infrastructure::claude_acp) fn tool_input(
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/claude_acp/tools/wire.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/claude_acp/tools/gen_ai.rs"]
+mod gen_ai;

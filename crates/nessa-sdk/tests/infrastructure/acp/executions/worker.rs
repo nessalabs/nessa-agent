@@ -262,6 +262,10 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
                 crate::application::agent_execution::executions::NativeHooksLaunchCause::Open,
             session_key: None,
             hold_remembered_allows: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            traces: crate::application::agent_execution::traces::TraceRecorder::new(
+                crate::application::agent_execution::traces::LocalTraceStore::new(),
+                crate::application::agent_execution::traces::ContentCapture::off(),
+            ),
         };
         if pending_permission {
             worker

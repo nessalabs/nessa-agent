@@ -41,6 +41,7 @@ use crate::application::agent_execution::sessions::{
     SessionManager, StorageError,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
+use crate::application::agent_execution::traces::GenAiSpan;
 use crate::domain::agent_execution::executions::{Initiation, Initiator, ToolChecking};
 use crate::domain::agent_execution::permissions::{
     CustomPermissionCancellationReason, PermissionAuthorityError, PermissionCancellationReason,
@@ -66,6 +67,20 @@ use std::{
     task::Poll,
 };
 use tokio::sync::{broadcast, watch, Mutex};
+
+fn hook_verdict_label(verdict: &ToolVerdict) -> &'static str {
+    match verdict {
+        ToolVerdict::Allow => "allow",
+        ToolVerdict::Stopped => "stopped",
+        ToolVerdict::Refuse(refusal) => match refusal.reason() {
+            "hook failed: error" => "error",
+            "hook failed: panic" => "panic",
+            "hook failed: timeout" => "timeout",
+            "hook failed: busy" => "busy",
+            _ => "refuse",
+        },
+    }
+}
 
 // All observation and timer saves use this same supervisor-owned wait. Evidence
 // remains locked by the manager's one save future while ingress is paused.
@@ -384,6 +399,39 @@ impl Agent {
     /// receipt, or provider outcome to a transcript.
     pub fn active_execution_id(&self) -> Option<ExecutionId> {
         self.inner.lifecycle.active()
+    }
+    /// Finished GenAI spans for `conversation_id`, in the order they closed.
+    ///
+    /// Empty when this agent's provider does not record traces, or when that
+    /// conversation has no finished turn yet. A turn still running is absent
+    /// until its agent span closes. This does not call the provider.
+    pub fn read_traces(&self, conversation_id: &str) -> Vec<GenAiSpan> {
+        self.inner
+            .provider
+            .traces()
+            .map(|store| store.read(conversation_id))
+            .unwrap_or_default()
+    }
+    fn note_grant_trace(&self, execution_id: &ExecutionId, submitter: &Submitter) {
+        let Some(store) = self.inner.provider.traces() else {
+            return;
+        };
+        let Initiator::Grant(grant) = submitter.initiation.initiator() else {
+            return;
+        };
+        let checked = submitter.initiation.tools() == ToolChecking::Checked;
+        store.note_grant(
+            execution_id.as_str(),
+            grant.grant(),
+            grant.policy_revision(),
+            checked,
+        );
+    }
+    fn note_hook_trace(&self, execution_id: &str, verdict: &str) {
+        let Some(store) = self.inner.provider.traces() else {
+            return;
+        };
+        store.note_hook(execution_id, "before_permission_review", verdict);
     }
     /// Whether the attached provider can cancel one turn without closing the session.
     /// False when nothing is attached. This reads no provider I/O.
@@ -1259,6 +1307,7 @@ impl Agent {
         work: &WorkPermit,
     ) -> Result<ExecutionOutcome, AgentError> {
         let id = input.execution_id.clone();
+        self.note_grant_trace(&id, &submitter);
         // Close can retire the attachment after this invocation has acquired its
         // work permit. Keep panic recovery's observation owner when it is still
         // available, but never let that optional drain bypass persistence of the
@@ -1944,6 +1993,10 @@ impl Agent {
                                     },
                                 )
                                 .await;
+                                self.note_hook_trace(
+                                    input.execution_id.as_str(),
+                                    hook_verdict_label(&decision.verdict),
+                                );
                                 events = attached.events.lock().await;
                             }
                             let review_id = remembered_review_id(&event, &input.execution_id);

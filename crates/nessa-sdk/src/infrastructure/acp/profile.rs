@@ -159,6 +159,19 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
     ) -> Result<(), AgentError>;
     fn begin_execution(&mut self);
     fn tool_call(&mut self, value: &Value) -> Result<ToolCallUpdate, AgentError>;
+    /// Provider tool name retained for `id`, when this profile kept one.
+    ///
+    /// The shared runtime uses it as `gen_ai.tool.name`. The default is that
+    /// the profile kept no name, and the runtime uses the update's title.
+    fn traced_tool_name(&self, _id: &str) -> Option<String> {
+        None
+    }
+    /// Arguments retained for `id`, as JSON text.
+    ///
+    /// The caller drops them unless content capture is on.
+    fn traced_tool_arguments(&self, _id: &str) -> Option<String> {
+        None
+    }
     /// Describe a permission request for the host that must answer it.
     ///
     /// The complete request is passed, not only its `toolCall`: providers differ

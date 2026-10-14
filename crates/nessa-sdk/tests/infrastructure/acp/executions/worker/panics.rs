@@ -123,6 +123,7 @@ fn spawn_worker<P: AcpProfile>(
         crate::application::agent_execution::executions::NativeHooksLaunchCause::Open,
         None,
         Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        crate::application::agent_execution::traces::LocalTraceStore::new(),
     ));
     (
         RunningWorker {

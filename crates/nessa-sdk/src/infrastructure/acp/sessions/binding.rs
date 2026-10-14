@@ -60,6 +60,7 @@ static NEXT_LAUNCH_ID: AtomicU64 = AtomicU64::new(1);
 pub(crate) type ProcessFactory =
     Arc<dyn Fn() -> Result<ProcessScope, ProcessStartFailure> + Send + Sync>;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
     process: ProcessFactory,
     config: AcpConfig,
@@ -67,6 +68,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
     profile: P,
     audit: Arc<dyn ExecutionAudit>,
     request: ProviderOpenRequest,
+    traces: Arc<crate::application::agent_execution::traces::LocalTraceStore>,
 ) -> Result<OpenedProviderSession, ProviderOpenError> {
     let session_key = request.session_key().map(str::to_owned);
     let (session, restore, mut open_control) = request.into_parts();
@@ -105,6 +107,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         permission_sequence: Arc::new(AtomicU64::new(0)),
         question_sequence: Arc::new(AtomicU64::new(0)),
         hold_remembered_allows: Arc::new(AtomicBool::new(false)),
+        traces,
         _stand_in_grant: stand_in_grant,
     };
     // Only an open for a named session belongs to an attachment.
@@ -191,6 +194,8 @@ struct WorkerFactory<P> {
     /// are: they outlive any one provider request, including across restarts
     /// of the worker that holds them.
     question_sequence: Arc<AtomicU64>,
+    /// Spans for every generation this open starts.
+    traces: Arc<crate::application::agent_execution::traces::LocalTraceStore>,
     /// The host's grant for this open, revoked when the factory — and so the
     /// provider session — is dropped.
     _stand_in_grant: Option<StandInGrant>,
@@ -314,6 +319,7 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
                 cause,
                 self.session_key.clone(),
                 self.hold_remembered_allows.clone(),
+                self.traces.clone(),
             )
             .in_current_span(),
         );

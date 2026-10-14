@@ -196,6 +196,10 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                     launch_cause: crate::application::agent_execution::executions::NativeHooksLaunchCause::Open,
                     session_key: None,
                     hold_remembered_allows: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    traces: crate::application::agent_execution::traces::TraceRecorder::new(
+                        crate::application::agent_execution::traces::LocalTraceStore::new(),
+                        crate::application::agent_execution::traces::ContentCapture::off(),
+                    ),
                 };
                 let mut execution = (method == "session/set_config_option").then(|| {
                     ExecutionController::new(ExecutionSessionId::new("restored-context").unwrap())

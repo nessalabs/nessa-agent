@@ -312,6 +312,12 @@ impl AcpProfile for ClaudeProfile {
     fn tool_call(&mut self, value: &Value) -> Result<ToolCallUpdate, AgentError> {
         wire::tool_call(value, &mut self.tool_names, &self.mcp_prefixes)
     }
+    fn traced_tool_name(&self, id: &str) -> Option<String> {
+        wire::retained_tool_name(&self.tool_names, id)
+    }
+    fn traced_tool_arguments(&self, id: &str) -> Option<String> {
+        wire::retained_tool_arguments(&self.tool_names, id)
+    }
     fn permission_input(&self, request: &Value) -> Result<ToolReviewInput, AgentError> {
         wire::permission_input(request, &self.tool_names, &self.mcp_prefixes)
     }
