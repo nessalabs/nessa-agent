@@ -3,13 +3,14 @@
 use nessa_local_storage::{create_directory, open, OpenMode, PrivateTempFile};
 use std::{
     fs::{self, OpenOptions},
-    io::{Read, Write},
+    io::{Read, Result, Write},
     os::windows::fs::OpenOptionsExt,
     path::Path,
 };
+use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION};
 use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
 
-fn publish(directory: &Path, bytes: &[u8]) -> std::io::Result<()> {
+fn publish(directory: &Path, bytes: &[u8]) -> Result<()> {
     create_directory(&directory.join("records"))?;
     let mut temporary = PrivateTempFile::new_beneath(directory, Path::new("records"))?;
     temporary.as_file_mut().write_all(bytes)?;
@@ -50,7 +51,13 @@ fn replacement_refuses_a_reader_without_delete_sharing_then_succeeds_after_relea
 
     let error = publish(&directory, b"refused").unwrap_err();
 
-    assert!(matches!(error.raw_os_error(), Some(5 | 32)), "{error:?}");
+    assert!(
+        matches!(
+            error.raw_os_error().map(|code| code as u32),
+            Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION)
+        ),
+        "{error:?}"
+    );
     assert_eq!(
         fs::read(directory.join("records/record.json")).unwrap(),
         b"previous"
@@ -79,7 +86,11 @@ fn replacement_preserves_a_read_only_destination_and_succeeds_after_permission_r
     let error = publish(&directory, b"refused").unwrap_err();
 
     fs::set_permissions(&destination, original_permissions).unwrap();
-    assert_eq!(error.raw_os_error(), Some(5), "{error:?}");
+    assert_eq!(
+        error.raw_os_error().map(|code| code as u32),
+        Some(ERROR_ACCESS_DENIED),
+        "{error:?}"
+    );
     assert_eq!(fs::read(&destination).unwrap(), b"previous");
     assert_eq!(fs::read_dir(directory.join("records")).unwrap().count(), 1);
     publish(&directory, b"replacement").unwrap();

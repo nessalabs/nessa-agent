@@ -6,6 +6,7 @@ use nessa_gateway_endpoint::{
     infrastructure::{FileEndpointDiscovery, FileEndpointPublication, ENDPOINT_FILE},
 };
 use nessa_local_storage::{open, OpenMode};
+use serde_json::Value;
 #[cfg(unix)]
 use std::{fs, os::unix::fs::PermissionsExt};
 use std::{
@@ -69,7 +70,7 @@ fn publication_replaces_an_endpoint_while_a_discovery_reader_retains_the_old_rec
         .execute(&replacement)
         .unwrap();
 
-    let current: serde_json::Value =
+    let current: Value =
         serde_json::from_slice(&std::fs::read(logs.join(ENDPOINT_FILE)).unwrap()).unwrap();
     assert_eq!(current["webSocketUrl"], "ws://127.0.0.1:9138");
     let mut retained = Vec::new();
