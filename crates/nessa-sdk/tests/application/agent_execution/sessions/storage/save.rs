@@ -5,6 +5,7 @@ use nessa_sync::replication::domain::Id;
 #[test]
 fn receipt_requires_original_scope_and_entire_unit_count_before_next_work() {
     let backend = SessionSaveBackend::Snapshot {
+        session: SessionId::new("conversation").unwrap(),
         incarnation: [1; 16],
     };
     let original = SessionSaveGeneration::new(backend.clone(), 4, 4);
@@ -21,6 +22,7 @@ fn receipt_requires_original_scope_and_entire_unit_count_before_next_work() {
     );
     let foreign = SessionSaveGeneration::new(
         SessionSaveBackend::Snapshot {
+            session: SessionId::new("conversation").unwrap(),
             incarnation: [2; 16],
         },
         4,
@@ -61,6 +63,7 @@ fn record_receipt_cannot_skip_generation_or_cross_reset_incarnation() {
 fn immutable_unit_and_snapshot_receipt_constructor_refuse_each_invalid_capability() {
     assert!(SessionSaveUnit::new(Vec::new()).is_err());
     let backend = SessionSaveBackend::Snapshot {
+        session: SessionId::new("conversation").unwrap(),
         incarnation: [1; 16],
     };
     let original = SessionSaveGeneration::new(backend.clone(), 4, 4);
@@ -80,4 +83,22 @@ fn immutable_unit_and_snapshot_receipt_constructor_refuse_each_invalid_capabilit
     assert!(SessionSaveReceipt::new(invalid_original, next.clone(), 1, [3; 32]).is_err());
     let invalid_next = SessionSaveGeneration::new(backend, 5, 6);
     assert!(SessionSaveReceipt::new(original, invalid_next, 1, [3; 32]).is_err());
+}
+
+#[test]
+fn snapshot_receipt_cannot_cross_conversations_with_the_same_incarnation_and_counters() {
+    let backend = |name| SessionSaveBackend::Snapshot {
+        session: SessionId::new(name).unwrap(),
+        incarnation: [1; 16],
+    };
+    let a = SessionSaveGeneration::new(backend("a"), 4, 4);
+    let b = SessionSaveGeneration::new(backend("b"), 4, 4);
+    let next_b = SessionSaveGeneration::new(backend("b"), 5, 5);
+    let receipt = SessionSaveReceipt::new(b.clone(), next_b.clone(), 1, [3; 32]).unwrap();
+    assert_eq!(receipt.next_for(&b, 1).unwrap(), next_b);
+    assert_eq!(receipt.next_for(&a, 1), Err(StorageError::IdentityMismatch));
+    assert!(matches!(
+        SessionSaveReceipt::new(a, next_b, 1, [3; 32]),
+        Err(StorageError::Corrupt(_))
+    ));
 }

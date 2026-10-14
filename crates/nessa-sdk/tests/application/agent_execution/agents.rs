@@ -62,9 +62,10 @@ impl Default for SnapshotSaveState {
     }
 }
 impl SnapshotSaveState {
-    fn binding(&self) -> SessionSaveGeneration {
+    fn binding(&self, id: &SessionId) -> SessionSaveGeneration {
         SessionSaveGeneration::new(
             SessionSaveBackend::Snapshot {
+                session: id.clone(),
                 incarnation: self.incarnation,
             },
             self.revision,
@@ -94,6 +95,7 @@ impl SavedState {
             })?;
         let next = SessionSaveGeneration::new(
             SessionSaveBackend::Snapshot {
+                session: snapshot.id.clone(),
                 incarnation: self.save.incarnation,
             },
             revision,
@@ -143,7 +145,7 @@ impl SessionStorageLease for MemoryStore {
             let state = self.0.lock().unwrap();
             Ok(SessionLoad::new(
                 state.snapshot.clone(),
-                state.save.binding(),
+                state.save.binding(&self.1),
                 SessionLoadState::Published,
             ))
         })
@@ -162,7 +164,7 @@ impl SessionStorageLease for MemoryStore {
                     .receipt
                     .as_ref()
                     .is_some_and(|receipt| receipt.binding() == &binding);
-                if snapshot.id != self.1 || (!retry && binding != state.save.binding()) {
+                if snapshot.id != self.1 || (!retry && binding != state.save.binding(&self.1)) {
                     return Err(StorageError::IdentityMismatch);
                 }
                 let base = if retry {

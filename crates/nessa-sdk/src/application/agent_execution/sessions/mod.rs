@@ -17,7 +17,7 @@
 //! Agent -> SessionManager -> SessionStorageLease -> storage adapter
 //! Agent lifecycle -> AttachmentLease -> provider cleanup + protective writer lease
 //! SessionManager -> SessionSnapshot + ordered SessionChange decisions
-//!                + lease-scoped SessionSaveGeneration
+//!                + session-scoped SessionSaveGeneration (record or snapshot)
 //!                + injected MessageCommitClock -> deadline wake
 //!                -> SessionStorageLease
 //!                       |-> validation -> domain InvocationHistory / permission rules
