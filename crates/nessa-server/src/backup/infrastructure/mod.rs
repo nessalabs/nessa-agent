@@ -2,7 +2,10 @@
 
 mod admission;
 mod bundle;
+mod cedar;
+mod committed;
 mod credentials;
+mod decision_audit;
 mod gateway;
 mod jsonl;
 mod log;
@@ -12,6 +15,9 @@ pub(crate) mod snapshot;
 
 pub use admission::ConversationAdmission;
 pub use bundle::DirectoryPublisher;
+#[cfg(test)]
+pub(crate) use cedar::CedarInventoryPolicy;
+pub use committed::CommittedInventory;
 pub use credentials::{read_credentials, CredentialReadError};
 pub use gateway::capture_namespace;
 pub use jsonl::jsonl_cut;

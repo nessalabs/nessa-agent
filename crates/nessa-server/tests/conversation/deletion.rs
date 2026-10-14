@@ -6,8 +6,8 @@ use crate::conversation::{
     application::{
         AttachmentReleaseCause, ConversationAccessPolicyEvaluator, ConversationCreation,
         ConversationCreationAuditRecord, ConversationCreationCause, ConversationDeletionBudgets,
-        ConversationDeletionCause, ConversationFuture, ProviderSessionEraser, SubmittedFile,
-        UnfinishedDeletions,
+        ConversationDeletionCause, ConversationFuture, FenceCapture, FenceCaptureError,
+        ProviderSessionEraser, SubmittedFile, UnfinishedDeletions,
     },
     infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
@@ -19,6 +19,7 @@ use crate::conversation_test_support::{
     MemoryRepository, MemorySummaries, ObservedPolicy, Provider, ProviderFactory,
     RecordingDeletionAudit, RecordingFileLinkAudit, TestClock, Unlisted, DELETION_BUDGETS,
 };
+use async_trait::async_trait;
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
 use nessa_protocol::conversation::view::ConversationMessageStatus;
 use nessa_sdk::application::agent_execution::permissions::PermissionCaller;
@@ -34,7 +35,10 @@ use std::{
     collections::{BTreeMap, VecDeque},
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{atomic::AtomicUsize, Mutex as StdMutex},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize},
+        Arc, Mutex as StdMutex,
+    },
 };
 use tokio::sync::oneshot;
 
@@ -5470,4 +5474,53 @@ async fn an_outstanding_deletion_counts_as_holding_resources() {
     assert!(service.owns_unreleased_resources().await);
     eraser.0.store(false, Ordering::SeqCst);
     assert!(!service.owns_unreleased_resources().await);
+}
+
+struct FailingCapture;
+
+#[async_trait]
+impl FenceCapture for FailingCapture {
+    async fn capture(&self) -> Result<(), FenceCaptureError> {
+        Err(FenceCaptureError::NotStored)
+    }
+}
+
+/// A capture that cannot store the log does not change the delete.
+#[tokio::test]
+async fn a_failed_inventory_capture_leaves_the_deletion() {
+    let fixture = deleting();
+    fixture.service.bind_fence_capture(Arc::new(FailingCapture));
+    let id = talked_in(&fixture).await;
+    assert!(matches!(
+        fixture.service.delete(id.clone(), caller("delete")).await,
+        Ok(true)
+    ));
+    assert!(fixture.repository.records.lock().unwrap()[&id]
+        .deletion()
+        .unwrap()
+        .erased());
+}
+
+struct RecordingCapture(AtomicBool);
+
+#[async_trait]
+impl FenceCapture for RecordingCapture {
+    async fn capture(&self) -> Result<(), FenceCaptureError> {
+        self.0.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// The inventory is asked after the tombstone, and the delete still finishes.
+#[tokio::test]
+async fn a_deletion_asks_the_inventory_after_the_fence() {
+    let fixture = deleting();
+    let asked = Arc::new(RecordingCapture(AtomicBool::new(false)));
+    fixture.service.bind_fence_capture(asked.clone());
+    let id = talked_in(&fixture).await;
+    assert!(matches!(
+        fixture.service.delete(id, caller("delete")).await,
+        Ok(true)
+    ));
+    assert!(asked.0.load(Ordering::SeqCst));
 }
