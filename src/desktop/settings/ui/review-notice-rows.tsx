@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { showWaitingReviews } from "../../workspace/adapters/gateway/review-notices"
 import { setting } from "../model/settings-catalogue"
 import { Group, ItemRow } from "./settings-controls"
 
@@ -8,6 +9,7 @@ import { Group, ItemRow } from "./settings-controls"
  * A prompt that arrives with the page is a WebKit console error, and one
  * that arrives on the next click interrupts that click. When permission
  * is already granted, a waiting review shows a notification on its own.
+ * Granting it from Allow also shows a review that is already waiting.
  */
 export function ReviewNoticeRows() {
   const supported = typeof Notification !== "undefined"
@@ -34,7 +36,10 @@ export function ReviewNoticeRows() {
             <button
               type="button"
               onClick={() => {
-                void Notification.requestPermission().then(setPermission)
+                void Notification.requestPermission().then((next) => {
+                  setPermission(next)
+                  if (next === "granted") showWaitingReviews()
+                })
               }}
             >
               Allow

@@ -31,9 +31,10 @@
  */
 import type { AttachmentApi, McpAppsApi } from "@nessa/client"
 import {
-  applyReviewSnapshot,
+  bindWaitingReviewNotices,
   browserReviewNotifier,
   openReviewEvent,
+  waitingReviewNotices,
   type WaitingReview,
 } from "./workspace/adapters/gateway/review-notices"
 import {
@@ -234,14 +235,13 @@ type WindowGatewayClient = GatewayClient &
 
 /** Notices for reviews that are waiting, replaced by each snapshot the gateway sends. */
 function reviewWaiting(): (reviews: readonly WaitingReview[]) => void {
-  let previous: readonly WaitingReview[] = []
-  const notifier = browserReviewNotifier((conversationId) => {
-    window.dispatchEvent(openReviewEvent(conversationId))
-  })
-  return (reviews) => {
-    applyReviewSnapshot(previous, reviews, notifier)
-    previous = reviews
-  }
+  const notices = waitingReviewNotices(
+    browserReviewNotifier((conversationId) => {
+      window.dispatchEvent(openReviewEvent(conversationId))
+    }),
+  )
+  bindWaitingReviewNotices(notices.showWaiting)
+  return notices.apply
 }
 
 /**

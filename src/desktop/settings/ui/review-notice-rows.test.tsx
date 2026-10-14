@@ -6,6 +6,7 @@
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
+import { bindWaitingReviewNotices } from "../../workspace/adapters/gateway/review-notices"
 import { ReviewNoticeRows } from "./review-notice-rows"
 
 let root: Root
@@ -19,6 +20,7 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  bindWaitingReviewNotices(() => {})
   await act(async () => root.unmount())
   host.remove()
   vi.unstubAllGlobals()
@@ -46,4 +48,21 @@ it("asks for permission from Allow", async () => {
   await act(async () => button?.click())
   expect(requestPermission).toHaveBeenCalledOnce()
   expect(host.textContent).toContain("On. A review that is waiting shows a notification.")
+})
+
+it("notifies for a waiting review when Allow is granted", async () => {
+  class FakeNotification {
+    static permission: NotificationPermission = "default"
+    static requestPermission(): Promise<NotificationPermission> {
+      FakeNotification.permission = "granted"
+      return Promise.resolve("granted")
+    }
+  }
+  vi.stubGlobal("Notification", FakeNotification)
+  const show = vi.fn()
+  bindWaitingReviewNotices(show)
+  await act(async () => root.render(<ReviewNoticeRows />))
+  const button = host.querySelector("button")
+  await act(async () => button?.click())
+  expect(show).toHaveBeenCalledOnce()
 })

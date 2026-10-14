@@ -4,6 +4,7 @@ import {
   applyReviewSnapshot,
   browserReviewNotifier,
   reviewToOpen,
+  waitingReviewNotices,
   waitingReviews,
   type ReviewNotifier,
   type WaitingReview,
@@ -63,6 +64,28 @@ describe("browserReviewNotifier", () => {
     notifier.show(held)
     expect(created).toEqual([{ title: "Bash needs a decision" }])
     notifier.clear(held)
+    vi.unstubAllGlobals()
+  })
+
+  it("shows a review dropped while permission was default once it is granted", () => {
+    const created: { title: string }[] = []
+    class FakeNotification {
+      static permission: NotificationPermission = "default"
+      constructor(title: string) {
+        created.push({ title })
+      }
+      close() {}
+    }
+    vi.stubGlobal("Notification", FakeNotification)
+    const notices = waitingReviewNotices(browserReviewNotifier(() => {}))
+    const held = review("p1")
+    notices.apply([held])
+    expect(created).toEqual([])
+    FakeNotification.permission = "granted"
+    notices.showWaiting()
+    expect(created).toEqual([{ title: "Bash needs a decision" }])
+    notices.showWaiting()
+    expect(created).toEqual([{ title: "Bash needs a decision" }])
     vi.unstubAllGlobals()
   })
 })

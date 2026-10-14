@@ -85,6 +85,51 @@ export function applyReviewSnapshot(
 }
 
 /**
+ * The reviews still waiting, and a way to show them again.
+ *
+ * `apply` shows arrivals and clears departures. A review dropped because
+ * notification permission was not granted is still in the last snapshot.
+ * `showWaiting` shows that snapshot as if none of it had been shown, so
+ * granting permission notifies for it. A notice the notifier already has
+ * is left as it is.
+ */
+export function waitingReviewNotices(notifier: ReviewNotifier): {
+  apply: (reviews: readonly WaitingReview[]) => void
+  showWaiting: () => void
+} {
+  let previous: readonly WaitingReview[] = []
+  let latest: readonly WaitingReview[] = []
+  return {
+    apply(reviews) {
+      applyReviewSnapshot(previous, reviews, notifier)
+      previous = reviews
+      latest = reviews
+    },
+    showWaiting() {
+      applyReviewSnapshot([], latest, notifier)
+      previous = latest
+    },
+  }
+}
+
+let showWaitingReviewsNow: (() => void) | undefined
+
+/** Point [`showWaitingReviews`] at the window's live waiting-review notices. */
+export function bindWaitingReviewNotices(showWaiting: () => void): void {
+  showWaitingReviewsNow = showWaiting
+}
+
+/**
+ * Show the reviews that are waiting, including one that arrived while
+ * notification permission was not granted. Settings calls this when the
+ * person allows notifications. Nothing is registered until the desktop
+ * window composes its gateway. A review already showing is not shown twice.
+ */
+export function showWaitingReviews(): void {
+  showWaitingReviewsNow?.()
+}
+
+/**
  * The browser's notifications. A prompt that arrives with the page is a
  * WebKit console error, and one that arrives on the next click interrupts
  * that click, so this does not ask. Settings asks from its own button.
