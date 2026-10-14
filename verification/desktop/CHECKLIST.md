@@ -1439,7 +1439,7 @@ zero times, preserves the draft and paints **Attachments still loading**; read
 completion allows one send containing the text and one image. A second URL drop
 while the first fetch is pending paints **Still reading files** and starts no
 second fetch. The JSON reports send, attachment, refusal and page-error counts
-for all twenty-two engine/scenario pairs. A late upload success or failure for a closed
+for all twenty-six engine/scenario pairs. A late upload success or failure for a closed
 parent leaves the replacement parent's shared-resource tile uploading (one rendered
 `data-upload="uploading"` tile), per [attachment lifetimes](../../docs/design/attachment-lifetimes.md).
 The same-parent remove/re-add cases also retain one uploading tile after an old
@@ -1453,6 +1453,16 @@ with three active uploads leaves the fourth queued after a completion; remountin
 resumes that sibling. Native SVG bytes retain their MIME type and render a 4px
 image from the object URL in both engines. This verifies browser interactions with the
 production panel; it does not exercise an operating-system file picker.
+AL24 also covers a terminal refusal followed by a restored-draft retry. In each
+engine, the fixture stages a 40 MiB native PNG as a 68 B processed image, refuses
+the first send, retries it successfully, then accepts a second 40 MiB image. Both
+reupload modes are exercised: the refused bytes remain stored, or the refused
+image is staged again. The 80 MiB of originals crosses the 64 MiB sent-preview
+cap; checks tied to the send execution IDs confirm the old failed turn becomes a
+reference, the older Blob and object URL are released, and the second file remains
+available. When the refused reference is no longer held, the transcript shows the
+existing **No longer kept** placeholder. The bounded run is
+`node verification/desktop/scripts/attachments-races.mjs --only terminal-refusal-preserved,terminal-refusal-reupload`.
 
 
 ## Provider authentication recovery (#501)
