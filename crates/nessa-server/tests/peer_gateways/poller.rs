@@ -5,8 +5,8 @@
 use super::super::audit::DurablePeerAudit;
 use super::*;
 use crate::peer_gateways::application::{
-    CacheState, PeerAudit, PeerAuditRecord, PeerAuditUnavailable, PeerConnectFuture, PeerConnector,
-    PeerState,
+    CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable,
+    PeerConnectFuture, PeerConnector, PeerState,
 };
 use crate::peer_gateways::infrastructure::{PeerRecords, AUDIT_DEADLINE};
 use futures_util::FutureExt;
@@ -21,7 +21,7 @@ use nessa_auth::domain::{
     AudienceId, OrganizationId, Resource, ResourceId,
 };
 use nessa_protocol::pairing::wire::NativePairingStatus;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 const POLICY: PollPolicy = PollPolicy {
@@ -620,6 +620,86 @@ async fn a_read_slot_stays_until_queued_records_leave() {
     );
 }
 
+/// The first record is refused before the deadline. The second never
+/// answers. The refusal has already completed its future; waiting on it
+/// again panics and the cycle is rescheduled as a failure. The slot stays
+/// for the record that is still unanswered, and a stop releases it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_audit_error_before_the_deadline_is_not_waited_on_again() {
+    let root = tempfile::tempdir().unwrap();
+    let clock = Arc::new(Manual(AtomicU64::new(0)));
+    let commands = slot_commands(
+        &root.path().join("gateway"),
+        clock.clone(),
+        Arc::new(RefusedThenPending::default()),
+    );
+    let holding = PeerHolding {
+        record: PeerState::Unknown,
+        cache: CacheState::Unknown,
+    };
+    let mut records = Vec::new();
+    for _ in 0..2 {
+        records.push(commands.poller_changed(
+            DeviceKey::new([7; 32]),
+            PollerCause::Approved,
+            holding.clone(),
+            holding.clone(),
+            Ok(()),
+        ));
+    }
+    let reads = Arc::new(Semaphore::new(1));
+    let permit = reads.clone().try_acquire_owned().unwrap();
+    let (stop, mut stopped) = watch::channel(false);
+    let mut held = std::pin::pin!(async {
+        commands.poller_kept(records, &mut stopped).await;
+        drop(permit);
+    });
+    tokio::select! {
+        biased;
+        _ = &mut held => panic!("the cycle finished while a record was still unanswered"),
+        () = tokio::time::sleep(WAKE_TICK / 2) => {}
+    }
+    clock
+        .0
+        .fetch_add(AUDIT_DEADLINE.as_millis() as u64, Ordering::SeqCst);
+    tokio::select! {
+        biased;
+        _ = &mut held => panic!("the read slot was freed while a record was still unanswered"),
+        () = tokio::time::sleep(2 * WAKE_TICK) => {}
+    }
+    assert!(
+        reads.try_acquire().is_err(),
+        "a replacement cycle could take the read slot"
+    );
+    stop.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(2), held)
+        .await
+        .expect("a stop left the read slot held");
+    assert_eq!(
+        reads.available_permits(),
+        1,
+        "a stop did not release the slot"
+    );
+}
+
+/// The first poller record is refused at once. Later records never answer.
+#[derive(Default)]
+struct RefusedThenPending {
+    calls: AtomicUsize,
+}
+impl PeerAudit for RefusedThenPending {
+    fn record(&self, _: PeerAuditRecord) -> PeerAuditFuture<'_> {
+        let first = self.calls.fetch_add(1, Ordering::SeqCst) == 0;
+        Box::pin(async move {
+            if first {
+                Err(PeerAuditUnavailable)
+            } else {
+                std::future::pending().await
+            }
+        })
+    }
+}
+
 /// How many of `count` records a stalled writer of `capacity` refuses.
 /// The writer blocks on the first record, so the queue cannot drain.
 async fn refused_while_stalled(capacity: usize, count: usize) -> usize {
@@ -717,8 +797,8 @@ impl nessa_protocol::clock::Clock for Manual {
 }
 fn slot_commands(
     root: &std::path::Path,
-    clock: Arc<Manual>,
-    audit: Arc<DurablePeerAudit>,
+    clock: Arc<dyn nessa_protocol::clock::Clock>,
+    audit: Arc<dyn PeerAudit>,
 ) -> Arc<PeerCommands> {
     nessa_local_storage::create_directory(root).unwrap();
     nessa_local_storage::create_directory_beneath(root, std::path::Path::new("peers")).unwrap();

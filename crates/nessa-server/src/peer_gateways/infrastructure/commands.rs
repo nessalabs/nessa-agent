@@ -1079,35 +1079,49 @@ impl PeerCommands {
         }
     }
     /// Log one cycle's records at [`AUDIT_DEADLINE`]: kept, or not kept and
-    /// the change stands. Then wait until each record has left the queue, or
-    /// `stopped` is set. The writer sends the answer after it takes the
-    /// record, so that wait is the read slot's reservation: dropping the
-    /// slot at the deadline would let a replacement cycle enqueue another
-    /// batch while these records are still queued
+    /// the change stands. Then wait until each record that was still
+    /// unanswered has left the queue, or `stopped` is set. The writer sends
+    /// the answer after it takes the record, so that wait is the read slot's
+    /// reservation: dropping the slot at the deadline would let a replacement
+    /// cycle enqueue another batch while these records are still queued
     /// (`a_read_slot_stays_until_queued_records_leave`). A stop releases the
     /// wait because the run loop has ended and shutdown drains the writer.
     /// The cleanup a record describes is never undone or held back for it,
     /// and no owner command waits on it: the cycle has already given back
     /// the turn.
     ///
-    /// A receiver the deadline already took is spent, and polling it again
-    /// panics. Only the records still unanswered are waited on here.
+    /// An answer that arrived, kept or refused, has already been polled to
+    /// completion. Polling it again panics
+    /// (`an_audit_error_before_the_deadline_is_not_waited_on_again`). Only a
+    /// record still pending at the deadline is waited on here.
     pub(super) async fn poller_kept(
         &self,
         mut records: Vec<PollerRecord<'_>>,
         stopped: &mut watch::Receiver<bool>,
     ) {
-        let mut kept = vec![false; records.len()];
-        let answers = (&mut records, &mut kept);
+        /// `Pending` was dropped still unanswered. `Kept` and `Refused`
+        /// finished, and their futures must not be polled again.
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum Answer {
+            Pending,
+            Kept,
+            Refused,
+        }
+        let mut answer = vec![Answer::Pending; records.len()];
+        let waiting = (&mut records, &mut answer);
         self.within(AUDIT_DEADLINE, move || async move {
-            for (record, kept) in answers.0.iter_mut().zip(answers.1.iter_mut()) {
-                *kept = (&mut record.kept).await.is_ok();
+            for (record, answer) in waiting.0.iter_mut().zip(waiting.1.iter_mut()) {
+                *answer = if (&mut record.kept).await.is_ok() {
+                    Answer::Kept
+                } else {
+                    Answer::Refused
+                };
             }
         })
         .await;
-        for (record, kept) in records.iter().zip(&kept) {
+        for (record, answer) in records.iter().zip(&answer) {
             let (peer, operation, cause) = (hex(&record.peer), record.operation, &record.name);
-            if *kept {
+            if *answer == Answer::Kept {
                 tracing::info!(peer = %peer, operation = %operation, cause = %cause,
                     after = ?record.after, outcome = ?record.outcome, "peer gateway poller change");
             } else {
@@ -1116,8 +1130,8 @@ impl PeerCommands {
                     "peer gateway poller change not audited; the change stands");
             }
         }
-        for (record, kept) in records.iter_mut().zip(kept) {
-            if kept {
+        for (record, answer) in records.iter_mut().zip(answer) {
+            if answer != Answer::Pending {
                 continue;
             }
             tokio::select! {

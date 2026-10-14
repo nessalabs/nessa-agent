@@ -1464,6 +1464,7 @@ sequenceDiagram
 | R32 | `reads_at_once` is 1, and both peers' reads would hold | One peer's read is held. The other has accepted nothing, for longer than a poll tick. Once the held read is released, the waiting peer is read | `a_read_past_the_cap_waits_for_a_slot` |
 | R33 | A read is held, and the interval has not passed; then another peer is enrolled | The directory is not scanned on each tick of the held read. Enrolling the other peer scans it, and that peer is `synced` without waiting out the interval | `a_held_read_lists_when_the_records_change_not_on_every_tick` |
 | R34 | The audit writer is still holding a cycle's records when `AUDIT_DEADLINE` passes; then the poller stops | The cycle keeps its read slot, so a replacement cycle cannot enqueue another batch, and an owner record still fits in the headroom. The change is logged as not kept and stands. A stop releases the slot while the records are still queued, so shutdown can drain the writer. An owner command is still answered at its own deadline (row R18) | `a_read_slot_stays_until_queued_records_leave`; the owner deadline in `a_stalled_audit_never_holds_an_owner_command` |
+| R35 | A poller record's audit answers an error before `AUDIT_DEADLINE`, and a later record in that cycle is still unanswered | The error is logged and the change stands. That finished future is not polled again. The read slot stays until the unanswered record leaves or the poller stops | `an_audit_error_before_the_deadline_is_not_waited_on_again` |
 
 ## What this part does not do
 
