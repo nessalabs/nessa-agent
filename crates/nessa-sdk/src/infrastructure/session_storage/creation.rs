@@ -396,6 +396,7 @@ fn outcome_byte(outcome: Option<MutationOutcome>) -> u8 {
         Some(MutationOutcome::Cancelled) => 3,
         Some(MutationOutcome::AlreadyFinal) => 4,
         Some(MutationOutcome::NoEffect) => 5,
+        Some(MutationOutcome::RefusedAfterSave) => 6,
     }
 }
 fn encode_mutation(receipt: &MutationReceipt) -> Result<NewEvent, StorageError> {
@@ -491,6 +492,7 @@ fn decode_mutation(event: &NewEvent) -> Result<MutationReceipt, StorageError> {
         3 => Some(MutationOutcome::Cancelled),
         4 => Some(MutationOutcome::AlreadyFinal),
         5 => Some(MutationOutcome::NoEffect),
+        6 => Some(MutationOutcome::RefusedAfterSave),
         _ => return Err(corrupt("unknown command outcome")),
     };
     match (stage, outcome) {

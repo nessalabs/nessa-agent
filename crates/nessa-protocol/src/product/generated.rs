@@ -836,6 +836,7 @@ pub enum ConversationCommandOutcome {
     Cancelled,
     AlreadyFinal,
     NoEffect,
+    RefusedAfterSave,
 }
 impl ConversationCommandOutcome {
     pub fn as_str(self) -> &'static str {
@@ -845,6 +846,7 @@ impl ConversationCommandOutcome {
             Self::Cancelled => "cancelled",
             Self::AlreadyFinal => "already_final",
             Self::NoEffect => "no_effect",
+            Self::RefusedAfterSave => "refused_after_save",
         }
     }
 }

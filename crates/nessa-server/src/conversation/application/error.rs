@@ -62,8 +62,9 @@ pub enum ConversationError {
     Revoked,
     /// A native steer that was saved, then refused because the grant moved
     /// before injection. The saved attempt is settled as refused and nothing
-    /// reached the agent. A retry of that same execution is answered the
-    /// same way and is not admitted again (row J31).
+    /// reached the agent. The command receipt is settled as refused after
+    /// save, and a retry of that same request is answered the same way and
+    /// is not admitted again (row J31).
     RevokedAfterSave,
     /// A delete that happened — the conversation is tombstoned, left out of
     /// every list, and refused — and did not finish. Repeating the delete

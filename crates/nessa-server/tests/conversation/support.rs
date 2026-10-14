@@ -929,6 +929,8 @@ pub(crate) struct ProviderFactory {
     pub(crate) close_requests: Mutex<Vec<SessionCloseRequest>>,
     /// Whether the agent agreed to take images, and its model can see them.
     pub(crate) image_input: AtomicBool,
+    /// Whether the attached agent can inject a steer into the active turn.
+    pub(crate) native_steering: AtomicBool,
     /// Set while the agent's answer is not known, as during a restoration.
     pub(crate) answer_unknown: AtomicBool,
     /// Whether the selected model is offered images: it records image limits
@@ -1537,6 +1539,7 @@ impl ProviderSessionBackend for Backend {
             image_input: self.factory.image_input.load(Ordering::SeqCst),
             negotiated: !self.factory.answer_unknown.load(Ordering::SeqCst),
             native_hooks_allowed: self.factory.native_hooks.load(Ordering::SeqCst),
+            native_steering: self.factory.native_steering.load(Ordering::SeqCst),
             ..ProviderOperationCapabilities::default()
         }
     }

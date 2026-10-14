@@ -37,7 +37,11 @@ impl ConversationService {
     /// saved turn without enqueueing again. A submit settled
     /// [`MutationOutcome::NoEffect`] is returned as [`ConversationError::Revoked`]:
     /// the effect refused before anything was enqueued, and the same request
-    /// answers that refusal again.
+    /// answers that refusal again. A submit settled
+    /// [`MutationOutcome::RefusedAfterSave`] is returned as
+    /// [`ConversationError::RevokedAfterSave`]: the turn was saved and then
+    /// refused before injection, and the same request answers that refusal
+    /// again.
     ///
     /// `initiation` is who the turn is saved as started by: the owner, or the
     /// share grant that admitted it. A retry of the same request is answered
@@ -97,8 +101,14 @@ impl ConversationService {
         })
         .await
         .map_err(|error| MutationFailure::TaskFault(CreationTaskFault::from_join_error(error)))??;
-        if progress.outcome() == Some(MutationOutcome::NoEffect) {
-            return Err(MutationFailure::Target(ConversationError::Revoked));
+        match progress.outcome() {
+            Some(MutationOutcome::NoEffect) => {
+                return Err(MutationFailure::Target(ConversationError::Revoked));
+            }
+            Some(MutationOutcome::RefusedAfterSave) => {
+                return Err(MutationFailure::Target(ConversationError::RevokedAfterSave));
+            }
+            _ => {}
         }
         let delivery = delivery
             .lock()
@@ -285,10 +295,14 @@ impl MutationTarget for SubmitTarget {
                 .map_err(SubmitFailure::into_error);
             let receipt = match submitted {
                 // The revision hold refused after this command was recorded
-                // Attempted, and before the agent was asked. Settle that as
-                // no effect so the same request is answered `revoked` again
-                // instead of `submission_unresolved`.
+                // Attempted. Settle it, so the same request is answered again
+                // instead of `submission_unresolved`. Before the save, nothing
+                // was enqueued. After the save, the SDK already cached
+                // `RefusedAfterSave`; the receipt keeps that answer.
                 Err(ConversationError::Revoked) => return Ok(MutationOutcome::NoEffect),
+                Err(ConversationError::RevokedAfterSave) => {
+                    return Ok(MutationOutcome::RefusedAfterSave)
+                }
                 Err(error) => return Err(CreationInitializationFailure::Target(error)),
                 Ok(receipt) => receipt,
             };
