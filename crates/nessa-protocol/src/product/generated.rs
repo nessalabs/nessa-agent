@@ -557,6 +557,8 @@ pub struct ConversationMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authentication_required: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_work_failed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steering_target: Option<String>,
     pub parts: Vec<ConversationPart>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

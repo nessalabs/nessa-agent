@@ -327,6 +327,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       "error",
       "steeringTarget",
       "authenticationRequired",
+      "requiredWorkFailed",
       "parts",
       "steeringOffset",
     ])
@@ -340,6 +341,11 @@ export function conversationView(value: unknown, expected: string): Conversation
       throw new Error("Conversation response has invalid authenticationRequired")
     if (message.authenticationRequired === true && message.status !== "failed")
       throw new Error("Conversation authentication refusal requires a failed turn")
+    if (
+      message.requiredWorkFailed !== undefined &&
+      typeof message.requiredWorkFailed !== "boolean"
+    )
+      throw new Error("Conversation response has invalid requiredWorkFailed")
     if (message.steeringTarget !== undefined) {
       const target = identity(message, "steeringTarget")
       if (target === executionId)
@@ -410,6 +416,14 @@ export function conversationView(value: unknown, expected: string): Conversation
     )
       throw new Error("Injected conversation state is incomplete")
     if (message.error !== undefined) text(message, "error", 2048, false)
+    if (message.requiredWorkFailed === true) {
+      if (message.authenticationRequired !== true || status !== "failed")
+        throw new Error(
+          "Conversation required-work failure belongs on an authentication refusal",
+        )
+      if (message.error === undefined)
+        throw new Error("Conversation required-work failure has no diagnostic")
+    }
     messageIds.add(executionId)
     messageStatuses.set(executionId, status)
     messageTexts.set(executionId, userText)

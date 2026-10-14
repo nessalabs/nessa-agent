@@ -498,6 +498,8 @@ export interface ConversationMessage {
   error?: string
   /** The provider adapter explicitly requires authentication for this failed turn. Generic provider codes and diagnostic text do not establish this fact. */
   authenticationRequired?: boolean
+  /** This failed authentication refusal also failed independent required work. The person-facing diagnostic stays in error. Absent for a pure refusal, and absent when the failure is not an authentication refusal. */
+  requiredWorkFailed?: boolean
   /** Execution that consumed this injected steering input; its shared reply answers this input. */
   steeringTarget?: string
   /** Provider observations in execution order; offsets address the retained SDK event sequence. */

@@ -867,6 +867,7 @@ it("keeps an independent failure beside authentication recovery", () => {
         turn({
           status: "failed",
           authenticationRequired: true,
+          requiredWorkFailed: true,
           error: "The turn could not complete all required work.",
         }),
       ],
@@ -882,6 +883,49 @@ it("keeps an independent failure beside authentication recovery", () => {
       status: "failed",
       error: "The turn could not complete all required work.",
     },
+  })
+})
+
+it("does not treat the required-work sentence as the independent failure", () => {
+  const sentence = "The turn could not complete all required work."
+  const transcript = transcriptFrom(
+    view("auth", {
+      messages: [
+        turn({
+          status: "failed",
+          authenticationRequired: true,
+          error: sentence,
+        }),
+      ],
+    }),
+    1,
+    at,
+    GATEWAY_NOW_MS,
+  )
+  expect(recovery(transcript)).toBe(true)
+  expect(
+    transcript.messages.every(
+      (message) => message.role === "note" || message.terminal === undefined,
+    ),
+  ).toBe(true)
+  expect(JSON.stringify(transcript)).not.toContain(sentence)
+  const flagged = transcriptFrom(
+    view("auth", {
+      messages: [
+        turn({
+          status: "failed",
+          authenticationRequired: true,
+          requiredWorkFailed: true,
+          error: "storage write failed",
+        }),
+      ],
+    }),
+    2,
+    at,
+    GATEWAY_NOW_MS,
+  )
+  expect(flagged.messages[0]).toMatchObject({
+    terminal: { status: "failed", error: "storage write failed" },
   })
 })
 

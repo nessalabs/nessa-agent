@@ -5,7 +5,9 @@
  * (`gateway-source.ts`) knows besides the wire is passed in, and the
  * revisions it mints are its own. A turn the gateway says failed, was
  * cancelled, or was left unresolved keeps that status and the diagnostic it
- * sent. A typed authentication refusal does not also carry them. Questions
+ * sent. A typed authentication refusal does not also carry them, unless the
+ * gateway's `requiredWorkFailed` says independent required work failed.
+ * Questions
  * the view lists, and a notice that a review or question was left out, are
  * kept; a question or notice that names nothing is left out.
  *
@@ -454,17 +456,11 @@ export function transcriptFrom(
 }
 
 /**
- * The notice `failure_notice` adds when a typed authentication refusal also
- * has a separate cleanup or storage failure. An authentication-only refusal
- * leaves `error` empty. The text is the gateway's; it is not rewritten.
- */
-const REQUIRED_WORK_FAILURE = "The turn could not complete all required work."
-
-/**
  * A terminal status the gateway reported. A typed authentication refusal
  * that recovery still owns — it is the latest input — does not also carry
- * the mark when that refusal is the only failure. The gateway's independent
- * required-work failure stays on that refusal, beside sign-in. An earlier
+ * the mark when that refusal is the only failure. `requiredWorkFailed` is
+ * the gateway's fact that independent required work failed; the diagnostic
+ * in `error` stays beside sign-in and is not how this decides. An earlier
  * refusal keeps its mark and diagnostic, including the authentication
  * diagnostic. Any other status is still running or finished and has no
  * mark. A blank diagnostic is left off; the text itself is not rewritten.
@@ -475,7 +471,7 @@ function turnTerminal(
   latestInput: boolean,
 ): TurnTerminal | undefined {
   const error = reportedText(turn.error)
-  if (turn.authenticationRequired && latestInput && error !== REQUIRED_WORK_FAILURE) {
+  if (turn.authenticationRequired && latestInput && turn.requiredWorkFailed !== true) {
     return undefined
   }
   switch (turn.status) {
