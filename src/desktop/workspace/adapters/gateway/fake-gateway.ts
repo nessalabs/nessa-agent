@@ -407,8 +407,7 @@ export function fakeGateway(
         calls.push({ method: "answerQuestion", args })
         const normal = (): AnswerQuestionResult => {
           const [target] = args
-          const { conversationId, executionId, questionId } = target
-          const current = views.get(conversationId)
+          const current = views.get(target.conversationId)
           if (current)
             views.set(target.conversationId, {
               ...current,
