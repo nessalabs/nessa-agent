@@ -75,6 +75,7 @@ type ThunkConfig = {
   state: { conversation: LocalTabs }
   extra: {
     conversation: ConversationEffects
+    preparedOperations: PreparedOperationTable
     /**
      * Whether this surface can say where a file is, which decides what a
      * message refused over an unsendable file is told. Injected because the
@@ -143,17 +144,6 @@ const commandFailure = (error: unknown): CommandFailure | undefined =>
  * going; once it has, the same execution is stopped even if the tab was
  * closed locally in between.
  */
-// getState is unique to a Redux store, even when effects/dependencies are shared.
-// The promise owns its operation after tab closure; the table retains retry intent
-// only while its original local turn remains retryable (prepared-operation tests).
-const operationTables = new WeakMap<() => ThunkConfig["state"], PreparedOperationTable>()
-function operationsOf(getState: () => ThunkConfig["state"]) {
-  let table = operationTables.get(getState)
-  if (!table) operationTables.set(getState, (table = new PreparedOperationTable()))
-  table.prune(getState().conversation.conversations)
-  return table
-}
-
 /** Bind a local tab without publishing a partial send transition. */
 function bindServerConversation(
   tabs: LocalTabs,
@@ -234,7 +224,7 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
       stopRequested: false,
       inflight: true,
     }
-    const operations = operationsOf(getState)
+    const operations = extra.preparedOperations
     operations.set(id, executionId, operation)
     // The operation exists before the one publication that makes it stoppable.
     // Subscribers can synchronously Stop/close; this promise still owns it (PS25–26).
@@ -585,7 +575,7 @@ export const controlConversation = createAsyncThunk<
     )
       return
     if (control.kind === "stop") {
-      const operation = operationsOf(getState).get(id, control.target.executionId)
+      const operation = extra.preparedOperations.get(id, control.target.executionId)
       if (operation) operation.stopRequested = true
       // Cancellation can overtake creation or a retry; it never owns the ordinary
       // control busy state (PS6/PS12). The gateway resolves current authority.
@@ -608,7 +598,7 @@ export const controlConversation = createAsyncThunk<
     if (current.controlPending) return
     const retryOperation =
       control.kind === "retry"
-        ? operationsOf(getState).get(id, control.target.executionId)
+        ? extra.preparedOperations.get(id, control.target.executionId)
         : undefined
     // Inflight intent stays available to Stop; only an unknown receipt permits retry.
     if (
@@ -691,7 +681,7 @@ export const controlConversation = createAsyncThunk<
             await stopAfterAdmission(operation, id, { dispatch, extra })
           } finally {
             operation.inflight = false
-            operationsOf(getState)
+            extra.preparedOperations.prune(getState().conversation.conversations)
           }
           break
         }
@@ -747,12 +737,12 @@ export const stopGenerating = createAsyncThunk<
   void,
   { conversationId?: string } | undefined,
   ThunkConfig
->("conversation/stop", async (input, { dispatch, getState }) => {
+>("conversation/stop", async (input, { dispatch, getState, extra }) => {
   const id = input?.conversationId ?? getState().conversation.activeId
   const current = getState().conversation.conversations.find((item) => item.id === id)
   const executionId = current ? capturedTurn(current.turns) : undefined
   if (!executionId) return
-  const operation = operationsOf(getState).get(id, executionId)
+  const operation = extra.preparedOperations.get(id, executionId)
   const target =
     operation?.prepared.target ??
     (current?.serverConversationId
