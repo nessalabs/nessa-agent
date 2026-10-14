@@ -15,7 +15,7 @@ import {
   type PublishedFile,
   type Turn,
 } from "../model"
-import { ClockProvider } from "./clock"
+import { ClockProvider } from "../../clock"
 import { HeldFilesProvider } from "./held-files"
 import { Transcript } from "./transcript"
 

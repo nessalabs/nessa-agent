@@ -10,7 +10,7 @@ import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { isMac } from "../../../adapters/platform"
 import { chordEvent } from "../../../model/keyboard"
-import { ClockProvider } from "../../adapters/dom/clock"
+import { ClockProvider } from "../../../../clock"
 import {
   closePane,
   focusPane,

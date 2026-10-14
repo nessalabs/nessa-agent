@@ -13,7 +13,7 @@ import {
   followConversation,
 } from "../../../../src/conversation/testing"
 import { App } from "../../../../src/panel/ui/app"
-import { ClockProvider } from "../../../../src/conversation/ui/clock"
+import { ClockProvider } from "../../../../src/clock"
 import { createAttachmentResources } from "../../../../src/panel/adapters/attachment-resources"
 import { ConversationReadFailedError } from "../../../../src/conversation/testing"
 import { sendDraft } from "../../../../src/conversation/adapters/store/slice"

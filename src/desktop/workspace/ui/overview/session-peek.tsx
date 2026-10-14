@@ -6,7 +6,7 @@ import {
 } from "react"
 import { DesktopIcon } from "../../../ui/icons"
 import { tooltip } from "../../../ui/tooltip"
-import { useNow } from "../../adapters/dom/clock"
+import { useNow } from "../../../../clock"
 import { labelOf } from "../../adapters/dom/shortcuts"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import {

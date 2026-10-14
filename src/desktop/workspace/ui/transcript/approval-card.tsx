@@ -1,6 +1,6 @@
 import { deadlinePendingLine } from "@nessa/client"
 import { memo } from "react"
-import { useNow } from "../../adapters/dom/clock"
+import { useNow } from "../../../../clock"
 import { DesktopIcon } from "../../../ui/icons"
 import { approve, deny } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"

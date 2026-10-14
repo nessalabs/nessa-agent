@@ -10,7 +10,7 @@ import {
   type Note,
   type Turn,
 } from "../model"
-import { ClockProvider } from "./clock"
+import { ClockProvider } from "../../clock"
 import { Transcript } from "./transcript"
 
 class TestResizeObserver {

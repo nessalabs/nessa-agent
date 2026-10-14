@@ -18,7 +18,7 @@ import {
   selectPaneSession,
 } from "../../adapters/store/selectors"
 import { workspaceActions } from "../../adapters/store/slice"
-import { ClockProvider } from "../../adapters/dom/clock"
+import { ClockProvider } from "../../../../clock"
 import { emptyTranscript } from "../../model/transcript"
 import { fakeSource, settle, shownBy, summary, testStore } from "../../testing"
 import { Pane } from "./pane"
