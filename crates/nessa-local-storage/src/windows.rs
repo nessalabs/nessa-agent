@@ -13,7 +13,7 @@ use std::{
         io::{AsRawHandle, FromRawHandle},
     },
     path::{Component, PathBuf, Prefix},
-    ptr::{null, null_mut},
+    ptr::{addr_of_mut, null, null_mut},
 };
 use windows_sys::Win32::{
     Foundation::*,
@@ -459,6 +459,42 @@ pub fn sync_directory_beneath(root: &Path, relative: &Path) -> io::Result<()> {
         verify_directory(&root.join(relative))
     }
 }
+fn rename_file(file: &File, to: &Path, replace: bool) -> io::Result<()> {
+    let name = wide(to)?;
+    let name_bytes = name
+        .len()
+        .checked_sub(1)
+        .and_then(|length| length.checked_mul(size_of::<u16>()))
+        .and_then(|length| u32::try_from(length).ok())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "destination is too long"))?;
+    let bytes = std::mem::offset_of!(FILE_RENAME_INFO, FileName)
+        .checked_add(name.len().checked_mul(size_of::<u16>()).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "destination is too long")
+        })?)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "destination is too long"))?;
+    let buffer_bytes = u32::try_from(bytes)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "destination is too long"))?;
+    let words = bytes.div_ceil(size_of::<usize>());
+    let mut buffer = vec![0usize; words];
+    let rename = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    unsafe {
+        (*rename).Anonymous.ReplaceIfExists = replace;
+        (*rename).RootDirectory = null_mut();
+        (*rename).FileNameLength = name_bytes;
+        std::ptr::copy_nonoverlapping(
+            name.as_ptr(),
+            addr_of_mut!((*rename).FileName).cast::<u16>(),
+            name.len(),
+        );
+        check(SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileRenameInfo,
+            rename.cast(),
+            buffer_bytes,
+        ))
+    }
+}
+
 pub fn replace(from: &Path, to: &Path) -> io::Result<()> {
     check_parents(from)?;
     check_parents(to)?;
