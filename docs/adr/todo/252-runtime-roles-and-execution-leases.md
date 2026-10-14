@@ -194,20 +194,29 @@ Environments lane, in order:
   [173](../done/173-fetch-agent-runtimes.md), is [#734](https://github.com/nessalabs/nessa-agent/issues/734).
   *Gate:* install refuses on fingerprint or version mismatch; macOS and
   Linux hosts verified.
-- [ ] **G. Per-conversation Read grants** ([#704](https://github.com/nessalabs/nessa-agent/issues/704)). A Cedar grant
+- [x] **G. Per-conversation Read grants** ([#704](https://github.com/nessalabs/nessa-agent/issues/704);
+  merged in [#720](https://github.com/nessalabs/nessa-agent/pull/720)). A Cedar grant
   on one conversation id for a paired device or peer. *Gate:* an ungranted
   id is invisible; revocation ends the next read.
-- [ ] **H. Peer gateway as a `gateway` principal kind** ([#705](https://github.com/nessalabs/nessa-agent/issues/705)).
-  Device pairing reused; a peer reads what it is granted. *Gate:* same
-  enrollment and listener; one new principal kind; a peer cannot hold both
-  authorities over one conversation. The granting side (enrollment under a
-  peer class, the `gateway` kind and what it can hold, revocation) is its
-  first part ([peer gateways](../../design/auth/peer-gateways.md)); a peer
-  reading only what it is granted is part 2a; the peer side follows.
+- [x] **H. Peer gateway as a `gateway` principal kind** ([#705](https://github.com/nessalabs/nessa-agent/issues/705)).
+  Device pairing reused; a peer reads what it is granted, directly or through
+  the relay. *Gate:* same enrollment and listener; one new principal kind; a
+  peer cannot hold both authorities over one conversation. Merged as the
+  granting side ([#725](https://github.com/nessalabs/nessa-agent/pull/725)),
+  reads behind the share grants
+  ([#728](https://github.com/nessalabs/nessa-agent/pull/728)), the dialing
+  client ([#729](https://github.com/nessalabs/nessa-agent/pull/729)),
+  enrollment ([#731](https://github.com/nessalabs/nessa-agent/pull/731)) and
+  the poller ([#738](https://github.com/nessalabs/nessa-agent/pull/738));
+  relay reads are [#266](https://github.com/nessalabs/nessa-agent/issues/266).
+  Design: [peer gateways](../../design/auth/peer-gateways.md). Local
+  discovery stays unresolved, with slice I.
 - [ ] **I. Environment grants to peers; outbound environment connection;
   local discovery** ([#706](https://github.com/nessalabs/nessa-agent/issues/706)). *Gate:* the peer admits and may
   narrow under its policy; narrowed grants recorded; lease ends on revoke;
-  relay fallback converges to the same checkpoint.
+  relay fallback converges to the same checkpoint. The relay half landed
+  with [#266](https://github.com/nessalabs/nessa-agent/issues/266). Local
+  discovery is still unresolved and has no issue of its own yet.
 - [ ] **J. Drive role and tool policy per person** ([#707](https://github.com/nessalabs/nessa-agent/issues/707);
   depends on the 0014 hook runtime under
   [#130](https://github.com/nessalabs/nessa-agent/issues/130) and 0011
