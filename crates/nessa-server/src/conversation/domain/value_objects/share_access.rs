@@ -11,7 +11,7 @@
 //!                                  └──command_hosts──▶ CommandHosts
 //! ```
 
-use nessa_sdk::domain::agent_execution::leases::EnvironmentRef;
+use nessa_sdk::domain::agent_execution::leases::{EnvironmentRef, SshDestination};
 use std::collections::BTreeSet;
 
 /// How much a share lets its holder do. What each role allows is the
@@ -103,24 +103,21 @@ pub enum ToolChoice {
 /// gateway's. Whether a host is used is the command policy's, which Cedar
 /// answers; this value only checks the names' shape, length and number.
 ///
-/// A host is bounded like a pattern: each is at most
-/// [`Self::MAX_HOST_BYTES`], which JSON writes in no more bytes than the
-/// longest pattern, and a policy's hosts and patterns together are at most
-/// [`ToolPolicy::MAX_ENTRIES`], so a host takes a pattern's room. Whether
-/// every grant of a conversation still fits one `conversation.shares` frame
-/// is measured, not argued: row J10's test builds the largest answer, hosts
-/// and all, and checks it.
+/// A host is at most [`Self::MAX_HOST_BYTES`], the longest SSH destination
+/// `config.json` accepts ([`SshDestination::MAX_BYTES`]), and a policy names
+/// at most [`Self::MAX_HOSTS`] of them, apart from its patterns. Whether one
+/// page of grants still fits one `conversation.shares` frame is measured,
+/// not argued: row J10's test builds a full page at that largest policy,
+/// hosts and all, and checks it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CommandHosts(BTreeSet<String>);
 
 impl CommandHosts {
     /// The most hosts one grant names.
     pub const MAX_HOSTS: usize = 16;
-    /// The longest host a grant names, in bytes: twice the longest pattern,
-    /// since a host has nothing JSON escapes and a pattern may be all
-    /// quotes. Room for a `peer:` name and most SSH destinations, though a
-    /// configured destination may be longer.
-    pub const MAX_HOST_BYTES: usize = 2 * ToolRules::MAX_RULE_BYTES;
+    /// The longest host a grant names, in bytes: the longest SSH destination
+    /// `config.json` accepts. A `peer:` name is shorter.
+    pub const MAX_HOST_BYTES: usize = SshDestination::MAX_BYTES;
 
     /// No hosts: a grant's turns run no commands.
     pub const fn none() -> Self {
@@ -173,10 +170,6 @@ pub struct ToolPolicy {
 }
 
 impl ToolPolicy {
-    /// The most patterns and hosts one policy holds together: as many as its
-    /// two pattern lists hold when full.
-    pub const MAX_ENTRIES: usize = 2 * ToolRules::MAX_RULES;
-
     /// `preset`, on no command hosts.
     pub const fn preset(preset: ToolPreset) -> Self {
         Self {
@@ -193,21 +186,14 @@ impl ToolPolicy {
         }
     }
 
-    /// This policy, with its turns' commands run on `hosts` only; refused
-    /// [`ToolPolicyError::TooManyHosts`] when its patterns and `hosts`
-    /// together are more than [`Self::MAX_ENTRIES`].
-    pub fn with_command_hosts(self, hosts: CommandHosts) -> Result<Self, ToolPolicyError> {
-        let patterns = match &self.tools {
-            ToolChoice::Preset(_) => 0,
-            ToolChoice::Rules(rules) => rules.allow.len() + rules.deny.len(),
-        };
-        if patterns + hosts.names().len() > Self::MAX_ENTRIES {
-            return Err(ToolPolicyError::TooManyHosts);
-        }
-        Ok(Self {
+    /// This policy, with its turns' commands run on `hosts` only. Hosts are
+    /// not counted against its patterns: both lists may be full and `hosts`
+    /// may still name [`CommandHosts::MAX_HOSTS`].
+    pub fn with_command_hosts(self, hosts: CommandHosts) -> Self {
+        Self {
             command_hosts: hosts,
             ..self
-        })
+        }
     }
 
     /// Which tools its turns may call.
@@ -233,8 +219,7 @@ pub enum ToolPolicyError {
     /// An empty pattern, one with surrounding whitespace, or one holding a
     /// control character.
     MalformedRule,
-    /// More than [`CommandHosts::MAX_HOSTS`] command hosts, or more hosts
-    /// and patterns together than [`ToolPolicy::MAX_ENTRIES`].
+    /// More than [`CommandHosts::MAX_HOSTS`] command hosts.
     TooManyHosts,
     /// A command host that is no SSH destination or `peer:` name, `here`,
     /// one longer than [`CommandHosts::MAX_HOST_BYTES`], or one named twice.

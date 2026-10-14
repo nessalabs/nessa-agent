@@ -5428,7 +5428,7 @@ impl super::ShareGrants for EveryRevisionHeld {
     fn grants<'a>(
         &'a self,
         _: &'a ConversationId,
-    ) -> super::ConversationFuture<'a, Vec<super::ShareGrant>> {
+    ) -> super::ConversationFuture<'a, super::ShareGrantList> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
     fn policy_at<'a>(
@@ -5667,14 +5667,12 @@ fn on_hosts(
     policy: crate::conversation::domain::ToolPolicy,
     hosts: &[&str],
 ) -> crate::conversation::domain::ToolPolicy {
-    policy
-        .with_command_hosts(
-            crate::conversation::domain::CommandHosts::new(
-                hosts.iter().map(|host| (*host).to_owned()).collect(),
-            )
-            .unwrap(),
+    policy.with_command_hosts(
+        crate::conversation::domain::CommandHosts::new(
+            hosts.iter().map(|host| (*host).to_owned()).collect(),
         )
-        .unwrap()
+        .unwrap(),
+    )
 }
 
 /// ADR 803 step 4: a Drive grant's turn whose policy allows `run` runs a
@@ -5947,7 +5945,7 @@ impl super::ShareGrants for NoEntry {
     fn grants<'a>(
         &'a self,
         _: &'a ConversationId,
-    ) -> super::ConversationFuture<'a, Vec<super::ShareGrant>> {
+    ) -> super::ConversationFuture<'a, super::ShareGrantList> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
     fn policy_at<'a>(
@@ -6013,7 +6011,7 @@ impl super::ShareGrants for PausingGrants {
     fn grants<'a>(
         &'a self,
         id: &'a ConversationId,
-    ) -> super::ConversationFuture<'a, Vec<super::ShareGrant>> {
+    ) -> super::ConversationFuture<'a, super::ShareGrantList> {
         self.inner.grants(id)
     }
     fn policy_at<'a>(
@@ -6064,6 +6062,7 @@ async fn grant_drive(harness: &Harness, receiver: &str) -> u64 {
     super::ShareGrants::grants(&*harness.metadata, &harness.id)
         .await
         .unwrap()
+        .grants
         .into_iter()
         .find(|grant| grant.receiver_id == receiver)
         .expect("the grant")
@@ -6352,8 +6351,13 @@ impl super::ShareGrants for SecondHoldRevokes {
     fn grants<'a>(
         &'a self,
         _: &'a ConversationId,
-    ) -> super::ConversationFuture<'a, Vec<super::ShareGrant>> {
-        Box::pin(async { Ok(Vec::new()) })
+    ) -> super::ConversationFuture<'a, super::ShareGrantList> {
+        Box::pin(async {
+            Ok(super::ShareGrantList {
+                grants: Vec::new(),
+                change_revision: 0,
+            })
+        })
     }
     fn policy_at<'a>(
         &'a self,
@@ -6706,6 +6710,7 @@ async fn a_grant_change_waits_until_the_turn_is_saved() {
     assert!(super::ShareGrants::grants(&*harness.metadata, &harness.id)
         .await
         .unwrap()
+        .grants
         .is_empty());
 }
 
@@ -6743,6 +6748,7 @@ async fn a_stalled_save_on_one_conversation_does_not_block_another() {
     let other_revision = super::ShareGrants::grants(&*harness.metadata, &other)
         .await
         .unwrap()
+        .grants
         .into_iter()
         .find(|grant| grant.receiver_id == "phone")
         .expect("the other grant")

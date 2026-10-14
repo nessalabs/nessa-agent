@@ -1643,8 +1643,8 @@ use.
 
 `share-dialog.mjs` opens the dev server's page with `?gateway` against a
 scripted product session that lists one conversation already shared Drive
-with one linked device, and answers `conversation.shares`, `.share`,
-`.unshare`, `credential.list` and `agents.list` (four command hosts). It runs
+with one linked device, and answers `conversation.shares` a page at a time,
+`.share`, `.unshare`, `credential.list` and `agents.list` (four command hosts). It runs
 in Chromium and WebKit. The rules are the gateway's; the dialog's order is
 the table in `docs/design/read-grants.md` › "Dialog state and order".
 
@@ -1659,10 +1659,10 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
   "2 of 16"; the notice says "Shared."; the
   notes say what a policy does not stop (unasked calls, hosts named and
   allowed or nowhere, Ask mode / hooks off / not OpenCode).
-- [ ] **The hosts are held to the room the tool patterns leave.** _Check:_
-  `budget`. 29 patterns: "3 of 3", the 4th host unavailable; a 30th pattern:
-  the count reads "3 selected, room for 2" and Share is held with "Too many
-  hosts…"; nothing sent.
+- [ ] **The hosts keep their own bound however full the tool patterns are.**
+  _Check:_ `budget`. Both pattern lists full (16 and 16): "4 of 16", Share
+  able to send; nothing sent. A host past the byte bound stays unavailable
+  in `share-dialog.test.tsx`.
 - [ ] **A refusal is said in words, never a wire code.** _Check:_ `refusal`,
   and every step's scan for codes.
 - [ ] **While a change is on its way, and the read after it, the form,

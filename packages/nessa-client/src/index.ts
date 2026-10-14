@@ -339,6 +339,7 @@ export type {
   ConversationPermissionSelectionState,
   ConversationShare,
   ConversationShareResult,
+  ConversationSharesCursor,
   ConversationSharesResult,
   ConversationToolPolicy,
 } from "./generated/product.js"
@@ -347,7 +348,7 @@ export {
   ConversationShareRole,
   ConversationToolPreset,
 } from "./generated/product.js"
-export { toolPolicyBounds } from "./protocol/conversation-validate.js"
+export { sharePage, toolPolicyBounds } from "./protocol/conversation-validate.js"
 export { conversationErrorCode } from "./application/conversation-error-code.js"
 export type { ConversationLease } from "./generated/product.js"
 export {

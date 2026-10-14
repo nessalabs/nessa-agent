@@ -2,8 +2,8 @@
 /**
  * The share dialog as drawn: the grants and what each holds, a share and a
  * revoke sent once each and the list read again, every refusal in words and
- * never a wire code, the hosts held to the room the patterns leave, and the
- * notes on what a policy does not stop.
+ * never a wire code, the hosts held to their own bound however full the
+ * patterns are, and the notes on what a policy does not stop.
  */
 import { act, StrictMode } from "react"
 import { createRoot, type Root } from "react-dom/client"
@@ -259,8 +259,8 @@ describe("the share dialog", () => {
     )
   })
 
-  it("holds the host list to the room the patterns leave", async () => {
-    const limits = { patterns: 16, hosts: 3, hostBytes: 8, entries: 4 }
+  it("keeps every fitting host available however full the patterns are", async () => {
+    const limits = { patterns: 16, hosts: 4, hostBytes: 8 }
     const memory = inMemorySharing({
       now: testNow,
       commandHosts: ["a", "b", "c", "much-too-long"],
@@ -277,16 +277,17 @@ describe("the share dialog", () => {
     expect(tooLong.closest("[data-slot=checkbox-list-row]")?.textContent).toContain(
       "Name too long for a grant",
     )
+    expect(tooLong.disabled || tooLong.getAttribute("aria-disabled") === "true").toBe(
+      true,
+    )
     for (const box of hostBoxes().slice(0, 3)) await click(box)
     expect(hostBoxes().filter((box) => box.checked)).toHaveLength(3)
     await choose("[data-share-presets]", "Custom")
-    expect(find("[data-share-reason]").textContent).toContain("Name at least one tool")
-    // Two patterns leave room for two hosts of the four entries.
-    await type(find<HTMLInputElement>('[data-share-pattern="allow"]'), "Read, Grep")
-    expect(find("[data-share-hosts]").textContent).toContain("3 selected, room for 2")
-    expect(find("[data-share-reason]").textContent).toContain("Too many hosts")
-    expect(submit().disabled).toBe(true)
-    await click(box(2))
+    const many = (count: number, name: string) =>
+      Array.from({ length: count }, (_, at) => `${name}${at}`).join(", ")
+    await type(find<HTMLInputElement>('[data-share-pattern="allow"]'), many(16, "Allow"))
+    await type(find<HTMLInputElement>('[data-share-pattern="deny"]'), many(16, "Deny"))
+    expect(find("[data-share-hosts]").textContent).toContain("3 of 4 selected")
     expect(dialog()?.querySelector("[data-share-reason]")).toBeNull()
     expect(submit().disabled).toBe(false)
   })
