@@ -5208,6 +5208,12 @@ impl GatewayReconciliationJournalSession for DeferredPublicationJournal {
                 before: intent.before().cloned(),
             },
         )?;
+        // The stop claim requires the effect plan at sequence 1, which is
+        // what the file journal produces after the intent. Consume that slot.
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            let _ = self.record_receipt(LifecycleRecordKind::Intent);
+        }
         Ok(())
     }
 
