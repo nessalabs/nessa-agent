@@ -112,6 +112,7 @@ export function useAttachmentUploads(
   }, [chat, resources, digest, pump])
   return {
     /** Try a failed upload again. The effect above picks it up from there. */
-    retry: (fileId: string) => chat.changeUpload({ fileId, to: "not-started" }),
+    retry: (fileId: string) =>
+      chat.changeUpload({ conversationId: chat.active.id, fileId, to: "not-started" }),
   }
 }

@@ -54,7 +54,7 @@ it("marks the file uploading, then hashes and stages exactly the original bytes"
   const original = blob(18 * 1024 * 1024)
   const { all, changes } = ports(original)
   await uploadImage(file, all, live())
-  expect(changes).toEqual([{ fileId: "f", to: "uploading" }])
+  expect(changes).toEqual([{ conversationId: "c0", fileId: "f", to: "uploading" }])
   expect(all.digest).toHaveBeenCalledExactlyOnceWith(original)
   expect(all.stage).toHaveBeenCalledExactlyOnceWith(
     {
@@ -85,7 +85,7 @@ describe("a tile removed while its upload is in flight", () => {
     await running
     expect(all.stage).not.toHaveBeenCalled()
     // No state is written for a file that is no longer there.
-    expect(changes).toEqual([{ fileId: "f", to: "uploading" }])
+    expect(changes).toEqual([{ conversationId: "c0", fileId: "f", to: "uploading" }])
   })
 
   it("stops quietly when hashing a removed file's bytes fails", async () => {
@@ -115,8 +115,8 @@ it.each([
     const { all, changes } = ports(original)
     await uploadImage(file, all, live())
     expect(changes).toEqual([
-      { fileId: "f", to: "uploading" },
-      { fileId: "f", to: "failed", reason: "unreadable" },
+      { conversationId: "c0", fileId: "f", to: "uploading" },
+      { conversationId: "c0", fileId: "f", to: "failed", reason: "unreadable" },
     ])
     expect(all.digest).not.toHaveBeenCalled()
     expect(all.stage).not.toHaveBeenCalled()
@@ -128,7 +128,12 @@ it("fails as unreadable, and never rejects, when hashing throws", async () => {
     digest: () => Promise.reject(new Error("no subtle crypto")),
   })
   await expect(uploadImage(file, all, live())).resolves.toBeUndefined()
-  expect(changes.at(-1)).toEqual({ fileId: "f", to: "failed", reason: "unreadable" })
+  expect(changes.at(-1)).toEqual({
+    conversationId: "c0",
+    fileId: "f",
+    to: "failed",
+    reason: "unreadable",
+  })
   expect(all.stage).not.toHaveBeenCalled()
 })
 
@@ -174,7 +179,7 @@ it("stages nothing once the tile was taken away while its bytes were being hashe
   hashing.resolve(DIGEST)
   await uploading
   expect(all.stage).not.toHaveBeenCalled()
-  expect(changes).toEqual([{ fileId: "f", to: "uploading" }])
+  expect(changes).toEqual([{ conversationId: "c0", fileId: "f", to: "uploading" }])
 })
 
 it("hands the signal that stops it to the transfer", async () => {
@@ -183,3 +188,42 @@ it("hands the signal that stops it to the transfer", async () => {
   await uploadImage(file, all, stopping.signal)
   expect(all.stage).toHaveBeenCalledExactlyOnceWith(expect.anything(), stopping.signal)
 })
+
+it.each(["success", "failure"] as const)(
+  "UP2: %s after hashing preserves the originally captured parent and file",
+  async (outcome) => {
+    const hashing = deferred<string>()
+    const { all, changes } = ports(blob(3), { digest: () => hashing.promise })
+    const original: Parameters<typeof uploadImage>[0] = { ...file }
+    const pending = uploadImage(original, all, live())
+    original.conversationId = "c1"
+    original.id = "other"
+    if (outcome === "success") hashing.resolve(DIGEST)
+    else hashing.reject(new Error("hash failed"))
+    await pending
+    expect(changes[0]).toEqual({ conversationId: "c0", fileId: "f", to: "uploading" })
+    if (outcome === "success")
+      expect(all.stage).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId: "c0", fileId: "f" }),
+        expect.any(AbortSignal),
+      )
+    else
+      expect(changes.at(-1)).toEqual({
+        conversationId: "c0",
+        fileId: "f",
+        to: "failed",
+        reason: "unreadable",
+      })
+  },
+)
+
+function uploadProgressTypeChecks() {
+  // @ts-expect-error Progress cannot discard its enclosing conversation.
+  const missingParent: Parameters<UploadPorts["change"]>[0] = {
+    fileId: "f",
+    to: "failed",
+    reason: "unreadable",
+  }
+  return missingParent
+}
+void uploadProgressTypeChecks

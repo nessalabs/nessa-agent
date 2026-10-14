@@ -21,6 +21,10 @@ callers when moving files. Review the resulting tree and verify affected links
 and checks before considering the change complete. A new folder alone does not
 establish an architectural boundary.
 
+Upload progress is owned by the conversation application and carries its local
+conversation and file together; see [upload targets](design/upload-targets.md).
+The panel carries that target through hashing and the store through staging.
+
 ## Today
 
 Nessa has a Rust desktop host (window, tray, settings, OS integration), a React
