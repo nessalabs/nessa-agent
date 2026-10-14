@@ -73,7 +73,7 @@ impl SessionSaveGeneration {
     /// ```
     /// use nessa_sdk::application::agent_execution::sessions::SessionSaveGeneration;
     /// use nessa_sync::replication::domain::Id;
-    /// let binding = SessionSaveGeneration::record(Id::new("chat")?, [1;16], 8, 3);
+    /// let binding = SessionSaveGeneration::record(Id::new("chat").unwrap(), [1;16], 8, 3);
     /// assert_eq!((binding.base(), binding.generation()), (8, 3));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
