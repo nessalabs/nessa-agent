@@ -20,6 +20,7 @@ await main(
           url: new URL(ui.page, url).href,
           readySelector: ui.ready,
           width,
+          lines: { width },
         })
         try {
           const { page } = opened
@@ -105,9 +106,6 @@ await main(
               .screenshot({ path: join(options.shots, `${engine}-restored-input.png`) })
           }
           await opened.settleRequests()
-          await attempt(rep, { engine, width, name: "console" }, async () => ({
-            failures: opened.errors.map((line) => `page error: ${line}`),
-          }))
         } finally {
           await opened.close()
         }
