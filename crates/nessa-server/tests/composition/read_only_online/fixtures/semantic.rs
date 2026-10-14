@@ -111,6 +111,7 @@ pub(super) fn prepare(
 pub(super) fn catalog() -> AgentsListResult {
     serde_json::from_value(json!({
         "environments": [],
+        "commandHosts": [],
         "agents": [{
             "agent": "claude",
             "defaultModel": "test",
