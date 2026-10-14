@@ -233,13 +233,6 @@ function draftPatterns(draft: ShareDraft): { allow: string[]; deny: string[] } {
   }
 }
 
-/** The patterns a custom draft names, together; none for a preset. */
-export function draftPatternCount(draft: ShareDraft): number {
-  if (draft.preset !== "custom") return 0
-  const { allow, deny } = draftPatterns(draft)
-  return allow.length + deny.length
-}
-
 /** Why a draft cannot be sent yet. */
 export type DraftHold =
   "no-target" | "changed" | "no-pattern" | "too-many-patterns" | "too-many-hosts"

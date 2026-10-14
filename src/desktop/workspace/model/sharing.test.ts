@@ -7,7 +7,6 @@ import {
   draftRestarted,
   draftSettled,
   draftFromGrant,
-  draftPatternCount,
   emptyDraft,
   hostFits,
   patternCount,
@@ -178,7 +177,6 @@ describe("a draft from a grant", () => {
     })
     const draft = draftFromGrant(comma)
     expect(draft).toMatchObject({ basis: 2, preset: "custom", allow: "mcp__a,b, Read" })
-    expect(draftPatternCount(draft)).toBe(2)
     expect(requestFrom(draft, [comma], limits)).toMatchObject({
       request: { policy: { allow: ["mcp__a,b", "Read"] } },
     })

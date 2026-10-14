@@ -2,8 +2,8 @@
 /**
  * The share dialog as drawn: the grants and what each holds, a share and a
  * revoke sent once each and the list read again, every refusal in words and
- * never a wire code, the hosts held to the room the patterns leave, and the
- * notes on what a policy does not stop.
+ * never a wire code, the hosts held to their own bound however full the
+ * patterns are, and the notes on what a policy does not stop.
  */
 import { act, StrictMode } from "react"
 import { createRoot, type Root } from "react-dom/client"
