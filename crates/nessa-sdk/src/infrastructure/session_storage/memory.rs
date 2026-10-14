@@ -1,8 +1,7 @@
 use crate::application::agent_execution::sessions::{
     CommittedCompleteness, CommittedFreshness, CommittedSession, CommittedStatus, SessionLoad,
-    SessionLoadState, SessionSaveBackend, SessionSaveGeneration, SessionSaveReceipt,
-    SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
-    StorageFuture,
+    SessionLoadState, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit, SessionSnapshot,
+    SessionStorage, SessionStorageLease, StorageError, StorageFuture,
 };
 use crate::domain::agent_execution::sessions::SessionId;
 use sha2::{Digest, Sha256};
@@ -36,14 +35,7 @@ impl Default for Entry {
 }
 impl Entry {
     fn binding(&self, id: &SessionId) -> SessionSaveGeneration {
-        SessionSaveGeneration::new(
-            SessionSaveBackend::Snapshot {
-                session: id.clone(),
-                incarnation: self.incarnation,
-            },
-            self.revision,
-            self.revision,
-        )
+        SessionSaveGeneration::snapshot(id.clone(), self.incarnation, self.revision)
     }
 }
 
