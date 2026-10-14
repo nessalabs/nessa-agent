@@ -1154,7 +1154,7 @@ sequenceDiagram
   authority over the records' order: it gives each record its `sequence`
   (from 1 in each process), id and `observedAtMs` the moment it is handed
   over, under the same lock that puts it on a bounded queue
-  (`AUDIT_QUEUE`, 64, a row of [`limits.md`](../../limits.md)), and one
+  (`AUDIT_QUEUE`, a row of [`limits.md`](../../limits.md)), and one
   writer thread writes the queue in that order. A full queue refuses the
   record at once rather than wait; a refused record uses up its sequence,
   so a gap in the files is a refusal the log names. Stopping native pairing
@@ -1247,7 +1247,8 @@ sequenceDiagram
     P-->>O: the record set, if no enroll, forget, or relay holds it; no read is stopped
     P->>U: each change as it is made (status, reset, conversations withdrawn): queued, in turn order
     P->>P: give back the turn, keep the read slot
-    P->>U: wait for those records, all within one AUDIT_DEADLINE
+    P->>U: log each record at AUDIT_DEADLINE
+    P->>P: keep the read slot until those records leave the queue, or the poller stops
     P->>P: free the read slot
 ```
 
@@ -1328,10 +1329,12 @@ sequenceDiagram
   when the gateway is built, to leave as long again for local writes. The
   cycle only hands its audit records over under the turn, which queues them
   at once, and waits for them after it gives the turn back, so a slow audit
-  never counts against `PREEMPT`. It keeps its read slot until those answers
-  come or `AUDIT_DEADLINE` passes, so another cycle does not enqueue while
-  they are still queued. Only another owner command, or a stopped
-  cycle that does not give the turn back within `PREEMPT`, answers
+  never counts against `PREEMPT`. It logs each record at `AUDIT_DEADLINE`
+  and keeps its read slot until those records leave the queue, or the poller
+  stops, so another cycle does not enqueue while they are still queued
+  (`a_read_slot_stays_until_queued_records_leave`). Only another owner
+  command, or a stopped cycle that does not give the turn back within
+  `PREEMPT`, answers
   `peer_busy`. The stopped read carries on at the next cycle.
 - **Revocation ends reading.** A Terminal or Unclaimed status removes the
   peer's cache and then marks the record `revoked`, both under the records'
@@ -1366,14 +1369,14 @@ sequenceDiagram
   Each record goes to `PeerCommands::poller_changed` as the step ends,
   while the cycle still holds the turn, and the audit queues it at once; so
   the records are in the order the turn was held, and a change the cycle
-  made comes before the owner command that stopped it.   The cycle waits for
-  their answers once it has given back the turn, still holding its read
-  slot, all within one
-  `AUDIT_DEADLINE`. An owner command's own record waits behind those
-  ahead of it in the queue, within its own `AUDIT_DEADLINE`: a stalled
-  store answers it `peer_audit_unavailable`, never holds it longer. A
-  record not kept is logged as an error and the change stands: cleanup is
-  never held back or undone for its evidence.
+  made comes before the owner command that stopped it. The cycle logs each
+  answer at one `AUDIT_DEADLINE` once it has given back the turn, and it
+  keeps its read slot until those records leave the queue or the poller
+  stops (`a_read_slot_stays_until_queued_records_leave`). An owner command's
+  own record waits behind those ahead of it in the queue, within its own
+  `AUDIT_DEADLINE`: a stalled store answers it `peer_audit_unavailable`,
+  never holds it longer. A record not kept is logged as an error and the
+  change stands: cleanup is never held back or undone for its evidence.
 
 ```mermaid
 sequenceDiagram
@@ -1460,6 +1463,7 @@ sequenceDiagram
 | R31 | Two peers enrolled, then one grantor's listener stopped | The stopped peer is listed `unreachable`. The other is `synced`. The poller joins | `a_failing_peer_is_reported_and_the_other_is_read` |
 | R32 | `reads_at_once` is 1, and both peers' reads would hold | One peer's read is held. The other has accepted nothing, for longer than a poll tick. Once the held read is released, the waiting peer is read | `a_read_past_the_cap_waits_for_a_slot` |
 | R33 | A read is held, and the interval has not passed; then another peer is enrolled | The directory is not scanned on each tick of the held read. Enrolling the other peer scans it, and that peer is `synced` without waiting out the interval | `a_held_read_lists_when_the_records_change_not_on_every_tick` |
+| R34 | The audit writer is still holding a cycle's records when `AUDIT_DEADLINE` passes; then the poller stops | The cycle keeps its read slot, so a replacement cycle cannot enqueue another batch, and an owner record still fits in the headroom. The change is logged as not kept and stands. A stop releases the slot while the records are still queued, so shutdown can drain the writer. An owner command is still answered at its own deadline (row R18) | `a_read_slot_stays_until_queued_records_leave`; the owner deadline in `a_stalled_audit_never_holds_an_owner_command` |
 
 ## What this part does not do
 
@@ -1489,9 +1493,10 @@ the client and gives the head an access path by receiver
   that tick.   The audit queue holds every cycle that can be enqueueing
   (`READS_AT_ONCE` of them) plus two owner records, so an enroll and a
   forget can both hand their intents over before either is written. A cycle
-  keeps its read slot until its records are answered or the audit deadline
-  passes. A further owner command waits for a place inside the same
-  deadline (`a_second_owner_record_waits_for_the_headroom`). A full queue
+  keeps its read slot until its records have left the queue, or the poller
+  stops (`a_read_slot_stays_until_queued_records_leave`). A further owner
+  command waits for a place inside the same deadline
+  (`a_second_owner_record_waits_for_the_headroom`). A full queue
   still refuses at once (row R22), which is more than that bound handed
   over before the writer drained it.
 - **An enrollment that loses its last reply can leave a pending record.** B

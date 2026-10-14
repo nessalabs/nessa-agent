@@ -5,9 +5,12 @@
 use super::super::audit::DurablePeerAudit;
 use super::*;
 use crate::peer_gateways::application::{
-    CacheState, PeerAudit, PeerAuditRecord, PeerAuditUnavailable, PeerState,
+    CacheState, PeerAudit, PeerAuditRecord, PeerAuditUnavailable, PeerConnectFuture, PeerConnector,
+    PeerState,
 };
+use crate::peer_gateways::infrastructure::{PeerRecords, AUDIT_DEADLINE};
 use futures_util::FutureExt;
+use nessa_auth::application::pairing::{GatewayKeyStore, PrivateKeyMaterial, PrivateStateError};
 use nessa_auth::application::ports::Clock;
 use nessa_auth::domain::PrincipalId;
 use nessa_auth::domain::{
@@ -507,6 +510,116 @@ async fn a_queue_of_64_refuses_two_full_cycles_and_the_sized_queue_keeps_every_c
     );
 }
 
+/// The writer has kept the first record and is stalled on the second, so
+/// the rest of the cycle is still queued. Past [`AUDIT_DEADLINE`] the read
+/// slot stays held, so a replacement cycle cannot enqueue another wave, and
+/// the owner headroom still accepts a record. What is still queued plus
+/// that wave is more than the queue. The first record's answer was already
+/// taken, and waiting on it again would panic. A stop releases the slot
+/// while the writer is still stalled, so shutdown can drain it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_read_slot_stays_until_queued_records_leave() {
+    // The stalled record has been taken out of the queue, and the one
+    // before it has been written.
+    let still_queued = RECORDS_PER_CYCLE - 2;
+    assert!(
+        still_queued + READS_AT_ONCE * RECORDS_PER_CYCLE + AUDIT_HEADROOM > AUDIT_QUEUE,
+        "a replacement wave no longer passes the owner headroom"
+    );
+
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("audit");
+    nessa_local_storage::create_directory(&directory).unwrap();
+    let stall = Stall::at(2);
+    let release = Release(stall.clone());
+    let clock = Arc::new(Manual(AtomicU64::new(0)));
+    let audit = Arc::new(DurablePeerAudit::with_writer_hook(
+        directory,
+        Arc::new(Ticks(AtomicU64::new(1))),
+        clock.clone(),
+        AUDIT_QUEUE,
+        stall.hook(),
+    ));
+    let commands = slot_commands(&root.path().join("gateway"), clock.clone(), audit.clone());
+    let holding = PeerHolding {
+        record: PeerState::Unknown,
+        cache: CacheState::Unknown,
+    };
+    let mut records = Vec::new();
+    for _ in 0..RECORDS_PER_CYCLE {
+        records.push(commands.poller_changed(
+            DeviceKey::new([7; 32]),
+            PollerCause::Approved,
+            holding.clone(),
+            holding.clone(),
+            Ok(()),
+        ));
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !stall.reached.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the writer did not take the first record");
+
+    let reads = Arc::new(Semaphore::new(1));
+    let permit = reads.clone().try_acquire_owned().unwrap();
+    let (stop, mut stopped) = watch::channel(false);
+    let mut held = std::pin::pin!(async {
+        commands.poller_kept(records, &mut stopped).await;
+        drop(permit);
+    });
+    // The deadline is captured on the first poll, while the clock still
+    // stands. The sleep is only so that poll happens before the jump.
+    tokio::select! {
+        biased;
+        _ = &mut held => panic!("the cycle finished before the audit deadline"),
+        () = tokio::time::sleep(WAKE_TICK / 2) => {}
+    }
+    clock
+        .0
+        .fetch_add(AUDIT_DEADLINE.as_millis() as u64, Ordering::SeqCst);
+    tokio::select! {
+        biased;
+        _ = &mut held => panic!(
+            "the read slot was freed at the audit deadline while records were still queued"
+        ),
+        () = tokio::time::sleep(2 * WAKE_TICK) => {}
+    }
+    assert!(
+        reads.try_acquire().is_err(),
+        "a replacement cycle could take the read slot"
+    );
+    for index in 0..AUDIT_HEADROOM {
+        assert!(
+            audit.record(owner_record()).now_or_never().is_none(),
+            "owner record {index} was refused while the cycle still held its slot"
+        );
+    }
+
+    stop.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(2), held)
+        .await
+        .expect("a stop left the read slot held");
+    assert_eq!(
+        reads.available_permits(),
+        1,
+        "a stop did not release the slot"
+    );
+
+    drop(release);
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            audit.drained(Duration::from_secs(20))
+        )
+        .await
+        .is_ok(),
+        "the writer did not finish"
+    );
+}
+
 /// How many of `count` records a stalled writer of `capacity` refuses.
 /// The writer blocks on the first record, so the queue cannot drain.
 async fn refused_while_stalled(capacity: usize, count: usize) -> usize {
@@ -549,15 +662,21 @@ async fn refused_while_stalled(capacity: usize, count: usize) -> usize {
     refused
 }
 
-/// Blocks the writer on the first record until dropped.
+/// Blocks the writer on one record's sequence until dropped.
 struct Stall {
+    at: u64,
     reached: AtomicBool,
     open: Mutex<bool>,
     opened: Condvar,
 }
 impl Stall {
+    /// Block on the first record.
     fn new() -> Arc<Self> {
+        Self::at(1)
+    }
+    fn at(sequence: u64) -> Arc<Self> {
         Arc::new(Self {
+            at: sequence,
             reached: AtomicBool::new(false),
             open: Mutex::new(false),
             opened: Condvar::new(),
@@ -566,7 +685,7 @@ impl Stall {
     fn hook(self: &Arc<Self>) -> Arc<dyn Fn(u64) + Send + Sync> {
         let stall = Arc::clone(self);
         Arc::new(move |sequence| {
-            if sequence != 1 {
+            if sequence != stall.at {
                 return;
             }
             stall.reached.store(true, Ordering::SeqCst);
@@ -596,6 +715,66 @@ impl nessa_protocol::clock::Clock for Manual {
         self.0.load(Ordering::SeqCst)
     }
 }
+fn slot_commands(
+    root: &std::path::Path,
+    clock: Arc<Manual>,
+    audit: Arc<DurablePeerAudit>,
+) -> Arc<PeerCommands> {
+    nessa_local_storage::create_directory(root).unwrap();
+    nessa_local_storage::create_directory_beneath(root, std::path::Path::new("peers")).unwrap();
+    let records = PeerRecords::open(
+        root,
+        std::path::Path::new("peers"),
+        Arc::new(NoKey),
+        AudienceId::new("gateway").unwrap(),
+        Arc::new(Ticks(AtomicU64::new(1))),
+    )
+    .unwrap();
+    Arc::new(PeerCommands::new(
+        Arc::new(records),
+        clock,
+        audit,
+        Arc::new(Refuses),
+        Arc::new(|| {
+            Box::new(nessa_auth::adapters::pairing::OsEntropy)
+                as Box<dyn crate::peer_gateways::infrastructure::EnrollmentEntropy>
+        }),
+    ))
+}
+
+struct NoKey;
+impl GatewayKeyStore for NoKey {
+    fn restore_gateway_key(
+        &self,
+        _: &AudienceId,
+        _: &dyn Clock,
+    ) -> Result<Option<PrivateKeyMaterial>, PrivateStateError> {
+        Ok(None)
+    }
+    fn save_gateway_key(
+        &self,
+        _: &PrivateKeyMaterial,
+        _: &AudienceId,
+        _: &dyn Clock,
+    ) -> Result<(), PrivateStateError> {
+        Err(PrivateStateError::Unavailable)
+    }
+}
+
+struct Refuses;
+impl PeerConnector for Refuses {
+    fn connect(&self, _: std::net::SocketAddr) -> PeerConnectFuture<'_> {
+        Box::pin(async { Err(std::io::ErrorKind::ConnectionRefused.into()) })
+    }
+    fn relay<'a>(
+        &'a self,
+        _: &'a nessa_protocol::relay::RelayAddress,
+        _: nessa_protocol::relay::GatewayKey,
+    ) -> PeerConnectFuture<'a> {
+        Box::pin(async { Err(std::io::ErrorKind::ConnectionRefused.into()) })
+    }
+}
+
 fn owner_record() -> PeerAuditRecord {
     PeerAuditRecord::ForgetRequested {
         operation: uuid::Uuid::new_v4(),

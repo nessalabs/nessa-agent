@@ -1078,11 +1078,25 @@ impl PeerCommands {
             kept,
         }
     }
-    /// Wait for one cycle's records, all within one [`AUDIT_DEADLINE`], and
-    /// log each: kept, or not kept and the change stands. The cleanup a
-    /// record describes is never undone or held back for it, and no owner
-    /// command waits on it: the cycle has already given back the turn.
-    pub(super) async fn poller_kept(&self, mut records: Vec<PollerRecord<'_>>) {
+    /// Log one cycle's records at [`AUDIT_DEADLINE`]: kept, or not kept and
+    /// the change stands. Then wait until each record has left the queue, or
+    /// `stopped` is set. The writer sends the answer after it takes the
+    /// record, so that wait is the read slot's reservation: dropping the
+    /// slot at the deadline would let a replacement cycle enqueue another
+    /// batch while these records are still queued
+    /// (`a_read_slot_stays_until_queued_records_leave`). A stop releases the
+    /// wait because the run loop has ended and shutdown drains the writer.
+    /// The cleanup a record describes is never undone or held back for it,
+    /// and no owner command waits on it: the cycle has already given back
+    /// the turn.
+    ///
+    /// A receiver the deadline already took is spent, and polling it again
+    /// panics. Only the records still unanswered are waited on here.
+    pub(super) async fn poller_kept(
+        &self,
+        mut records: Vec<PollerRecord<'_>>,
+        stopped: &mut watch::Receiver<bool>,
+    ) {
         let mut kept = vec![false; records.len()];
         let answers = (&mut records, &mut kept);
         self.within(AUDIT_DEADLINE, move || async move {
@@ -1091,15 +1105,25 @@ impl PeerCommands {
             }
         })
         .await;
-        for (record, kept) in records.iter().zip(kept) {
+        for (record, kept) in records.iter().zip(&kept) {
             let (peer, operation, cause) = (hex(&record.peer), record.operation, &record.name);
-            if kept {
+            if *kept {
                 tracing::info!(peer = %peer, operation = %operation, cause = %cause,
                     after = ?record.after, outcome = ?record.outcome, "peer gateway poller change");
             } else {
                 tracing::error!(peer = %peer, operation = %operation, cause = %cause,
                     after = ?record.after, outcome = ?record.outcome,
                     "peer gateway poller change not audited; the change stands");
+            }
+        }
+        for (record, kept) in records.iter_mut().zip(kept) {
+            if kept {
+                continue;
+            }
+            tokio::select! {
+                biased;
+                _ = stopped.wait_for(|stop| *stop) => return,
+                _ = &mut record.kept => {}
             }
         }
     }

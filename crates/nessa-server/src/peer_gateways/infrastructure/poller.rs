@@ -20,6 +20,8 @@
 //!   every change above, as it is made --> PeerCommands::poller_changed
 //!                                          (queued by the audit at once)
 //!   give back the turn, still holding the read slot --> PeerCommands::poller_kept
+//!     (logged at AUDIT_DEADLINE; the slot stays until the records leave
+//!      the queue, or the poller stops)
 //!   free the read slot
 //! ```
 //! Arrows are calls, in order. No read happens without a fresh Active
@@ -45,10 +47,11 @@
 //! records to the audit's one writer, which keeps the order they were handed
 //! over.
 //! The cycle waits for the audit's answers only once it has given back the
-//! turn, and it keeps its read slot until those answers come or
-//! [`super::AUDIT_DEADLINE`] passes, so an audit that is slow or stalled
-//! never holds the turn and a further cycle cannot enqueue while these
-//! records are still queued. A stop
+//! turn. It logs each one at [`super::AUDIT_DEADLINE`], and it keeps its
+//! read slot until those records leave the queue or the poller stops
+//! (`a_read_slot_stays_until_queued_records_leave`), so an audit that is
+//! slow or stalled never holds the turn and a further cycle cannot enqueue
+//! while these records are still queued. A stop
 //! during the status wait does not drop the worker's answer: that answer
 //! names an ended enrollment's cause, and the worker may already have
 //! committed the ending. The cycle still does not go on to read.
@@ -108,8 +111,11 @@ pub const WITHDRAWN_PER_READ: usize = 16 * WITHDRAWN_PER_RECORD;
 /// and the two reads around it.
 const RECORDS_PER_CYCLE: usize = 3 + 2 * WITHDRAWN_PER_READ.div_ceil(WITHDRAWN_PER_RECORD);
 /// The queue holds every cycle that can be enqueueing plus
-/// [`AUDIT_HEADROOM`] owner records. A full queue still refuses at once
-/// (design row R22).
+/// [`AUDIT_HEADROOM`] owner records. A cycle keeps its read slot until
+/// those records leave the queue
+/// (`a_read_slot_stays_until_queued_records_leave`), so a slow writer
+/// cannot admit another wave on top of them. A full queue still refuses
+/// at once (design row R22).
 const _: () = assert!(READS_AT_ONCE * RECORDS_PER_CYCLE + AUDIT_HEADROOM <= AUDIT_QUEUE);
 /// How this gateway names itself to a peer's product session.
 const CLIENT_ID: &str = "nessa-peer-gateway";
@@ -232,8 +238,9 @@ struct Shared {
 struct Poller {
     shared: Arc<Shared>,
     /// Places for reads running at once. A cycle holds one from the moment
-    /// it starts until its audit records are answered or the audit deadline
-    /// passes, so at most [`READS_AT_ONCE`] cycles are enqueueing together.
+    /// it starts until its audit records have left the queue, or the poller
+    /// stops, so at most [`READS_AT_ONCE`] cycles are enqueueing together
+    /// (`a_read_slot_stays_until_queued_records_leave`).
     reads: Arc<Semaphore>,
     due: HashMap<DeviceKey, Due>,
     running: JoinSet<Option<Pace>>,
@@ -478,10 +485,11 @@ impl Shared {
 
     /// One peer: under its turn, its record read again, the pinned status,
     /// then a read if it is Active, each change handed to the audit as it is
-    /// made. The turn is given back before the audit's answers are awaited,
-    /// and the read slot is held until they are, or [`super::AUDIT_DEADLINE`]
-    /// passes. `None` when the poller stopped. A failure is this peer's
-    /// pace; it is not the pass's.
+    /// made. The turn is given back before the audit's answers are awaited.
+    /// The read slot stays until those records leave the queue, or this
+    /// poller is stopping
+    /// (`a_read_slot_stays_until_queued_records_leave`). `None` when the
+    /// poller stopped. A failure is this peer's pace; it is not the pass's.
     async fn cycle(&self, key: DeviceKey, permit: OwnedSemaphorePermit) -> Option<Pace> {
         let cycle = CycleStop::new();
         let turn = match self.take_turn(key, &cycle).await {
@@ -491,13 +499,16 @@ impl Shared {
         let mut changes = Vec::new();
         let pace = self.held(key, &cycle, &mut changes).await;
         // The turn is given back first: an audit, however slow, never holds
-        // it. The read slot stays until the answers, so another cycle cannot
-        // enqueue while these records are still queued. The queue holds
-        // every such cycle plus one owner record
-        // (`a_queue_of_64_refuses_two_full_cycles_and_the_sized_queue_keeps_every_cycle_and_an_owner_record`).
-        // The changes stand either way.
+        // it. The read slot stays until the records leave the queue, so
+        // another cycle cannot enqueue while they are still queued. The
+        // queue holds every such cycle plus the owner headroom
+        // (`a_queue_of_64_refuses_two_full_cycles_and_the_sized_queue_keeps_every_cycle_and_an_owner_record`,
+        // `a_read_slot_stays_until_queued_records_leave`). The changes stand
+        // either way. A stop releases the slot: the run loop has ended, so
+        // no replacement cycle starts, and shutdown can drain the writer.
         drop(turn);
-        self.commands.poller_kept(changes).await;
+        let mut stopped = self.stopped.clone();
+        self.commands.poller_kept(changes, &mut stopped).await;
         drop(permit);
         pace
     }
