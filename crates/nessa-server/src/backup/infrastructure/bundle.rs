@@ -3,6 +3,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 
@@ -38,29 +39,59 @@ impl ManifestPublisher for DirectoryPublisher {
 }
 
 fn write_bundle(root: &Path, manifest: &str, records: &[PublishedRecord]) -> Result<(), ()> {
-    let staging = staging(root)?;
-    let _ = fs::remove_dir_all(&staging);
-    fs::create_dir_all(&staging).map_err(|_| ())?;
+    // One directory per attempt. Two publishes of an absent root must not
+    // write the same staging path: admission does not cover publish.
+    let staging = StagedDir::create(root)?;
     for record in records {
-        let path = record_path(&staging, record.store, &record.identity)?;
+        let path = record_path(staging.path(), record.store, &record.identity)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|_| ())?;
         }
         fs::write(&path, &record.bytes).map_err(|_| ())?;
     }
-    fs::write(staging.join("manifest.txt"), manifest).map_err(|_| ())?;
+    fs::write(staging.path().join("manifest.txt"), manifest).map_err(|_| ())?;
     if root.exists() {
-        let _ = fs::remove_dir_all(&staging);
         return Err(());
     }
-    fs::rename(&staging, root).map_err(|_| ())?;
-    Ok(())
+    fs::rename(staging.path(), root).map_err(|_| ())
+}
+
+/// Removed on drop, including when publish fails. A successful rename moves
+/// the directory away, so the drop then finds nothing to remove.
+struct StagedDir {
+    path: PathBuf,
+}
+
+impl StagedDir {
+    fn create(root: &Path) -> Result<Self, ()> {
+        let path = staging(root)?;
+        // The name is this attempt's. A directory already there is a crashed
+        // attempt, not another publish in progress.
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).map_err(|_| ())?;
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for StagedDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
 }
 
 fn staging(root: &Path) -> Result<PathBuf, ()> {
+    static ATTEMPT: AtomicU64 = AtomicU64::new(1);
     let name = root.file_name().ok_or(())?;
     let mut staged = name.to_os_string();
-    staged.push(".partial");
+    staged.push(format!(
+        ".partial-{}-{}",
+        std::process::id(),
+        ATTEMPT.fetch_add(1, Ordering::Relaxed)
+    ));
     Ok(root.with_file_name(staged))
 }
 
@@ -88,4 +119,23 @@ fn encode(value: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_publish_attempt_has_its_own_staging_directory() {
+        let root = Path::new("/tmp/export-cut");
+        let first = staging(root).unwrap();
+        let second = staging(root).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), root.parent());
+        let first_name = first.file_name().unwrap().to_string_lossy();
+        let second_name = second.file_name().unwrap().to_string_lossy();
+        assert!(first_name.starts_with("export-cut.partial-"));
+        assert!(second_name.starts_with("export-cut.partial-"));
+        assert_ne!(first_name, "export-cut.partial");
+    }
 }

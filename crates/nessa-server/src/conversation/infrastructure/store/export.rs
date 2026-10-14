@@ -66,10 +66,18 @@ impl MetadataSnapshot {
         })
     }
 
+    /// Tombstones and revocations from this snapshot.
+    ///
+    /// A row that cannot be decoded or named fails the source. Leaving it
+    /// out would look like a re-grant, and reconciliation would delete a
+    /// fence already stored. [`Self::facts`] still names that row.
     pub fn fences(&self) -> Result<ExportFences, ConversationError> {
         let mut skipped = Vec::new();
         let tombstones = tombstones(&self.connection, &mut skipped)?;
         let revocations = revocation_rows(&self.connection, &mut skipped)?;
+        if !skipped.is_empty() {
+            return Err(ConversationError::Metadata);
+        }
         Ok(ExportFences {
             tombstones,
             revocations,

@@ -1,5 +1,6 @@
 //! A SQLite read snapshot. Opened while admission is held; copied afterwards.
 
+use std::io::Read;
 use std::path::Path;
 
 use nessa_local_database::rusqlite::backup::{Backup, StepResult};
@@ -146,6 +147,14 @@ fn stream_size(connection: &Connection, stream_key: i64) -> Result<u64, ()> {
     u64::try_from(size).map_err(|_| ())
 }
 
+struct DigestRecord {
+    rowid: i64,
+    offset: Vec<u8>,
+    schema_id: String,
+    schema_version: i64,
+    event_id: String,
+}
+
 fn stream_digest(
     connection: &Connection,
     stream_key: i64,
@@ -158,28 +167,66 @@ fn stream_digest(
     hasher.update(incarnation);
     hasher.update(floor);
     hasher.update(tail);
+    // Row heads only. Each payload is hashed from the blob API below, so a
+    // record larger than the session cap is not loaded into one buffer.
+    let records = digest_records(connection, stream_key)?;
+    for record in records {
+        hasher.update(&record.offset);
+        write_prefixed(&mut hasher, record.schema_id.as_bytes())?;
+        hasher.update(record.schema_version.to_be_bytes());
+        write_prefixed(&mut hasher, record.event_id.as_bytes())?;
+        hash_payload(connection, record.rowid, &mut hasher)?;
+    }
+    Ok(hasher.finalize().into())
+}
+
+fn digest_records(connection: &Connection, stream_key: i64) -> Result<Vec<DigestRecord>, ()> {
     let mut statement = connection
         .prepare(
-            "SELECT offset, schema_id, schema_version, event_id, payload
+            "SELECT rowid, offset, schema_id, schema_version, event_id
              FROM event_records WHERE stream_key = ?1 ORDER BY offset",
         )
         .map_err(|_| ())?;
-    let mut rows = statement.query([stream_key]).map_err(|_| ())?;
-    while let Some(row) = rows.next().map_err(|_| ())? {
-        let offset: Vec<u8> = row.get(0).map_err(|_| ())?;
-        let schema_id: String = row.get(1).map_err(|_| ())?;
-        let schema_version: i64 = row.get(2).map_err(|_| ())?;
-        let event_id: String = row.get(3).map_err(|_| ())?;
-        let payload: Vec<u8> = row.get(4).map_err(|_| ())?;
-        hasher.update(&offset);
-        write_prefixed(&mut hasher, schema_id.as_bytes())?;
-        hasher.update(schema_version.to_be_bytes());
-        write_prefixed(&mut hasher, event_id.as_bytes())?;
-        let payload_len = u64::try_from(payload.len()).map_err(|_| ())?;
-        hasher.update(payload_len.to_be_bytes());
-        hasher.update(&payload);
+    let records = statement
+        .query_map([stream_key], |row| {
+            Ok(DigestRecord {
+                rowid: row.get(0)?,
+                offset: row.get(1)?,
+                schema_id: row.get(2)?,
+                schema_version: row.get(3)?,
+                event_id: row.get(4)?,
+            })
+        })
+        .map_err(|_| ())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| ())?;
+    Ok(records)
+}
+
+/// Hash the payload of `rowid` in chunks. `length` is written before the
+/// bytes, which is the same layout as hashing the value in one buffer.
+fn hash_payload(connection: &Connection, rowid: i64, hasher: &mut Sha256) -> Result<(), ()> {
+    let mut blob = connection
+        .blob_open("main", "event_records", "payload", rowid, true)
+        .map_err(|_| ())?;
+    let len = u64::try_from(blob.len()).map_err(|_| ())?;
+    hasher.update(len.to_be_bytes());
+    let mut buf = [0u8; 64 * 1024];
+    let mut hashed = 0u64;
+    loop {
+        let read = blob.read(&mut buf).map_err(|_| ())?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buf[..read]);
+        hashed = hashed
+            .checked_add(u64::try_from(read).map_err(|_| ())?)
+            .ok_or(())?;
     }
-    Ok(hasher.finalize().into())
+    if hashed != len {
+        return Err(());
+    }
+    Ok(())
 }
 
 fn write_prefixed(hasher: &mut Sha256, bytes: &[u8]) -> Result<(), ()> {
@@ -232,5 +279,95 @@ impl Drop for SqliteMalloc {
     fn drop(&mut self) {
         // SAFETY: the pointer came from sqlite3_serialize and is freed once.
         unsafe { ffi::sqlite3_free(self.0.cast()) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_deferred_digest_hashes_each_payload_in_chunks() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE event_records(
+                    stream_key INTEGER NOT NULL,
+                    offset BLOB NOT NULL,
+                    event_id TEXT NOT NULL,
+                    schema_id TEXT NOT NULL,
+                    schema_version INTEGER NOT NULL,
+                    payload BLOB NOT NULL
+                );",
+            )
+            .unwrap();
+        let wide = vec![0xA5u8; 70_000];
+        let offset_wide = [0u8, 0, 0, 0, 0, 0, 0, 1];
+        let offset_zero = [0u8, 0, 0, 0, 0, 0, 0, 2];
+        connection
+            .execute(
+                "INSERT INTO event_records(stream_key, offset, event_id, schema_id, schema_version, payload)
+                 VALUES (7, ?1, 'wide', 'nessa.record', 3, ?2)",
+                nessa_local_database::rusqlite::params![offset_wide.as_slice(), wide.as_slice()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO event_records(stream_key, offset, event_id, schema_id, schema_version, payload)
+                 VALUES (7, ?1, 'zero', 'nessa.record', 4, zeroblob(1000))",
+                [offset_zero.as_slice()],
+            )
+            .unwrap();
+        let incarnation = [9u8; 16];
+        let floor = [1u8; 8];
+        let tail = [2u8; 8];
+        let digest = stream_digest(&connection, 7, &incarnation, &floor, &tail).unwrap();
+        let mut hasher = Sha256::new();
+        hasher.update(b"deferred-session/1");
+        hasher.update(incarnation);
+        hasher.update(floor);
+        hasher.update(tail);
+        expect_record(
+            &mut hasher,
+            Expected {
+                offset: &offset_wide,
+                schema_id: "nessa.record",
+                version: 3,
+                event_id: "wide",
+                payload: &wide,
+            },
+        );
+        let zeros = [0u8; 1000];
+        expect_record(
+            &mut hasher,
+            Expected {
+                offset: &offset_zero,
+                schema_id: "nessa.record",
+                version: 4,
+                event_id: "zero",
+                payload: &zeros,
+            },
+        );
+        let expected: [u8; 32] = hasher.finalize().into();
+        assert_eq!(digest, expected);
+    }
+
+    struct Expected<'a> {
+        offset: &'a [u8],
+        schema_id: &'a str,
+        version: i64,
+        event_id: &'a str,
+        payload: &'a [u8],
+    }
+
+    fn expect_record(hasher: &mut Sha256, record: Expected<'_>) {
+        hasher.update(record.offset);
+        hasher.update(u32::try_from(record.schema_id.len()).unwrap().to_be_bytes());
+        hasher.update(record.schema_id.as_bytes());
+        hasher.update(record.version.to_be_bytes());
+        hasher.update(u32::try_from(record.event_id.len()).unwrap().to_be_bytes());
+        hasher.update(record.event_id.as_bytes());
+        hasher.update(u64::try_from(record.payload.len()).unwrap().to_be_bytes());
+        hasher.update(record.payload);
     }
 }

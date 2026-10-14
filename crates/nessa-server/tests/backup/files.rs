@@ -6,7 +6,9 @@ use std::path::Path;
 
 use async_trait::async_trait;
 
-use crate::backup::application::{ExportClock, ManifestPublisher, MutationAdmission};
+use crate::backup::application::{
+    ExportClock, ManifestPublisher, MutationAdmission, PublishedRecord,
+};
 use crate::backup::domain::{Sensitivity, SkipReason, StoreKind};
 use crate::backup::infrastructure::{
     capture_namespace, jsonl_cut, path_sensitivity, DirectoryPublisher, FileDeletionLog,
@@ -851,6 +853,52 @@ async fn a_failed_export_releases_admission_and_publishes_nothing() {
         .join("manifest.txt")
         .exists());
     assert!(fs::read(root.path().join("blocked")).unwrap() == b"x");
+}
+
+#[tokio::test]
+async fn concurrent_publishes_of_one_root_do_not_mix() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("cut");
+    let publisher = DirectoryPublisher::new(target.clone());
+    let left = vec![PublishedRecord {
+        store: StoreKind::LeaseRecords,
+        identity: "note".into(),
+        bytes: b"left-body".to_vec(),
+    }];
+    let right = vec![PublishedRecord {
+        store: StoreKind::LeaseRecords,
+        identity: "note".into(),
+        bytes: b"right-body".to_vec(),
+    }];
+    let (left_put, right_put) = tokio::join!(
+        publisher.put("LEFT\n", &left),
+        publisher.put("RIGHT\n", &right),
+    );
+    let succeeded = [left_put.is_ok(), right_put.is_ok()]
+        .into_iter()
+        .filter(|ok| *ok)
+        .count();
+    assert_eq!(succeeded, 1);
+    let manifest = fs::read_to_string(target.join("manifest.txt")).unwrap();
+    let body = fs::read(target.join("records/lease-records/note")).unwrap();
+    match manifest.as_str() {
+        "LEFT\n" => assert_eq!(body, b"left-body"),
+        "RIGHT\n" => assert_eq!(body, b"right-body"),
+        other => panic!("published manifest was {other:?}"),
+    }
+    assert!(publisher.put("THIRD\n", &[]).await.is_err());
+    assert_eq!(
+        fs::read_to_string(target.join("manifest.txt")).unwrap(),
+        manifest
+    );
+    let leftover = fs::read_dir(root.path()).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".partial")
+    });
+    assert!(!leftover);
 }
 
 struct PublishedCut {

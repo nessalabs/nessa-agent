@@ -16,7 +16,7 @@ use crate::conversation::application::{
     ConversationRepository, ShareGrantChange, ShareGrantTransition, ShareGrants,
 };
 use crate::conversation::domain::{Conversation, ShareAccess, ShareRole, ToolPolicy, ToolPreset};
-use crate::conversation::infrastructure::LocalConversationStore;
+use crate::conversation::infrastructure::{ExportSkip, LocalConversationStore, MetadataSnapshot};
 use nessa_auth::application::dto::{CredentialGrantDto, CredentialMetadataDto, ResourceDto};
 use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
@@ -230,6 +230,92 @@ async fn a_failed_fence_source_does_not_commit_the_other_source() {
         std::fs::read_to_string(root.join("backup/deletion-inventory.txt")).unwrap_or_default();
     assert!(!log.contains("party"));
     assert!(!log.contains("grant "));
+}
+
+#[tokio::test]
+async fn a_damaged_fence_row_leaves_the_stored_revoke() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let private = root.join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let metadata = private.join("metadata.sqlite3");
+    let store = LocalConversationStore::open(&metadata)
+        .unwrap()
+        .with_access_policy(crate::conversation_test_support::access_policy());
+    let kept = new_id();
+    let damaged = new_id();
+    store.create(owned(&kept)).await.unwrap();
+    store.create(owned(&damaged)).await.unwrap();
+    grant(&store, &kept, "kept-party", ShareAccess::read()).await;
+    revoke(&store, &kept, "kept-party").await;
+    grant(&store, &damaged, "damaged-party", ShareAccess::read()).await;
+    revoke(&store, &damaged, "damaged-party").await;
+    drop(store);
+
+    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    let first_bundle = tempfile::tempdir().unwrap();
+    let first = capture_namespace(
+        root,
+        &FenceAdmission,
+        &inventory,
+        &DirectoryPublisher::new(first_bundle.path().join("cut")),
+        &FenceClock,
+        &inventory.key(),
+    )
+    .await
+    .unwrap();
+    assert!(!first
+        .encoded()
+        .contains("skipped deletion-inventory append unavailable"));
+    let log_path = root.join("backup/deletion-inventory.txt");
+    let before = std::fs::read_to_string(&log_path).unwrap();
+    assert!(before.contains("kept-party"));
+    assert!(before.contains("damaged-party"));
+
+    let connection = nessa_local_database::rusqlite::Connection::open(&metadata).unwrap();
+    let changed = connection
+        .execute(
+            "UPDATE share_grant_changes
+             SET receiver_id = receiver_id || char(1)
+             WHERE receiver_id = 'damaged-party'",
+            [],
+        )
+        .unwrap();
+    assert!(changed >= 1);
+    drop(connection);
+
+    let snapshot = MetadataSnapshot::open(&metadata).unwrap();
+    assert!(snapshot.fences().is_err());
+    let facts = snapshot.facts().unwrap();
+    assert!(facts
+        .revocations
+        .iter()
+        .any(|revocation| revocation.receiver_id == "kept-party"));
+    assert!(facts
+        .revocations
+        .iter()
+        .all(|revocation| revocation.receiver_id != "damaged-party"));
+    assert!(facts
+        .skipped
+        .iter()
+        .any(|skip| matches!(skip, ExportSkip::Grant { .. })));
+    drop(snapshot);
+
+    let second_bundle = tempfile::tempdir().unwrap();
+    let second = capture_namespace(
+        root,
+        &FenceAdmission,
+        &inventory,
+        &DirectoryPublisher::new(second_bundle.path().join("cut")),
+        &FenceClock,
+        &inventory.key(),
+    )
+    .await
+    .unwrap();
+    let text = second.encoded();
+    assert!(text.contains("skipped deletion-inventory append unavailable"));
+    assert!(text.contains("skipped share-grants revoke-"));
+    assert_eq!(std::fs::read_to_string(&log_path).unwrap(), before);
 }
 
 fn fs_create(path: &std::path::Path) {

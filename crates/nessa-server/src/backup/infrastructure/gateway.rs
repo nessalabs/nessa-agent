@@ -332,15 +332,12 @@ impl FactsCache {
         })
         .await
         .map_err(|_| ())?;
+        // A row the fence read skipped fails this source. The snapshot stays
+        // open so the metadata and grant cuts can still name that row.
+        *self.state.lock().map_err(|_| ())? = FactsState::Open(snapshot);
         match fences {
-            Ok(fences) => {
-                *self.state.lock().map_err(|_| ())? = FactsState::Open(snapshot);
-                Ok(Some(fences))
-            }
-            Err(_) => {
-                *self.state.lock().map_err(|_| ())? = FactsState::Failed;
-                Err(())
-            }
+            Ok(fences) => Ok(Some(fences)),
+            Err(_) => Err(()),
         }
     }
 
