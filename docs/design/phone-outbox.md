@@ -31,6 +31,7 @@ Cedar admits the session. This outbox does not decide who may send.
 | S8 | Send returns `submission_unresolved` | Unknown, cause unresolved. The same id is not sent again | `submission_unresolved_is_not_sent_again` |
 | S9 | Send answer is not a receipt or a known refusal | The receipt is read. The same bytes are not sent again in that call | `an_unreadable_send_answer_is_not_sent_again` |
 | S10 | The send is answered and saving that answer fails | The error says the message may have been delivered. The saved row stays unknown and does not claim submission. A later send reads the receipt | `a_failed_save_after_a_send_keeps_possible_delivery` |
+| S11 | Another connection commits an outcome while `conversation.send` is in flight | This call returns that committed outcome. The command id stays | `a_reconciled_row_is_kept_when_the_send_save_loses` |
 | L1 | Send answer lost, lookup finds `accepted` | Accepted. No further send | `a_lost_answer_with_an_accepted_receipt_is_not_sent_again` |
 | L2 | Send answer lost, lookup finds `attempted` | Unknown, cause attempted. No further send | `an_attempted_receipt_is_unknown_and_not_sent_again` |
 | L3 | Send answer lost, lookup finds settled `dispatched` | Done | `a_dispatched_receipt_is_done` |
@@ -67,8 +68,10 @@ fixed here so a review can see them without editing the contract:
 - A typed lookup refusal, including a deleted conversation, is `failed`.
   `unknown` is a lost send whose lookup found nothing, a lookup that did not
   finish, an `attempted` stage, an unreadable answer, or
-  `submission_unresolved`. A settled submit receipt with no effect, or with
-  `withdrawn`, `cancelled`, or `already_final`, is a protocol failure.
+  `submission_unresolved`. A settled submit receipt that omits its outcome,
+  or that carries `withdrawn`, `cancelled`, or `already_final`, is a protocol
+  failure. Settled `no_effect`, `refused_after_save`, and
+  `unavailable_after_save` are failed, as row L4 says.
 - Every other conversation code, including `temporarily_unavailable`, stays
   `failed` and is not retried under the same id.
 - `conversation.send` and `conversation.receipt` are product calls on the

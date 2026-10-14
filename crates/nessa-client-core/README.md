@@ -23,7 +23,7 @@ outcome values through `product_contract`, not transport DTOs through `product`.
 The public API is `pairing::{NativeEnrollmentClient, NativeClientError,
 NativeRetryOutcome}`, `retained::{RetainedCache, ReaderAccess, ReaderRole, ReadStop,
 ReadReport, ReadFailure, ConversationFeed, FeedEvent, SubscribeError}` and its typed saved catalogue/transcript/progress values,
-`outbox::{PhoneOutbox, PhoneIntent, PhoneOutcome, open}`,
+`outbox::{PhoneOutbox, PhoneIntent, PhoneOutcome, IntentStore, IntentEvent, StoreError, open}`,
 and, with `cli`, `composition::{execute, run_read_only_example}`.
 Gateway enrollment tests use the former; gateway online tests/child fixtures use
 `execute`; the example uses `run_read_only_example`. The crate root publishes an

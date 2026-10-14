@@ -21,11 +21,13 @@ mod application;
 mod domain;
 mod infrastructure;
 
-pub use application::{CommandIds, IntentStore, OutboxError, PhoneGateway, PhoneOutbox, UuidIds};
+pub use application::{
+    CommandIds, IntentStore, OutboxError, PhoneGateway, PhoneOutbox, StoreError, UuidIds,
+};
 pub use domain::{
-    Cause, Delivery, Initiator, IntentError, LookupAnswer, PhoneCommandId, PhoneFailure,
-    PhoneImage, PhoneIntent, PhoneOutcome, PhoneRecord, PhoneView, ReceiptEffect, ReceiptStage,
-    SendAnswer, UnknownCause, FOREGROUND_SENDS,
+    Cause, Delivery, Initiator, IntentError, IntentEvent, LookupAnswer, PhoneCommandId,
+    PhoneFailure, PhoneImage, PhoneIntent, PhoneOutcome, PhoneRecord, PhoneView, ReceiptEffect,
+    ReceiptStage, SendAnswer, UnknownCause, FOREGROUND_SENDS,
 };
 pub use infrastructure::open;
 pub(crate) use infrastructure::{

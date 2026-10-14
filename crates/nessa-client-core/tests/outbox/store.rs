@@ -397,6 +397,48 @@ fn a_failed_save_after_a_send_keeps_possible_delivery() {
     }
 }
 
+#[test]
+fn a_reconciled_row_is_kept_when_the_send_save_loses() {
+    let dir = directory();
+    let path = path_in(&dir);
+    struct Race {
+        path: PathBuf,
+    }
+    impl PhoneGateway for Race {
+        fn send(&mut self, _: &PhoneIntent) -> SendAnswer {
+            let mut other = open(
+                &self.path,
+                Scripted::new(Vec::new(), vec![settled(ReceiptEffect::Dispatched)]),
+                SeqIds::default(),
+                clock(),
+            )
+            .unwrap();
+            let recovered = other.recover().unwrap();
+            assert_eq!(recovered[0].outcome(), PhoneOutcome::Done);
+            SendAnswer::Receipt(Delivery::Queued)
+        }
+        fn lookup(&mut self, _: &PhoneIntent) -> LookupAnswer {
+            panic!("the in-flight send does not look the receipt up");
+        }
+    }
+    let mut outbox = open(
+        &path,
+        Race { path: path.clone() },
+        SeqIds::default(),
+        clock(),
+    )
+    .unwrap();
+    person_hold(&mut outbox, text_intent("command-1", "hello"));
+    let view = outbox.send(&command("command-1")).unwrap();
+    assert_eq!(view.outcome(), PhoneOutcome::Done);
+    assert!(view.claims_submission());
+    assert_eq!(view.intent().command().as_str(), "command-1");
+    assert_eq!(view.intent().text(), "hello");
+    let again = outbox.send(&command("command-1")).unwrap();
+    assert_eq!(again.outcome(), PhoneOutcome::Done);
+    assert_eq!(outbox.list().unwrap().len(), 1);
+}
+
 fn accepted_send(delivery: Delivery, outcome: PhoneOutcome) {
     let dir = directory();
     let gateway = Scripted::new(vec![SendAnswer::Receipt(delivery)], Vec::new());
