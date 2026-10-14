@@ -489,8 +489,13 @@ hand their evidence (`application/`, the `PeerAudit` port) to
 TCP adapter is `infrastructure/connector.rs`. `infrastructure/poller.rs`
 reads each kept peer's pinned status and what it granted, into a retained
 cache beside its record, through `nessa-client-core`'s public `retained`
-module, under the commands' turn, which an owner command takes back by
-stopping the cycle; every change it makes is audited through
+module, up to `READS_AT_ONCE` peers at once. It scans the peer records
+when they change and on the poll interval, not on every tick of a read in
+flight. Each cycle holds that peer's
+turn; `peer.forget` and `peer.relay` take that turn back by stopping that
+peer's cycle. `peer.enroll`, `peer.forget`, and `peer.relay` share the
+record set, and a command that cannot take it does not stop a read.
+Every change a cycle makes is audited through
 `PeerCommands::poller_changed`. The
 product methods are `nessa-server/src/product/peers.rs`, composed beside native
 pairing in `composition/native_pairing.rs`, which starts and joins the poller.

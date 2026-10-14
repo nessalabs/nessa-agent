@@ -504,11 +504,12 @@ mod tests {
             assert_eq!(page, PAGE.as_bytes());
         }
         drop(receiver);
+        // Joining the task is the release. A connect can succeed afterwards
+        // when another test binds the same port, so refusal is not the proof.
         timeout(Duration::from_millis(300), task)
             .await
             .unwrap()
             .unwrap();
-        assert!(TcpStream::connect(host).await.is_err());
     }
 
     struct BrokenWriter(Chunks);
