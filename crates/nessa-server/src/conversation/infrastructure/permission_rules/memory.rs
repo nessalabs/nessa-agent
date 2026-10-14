@@ -7,6 +7,8 @@
 //! A remember stays provisional until `acknowledge`. `withdraw` removes that
 //! revision, or restores the one a replacement wrote over. A revoke records
 //! the request, deletes the row, and only then records that it is absent.
+//! A share that changes who may read a conversation asks the waiting-review
+//! publishers to filter again, without moving the board's generation.
 
 use nessa_local_database::OpenError;
 use nessa_sdk::application::agent_execution::permissions::{
@@ -82,6 +84,8 @@ pub struct PermissionMemory {
     noted: Mutex<NotedCallers>,
     notices: Mutex<Vec<PublishedReview>>,
     generation: watch::Sender<u64>,
+    /// Moves when who may see a waiting review may have changed.
+    visibility: watch::Sender<u64>,
     evaluator: CedarPermissionRuleEvaluator,
     revocations: Arc<dyn PermissionRuleRevocationAudit>,
     /// The next revoke deletes nothing. Tests use it to leave the request
@@ -108,6 +112,7 @@ impl PermissionMemory {
         let store = RuleStore::open(path)?;
         let rows = store.load().map_err(OpenError::from)?;
         let (generation, _) = watch::channel(0);
+        let (visibility, _) = watch::channel(0);
         Ok(Self {
             rules: Mutex::new(LiveRules {
                 store,
@@ -125,6 +130,7 @@ impl PermissionMemory {
             }),
             notices: Mutex::new(Vec::new()),
             generation,
+            visibility,
             evaluator: CedarPermissionRuleEvaluator,
             revocations,
             #[cfg(test)]
@@ -174,6 +180,34 @@ impl PermissionMemory {
     /// Wait until the generation is no longer `seen`.
     pub async fn wait_after(&self, seen: u64) {
         let mut updates = self.generation.subscribe();
+        loop {
+            if *updates.borrow() != seen {
+                return;
+            }
+            if updates.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+
+    /// The visibility generation a notice publisher last filtered at.
+    pub fn visibility(&self) -> u64 {
+        *self.visibility.borrow()
+    }
+
+    /// Ask every waiting-review publisher to filter its snapshot again.
+    ///
+    /// A share or an unshare does not change the board's generation. A session
+    /// that could see a review can lose that conversation while the review is
+    /// still waiting, and the next snapshot is the filtered set.
+    pub fn recheck_visibility(&self) {
+        let next = self.visibility.borrow().saturating_add(1);
+        self.visibility.send_replace(next);
+    }
+
+    /// Wait until visibility should be filtered again.
+    pub async fn wait_for_visibility(&self, seen: u64) {
+        let mut updates = self.visibility.subscribe();
         loop {
             if *updates.borrow() != seen {
                 return;

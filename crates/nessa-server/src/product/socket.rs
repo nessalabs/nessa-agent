@@ -1405,11 +1405,14 @@ async fn forward_review_notices(
     // `None` is unseen, including a generation of zero. A session that
     // connects after a restart, or a new authentication, is sent the board
     // as it stands — empty, when nothing is waiting — so a desktop does not
-    // keep a review the server no longer has.
+    // keep a review the server no longer has. A share that changes who may
+    // read a conversation filters that same generation again.
     let mut seen = None;
+    let mut visibility_seen = board.visibility();
     loop {
         let (generation, reviews) = board.current();
-        if seen != Some(generation) {
+        let visibility = board.visibility();
+        if seen != Some(generation) || visibility_seen != visibility {
             let mut visible = Vec::with_capacity(reviews.len());
             for review in reviews {
                 if super::read_access::may_see_review(&state, &session, &review.conversation_id)
@@ -1445,8 +1448,12 @@ async fn forward_review_notices(
                 break;
             }
             seen = Some(generation);
+            visibility_seen = visibility;
         }
-        board.wait_after(generation).await;
+        tokio::select! {
+            () = board.wait_after(generation) => {}
+            () = board.wait_for_visibility(visibility) => {}
+        }
     }
 }
 
@@ -2479,6 +2486,51 @@ mod tests {
         }
     }
 
+    /// A read grant that a test can take away while a review is still waiting.
+    struct ToggleGrant {
+        conversation: String,
+        open: Arc<AtomicBool>,
+    }
+    impl ShareGrants for ToggleGrant {
+        fn held_grant<'a>(
+            &'a self,
+            id: &'a ConversationId,
+            receiver_id: &'a str,
+        ) -> ConversationFuture<'a, Option<HeldGrant>> {
+            let allowed = self.open.load(Ordering::SeqCst)
+                && receiver_id == "device"
+                && id.to_string() == self.conversation;
+            Box::pin(async move {
+                Ok(allowed.then_some(HeldGrant {
+                    role: ShareRole::Read,
+                    policy_revision: 1,
+                }))
+            })
+        }
+        fn change(&self, _: ShareGrantChange) -> ConversationFuture<'_, ShareGrantReceipt> {
+            Box::pin(async { Err(ConversationError::Metadata) })
+        }
+        fn grants<'a>(&'a self, _: &'a ConversationId) -> ConversationFuture<'a, ShareGrantList> {
+            Box::pin(async { Err(ConversationError::Metadata) })
+        }
+        fn policy_at<'a>(
+            &'a self,
+            _: &'a ConversationId,
+            _: &'a str,
+            _: u64,
+        ) -> ConversationFuture<'a, Option<ToolPolicy>> {
+            Box::pin(async { Err(ConversationError::Metadata) })
+        }
+        fn hold_revision<'a>(
+            &'a self,
+            _: &'a ConversationId,
+            _: &'a str,
+            _: u64,
+        ) -> ConversationFuture<'a, RevisionHold> {
+            Box::pin(async { Err(ConversationError::Metadata) })
+        }
+    }
+
     struct RecordBinding;
     impl ReceiverAuthority for RecordBinding {
         fn resolve<'a>(
@@ -2884,6 +2936,84 @@ mod tests {
         assert_eq!(owns_one.reviews.len(), 1);
         assert_eq!(owns_one.reviews[0].conversation_id, id_a);
         assert_eq!(owns_one.reviews[0].tool, "Bash");
+    }
+
+    /// A paired grant that goes away while the review is still waiting drops
+    /// that review from the next snapshot. The board generation does not move.
+    #[tokio::test]
+    async fn a_revoked_grant_drops_the_waiting_review_from_the_next_snapshot() {
+        let (_directory, board) = open_rules();
+        let id_a = "00000000-0000-4000-8000-00000000000a";
+        let execution = ExecutionId::new("turn").unwrap();
+        board.waiting(&ReviewNotice {
+            conversation_id: id_a.into(),
+            execution_id: execution,
+            permission_id: PermissionId::new("perm-a").unwrap(),
+            tool: "Bash".into(),
+        });
+        let open = Arc::new(AtomicBool::new(true));
+        let grants = Arc::new(ToggleGrant {
+            conversation: id_a.into(),
+            open: Arc::clone(&open),
+        });
+        let (state, authority) = fixture(MembershipRole::Member);
+        *authority.snapshot.lock().unwrap() = snapshot_with(
+            MembershipRole::Member,
+            MembershipStatus::Active,
+            &["conversation.read"],
+        );
+        let state = state.with_passive_read(
+            Arc::new(DeviceBinding),
+            repository_of(vec![owned_conversation(id_a, "owner")]),
+            grants,
+            crate::conversation_test_support::access_policy(),
+        );
+        let session = authenticate(&state).await;
+        let (send, mut recv) = mpsc::channel(1);
+        let slots = Arc::new(Semaphore::new(2));
+        let task = tokio::spawn(super::forward_review_notices(
+            board.clone(),
+            send,
+            slots,
+            state,
+            session,
+        ));
+        let first = tokio::time::timeout(std::time::Duration::from_secs(2), recv.recv())
+            .await
+            .expect("the granted review is sent")
+            .expect("the notice task stays up");
+        match first.message {
+            WireResponse::ReviewWaiting {
+                payload,
+                generation,
+            } => {
+                assert_eq!(payload.reviews.len(), 1);
+                assert_eq!(payload.reviews[0].tool, "Bash");
+                assert_eq!(generation, 1);
+            }
+            _ => panic!("expected the board"),
+        }
+        open.store(false, Ordering::SeqCst);
+        let generation_before = board.current().0;
+        board.recheck_visibility();
+        assert_eq!(board.current().0, generation_before);
+        let second = tokio::time::timeout(std::time::Duration::from_secs(2), recv.recv())
+            .await
+            .expect("the revoked grant is filtered")
+            .expect("the notice task stays up");
+        match second.message {
+            WireResponse::ReviewWaiting {
+                payload,
+                generation,
+            } => {
+                assert!(payload.reviews.is_empty());
+                assert_eq!(generation, generation_before);
+            }
+            _ => panic!("expected the filtered board"),
+        }
+        drop(recv);
+        task.abort();
+        let _ = task.await;
     }
 
     /// The five passive reads skip ordinary dispatch, so their Cedar check is

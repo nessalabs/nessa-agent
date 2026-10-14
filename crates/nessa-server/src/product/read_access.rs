@@ -478,6 +478,9 @@ pub(super) async fn dispatch_share(
                         now,
                     )
                     .await?;
+                if granted.applied {
+                    recheck_review_visibility(state);
+                }
                 Ok(success(
                     &frame.id,
                     &ConversationShareResult {
@@ -503,6 +506,9 @@ pub(super) async fn dispatch_share(
                         now,
                     )
                     .await?;
+                if applied {
+                    recheck_review_visibility(state);
+                }
                 Ok(success(
                     &frame.id,
                     &ConversationMutationResult {
@@ -544,6 +550,14 @@ pub(super) async fn dispatch_share(
     }
     .await;
     result.unwrap_or_else(|error| failure(&frame.id, error_code(&error).as_str()))
+}
+
+/// A share that landed can change which waiting reviews a socket may see.
+/// The board's generation does not move, so the publishers are asked directly.
+fn recheck_review_visibility(state: &ProductRouteState) {
+    if let Some(board) = state.permission_rules.as_ref() {
+        board.recheck_visibility();
+    }
 }
 
 /// Whether a paired party may take the share action `frame` names on the
