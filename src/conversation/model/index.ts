@@ -83,3 +83,10 @@ export {
   type NoteAuthor,
   type NotePlacement,
 } from "./notes"
+
+export {
+  historyExtent,
+  historyNotices,
+  type HistoryExtent,
+  type HistoryNotice,
+} from "./history"

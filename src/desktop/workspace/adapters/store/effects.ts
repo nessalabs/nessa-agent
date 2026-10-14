@@ -111,7 +111,8 @@ export function workspaceEffects(
   // conversation on screen is read again, held or not, and a read already on
   // its way is set aside unless it was asked after the index was — one asked
   // before may predate the loss. The newer of the read's answer and what is
-  // held is kept (`transcriptLoaded`).
+  // held is kept; the same revision is kept too when its content was let go
+  // (`transcriptLoaded`).
   listener.startListening({
     actionCreator: workspaceActions.indexRequested,
     effect: ({ payload }) => {

@@ -27,8 +27,8 @@ use crate::application::agent_execution::{
 };
 use crate::domain::agent_execution::{
     executions::{
-        ExecutionId, ExecutionOutcome, InvocationHistory, InvocationKind, InvocationObservation,
-        QueueMutation, QueueOrderChange, SchedulingCause,
+        ExecutionId, ExecutionOutcome, Initiation, InvocationHistory, InvocationKind,
+        InvocationObservation, QueueMutation, QueueOrderChange, SchedulingCause,
     },
     permissions::PermissionRequest,
     prompts::NoteContext,
@@ -1899,6 +1899,19 @@ impl SessionManager {
             .scheduling
             .last()
             .cloned()
+    }
+
+    /// Who started the saved turn `id`, as its record says; `None` when no
+    /// turn of this session is `id`.
+    pub(crate) async fn initiation_of(&self, id: &ExecutionId) -> Option<Initiation> {
+        let evidence = self.evidence.lock().await;
+        evidence
+            .observed
+            .as_ref()?
+            .invocations
+            .iter()
+            .find(|record| &record.request.execution_id == id)
+            .map(|record| record.initiation.clone())
     }
 
     /// Narrow observed scheduling lookup for supervisor recovery.

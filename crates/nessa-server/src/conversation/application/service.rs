@@ -4,6 +4,7 @@ use super::metadata_target::{load_conversation, validate_target};
 use super::session_key::conversation_session;
 use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
+    drive_tools::{checked_source, AdmittedPolicies, DriveToolHook, DriveTools},
     environment::{confirmed_despite, issue, open_lease, LeaseIssueError, LeaseRequest, LiveLease},
     live_changes::LiveChanges,
     locks::ConversationLocks,
@@ -12,18 +13,18 @@ use super::{
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
     ArtifactBudget, ArtifactCollector, ArtifactOffer, AttachmentRelease, AttachmentReleaseCause,
-    ConversationAttachments, ConversationCreationAudit, ConversationDeletionAudit,
-    ConversationDeletionAuditRecord, ConversationDeletionCause, ConversationError,
-    ConversationFileLinkAudit, ConversationFileLinkAuditRecord, ConversationFileLinkCause,
-    ConversationFileLinkState, ConversationListing, ConversationModeApplication,
-    ConversationModeAudit, ConversationModeAuditPhase, ConversationModeRequest,
-    ConversationModeRequestState, ConversationOwnershipState, ConversationRepository,
-    ConversationSummaries, DeletionFailures, FetchRequests, ListedConversation, ObservationCursor,
-    ObservedConversations, PublishRequests, RuntimeReadiness, StopFailure, SubmittedMessage,
-    UnfinishedDeletions,
+    ConversationAccessPolicyEvaluator, ConversationAttachments, ConversationCreationAudit,
+    ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionCause,
+    ConversationError, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
+    ConversationFileLinkCause, ConversationFileLinkState, ConversationListing,
+    ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
+    ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
+    ConversationRepository, ConversationSummaries, DeletionFailures, FetchRequests,
+    ListedConversation, ObservationCursor, ObservedConversations, OwnerAccess, PublishRequests,
+    RuntimeReadiness, StopFailure, SubmittedMessage, UnfinishedDeletions,
 };
 use crate::conversation::domain::{
-    Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink,
+    Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink, ToolSource,
 };
 use futures_util::{future::join_all, FutureExt};
 use nessa_auth::application::ports::Clock;
@@ -67,7 +68,10 @@ use nessa_sdk::application::agent_execution::{
     },
 };
 use nessa_sdk::domain::agent_execution::{
-    executions::{ExecutionId, ExecutionOutcome, Initiation, InvocationStage, MessageKind},
+    executions::{
+        ExecutionId, ExecutionOutcome, GrantInitiator, Initiation, Initiator, InvocationStage,
+        MessageKind,
+    },
     leases::{AgentWork, LeaseEndCause, SandboxProfile, SandboxProfiles},
     permissions::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionId,
@@ -603,6 +607,12 @@ struct LiveConversation {
     fetches: Arc<FetchRequests>,
     /// Whose organization the conversation is, as its record says.
     organization_id: OrganizationId,
+    /// Who names its agent's tools, when every call that agent makes outside
+    /// its Ask-mode floor is asked about; `None` for OpenCode, which admits
+    /// no Drive turn.
+    tool_source: Option<ToolSource>,
+    /// The tool policies of the Drive turns admitted here.
+    admitted_policies: Arc<AdmittedPolicies>,
 }
 enum AttachmentOwner {
     Running(JoinHandle<()>),
@@ -690,6 +700,8 @@ struct Inner {
     /// Where agents run; every opening is leased from it.
     environment: Environments,
     clock: Arc<dyn Clock>,
+    /// Decides every command's admission to a conversation.
+    access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
     conversations: Mutex<HashMap<ConversationId, Arc<Slot>>>,
     creation: Mutex<()>,
@@ -739,6 +751,9 @@ struct Inner {
     /// turn takes it. Composition binds the gateway's table; without one, a
     /// grant's note is never checked and waits, and an owner's is taken.
     note_authors: Arc<OnceLock<Arc<dyn super::ShareGrants>>>,
+    /// What checks a Drive grant's tools. Composition binds it; until then
+    /// no Drive turn is admitted (`drive_policy_unenforceable`).
+    drive: Arc<OnceLock<DriveTools>>,
 }
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
@@ -907,6 +922,9 @@ pub struct ConversationDependencies {
     /// SSH hosts the configuration names.
     pub(crate) environment: Environments,
     pub clock: Arc<dyn Clock>,
+    /// Decides who may locate, act on and read a conversation: every
+    /// command's admission asks it ([`OwnerAccess`]).
+    pub access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
 }
 /// What a host chose for one of the agent's questions.
 ///
@@ -1004,6 +1022,7 @@ impl ConversationService {
             deletion_budgets,
             environment,
             clock,
+            access_policy,
         } = dependencies;
         // The input bound is never larger than what the protocol carries of
         // a message, the person's or an app's (`MAX_MCP_MESSAGE_BYTES`, held
@@ -1036,6 +1055,7 @@ impl ConversationService {
                 deletion_budgets,
                 environment,
                 clock,
+                access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
                 creation: Mutex::new(()),
@@ -1053,6 +1073,7 @@ impl ConversationService {
                 fetch_reads: Arc::new(Semaphore::new(artifact_fetch::FETCH_READS)),
                 commands: Arc::new(OnceLock::new()),
                 note_authors: Arc::new(OnceLock::new()),
+                drive: Arc::new(OnceLock::new()),
             }),
         })
     }
@@ -1106,7 +1127,7 @@ impl ConversationService {
             // A deleted conversation is not created again under its
             // identity, whoever asks; only its owner is told why
             // (`a_deleted_conversation_refuses_every_command_on_it`).
-            record.check_access(&caller.organization_id, &caller.principal_id)?;
+            service.access().admit(&record, &caller)?;
             drop(creation_guard);
             // Acknowledge the original creation from its stored creator
             // evidence before attributing this reopen to its caller, and
@@ -1121,10 +1142,10 @@ impl ConversationService {
                 // recorded after its deletion
                 // (`a_reopen_racing_a_delete_is_not_recorded_after_the_deletion`).
                 let _creation = service.inner.creation.lock().await;
-                load_conversation(service.inner.metadata.as_ref(), &id)
+                let current = load_conversation(service.inner.metadata.as_ref(), &id)
                     .await?
-                    .ok_or(ConversationError::NotFound)?
-                    .check_access(&caller.organization_id, &caller.principal_id)?;
+                    .ok_or(ConversationError::NotFound)?;
+                service.access().admit(&current, &caller)?;
                 service
                     .inner
                     .creation_audit
@@ -1217,7 +1238,7 @@ impl ConversationService {
         let outcome = service.inner.metadata.create(proposed.clone()).await?;
         let record = &outcome.conversation;
         validate_target(&id, record)?;
-        record.check_access(&caller.organization_id, &caller.principal_id)?;
+        service.access().admit(record, &caller)?;
         // Created acknowledges this exact admitted proposal. Existing alone
         // retains another creator's historical evidence. The regressions are
         // `creation_created_acknowledgement_preserves_the_admitted_origin` and
@@ -1349,8 +1370,8 @@ impl ConversationService {
         let record = load_conversation(self.inner.metadata.as_ref(), id)
             .await?
             .ok_or(ConversationError::NotFound)?;
-        record
-            .check_access(&caller.organization_id, &caller.principal_id)
+        self.access()
+            .admit(&record, caller)
             .map_err(ConversationError::from)?;
         let slot = {
             let mut owners = self.inner.conversations.lock().await;
@@ -1507,6 +1528,7 @@ impl ConversationService {
                                 service.inner.clock.as_ref(),
                             )
                             .await;
+                            let tool_source = checked_source(agent);
                             let agent = Agent::prepare(
                                 opening.fence.clone(),
                                 manager,
@@ -1519,6 +1541,18 @@ impl ConversationService {
                                     holds: error.needs_cleanup(),
                                 }
                             })?;
+                            // Before anything can run: every call a Drive
+                            // grant's turn asks about is checked against its
+                            // policy. An agent that does not ask about every
+                            // call admits no Drive turn, so it needs no hook.
+                            let admitted_policies = Arc::new(AdmittedPolicies::default());
+                            if let Some(source) = tool_source {
+                                agent.add_invocation_hook(Arc::new(DriveToolHook {
+                                    drive: service.inner.drive.clone(),
+                                    admitted: admitted_policies.clone(),
+                                    source,
+                                }));
+                            }
                             let issued = issue(
                                 agent.session_manager(),
                                 environment.as_ref(),
@@ -1720,6 +1754,8 @@ impl ConversationService {
                                 publishes: Arc::default(),
                                 fetches: Arc::default(),
                                 organization_id: record.organization().clone(),
+                                tool_source,
+                                admitted_policies,
                             });
                             // What the host publishes under the lease is
                             // kept for as long as the lease is held.
@@ -1909,7 +1945,7 @@ impl ConversationService {
         let record = load_conversation(self.inner.metadata.as_ref(), id)
             .await?
             .ok_or(ConversationError::NotFound)?;
-        record.check_access(&caller.organization_id, &caller.principal_id)?;
+        self.access().admit(&record, caller)?;
         let Some(request) = self.inner.metadata.pending_mode_change(id).await? else {
             return Ok(());
         };
@@ -1985,7 +2021,7 @@ impl ConversationService {
             let record = load_conversation(service.inner.metadata.as_ref(), &id)
                 .await?
                 .ok_or(ConversationError::NotFound)?;
-            record.check_access(&caller.organization_id, &caller.principal_id)?;
+            service.access().admit(&record, &caller)?;
             let matches_call = |request: &ConversationModeRequest| {
                 request.conversation_id == id
                     && request.request_id == caller.action_id
@@ -2347,7 +2383,7 @@ impl ConversationService {
         let record = load_conversation(self.inner.metadata.as_ref(), id)
             .await?
             .ok_or(ConversationError::NotFound)?;
-        record.check_access(&caller.organization_id, &caller.principal_id)?;
+        self.access().admit(&record, caller)?;
         let (committed, order) = self.committed_with_order(id).await?;
         let projection = self.detached(id, &committed, &order);
         let read = (projection.read(), projection.committed_cursor());
@@ -2423,7 +2459,7 @@ impl ConversationService {
         let record = load_conversation(self.inner.metadata.as_ref(), id)
             .await?
             .ok_or(ConversationError::NotFound)?;
-        record.check_access(&caller.organization_id, &caller.principal_id)?;
+        self.access().admit(&record, caller)?;
         let Some(request) = self.inner.metadata.pending_mode_change(id).await? else {
             return Ok(None);
         };
@@ -2469,10 +2505,10 @@ impl ConversationService {
         id: &ConversationId,
         caller: &ConversationCaller,
     ) -> Result<(), ConversationError> {
-        load_conversation(self.inner.metadata.as_ref(), id)
+        let record = load_conversation(self.inner.metadata.as_ref(), id)
             .await?
-            .ok_or(ConversationError::NotFound)?
-            .check_access(&caller.organization_id, &caller.principal_id)?;
+            .ok_or(ConversationError::NotFound)?;
+        self.access().admit(&record, caller)?;
         Ok(())
     }
     /// The title a list shows for the conversation, which a read shows too:
@@ -2613,6 +2649,55 @@ impl ConversationService {
     /// (`m10_a_stop_that_ended_the_messages_opening_before_the_enqueue_is_m10_by_the_system`).
     /// One that came after the refusal leaves it as it was
     /// (`m10_a_release_after_a_turn_running_refusal_keeps_turn_running`).
+    /// Admit a turn `grant` sends to `live`, or refuse it
+    /// `DrivePolicyUnenforceable` (row J26): its agent must ask about every
+    /// call outside its Ask-mode floor (Claude or Codex, not OpenCode), run
+    /// in the Ask approval mode, attached, with native hooks off, and the
+    /// grant's policy at the admitted revision must be read from its journal.
+    /// The policy is kept for the conversation, where its calls are checked.
+    async fn admit_drive_turn(
+        &self,
+        live: &LiveConversation,
+        id: &ConversationId,
+        grant: &GrantInitiator,
+        non_default_mode: bool,
+    ) -> Result<(), ConversationError> {
+        let refused = Err(ConversationError::DrivePolicyUnenforceable);
+        let Some(drive) = self.inner.drive.get() else {
+            return refused;
+        };
+        if live.tool_source.is_none() || non_default_mode {
+            return refused;
+        }
+        // What the agent asks about is decided as it attaches: its approval
+        // mode and whether its own hooks may answer first.
+        let _ = live.join_attachment_owner().await;
+        if live.agent.attachment_status().phase() != AttachmentPhase::Attached
+            || live.agent.approval_mode() != Some(ProviderApprovalMode::Ask)
+            || live.agent.operation_capabilities().native_hooks_allowed()
+        {
+            return refused;
+        }
+        match drive
+            .grants
+            .policy_at(id, grant.grant(), grant.policy_revision())
+            .await
+        {
+            Ok(Some(policy)) => {
+                live.admitted_policies
+                    .admit(grant.grant(), grant.policy_revision(), policy);
+                Ok(())
+            }
+            Ok(None) | Err(_) => refused,
+        }
+    }
+
+    /// Bind what checks a Drive grant's tools. A second bind is ignored;
+    /// unbound, no Drive turn is admitted.
+    pub fn bind_drive_tools(&self, drive: DriveTools) {
+        let _ = self.inner.drive.set(drive);
+    }
+
     pub(super) async fn submit_as(
         &self,
         id: ConversationId,
@@ -2696,8 +2781,14 @@ impl ConversationService {
                         .invocations
                         .iter()
                         .find(|record| record.request.execution_id == execution)
-                        .map(|record| record.request.user_message.app_model_context().to_vec())
+                        .map(|record| {
+                            (
+                                record.request.user_message.app_model_context().to_vec(),
+                                record.initiation.clone(),
+                            )
+                        })
                 });
+            let (original, saved_initiation) = original.unzip();
             let known = original.is_some();
             // Asked under the submission lock, which a desktop stop takes to
             // mark the owner: an owner being stopped is handed no new message
@@ -2741,6 +2832,24 @@ impl ConversationService {
                     return Err(ConversationError::ApprovalModeNotApplied.into());
                 }
             }
+            // A Drive grant's turn is admitted only where every call it asks
+            // about is checked against the grant's policy, and is saved as
+            // checked (rows J26 and J27).
+            // A retry by the same initiator is answered from what was saved,
+            // checked or not, and is not admitted again; one by another is
+            // the agent's conflict to refuse.
+            let retried = saved_initiation
+                .filter(|saved| saved.initiator() == writer.initiation().initiator());
+            let initiation = match (retried, writer.initiation().initiator()) {
+                (Some(saved), _) => saved,
+                (None, Initiator::Owner) => Initiation::owner(),
+                (None, Initiator::Grant(grant)) => {
+                    service
+                        .admit_drive_turn(&live, &id, grant, non_default_mode)
+                        .await?;
+                    Initiation::checked_grant(grant.clone())
+                }
+            };
             if !message.images().is_empty() && !known {
                 // Refuse before acceptance what the agent would refuse at dispatch,
                 // and any digest this conversation did not upload itself.
@@ -2862,11 +2971,11 @@ impl ConversationService {
             }
             asking.store(true, Ordering::SeqCst);
             // Saved as started by whom it was admitted for: the owner, or
-            // the Drive grant as it stood at admission, its tools unchecked
-            // (row J15).
+            // the Drive grant as it stood at admission, its tools checked
+            // (rows J15 and J27).
             let submitter = Submitter {
                 context: actor,
-                initiation: writer.initiation(),
+                initiation,
             };
             // A person's queued message may start the next turn, so it may
             // take the notes waiting for one: each author is checked now, and
@@ -3078,18 +3187,13 @@ impl ConversationService {
             .await?;
         let complete =
             listed.unreadable == 0 && listed.conversations.len() <= MAX_LISTED_CONVERSATIONS;
-        // Found by the listing, decided by the domain: a row it returns that
-        // is not this caller's, or is deleted, is not shown whatever listing
-        // is wired here (`a_list_shows_only_what_the_domain_lets_the_caller_see`).
-        let owned: Vec<ListedConversation> = listed
-            .conversations
+        // Found by the listing, decided by the access policy: a row it
+        // returns that is not this caller's, or is deleted, is not shown
+        // whatever listing is wired here
+        // (`a_list_shows_only_what_the_domain_lets_the_caller_see`).
+        let owned: Vec<ListedConversation> = self
+            .admitted(listed.conversations, &caller)?
             .into_iter()
-            .filter(|listed| {
-                listed
-                    .conversation
-                    .check_access(&caller.organization_id, &caller.principal_id)
-                    .is_ok()
-            })
             .take(MAX_LISTED_CONVERSATIONS)
             .collect();
         let running = self.running_ids(&owned).await;
@@ -3139,15 +3243,7 @@ impl ConversationService {
             complete,
             cursor,
         } = observed;
-        let owned: Vec<ListedConversation> = conversations
-            .into_iter()
-            .filter(|listed| {
-                listed
-                    .conversation
-                    .check_access(&caller.organization_id, &caller.principal_id)
-                    .is_ok()
-            })
-            .collect();
+        let owned: Vec<ListedConversation> = self.admitted(conversations, &caller)?;
         let running = self.running_ids(&owned).await;
         Ok(ConversationObservation {
             conversations: list_entries(&owned, &running),
@@ -3159,6 +3255,29 @@ impl ConversationService {
                 id: cursor.id.to_string(),
             }),
         })
+    }
+    /// The access policy, as every command's admission asks it.
+    fn access(&self) -> OwnerAccess<'_> {
+        OwnerAccess::new(self.inner.access_policy.as_ref())
+    }
+    /// The listed conversations `caller` may act on, in order: a listing is
+    /// an index, and each row it found is admitted again here, rows that
+    /// differ only in what the policy never sees sharing one decision
+    /// ([`OwnerAccess::admits_each`]). A policy that cannot decide fails the
+    /// list rather than shortening it.
+    fn admitted(
+        &self,
+        listed: Vec<ListedConversation>,
+        caller: &ConversationCaller,
+    ) -> Result<Vec<ListedConversation>, ConversationError> {
+        let admitted = self
+            .access()
+            .admits_each(listed.iter().map(|row| &row.conversation), caller)?;
+        Ok(listed
+            .into_iter()
+            .zip(admitted)
+            .filter_map(|(row, admitted)| admitted.then_some(row))
+            .collect())
     }
     /// Which of `owned` are open here with a turn under way.
     ///
@@ -3467,7 +3586,7 @@ impl ConversationService {
             let record = load_conversation(service.inner.metadata.as_ref(), &id)
                 .await?
                 .ok_or(ConversationError::NotFound)?;
-            record.check_access(&caller.organization_id, &caller.principal_id)?;
+            service.access().admit(&record, &caller)?;
             let pending_mode = service.inner.metadata.pending_mode_change(&id).await?;
             // Its apps' end drops what they still hold, each drop reported
             // to the drop recorder there and then: the close answers its own
@@ -3603,7 +3722,7 @@ impl ConversationService {
             let record = load_conversation(service.inner.metadata.as_ref(), &id)
                 .await?
                 .ok_or(ConversationError::NotFound)?;
-            record.check_access(&caller.organization_id, &caller.principal_id)?;
+            service.access().admit(&record, &caller)?;
             // Nothing said, nothing listed, nothing to archive: no summary is
             // made for it, so it stays out of both lists.
             let Some(previous) = service.inner.summaries.load(&id).await? else {
@@ -3715,8 +3834,15 @@ impl ConversationService {
             .await
             .map_err(RepositoryFailure::from_load)?
             .ok_or(FenceFailure::NotFound)?;
-        if !record.allows(&caller.organization_id, &caller.principal_id) {
-            return Err(FenceFailure::NotFound);
+        // The owner deletes their conversation, deleted already or not: a
+        // second delete answers from the tombstone the first left.
+        match self
+            .access()
+            .locates(&record, &caller.organization_id, &caller.principal_id)
+        {
+            Ok(true) => {}
+            Ok(false) => return Err(FenceFailure::NotFound),
+            Err(_) => return Err(FenceFailure::Repository(RepositoryFailure::Metadata)),
         }
         // Never dated before the conversation it deletes: a clock stepped
         // back since its creation would otherwise propose a tombstone its

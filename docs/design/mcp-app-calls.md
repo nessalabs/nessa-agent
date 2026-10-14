@@ -12,8 +12,14 @@ the gateway does with it (#348, part b).
 
 ## What is built
 
-- **Policy** (`mcp_servers::domain::app_call`): pure rules over what the
-  conversation's view says of the app and what its server's session listed.
+- **Policy** (`conversation::application::AppCallPolicyEvaluator`, answered
+  by Cedar in `conversation::infrastructure::tool_policy::cedar`'s
+  `apps.cedar`): an app reaches only its own server, and calls only that
+  server's tools visible to apps. The rest is pure rules
+  (`mcp_servers::domain::app_call`) over what the conversation's view says of
+  the app and what its server's session listed: whether it is an app at all,
+  whether the tool was listed, the arguments' size, and whether a destructive
+  tool waits for a review.
 - **The flow** (`conversation::application::service::app_calls`): policy,
   then a review for a destructive tool, then the call, each step audited
   before its effect is reported. Each call runs on a task of its own, holding
@@ -124,6 +130,7 @@ is opened again.
 | — | no open session of that server | — | `Refused(mcp_session_unavailable)` |
 | — | its mount released, or the opening it resolved ended (checked after the rows above) | — | `Refused(mcp_cancelled)`, by the system |
 | — | the tool is not listed, or its `visibility` excludes `app` | — | `Refused(mcp_tool_not_for_app)` |
+| — | the call policy could not be evaluated | — | `Refused(mcp_server_mismatch)` when asking about the server, `Refused(mcp_tool_not_for_app)` when asking about the tool; logged at error. The bundle is validated at startup, so this is not expected |
 | — | arguments past 32 KiB | — | `Refused(mcp_request_too_large)` |
 | — | arguments that are not one JSON object | — | `Refused(invalid_request)` |
 | — | admitted, not destructive | Sending | `Admitted`; the arguments sent as parsed |
@@ -1149,7 +1156,9 @@ leave a release unread.
 
 Each row above has a test, named after it:
 
-- Policy, one per row: `crates/nessa-server/tests/mcp_servers/app_call.rs`.
+- Policy, one per row: `crates/nessa-server/tests/mcp_servers/app_call.rs`
+  for the pure rules, and `crates/nessa-server/tests/conversation/app_call_policy.rs`
+  for each Cedar policy id.
 - Reviews: `crates/nessa-server/tests/conversation/app_reviews.rs`.
 - The flow, each row of "A tool call" and "A resource read":
   `crates/nessa-server/tests/conversation/app_calls.rs`.

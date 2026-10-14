@@ -125,10 +125,15 @@ async fn run_local_conversation(root: &Path) -> Evidence {
     .unwrap();
     nessa_local_storage::create_directory(&root.join("conversations")).unwrap();
     let database = root.join("conversations").join("metadata.sqlite3");
-    let metadata = Arc::new(LocalConversationStore::open(&database).unwrap());
+    let metadata = Arc::new(
+        LocalConversationStore::open(&database)
+            .unwrap()
+            .with_access_policy(crate::conversation_test_support::access_policy()),
+    );
     let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents,
             storage: storage.clone(),
             metadata: metadata.clone(),

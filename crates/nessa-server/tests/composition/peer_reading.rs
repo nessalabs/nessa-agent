@@ -212,8 +212,11 @@ impl Peer {
         )
         .await
         .unwrap();
-        let metadata =
-            Arc::new(LocalConversationStore::open(&root.join("metadata.sqlite3")).unwrap());
+        let metadata = Arc::new(
+            LocalConversationStore::open(&root.join("metadata.sqlite3"))
+                .unwrap()
+                .with_access_policy(crate::conversation_test_support::access_policy()),
+        );
         let storage = Arc::new(RecordStorage::new(root.join("source")).unwrap());
         storage.initialize().await.unwrap();
         let state = ProductRouteState::new(
@@ -229,7 +232,12 @@ impl Peer {
                 agent_probe: Arc::new(NoAgents),
             },
         )
-        .with_passive_read(receivers, metadata.clone(), metadata.clone())
+        .with_passive_read(
+            receivers,
+            metadata.clone(),
+            metadata.clone(),
+            crate::conversation_test_support::access_policy(),
+        )
         .with_record_source(Arc::new(NessaRecordReadSource::new(
             storage.clone(),
             Id::new(&gateway).unwrap(),
@@ -237,6 +245,7 @@ impl Peer {
         )))
         .with_catalogue_source(Arc::new(NessaCatalogueReadSource::new(
             metadata.clone(),
+            crate::conversation_test_support::access_policy(),
             Id::new(&gateway).unwrap(),
         )));
         let bound = bind(prepared, RuntimeDependencies::default().clock, state)
@@ -289,13 +298,14 @@ impl Peer {
         id: &ConversationId,
         reader: &(String, String),
     ) {
-        ShareGrants::change(
+        let receipt = ShareGrants::change(
             self.metadata.as_ref(),
             ShareGrantChange {
                 transition,
                 conversation_id: id.clone(),
                 receiver_id: Some(reader.0.clone()),
                 credential_id: CredentialId::new(reader.1.clone()).unwrap(),
+                expected_policy_revision: None,
                 initiator: ConversationCaller {
                     organization_id: OrganizationId::new(self.organization.clone()).unwrap(),
                     principal_id: PrincipalId::new(self.owner.clone()).unwrap(),
@@ -307,6 +317,7 @@ impl Peer {
         )
         .await
         .unwrap();
+        assert!(receipt.applied);
     }
 }
 

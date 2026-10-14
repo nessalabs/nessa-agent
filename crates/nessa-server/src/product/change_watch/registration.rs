@@ -166,6 +166,10 @@ impl WatchSelector {
             .passive_read
             .as_ref()
             .ok_or(WatchRefusal::Unavailable)?;
+        let access_policy = state
+            .conversation_access
+            .as_ref()
+            .ok_or(WatchRefusal::Unavailable)?;
         // Watch methods publish no grant of their own. A records watch is
         // admitted as a record head, and a catalogue watch as a catalogue head:
         // the same read the watch follows.
@@ -180,6 +184,7 @@ impl WatchSelector {
             conversations: conversations.as_ref(),
             grants: &PUBLISHED_PASSIVE_READ_GRANTS,
             share_grants: share_grants.as_ref(),
+            access_policy: access_policy.as_ref(),
         };
         let admitted = match self {
             Self::Records {
@@ -204,16 +209,13 @@ impl WatchSelector {
                     .catalogue(session, receiver, *epoch, PassiveRead::CatalogueHead)
                     .await
                     .map_err(WatchRefusal::Read)?;
-                // A catalogue watch is the owner's: its notices fire on every
-                // change to the owner's catalogue, granted or not. A paired
-                // device signs in as that owner; a peer gateway is another
-                // party, and the timing of the owner's ungranted work is not
-                // its to see, so it is refused the watch and polls its head,
-                // which moves only with what it was granted
-                // (`docs/design/auth/peer-gateways.md`).
-                if admitted.owner_id != *session.context().principal_id() {
-                    return Err(WatchRefusal::Read(ReadRefusal::Forbidden));
-                }
+                // A catalogue watch fires on every change to the owner's
+                // catalogue, granted or not; the policy decides who may
+                // follow that (`catalogue.watch`). A peer gateway polls its
+                // head instead (`docs/design/auth/peer-gateways.md`).
+                admission
+                    .catalogue_watch(session, &admitted)
+                    .map_err(WatchRefusal::Read)?;
                 Admitted::Catalogue(admitted)
             }
         };

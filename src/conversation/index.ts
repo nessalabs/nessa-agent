@@ -44,8 +44,11 @@ export {
 // the desktop window's alike.
 export { TranscriptNote } from "./ui/transcript-note"
 export {
+  historyExtent,
+  historyNotices,
   placeNotes,
   placePublished,
+  type HistoryExtent,
   type Note,
   type HeldFile,
   type HeldFileFailure,

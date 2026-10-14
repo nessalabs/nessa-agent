@@ -117,7 +117,12 @@ it("replaces the choices with each catalog the follow sends, and stops it on unm
   expect(container.textContent).toBe("none")
   act(() =>
     show?.({
-      catalog: { agents: [], environments: ["devbox"], nativeHooks: OFF },
+      catalog: {
+        agents: [],
+        environments: ["devbox"],
+        commandHosts: [],
+        nativeHooks: OFF,
+      },
       chosenAgent: undefined,
     }),
   )
@@ -125,7 +130,12 @@ it("replaces the choices with each catalog the follow sends, and stops it on unm
   const peer = `peer:${"ab".repeat(32)}`
   act(() =>
     show?.({
-      catalog: { agents: [], environments: ["devbox", peer], nativeHooks: OFF },
+      catalog: {
+        agents: [],
+        environments: ["devbox", peer],
+        commandHosts: [],
+        nativeHooks: OFF,
+      },
       chosenAgent: undefined,
     }),
   )
@@ -148,7 +158,12 @@ it("stops the follow and offers nothing while the gateway is unavailable", () =>
   act(() => root.render(React.createElement(Choices, { available: true, follow })))
   act(() =>
     show?.({
-      catalog: { agents: [], environments: ["devbox"], nativeHooks: OFF },
+      catalog: {
+        agents: [],
+        environments: ["devbox"],
+        commandHosts: [],
+        nativeHooks: OFF,
+      },
       chosenAgent: undefined,
     }),
   )
