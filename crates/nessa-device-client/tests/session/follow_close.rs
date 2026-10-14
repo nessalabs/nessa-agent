@@ -162,7 +162,10 @@ fn peer(
     let address = listener.local_addr().unwrap();
     let thread = Peer(Some(thread::spawn(move || {
         listener.set_nonblocking(true).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
+        // The client dials after it opens its cache. A two-second accept
+        // expires on a slow Windows runner, which then reports the wait as
+        // WouldBlock (os error 10035).
+        let deadline = Instant::now() + Duration::from_secs(15);
         let (stream, _) = loop {
             match listener.accept() {
                 Ok(accepted) => {
