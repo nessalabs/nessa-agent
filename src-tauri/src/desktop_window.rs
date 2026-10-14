@@ -15,16 +15,17 @@ pub const DESKTOP_WINDOW: &str = "desktop";
 /// Shows the desktop window and brings it forward, giving the app its Dock icon.
 pub fn open(app: &AppHandle) {
     let Some(window) = app.get_webview_window(DESKTOP_WINDOW) else {
-        eprintln!("[nessa] there is no desktop window to open");
+        crate::host_log::warn("there is no desktop window to open");
         return;
     };
     // Dock presence first: an Accessory app cannot become the active app, so
     // focusing the window before the policy changes would leave it behind.
     platform::current().set_dock_presence(app, true);
     if let Err(error) = window.show() {
-        eprintln!("[nessa] could not show the desktop window: {error}");
+        crate::host_log::warn(format!("could not show the desktop window: {error}"));
         return;
     }
+    crate::host_log::window_shown(DESKTOP_WINDOW);
     let _ = window.unminimize();
     let _ = window.set_focus();
 }
@@ -33,7 +34,7 @@ pub fn open(app: &AppHandle) {
 /// and takes the Dock icon away with it.
 pub fn dismiss(window: &Window) {
     if let Err(error) = window.hide() {
-        eprintln!("[nessa] could not hide the desktop window: {error}");
+        crate::host_log::warn(format!("could not hide the desktop window: {error}"));
         return;
     }
     platform::current().set_dock_presence(window.app_handle(), false);

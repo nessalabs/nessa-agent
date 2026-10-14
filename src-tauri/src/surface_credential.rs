@@ -102,6 +102,19 @@ pub(crate) struct ServiceNamespace {
     pub(crate) relative: PathBuf,
 }
 
+impl ServiceNamespace {
+    /// `logs` under this namespace. The gateway advertisement and `gateway.log`
+    /// live here, and the desktop startup log is the sibling file `host.log`.
+    pub(crate) fn logs_relative(&self) -> PathBuf {
+        self.relative.join("logs")
+    }
+
+    /// Absolute form of [`Self::logs_relative`].
+    pub(crate) fn log_directory(&self) -> PathBuf {
+        self.root.join(self.logs_relative())
+    }
+}
+
 /// Whether a name may be one path segment of a namespace.
 ///
 /// Conservative on purpose: these come from the environment and are joined into
@@ -708,6 +721,18 @@ mod tests {
                 root: absolute("data"),
                 relative: PathBuf::from("dev/instances/wt")
             })
+        );
+
+        let prod = service_namespace(base(), "prod", None).expect("prod namespace");
+        assert_eq!(prod.log_directory(), absolute("data").join("logs"));
+        let staged = service_namespace(base(), "dev", Some("wt")).expect("dev namespace");
+        assert_eq!(
+            staged.log_directory(),
+            absolute("data")
+                .join("dev")
+                .join("instances")
+                .join("wt")
+                .join("logs")
         );
     }
 

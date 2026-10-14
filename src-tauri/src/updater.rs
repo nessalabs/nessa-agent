@@ -828,7 +828,15 @@ pub fn install_update(app: AppHandle) {
         }
         // Not said: the tab is already showing the first request's progress,
         // and a failure drawn over a running download would be a lie.
-        Err(NotInstalling::AlreadyRunning) => return,
+        Err(NotInstalling::AlreadyRunning) => {
+            tracing::info!(
+                target: "nessa.retry",
+                command = "updater_install",
+                outcome = "already_running",
+                "outcome"
+            );
+            return;
+        }
     };
 
     let app = app.clone();
@@ -855,16 +863,27 @@ pub fn install_update(app: AppHandle) {
 /// Tells the panel an install did not happen, and why.
 ///
 /// Both halves matter. The panel turns this into the statement and the retry a
-/// person can act on; stderr keeps the technical reason next to the app's other
-/// diagnostics, where a bug report can find it.
+/// person can act on; the startup log keeps the technical reason, where a bug
+/// report can find it.
 fn refuse(app: &AppHandle, reason: &str) {
-    eprintln!("[nessa] could not install the update: {reason}");
+    tracing::warn!(
+        target: "nessa.retry",
+        command = "updater_install",
+        outcome = "failed",
+        cause = %reason,
+        "outcome"
+    );
     // The one emit worth naming when it fails. A lost progress event costs a
     // position of a bar and the next chunk redraws it; a lost refusal leaves a
     // tab saying it is downloading with nothing ever arriving to correct it,
     // and somebody asked for this install.
     if let Err(error) = app.emit_to(panel::MAIN_WINDOW, host::UPDATE_FAILED, reason) {
-        eprintln!("[nessa] and the panel was not told: {error}");
+        tracing::warn!(
+            target: "nessa.retry",
+            command = "updater_install",
+            %error,
+            "the panel was not told"
+        );
     }
 }
 
@@ -916,6 +935,15 @@ struct RestartsTheApp(AppHandle);
 
 impl Restarter for RestartsTheApp {
     fn restart(&self) {
+        tracing::info!(target: "nessa.retry", command = "updater_restart", "attempt");
+        crate::host_log::flush();
+        tracing::info!(
+            target: "nessa.retry",
+            command = "updater_restart",
+            outcome = "restarting",
+            "outcome"
+        );
+        crate::host_log::flush();
         self.0.restart();
     }
 }

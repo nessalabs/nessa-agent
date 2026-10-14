@@ -1608,7 +1608,10 @@ fn allocate_id(
 
 fn publish(events: &Arc<dyn GatewayStartupEvents>, startup: &GatewayStartup) {
     if catch_unwind(AssertUnwindSafe(|| events.publish(startup))).is_err() {
-        eprintln!("[nessa] gateway startup event adapter panicked");
+        tracing::error!(
+            target: "nessa.launch",
+            "gateway startup event adapter panicked"
+        );
     }
 }
 

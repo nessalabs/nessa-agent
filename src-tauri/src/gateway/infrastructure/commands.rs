@@ -28,11 +28,40 @@ pub(super) struct HostGatewayStartupEvents {
 
 impl GatewayStartupEvents for HostGatewayStartupEvents {
     fn publish(&self, startup: &ApplicationStartup) {
+        log_startup_phase(startup);
         let payload = payload(startup);
         for (label, _) in BUNDLED_WINDOWS {
             if let Err(error) = self.app.emit_to(label, GATEWAY_STARTUP, &payload) {
-                eprintln!("[nessa] could not publish gateway startup to {label}: {error}");
+                tracing::warn!(
+                    target: "nessa.launch",
+                    label,
+                    %error,
+                    "could not publish gateway startup"
+                );
             }
+        }
+    }
+}
+
+fn log_startup_phase(startup: &ApplicationStartup) {
+    let revision = startup.revision();
+    match startup.phase() {
+        GatewayStartupPhase::Starting(step) => {
+            tracing::info!(
+                target: "nessa.launch",
+                revision,
+                step = ?step,
+                "gateway startup step"
+            );
+        }
+        GatewayStartupPhase::Ready => crate::host_log::gateway_ready(),
+        GatewayStartupPhase::Failed(error) => {
+            tracing::error!(
+                target: "nessa.launch",
+                revision,
+                cause = %error,
+                "gateway startup failed"
+            );
         }
     }
 }
@@ -163,13 +192,46 @@ pub async fn retry_gateway_startup(
     deps: State<'_, HostDependencies>,
 ) -> Result<(), String> {
     let surface = bundled_window(window.label())?;
-    if let Some(gateway) = deps.gateway.as_deref() {
-        gateway
-            .retry(surface)
-            .await
-            .map_err(|error| error.to_string())?;
+    tracing::info!(
+        target: "nessa.retry",
+        command = "retry_gateway_startup",
+        surface = ?surface,
+        "attempt"
+    );
+    let Some(gateway) = deps.gateway.as_deref() else {
+        tracing::info!(
+            target: "nessa.retry",
+            command = "retry_gateway_startup",
+            surface = ?surface,
+            outcome = "unmanaged",
+            "outcome"
+        );
+        return Ok(());
+    };
+    match gateway.retry(surface).await {
+        Ok(()) => {
+            tracing::info!(
+                target: "nessa.retry",
+                command = "retry_gateway_startup",
+                surface = ?surface,
+                outcome = "succeeded",
+                "outcome"
+            );
+            Ok(())
+        }
+        Err(error) => {
+            let cause = error.to_string();
+            tracing::warn!(
+                target: "nessa.retry",
+                command = "retry_gateway_startup",
+                surface = ?surface,
+                outcome = "failed",
+                cause = %cause,
+                "outcome"
+            );
+            Err(cause)
+        }
     }
-    Ok(())
 }
 
 /// Why a Claude configuration-directory change was not applied.

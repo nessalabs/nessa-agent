@@ -106,7 +106,9 @@ pub fn watch(app: AppHandle, loads: Loads) {
         std::thread::sleep(Duration::from_secs(4));
         let handle = app.clone();
         if let Err(error) = app.run_on_main_thread(move || explain(&handle, &loads)) {
-            eprintln!("[nessa] could not report a page that never loaded: {error}");
+            crate::host_log::warn(format!(
+                "could not report a page that never loaded: {error}"
+            ));
         }
     });
 }
@@ -135,9 +137,14 @@ fn explain(app: &AppHandle, loads: &Loads) {
             .map(|url| url.to_string())
             .unwrap_or_else(|_| "http://localhost:1420/".to_string());
         let said = host_refusal::fill("document-unserved", &[("page", page.as_str())]);
-        eprintln!("[nessa] {label}: {said}");
+        tracing::warn!(target: "nessa.window", label, "{said}");
         if let Err(error) = window.navigate(load_failure_url(&page)) {
-            eprintln!("[nessa] {label}: could not open the load failure page: {error}");
+            tracing::warn!(
+                target: "nessa.window",
+                label,
+                %error,
+                "could not open the load failure page"
+            );
         }
     }
 }

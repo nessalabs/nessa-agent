@@ -58,7 +58,7 @@ pub fn toggle(app: &AppHandle) -> Option<bool> {
     }
 
     if let Err(error) = show(&window, &settings(app)) {
-        eprintln!("[nessa] could not summon the panel: {error}");
+        crate::host_log::warn(format!("could not summon the panel: {error}"));
         return None;
     }
     Some(true)
@@ -134,7 +134,7 @@ pub fn open_setup_window(app: &AppHandle) {
             #[cfg(debug_assertions)]
             reveal_setup_window(window);
         }
-        Err(error) => eprintln!("[nessa] could not open setup: {error}"),
+        Err(error) => crate::host_log::warn(format!("could not open setup: {error}")),
     }
 }
 
@@ -236,11 +236,26 @@ pub fn retry_setup_record(
     deps: State<'_, HostDependencies>,
     agent: Option<String>,
 ) -> SetupHandoff {
+    tracing::info!(target: "nessa.retry", command = "retry_setup_record", "attempt");
     let settings_store = deps.settings.clone();
-    settle(
+    let handoff = settle(
         || record_completion(&*settings_store, agent),
         || close_setup_window(&app),
-    )
+    );
+    tracing::info!(
+        target: "nessa.retry",
+        command = "retry_setup_record",
+        outcome = if handoff.record_error.is_none() && handoff.setup_closed {
+            "succeeded"
+        } else {
+            "failed"
+        },
+        setup_closed = handoff.setup_closed,
+        record_error = handoff.record_error.as_deref().unwrap_or(""),
+        close_error = handoff.close_error.as_deref().unwrap_or(""),
+        "outcome"
+    );
+    handoff
 }
 
 /// Close the setup window, or report why it would not go.
@@ -297,7 +312,7 @@ fn settle(
     close_setup: impl FnOnce() -> Result<(), String>,
 ) -> SetupHandoff {
     if let Some(error) = record().err() {
-        eprintln!("[nessa] {error}");
+        crate::host_log::warn(&error);
         return SetupHandoff {
             setup_closed: false,
             close_error: None,
@@ -311,7 +326,7 @@ fn settle(
 fn close_only(close_setup: impl FnOnce() -> Result<(), String>) -> SetupHandoff {
     let close_error = close_setup().err();
     if let Some(error) = &close_error {
-        eprintln!("[nessa] {error}");
+        crate::host_log::warn(error);
     }
     SetupHandoff {
         setup_closed: close_error.is_none(),
@@ -334,7 +349,10 @@ fn close_only(close_setup: impl FnOnce() -> Result<(), String>) -> SetupHandoff 
 /// for. See `src/onboarding/ui/reveal-on-first-render.ts`.
 #[tauri::command]
 pub fn reveal_setup_window(window: WebviewWindow) {
-    let _ = window.show();
+    match window.show() {
+        Ok(()) => crate::host_log::window_shown(SETUP_WINDOW),
+        Err(error) => crate::host_log::warn(format!("could not show setup: {error}")),
+    }
     platform::current().reveal_overlay(&window);
 }
 
@@ -401,7 +419,9 @@ pub fn restart_onboarding(app: &AppHandle, settings: &dyn SettingsStore) {
     // that will not take the change costs the next launch's setup, not this
     // window, so it is reported and the window opens anyway.
     if let Err(error) = set_onboarding(settings, Onboarding::default()) {
-        eprintln!("[nessa] could not reopen setup for the next launch: {error}");
+        crate::host_log::warn(format!(
+            "could not reopen setup for the next launch: {error}"
+        ));
     }
 
     let Some(window) = app.get_webview_window(SETUP_WINDOW) else {
@@ -431,7 +451,7 @@ pub fn show(window: &WebviewWindow, settings: &Settings) -> tauri::Result<()> {
     // one it was last fitted for, and the viewport is sized for the work area
     // it is standing in. A failure costs the resize fix, not the show.
     if let Err(error) = platform::current().fit_viewport(window) {
-        eprintln!("[nessa] could not fit the panel's viewport: {error}");
+        crate::host_log::warn(format!("could not fit the panel's viewport: {error}"));
     }
     // Setup covers the menu bar, so a panel at its ordinary level would be
     // summoned behind the window teaching the shortcut that summoned it. The
@@ -444,6 +464,7 @@ pub fn show(window: &WebviewWindow, settings: &Settings) -> tauri::Result<()> {
         .is_some_and(|setup| setup.is_visible().unwrap_or(false));
     platform::current().set_above_overlay(window, over_setup);
     window.show()?;
+    crate::host_log::window_shown(window.label());
     window.set_focus()?;
     let _ = window.emit(host::FOCUS_COMPOSER, ());
     Ok(())

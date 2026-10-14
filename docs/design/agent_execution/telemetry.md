@@ -2,9 +2,10 @@
 
 Status: proposed. Research behind
 [ADR 195](../../adr/todo/195-tracing-is-the-telemetry-port.md), argued in
-[#195](https://github.com/nessalabs/nessa-agent/issues/195). Nothing here is
-implemented; each slice in section 5 is a sub-issue of #195. Paths are
-relative to the repository root. Line numbers were read at `19d42ff1`.
+[#195](https://github.com/nessalabs/nessa-agent/issues/195). The desktop
+startup log in section 2.3 is implemented. The rest of this design is not;
+each slice in section 5 is a sub-issue of #195. Paths are relative to the
+repository root. Line numbers were read at `19d42ff1`.
 
 ## 1. What we want
 
@@ -108,15 +109,18 @@ Facts that matter for the design:
 - `GET /health` deliberately "exposes no product state" (`server/entrypoint/http.rs:13-14`).
   Not a place for a metrics endpoint.
 
-### 2.3 The desktop host and shell have no logging framework
+### 2.3 The desktop host logs startup; the shell has no logging framework
 
-- Host: about 67 `eprintln!("[nessa] ...")` calls, no `tracing`, no `log`
-  crate. In a packaged app that stderr is lost. The only structured evidence
-  is the reconciliation audit (`src-tauri/src/gateway/infrastructure/reconciliation_audit.rs`)
-  and the credential-save audit, both JSON files under the config root.
+- Host: startup lines go through `tracing` to `{data}/logs/host.log`
+  (`src-tauri/src/host_log.rs`), beside `gateway.log`. Other
+  `eprintln!("[nessa] ...")` calls remain, and in a packaged app that stderr
+  is still lost. The reconciliation audit
+  (`src-tauri/src/gateway/infrastructure/reconciliation_audit.rs`) and the
+  credential-save audit are JSON files under the config root.
 - Shell: `console.warn/error` with a `[nessa]` prefix; a dev-only bridge
   forwards warn/error to the terminal (`src-tauri/src/diagnostics.rs`,
-  `src/diagnostics/dev-console.ts`). No timing code anywhere.
+  `src/diagnostics/dev-console.ts`). The shell has no timing of its own.
+  Host startup durations are the `nessa.timing` lines in `host.log`.
 - No "open logs", no support bundle, no diagnostics export in the tray or
   settings.
 
@@ -443,11 +447,14 @@ each hop below says which of the two it delivers.
 
 **src-tauri (desktop host)**
 
-- The migration `CODING_STANDARDS.md:702-705` already anticipates: build a
-  `fmt` subscriber in `main.rs` before `Builder`, text to
-  `<config_root>/logs/host.log` bounded on start, and replace the 67
-  `eprintln!("[nessa] ...")` calls with `tracing::{info,warn,error}!`.
-  Failures before the subscriber exists keep `eprintln!` and say so.
+- Startup acceptance lines are recorded now. `src-tauri/src/host_log.rs`
+  installs a `fmt` subscriber in `main` before `Builder` and writes
+  `{data}/logs/host.log` beside `gateway.log`, size-capped when the file is
+  opened. Launch, window, login-item, retry, and timing lines use `tracing`.
+  The startup `eprintln!` calls on that path go through the same subscriber.
+  If a subscriber is already installed, `install` leaves it and says so on
+  stderr. The remaining host `eprintln!` calls, the spans below, and the tray
+  item are still this slice.
 - Spans where the host already has correlation IDs: gateway reconciliation
   and readiness (`macos/control.rs:870-921`), update check, summon-to-shown.
   No port: the subscriber is composition's, exactly as in the gateway.
