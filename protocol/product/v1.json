@@ -216,7 +216,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 70,
+          "maxItems": 73,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -2070,7 +2070,15 @@
     },
     "ConversationCommandOutcome": {
       "type": "string",
-      "enum": ["dispatched", "withdrawn", "cancelled", "already_final", "no_effect", "refused_after_save", "unavailable_after_save"],
+      "enum": [
+        "dispatched",
+        "withdrawn",
+        "cancelled",
+        "already_final",
+        "no_effect",
+        "refused_after_save",
+        "unavailable_after_save"
+      ],
       "description": "What a settled submit or stop did. Absent until the stage is settled. Already final means nothing was sent. No effect means the submit was refused before anything was enqueued or injected; retrying that request answers the same refusal and does not dispatch. Refused after save means the submit saved the turn and then refused before injection; retrying that request answers revoked_after_save and does not inject. Unavailable after save means the submit saved the turn and then could not decide before injection; retrying that request answers unavailable_after_save and does not inject."
     },
     "ConversationCommandReceipt": {
