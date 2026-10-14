@@ -67,11 +67,15 @@ for the lines.
 Gaps live on the fold, its checkpoint, and `CommittedSession`. They are not
 fields of `SessionSnapshot`. The checkpoint requires the gap list and whether
 it was cut, so a checkpoint written before this change is reread from the
-records. At most 32 lines are kept. A later gap is still skipped, adds no
-line, and sets `unreadableTruncated`. The id is the decimal physical position
-of the record. `afterExecutionId` is the last accepted turn at that moment,
-and it is absent when there was none. A duplicate of an id already kept does
-not set the flag.
+records. The list it stores is the prefix published with the last complete
+save, oldest first, and the cut flag as of that save. A gap noted after that
+save is left out; replaying the suffix notes it again. At most 32 lines are
+kept. A later gap is still skipped, adds no line, and sets `unreadableTruncated`
+when the save that follows it completes. The id is the decimal physical
+position of the record, and a checkpoint whose ids are not strictly increasing
+positions is reread from the records. `afterExecutionId` is the last accepted
+turn at that moment, and it is absent when there was none. A duplicate of an
+id already kept does not set the flag.
 
 The view carries `unreadable`: an array of `{ id, afterExecutionId? }`, always
 present, possibly empty, and `unreadableTruncated`: a boolean, always

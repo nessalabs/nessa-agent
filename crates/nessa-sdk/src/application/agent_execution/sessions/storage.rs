@@ -201,17 +201,31 @@ impl UnreadablePart {
         if parts.len() > Self::MAX_PER_CONVERSATION {
             return false;
         }
-        let mut seen = std::collections::BTreeSet::new();
+        let mut previous = 0u64;
         parts.iter().all(|part| {
-            seen.insert(part.id.as_str())
-                && !part.id.is_empty()
-                && part.id.len() <= 20
-                && part.id.bytes().all(|byte| byte.is_ascii_digit())
-                && !part.id.starts_with('0')
-                && part
+            if part.id.is_empty()
+                || part.id.len() > 20
+                || !part.id.bytes().all(|byte| byte.is_ascii_digit())
+                || part.id.starts_with('0')
+                || part
                     .after_execution_id
                     .as_ref()
-                    .is_none_or(|id| !id.is_empty() && id.len() <= 256)
+                    .is_some_and(|id| id.is_empty() || id.len() > 256)
+            {
+                return false;
+            }
+            // `01` parses as 1, so the leading-zero check above stays. A value
+            // past `u64::MAX` is not a physical position. Oldest first: a
+            // restored suffix appends later positions, and a list that is
+            // already out of order would put a newer gap ahead of an older one.
+            let Ok(position) = part.id.parse::<u64>() else {
+                return false;
+            };
+            if position <= previous {
+                return false;
+            }
+            previous = position;
+            true
         })
     }
 }

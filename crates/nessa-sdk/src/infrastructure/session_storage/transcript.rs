@@ -91,12 +91,18 @@ pub struct TranscriptFold {
     groups: GroupProgress,
     pending: PendingBody,
     frames: FrameValidator,
-    /// Gaps whose record position is at or before the last published save.
-    /// A gap in the unpublished suffix is noted again when that suffix is replayed.
+    /// Every gap noted so far, oldest first, including the unpublished suffix.
+    /// `published_unread` is the prefix the last save completion published.
+    /// A checkpoint stores that prefix; replaying the suffix notes the rest again.
     unread: Vec<UnreadablePart>,
+    /// Length of the published prefix of `unread`.
+    published_unread: usize,
     /// A record past [`UnreadablePart::MAX_PER_CONVERSATION`] was also skipped.
     /// The transcript ends with one line for that; the list itself stays at 32.
     unreadable_truncated: bool,
+    /// `unreadable_truncated` as of the last save completion. An overflow in
+    /// the unpublished suffix stays off the checkpoint until that save completes.
+    published_unreadable_truncated: bool,
     /// A run of physical frames that are not frames. One line covers the run.
     resyncing: bool,
     #[cfg(test)]
@@ -124,7 +130,9 @@ impl TranscriptFold {
             pending: PendingBody::default(),
             frames: FrameValidator::after(0),
             unread: Vec::new(),
+            published_unread: 0,
             unreadable_truncated: false,
+            published_unreadable_truncated: false,
             resyncing: false,
             #[cfg(test)]
             semantic_decodes: 0,
@@ -269,7 +277,9 @@ impl TranscriptFold {
             groups: self.groups.clone(),
             pending: self.pending.clone(),
             unread: self.unread.clone(),
+            published_unread: self.published_unread,
             unreadable_truncated: self.unreadable_truncated,
+            published_unreadable_truncated: self.published_unreadable_truncated,
             resyncing: self.resyncing,
             loaded: self.loaded,
             freshness: self.freshness,
@@ -457,6 +467,8 @@ impl TranscriptFold {
                 }
                 self.published = self.committed.snapshot_handle();
                 self.published_facts = self.committed.fact_count();
+                self.published_unread = self.unread.len();
+                self.published_unreadable_truncated = self.unreadable_truncated;
                 self.committed.abort(position);
             }
         }
@@ -779,8 +791,10 @@ impl TranscriptFold {
             facts: self.fact_count(),
             snapshot: self.snapshot().map(snapshot::checkpoint::SnapshotRef),
             group: self.groups.checkpoint(),
-            unread: self.unread.clone(),
-            unreadable_truncated: self.unreadable_truncated,
+            // The published cursor is `applied`. Gaps noted after that save
+            // are not part of it; the suffix notes them again on replay.
+            unread: self.unread[..self.published_unread].to_vec(),
+            unreadable_truncated: self.published_unreadable_truncated,
         };
         let mut output = ChunkWriter::with_limit(max_bytes);
         if serde_json::to_writer(&mut output, &saved).is_err() {
@@ -865,6 +879,8 @@ impl TranscriptFold {
         // Pending downloaded frames belong to the receiver journal. Resume at
         // A, then drain that journal through D before requesting a new page.
         fold.frames = FrameValidator::after(saved.applied);
+        fold.published_unread = saved.unread.len();
+        fold.published_unreadable_truncated = saved.unreadable_truncated;
         fold.unread = saved.unread;
         fold.unreadable_truncated = saved.unreadable_truncated;
         fold.loaded = saved.loaded;
@@ -881,7 +897,9 @@ struct ReceiverBackup {
     groups: GroupProgress,
     pending: PendingBody,
     unread: Vec<UnreadablePart>,
+    published_unread: usize,
     unreadable_truncated: bool,
+    published_unreadable_truncated: bool,
     resyncing: bool,
     loaded: bool,
     freshness: CommittedFreshness,
@@ -917,7 +935,9 @@ impl TranscriptTransaction<'_> {
             self.fold.groups = backup.groups;
             self.fold.pending = backup.pending;
             self.fold.unread = backup.unread;
+            self.fold.published_unread = backup.published_unread;
             self.fold.unreadable_truncated = backup.unreadable_truncated;
+            self.fold.published_unreadable_truncated = backup.published_unreadable_truncated;
             self.fold.resyncing = backup.resyncing;
             self.fold.loaded = backup.loaded;
             self.fold.freshness = backup.freshness;
@@ -3288,6 +3308,187 @@ mod tests {
             TranscriptFold::restore(scope, fold.applied(), &fold.checkpoint().unwrap()).unwrap();
         assert_eq!(restored.unreadable(), fold.unreadable());
         assert_eq!(restored.snapshot(), fold.snapshot());
+    }
+
+    /// A save unit and the completion that publishes it. `hole` is the number
+    /// of physical positions left between them; the completion frames name
+    /// their own positions, so a caller can fill that hole with another record.
+    fn save_without_completion(
+        fold: &TranscriptFold,
+        changes: &[SessionChange],
+        generation: u64,
+        hole: u64,
+    ) -> (Vec<Record>, Vec<Record>) {
+        let payload = snapshot::encode_semantic_batch(changes).unwrap();
+        let binding = SessionSaveGeneration::new(
+            SessionSaveBackend::Record {
+                stream: fold.scope.stream().clone(),
+                incarnation: *Uuid::parse_str(fold.scope.incarnation().as_str())
+                    .unwrap()
+                    .as_bytes(),
+            },
+            fold.applied(),
+            generation,
+        );
+        let identity = SaveIdentity::binding(&binding).unwrap();
+        let unit = Header::unit(identity.clone(), 0, EMPTY_CHAIN, &payload);
+        let start = fold.downloaded() + 1;
+        let frames = stream_fact::frame_fact(
+            &FramedFact {
+                key: FactKey::new(FactKind::SaveUnit, None, 0).unwrap(),
+                body: unit.encode(&payload),
+            },
+            start,
+        )
+        .unwrap();
+        let saved = records(&fold.scope, start, &frames);
+        let terminal = Header::unit(identity, 1, unit.chain(payload.len() as u64), &[]);
+        let complete_at = start + frames.len() as u64 + hole;
+        let complete = stream_fact::frame_fact(
+            &FramedFact {
+                key: FactKey::new(FactKind::SaveComplete, None, 1).unwrap(),
+                body: terminal.encode(&[]),
+            },
+            complete_at,
+        )
+        .unwrap();
+        (saved, records(&fold.scope, complete_at, &complete))
+    }
+
+    #[test]
+    fn a_checkpoint_leaves_out_a_gap_the_published_save_has_not_reached() {
+        let scope = scope();
+        let mut live = TranscriptFold::new(scope.clone()).unwrap();
+        // The observation names no accepted turn, so the unit is one gap and
+        // the open is abandoned with it. A checkpoint taken before the
+        // completion must not carry that gap: replaying it with the gap
+        // already present would hide the observation and keep the open.
+        let (unit, complete) = save_without_completion(
+            &live,
+            &[opened(), accepted_input("kept"), text_observation("never")],
+            0,
+            0,
+        );
+        live.apply(&unit).unwrap();
+        assert_eq!(live.applied(), 0);
+        assert!(live.snapshot().is_none());
+        assert_eq!(live.unreadable().len(), 1);
+        let checkpoint = live.checkpoint().unwrap();
+        let mut restored = TranscriptFold::restore(scope.clone(), 0, &checkpoint).unwrap();
+        assert!(restored.unreadable().is_empty());
+        assert!(!restored.unreadable_truncated());
+        restored.apply(&unit).unwrap();
+        live.apply(&complete).unwrap();
+        restored.apply(&complete).unwrap();
+        assert!(live.snapshot().is_none());
+        assert_eq!(restored.snapshot(), live.snapshot());
+        assert_eq!(restored.unreadable(), live.unreadable());
+        assert!(!restored.unreadable_truncated());
+    }
+
+    #[test]
+    fn a_turn_ahead_of_an_unpublished_gap_survives_suffix_replay() {
+        let scope = scope();
+        let mut live = TranscriptFold::new(scope.clone()).unwrap();
+        live.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let published = live.applied();
+        let (unit, complete) = save_without_completion(&live, &[accepted_input("kept")], 1, 1);
+        let torn_at = complete[0].position - 1;
+        let torn = Record {
+            position: torn_at,
+            id: id("torn-frame"),
+            scope: scope.clone(),
+            payload: vec![0xff],
+        };
+        live.apply(&unit).unwrap();
+        live.apply(std::slice::from_ref(&torn)).unwrap();
+        assert_eq!(live.applied(), published);
+        assert!(live
+            .unreadable()
+            .iter()
+            .any(|part| part.id() == torn_at.to_string()));
+        let checkpoint = live.checkpoint().unwrap();
+        {
+            let mut staged = live.transaction();
+            staged.apply(&complete).unwrap();
+        }
+        assert_eq!(live.checkpoint().unwrap(), checkpoint);
+        let mut restored = TranscriptFold::restore(scope, published, &checkpoint).unwrap();
+        assert!(restored.unreadable().is_empty());
+        assert!(!restored.unreadable_truncated());
+        restored.apply(&unit).unwrap();
+        restored.apply(std::slice::from_ref(&torn)).unwrap();
+        live.apply(&complete).unwrap();
+        restored.apply(&complete).unwrap();
+        assert_eq!(live.snapshot().unwrap().invocations.len(), 1);
+        assert_eq!(restored.snapshot(), live.snapshot());
+        assert_eq!(
+            restored
+                .unreadable()
+                .iter()
+                .map(UnreadablePart::id)
+                .collect::<Vec<_>>(),
+            vec![torn_at.to_string().as_str()]
+        );
+    }
+
+    #[test]
+    fn an_unpublished_overflow_stays_off_the_published_gap_list() {
+        let scope = scope();
+        let mut live = TranscriptFold::new(scope.clone()).unwrap();
+        let foreign = Scope::new(
+            scope.receiver().clone(),
+            scope.origin().clone(),
+            scope.stream().clone(),
+            id("other"),
+            scope.schema().clone(),
+            scope.access_epoch().clone(),
+        );
+        // Each foreign record is its own gap, and none of them is a save
+        // completion, so the cut flag is still unpublished.
+        let batch: Vec<_> = (1..=33)
+            .map(|position| Record {
+                position,
+                id: id(&format!("bad{position}")),
+                scope: foreign.clone(),
+                payload: vec![1],
+            })
+            .collect();
+        live.apply(&batch).unwrap();
+        assert_eq!(live.unreadable().len(), 32);
+        assert!(live.unreadable_truncated());
+        assert_eq!(live.applied(), 0);
+        let mut restored = TranscriptFold::restore(scope, 0, &live.checkpoint().unwrap()).unwrap();
+        assert!(restored.unreadable().is_empty());
+        assert!(!restored.unreadable_truncated());
+        restored.apply(&batch).unwrap();
+        assert_eq!(restored.unreadable(), live.unreadable());
+        assert!(restored.unreadable_truncated());
+    }
+
+    #[test]
+    fn a_checkpoint_refuses_an_unordered_or_impossible_gap_id() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let checkpoint = fold.checkpoint().unwrap();
+        let value: Value = serde_json::from_reader(checkpoint.reader()).unwrap();
+        for unread in [
+            serde_json::json!([{"id": "4"}, {"id": "2"}]),
+            serde_json::json!([{"id": "18446744073709551616"}]),
+        ] {
+            let mut changed = value.clone();
+            changed["unread"] = unread;
+            let malformed =
+                TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&changed).unwrap()])
+                    .unwrap();
+            assert!(matches!(
+                TranscriptFold::restore(scope.clone(), fold.applied(), &malformed),
+                Err(TranscriptError::Checkpoint)
+            ));
+        }
     }
 
     #[test]
