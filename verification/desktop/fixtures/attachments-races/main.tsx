@@ -17,6 +17,7 @@ import {
   uploadChanged,
   removeFile,
   openConversation,
+  setActive,
 } from "../../../../src/conversation/testing"
 import { sessionReady } from "../../../../src/session/testing"
 import "../../../../src/styles.css"
@@ -149,6 +150,19 @@ const probe = {
     probe.began?.(requestId, "picked")
     probe.readied?.({ id: `${requestId}:0`, name, readying: true })
   },
+  beginDrop: (batch: string) => probe.began?.(batch, "dropped"),
+  openAnotherConversation: () => {
+    store.dispatch(openConversation())
+    return store.getState().conversation.activeId
+  },
+  selectConversation: (id: string) => store.dispatch(setActive(id)),
+  finishDropRefusal: (batch: string, reason: string) =>
+    probe.drop?.({
+      batch,
+      files: [],
+      refused: { reason, shown: null, detail: null },
+      text: { plain: "", uriList: "", html: "" },
+    }),
   settlePick: (requestId: string, files: PickerFile[]) => {
     const request = probe.pickRequests.find((pending) => pending.requestId === requestId)
     if (!request) throw new Error(`Unknown picker request ${requestId}`)

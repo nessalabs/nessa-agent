@@ -70,7 +70,21 @@ request is refused without replacing that request's captured destination.
 | AG15 | 64 drops begin in A/c0; switch to empty B/c0; the 65th is rejected; an older result, duplicate, unknown and post-capacity result arrive | Keep all 64 destinations until terminal results; show the 65th refusal in B; ignore its rejected result and unknown/duplicate results; route the oldest result only to A and consume it once; admit the next batch into B after a slot frees | actual App 65-drop saturation browser scenario |
 | AG16 | A host drop carries text or an image URL without paths and therefore without a batch-begun event | Text is pasted to the focused composer; image fetch is explicitly owned by the current destination at result delivery; path/refusal results still require one reserved batch | actual App host-drop regression |
 | AG17 | Browser picker fallback opens for A; the provider changes to B before `change`; the chooser is attempted again, cancelled, reopened or torn down | A's delayed change attaches to A; a second attempt cannot replace A's owner; cancellation frees the single input; unmount retires its operation and ignores late events | actual App and hook browser-picker regressions |
+| AG18 | A and B are open in one store; A's delayed refusal arrives while B is active, then A is revisited and answered | Retain one refusal per open local conversation in the current store/resource scope; A and B notices remain independent, and answering A leaves B's notice intact | owner hook regression |
+| AG19 | A host listener registration is pending while the provider changes; the old callback fires after unmount | Keep one host subscription for the mounted component, read the latest destination from committed refs, and ignore callbacks after disposal without a registration gap | host-drop and owner hook regressions |
 
 The host-drop adapter carries the captured destination as one value; it does
 not resolve it to a local string and hand that to a replacement hook. The App
 reveals a draft only for a destination owned by its current store.
+
+Refusal state is local to the attachment hook and its store/resource scope, but
+one global slot loses a still-open inactive conversation's message when another
+tab refuses. Refusals therefore belong in a read-only map keyed by local
+conversation ID, pruned when the conversation closes or its provider scope is
+retired; only the active conversation's entry is rendered or dismissed. The
+picker ownership suite covers independent notices, delayed inactive-tab
+refusals, answer isolation, same-ID provider replacement, and close cleanup.
+Likewise, host event subscriptions belong to the mounted UI boundary rather
+than to a provider render: re-registering during a provider swap can leave an
+async unsubscribe/register gap, while callbacks can already consult the latest
+committed destination through a ref.

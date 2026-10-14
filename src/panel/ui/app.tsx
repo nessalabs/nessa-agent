@@ -280,8 +280,6 @@ export function App({
   // there is no host, the page keeps its own drops, and nothing below fires.
   // Neither is gated on the other: each is silent where the other is live.
   const hostDrop = useHostDrop({
-    owner: attachments.captureDestination().store,
-    resources: attachmentResources,
     captureDestination: attachments.captureDestination,
     addChosenFiles: (chosen, destination) => {
       if (attachments.isCurrent(destination)) revealDraft(destination.conversationId)

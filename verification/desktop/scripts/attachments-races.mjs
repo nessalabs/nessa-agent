@@ -16,6 +16,7 @@ const scenarios = [
   "second-url",
   "picker-owner-correlation",
   "drop-capacity",
+  "conversation-refusals",
   "pathless-host-drop",
   "browser-picker-fallback",
   "upload-parent-success",
@@ -520,6 +521,76 @@ try {
             await page.screenshot({
               path: `/tmp/attachment-drop-capacity-after-free-${engine}.png`,
             })
+          } else if (scenario === "conversation-refusals") {
+            const firstId = (await snapshot()).tabs[0].id
+            await page.evaluate(() => window.__attachmentProbe.beginDrop("refusal-a"))
+            const secondId = await page.evaluate(() =>
+              window.__attachmentProbe.openAnotherConversation(),
+            )
+            assert.ok(secondId && secondId !== firstId)
+            await page.evaluate(() => window.__attachmentProbe.beginDrop("refusal-b"))
+            await page.evaluate(() =>
+              window.__attachmentProbe.finishDropRefusal("refusal-b", "folder-empty"),
+            )
+            await page.getByText("Folder has no files", { exact: true }).waitFor()
+            await page.evaluate(() =>
+              window.__attachmentProbe.finishDropRefusal("refusal-a", "folder-too-large"),
+            )
+            assert.equal(
+              await page.getByText("Folder has no files", { exact: true }).count(),
+              1,
+            )
+            assert.equal(
+              await page.getByText("Folder is too big to read", { exact: true }).count(),
+              0,
+            )
+            await page.screenshot({ path: `/tmp/attachment-refusal-b-${engine}.png` })
+
+            await page.evaluate(
+              (id) => window.__attachmentProbe.selectConversation(id),
+              firstId,
+            )
+            await page.getByText("Folder is too big to read", { exact: true }).waitFor()
+            assert.equal(
+              await page.getByText("Folder has no files", { exact: true }).count(),
+              0,
+            )
+            await page.screenshot({ path: `/tmp/attachment-refusal-a-${engine}.png` })
+            await page.evaluate(() => window.__attachmentProbe.beginDrop("answer-a"))
+            await page.evaluate(() =>
+              window.__attachmentProbe.drop({
+                batch: "answer-a",
+                files: [
+                  {
+                    path: "/verification/answer.pdf",
+                    name: "answer.pdf",
+                    size: 1,
+                    mimeType: "application/pdf",
+                    ticket: "answer-a",
+                  },
+                ],
+                refused: null,
+                text: { plain: "", uriList: "", html: "" },
+              }),
+            )
+            await page.waitForFunction(() =>
+              window.__attachmentProbe
+                .snapshot()
+                .draft.some((part) => part.type === "file"),
+            )
+            assert.equal(
+              await page.getByText("Folder is too big to read", { exact: true }).count(),
+              0,
+            )
+            await page.evaluate(
+              (id) => window.__attachmentProbe.selectConversation(id),
+              secondId,
+            )
+            await page.getByText("Folder has no files", { exact: true }).waitFor()
+            assert.equal(
+              await page.getByText("Folder has no files", { exact: true }).count(),
+              1,
+            )
           } else if (scenario === "pathless-host-drop") {
             await page.evaluate(() =>
               window.__attachmentProbe.drop({

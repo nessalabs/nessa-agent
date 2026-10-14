@@ -1443,7 +1443,7 @@ zero times, preserves the draft and paints **Attachments still loading**; read
 completion allows one send containing the text and one image. A second URL drop
 while the first fetch is pending paints **Still reading files** and starts no
 second fetch. The JSON reports send, attachment, refusal and page-error counts
-for all thirty engine/scenario pairs. The `drop-capacity` case begins 64
+for all thirty-two engine/scenario pairs. The `drop-capacity` case begins 64
 batches in A/c0, switches to empty B/c0, and checks that the visible 65th-drop
 refusal belongs to B. The rejected overflow and unknown results do nothing;
 the oldest result attaches once to A, a duplicate does nothing, and B accepts a
@@ -1474,6 +1474,12 @@ fetch waits. `browser-picker-fallback` cancels and reopens the native browser in
 then resolves its delayed file change after the provider has changed; the original
 owner receives it. Cropped views of both results are retained in
 [`attachment-gesture-owners`](evidence/attachment-gesture-owners/README.md).
+`conversation-refusals` leaves one refused folder in each of two open tabs,
+delivers A's result while B is active, revisits and answers A, and verifies B's
+notice remains. The paired screenshots show each tab's own notice. A delayed
+host-batch registration test also replaces the provider before the subscription
+resolves and verifies the single mounted listener still captures the current
+destination; a retained callback after unmount has no effect.
 
 
 ## Provider authentication recovery (#501)

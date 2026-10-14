@@ -146,6 +146,61 @@ it("keeps the host batch listener through local attachment-state renders", async
   expect(onAttachmentBatch).toHaveBeenCalledTimes(1)
 })
 
+it("does not resubscribe the host batch channel during a provider replacement", async () => {
+  const conversationId = hook.captureDestination().conversationId
+  await act(async () => root.unmount())
+  root = createRoot(container)
+  onAttachmentBatch.mockClear()
+  const registration = deferred<() => void>()
+  onAttachmentBatch.mockImplementation(
+    (handler: (batch: string, gesture: "picked" | "dropped") => void) => {
+      began = handler
+      return registration.promise
+    },
+  )
+  await act(async () => {
+    root.render(
+      React.createElement(Provider, {
+        store,
+        children: React.createElement(Surface),
+      }),
+    )
+  })
+  const firstBegin = began
+  const firstReady = said
+  const storeB = makeStore(
+    createDependencies({
+      conversation: scenarioEffects("echo") as unknown as ConversationEffects,
+    }),
+  )
+  await act(async () => storeB.dispatch(openConversation()))
+  await act(async () => storeB.dispatch(setActive(conversationId)))
+  store = storeB
+  resources = createAttachmentResources()
+  await act(async () => {
+    root.render(
+      React.createElement(Provider, {
+        store: storeB,
+        children: React.createElement(Surface),
+      }),
+    )
+  })
+
+  expect(onAttachmentBatch).toHaveBeenCalledTimes(1)
+  const batch = "late-registration-drop"
+  announced.add(batch)
+  await act(async () => {
+    firstBegin(batch, "dropped")
+    firstReady({ id: `${batch}:0`, name: "survived-gap.pdf", readying: true })
+  })
+  expect(onAttachmentBatch).toHaveBeenCalledTimes(1)
+  expect(names()).toEqual(["survived-gap.pdf"])
+  expect(hook.isPending(conversationId)).toBe(true)
+
+  registration.resolve(() => {})
+  await act(async () => registration.promise)
+})
+
 it("shows a tile for the file that needs a moment, named, as soon as it is told", async () => {
   expect(names()).toEqual([])
 

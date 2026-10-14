@@ -6,8 +6,6 @@ import { pickerRefusal, type AttachmentRefusal } from "../application/attachment
 import type { AttachmentDestination } from "./use-file-attachments"
 
 type HostDropActions = {
-  owner: object
-  resources: object
   /** Capture the current destination for a pathless image result. */
   captureDestination: () => AttachmentDestination
   /** The same call the picker's answer goes through, for a named draft. */
@@ -125,6 +123,6 @@ export function useHostDrop(actions: HostDropActions) {
       live = false
       void subscriptions.then((unlisten) => unlisten.forEach((stop) => stop()))
     }
-  }, [actions.owner, actions.resources])
+  }, [])
   return { dragging }
 }
