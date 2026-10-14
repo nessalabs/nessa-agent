@@ -43,7 +43,9 @@ use nessa_protocol::product::generated::{
     MIN_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS, PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
 };
 use nessa_protocol::product::handshake::{authentication_close_reason, supports_product_version};
-use nessa_protocol::product::passive_read::{encode_request, ReadEncodeError};
+use nessa_protocol::product::passive_read::{
+    conforming_view_cursor, encode_request, ReadEncodeError,
+};
 use nessa_protocol::product_contract::generated::{
     CatalogueReadErrorCode, ChangeWatchEndReason, ChangeWatchErrorCode, ConversationErrorCode,
     RecordReadErrorCode,
@@ -269,12 +271,18 @@ impl Events {
             .filter(|inbox| inbox.watch == watch)
             .ok_or(GatewayError::Protocol)
     }
-    /// A view outside the generated shape is skipped. One for another
+    /// A view outside the generated shape, including a cursor this client
+    /// could not pass back to `follow`, is skipped. One for another
     /// subscription than the one this connection opened, or for a different
     /// conversation than the one it subscribed to, is a protocol failure.
     fn observe_view(&mut self, payload: serde_json::Value) -> Result<(), GatewayError> {
         let viewed = match strict_decode::<ConversationViewed>(payload) {
-            Ok(viewed) if conforming_subscription_id(&viewed.subscription_id) => viewed,
+            Ok(viewed)
+                if conforming_subscription_id(&viewed.subscription_id)
+                    && conforming_view_cursor(&viewed.cursor) =>
+            {
+                viewed
+            }
             _ => {
                 tracing::warn!(
                     limit = "client.subscription_view",
@@ -308,7 +316,7 @@ impl Events {
         self.count_unexpected()
     }
     fn observe_subscription_end(&mut self, payload: serde_json::Value) -> Result<(), GatewayError> {
-        let ended = match strict_decode::<ConversationSubscriptionEnded>(payload) {
+        let mut ended = match strict_decode::<ConversationSubscriptionEnded>(payload) {
             Ok(ended) if conforming_subscription_id(&ended.subscription_id) => ended,
             _ => {
                 tracing::warn!(
@@ -318,6 +326,19 @@ impl Events {
                 return Ok(());
             }
         };
+        // A resume cursor follow would reject is not offered. The end still
+        // arrives, so the caller subscribes again without it.
+        if ended
+            .last_delivered
+            .as_ref()
+            .is_some_and(|cursor| !conforming_view_cursor(cursor))
+        {
+            tracing::warn!(
+                limit = "client.subscription_end",
+                "dropped a resume cursor outside the published view cursor"
+            );
+            ended.last_delivered = None;
+        }
         let parked = if let Some(live) = &mut self.subscription {
             if ended.subscription_id != live.id {
                 return Err(GatewayError::Protocol);

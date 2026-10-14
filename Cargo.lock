@@ -3249,7 +3249,6 @@ dependencies = [
  "nessa-local-storage",
  "nessa-protocol",
  "nessa-sync",
- "regex",
  "serde",
  "serde_json",
  "tempfile",

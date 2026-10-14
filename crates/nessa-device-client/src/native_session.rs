@@ -22,10 +22,7 @@ use nessa_client_core::{
 use nessa_protocol::{
     conversation::domain::ConversationId,
     pairing::wire::NativePairingStatus,
-    product::generated::{
-        ConversationViewCursor, DECIMAL_U64_PATTERN, MAX_DECIMAL_U64_CHARACTERS,
-        MAX_VIEW_CURSOR_INCARNATION_CHARACTERS, MIN_VIEW_CURSOR_INCARNATION_CHARACTERS,
-    },
+    product::{generated::ConversationViewCursor, passive_read::conforming_view_cursor},
 };
 use nessa_sync::replication::{catalogue::EntryKey, domain::Id};
 use std::{net::SocketAddr, path::Path, sync::Arc};
@@ -530,7 +527,10 @@ impl NativeFollow {
     }
     /// Why no view was delivered, when a reader was selected.
     /// [`NativeReadFailure::CursorAhead`] means `after` is past the gateway
-    /// head: follow again with no cursor. It is not an ungranted conversation.
+    /// head: follow again with no cursor.
+    /// [`NativeReadFailure::SubscriptionCapacity`] means the gateway's watch
+    /// capacity is full: follow again. Neither is an ungranted conversation,
+    /// and neither asks pinned status.
     pub fn failure(&self) -> Option<NativeReadFailure> {
         self.value
             .followed()
@@ -806,7 +806,7 @@ impl NativeDeviceSession {
     /// Run status, binding, one `conversation.subscribe`, and an authority recheck.
     /// `after_incarnation` and `after_position` are both absent, or both a
     /// published `ConversationViewCursor`: incarnation within its character
-    /// bound, position the published decimal. Anything else is
+    /// bound, position a decimal `u64`. Anything else is
     /// [`NativeCallError::InvalidArgument`] before a follow starts. The first
     /// view is returned and the subscription is closed. Checkpoints stay on
     /// [`Self::refresh`].
@@ -883,39 +883,27 @@ impl NativeDeviceSession {
 }
 
 /// A restored or caller-supplied cursor, or none when both parts are absent.
-/// The parts are the published `ConversationViewCursor` bounds.
+/// [`conforming_view_cursor`] is the check: the published incarnation bound,
+/// and a position `decimal_u64` accepts.
 fn view_cursor(
     incarnation: Option<String>,
     position: Option<String>,
 ) -> Result<Option<ConversationViewCursor>, NativeCallError> {
     match (incarnation, position) {
         (None, None) => Ok(None),
-        (Some(incarnation), Some(position))
-            if conforming_incarnation(&incarnation) && conforming_position(&position) =>
-        {
-            Ok(Some(ConversationViewCursor {
+        (Some(incarnation), Some(position)) => {
+            let cursor = ConversationViewCursor {
                 incarnation,
                 position,
-            }))
+            };
+            if conforming_view_cursor(&cursor) {
+                Ok(Some(cursor))
+            } else {
+                Err(NativeCallError::InvalidArgument)
+            }
         }
         _ => Err(NativeCallError::InvalidArgument),
     }
-}
-
-fn conforming_incarnation(value: &str) -> bool {
-    let length = value.chars().count();
-    (MIN_VIEW_CURSOR_INCARNATION_CHARACTERS..=MAX_VIEW_CURSOR_INCARNATION_CHARACTERS)
-        .contains(&length)
-}
-
-fn conforming_position(value: &str) -> bool {
-    static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    value.chars().count() <= MAX_DECIMAL_U64_CHARACTERS
-        && PATTERN
-            .get_or_init(|| {
-                regex::Regex::new(DECIMAL_U64_PATTERN).expect("generated pattern compiles")
-            })
-            .is_match(value)
 }
 
 #[cfg(test)]

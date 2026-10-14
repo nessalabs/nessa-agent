@@ -81,6 +81,14 @@ fn cursor_ahead_stays_distinct_from_an_ungranted_conversation() {
         NativeReadFailure::from(ReadFailure::CursorAhead),
         NativeReadFailure::Refused
     );
+    assert_eq!(
+        NativeReadFailure::from(ReadFailure::SubscriptionCapacity),
+        NativeReadFailure::SubscriptionCapacity
+    );
+    assert_ne!(
+        NativeReadFailure::from(ReadFailure::SubscriptionCapacity),
+        NativeReadFailure::Refused
+    );
 }
 
 #[test]

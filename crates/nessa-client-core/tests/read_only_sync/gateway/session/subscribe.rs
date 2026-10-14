@@ -91,7 +91,18 @@ fn send_view(socket: &mut PeerSocket, id: &str, position: &str, text: &str) {
     send_view_of(socket, id, "conversation", position, text);
 }
 fn send_view_of(socket: &mut PeerSocket, id: &str, conversation: &str, position: &str, text: &str) {
+    send_cursor(socket, id, conversation, "inc", position, text);
+}
+fn send_cursor(
+    socket: &mut PeerSocket,
+    id: &str,
+    conversation: &str,
+    incarnation: &str,
+    position: &str,
+    text: &str,
+) {
     let mut value = viewed(id, position, text);
+    value["cursor"]["incarnation"] = json!(incarnation);
     value["view"]["conversationId"] = json!(conversation);
     send(
         socket,
@@ -463,6 +474,128 @@ fn a_subscription_id_outside_the_contract_is_a_protocol_failure() {
         drop(session);
         gateway.join().unwrap();
     }
+}
+
+/// A view whose cursor follow would reject is skipped. A position of
+/// `u64::MAX` and the longest published incarnation are still delivered.
+#[test]
+fn a_view_cursor_outside_the_contract_is_skipped() {
+    let (endpoint, gateway) = peer(|socket| {
+        admit(socket, "1");
+        send_cursor(socket, "1", "conversation", "inc", "abc", "letters");
+        send_cursor(socket, "1", "conversation", "", "1", "empty");
+        send_cursor(socket, "1", "conversation", &"a".repeat(129), "1", "long");
+        send_cursor(
+            socket,
+            "1",
+            "conversation",
+            "inc",
+            "99999999999999999999",
+            "overflow",
+        );
+        send_cursor(
+            socket,
+            "1",
+            "conversation",
+            &"é".repeat(128),
+            "18446744073709551615",
+            "kept",
+        );
+        while !socket.ended() {}
+    });
+    let mut session = connect(&endpoint);
+    session.begin().unwrap();
+    session.subscribe(&params(None)).unwrap();
+    session.finish().unwrap();
+    session.begin().unwrap();
+    match session.next_delivery().unwrap() {
+        SubscriptionDelivery::View(viewed) => {
+            assert_eq!(viewed.view.messages[0].user_text, "kept");
+            assert_eq!(viewed.cursor.position, "18446744073709551615");
+            assert_eq!(viewed.cursor.incarnation.chars().count(), 128);
+        }
+        SubscriptionDelivery::Ended(_) => panic!("the valid view is delivered"),
+    }
+    drop(session);
+    gateway.join().unwrap();
+}
+
+/// A resume cursor follow can send is kept with the end.
+#[test]
+fn a_resume_cursor_inside_the_contract_is_kept() {
+    let (endpoint, gateway) = peer(|socket| {
+        admit(socket, "1");
+        send(
+            socket,
+            OutgoingMessage::Event(
+                EventFrame::push(
+                    product_event::CONVERSATION_SUBSCRIPTION_ENDED,
+                    &json!({
+                        "subscriptionId": "1",
+                        "reason": ConversationSubscriptionEndReason::Lagging,
+                        "lastDelivered": {
+                            "incarnation": "inc",
+                            "position": "18446744073709551615",
+                        },
+                    }),
+                    1,
+                    0,
+                )
+                .unwrap(),
+            ),
+        );
+        while !socket.ended() {}
+    });
+    let mut session = connect(&endpoint);
+    session.begin().unwrap();
+    session.subscribe(&params(None)).unwrap();
+    session.finish().unwrap();
+    session.begin().unwrap();
+    match session.next_delivery().unwrap() {
+        SubscriptionDelivery::Ended(ended) => {
+            let cursor = ended.last_delivered.expect("the cursor is kept");
+            assert_eq!(cursor.position, "18446744073709551615");
+        }
+        SubscriptionDelivery::View(_) => panic!("the end is delivered"),
+    }
+    drop(session);
+    gateway.join().unwrap();
+}
+
+/// A resume cursor follow would reject is not offered with the end.
+#[test]
+fn a_resume_cursor_outside_the_contract_is_dropped() {
+    let (endpoint, gateway) = peer(|socket| {
+        admit(socket, "1");
+        send(
+            socket,
+            OutgoingMessage::Event(
+                EventFrame::push(
+                    product_event::CONVERSATION_SUBSCRIPTION_ENDED,
+                    &json!({
+                        "subscriptionId": "1",
+                        "reason": ConversationSubscriptionEndReason::Lagging,
+                        "lastDelivered": {"incarnation": "inc", "position": "abc"},
+                    }),
+                    1,
+                    0,
+                )
+                .unwrap(),
+            ),
+        );
+        while !socket.ended() {}
+    });
+    let mut session = connect(&endpoint);
+    session.begin().unwrap();
+    session.subscribe(&params(None)).unwrap();
+    session.finish().unwrap();
+    session.begin().unwrap();
+    match session.next_delivery().unwrap() {
+        SubscriptionDelivery::Ended(ended) => assert!(ended.last_delivered.is_none()),
+        SubscriptionDelivery::View(_) => panic!("the end is delivered"),
+    }
+    drop(session);
+    gateway.join().unwrap();
 }
 
 /// A view or end whose subscription id is outside the contract is skipped.

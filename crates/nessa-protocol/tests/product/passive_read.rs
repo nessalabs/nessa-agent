@@ -1,4 +1,27 @@
 use super::*;
+
+#[test]
+fn a_view_cursor_is_the_published_incarnation_bound_and_a_u64_position() {
+    use crate::product::generated::ConversationViewCursor;
+    let cursor = |incarnation: &str, position: &str| ConversationViewCursor {
+        incarnation: incarnation.to_owned(),
+        position: position.to_owned(),
+    };
+    assert!(conforming_view_cursor(&cursor("inc", "0")));
+    assert!(conforming_view_cursor(&cursor(
+        &"é".repeat(128),
+        "18446744073709551615"
+    )));
+    assert!(!conforming_view_cursor(&cursor("", "1")));
+    assert!(!conforming_view_cursor(&cursor(&"a".repeat(129), "1")));
+    assert!(!conforming_view_cursor(&cursor("inc", "abc")));
+    assert!(!conforming_view_cursor(&cursor("inc", "00")));
+    assert!(!conforming_view_cursor(&cursor(
+        "inc",
+        "99999999999999999999"
+    )));
+}
+
 #[test]
 fn passive_writer_retains_bounded_capacity_across_large_chunk_and_suffix() {
     let mut writer = CappedWriter::new(MAX_RECORD_RESPONSE_BYTES);

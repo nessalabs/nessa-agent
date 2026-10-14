@@ -161,6 +161,10 @@ fn follow_rejects_a_cursor_outside_the_published_contract_before_it_dials() {
         (Some("inc".to_owned()), Some("1".repeat(21))),
         (Some("a".repeat(129)), Some("0".to_owned())),
         (Some("é".repeat(129)), Some("0".to_owned())),
+        (
+            Some("inc".to_owned()),
+            Some("99999999999999999999".to_owned()),
+        ),
     ] {
         let label = format!("{incarnation:?}/{position:?}");
         assert!(
@@ -184,11 +188,9 @@ fn follow_rejects_a_cursor_outside_the_published_contract_before_it_dials() {
         .unwrap()
         .unwrap();
     assert_eq!(cursor.position, position);
-    // Twenty digits past u64::MAX still match the published pattern and its
-    // character bound.
-    let wider = "99999999999999999999".to_owned();
-    let cursor = super::view_cursor(Some("inc".to_owned()), Some(wider.clone()))
-        .unwrap()
-        .unwrap();
-    assert_eq!(cursor.position, wider);
+    assert!(super::view_cursor(
+        Some("inc".to_owned()),
+        Some("99999999999999999999".to_owned())
+    )
+    .is_err());
 }

@@ -102,6 +102,8 @@ impl ConversationFeed {
     /// subscribe; [`SubscribeError::asks_status`] is set only for this
     /// credential's authority. `CursorAhead` when `after` is past the
     /// gateway head: follow again with no cursor, and do not ask status.
+    /// `SubscriptionCapacity` when the gateway's watch capacity is full:
+    /// follow again, and do not ask status.
     /// `Protocol` when a frame is outside the session, including a `next`
     /// after the feed has ended or been closed.
     pub fn next_event(&mut self) -> Result<FeedEvent, SubscribeError> {
@@ -308,6 +310,9 @@ fn subscribe_failure(error: GatewayError) -> ReadFailure {
             SubscriptionRefusal::Subscription(SubscriptionCode::CursorAhead) => {
                 ReadFailure::CursorAhead
             }
+            SubscriptionRefusal::Subscription(SubscriptionCode::Capacity) => {
+                ReadFailure::SubscriptionCapacity
+            }
             SubscriptionRefusal::Subscription(_) => ReadFailure::Refused,
             SubscriptionRefusal::Conversation(
                 ConversationErrorCode::ConversationNotFound
@@ -382,6 +387,15 @@ mod tests {
             )),
             ReadFailure::Refused
         );
+        assert!(!asks_status(GatewayError::Subscription(
+            SubscriptionRefusal::Subscription(SubscriptionCode::Capacity)
+        )));
+        assert_eq!(
+            subscribe_failure(GatewayError::Subscription(
+                SubscriptionRefusal::Subscription(SubscriptionCode::Capacity)
+            )),
+            ReadFailure::SubscriptionCapacity
+        );
     }
 
     #[test]
@@ -394,6 +408,9 @@ mod tests {
         let ahead = ended_failure("refused", Some("cursor_ahead"));
         assert_eq!(ahead.failure(), ReadFailure::CursorAhead);
         assert!(!ahead.asks_status());
+        let capacity = ended_failure("refused", Some("subscription_capacity"));
+        assert_eq!(capacity.failure(), ReadFailure::SubscriptionCapacity);
+        assert!(!capacity.asks_status());
         assert_eq!(
             ended_failure("lagging", None).failure(),
             ReadFailure::Unreachable
