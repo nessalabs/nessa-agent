@@ -60,9 +60,10 @@ own scheduling, authorization, current state, audit and physical cancellation.
 
 `src/conversation/adapters/store/prepared-operation-table.ts` owns the
 process-local prepared-operation table and its receipt/in-flight pruning rule.
-`src/conversation/adapters/store/slice.ts` scopes one table to each actual Redux
-`getState` lifetime. Tables distinguish local tab and execution identity; two
-stores may share effects without sharing intent.
+`src/store.ts` creates one table per Redux store, injects it into the slice
+thunks, and reconciles it on each store publication. Promise settlement prunes
+after clearing in-flight state. Tables distinguish local tab and execution
+identity; two stores may share effects without sharing intent.
 The send use-case registers its operation before a single reducer publication
 binds the server identity and makes the turn visible. That publication derives
 server/execution/action/mode from the issued prepared value; it replaces send's

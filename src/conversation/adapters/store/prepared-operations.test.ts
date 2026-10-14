@@ -15,10 +15,13 @@ import {
   SubmissionRefusedError,
   type ConversationEffects,
 } from "../../application/ports"
+import type { ConversationView } from "../../application/view"
 import {
   bindConversation,
+  closeTab,
   closeConversation,
   controlConversation,
+  followConversation,
   openConversation,
   sendDraft,
   setActive,
@@ -26,6 +29,7 @@ import {
   submissionStarted,
   submissionAccepted,
   stopGenerating,
+  unfollowConversation,
   type Control,
 } from "./slice"
 import { PreparedOperationTable } from "./prepared-operation-table"
@@ -62,6 +66,57 @@ function gate() {
   })
   return { promise, resolve }
 }
+function acceptedView(conversationId: string, executionId: string): ConversationView {
+  return {
+    conversationId,
+    artifacts: [],
+    notes: [],
+    approvalMode: "ask",
+    approvalModes: [
+      { id: "ask", name: "Provider asks", description: "Provider asks where required." },
+    ],
+    title: null,
+    revision: "accepted",
+    truncated: false,
+    queueComplete: true,
+    transcriptState: "complete",
+    messages: [
+      {
+        executionId,
+        parts: [],
+        userText: "original",
+        attachments: [],
+        files: [],
+        status: "queued",
+      },
+    ],
+    permissions: [],
+    questions: [],
+    tools: [],
+    pending: [],
+    capabilities: {
+      queue: true,
+      steer: true,
+      resume: true,
+      permissions: true,
+      imageInput: false,
+      agentFeatures: {
+        permissionDenial: "unknown",
+        nativeHookSuppression: "unknown",
+        nativeHooks: "off",
+        compactionReporting: "unsupported_not_implemented",
+        modelSwitchReporting: "unsupported_not_implemented",
+        permissionDeferral: "unsupported_not_implemented",
+        elicitationForwarding: "unknown",
+        preToolPolicy: "unsupported_not_implemented",
+        policyEndTurn: "unsupported",
+        policyCloseSession: "unsupported",
+        incomingElicitation: "unsupported",
+      },
+    },
+    lifecycle: { phase: "attached" },
+  }
+}
 function fixture(
   overrides: Partial<ConversationEffects> = {},
   echo = scenarioEffects("echo"),
@@ -86,6 +141,93 @@ function targetOf(store: ReturnType<typeof makeStore>, id = "c0") {
     pending: [],
   })[0]!
 }
+
+function watchPreparedOperations() {
+  const prune = vi.spyOn(PreparedOperationTable.prototype, "prune")
+  return {
+    table: () => prune.mock.contexts[0] as PreparedOperationTable,
+    restore: () => prune.mockRestore(),
+  }
+}
+
+it("prunes a settled unknown retry operation when its tab closes", async () => {
+  const watched = watchPreparedOperations()
+  try {
+    const echo = scenarioEffects("echo")
+    const submit = vi
+      .fn(echo.submit)
+      .mockRejectedValueOnce(new Error("lost acknowledgement"))
+    const { store } = fixture({ submit, create: echo.create }, echo)
+    await store.dispatch(sendDraft({ content: textContent("original") }))
+    const prepared = submit.mock.calls[0]![0]
+    expect(watched.table().get("c0", prepared.executionId)).toBeDefined()
+
+    await store.dispatch(closeTab("c0"))
+    expect(watched.table().get("c0", prepared.executionId)).toBeUndefined()
+  } finally {
+    watched.restore()
+  }
+})
+
+it("prunes a closed tab's retry operation when an uncertain send settles", async () => {
+  const watched = watchPreparedOperations()
+  try {
+    const waiting = gate()
+    const echo = scenarioEffects("echo")
+    const submit = vi.fn(async (_prepared: PreparedSubmission) => {
+      await waiting.promise
+      throw new Error("lost acknowledgement")
+    })
+    const { store } = fixture({ submit, create: echo.create }, echo)
+    const sending = store.dispatch(sendDraft({ content: textContent("original") }))
+    await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce())
+    const prepared = submit.mock.calls[0]![0]
+    await store.dispatch(closeTab("c0"))
+    expect(watched.table().get("c0", prepared.executionId)).toBeUndefined()
+
+    waiting.resolve()
+    await sending
+    expect(watched.table().get("c0", prepared.executionId)).toBeUndefined()
+  } finally {
+    watched.restore()
+  }
+})
+
+it("prunes retry intent as soon as a passive authoritative view accepts the turn", async () => {
+  const watched = watchPreparedOperations()
+  try {
+    const echo = scenarioEffects("echo")
+    let publishView: ((view: ConversationView) => void) | undefined
+    const stopFollowing = vi.fn()
+    const follow: ConversationEffects["follow"] = (_id, listener) => {
+      publishView = listener.view
+      return stopFollowing
+    }
+    const submit = vi.fn<ConversationEffects["submit"]>(async () => {
+      throw new Error("lost acknowledgement")
+    })
+    const { store } = fixture({ follow, submit }, echo)
+    const following = store.dispatch(followConversation("c0"))
+    await vi.waitFor(() => expect(publishView).toBeDefined())
+    const sent = await store.dispatch(sendDraft({ content: textContent("original") }))
+    expect(sent.meta.requestStatus).toBe("rejected")
+    const prepared = submit.mock.calls[0]![0]
+    expect(watched.table().get("c0", prepared.executionId)).toBeDefined()
+
+    publishView!(acceptedView(first, prepared.executionId))
+    await vi.waitFor(() =>
+      expect(store.getState().conversation.conversations[0]!.turns[0]).toMatchObject({
+        receipt: "accepted",
+      }),
+    )
+    expect(watched.table().get("c0", prepared.executionId)).toBeUndefined()
+    await store.dispatch(unfollowConversation("c0"))
+    await following
+    expect(stopFollowing).toHaveBeenCalledOnce()
+  } finally {
+    watched.restore()
+  }
+})
 
 it.each(["create", "admission"] as const)(
   "stops the prepared operation immediately during %s and again after admission (PS6)",

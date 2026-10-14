@@ -12,6 +12,7 @@ import {
   conversationReducer,
 } from "./conversation/adapters/store/slice"
 import { sessionReducer } from "./session/adapters/store/slice"
+import { PreparedOperationTable } from "./conversation/adapters/store/prepared-operation-table"
 
 import { createDependencies, type AppDependencies } from "./composition/dependencies"
 
@@ -22,6 +23,7 @@ export type StoreDependencies = Pick<
 >
 
 export function makeStore(dependencies: StoreDependencies = createDependencies()) {
+  const preparedOperations = new PreparedOperationTable()
   const store = configureStore({
     middleware: (getDefaultMiddleware) =>
       getDefaultMiddleware({
@@ -29,6 +31,7 @@ export function makeStore(dependencies: StoreDependencies = createDependencies()
           extraArgument: {
             conversation: dependencies.conversation,
             canChoosePaths: dependencies.canChoosePaths,
+            preparedOperations,
           },
         },
       }),
@@ -50,6 +53,7 @@ export function makeStore(dependencies: StoreDependencies = createDependencies()
   // they stop counting against what may be attached; the conversation slice
   // bounds how many of those originals it keeps at all.
   store.subscribe(() => {
+    preparedOperations.prune(store.getState().conversation.conversations)
     const ids = new Set<string>()
     const sent = new Set<string>()
     for (const conversation of store.getState().conversation.conversations) {
