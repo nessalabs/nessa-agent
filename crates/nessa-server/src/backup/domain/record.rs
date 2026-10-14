@@ -146,6 +146,10 @@ pub enum SkipReason {
     Unavailable,
     /// The record's identity or watermark was not one this cut can name.
     Unnameable,
+    /// The session file is above the export size cap, so it was not copied.
+    Oversized,
+    /// The bytes hold key material. A fingerprint may still name them.
+    Secret,
 }
 
 impl SkipReason {
@@ -154,6 +158,8 @@ impl SkipReason {
             Self::Unreadable => "unreadable",
             Self::Unavailable => "unavailable",
             Self::Unnameable => "unnameable",
+            Self::Oversized => "oversized",
+            Self::Secret => "secret",
         }
     }
 }

@@ -209,7 +209,7 @@ async fn a_session_database_holding_a_private_key_is_not_copied() {
     let root = namespace.path();
     let sessions = root.join("conversations/sessions");
     fs::create_dir_all(&sessions).unwrap();
-    let secret = b"BEGIN OPENSSH PRIVATE KEY";
+    let secret = b"-----BEGIN OPENSSH PRIVATE KEY-----";
     let database =
         nessa_local_database::rusqlite::Connection::open(sessions.join("records.sqlite3")).unwrap();
     database
@@ -219,30 +219,290 @@ async fn a_session_database_holding_a_private_key_is_not_copied() {
         .execute("INSERT INTO payload(body) VALUES (?1)", [secret])
         .unwrap();
     drop(database);
-    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
-    let bundle = tempfile::tempdir().unwrap();
-    let manifest = capture_namespace(
-        root,
-        &OpenAdmission,
-        &inventory,
-        &DirectoryPublisher::new(bundle.path().join("cut")),
-        &Clock(8),
-        &inventory.key(),
-    )
-    .await
-    .unwrap();
-    let bundle_bytes = read_tree(&bundle.path().join("cut"));
-    assert!(!bundle_bytes
-        .windows(secret.len())
-        .any(|window| window == secret));
-    let text = fs::read_to_string(bundle.path().join("cut/manifest.txt")).unwrap();
-    assert!(text.contains("redacted canonical-records records.sqlite3"));
-    assert!(manifest
+    let published = publish_cut(root).await;
+    assert!(!holds(&published.bytes, secret));
+    assert!(published
+        .text
+        .contains("redacted canonical-records records.sqlite3"));
+    assert!(published
+        .text
+        .contains("skipped canonical-records records.sqlite3 secret"));
+    assert!(published
+        .manifest
         .manifest()
         .store(StoreKind::CanonicalRecords)
         .records()[0]
         .public_bytes()
         .is_none());
+}
+
+#[tokio::test]
+async fn a_session_database_holding_an_rsa_ec_or_encrypted_private_key_is_not_copied() {
+    let headers: &[&[u8]] = &[
+        b"-----BEGIN RSA PRIVATE KEY-----",
+        b"-----BEGIN EC PRIVATE KEY-----",
+        b"-----BEGIN ENCRYPTED PRIVATE KEY-----",
+    ];
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let sessions = root.join("conversations/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let database =
+        nessa_local_database::rusqlite::Connection::open(sessions.join("records.sqlite3")).unwrap();
+    database
+        .execute("CREATE TABLE payload(body BLOB)", [])
+        .unwrap();
+    for header in headers {
+        database
+            .execute("INSERT INTO payload(body) VALUES (?1)", [*header])
+            .unwrap();
+    }
+    drop(database);
+    let published = publish_cut(root).await;
+    for header in headers {
+        assert!(
+            !holds(&published.bytes, header),
+            "published {}",
+            String::from_utf8_lossy(header)
+        );
+    }
+    assert!(published
+        .text
+        .contains("redacted canonical-records records.sqlite3"));
+    assert!(published
+        .text
+        .contains("skipped canonical-records records.sqlite3 secret"));
+}
+
+#[tokio::test]
+async fn a_plaintext_public_file_holding_a_private_key_is_not_copied() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let secret = b"-----BEGIN EC PRIVATE KEY-----\nEC-KEY-BODY-MUST-NOT-PUBLISH\n";
+    let directory = root.join("conversations/audit/creation");
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(
+        directory.join("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json"),
+        secret,
+    )
+    .unwrap();
+    let published = publish_cut(root).await;
+    assert!(!holds(&published.bytes, b"EC-KEY-BODY-MUST-NOT-PUBLISH"));
+    assert!(!holds(&published.bytes, b"-----BEGIN EC PRIVATE KEY-----"));
+    assert!(published
+        .text
+        .contains("redacted conversation-audit aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json"));
+    assert!(published
+        .text
+        .contains("skipped conversation-audit aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json secret"));
+}
+
+#[tokio::test]
+async fn a_json_record_holding_an_rsa_private_key_is_not_copied() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    fs::create_dir_all(root.join("environment")).unwrap();
+    let secret = b"-----BEGIN RSA PRIVATE KEY-----";
+    fs::write(
+        root.join("environment/grants.json"),
+        format!(r#"{{"holder":"{}"}}"#, String::from_utf8_lossy(secret)),
+    )
+    .unwrap();
+    let published = publish_cut(root).await;
+    assert!(!holds(&published.bytes, secret));
+    assert!(published
+        .text
+        .contains("skipped environment-grants grants.json secret"));
+}
+
+#[tokio::test]
+async fn an_undashed_private_key_phrase_is_copied() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let sessions = root.join("conversations/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let phrase = b"BEGIN RSA PRIVATE KEY";
+    let database =
+        nessa_local_database::rusqlite::Connection::open(sessions.join("records.sqlite3")).unwrap();
+    database
+        .execute("CREATE TABLE payload(body BLOB)", [])
+        .unwrap();
+    database
+        .execute("INSERT INTO payload(body) VALUES (?1)", [phrase])
+        .unwrap();
+    drop(database);
+    let published = publish_cut(root).await;
+    let canonical = fs::read(
+        published
+            .root
+            .join("records/canonical-records/records.sqlite3"),
+    )
+    .unwrap();
+    assert!(holds(&canonical, phrase));
+}
+
+#[tokio::test]
+async fn a_public_jsonl_holding_a_private_key_is_not_copied() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    fs::create_dir_all(root.join("environment")).unwrap();
+    let secret = b"-----BEGIN ENCRYPTED PRIVATE KEY-----";
+    fs::write(
+        root.join("environment/leases.jsonl"),
+        format!("{{\"note\":\"{}\"}}\n", String::from_utf8_lossy(secret)),
+    )
+    .unwrap();
+    let published = publish_cut(root).await;
+    assert!(!holds(&published.bytes, secret));
+    assert!(published
+        .text
+        .contains("skipped lease-records leases.jsonl secret"));
+}
+
+#[tokio::test]
+async fn a_session_database_quoting_token_is_still_copied() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let sessions = root.join("conversations/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let database =
+        nessa_local_database::rusqlite::Connection::open(sessions.join("records.sqlite3")).unwrap();
+    database
+        .execute_batch(
+            "CREATE TABLE note(body TEXT);
+             INSERT INTO note VALUES ('{\"token\":\"SESSION-TOKEN-STAYS\"}');
+             INSERT INTO note VALUES ('{\"secret\":\"ORDINARY-SECRET-WORD\"}');",
+        )
+        .unwrap();
+    drop(database);
+    let published = publish_cut(root).await;
+    assert!(holds(&published.bytes, b"SESSION-TOKEN-STAYS"));
+    assert!(holds(&published.bytes, b"ORDINARY-SECRET-WORD"));
+    assert!(!published
+        .text
+        .contains("skipped canonical-records records.sqlite3 secret"));
+}
+
+#[tokio::test]
+async fn a_public_key_header_in_a_session_database_is_copied() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let sessions = root.join("conversations/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let header = b"-----BEGIN PUBLIC KEY-----\n-----BEGIN CERTIFICATE-----";
+    let database =
+        nessa_local_database::rusqlite::Connection::open(sessions.join("records.sqlite3")).unwrap();
+    database
+        .execute("CREATE TABLE payload(body BLOB)", [])
+        .unwrap();
+    database
+        .execute("INSERT INTO payload(body) VALUES (?1)", [header])
+        .unwrap();
+    drop(database);
+    let published = publish_cut(root).await;
+    let canonical = fs::read(
+        published
+            .root
+            .join("records/canonical-records/records.sqlite3"),
+    )
+    .unwrap();
+    assert!(holds(&canonical, header));
+}
+
+#[tokio::test]
+async fn an_oversized_session_is_skipped_and_the_cut_continues() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let sessions = root.join("conversations/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    fs::create_dir_all(root.join("environment")).unwrap();
+    fs::write(
+        root.join("environment/leases.jsonl"),
+        b"{\"lease\":\"still-cut\"}\n",
+    )
+    .unwrap();
+    let database =
+        nessa_local_database::rusqlite::Connection::open(sessions.join("records.sqlite3")).unwrap();
+    let limit =
+        i64::try_from(crate::backup::infrastructure::snapshot::SESSION_EXPORT_LIMIT).unwrap();
+    database
+        .execute_batch("CREATE TABLE blob(body BLOB);")
+        .unwrap();
+    database
+        .execute(
+            "INSERT INTO blob(body) VALUES (zeroblob(?1))",
+            [limit + 4096],
+        )
+        .unwrap();
+    drop(database);
+    let published = publish_cut(root).await;
+    assert!(published
+        .text
+        .contains("skipped canonical-records records.sqlite3 oversized"));
+    assert!(published
+        .text
+        .contains("skipped notes records.sqlite3 oversized"));
+    assert!(holds(&published.bytes, b"still-cut"));
+    assert!(!published
+        .root
+        .join("records/canonical-records/records.sqlite3")
+        .exists());
+}
+
+#[tokio::test]
+async fn a_deleted_secret_is_absent_from_the_session_backup() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let sessions = root.join("conversations/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let path = sessions.join("records.sqlite3");
+    let needle = b"DELETED-SECRET-MARKER-9f3c1a7e";
+    let marker = needle.repeat(400);
+    let database = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    database
+        .execute_batch("PRAGMA secure_delete = OFF;")
+        .unwrap();
+    database
+        .execute("CREATE TABLE note(body BLOB)", [])
+        .unwrap();
+    database
+        .execute("INSERT INTO note(body) VALUES (?1)", [marker.as_slice()])
+        .unwrap();
+    database
+        .execute(
+            "INSERT INTO note(body) VALUES (?1)",
+            [b"kept-note".as_slice()],
+        )
+        .unwrap();
+    database
+        .execute("DELETE FROM note WHERE body = ?1", [marker.as_slice()])
+        .unwrap();
+    drop(database);
+    let source = fs::read(&path).unwrap();
+    assert!(
+        holds(&source, needle),
+        "the source file must still hold the deleted secret"
+    );
+    let published = publish_cut(root).await;
+    let canonical = fs::read(
+        published
+            .root
+            .join("records/canonical-records/records.sqlite3"),
+    )
+    .unwrap();
+    assert!(!holds(&canonical, needle));
+    assert!(holds(&canonical, b"kept-note"));
+    let copy = tempfile::NamedTempFile::new().unwrap();
+    fs::write(copy.path(), &canonical).unwrap();
+    let opened = nessa_local_database::rusqlite::Connection::open(copy.path()).unwrap();
+    let kept: Vec<u8> = opened
+        .query_row("SELECT body FROM note", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(kept, b"kept-note");
+    let freelist: i64 = opened
+        .query_row("PRAGMA freelist_count", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(freelist, 0);
 }
 
 #[tokio::test]
@@ -258,6 +518,44 @@ async fn a_failed_export_releases_admission_and_publishes_nothing() {
         .join("manifest.txt")
         .exists());
     assert!(fs::read(root.path().join("blocked")).unwrap() == b"x");
+}
+
+struct PublishedCut {
+    manifest: crate::backup::domain::AuthenticatedManifest,
+    _bundle: tempfile::TempDir,
+    root: std::path::PathBuf,
+    text: String,
+    bytes: Vec<u8>,
+}
+
+async fn publish_cut(root: &Path) -> PublishedCut {
+    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let manifest = capture_namespace(
+        root,
+        &OpenAdmission,
+        &inventory,
+        &DirectoryPublisher::new(bundle.path().join("cut")),
+        &Clock(8),
+        &inventory.key(),
+    )
+    .await
+    .unwrap();
+    let cut = bundle.path().join("cut");
+    let text = fs::read_to_string(cut.join("manifest.txt")).unwrap();
+    assert_eq!(text, manifest.encoded());
+    let bytes = read_tree(&cut);
+    PublishedCut {
+        manifest,
+        root: cut,
+        text,
+        bytes,
+        _bundle: bundle,
+    }
+}
+
+fn holds(bytes: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && bytes.windows(needle.len()).any(|window| window == needle)
 }
 
 struct OpenAdmission;
@@ -314,7 +612,12 @@ fn a_sqlite_snapshot_excludes_a_later_write() {
         connection.busy_timeout(Duration::from_secs(5)).unwrap();
         connection.execute("UPDATE t SET v = 2", []).unwrap();
     });
-    let bytes = snapshot.backup_bytes().unwrap();
+    let bytes = match snapshot.backup_bytes().unwrap() {
+        crate::backup::infrastructure::snapshot::SnapshotCopy::Ready(bytes) => bytes,
+        crate::backup::infrastructure::snapshot::SnapshotCopy::Oversized => {
+            panic!("the fixture is within the session export limit");
+        }
+    };
     watch.assert_no_export_file();
     drop(snapshot);
     writer.join().unwrap();

@@ -16,7 +16,7 @@ use serde_json::Value;
 use super::credentials::{read_credentials, CredentialRead, CredentialReadError};
 use super::jsonl::jsonl_cut;
 use super::sensitivity::path_sensitivity;
-use super::snapshot::SqliteSnapshot;
+use super::snapshot::{SnapshotCopy, SqliteSnapshot};
 use crate::backup::application::{
     capture_export, Authenticator, CopiedStore, DeletionLogStore, ExportClock, ExportFailure,
     ExportRequest, ExportSource, FenceSource, ManifestPublisher, MutationAdmission, PinnedStore,
@@ -341,14 +341,16 @@ enum SessionState {
     Cold,
     Absent,
     Unreadable,
+    Oversized,
     Open(SqliteSnapshot),
-    Bytes(Vec<u8>),
+    Bytes(Arc<Vec<u8>>),
 }
 
 enum SessionView {
     Absent,
     Unreadable,
-    Bytes(Vec<u8>),
+    Oversized,
+    Bytes(Arc<Vec<u8>>),
 }
 
 impl SessionFiles {
@@ -377,7 +379,7 @@ impl SessionFiles {
         let opened = tokio::task::spawn_blocking(move || match SqliteSnapshot::open(&path) {
             Ok(snapshot) => SessionState::Open(snapshot),
             Err(()) => match fs::read(&path) {
-                Ok(bytes) => SessionState::Bytes(bytes),
+                Ok(bytes) => SessionState::Bytes(Arc::new(bytes)),
                 Err(_) => SessionState::Unreadable,
             },
         })
@@ -403,24 +405,31 @@ impl SessionFiles {
                     *guard = SessionState::Unreadable;
                     return Ok(SessionView::Unreadable);
                 }
+                SessionState::Oversized => {
+                    *guard = SessionState::Oversized;
+                    return Ok(SessionView::Oversized);
+                }
                 SessionState::Bytes(bytes) => {
-                    *guard = SessionState::Bytes(bytes.clone());
-                    return Ok(SessionView::Bytes(bytes));
+                    let shared = Arc::clone(&bytes);
+                    *guard = SessionState::Bytes(bytes);
+                    return Ok(SessionView::Bytes(shared));
                 }
                 SessionState::Open(snapshot) => snapshot,
-                other => {
-                    *guard = other;
-                    return Err(());
-                }
+                SessionState::Cold => return Err(()),
             }
         };
         let copied = tokio::task::spawn_blocking(move || snapshot.backup_bytes())
             .await
             .map_err(|_| ())?;
         match copied {
-            Ok(bytes) => {
-                *self.state.lock().map_err(|_| ())? = SessionState::Bytes(bytes.clone());
+            Ok(SnapshotCopy::Ready(bytes)) => {
+                let bytes = Arc::new(bytes);
+                *self.state.lock().map_err(|_| ())? = SessionState::Bytes(Arc::clone(&bytes));
                 Ok(SessionView::Bytes(bytes))
+            }
+            Ok(SnapshotCopy::Oversized) => {
+                *self.state.lock().map_err(|_| ())? = SessionState::Oversized;
+                Ok(SessionView::Oversized)
             }
             Err(()) => {
                 *self.state.lock().map_err(|_| ())? = SessionState::Unreadable;
@@ -502,22 +511,36 @@ impl PinnedStore for CanonicalPin {
         match self.files.view().await? {
             SessionView::Absent => absent(StoreKind::CanonicalRecords),
             SessionView::Unreadable => skipped_file(StoreKind::CanonicalRecords, "records.sqlite3"),
+            SessionView::Oversized => skipped_reason(
+                StoreKind::CanonicalRecords,
+                "records.sqlite3",
+                "oversized",
+                SkipReason::Oversized,
+            ),
             SessionView::Bytes(bytes) => {
-                // The file is one record. A private key or a secret JSON key
-                // inside it cannot be stripped per event, so the whole file
-                // is fingerprinted and the bytes are not published.
-                let record = if bytes_hold_secret(&bytes) {
-                    CapturedRecord::new(
+                // The file is one record. A private-key header or a secret
+                // JSON key inside it cannot be stripped per event, so the
+                // whole file is fingerprinted, named as a skip, and the
+                // bytes are not published.
+                if content_is_secret(bytes.as_slice()) {
+                    let mut records = Vec::new();
+                    let mut skipped = Vec::new();
+                    withhold(
                         StoreKind::CanonicalRecords,
                         "records.sqlite3",
-                        Sensitivity::Secret,
-                        bytes,
-                    )
-                    .map_err(|_| ())?
+                        (*bytes).clone(),
+                        &mut records,
+                        &mut skipped,
+                    );
+                    finish(StoreKind::CanonicalRecords, "file", records, skipped)
                 } else {
-                    public(StoreKind::CanonicalRecords, "records.sqlite3", bytes)?
-                };
-                finish(StoreKind::CanonicalRecords, "file", vec![record], vec![])
+                    let record = public(
+                        StoreKind::CanonicalRecords,
+                        "records.sqlite3",
+                        (*bytes).clone(),
+                    )?;
+                    finish(StoreKind::CanonicalRecords, "file", vec![record], vec![])
+                }
             }
         }
     }
@@ -554,8 +577,14 @@ impl PinnedStore for NotesPin {
         match self.files.view().await? {
             SessionView::Absent => absent(StoreKind::Notes),
             SessionView::Unreadable => skipped_file(StoreKind::Notes, "records.sqlite3"),
+            SessionView::Oversized => skipped_reason(
+                StoreKind::Notes,
+                "records.sqlite3",
+                "oversized",
+                SkipReason::Oversized,
+            ),
             SessionView::Bytes(bytes) => {
-                let fingerprint = crate::backup::domain::Fingerprint::of(&bytes);
+                let fingerprint = crate::backup::domain::Fingerprint::of(bytes.as_slice());
                 finish(StoreKind::Notes, &fingerprint.hex(), vec![], vec![])
             }
         }
@@ -753,8 +782,17 @@ impl JsonlFile {
         if !self.path.exists() {
             return absent(self.kind);
         }
-        let text = fs::read_to_string(&self.path).map_err(|_| ())?;
-        jsonl_cut(self.kind, &text).map_err(|_| ())
+        match read_public_text(&self.path) {
+            TextRead::Missing => Err(()),
+            TextRead::Secret(bytes) => {
+                let identity = file_name(&self.path);
+                let mut records = Vec::new();
+                let mut skipped = Vec::new();
+                withhold(self.kind, &identity, bytes, &mut records, &mut skipped);
+                finish(self.kind, "secret", records, skipped)
+            }
+            TextRead::Text(text) => jsonl_cut(self.kind, &text).map_err(|_| ()),
+        }
     }
 }
 
@@ -1198,11 +1236,18 @@ fn push_jsonl(
     records: &mut Vec<CapturedRecord>,
     skipped: &mut Vec<SkippedRecord>,
 ) {
-    let Ok(text) = fs::read_to_string(path) else {
-        if let Ok(record) = skip(kind, "jsonl") {
-            skipped.push(record);
+    let text = match read_public_text(path) {
+        TextRead::Missing => {
+            if let Ok(record) = skip(kind, "jsonl") {
+                skipped.push(record);
+            }
+            return;
         }
-        return;
+        TextRead::Secret(bytes) => {
+            withhold(kind, &file_name(path), bytes, records, skipped);
+            return;
+        }
+        TextRead::Text(text) => text,
     };
     match jsonl_cut(kind, &text) {
         Ok(cut) => {
@@ -1214,6 +1259,25 @@ fn push_jsonl(
                 skipped.push(record);
             }
         }
+    }
+}
+
+enum TextRead {
+    Missing,
+    Secret(Vec<u8>),
+    Text(String),
+}
+
+fn read_public_text(path: &Path) -> TextRead {
+    let Ok(bytes) = fs::read(path) else {
+        return TextRead::Missing;
+    };
+    if content_is_secret(&bytes) {
+        return TextRead::Secret(bytes);
+    }
+    match String::from_utf8(bytes) {
+        Ok(text) => TextRead::Text(text),
+        Err(_) => TextRead::Missing,
     }
 }
 
@@ -1233,7 +1297,12 @@ fn push_path(
             return;
         }
     };
-    let secret = path_sensitivity(path) == Sensitivity::Secret || json_has_secret(&bytes);
+    let content_secret = content_is_secret(&bytes);
+    let secret = path_sensitivity(path) == Sensitivity::Secret || content_secret;
+    if secret && content_secret {
+        withhold(kind, identity, bytes, records, skipped);
+        return;
+    }
     let captured = if secret {
         CapturedRecord::new(kind, identity, Sensitivity::Secret, bytes)
     } else {
@@ -1249,9 +1318,19 @@ fn push_path(
     }
 }
 
-const SECRET_JSON_KEYS: &[&str] = &["verifier", "privateKey", "private_key", "token", "secret"];
+/// JSON keys whose values are key material. A quoted `"token"` or
+/// `"secret"` in ordinary conversation text is not one of these.
+const SECRET_JSON_KEYS: &[&str] = &["verifier", "privateKey", "private_key"];
 
-const PRIVATE_KEY_MARKERS: &[&str] = &["BEGIN PRIVATE KEY", "BEGIN OPENSSH PRIVATE KEY"];
+const PEM_BEGIN: &[u8] = b"-----BEGIN";
+const PRIVATE_KEY_LABEL: &[u8] = b"PRIVATE KEY";
+/// PEM labels are short. The bound keeps a `-----BEGIN` inside a binary
+/// page from being treated as a line that runs to the end of the file.
+const PEM_HEADER_LIMIT: usize = 256;
+
+fn content_is_secret(bytes: &[u8]) -> bool {
+    bytes_hold_secret(bytes) || json_has_secret(bytes)
+}
 
 fn json_has_secret(bytes: &[u8]) -> bool {
     let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
@@ -1261,20 +1340,44 @@ fn json_has_secret(bytes: &[u8]) -> bool {
 }
 
 /// A raw store file, including a session database, that holds key material.
-/// The markers are the same keys and private-key text [`json_has_secret`]
+/// The markers are the same keys and private-key headers [`json_has_secret`]
 /// refuses in a JSON value.
 fn bytes_hold_secret(bytes: &[u8]) -> bool {
-    PRIVATE_KEY_MARKERS
-        .iter()
-        .any(|marker| contains_bytes(bytes, marker.as_bytes()))
+    holds_private_key_header(bytes)
         || SECRET_JSON_KEYS.iter().any(|key| {
             let quoted = format!("\"{key}\"");
-            contains_bytes(bytes, quoted.as_bytes())
+            find_bytes(bytes, quoted.as_bytes()).is_some()
         })
 }
 
-fn contains_bytes(bytes: &[u8], marker: &[u8]) -> bool {
-    !marker.is_empty() && bytes.windows(marker.len()).any(|window| window == marker)
+/// A PEM header: `-----BEGIN` through the end of that line, when the line
+/// contains `PRIVATE KEY`. RSA, EC, encrypted, OpenSSH, and PKCS#8 headers
+/// match. A public key or a certificate does not.
+fn holds_private_key_header(bytes: &[u8]) -> bool {
+    let mut rest = bytes;
+    while let Some(at) = find_bytes(rest, PEM_BEGIN) {
+        let after = at + PEM_BEGIN.len();
+        let line = &rest[after..];
+        let end = line
+            .iter()
+            .position(|byte| *byte == b'\n' || *byte == b'\r')
+            .unwrap_or(line.len())
+            .min(PEM_HEADER_LIMIT);
+        if find_bytes(&line[..end], PRIVATE_KEY_LABEL).is_some() {
+            return true;
+        }
+        rest = &rest[after..];
+    }
+    false
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 fn secret_key(value: &Value) -> bool {
@@ -1283,11 +1386,37 @@ fn secret_key(value: &Value) -> bool {
             .iter()
             .any(|(key, child)| SECRET_JSON_KEYS.contains(&key.as_str()) || secret_key(child)),
         Value::Array(items) => items.iter().any(secret_key),
-        Value::String(text) => PRIVATE_KEY_MARKERS
-            .iter()
-            .any(|marker| text.contains(marker)),
+        Value::String(text) => holds_private_key_header(text.as_bytes()),
         _ => false,
     }
+}
+
+fn withhold(
+    kind: StoreKind,
+    identity: &str,
+    bytes: Vec<u8>,
+    records: &mut Vec<CapturedRecord>,
+    skipped: &mut Vec<SkippedRecord>,
+) {
+    match CapturedRecord::new(kind, identity, Sensitivity::Secret, bytes) {
+        Ok(record) => records.push(record),
+        Err(_) => {
+            if let Ok(record) = skip(kind, "unnameable") {
+                skipped.push(record);
+            }
+            return;
+        }
+    }
+    if let Ok(record) = SkippedRecord::new(kind, identity, SkipReason::Secret) {
+        skipped.push(record);
+    }
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("file")
+        .to_owned()
 }
 
 fn file_identity(root: &Path, path: &Path) -> String {
@@ -1313,6 +1442,20 @@ fn skip(kind: StoreKind, identity: &str) -> Result<SkippedRecord, ()> {
 
 fn skipped_file(kind: StoreKind, identity: &str) -> Result<SourceCut, ()> {
     finish(kind, "unavailable", vec![], vec![skip(kind, identity)?])
+}
+
+fn skipped_reason(
+    kind: StoreKind,
+    identity: &str,
+    watermark: &str,
+    reason: SkipReason,
+) -> Result<SourceCut, ()> {
+    finish(
+        kind,
+        watermark,
+        vec![],
+        vec![SkippedRecord::new(kind, identity, reason).map_err(|_| ())?],
+    )
 }
 
 fn absent(kind: StoreKind) -> Result<SourceCut, ()> {

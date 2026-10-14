@@ -3,7 +3,22 @@
 use std::path::Path;
 
 use nessa_local_database::rusqlite::backup::{Backup, StepResult};
+use nessa_local_database::rusqlite::ffi::{self, sqlite3_int64};
 use nessa_local_database::rusqlite::{Connection, OpenFlags};
+
+/// A session file larger than this is named and left out of the cut.
+///
+/// The figure is `page_count * page_size` on the snapshot, which is the
+/// number of bytes a backup would copy, including free pages.
+pub const SESSION_EXPORT_LIMIT: u64 = 64 * 1024 * 1024;
+
+/// Bytes copied from a snapshot, or a file left unread because it is too big.
+pub enum SnapshotCopy {
+    /// The vacuumed database image. Free pages are not in these bytes.
+    Ready(Vec<u8>),
+    /// `page_count * page_size` is above [`SESSION_EXPORT_LIMIT`].
+    Oversized,
+}
 
 /// A read transaction on one database file.
 ///
@@ -34,11 +49,16 @@ impl SqliteSnapshot {
 
     /// Copy this snapshot into memory. The live file is not read again.
     ///
-    /// The copy is one `Vec<u8>`: the published record is the whole file, and
-    /// the publisher takes those bytes together. Nothing is written to a
-    /// shared temp directory. The in-memory connection is dropped on every
-    /// return, including a panic while the bytes are being built.
-    pub fn backup_bytes(&self) -> Result<Vec<u8>, ()> {
+    /// A file above [`SESSION_EXPORT_LIMIT`] is [`SnapshotCopy::Oversized`]
+    /// and is not copied. Otherwise the copy is vacuumed so deleted rows'
+    /// free pages are dropped, then the in-memory image is released before
+    /// the published bytes are built. Nothing is written to a shared temp
+    /// directory. The in-memory connection is dropped on every return,
+    /// including a panic while the bytes are being built.
+    pub fn backup_bytes(&self) -> Result<SnapshotCopy, ()> {
+        if snapshot_bytes(&self.connection)? > SESSION_EXPORT_LIMIT {
+            return Ok(SnapshotCopy::Oversized);
+        }
         let mut memory = Connection::open_in_memory().map_err(|_| ())?;
         {
             let backup = Backup::new(&self.connection, &mut memory).map_err(|_| ())?;
@@ -46,7 +66,57 @@ impl SqliteSnapshot {
                 return Err(());
             }
         }
-        let data = memory.serialize("main").map_err(|_| ())?;
-        Ok(data.to_vec())
+        // Online backup copies free pages. Vacuum rebuilds the image from
+        // the live rows, and secure_delete overwrites pages that vacuum frees.
+        memory
+            .execute_batch("PRAGMA secure_delete = ON; VACUUM;")
+            .map_err(|_| ())?;
+        Ok(SnapshotCopy::Ready(serialized_image(memory)?))
+    }
+}
+
+fn snapshot_bytes(connection: &Connection) -> Result<u64, ()> {
+    let pages: i64 = connection
+        .query_row("PRAGMA page_count", [], |row| row.get(0))
+        .map_err(|_| ())?;
+    let page_size: i64 = connection
+        .query_row("PRAGMA page_size", [], |row| row.get(0))
+        .map_err(|_| ())?;
+    if pages < 0 || page_size < 0 {
+        return Err(());
+    }
+    Ok((pages as u64).saturating_mul(page_size as u64))
+}
+
+/// `connection` is the in-memory copy. It is dropped before the returned
+/// buffer is allocated, so the image and the published bytes are not live
+/// together.
+fn serialized_image(connection: Connection) -> Result<Vec<u8>, ()> {
+    let mut size: sqlite3_int64 = 0;
+    // SAFETY: `handle` is this open connection. Flag 0 allocates a new
+    // buffer with sqlite3_malloc. That buffer stays valid after the
+    // connection is closed and is released with sqlite3_free.
+    let ptr =
+        unsafe { ffi::sqlite3_serialize(connection.handle(), c"main".as_ptr(), &mut size, 0) };
+    drop(connection);
+    if ptr.is_null() {
+        return Err(());
+    }
+    let buffer = SqliteMalloc(ptr);
+    let len = usize::try_from(size).map_err(|_| ())?;
+    if len == 0 {
+        return Err(());
+    }
+    // SAFETY: `buffer` is `len` bytes allocated by sqlite3_serialize.
+    Ok(unsafe { std::slice::from_raw_parts(buffer.0, len) }.to_vec())
+}
+
+/// An image allocated by `sqlite3_malloc`. Drop frees it, including on panic.
+struct SqliteMalloc(*mut u8);
+
+impl Drop for SqliteMalloc {
+    fn drop(&mut self) {
+        // SAFETY: the pointer came from sqlite3_serialize and is freed once.
+        unsafe { ffi::sqlite3_free(self.0.cast()) };
     }
 }
