@@ -232,15 +232,21 @@ impl RetainedCache {
                 .saturating_add(u64::try_from(budget.as_millis()).unwrap_or(u64::MAX)),
         });
         let offline = Arc::new(AtomicBool::new(false));
+        // A dial that succeeds registers its socket on `stop` before the
+        // handshake. Either failure drops that clone with the session.
         let mut session = match self.open_session(&access, &ending, &offline) {
             Ok(session) => session,
             Err(ReadFailure::Unreachable) if offline.load(Ordering::SeqCst) => {
+                stop.release();
                 return Err(SubscribeError {
                     failure: ReadFailure::Away,
                     authority: false,
                 });
             }
-            Err(failure) => return Err(as_subscribe(failure)),
+            Err(failure) => {
+                stop.release();
+                return Err(as_subscribe(failure));
+            }
         };
         let params = ConversationSubscribeParams {
             conversation_id: conversation.to_string(),
@@ -252,19 +258,9 @@ impl RetainedCache {
         }
         let subscribed = session.subscribe(&params);
         let _ = session.finish();
-        let id = match subscribed {
-            Ok(id) => id,
-            Err(error) => {
-                stop.release();
-                return Err(classify(&ending, stop, error));
-            }
-        };
-        if id.is_empty() {
+        if let Err(error) = subscribed {
             stop.release();
-            return Err(SubscribeError {
-                failure: ReadFailure::Protocol,
-                authority: false,
-            });
+            return Err(classify(&ending, stop, error));
         }
         Ok(ConversationFeed {
             session,

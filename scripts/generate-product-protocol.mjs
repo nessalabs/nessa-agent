@@ -430,14 +430,31 @@ rs += `pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = ${subscriptionLimits
 rs += `pub const SUBSCRIPTION_DELIVERY_TIMEOUT_MS: u64 = ${subscriptionLimits.deliveryTimeoutMs};\n`
 ts += `export const subscriptionLimits = ${JSON.stringify(subscriptionLimits)} as const\n`
 const subscriptionId = schema.$defs.ConversationSubscriptionId
-if (typeof subscriptionId.pattern !== "string")
+if (
+  typeof subscriptionId.pattern !== "string" ||
+  !Number.isSafeInteger(subscriptionId.minLength) ||
+  !Number.isSafeInteger(subscriptionId.maxLength) ||
+  subscriptionId.minLength < 1 ||
+  subscriptionId.maxLength < subscriptionId.minLength
+)
   throw new Error("Invalid subscription ID publication")
-// Published so the client checks the identities a frame names.
+// Published so the client checks the identities a frame names. Rust and
+// TypeScript both read these; neither retypes the schema.
 ts += `export const conversationSubscriptionIdPattern = ${JSON.stringify(subscriptionId.pattern)} as const\n`
+rs += `pub const CONVERSATION_SUBSCRIPTION_ID_PATTERN: &str = ${JSON.stringify(subscriptionId.pattern)};\n`
+rs += `pub const MIN_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS: usize = ${subscriptionId.minLength};\n`
+rs += `pub const MAX_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS: usize = ${subscriptionId.maxLength};\n`
 const incarnation = schema.$defs.ConversationViewCursor.properties.incarnation
-if (!Number.isSafeInteger(incarnation.maxLength))
+if (
+  !Number.isSafeInteger(incarnation.minLength) ||
+  !Number.isSafeInteger(incarnation.maxLength) ||
+  incarnation.minLength < 1 ||
+  incarnation.maxLength < incarnation.minLength
+)
   throw new Error("Invalid view cursor publication")
 ts += `export const maxViewCursorIncarnationLength = ${incarnation.maxLength} as const\n`
+rs += `pub const MIN_VIEW_CURSOR_INCARNATION_CHARACTERS: usize = ${incarnation.minLength};\n`
+rs += `pub const MAX_VIEW_CURSOR_INCARNATION_CHARACTERS: usize = ${incarnation.maxLength};\n`
 const image = schema.$defs.ImageAttachment.properties
 const mcpCall = schema.$defs.McpCallToolParams.properties
 const mcpRead = schema.$defs.McpReadResourceParams.properties
@@ -532,6 +549,7 @@ const bounds = {
     pageRequest.target.pattern,
     schema.$defs.RecordWireRecord.properties.position.pattern,
     schema.$defs.ConversationRecordsHeadResult.properties.head.pattern,
+    schema.$defs.ConversationViewCursor.properties.position.pattern,
     ...catalogueDecimalFields.map((field) => field.pattern),
   ]),
   maxDecimalU64Characters: agreeing("decimal u64 width", [
@@ -539,6 +557,7 @@ const bounds = {
     pageRequest.target.maxLength,
     schema.$defs.RecordWireRecord.properties.position.maxLength,
     schema.$defs.ConversationRecordsHeadResult.properties.head.maxLength,
+    schema.$defs.ConversationViewCursor.properties.position.maxLength,
     ...catalogueDecimalFields.map((field) => field.maxLength),
   ]),
   positiveEpochPattern: agreeing(
@@ -651,6 +670,8 @@ for (const name of [
   rs += `/// Published bound from the product schema.\npub const ${snake(name).toUpperCase()}: usize = ${bounds[name]};\n`
 }
 rs += `/// Published request-frame maximum from the product schema, in bytes.\npub const MAX_PAYLOAD_BYTES: i64 = ${maxOrdinaryResponseBytes};\n`
+rs += `/// Published decimal shape from the product schema, including a view cursor position.\npub const DECIMAL_U64_PATTERN: &str = ${JSON.stringify(bounds.decimalU64Pattern)};\n`
+rs += `/// Published decimal width from the product schema, in characters.\npub const MAX_DECIMAL_U64_CHARACTERS: usize = ${bounds.maxDecimalU64Characters};\n`
 // An app's message past it is refused at the wire, before anything is
 // recorded; and the conversation's own input bound is never larger, which the
 // gateway's configuration holds to it — so it sits with the contract.

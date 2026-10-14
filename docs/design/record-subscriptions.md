@@ -65,7 +65,7 @@ follows one conversation with `conversation.subscribe` on a new pinned
 session to the same gateway as its checkpoint read. The two calls do not
 share a connection. The checkpoint read still copies records
 (`conversation.recordsHead` / `recordsPage`). `conversation.watchRecords`
-remains for that retained path until nessa-ios is confirmed off it.
+remains for that retained path until nessa-ios is confirmed to have stopped using `conversation.watchRecords`.
 `conversation.subscribeList` stays refused to a paired device until #724
 scopes the catalogue head to the device's grants. The desktop shows the
 view's own `truncated` and `transcriptState` (`history` on its transcript).

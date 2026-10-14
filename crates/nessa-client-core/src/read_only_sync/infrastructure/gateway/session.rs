@@ -37,8 +37,10 @@ use nessa_protocol::product::generated::{
     ConversationWatchEnded, ConversationWatchRecordsParams, ConversationWatchResult,
     ProductClientMetadata, ProductSessionReady, ProductSurface, ProductSurfaceKind,
     SessionAuthenticateParams, SessionChallenge, CHANGE_WATCH_ID_PATTERN,
-    MAX_AUTH_CREDENTIAL_CHARACTERS, MAX_CHANGE_WATCH_ID_BYTES, MAX_PRODUCT_CLIENT_ID_CHARACTERS,
-    MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS, PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
+    CONVERSATION_SUBSCRIPTION_ID_PATTERN, MAX_AUTH_CREDENTIAL_CHARACTERS,
+    MAX_CHANGE_WATCH_ID_BYTES, MAX_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS,
+    MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
+    MIN_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS, PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
 };
 use nessa_protocol::product::handshake::{authentication_close_reason, supports_product_version};
 use nessa_protocol::product::passive_read::{encode_request, ReadEncodeError};
@@ -272,7 +274,7 @@ impl Events {
     /// conversation than the one it subscribed to, is a protocol failure.
     fn observe_view(&mut self, payload: serde_json::Value) -> Result<(), GatewayError> {
         let viewed = match strict_decode::<ConversationViewed>(payload) {
-            Ok(viewed) if !viewed.subscription_id.is_empty() => viewed,
+            Ok(viewed) if conforming_subscription_id(&viewed.subscription_id) => viewed,
             _ => {
                 tracing::warn!(
                     limit = "client.subscription_view",
@@ -307,7 +309,7 @@ impl Events {
     }
     fn observe_subscription_end(&mut self, payload: serde_json::Value) -> Result<(), GatewayError> {
         let ended = match strict_decode::<ConversationSubscriptionEnded>(payload) {
-            Ok(ended) if !ended.subscription_id.is_empty() => ended,
+            Ok(ended) if conforming_subscription_id(&ended.subscription_id) => ended,
             _ => {
                 tracing::warn!(
                     limit = "client.subscription_end",
@@ -622,7 +624,7 @@ impl Session {
             }
         };
         let result = match strict_decode::<ConversationSubscribeResult>(value) {
-            Ok(result) if !result.subscription_id.is_empty() => result,
+            Ok(result) if conforming_subscription_id(&result.subscription_id) => result,
             _ => {
                 self.events.opening = None;
                 self.events.opening_conversation = None;
@@ -863,6 +865,21 @@ fn held_file_refusal(code: String) -> GatewayError {
         },
     };
     GatewayError::HeldFile(refusal)
+}
+
+/// Whether `id` is within the published subscription identity: its character
+/// bound and [`CONVERSATION_SUBSCRIPTION_ID_PATTERN`].
+fn conforming_subscription_id(id: &str) -> bool {
+    static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let length = id.chars().count();
+    (MIN_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS..=MAX_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS)
+        .contains(&length)
+        && PATTERN
+            .get_or_init(|| {
+                regex::Regex::new(CONVERSATION_SUBSCRIPTION_ID_PATTERN)
+                    .expect("generated pattern compiles")
+            })
+            .is_match(id)
 }
 
 /// Whether `id` is within the published change-watch identity contract: its

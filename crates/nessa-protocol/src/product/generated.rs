@@ -2504,6 +2504,11 @@ pub const MAX_PEERS: usize = 64;
 pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = 8;
 pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = 2;
 pub const SUBSCRIPTION_DELIVERY_TIMEOUT_MS: u64 = 10000;
+pub const CONVERSATION_SUBSCRIPTION_ID_PATTERN: &str = "^[1-9][0-9]{0,19}$";
+pub const MIN_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS: usize = 1;
+pub const MAX_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS: usize = 20;
+pub const MIN_VIEW_CURSOR_INCARNATION_CHARACTERS: usize = 1;
+pub const MAX_VIEW_CURSOR_INCARNATION_CHARACTERS: usize = 128;
 /// Published bound from the product schema.
 pub const MAX_AUTH_CREDENTIAL_CHARACTERS: usize = 16384;
 /// Published bound from the product schema.
@@ -2532,6 +2537,10 @@ pub const MAX_MCP_CONTEXT_BYTES: usize = 8192;
 pub const MIN_MCP_MESSAGE_CHARACTERS: usize = 1;
 /// Published request-frame maximum from the product schema, in bytes.
 pub const MAX_PAYLOAD_BYTES: i64 = 65536;
+/// Published decimal shape from the product schema, including a view cursor position.
+pub const DECIMAL_U64_PATTERN: &str = "^(0|[1-9][0-9]{0,19})$";
+/// Published decimal width from the product schema, in characters.
+pub const MAX_DECIMAL_U64_CHARACTERS: usize = 20;
 /// Published passive read timing from the product schema, in milliseconds.
 pub const PASSIVE_READ_TIMEOUT_MS: u64 = 10000;
 /// Published passive read timing from the product schema, in milliseconds.

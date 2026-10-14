@@ -435,27 +435,58 @@ fn typed_refusals_keep_the_connection() {
 }
 
 #[test]
-fn an_empty_subscription_id_is_a_protocol_failure() {
-    let (endpoint, gateway) = peer(|socket| {
-        let opened = request(socket);
-        send(
-            socket,
-            OutgoingMessage::Response(
-                ResponseFrame::success(&opened.id, &json!({"subscriptionId": ""})).unwrap(),
-            ),
+fn a_subscription_id_outside_the_contract_is_a_protocol_failure() {
+    for id in ["", "0", "01", "10a", &"1".repeat(21)] {
+        let refused = id.to_owned();
+        let (endpoint, gateway) = peer(move |socket| {
+            let opened = request(socket);
+            send(
+                socket,
+                OutgoingMessage::Response(
+                    ResponseFrame::success(&opened.id, &json!({"subscriptionId": refused}))
+                        .unwrap(),
+                ),
+            );
+            while !socket.ended() {}
+        });
+        let mut session = connect(&endpoint);
+        session.begin().unwrap();
+        assert_eq!(
+            session.subscribe(&params(None)),
+            Err(GatewayError::Protocol),
+            "{id}"
         );
+        assert_eq!(
+            session.finish().unwrap().failure,
+            Some(GatewayError::Protocol)
+        );
+        drop(session);
+        gateway.join().unwrap();
+    }
+}
+
+/// A view or end whose subscription id is outside the contract is skipped.
+/// The longest published id is still accepted.
+#[test]
+fn a_view_id_outside_the_contract_is_skipped_and_a_full_length_id_is_kept() {
+    let id = format!("9{}", "0".repeat(19));
+    let live = id.clone();
+    let (endpoint, gateway) = peer(move |socket| {
+        admit(socket, &live);
+        send_end(socket, "0");
+        send_view(socket, "01", "1", "skipped");
+        send_view(socket, &live, "1", "kept");
         while !socket.ended() {}
     });
     let mut session = connect(&endpoint);
     session.begin().unwrap();
-    assert_eq!(
-        session.subscribe(&params(None)),
-        Err(GatewayError::Protocol)
-    );
-    assert_eq!(
-        session.finish().unwrap().failure,
-        Some(GatewayError::Protocol)
-    );
+    assert_eq!(session.subscribe(&params(None)).unwrap(), id);
+    session.finish().unwrap();
+    session.begin().unwrap();
+    match session.next_delivery().unwrap() {
+        SubscriptionDelivery::View(viewed) => assert_eq!(viewed.view.messages[0].user_text, "kept"),
+        SubscriptionDelivery::Ended(_) => panic!("the valid view is delivered"),
+    }
     drop(session);
     gateway.join().unwrap();
 }
@@ -561,4 +592,70 @@ fn a_forbidden_unsubscribe_closes_the_socket_and_asks_status() {
     assert_eq!(error.failure(), ReadFailure::Refused);
     drop(feed);
     gateway.join().unwrap();
+}
+
+/// The dial registers a socket before the handshake. A failed open drops that
+/// clone, so the peer sees the client shut the connection while the stop lives.
+#[test]
+fn a_failed_open_releases_the_stop_socket() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let peer = thread::spawn(move || {
+        let (mut socket, _) = super::bounded_accept(&listener);
+        socket
+            .set_read_timeout(Some(Duration::from_secs(8)))
+            .unwrap();
+        let mut buffer = [0; 64];
+        loop {
+            match socket.read(&mut buffer) {
+                Ok(0) => return,
+                Ok(_) => continue,
+                Err(error) if error.kind() == ErrorKind::ConnectionReset => return,
+                Err(error)
+                    if matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) =>
+                {
+                    panic!("the stop still holds the socket")
+                }
+                Err(error) => panic!("peer read: {error}"),
+            }
+        }
+    });
+    let root = tempfile::tempdir().unwrap();
+    let private = root.path().join("cache");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let cache = RetainedCache::open(
+        &private.join("cache.sqlite3"),
+        Arc::new(Wall),
+        Arc::new(Time(Instant::now())),
+    )
+    .unwrap();
+    let device = NativeIdentity::generate(&mut OsEntropy).unwrap();
+    let pin = NativeIdentity::generate(&mut OsEntropy)
+        .unwrap()
+        .public_spki();
+    let conversation = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let stop = ReadStop::new();
+    let failed = match cache.subscribe(
+        ReaderAccess {
+            role: ReaderRole::GrantedPeer,
+            address,
+            relay: None,
+            identity: &device,
+            pin,
+            credential: "credential",
+            receiver: "receiver",
+            access_epoch: 3,
+            client_id: "example",
+        },
+        &conversation,
+        None,
+        &stop,
+        Duration::from_millis(800),
+    ) {
+        Ok(_) => panic!("handshake against a silent peer opened"),
+        Err(error) => error,
+    };
+    assert_ne!(failed.failure(), ReadFailure::Away);
+    peer.join().unwrap();
+    drop(stop);
 }

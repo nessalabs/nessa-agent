@@ -1,10 +1,13 @@
 //! Foreign passive correlation preserves the existing owners' exact values.
 use super::*;
+use crate::test_support::PrivateFixture;
 use nessa_auth::domain::{
     pairing::{AttemptId, ConsentIntentId, DisclosedConsent, InvitationId},
     AudienceId, CredentialId, OrganizationId, Resource, ResourceId,
 };
+use nessa_local_storage::create_directory_beneath;
 use nessa_sync::replication::domain::MAX_ID_BYTES;
+use std::{io::ErrorKind, net::TcpListener, path::Path, sync::Arc};
 
 fn intent(class: ConsentClass, attempt: u8) -> PublicIntent {
     PublicIntent::new(
@@ -130,4 +133,62 @@ fn saved_cursor_restoration_uses_id_owner_without_narrowing_or_normalizing() {
         NativeEntryKey::new(1, "é".repeat(MAX_ID_BYTES)),
         Err(NativeCallError::InvalidArgument)
     ));
+}
+
+#[test]
+fn follow_rejects_a_cursor_outside_the_published_contract_before_it_dials() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let root = PrivateFixture::new();
+    create_directory_beneath(root.path(), Path::new("private")).unwrap();
+    let session = NativeDeviceSession::open(
+        root.path().to_str().unwrap().to_owned(),
+        "private".to_owned(),
+        address.to_string(),
+    )
+    .unwrap();
+    let conversation = "00000000-0000-4000-8000-000000000001".to_owned();
+    let stop = || Arc::new(NativeReadStop::new());
+    for (incarnation, position) in [
+        (Some(String::new()), Some("1".to_owned())),
+        (Some("inc".to_owned()), Some(String::new())),
+        (Some("inc".to_owned()), None),
+        (None, Some("1".to_owned())),
+        (Some("inc".to_owned()), Some("00".to_owned())),
+        (Some("inc".to_owned()), Some("01".to_owned())),
+        (Some("inc".to_owned()), Some("1a".to_owned())),
+        (Some("inc".to_owned()), Some("1".repeat(21))),
+        (Some("a".repeat(129)), Some("0".to_owned())),
+        (Some("é".repeat(129)), Some("0".to_owned())),
+    ] {
+        let label = format!("{incarnation:?}/{position:?}");
+        assert!(
+            matches!(
+                session.follow(conversation.clone(), incarnation, position, stop()),
+                Err(NativeCallError::InvalidArgument)
+            ),
+            "{label}"
+        );
+    }
+    assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
+    assert!(super::view_cursor(None, None).unwrap().is_none());
+    let longest = "é".repeat(128);
+    let position = "18446744073709551615".to_owned();
+    let cursor = super::view_cursor(Some(longest.clone()), Some("0".to_owned()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(cursor.incarnation, longest);
+    assert_eq!(cursor.position, "0");
+    let cursor = super::view_cursor(Some("inc".to_owned()), Some(position.clone()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(cursor.position, position);
+    // Twenty digits past u64::MAX still match the published pattern and its
+    // character bound.
+    let wider = "99999999999999999999".to_owned();
+    let cursor = super::view_cursor(Some("inc".to_owned()), Some(wider.clone()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(cursor.position, wider);
 }
