@@ -6190,9 +6190,9 @@
       "properties": {
         "reviews": {
           "type": "array",
-          "maxItems": 64,
+          "maxItems": 128,
           "items": { "$ref": "#/$defs/PermissionReviewNotice" },
-          "description": "Waiting reviews, oldest first, at most 64."
+          "description": "Waiting reviews, oldest first, at most 128."
         }
       },
       "required": ["reviews"]

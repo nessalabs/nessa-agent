@@ -5,6 +5,9 @@
 //! that is still waiting, and is cleared when that review is answered,
 //! cancelled, or settled by its deadline.
 //!
+//! The rule and its audit record commit together in the host store. A later
+//! failure to record the permission answer does not remove the rule.
+//!
 //! ```text
 //! owner turn ──arm──▶ PermissionRules::offers_remember
 //! review ──settle──▶ live rule selects the once option (Rule basis)
@@ -61,8 +64,7 @@ impl SettledRule {
 
 /// Who is answering, as the host verified it.
 ///
-/// Cedar admits a remembered rule for [`Self::Owner`] and refuses
-/// [`Self::Grant`]. A missing caller is not treated as the owner.
+/// Cedar is asked as this caller. A missing caller is not treated as the owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PermissionCaller {
     /// The conversation's owner.
@@ -107,10 +109,19 @@ pub enum RememberError {
 /// `settle` returns a live rule or nothing. Nothing means ask the person.
 /// A failure to read the store is nothing, so a broken store never allows
 /// or denies a tool by itself. `remember` is the opposite: a failure leaves
-/// the review pending and writes nothing.
+/// the review pending and writes nothing. `caller` is the turn's principal.
+/// A host does not rewrite a grant as the owner.
 pub trait PermissionRules: Send + Sync {
-    /// A live rule for this tool in this workspace, if one should answer it.
-    fn settle(&self, workspace: &str, source: &str, tool: &str) -> Option<SettledRule>;
+    /// A live rule for this tool in this workspace, asked as `caller`, if one
+    /// should answer it. `caller` is the turn's principal. A host does not
+    /// rewrite a grant as the owner.
+    fn settle(
+        &self,
+        caller: PermissionCaller,
+        workspace: &str,
+        source: &str,
+        tool: &str,
+    ) -> Option<SettledRule>;
 
     /// Whether this execution in `conversation_id` may be offered Nessa's
     /// remember choices. The same execution id in another conversation is not.
@@ -124,56 +135,43 @@ pub trait PermissionRules: Send + Sync {
     /// conversation does not replace this one.
     fn arm(&self, conversation_id: &str, execution: &ExecutionId, owner: bool);
 
-    /// Record that the answer identified by `execution` and `request_id` is
-    /// `caller`. The host sets this before that answer is queued. A later note
-    /// for the same key replaces this one. Reading it in [`Self::answerer`]
-    /// removes it, so a later answer is not attributed to an earlier caller.
-    fn note_answerer(&self, execution: &ExecutionId, request_id: &str, caller: PermissionCaller) {
-        let _ = (self, execution, request_id, caller);
+    /// Record that the answer identified by `conversation`, `execution`, and
+    /// `request_id` is `caller`. The host sets this before that answer is
+    /// queued. A later note for the same key replaces this one. Reading it in
+    /// [`Self::answerer`] removes it, so a later answer is not attributed to
+    /// an earlier caller. The same execution id in another conversation is a
+    /// different answer.
+    fn note_answerer(
+        &self,
+        conversation: &str,
+        execution: &ExecutionId,
+        request_id: &str,
+        caller: PermissionCaller,
+    ) {
+        let _ = (self, conversation, execution, request_id, caller);
     }
 
     /// The caller noted for this answer, if the host set one.
     ///
     /// `None` when it did not. Callers must not treat `None` as the owner.
     /// Reading removes the note.
-    fn answerer(&self, execution: &ExecutionId, request_id: &str) -> Option<PermissionCaller> {
-        let _ = (self, execution, request_id);
+    fn answerer(
+        &self,
+        conversation: &str,
+        execution: &ExecutionId,
+        request_id: &str,
+    ) -> Option<PermissionCaller> {
+        let _ = (self, conversation, execution, request_id);
         None
     }
 
     /// Store a rule for `request.caller`. The review stays pending on error.
     /// Cedar admits or refuses that caller; the owner is not assumed.
     ///
-    /// The revision stays provisional until [`Self::acknowledge`]. Until then
-    /// it does not settle a review, and [`Self::withdraw`] removes a fresh
-    /// rule or writes the replaced rule back as a new revision. A second
-    /// remember of a key that is still provisional is
-    /// [`RememberError::Unavailable`]. A host that stores nothing may leave
-    /// both as they are.
+    /// The rule and its audit record commit together. A failure writes
+    /// neither. A later failure to record the permission answer does not
+    /// remove the rule: the grant was already recorded.
     fn remember(&self, request: RememberRequest<'_>) -> Result<SettledRule, RememberError>;
-
-    /// The selection that stored `rule` was recorded. The revision may settle.
-    /// Withdrawing it afterwards does not remove it or restore what it replaced.
-    ///
-    /// [`RememberError::Unavailable`] means the revision is still provisional
-    /// and must not be treated as a completed remember.
-    fn acknowledge(&self, rule: &ApprovalRuleReference) -> Result<(), RememberError> {
-        let _ = (self, rule);
-        Ok(())
-    }
-
-    /// The selection that stored `rule` was not recorded. Remove that revision.
-    ///
-    /// A fresh rule is deleted. A replacement writes the previous rule back
-    /// under a new revision, never the number it already used. A revision
-    /// that was already acknowledged, already revoked, or is not the current
-    /// provisional revision is left as it is. [`RememberError::Unavailable`]
-    /// means the unrecorded revision is still stored, and it still does not
-    /// settle.
-    fn withdraw(&self, rule: &ApprovalRuleReference) -> Result<(), RememberError> {
-        let _ = (self, rule);
-        Ok(())
-    }
 }
 
 /// No rules, and no execution is offered a remember choice.
@@ -181,7 +179,7 @@ pub trait PermissionRules: Send + Sync {
 pub struct IdlePermissionRules;
 
 impl PermissionRules for IdlePermissionRules {
-    fn settle(&self, _: &str, _: &str, _: &str) -> Option<SettledRule> {
+    fn settle(&self, _: PermissionCaller, _: &str, _: &str, _: &str) -> Option<SettledRule> {
         None
     }
     fn offers_remember(&self, _: &str, _: &ExecutionId) -> bool {
