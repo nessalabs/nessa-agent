@@ -1326,7 +1326,7 @@ and which stores it names. `application/` holds the conversation service's
 admission lock only while it pins each store and appends fences already
 committed, then releases it and reads, macs, and publishes from those
 snapshots. `infrastructure/` reads the namespace, including `device/outbox/` and
-`environment/outbox/`, and writes the bundle. The
+`environment/outbox/` under each directory's `outbox.lock`, and writes the bundle. The
 mac key stays beside the deletion inventory and is not part of the bundle.
 Restore and quarantine are not in this module.
 

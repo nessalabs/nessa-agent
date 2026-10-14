@@ -229,6 +229,9 @@ pub async fn capture_namespace(
             wanted: None,
         }),
         Box::new(Receivers::new(credentials.clone())),
+        // Both pins take `outbox.lock` shared for the whole read. The
+        // environment writer holds that file exclusively across stage,
+        // discard, close, and the sweep when serving starts.
         Box::new(super::outbox::OutboxDirectory::new(
             StoreKind::DeviceOutbox,
             namespace.join("device").join("outbox"),

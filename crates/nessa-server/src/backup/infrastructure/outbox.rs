@@ -2,23 +2,30 @@
 //!
 //! ```text
 //! pin (admission still held)
+//!   outbox.lock shared, for the whole read
 //!   directory absent ──▶ watermark absent, no rows
 //!   not a directory, a symlink, a short read, a file past the artifact
 //!   bound, or a name this cut cannot keep ──▶ fail the source
 //!   each regular file ──▶ open without following a link, read the
 //!   length just recorded, keep those bytes
 //!   watermark = outbox_watermark(identity, length)
+//!   outbox.lock released
 //! ```
 //!
 //! Arrows are the pin's steps. A failure here aborts the cut before deletion
-//! fences are appended and before anything is published. Bytes appended
-//! after this pin are not part of the watermark or the rows.
+//! fences are appended and before anything is published. The lock is the
+//! sibling `outbox.lock` (`environment/outbox` → `environment/outbox.lock`).
+//! `FileOutbox` holds that same file exclusively across a stage, a discard,
+//! a lease close, and the sweep when serving starts, so this read does not
+//! observe a copy in progress or a row removed halfway through.
+//! `an_environment_outbox_cut_waits_for_the_writer_lock`.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
 use async_trait::async_trait;
+use nessa_local_storage::{open, OpenMode};
 use nessa_protocol::lease::MAX_ARTIFACT_BYTES;
 
 use super::gateway::content_is_secret;
@@ -60,6 +67,7 @@ struct Row {
 }
 
 fn read_outbox(kind: StoreKind, root: &Path) -> Result<SourceCut, ()> {
+    let _lock = shared_outbox_lock(root)?;
     match fs::symlink_metadata(root) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             return SourceCut::absent(kind).map_err(|_| ());
@@ -108,6 +116,29 @@ fn collect(root: &Path, directory: &Path, rows: &mut Vec<Row>) -> Result<(), ()>
         rows.push(read_row(root, &path)?);
     }
     Ok(())
+}
+
+/// `outbox.lock` beside `root`, shared for as long as the returned file lives.
+///
+/// `Ok(None)` is a directory whose parent is not there: no writer can have
+/// created the lock yet. Any other failure refuses the source.
+fn shared_outbox_lock(root: &Path) -> Result<Option<File>, ()> {
+    let Some(parent) = root
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return Err(());
+    };
+    if !parent.is_dir() {
+        return if fs::symlink_metadata(root).is_ok() {
+            Err(())
+        } else {
+            Ok(None)
+        };
+    }
+    let file = open(&root.with_extension("lock"), OpenMode::OpenOrCreate).map_err(|_| ())?;
+    file.lock_shared().map_err(|_| ())?;
+    Ok(Some(file))
 }
 
 /// Open `path` without following a final link.

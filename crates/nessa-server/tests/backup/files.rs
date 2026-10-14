@@ -214,6 +214,35 @@ async fn a_concurrent_outbox_append_is_outside_the_cut() {
 }
 
 #[tokio::test]
+async fn an_environment_outbox_cut_waits_for_the_writer_lock() {
+    use std::time::Duration;
+
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let outbox = root.join("environment/outbox/aa");
+    fs::create_dir_all(&outbox).unwrap();
+    fs::write(outbox.join("0"), b"PARTIAL-ROW").unwrap();
+    let lock = nessa_local_storage::open(
+        &root.join("environment/outbox.lock"),
+        nessa_local_storage::OpenMode::OpenOrCreate,
+    )
+    .unwrap();
+    lock.lock().unwrap();
+    let captured = root.to_path_buf();
+    let task = tokio::spawn(async move { publish_cut(&captured).await });
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(
+        !task.is_finished(),
+        "the cut must wait while outbox.lock is held"
+    );
+    fs::write(outbox.join("0"), b"COMPLETE-ROW").unwrap();
+    drop(lock);
+    let published = task.await.unwrap();
+    assert!(holds(&published.bytes, b"COMPLETE-ROW"));
+    assert!(!holds(&published.bytes, b"PARTIAL-ROW"));
+}
+
+#[tokio::test]
 async fn an_invalid_outbox_is_refused_and_nothing_is_committed() {
     let namespace = tempfile::tempdir().unwrap();
     let root = namespace.path();

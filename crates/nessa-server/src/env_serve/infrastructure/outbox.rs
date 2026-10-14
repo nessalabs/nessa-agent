@@ -7,10 +7,14 @@
 //! <private temporary directory>/        0700, one per serving process
 //!   <16 hex digits of the lease>        the lease's publish point (a Unix socket)
 //!
-//! stage(path) ──▶ absolute? ──▶ every link followed ──▶ inside the workspace?
+//! stage(path) ──▶ outbox.lock exclusive ──▶ absolute? ──▶ every link followed
+//!   ──▶ inside the workspace?
 //!   ──▶ open without following a last link ──▶ a regular file, the one checked?
 //!   ──▶ copy to <lease>/<artifact>, hashed and counted as it is copied
 //!   ──▶ StagedArtifact { name, media type, size, digest, path }
+//!   ──▶ outbox.lock released
+//! discard and close hold that same lock across the removal. The export pin
+//! holds it shared for its whole read (`an_environment_outbox_cut_waits_for_the_writer_lock`).
 //! publish point: one request line ──▶ PublishCall ──▶ one answer line
 //! ```
 //!
@@ -74,7 +78,26 @@ impl FileOutbox {
     /// The outbox, the workspace or the directory for publish points could
     /// not be made ready.
     pub(crate) fn open(root: PathBuf, sockets: PathBuf, workspace: &Path) -> io::Result<Self> {
-        match fs::remove_dir_all(&root) {
+        let workspace = fs::canonicalize(workspace)?;
+        if let Some(parent) = root
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(parent)?;
+        }
+        let outbox = Self {
+            root,
+            sockets,
+            workspace,
+            points: Mutex::new(HashMap::new()),
+        };
+        // The sweep is the same exclusive section as a stage: an export pin
+        // waiting on this lock does not read a half-deleted tree.
+        let _lock = outbox.lock_outbox()?;
+        match fs::remove_dir_all(&outbox.root) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
@@ -82,14 +105,21 @@ impl FileOutbox {
         fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
-            .create(&root)?;
-        fs::DirBuilder::new().mode(0o700).create(&sockets)?;
-        Ok(Self {
-            root,
-            sockets,
-            workspace: fs::canonicalize(workspace)?,
-            points: Mutex::new(HashMap::new()),
-        })
+            .create(&outbox.root)?;
+        fs::DirBuilder::new().mode(0o700).create(&outbox.sockets)?;
+        Ok(outbox)
+    }
+
+    /// `outbox.lock` beside the outbox directory, exclusive until dropped.
+    /// The export pin holds the same file shared.
+    /// `a_stage_and_a_close_wait_for_the_outbox_lock`.
+    fn lock_outbox(&self) -> io::Result<File> {
+        let file = nessa_local_storage::open(
+            &self.root.with_extension("lock"),
+            nessa_local_storage::OpenMode::OpenOrCreate,
+        )?;
+        file.lock()?;
+        Ok(file)
     }
 
     /// Named by the lease's digest, never by what the gateway sent: a
@@ -115,6 +145,9 @@ impl FileOutbox {
         artifact: u32,
         request: &PublishRequest,
     ) -> Result<StagedArtifact, PublishRefusal> {
+        let _lock = self
+            .lock_outbox()
+            .map_err(|_| PublishRefusal::StagingFailed)?;
         let requested = Path::new(&request.path);
         if !requested.is_absolute() {
             return Err(PublishRefusal::OutsideWorkspace);
@@ -325,6 +358,14 @@ impl ArtifactOutbox for FileOutbox {
     }
 
     fn discard(&self, lease: &str, artifact: u32) {
+        let Ok(_lock) = self.lock_outbox() else {
+            tracing::warn!(
+                lease,
+                artifact,
+                "the outbox lock could not be taken to discard"
+            );
+            return;
+        };
         let path = self.lease_directory(lease).join(artifact.to_string());
         if let Err(error) = fs::remove_file(&path) {
             if error.kind() != io::ErrorKind::NotFound {
@@ -342,6 +383,10 @@ impl ArtifactOutbox for FileOutbox {
         if let Some(task) = task {
             task.abort();
         }
+        let Ok(_lock) = self.lock_outbox() else {
+            tracing::warn!(lease, "the outbox lock could not be taken to close");
+            return;
+        };
         let _ = fs::remove_file(self.socket(lease));
         match fs::remove_dir_all(self.lease_directory(lease)) {
             Ok(()) => {}
