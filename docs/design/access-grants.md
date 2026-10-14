@@ -215,8 +215,8 @@ policy engine, a new crate, or a grant-by-list.
 | Remembered permission rules | Stay the owner's. `rules.cedar` already refuses a grant. |
 | `#797` targets | Stay a caller contract. |
 | `#811` owner phone | Left to that issue. Pairing classes are unchanged here. |
-| `PeerPoller` timer for an Active peer | Deleted. Grant add, revoke, and epoch changes arrive on a grant subscription. Chat views arrive on `conversation.subscribe`. Both use the cursor and resume rules in [record subscriptions](record-subscriptions.md). One connection follows at most eight chats. The record copy stays `conversation.recordsHead` and `recordsPage`, woken by the subscription's record watch, including when that reread sends no frame. |
-| `conversation.watchRecords` | Stays the retained phone path ([#851](https://github.com/nessalabs/nessa-agent/issues/851)). Peers use the subscription's record watch as the wake, and `recordsHead` / `recordsPage` as the copy. |
+| `PeerPoller` timer for an Active peer | Deleted. Grant add, revoke, and epoch changes arrive on a grant subscription, paged inside the 64 KiB frame bound. Chat views arrive on `conversation.subscribe`. The record copy stays `conversation.recordsHead` and `recordsPage`, woken by a record-hint frame on that subscription. |
+| `conversation.watchRecords` | Stays the retained phone path ([#851](https://github.com/nessalabs/nessa-agent/issues/851)). A connection holds one record watch, and `conversation.changed` carries no cursor. Peers do not use it. |
 | Grant by channel, folder-of-chats, or default sync | Already refused. Stays refused. |
 | A webhook-only access list | Not added. The webhook's share grant is the list. |
 | Nessa copies of Claude or Codex hooks | Not added. |
@@ -311,12 +311,20 @@ subscription machinery #851 already uses. Cursor `{incarnation, position}`,
 resume with `after`, replacement on a new incarnation, `cursor_ahead`
 refused, `lagging` resumed from `lastDelivered`.
 
-- **Grants.** A grant subscription for this receiver. Each frame is that
-  receiver's grant set: a grant added, a grant revoked, or a grant epoch
-  changed. It is not `catalogue.watch`. That watch fires on the owner's
-  whole catalogue, which is why a peer is refused it today. This stream
-  names only the receiver's own grants, so the timing of ungranted work
-  stays on the grantor.
+- **Grants.** A grant subscription for this receiver. Each frame is a
+  prefix of that receiver's grants in cursor order: a grant added, a grant
+  revoked, or a grant epoch changed. It is not `catalogue.watch`. That
+  watch fires on the owner's whole catalogue, which is why a peer is
+  refused it today. This stream names only the receiver's own grants, so
+  the timing of ungranted work stays on the grantor. A frame that would
+  pass the 64 KiB product-frame bound is cut on a grant boundary and
+  marked `complete: false`, the same cut a list frame uses
+  ([record subscriptions](record-subscriptions.md), row L3). The follower
+  applies the prefix and resumes with `after` the last cursor in the frame
+  until a frame is complete. It does not walk the owner's catalogue. The
+  subscription is not ended `too_large` because the set did not fit. One
+  grant row that itself exceeds the bound ends that subscription
+  `too_large`, which is the existing oversized-frame rule.
 - **Chats.** `conversation.subscribe` for each shared chat the follower has
   opened and chosen to follow, up to the connection's conversation cap. A
   refused chat subscribe withdraws that local replica.
@@ -347,26 +355,34 @@ on `conversation.recordsHead` and `recordsPage`, and say the view is not
 that copy. The local replica is the retained peer cache, which slice 2
 reads. Deleting the poller timer does not delete the copy.
 
-The copy wakes from the record watch `conversation.subscribe` registers
-before its first read
-([record subscriptions](record-subscriptions.md)). A commit dirties that
-watch, and the task rereads. Row S9 sends no frame when the bounded view
-is unchanged, including a commit that touches only history the view omits.
-The copy still runs. `recordsHead` is the cursor-bearing read: the follower
-copies from the cursor the cache last applied through `recordsPage`, and
-writes those records into the cache. A changed view frame is not the
-signal. A grant frame that adds a chat the follower has chosen to follow
-starts the first copy. The watch wakes every copy after that. The walk is
-not `catalogueHead` and not `peer.poll_interval`. A chat let go past the
-eight-cap keeps its cursor and is not walked until it is opened again.
-After a disconnect the follower resumes the subscriptions and the record
-cursor from what it last applied.
+The server-side record watch stays inside the grantor's subscription
+task. Row S9 sends no view frame when the bounded view is unchanged,
+including a commit that touches only history the view omits
+([record subscriptions](record-subscriptions.md)). That watch is not a
+signal on the follower's socket.
+
+When the reread observes the record head moved, the task sends a
+record-hint frame on that `conversation.subscribe`: the subscription id
+and the head cursor `{incarnation, position}`. It sends the hint whether
+or not a view frame is also sent. The hint is the wake. The follower calls
+`recordsHead` and then `recordsPage` from the cursor the cache last
+applied, and writes those records into the cache. A view frame is not the
+wake, and neither is `conversation.watchRecords`. That method stays the
+retained phone path. Its hint carries no cursor, and a connection holds
+one record watch, so it cannot wake the chats this connection follows.
+
+A grant frame that adds a chat the follower has chosen to follow starts
+the first copy. The walk is not `catalogueHead` and not
+`peer.poll_interval`. A chat let go past the eight-cap keeps its cursor
+and is not walked until it is opened again. After a disconnect the
+follower resumes the subscriptions and the record cursor from what it
+last applied.
 
 The `PeerPoller` timer goes away for an Active peer. `peer.poll_interval`
 no longer wakes a `catalogueHead`. The record copy above is the walk, and
-the record watch wakes it. After a disconnect the follower opens a new
-pinned session and resumes both subscriptions from the cursors it last
-applied, the same way the sync engine resumes a pass.
+the record-hint frame wakes it. After a disconnect the follower opens a
+new pinned session and resumes both subscriptions from the cursors it
+last applied, the same way the sync engine resumes a pass.
 
 Two waits are not that timer:
 
@@ -416,12 +432,27 @@ The next admission reads the new epoch and is not sent. That is the Drive
 turn's rule: admitted work finishes, and the next command is refused.
 
 - An attempt takes the permit, reads the grant epoch, and reads whether
-  the integration credential is still current. Only then does it write the
-  POST. The credential check is the same fact a product session would
-  refuse: revoked or expired. The grant epoch does not move when the
-  credential is revoked or expires, so the epoch alone does not stop
-  delivery. An epoch that no longer allows delivery, or a credential that
-  is not current, records `not sent` and writes nothing.
+  the integration credential is still current. The credential check is the
+  same fact a product session would refuse: revoked or expired. The grant
+  epoch does not move when the credential is revoked or expires, so the
+  epoch alone does not stop delivery. An epoch that no longer allows
+  delivery, or a credential that is not current, records `not sent` and
+  writes nothing.
+- Before any POST byte is written, the attempt durably records `sending`:
+  the target, the delivery id, the epoch it read, and that the credential
+  was current. That write commits first. If it fails, the POST is not
+  written, the outcome is `not sent` with cause audit unavailable, and the
+  permit drops. After `sending` commits, the attempt writes the POST.
+- The terminal outcome is a second durable record. It does not replace
+  `sending`. It names `sent`, `retry scheduled`, `timed out`, or `not
+  sent`, the response that was observed, and the cause. If that write
+  fails after the response, or the process stops before it commits, the
+  `sending` row stays. Restart finds `sending` with no terminal record and
+  does not POST that delivery id again. It appends a reconciliation
+  record: outcome unknown, cause audit unavailable after send, the same
+  delivery id, target, and epoch. The effect is not relabeled `sent` and
+  the `sending` row is not removed. A later admission of that delivery id
+  is refused. A new event is a new delivery id.
 - Revoke takes the same permit. When an attempt holds it, revoke waits
   until that attempt records its outcome and drops the permit, and no
   longer than `webhook.post_deadline`. Revoke does not cancel a write that
@@ -768,16 +799,22 @@ Part of docs/design/access-grants.md.
 ## Deliver
 
 Delete the `PeerPoller` timer for an Active peer. `peer.poll_interval` no
-longer wakes a `catalogueHead`. The record copy stays, and the
-subscription's record watch wakes it, including when the reread sends no
-frame.
+longer wakes a `catalogueHead`. The record copy stays. A record-hint
+frame on `conversation.subscribe` wakes it when the record head moves,
+including when the view frame is not sent.
 
 Push grant changes on a grant subscription for this receiver, on the same
 subscription machinery as `conversation.subscribe` (#851). The cursor is
 `{incarnation, position}`. Resume with `after`. A new incarnation replaces
 the set. `cursor_ahead` is refused. `lagging` resumes from `lastDelivered`.
-Each frame is that receiver's grants: a grant added, a grant revoked, or a
-grant epoch changed. It is not `catalogue.watch`, which fires on the
+Each frame is a prefix of that receiver's grants in cursor order: a grant
+added, a grant revoked, or a grant epoch changed. A frame that would pass
+the 64 KiB product-frame bound is cut on a grant boundary and marked
+`complete: false`. The follower resumes with `after` the last cursor in
+that frame until a frame is complete. It does not walk the owner's
+catalogue. The subscription is not ended `too_large` because the set did
+not fit. One grant row that itself exceeds the bound ends that
+subscription `too_large`. It is not `catalogue.watch`, which fires on the
 owner's whole catalogue. A chat the follower has opened follows on
 `conversation.subscribe` with the same cursor and resume rules. A refused
 chat subscribe withdraws that local conversation.
@@ -798,15 +835,16 @@ resumes with `after` from the cursor last applied. There is no second
 connection and no poller for that chat. A grant change still arrives while
 eight chats are live.
 
-The record watch `conversation.subscribe` registers wakes the copy. The
-view is a bounded view, not a record stream, and it is not written into
-the cache as the replica. Row S9 in `docs/design/record-subscriptions.md`
-sends no frame when the view is unchanged. The copy still runs.
-`conversation.recordsHead` is the cursor-bearing read, and `recordsPage`
-copies from the cursor the cache last applied. Turns the view omits are
-still copied. A changed view frame is not the signal. A chat let go past
-the eight-cap keeps that cursor and is not walked until it is opened
-again.
+The server-side record watch stays in the grantor. Row S9 sends no view
+frame when the bounded view is unchanged. When the reread observes the
+record head moved, the task sends a record-hint frame on that
+subscription: the subscription id and the head cursor
+`{incarnation, position}`. The follower calls `conversation.recordsHead`
+and `recordsPage` from the cursor the cache last applied. The view is not
+the replica, and a view frame is not the wake. `conversation.watchRecords`
+stays the phone path: its hint carries no cursor, and a connection holds
+one record watch. A chat let go past the eight-cap keeps its cursor and
+is not walked until it is opened again.
 
 Two waits stay, and neither reads the catalogue on a timer. Until the
 enrollment is Active there is no session, so the existing status dial runs
@@ -818,11 +856,13 @@ connection's silence bound stays; it carries leases and is not this poller.
 ## Gate
 
 A new share, a revoke, and an epoch change each arrive on the grant
-subscription with no `catalogueHead` from `peer.poll_interval`. A new
+subscription with no `catalogueHead` from `peer.poll_interval`. A grant
+set larger than 64 KiB arrives as frames cut inside that bound and resumed with `after`,
+and the subscription stays open. A new
 message on an opened chat arrives on `conversation.subscribe` the same
-way. A commit that leaves the bounded view unchanged still copies the
-new records into the cache. A missing view frame is not a skipped copy.
-Reconnect resumes
+way. A commit that leaves the bounded view unchanged still sends the
+record-hint frame, and the copy that follows it puts the new records in
+the cache, including a turn the view omitted. Reconnect resumes
 the subscription cursors and the record cursor, and does not move any of
 them backwards in the same incarnation. An Active peer has no poller
 timer. A pending
@@ -903,10 +943,20 @@ to HTTPS is still not followed.
 
 Revoke and delivery share one permit for the registration. An attempt
 takes the permit, reads the grant epoch, and reads whether the integration
-credential is still current. Only then does it write the POST. Revoked or
-expired is not current. The grant epoch does not move when the credential
-is revoked or expires. An epoch that no longer allows delivery, or a
-credential that is not current, records `not sent` and writes nothing.
+credential is still current. Revoked or expired is not current. The
+grant epoch does not move when the credential is revoked or expires. An
+epoch that no longer allows delivery, or a credential that is not
+current, records `not sent` and writes nothing. Before any POST byte is
+written, the attempt durably records `sending` with the target, the
+delivery id, the epoch, and that the credential was current. If that
+write fails, the POST is not written and the outcome is `not sent` with
+cause audit unavailable. After `sending` commits, the attempt writes the
+POST. The terminal outcome is a second durable record and does not
+replace `sending`. If that write fails after the response, or the process
+stops before it commits, restart finds `sending` with no terminal record,
+does not POST that delivery id again, and appends outcome unknown with
+cause audit unavailable after send. The `sending` row stays. The effect
+is not relabeled `sent`.
 The attempt holds the permit at most until `webhook.post_deadline`, a row
 this slice adds to `docs/limits.md`. The clock starts when the attempt
 takes the permit. At the deadline the sender closes its side of the POST,
@@ -943,7 +993,11 @@ finish inside the deadline. One that has not taken the permit is not
 sent. A POST that does not finish within `webhook.post_deadline` records
 `timed out`, drops the permit, and revoke then advances the epoch without
 waiting further. A 3xx is not followed and is not a delivery. The
-signature is not sent to the redirect target.
+signature is not sent to the redirect target. A POST whose response is
+success and whose terminal audit write fails leaves `sending` in place,
+sends no second POST of that delivery id, and records outcome unknown.
+Restart from that row does the same. A failed pre-send write sends
+nothing.
 
 ## Depends on
 
