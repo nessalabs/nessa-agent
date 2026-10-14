@@ -12,7 +12,7 @@ import { conversationView as panelView } from "../../src/conversation/adapters/g
 import {
   closeTab,
   followConversation,
-  restoreConversations,
+  openListed,
 } from "../../src/conversation/adapters/store/slice"
 import { conversationTabSnapshot } from "../../src/conversation/application/saved-tabs"
 import { followByReading } from "../../src/conversation/testing"
@@ -189,7 +189,7 @@ function HistoryTabConsumer() {
       },
     }
     const tabs = makeStore(createDependencies({ conversation: effects }))
-    tabs.dispatch(restoreConversations({ tabs: [{ conversationId: serverId }] }))
+    tabs.dispatch(openListed({ serverConversationId: serverId, title: null }))
     await tabs
       .dispatch(followConversation(tabs.getState().conversation.activeId))
       .unwrap()
@@ -203,9 +203,8 @@ function HistoryTabConsumer() {
   }
   const close = async () => {
     if (!active) return
-    await active.store
-      .dispatch(closeTab(active.store.getState().conversation.activeId))
-      .unwrap()
+    const closedId = active.store.getState().conversation.activeId
+    await active.store.dispatch(closeTab(closedId)).unwrap()
     setResult(
       (previous) =>
         previous && {
@@ -213,7 +212,7 @@ function HistoryTabConsumer() {
           closes: active.closeCalls(),
           open: active.store
             .getState()
-            .conversation.conversations.some((item) => item.id === "c0"),
+            .conversation.conversations.some((item) => item.id === closedId),
         },
     )
   }
