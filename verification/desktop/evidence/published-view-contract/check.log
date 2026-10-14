@@ -23,3 +23,15 @@ Revert probes; each source change was restored:
 - Include serverNowMs in mode-independent content: mode-content test failed because the two observation clocks differed.
 - Remove Object.hasOwn from lease case lookup: Chromium reported pageerror Invalid conversation lease state for __proto__; the fixture then failed to render. Output: /tmp/nessa-827-prototype-revert-current.json.
 - The five source-asserted probes below were performed before restacking at the earlier code head. Restored source was revalidated at the current code head: the full lease-details run above held 108/108; TypeScript, lint, format, library, architecture and whitespace checks passed.
+
+Current-main replay (2026-10-14 America/Vancouver)
+Tested source: c3e46d39ca181f62f18d88f86d50768c53dd5d22
+Base: 254473c7ea449a67804e8319b66833f00490ed61
+Private UI:30900b8644ce9b1bb49681ed28067dad4537a70d; fonts resolve inside checkout.
+TypeScript passed; verification helper tests167/167; scoped lease fixture lint passed.
+lease-details:108/108 held, Chromium/WebKit at360/600/1440.
+mode-publication:2/2 held, Chromium/WebKit real gateway publications.
+Mode replay reused read-only /tmp/nessa-797-combined-cargo-target/debug/nessa, built at4fb33cd5e.
+Diff of Cargo.toml/Cargo.lock/crates between4fb and this source was empty; no native build ran concurrently.
+Raw current-head logs:/tmp/nessa-836-c3e-lease.log and /tmp/nessa-836-c3e-mode.log.
+Fresh independent full10-file scoped review: no findings; reviewer did not rerun browser/test workloads.
