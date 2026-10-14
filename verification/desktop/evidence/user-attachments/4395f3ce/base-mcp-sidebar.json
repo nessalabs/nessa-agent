@@ -1,0 +1,433 @@
+{
+  "check": "mcp-apps",
+  "ok": true,
+  "started": "2026-10-14T23:12:12.599Z",
+  "finished": "2026-10-14T23:14:11.850Z",
+  "target": {
+    "url": "http://127.0.0.1:1494/desktop.html",
+    "mode": "given"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "inline",
+      "frame": {
+        "x": 526,
+        "y": 271.390625,
+        "w": 652,
+        "h": 233
+      },
+      "drawn": {
+        "x": 526,
+        "y": 271.390625,
+        "w": 652,
+        "h": 233
+      },
+      "appHeight": 233,
+      "told": {
+        "variables": {
+          "--color-background-primary": "oklch(0.145 0 0)",
+          "--color-background-secondary": "oklch(0.269 0 0)",
+          "--color-background-tertiary": "oklch(0.269 0 0)",
+          "--color-background-inverse": "oklch(0.985 0 0)",
+          "--color-background-danger": "oklch(0.704 0.187 22.216)",
+          "--color-text-primary": "oklch(0.985 0 0)",
+          "--color-text-secondary": "oklch(0.708 0 0)",
+          "--color-text-inverse": "oklch(0.145 0 0)",
+          "--color-text-danger": "oklch(0.704 0.187 22.216)",
+          "--color-border-primary": "oklch(1 0 0 / 35%)",
+          "--color-border-secondary": "oklch(1 0 0 / 38%)",
+          "--color-ring-primary": "oklch(0.92 0 0)",
+          "--font-sans": "\"Geist Variable\", \"Geist\", ui-sans-serif, system-ui, sans-serif",
+          "--font-mono": "\"Geist Mono Variable\", \"Geist Mono\", ui-monospace, monospace",
+          "--border-radius-xs": "calc(0.625rem * 0.5)",
+          "--border-radius-sm": "calc(0.625rem * 0.75)",
+          "--border-radius-md": "calc(0.625rem * 0.875)",
+          "--border-radius-lg": "0.625rem",
+          "--border-radius-xl": "calc(0.625rem * 1.5)"
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1494/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "pane",
+      "frame": {
+        "x": 857.77978515625,
+        "y": 50.484310150146484,
+        "w": 572.4404296875,
+        "h": 838.7841796875
+      },
+      "measured": {
+        "body": {
+          "x": 857.124267578125,
+          "y": 49.56934356689453,
+          "w": 573.75146484375,
+          "h": 840.7052001953125
+        },
+        "frame": {
+          "x": 857.124267578125,
+          "y": 49.56934356689453,
+          "w": 573.75146484375,
+          "h": 840.7052001953125
+        },
+        "fit": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "window",
+      "frame": {
+        "x": 280.21282958984375,
+        "y": 53.69235610961914,
+        "w": 1143.57421875,
+        "h": 832.048828125
+      },
+      "measured": {
+        "body": {
+          "x": 280.21282958984375,
+          "y": 53.69235610961914,
+          "w": 1143.57421875,
+          "h": 832.048828125
+        },
+        "frame": {
+          "x": 280.21282958984375,
+          "y": 53.69235610961914,
+          "w": 1143.57421875,
+          "h": 832.048828125
+        },
+        "fit": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "tools-call",
+      "allowed": "ok: {\"content\":[{\"type\":\"text\",\"text\":\"Refreshed\"}],\"structuredContent\":{\"refreshed\":{\"times\":1}}}",
+      "hidden": "error: fixture_secret is not available to apps"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "message",
+      "sent": "ok: {}",
+      "label": "Sent by show_fixture, from nessa-fixture",
+      "said": "Plot May next to April",
+      "busy": "ok: {\"isError\":true}",
+      "context": "error: The sample has no model to give context to",
+      "geometry": {
+        "label": {
+          "x": 953.984375,
+          "y": 538.0574340820312,
+          "w": 220.015625,
+          "h": 18
+        },
+        "bubble": {
+          "x": 1005.421875,
+          "y": 560.0574340820312,
+          "w": 172.578125,
+          "h": 38.46875
+        },
+        "column": {
+          "x": 526,
+          "y": 538.0574340820312,
+          "w": 652,
+          "h": 60.46875
+        },
+        "rightEdgeApart": 4
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "csp",
+      "fetched": "blocked"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "console",
+      "harmless": [
+        "console.error: Connecting to 'https://example.com/' violates the following Content Security Policy directive: \"connect-src 'none'\". The action has been blocked. (about:srcdoc)",
+        "console.error: Connecting to 'https://example.com/' violates the following Content Security Policy directive: \"connect-src 'none'\". The action has been blocked. (about:srcdoc)",
+        "console.error: Fetch API cannot load https://example.com/. Refused to connect because it violates the document's Content Security Policy. (about:srcdoc)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "isolation",
+      "inside": {
+        "origin": "null",
+        "parentDocument": "refused",
+        "topDocument": "refused",
+        "localStorage": "refused",
+        "cookie": "refused"
+      },
+      "pageOrigin": "http://127.0.0.1:1494",
+      "proxyOrigin": "http://127.0.0.1:56060"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "escape-navigate",
+      "outcome": "departed",
+      "leaked": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "console",
+      "harmless": [
+        "console.error: Framing 'https://example.com/' violates the following Content Security Policy directive: \"frame-src 'none'\". The request has been blocked.\n"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "escape-refresh",
+      "outcome": "departed",
+      "leaked": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "console",
+      "harmless": [
+        "console.error: Framing 'https://example.com/' violates the following Content Security Policy directive: \"frame-src 'none'\". The request has been blocked.\n"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "escape-rewrite",
+      "outcome": "departed",
+      "leaked": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "console",
+      "harmless": [
+        "console.error: Framing 'https://example.com/' violates the following Content Security Policy directive: \"frame-src 'none'\". The request has been blocked.\n"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "departures-cleanup",
+      "outside": 0,
+      "product": false,
+      "overflowing": 0,
+      "path": "/verification/desktop/fixtures/sandbox-probes/index.html",
+      "owned": true,
+      "aborted": true,
+      "remaining": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "departures",
+      "seen": {
+        "left-alone": ["hello-from-app"],
+        "forged-departures": ["hello-from-app"],
+        "fragment-links": [
+          "hello-from-app",
+          "moved-plain",
+          "moved-empty",
+          "moved-self",
+          "moved-spaced",
+          "moved-svg",
+          "moved-area",
+          "moved-shadowed",
+          "hello-from-app"
+        ],
+        "fragment-by-script": ["hello-from-app", "moved"],
+        "rewrite-alone": [
+          "hello-from-app",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "rewrite-then-reload": [
+          "hello-from-app",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "rewrite-then-navigate": [
+          "hello-from-app",
+          "ui/notifications/sandbox-csp-violation",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "rewrite-then-blank": [
+          "hello-from-app",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "navigate-before-load": [
+          "hello-from-app",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "reload-before-load": [
+          "hello-from-app",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "holds-first-load": ["hello-from-app", "holding"],
+        "posts-as-it-goes": [
+          "hello-from-app",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "forged-checks": [
+          "hello-from-app",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "prototype-reply": [
+          "hello-from-app",
+          "send-host-reply",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "forged-checks-from-a-frame": [
+          "hello-from-app",
+          "ui/notifications/sandbox-app-left"
+        ],
+        "patched-app": ["hello-from-app"],
+        "unusable-deadline": [],
+        "no-reporter": ["ui/notifications/sandbox-app-left"],
+        "impostor": ["ui/notifications/sandbox-app-left"],
+        "nested-answers": ["ui/notifications/sandbox-app-left"],
+        "javascript-url": ["hello-from-app", "still-here"]
+      },
+      "forgedAt": {
+        "proxies": 21,
+        "apps": 18
+      },
+      "leaked": [],
+      "held": {
+        "hits": 1,
+        "unanswered": 1
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "console",
+      "harmless": [
+        "console.error: Framing 'https://example.com/' violates the following Content Security Policy directive: \"frame-src 'none'\". The request has been blocked.\n"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "departures-back-cleanup",
+      "outside": 0,
+      "product": false,
+      "overflowing": 0,
+      "path": "/verification/desktop/fixtures/sandbox-probes/index.html",
+      "owned": true,
+      "aborted": true,
+      "remaining": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "departures-back",
+      "seen": {
+        "hash-then-back": ["hello-from-app", "went-back"],
+        "stale-answer": ["answered-late", "ui/notifications/sandbox-app-left"]
+      },
+      "forgedAt": {
+        "proxies": 2,
+        "apps": 2
+      },
+      "leaked": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "chart-cleanup",
+      "outside": 0,
+      "product": false,
+      "overflowing": 0,
+      "path": "/verification/desktop/fixtures/sandbox-probes/index.html",
+      "owned": true,
+      "aborted": true,
+      "remaining": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "chart",
+      "said": {
+        "state": "live",
+        "chart": "alpha 10, beta 20",
+        "heading": "Chart (nessa-test)"
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "forge",
+      "notices": ["Blocked a connection this app didn't declare"]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "teardown",
+      "said": "tearing-down"
+    }
+  ]
+}

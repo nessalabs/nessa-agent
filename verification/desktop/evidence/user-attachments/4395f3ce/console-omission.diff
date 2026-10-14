@@ -1,0 +1,13 @@
+diff --git a/verification/desktop/fixtures/user-attachments/main.tsx b/verification/desktop/fixtures/user-attachments/main.tsx
+index dd41afe75..dee39127e 100644
+--- a/verification/desktop/fixtures/user-attachments/main.tsx
++++ b/verification/desktop/fixtures/user-attachments/main.tsx
+@@ -7,6 +7,8 @@ import "@fontsource-variable/geist"
+ import "../../../../src/desktop/styles.css"
+ import "../../../../src/desktop/workspace/ui/transcript/transcript.css"
+ 
++console.error("682 console regression witness")
++
+ const image = { digest: "a".repeat(64), mimeType: "image/png" as const, size: 2048 }
+ const file = { path: "/workspace/quarterly [report].csv" }
+ const scenarios = ["committed", "pending", "restored"].flatMap((phase) =>
