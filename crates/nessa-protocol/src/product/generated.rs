@@ -678,6 +678,8 @@ pub struct ConversationView {
     pub lease: Option<ConversationLease>,
     pub artifacts: Vec<ConversationArtifact>,
     pub notes: Vec<ConversationNote>,
+    pub unreadable: Vec<ConversationUnreadable>,
+    pub unreadable_truncated: bool,
     #[serde(deserialize_with = "Option::deserialize")]
     pub title: Option<String>,
     pub questions: Vec<ConversationQuestion>,
@@ -2433,6 +2435,13 @@ impl ConversationMessageRetiredReason {
             Self::PermissionLost => "permission_lost",
         }
     }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationUnreadable {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_execution_id: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

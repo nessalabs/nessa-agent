@@ -667,6 +667,10 @@ export interface ConversationView {
   artifacts: ConversationArtifact[]
   /** Notes left in the conversation (conversation.message), the newest 64 in the order they were left; empty before any was. An older one is left out of the list, not out of the conversation, and the list may give up its oldest entries to bound the response. */
   notes: ConversationNote[]
+  /** Records this read could not apply, oldest first, at most 32. Empty when every record could be read. A chat with no turns may still list these. Each is one line in the transcript. The line is where a future report action attaches; this view carries no report control. */
+  unreadable: ConversationUnreadable[]
+  /** True when more records could not be read than the 32 lines in unreadable. Those records were still skipped. The transcript ends with one line: More parts of this conversation couldn't be read. */
+  unreadableTruncated: boolean
   /** Name the gateway derived from the conversation's first message, the same one conversation.list shows; null before anything was said. */
   title: string | null
   /** Questions the agent is waiting on, oldest first. */
@@ -2437,6 +2441,13 @@ export const ConversationMessageRetiredReason = {
 } as const
 export type ConversationMessageRetiredReason =
   (typeof ConversationMessageRetiredReason)[keyof typeof ConversationMessageRetiredReason]
+/** One saved record this read could not apply. The transcript draws one line for it, after the turn named by afterExecutionId, and that line is where a future report action attaches. */
+export interface ConversationUnreadable {
+  /** The record's physical position, as a decimal with no leading zero. */
+  id: string
+  /** The last turn accepted when the record was skipped, so the line is shown after that turn; absent when none had been. */
+  afterExecutionId?: string
+}
 /** One note left in the conversation, as everyone who reads it sees it. A note is not a turn and not the person's message: show it apart from the turns, with its author. */
 export interface ConversationNote {
   /** The conversation's own name for the note, as its receipt gave it. */

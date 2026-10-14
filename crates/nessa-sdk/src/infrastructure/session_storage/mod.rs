@@ -19,8 +19,11 @@
 //! integration tests; inherited private codec/allocation fixtures remain limited
 //! implementation observations, not public acceptance.
 //! TranscriptFold validates unit checkpoints through the one SDK session fold. A
-//! committed read cache advances from a fixed head and remains separate from
-//! the writer's observed state.
+//! record that cannot be read is skipped and remembered as one gap, including
+//! a record delivered for another stream; past 32 gaps the fold still skips
+//! and says the list was cut. The chat still opens. A committed read cache
+//! advances from a fixed head and remains
+//! separate from the writer's observed state.
 //!
 //! ```text
 //! SessionStorage::open -> SessionStorageLease <- SessionManager

@@ -101,7 +101,7 @@ pub use storage::{
     ProviderContext, QueueHistoryRecord, SessionChange, SessionLoad, SessionLoadState,
     SessionSaveBackend, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
     SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
-    StorageShutdownFailure, SubmissionAcknowledgement,
+    StorageShutdownFailure, SubmissionAcknowledgement, UnreadablePart,
 };
 
 pub(crate) use transcript::CommittedTransactionState;

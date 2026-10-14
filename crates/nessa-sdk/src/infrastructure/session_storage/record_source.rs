@@ -1092,15 +1092,14 @@ fn committed_source_error(error: SourceError) -> StorageError {
 }
 
 fn committed_fold_error(error: super::transcript::TranscriptError) -> StorageError {
-    // A decision keeps its cause: another version, and a body that does not
-    // decode, stay those errors. A malformed frame is stored data. So is
-    // `Scope`: the only way this read produces it is a saved header or
-    // snapshot whose identity is another stream (`apply_one`). Those bytes
-    // will not match on a retry, so the chat stays corrupt and can be
-    // deleted. `Position` is a lifecycle race: this read stamps contiguous
-    // positions itself, and a head behind downloaded progress can catch up.
-    // `Checkpoint` and `CheckpointTooLarge` are not produced here. They stay
-    // retryable I/O.
+    // A decision keeps its cause. A record that cannot be read is skipped by
+    // the fold, including one whose scope is another stream, so it is not an
+    // error here. `Scope` is a decoded open whose session is not this one:
+    // those bytes will not match on a retry, so the chat stays corrupt and
+    // can be deleted. `Position` is a lifecycle race: this read stamps
+    // contiguous positions itself, and a head behind downloaded progress can
+    // catch up. `Checkpoint` and `CheckpointTooLarge` are not produced here.
+    // They stay retryable I/O. A malformed frame is skipped, not returned.
     match error {
         super::transcript::TranscriptError::Decision(cause) => cause,
         super::transcript::TranscriptError::Frame | super::transcript::TranscriptError::Scope => {
@@ -1439,13 +1438,11 @@ mod tests {
         }
     }
 
-    /// A stored start frame the validator rejects is corrupt from a committed
-    /// read. The schema tag is the known start frame and the version byte is
-    /// not this build's, which is how saved bytes become `TranscriptError::Frame`.
-    /// An unknown tag is that same error. The bytes will not become readable,
-    /// so the read does not report a retryable outage.
+    /// A stored frame whose tag this build does not know is one gap. The chat
+    /// opens with no snapshot. Those bytes do not become a turn, and a retry
+    /// sees the same gap rather than an outage.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn an_unknown_frame_tag_is_corrupt_from_read_committed() {
+    async fn an_unknown_frame_tag_is_a_gap_from_read_committed() {
         use event_stream::Payload;
         let directory = tempfile::tempdir().unwrap();
         let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
@@ -1469,20 +1466,22 @@ mod tests {
             )
             .await
             .unwrap();
-        let error = storage.read_committed(session).await.unwrap_err();
-        assert_eq!(
-            error,
-            StorageError::Corrupt("committed transcript: Frame".into())
-        );
+        let committed = storage.read_committed(session).await.unwrap().unwrap();
+        assert!(committed.snapshot().is_none());
+        assert_eq!(committed.downloaded(), 1);
+        assert_eq!(committed.unreadable().len(), 1);
+        assert_eq!(committed.unreadable()[0].id(), "1");
+        assert!(committed.unreadable()[0].after_execution_id().is_none());
+        assert!(!committed.unreadable_truncated());
         storage.shutdown().await.unwrap();
     }
 
     /// A save group written for one stream, copied as the same raw frames
-    /// into another, is corrupt from a committed read. The header's stream
-    /// and incarnation are stored bytes. They will not match the stream
-    /// being read, and a retry sees the same bytes.
+    /// into another, is a gap on the chat that received the copy. The header
+    /// names the other stream, so it is not adopted. The chat opens with no
+    /// snapshot, and each copied fact is its own line.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_save_group_from_another_stream_is_corrupt_from_read_committed() {
+    async fn a_save_group_from_another_stream_is_a_gap_from_read_committed() {
         use event_stream::{Cursor, PageLimits};
         let directory = tempfile::tempdir().unwrap();
         let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
@@ -1517,11 +1516,18 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let error = storage.read_committed(foreign).await.unwrap_err();
+        let committed = storage.read_committed(foreign).await.unwrap().unwrap();
+        assert!(committed.snapshot().is_none());
+        assert_eq!(committed.downloaded(), 2);
         assert_eq!(
-            error,
-            StorageError::Corrupt("committed transcript: Scope".into())
+            committed
+                .unreadable()
+                .iter()
+                .map(|part| part.id())
+                .collect::<Vec<_>>(),
+            ["1", "2"]
         );
+        assert!(!committed.unreadable_truncated());
         storage.shutdown().await.unwrap();
     }
 
@@ -3341,7 +3347,36 @@ mod tests {
             limits,
         )
         .unwrap();
-        assert_eq!(receiver.apply(invalid_schema), Err(StoreError::Failed));
+        // An unknown tag is a gap. Apply it on a copy so resume still reads
+        // the database that ends at the lost reply.
+        let poison_path = directory.path().join("receiver-poison.sqlite3");
+        std::fs::copy(&db_path, &poison_path).unwrap();
+        let mut poison = DurableReceiver::open(&poison_path, authority.scope.clone(), false);
+        assert_eq!(poison.apply(invalid_schema), Ok(()));
+        let poisoned = poison.progress().unwrap().unwrap();
+        assert_eq!(
+            (poisoned.downloaded, poisoned.applied, poisoned.facts),
+            (3, 2, 1)
+        );
+        let mut restored = TranscriptFold::restore(
+            authority.scope.clone(),
+            poisoned.applied,
+            &super::super::transcript::TranscriptCheckpoint::from_chunks(poisoned.checkpoint)
+                .unwrap(),
+        )
+        .unwrap();
+        // Position 3 is past the published save, so the checkpoint leaves the
+        // gap out. Replaying the saved suffix notes it again.
+        assert!(restored.unreadable().is_empty());
+        assert!(restored.snapshot().is_some());
+        drain_saved_records(&poison.db, &authority.scope, &mut restored).unwrap();
+        assert_eq!(restored.unreadable().len(), 1);
+        assert_eq!(restored.unreadable()[0].id(), "3");
+        assert_eq!(
+            poison.load(&authority.scope).unwrap().unwrap().position(),
+            poisoned.downloaded
+        );
+        drop(poison);
         assert_eq!(receiver.progress().unwrap().unwrap(), initial);
         drop(receiver);
 
@@ -3627,6 +3662,7 @@ mod tests {
                 result: None,
             }));
             let mut changes = vec![input];
+            // A second open is skipped as its own unit. The input unit stays.
             if reject {
                 changes.push(opening(&session));
             }
@@ -3660,7 +3696,12 @@ mod tests {
             let result = reading.await.unwrap();
             assert!(page_charge > initial_charge);
             if reject {
-                assert!(matches!(result, Err(StorageError::Corrupt(_))));
+                // The second open is its own unit. It is one gap. The input
+                // unit before it stays, and the page is published.
+                let committed = result.unwrap().unwrap();
+                assert_eq!(committed.snapshot().unwrap().invocations.len(), 1);
+                assert_eq!(committed.unreadable().len(), 1);
+                assert!(!committed.unreadable_truncated());
             } else {
                 assert_eq!(
                     result
@@ -3675,8 +3716,8 @@ mod tests {
             }
             {
                 let receiver = entry.receiver.lock().unwrap();
-                assert_eq!(receiver.fold.applied(), if reject { 2 } else { 4 });
-                assert_eq!(receiver.fold.downloaded(), if reject { 2 } else { 4 });
+                assert_eq!(receiver.fold.applied(), if reject { 5 } else { 4 });
+                assert_eq!(receiver.fold.downloaded(), if reject { 5 } else { 4 });
                 // Check cached semantic totals against current allocation owners first.
                 receiver.fold.assert_retained_accounting();
                 // Sum the entry's actual layouts and separate scope/StreamKey copies,
@@ -3699,14 +3740,17 @@ mod tests {
                 assert_eq!(entry.retained_bytes.load(Ordering::Acquire), expected);
                 assert!(expected > initial_charge); // surviving actual slot owners grew.
                 if reject {
-                    assert!(receiver.fold.snapshot().unwrap().invocations.is_empty());
+                    assert_eq!(receiver.fold.snapshot().unwrap().invocations.len(), 1);
+                    assert_eq!(receiver.fold.unreadable().len(), 1);
                     assert!(!entry.lifetime.is_pinned());
                 }
             }
             // A repeated failed read reuses warm spare; the valid path remains publishable.
             let retry = storage.read_committed(session).await;
             if reject {
-                assert!(matches!(retry, Err(StorageError::Corrupt(_))));
+                let committed = retry.unwrap().unwrap();
+                assert_eq!(committed.snapshot().unwrap().invocations.len(), 1);
+                assert_eq!(committed.unreadable().len(), 1);
             } else {
                 assert_eq!(
                     retry
