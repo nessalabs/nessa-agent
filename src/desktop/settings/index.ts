@@ -32,6 +32,14 @@
  *   ui/native-hooks-rows.tsx ──▶ adapters/native-hooks-gateway.ts
  *   (Access: Claude and Codex     (`client.agents` list and
  *    hook switches)                setNativeHooks)
+ *
+ *   ui/permission-rule-rows.tsx ──▶ adapters/permission-rules-gateway.ts
+ *   (Access: remembered rules     (`client.conversation` list and
+ *    and revoke)                   revokePermissionRule)
+ *
+ *   ui/review-notice-rows.tsx
+ *   (Access: the button that asks the browser to allow a notification
+ *    while a review waits)
  * ```
  *
  * An arrow points from what reads to what it reads. The window mounts
@@ -44,6 +52,7 @@ export { openSettings, SettingsHost, useSettingsOpening } from "./ui/settings-vi
 export { McpServersProvider } from "./ui/integrations-tab"
 export { LinkedDevicesProvider } from "./ui/linked-devices-tab"
 export { NativeHooksProvider } from "./ui/native-hooks-rows"
+export { PermissionRulesProvider } from "./ui/permission-rule-rows"
 export {
   mcpServersGateway,
   type McpServersClient,
@@ -59,3 +68,8 @@ export {
   type NativeHooksClient,
   type NativeHooksGateway,
 } from "./adapters/native-hooks-gateway"
+export {
+  permissionRulesGateway,
+  type PermissionRulesClient,
+  type PermissionRulesGateway,
+} from "./adapters/permission-rules-gateway"

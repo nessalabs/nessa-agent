@@ -310,6 +310,7 @@ pub(super) async fn product_state(
                         built.record_watches,
                         built.catalogue_watches,
                         built.native_hooks,
+                        built.permission_memory,
                     )),
                     built.agent_probe,
                     built.warm_ups,
@@ -393,12 +394,14 @@ pub(super) async fn product_state(
         record_watches,
         catalogue_watches,
         native_hooks,
+        permission_memory,
     )) = conversations
     {
         record_reader = Some(reader.clone());
         catalogue_reader = Some(catalogue.clone());
         product = product
             .with_conversations(Arc::new(service))
+            .with_permission_rules(permission_memory)
             .with_passive_read(receivers, metadata, share_grants, access_policy)
             .with_change_watches(record_watches, catalogue_watches)
             .with_record_source(reader)
@@ -508,6 +511,8 @@ struct BuiltConversations {
     /// in: the store the conversation service issues on, and the audit it
     /// records an app's calls in. `None` without MCP servers.
     resource_route: Option<(Arc<ResourceTicketStore>, Arc<dyn McpAppAudit>)>,
+    /// The rules Claude and Codex remember, and the notices a waiting review raises.
+    permission_memory: Arc<crate::conversation::infrastructure::PermissionMemory>,
     /// The paired environments the native listener serves, when it does,
     /// and the names of those connected now, for the catalog.
     environment_peers: Option<PairedParts>,
@@ -1026,6 +1031,7 @@ async fn conversations(
         credentials.clone(),
         &deferred,
     )?;
+    let permission_memory = built.permission_memory.clone();
     // One warm-up per configured agent, because each runs its own runtime
     // and the operating system scans each of them separately on its first
     // execution. One for the server would leave whichever agent it did not
@@ -1153,6 +1159,7 @@ async fn conversations(
         clock: clock.clone(),
         images: attachments.images.clone(),
         native_hooks: built.native_hooks.clone(),
+        permission_memory: permission_memory.clone(),
         warm_up: CurrentOpenCodeWarmUp::new(records.clone(), warm_up_audit.clone(), clock.clone()),
     }));
     let selected = resolver.default_agent()?;
@@ -1241,6 +1248,7 @@ async fn conversations(
         evaluator: Arc::new(evaluator),
         audit: Arc::new(drive_audit),
     });
+    service.bind_permission_rules(permission_memory.clone());
     if let Some(tools) = &environment_tools {
         tools.attach(service.clone());
     }
@@ -1266,6 +1274,7 @@ async fn conversations(
         mcp_authorization,
         resource_route,
         environment_peers,
+        permission_memory,
     })
 }
 

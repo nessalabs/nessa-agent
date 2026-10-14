@@ -268,9 +268,13 @@ async fn an_approval_with_no_arguments_still_reaches_the_host_with_what_codex_sa
         serde_json::from_str::<serde_json::Value>(&input.arguments_json).unwrap(),
         serde_json::json!({"toolCall":{"toolCallId":"file-change-1","kind":"edit","status":"pending","locations":[{"path":"/workspace/config.txt"}]},"metadata":{"permission":{"version":1,"title":"Make edits?"}}})
     );
-    // Codex offers a persistent choice this binding cannot enforce; it is not
-    // passed on to the host as one it may take.
-    assert_eq!(options.choices().len(), 2);
+    // Codex's own always-allow is passed through with its option id. Nessa
+    // does not replace it, and does not treat it as a project rule.
+    assert_eq!(options.choices().len(), 3);
+    assert!(options
+        .choices()
+        .iter()
+        .any(|option| option.id().as_str() == "allow_always"));
     let allow = options
         .choices()
         .iter()
