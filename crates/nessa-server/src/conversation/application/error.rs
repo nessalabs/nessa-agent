@@ -66,6 +66,12 @@ pub enum ConversationError {
     /// save, and a retry of that same request is answered the same way and
     /// is not admitted again (row J31).
     RevokedAfterSave,
+    /// A native steer that was saved, then could not be checked because the
+    /// grant record could not be read before injection. Nothing reached the
+    /// agent. The command receipt is settled as unavailable after save, and
+    /// a retry of that same request is answered the same way and is not
+    /// admitted again (row J31).
+    UnavailableAfterSave,
     /// A delete that happened — the conversation is tombstoned, left out of
     /// every list, and refused — and did not finish. Repeating the delete
     /// finishes it.

@@ -6328,9 +6328,11 @@ async fn a_revoked_admission_settles_the_command_and_the_same_request_is_revoked
     assert!(harness.provider.executions.lock().unwrap().is_empty());
 }
 
-/// The hold before the save succeeds. The save check, the second hold, refuses.
+/// The hold before the save succeeds. The save check, the second hold, fails
+/// with `after_save`.
 struct SecondHoldRevokes {
     holds: AtomicUsize,
+    after_save: ConversationError,
 }
 
 impl super::ShareGrants for SecondHoldRevokes {
@@ -6370,11 +6372,12 @@ impl super::ShareGrants for SecondHoldRevokes {
         _: u64,
     ) -> super::ConversationFuture<'a, super::RevisionHold> {
         let holds = self.holds.fetch_add(1, Ordering::SeqCst);
+        let after_save = self.after_save.clone();
         Box::pin(async move {
             if holds == 0 {
                 Ok(super::RevisionHold::vacant())
             } else {
-                Err(ConversationError::Revoked)
+                Err(after_save)
             }
         })
     }
@@ -6399,6 +6402,7 @@ async fn a_saved_steer_revoked_after_save_settles_the_command_and_the_same_reque
         .store(true, Ordering::SeqCst);
     let grants = Arc::new(SecondHoldRevokes {
         holds: AtomicUsize::new(0),
+        after_save: ConversationError::Revoked,
     });
     bind_live_grants(&harness, Arc::clone(&grants) as Arc<dyn super::ShareGrants>);
     harness.create().await;
@@ -6494,6 +6498,128 @@ async fn a_saved_steer_revoked_after_save_settles_the_command_and_the_same_reque
             .expect("the saved steer")
             .result,
         Some(Err(AgentError::RefusedAfterSave))
+    );
+}
+
+/// Row J31: a native steer saved, then left unchecked because the second
+/// revision hold cannot be read, settles the command. The same request is
+/// `unavailable_after_save` again, and the saved turn keeps the SDK's
+/// `AfterSaveUnavailable`.
+#[tokio::test]
+async fn a_saved_steer_unavailable_after_save_settles_the_command_and_the_same_request_is_unavailable_again(
+) {
+    use nessa_sdk::application::agent_execution::commands::{
+        CreationStorage, MutationFailure, MutationOutcome, MutationStage,
+    };
+    use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
+    use nessa_sdk::infrastructure::session_storage::RecordStorage;
+    let root = tempfile::tempdir().unwrap();
+    let harness = in_process(root.path(), DELETION_BUDGETS.stop);
+    harness
+        .provider
+        .native_steering
+        .store(true, Ordering::SeqCst);
+    let grants = Arc::new(SecondHoldRevokes {
+        holds: AtomicUsize::new(0),
+        after_save: ConversationError::Metadata,
+    });
+    bind_live_grants(&harness, Arc::clone(&grants) as Arc<dyn super::ShareGrants>);
+    harness.create().await;
+    let commands: Arc<dyn CreationStorage> =
+        Arc::new(RecordStorage::new(root.path().join("commands")).unwrap());
+    harness.service.bind_commands(Arc::clone(&commands));
+    let initiation = Initiation::grant(GrantInitiator::new("phone", 1).unwrap());
+    let sent = harness
+        .service
+        .submit_command(
+            Arc::clone(&commands),
+            harness.id.clone(),
+            caller("settle"),
+            initiation.clone(),
+            "driven".into(),
+            drive_message(),
+            SubmissionMode::Steer,
+        )
+        .await;
+    match sent {
+        Err(MutationFailure::Target(error)) => {
+            assert!(
+                matches!(error, ConversationError::UnavailableAfterSave),
+                "{error:?}"
+            );
+        }
+        Err(MutationFailure::Interrupted(_)) => {
+            panic!("the first failure left the receipt attempted")
+        }
+        Ok(_) => panic!("the first failure injected a turn"),
+        Err(_) => panic!("the first failure was not unavailable after save"),
+    }
+    assert_eq!(grants.holds.load(Ordering::SeqCst), 2);
+    let binding = super::ConversationService::submit_lookup(
+        &harness.id,
+        &caller("settle"),
+        "driven",
+        &drive_message(),
+        SubmissionMode::Steer,
+    )
+    .unwrap();
+    let receipt = harness
+        .service
+        .lookup_command(
+            Arc::clone(&commands),
+            harness.id.clone(),
+            caller("settle"),
+            binding,
+        )
+        .await
+        .expect("the receipt is readable")
+        .expect("the failure was recorded");
+    assert_eq!(receipt.stage(), MutationStage::Settled);
+    assert_eq!(
+        receipt.outcome(),
+        Some(MutationOutcome::UnavailableAfterSave)
+    );
+    let again = harness
+        .service
+        .submit_command(
+            commands,
+            harness.id.clone(),
+            caller("settle"),
+            initiation,
+            "driven".into(),
+            drive_message(),
+            SubmissionMode::Steer,
+        )
+        .await;
+    match again {
+        Err(MutationFailure::Target(error)) => {
+            assert!(
+                matches!(error, ConversationError::UnavailableAfterSave),
+                "{error:?}"
+            );
+        }
+        Err(MutationFailure::Interrupted(_)) => {
+            panic!("the same request was submission_unresolved")
+        }
+        Ok(_) => panic!("the retry injected a turn"),
+        Err(_) => panic!("the retry was not unavailable after save"),
+    }
+    assert!(harness.provider.executions.lock().unwrap().is_empty());
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    assert_eq!(
+        harness
+            .snapshot()
+            .await
+            .invocations
+            .into_iter()
+            .find(|turn| turn.request.execution_id.as_str() == "driven")
+            .expect("the saved steer")
+            .result,
+        Some(Err(AgentError::AfterSaveUnavailable))
     );
 }
 

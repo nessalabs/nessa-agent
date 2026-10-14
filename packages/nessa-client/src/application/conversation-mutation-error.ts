@@ -60,6 +60,8 @@ const REFUSALS: Partial<Record<ConversationErrorCode, string>> = {
     "This conversation runs on an SSH host, which cannot read files on this computer, so the message was not sent. Remove the linked files, or attach images, whose bytes are sent with them.",
   revoked_after_save:
     "The message was saved, then refused because its access changed before it reached the agent. Sending it again needs a new message.",
+  unavailable_after_save:
+    "The message was saved, then could not be checked because its access record could not be read. Sending it again needs a new message.",
 }
 
 /**
@@ -196,6 +198,13 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     // the agent. Retrying that same execution is answered the same way and
     // is not a clean retry of a command that was never saved.
     case ConversationErrorCode.RevokedAfterSave:
+      return false
+    // A native steer was saved, then could not be checked because the grant
+    // record could not be read before injection. The saved attempt is
+    // settled as unavailable, and nothing reached the agent. Retrying that
+    // same execution is answered the same way and is not a clean retry of a
+    // command that was never saved.
+    case ConversationErrorCode.UnavailableAfterSave:
       return false
     case ConversationErrorCode.StalePermission:
     case ConversationErrorCode.AgentOperationFailed:

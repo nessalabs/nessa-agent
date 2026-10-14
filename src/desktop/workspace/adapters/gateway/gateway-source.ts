@@ -1574,6 +1574,11 @@ function reasonFor(
     // injection. The attempt is settled, so it is not a clean refusal.
     case ConversationErrorCode.RevokedAfterSave:
       return "unavailable"
+    // A native steer was saved, then could not be checked because the grant
+    // record could not be read. The attempt is settled, so it is not a clean
+    // refusal.
+    case ConversationErrorCode.UnavailableAfterSave:
+      return "unavailable"
     // An MCP App's own calls: this source makes none, so none of these can
     // answer it; one that did would be no answer it knows.
     case ConversationErrorCode.McpAppUnknown:

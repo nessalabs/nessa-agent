@@ -117,6 +117,7 @@ const conversationFailure: Record<ConversationErrorCode, SharingFailure> = {
   // are not a share or an unshare.
   [ConversationErrorCode.Revoked]: "other",
   [ConversationErrorCode.RevokedAfterSave]: "other",
+  [ConversationErrorCode.UnavailableAfterSave]: "other",
 }
 
 /**

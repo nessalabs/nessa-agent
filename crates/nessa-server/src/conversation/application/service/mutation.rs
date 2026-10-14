@@ -41,7 +41,10 @@ impl ConversationService {
     /// [`MutationOutcome::RefusedAfterSave`] is returned as
     /// [`ConversationError::RevokedAfterSave`]: the turn was saved and then
     /// refused before injection, and the same request answers that refusal
-    /// again.
+    /// again. A submit settled [`MutationOutcome::UnavailableAfterSave`] is
+    /// returned as [`ConversationError::UnavailableAfterSave`]: the turn was
+    /// saved and then could not be checked, and the same request answers
+    /// that failure again.
     ///
     /// `initiation` is who the turn is saved as started by: the owner, or the
     /// share grant that admitted it. A retry of the same request is answered
@@ -107,6 +110,11 @@ impl ConversationService {
             }
             Some(MutationOutcome::RefusedAfterSave) => {
                 return Err(MutationFailure::Target(ConversationError::RevokedAfterSave));
+            }
+            Some(MutationOutcome::UnavailableAfterSave) => {
+                return Err(MutationFailure::Target(
+                    ConversationError::UnavailableAfterSave,
+                ));
             }
             _ => {}
         }
@@ -295,13 +303,18 @@ impl MutationTarget for SubmitTarget {
                 .map_err(SubmitFailure::into_error);
             let receipt = match submitted {
                 // The revision hold refused after this command was recorded
-                // Attempted. Settle it, so the same request is answered again
-                // instead of `submission_unresolved`. Before the save, nothing
-                // was enqueued. After the save, the SDK already cached
-                // `RefusedAfterSave`; the receipt keeps that answer.
+                // Attempted, or the second hold could not be read. Settle it,
+                // so the same request is answered again instead of
+                // `submission_unresolved`. Before the save, nothing was
+                // enqueued. After the save, the SDK already cached
+                // `RefusedAfterSave` or `AfterSaveUnavailable`; the receipt
+                // keeps that answer.
                 Err(ConversationError::Revoked) => return Ok(MutationOutcome::NoEffect),
                 Err(ConversationError::RevokedAfterSave) => {
                     return Ok(MutationOutcome::RefusedAfterSave)
+                }
+                Err(ConversationError::UnavailableAfterSave) => {
+                    return Ok(MutationOutcome::UnavailableAfterSave)
                 }
                 Err(error) => return Err(CreationInitializationFailure::Target(error)),
                 Ok(receipt) => receipt,

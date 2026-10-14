@@ -250,6 +250,9 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   // A native steer saved, then refused because the grant moved before
   // injection. The panel, as the owner, never sends one.
   revoked_after_save: "invalid-request",
+  // A native steer saved, then unchecked because the grant record could not
+  // be read. The panel, as the owner, never sends one.
+  unavailable_after_save: "invalid-request",
 }
 
 /**
@@ -340,6 +343,7 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   drive_policy_unenforceable: "unavailable",
   revoked: "unavailable",
   revoked_after_save: "unavailable",
+  unavailable_after_save: "unavailable",
   model_unavailable: "unavailable",
   approval_mode_unavailable: "unavailable",
   approval_mode_not_applied: "unavailable",

@@ -48,6 +48,11 @@ pub enum MutationOutcome {
     /// Saved only from `Attempted`. A retry returns this receipt and does not
     /// inject the turn again.
     RefusedAfterSave,
+    /// The submit saved the turn and then could not decide before injection.
+    ///
+    /// Saved only from `Attempted`. A retry returns this receipt and does not
+    /// inject the turn again.
+    UnavailableAfterSave,
 }
 
 /// Immutable principal/request binding for one submit or stop.
@@ -141,8 +146,10 @@ impl MutationReceipt {
     /// [`MutationOutcome::AlreadyFinal`] when classification proved nothing
     /// would be sent. `Attempted` may become `Settled` with the effect's outcome,
     /// including [`MutationOutcome::NoEffect`] when the effect refused before
-    /// it enqueued or injected anything, and [`MutationOutcome::RefusedAfterSave`]
-    /// when a saved steer was refused before injection.
+    /// it enqueued or injected anything, [`MutationOutcome::RefusedAfterSave`]
+    /// when a saved steer was refused before injection, and
+    /// [`MutationOutcome::UnavailableAfterSave`] when a saved steer could not
+    /// be checked before injection.
     ///
     /// # Errors
     /// Returns [`StorageError::Corrupt`] for a skipped, reversed, or outcome-less transition.
@@ -164,6 +171,7 @@ impl MutationReceipt {
                             | MutationOutcome::AlreadyFinal
                             | MutationOutcome::NoEffect
                             | MutationOutcome::RefusedAfterSave
+                            | MutationOutcome::UnavailableAfterSave
                     )
                 )
                 | (
