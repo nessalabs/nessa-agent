@@ -66,6 +66,10 @@ enum JournalState {
 
 struct AttemptState {
     settlement: Option<AttemptSettlement>,
+    /// Set once the gateway is ready and a deferred publication may still be
+    /// running. Surface waiters return here. The receipt stays unsettled until
+    /// that publication's real completion is journaled.
+    surface_ready: bool,
     waiters: usize,
 }
 
@@ -225,6 +229,7 @@ impl AttemptReceipt {
             request,
             state: Mutex::new(AttemptState {
                 settlement: None,
+                surface_ready: false,
                 waiters: 0,
             }),
             settled: Condvar::new(),
@@ -262,7 +267,27 @@ impl AttemptReceipt {
     }
 
     fn wait(&self) -> Result<(), GatewayError> {
-        self.wait_settlement()?.reported
+        let mut state = self.state.lock().map_err(|_| state_unavailable())?;
+        state.waiters += 1;
+        self.settled.notify_all();
+        loop {
+            if let Some(settlement) = &state.settlement {
+                return settlement.reported.clone();
+            }
+            // A deferred publication keeps this receipt until the copy is
+            // journaled. Endpoint and credential reads return at Ready.
+            if state.surface_ready {
+                return Ok(());
+            }
+            state = self.settled.wait(state).map_err(|_| state_unavailable())?;
+        }
+    }
+
+    fn release_surface(&self) -> Result<(), GatewayError> {
+        let mut state = self.state.lock().map_err(|_| state_unavailable())?;
+        state.surface_ready = true;
+        self.settled.notify_all();
+        Ok(())
     }
 
     fn wait_physical_until(
@@ -291,21 +316,6 @@ impl AttemptReceipt {
             .ok_or_else(state_unavailable)?
             .physical
             .clone()
-    }
-
-    fn wait_settlement(&self) -> Result<AttemptSettlement, GatewayError> {
-        let mut state = self.state.lock().map_err(|_| state_unavailable())?;
-        state.waiters += 1;
-        self.settled.notify_all();
-        let settlement = self
-            .settled
-            .wait_while(state, |state| state.settlement.is_none())
-            .map_err(|_| state_unavailable())?;
-        settlement
-            .settlement
-            .as_ref()
-            .cloned()
-            .ok_or_else(state_unavailable)
     }
 
     fn settle(&self, result: AttemptSettlement) -> Result<(), GatewayError> {
@@ -2011,29 +2021,41 @@ fn execute_attempt(
         ))
     });
     if let Some(mut deferred) = progress.take_deferred_stage() {
-        let early = physical
-            .as_ref()
-            .ok()
-            .and_then(|gateway| publish_ready_while_stage_finishes(executor, receipt, gateway));
-        // The plan is durable before the copy starts. A rejected plan drops
-        // `deferred` with its launch, so nothing is copied without a journal
-        // record. Recovery of a crash after acceptance settles the plan
-        // without pruning.
+        // The plan is durable before Ready is published and before the copy
+        // starts. A rejected plan drops `deferred` with its launch, so nothing
+        // is copied and Ready is not published. Recovery of a crash after
+        // acceptance settles the plan without pruning.
         let planned = plan_deferred_stage(&progress, &deferred, &physical);
-        let recorded = planned.and_then(|()| {
-            let stage_result = deferred.publication_result();
-            complete_deferred_stage(
-                &progress,
-                executor.host.as_ref(),
-                &deferred,
-                &physical,
-                stage_result,
-            )
-        });
-        if let Err(error) = recorded {
-            if let Some(early) = early {
-                restore_startup(executor, early);
+        let recorded = match planned {
+            Err(error) => Err(error),
+            Ok(()) => {
+                let early = physical.as_ref().ok().and_then(|gateway| {
+                    publish_ready_while_stage_finishes(executor, receipt, gateway)
+                });
+                if early.is_some() {
+                    // Surface readers return while this thread waits for the
+                    // copy and records its real completion.
+                    let _ = receipt.release_surface();
+                }
+                let stage_result = deferred.publication_result();
+                match complete_deferred_stage(
+                    &progress,
+                    executor.host.as_ref(),
+                    &deferred,
+                    &physical,
+                    stage_result,
+                ) {
+                    Ok(()) => Ok(()),
+                    Err(error) => {
+                        if let Some(early) = early {
+                            restore_startup(executor, early);
+                        }
+                        Err(error)
+                    }
+                }
             }
+        };
+        if let Err(error) = recorded {
             physical = Err(error);
         }
     }

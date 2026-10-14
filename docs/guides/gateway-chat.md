@@ -863,11 +863,12 @@ at that directory, so replacing `Nessa.app` cannot replace files under that
 gateway. A generation that is not there yet does not block the gateway: that
 registration prepares the data directory and runs the bundled tree by absolute
 path — the same fingerprint, still on nobody's `PATH`. The attempt records the
-empty-cleanup publication plan after its other effects. The copy starts only
-after that plan is accepted, on a thread that keeps the per-label lock until it
-finishes, and the attempt then records the copy's result and whether the
-directory is present, before its outcome. The gateway is already reported ready
-while the copy finishes. A failure after that ready report is published at a
+empty-cleanup publication plan after its other effects. Ready is published only
+after that plan is accepted, and the panel can read the endpoint and credential
+then. The copy starts after that, on a thread that keeps the per-label lock
+until it finishes, and the attempt then records the copy's real result and
+whether the directory is present, before its outcome. The gateway is already
+reported ready while the copy finishes. A failure after that ready report is published at a
 strictly newer startup revision. This process keeps the bundle path for a fingerprint it launched
 that way while the installed definition still names the bundle, so a later
 reconciliation in the same launch leaves that healthy gateway in place. The

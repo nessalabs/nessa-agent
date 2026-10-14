@@ -579,9 +579,11 @@ attempt calls only after it has accepted the empty-cleanup `stage-runtime`
 plan; a slow or rejected plan never starts the copy. That publication flushes
 files on a bounded pool while it hashes the tree, and it still requires a
 matching digest and durable files and directories before the exclusive rename.
-The attempt writes the plan after its other effects and before its outcome,
-once the gateway is already ready. A failure after that ready publish carries
-a strictly newer startup revision. This process keeps the bundle path while
+The attempt writes the plan after its other effects. Ready is published only
+after that plan is accepted, and endpoint and credential reads return then,
+before the copy starts. The attempt still waits for the copy and records its
+real result and observation before the outcome. A failure after that ready
+publish carries a strictly newer startup revision. This process keeps the bundle path while
 the installed definition still names it.
 The next launch of the app points the service at that directory.
 Replacing or moving the app while that first job is running from the bundle does

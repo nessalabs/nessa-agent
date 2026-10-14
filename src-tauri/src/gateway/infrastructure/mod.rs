@@ -12,9 +12,11 @@
 //! changes. One that is not does not gate launchd: this registration prepares
 //! the data directory and runs the bundled tree by absolute path. The copy
 //! starts on a thread that keeps the service-label lock only after the attempt
-//! has accepted the empty-cleanup `stage-runtime` plan, and that thread holds
-//! the lock until `stage_runtime` returns. The attempt journals that plan
-//! after its other effects, before its outcome, and keeps the bundle path for
+//! has accepted the empty-cleanup `stage-runtime` plan. Surface readiness
+//! returns at that Ready publish, before the copy. The staging thread then
+//! holds the lock until `stage_runtime` returns. The attempt journals the
+//! plan after its other effects and the copy's real result before its outcome,
+//! and keeps the bundle path for
 //! the rest of this process while the installed definition still names it. A
 //! failure after the early ready publish carries a strictly newer startup
 //! revision. File durability
