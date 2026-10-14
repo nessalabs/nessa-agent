@@ -1059,6 +1059,61 @@ async function sceneKeepsFocus(page) {
   return { after, failures }
 }
 
+/** A bound but unavailable command keeps its key out of native window actions. */
+async function boundKeys(page) {
+  await page.evaluate(() => {
+    const records = []
+    const listener = (event) => {
+      if (event.metaKey && ["KeyN", "KeyW", "KeyX"].includes(event.code))
+        records.push({ code: event.code, prevented: event.defaultPrevented })
+    }
+    window.__boundKeyProof = { records, listener }
+    window.addEventListener("keydown", listener)
+  })
+  try {
+    const original = await paneCount(page)
+    await page.keyboard.press(keys.switcher)
+    await need(page, css.switcherField, "the quick switcher")
+    await page.keyboard.press(keys.newSession)
+    await page.keyboard.press(keys.closePane)
+    const retained = await paneCount(page)
+    const modal = await page.locator(css.switcherField).isVisible()
+    await page.keyboard.press("Meta+KeyX")
+    await page.keyboard.press(keys.escape)
+    await page.waitForSelector(css.switcherField, { state: "hidden" })
+    await page.keyboard.press(keys.newSessionBeside)
+    await settled(page)
+    const ordinary = await paneCount(page)
+    const records = await page.evaluate(() => window.__boundKeyProof.records)
+    return {
+      records,
+      original,
+      retained,
+      ordinary,
+      modal,
+      failures: [
+        ...(["KeyN", "KeyW"].some(
+          (code) => !records.some((record) => record.code === code && record.prevented),
+        )
+          ? ["unavailable bound command released its native default"]
+          : []),
+        ...(records.some((record) => record.code === "KeyX" && record.prevented)
+          ? ["unbound command was consumed"]
+          : []),
+        ...(retained !== original || !modal
+          ? ["unavailable command changed the workspace or closed the switcher"]
+          : []),
+        ...(ordinary !== original + 1 ? ["ordinary split command stopped working"] : []),
+      ],
+    }
+  } finally {
+    await page.evaluate(() => {
+      window.removeEventListener("keydown", window.__boundKeyProof.listener)
+      delete window.__boundKeyProof
+    })
+  }
+}
+
 await main(meta, async ({ options, rep, url }) => {
   await withEngines(options, rep, async (engine, browser) => {
     for (const layout of options.layouts) {
@@ -1123,6 +1178,14 @@ await main(meta, async ({ options, rep, url }) => {
       } finally {
         await opened.close()
       }
+      await attempt(rep, { name: "focus-bound-keys", engine, layout }, async () => {
+        const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
+        try {
+          return await boundKeys(fresh.page)
+        } finally {
+          await fresh.close()
+        }
+      })
       await attempt(rep, { name: "focus-retired-layout", engine, layout }, async () => {
         const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
         try {

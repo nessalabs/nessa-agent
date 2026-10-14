@@ -250,6 +250,14 @@ pub enum AgentError {
     Unsupported(String),
     /// Input failed admission validation without dispatching this attempt.
     InvalidInput(String),
+    /// The host refused to start a steered turn after its input was saved.
+    ///
+    /// The provider is not asked to inject it, and it is not queued. The
+    /// saved attempt is settled as this error.
+    RefusedAfterSave,
+    /// The host could not decide whether a steered turn may start after its
+    /// input was saved. The provider is not asked, and the attempt is not queued.
+    AfterSaveUnavailable,
     /// The message names an app — as its writer, or as the giver of a context
     /// it carries — that is no MCP tool call this session recorded before it.
     /// Admission answers this before anything is saved, queued or sent, at

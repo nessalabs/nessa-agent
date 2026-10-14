@@ -777,6 +777,7 @@ impl SessionManager {
         let Submitter {
             context: actor,
             initiation,
+            ..
         } = submitter;
         // Notes reach the model only from the conversation's own records,
         // joined at dispatch: a caller cannot hand a turn notes of its own.

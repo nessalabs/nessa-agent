@@ -78,9 +78,16 @@ it("publishes timer ticks to same-interval readers without mixing provider clock
   expect(host.querySelector('[data-testid="second"]')?.textContent).toBe("21")
 })
 
-it("retires the timer and ignores its late callback after a remount", () => {
+it("keeps a retired timer from changing the remounted snapshot", async () => {
   vi.useFakeTimers()
-  const now = () => 10
+  let currentTime = 10
+  let afterSnapshotRead: (() => void) | undefined
+  const now = () => {
+    const callback = afterSnapshotRead
+    afterSnapshotRead = undefined
+    callback?.()
+    return currentTime
+  }
   const callbacks: Array<() => void> = []
   const originalSetInterval = window.setInterval.bind(window)
   const setInterval = vi.spyOn(window, "setInterval")
@@ -88,29 +95,61 @@ it("retires the timer and ignores its late callback after a remount", () => {
     if (typeof callback === "function") callbacks.push(callback as () => void)
     return originalSetInterval(callback, delay)
   }) as typeof window.setInterval)
-  const render = (child: React.ReactNode) =>
-    act(() => root.render(<ClockProvider now={now}>{child}</ClockProvider>))
-  let renders = 0
-  function CountedReader() {
+  const renders = { reader: 0, probe: 0 }
+  let setReaderVisible: (visible: boolean) => void = () => {}
+  let setProbeVisible: (visible: boolean) => void = () => {}
+  const CountedReader = React.memo(function CountedReader({
+    name,
+  }: {
+    name: "reader" | "probe"
+  }) {
     const current = useNow(1000)
-    renders += 1
-    return <output data-testid="clock">{current}</output>
+    renders[name] += 1
+    return <output data-testid={name}>{current}</output>
+  })
+  function Parent() {
+    const [readerVisible, setReaderVisibleState] = React.useState(true)
+    const [probeVisible, setProbeVisibleState] = React.useState(false)
+    setReaderVisible = setReaderVisibleState
+    setProbeVisible = setProbeVisibleState
+    return (
+      <ClockProvider now={now}>
+        {readerVisible ? <CountedReader name="reader" /> : null}
+        {probeVisible ? <CountedReader name="probe" /> : null}
+      </ClockProvider>
+    )
   }
 
-  mount(
-    <ClockProvider now={now}>
-      <CountedReader />
-    </ClockProvider>,
-  )
+  mount(<Parent />)
   expect(callbacks).toHaveLength(1)
-  render(null)
-  render(<CountedReader />)
+  act(() => setReaderVisible(false))
+  act(() => setReaderVisible(true))
+  expect(callbacks).toHaveLength(2)
 
-  const rendersBeforeLateCallback = renders
-  act(() => callbacks[0]())
+  currentTime = 1010
+  const readerRendersBeforeParentUpdate = renders.reader
+  let retiredCallbackDelivered = false
+  afterSnapshotRead = () => {
+    retiredCallbackDelivered = true
+    callbacks[0]()
+  }
+  await act(async () => {
+    React.startTransition(() => setProbeVisible(true))
+    await Promise.resolve()
+  })
 
-  expect(renders).toBe(rendersBeforeLateCallback)
-  expect(setInterval).toHaveBeenCalledTimes(2)
+  expect(retiredCallbackDelivered).toBe(true)
+  expect(renders.reader).toBe(readerRendersBeforeParentUpdate)
+  expect(renders.probe).toBe(1)
+  expect(host.querySelector('[data-testid="reader"]')?.textContent).toBe("10")
+
+  const readerRendersBeforeCurrentTick = renders.reader
+  const probeRendersBeforeCurrentTick = renders.probe
+  act(() => callbacks[1]())
+
+  expect(renders.reader).toBe(readerRendersBeforeCurrentTick + 1)
+  expect(renders.probe).toBe(probeRendersBeforeCurrentTick + 1)
+  expect(host.querySelector('[data-testid="reader"]')?.textContent).toBe("1010")
 })
 
 it("replaces interval and provider subscriptions with the current clock", () => {

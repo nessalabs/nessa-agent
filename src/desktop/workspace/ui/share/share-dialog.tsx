@@ -8,11 +8,11 @@
  * words (`share-copy.ts`).
  *
  * The rules are the gateway's. The dialog holds the hosts a person may check
- * to the room the published bounds leave (`hostRoom`) and lets the gateway
- * refuse the rest; after every change it shows the list as the gateway reads
- * it again, never a guess from the outcome. Change and Revoke name the
- * revision they were built on, so a grant changed in another window is
- * refused rather than overwritten.
+ * to the host bound the schema publishes and lets the gateway refuse the
+ * rest; after every change it shows the list as the gateway reads it again,
+ * never a guess from the outcome. Change and Revoke name the revision they
+ * were built on, so a grant changed in another window is refused rather than
+ * overwritten.
  *
  * Mounted once by the shell; it draws nothing while no dialog is open.
  */
@@ -50,8 +50,6 @@ import {
   draftFromGrant,
   emptyDraft,
   hostFits,
-  hostRoom,
-  draftPatternCount,
   requestFrom,
   type ShareDraft,
   type ShareGrant,
@@ -242,7 +240,7 @@ function ShareDialog({ dialog }: { dialog: ShareDialogState }) {
 }
 
 /** The bounds before anything has been read: no room for anything. */
-const noRoom = { patterns: 0, hosts: 0, hostBytes: 0, entries: 0 }
+const noRoom = { patterns: 0, hosts: 0, hostBytes: 0 }
 
 function Grants({
   grants,
@@ -420,7 +418,7 @@ function DriveFields({
   onDraft: (draft: ShareDraft) => void
 }) {
   const custom = draft.preset === "custom"
-  const room = hostRoom(choices.limits, draftPatternCount(draft))
+  const room = choices.limits.hosts
   // The hosts on offer, then any the grant holds that are not on offer now:
   // shown, so they can be kept or unchecked, never dropped unseen.
   const away = draft.hosts.filter((host) => !choices.commandHosts.includes(host))
@@ -489,18 +487,8 @@ function DriveFields({
         value={draft.hosts}
         onValueChange={(next) => onDraft({ ...draft, hosts: next })}
         max={room}
-        // Past the room the patterns leave — a pattern typed after the hosts
-        // were checked — the hint says so rather than "3 of 2".
-        count={({ selected, max }) =>
-          max !== undefined && selected > max
-            ? `${selected} selected, room for ${max}`
-            : `${selected} of ${max} selected`
-        }
-        limitReason={
-          room < choices.limits.hosts
-            ? "No more room: hosts and tool patterns share one limit"
-            : "No more room for hosts"
-        }
+        count={({ selected, max }) => `${selected} of ${max} selected`}
+        limitReason="No more room for hosts"
         emptyMessage="The gateway runs your commands on no host, so this grant can’t run any."
       />
       <ul className="share-notes nessa-text-2" data-share-notes="">

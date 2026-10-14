@@ -7,8 +7,10 @@ import { InlineWidget, type WidgetRef } from "../../../widgets"
 import { paneItemKey, widgetItem } from "../../model/pane-item"
 import {
   groupSteps,
+  terminalLabel,
   type Message as MessageValue,
   type MessageApp,
+  type TurnTerminal,
 } from "../../model/transcript"
 import { RichText } from "./rich-text"
 import { named, Saying, type Said } from "./said"
@@ -79,14 +81,19 @@ export const Message = memo(function Message({
         {failed ? (
           <Unsent sessionId={sessionId} messageId={message.id} reason={failed} />
         ) : null}
+        {message.terminal ? <TurnTerminalMark terminal={message.terminal} /> : null}
       </div>
     )
   }
   const groups = groupSteps(message.parts)
   const widgetOccurrences = new Map<string, number>()
   // A reply that has only just begun streaming has nothing to show yet.
+  // A turn that ended still shows how it ended, even when it said nothing.
   if (
-    groups.every((group) => !Array.isArray(group) && group.kind === "text" && !group.text)
+    groups.every(
+      (group) => !Array.isArray(group) && group.kind === "text" && !group.text,
+    ) &&
+    !message.terminal
   )
     return null
   return (
@@ -140,9 +147,32 @@ export const Message = memo(function Message({
           return null
         })}
       </div>
+      {message.terminal ? <TurnTerminalMark terminal={message.terminal} /> : null}
     </div>
   )
 })
+
+/**
+ * How a turn ended, in the gateway's words: the status, and its diagnostic
+ * when it sent one. Separate from a message this window could not deliver.
+ */
+function TurnTerminalMark({ terminal }: { terminal: TurnTerminal }) {
+  return (
+    <div
+      className="workspace-turn-terminal"
+      role="status"
+      data-turn-terminal={terminal.status}
+      {...(terminal.error === undefined ? {} : { "data-turn-error": terminal.error })}
+    >
+      <span className="workspace-turn-terminal-status">
+        {terminalLabel(terminal.status)}
+      </span>
+      {terminal.error === undefined ? null : (
+        <span className="workspace-turn-terminal-error">{terminal.error}</span>
+      )}
+    </div>
+  )
+}
 
 /** A widget in a message: its card, whose pane opens beside this conversation. */
 function MessageWidget({ sessionId, widget }: { sessionId: string; widget: WidgetRef }) {

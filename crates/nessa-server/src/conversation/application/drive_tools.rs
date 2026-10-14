@@ -4,9 +4,13 @@
 //!
 //! A turn names the grant it was started under and the revision admitted
 //! (`Initiation`); the grant journal says what that revision's policy was
-//! ([`ShareGrants::policy_at`]). Admission reads it once, keeps it for the
-//! conversation in [`AdmittedPolicies`], and saves the turn as checked. Every
-//! tool call of that turn is then asked of [`ToolPolicyEvaluator`]:
+//! ([`ShareGrants::policy_at`]). Admission reads it once and keeps it for the
+//! conversation in [`AdmittedPolicies`]. The turn proceeds only while
+//! [`ShareGrants::hold_revision`] still finds that grant at that revision
+//! (row J31), and it is saved as checked. The hold is that grant, not every
+//! conversation. A native steer drops it after the save and compares the
+//! revision again before the provider is asked. Every tool call of that turn is
+//! then asked of [`ToolPolicyEvaluator`]:
 //!
 //! - a call the agent asks permission for, by [`DriveToolHook`] before a
 //!   person is asked;
@@ -18,6 +22,13 @@
 //! ```text
 //! send ─▶ admit: Claude or Codex, Ask mode, no native hooks, policy_at(rev)
 //!           │                                     └─▶ AdmittedPolicies
+//!           ▼
+//!         hold_revision(rev) ─ this grant still at that revision? ─ else revoked
+//!           ▼
+//!         save the turn as checked
+//!           │  native steer: drop the hold, compare the revision, then inject
+//!           ▼
+//!         drop the hold once the turn is saved (queued) or the compare returns
 //!           ▼
 //! turn ─▶ review hook ─────────▶ refusal(initiation, call) ─▶ Cedar
 //! turn ─▶ run / publish / fetch ─▶ decision(initiation, call) ─▶ Cedar

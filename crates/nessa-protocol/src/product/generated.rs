@@ -557,6 +557,8 @@ pub struct ConversationMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authentication_required: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_work_failed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steering_target: Option<String>,
     pub parts: Vec<ConversationPart>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -835,6 +837,9 @@ pub enum ConversationCommandOutcome {
     Withdrawn,
     Cancelled,
     AlreadyFinal,
+    NoEffect,
+    RefusedAfterSave,
+    UnavailableAfterSave,
 }
 impl ConversationCommandOutcome {
     pub fn as_str(self) -> &'static str {
@@ -843,6 +848,9 @@ impl ConversationCommandOutcome {
             Self::Withdrawn => "withdrawn",
             Self::Cancelled => "cancelled",
             Self::AlreadyFinal => "already_final",
+            Self::NoEffect => "no_effect",
+            Self::RefusedAfterSave => "refused_after_save",
+            Self::UnavailableAfterSave => "unavailable_after_save",
         }
     }
 }
@@ -1013,8 +1021,17 @@ pub struct ConversationUnshareParams {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSharesCursor {
+    pub granted_at_ms: u64,
+    pub credential_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationSharesParams {
     pub conversation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<ConversationSharesCursor>,
+    pub page_size: u64,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1030,6 +1047,9 @@ pub struct ConversationShare {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationSharesResult {
     pub items: Vec<ConversationShare>,
+    pub change_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<ConversationSharesCursor>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2526,6 +2546,8 @@ pub const MAX_RECORD_PAGE_RECORDS: usize = 16;
 pub const MAX_RECORD_PAGE_PAYLOAD_BYTES: usize = 65546;
 /// Published bound from the product schema.
 pub const MAX_RECORD_RESPONSE_BYTES: usize = 131072;
+/// Published bound from the product schema.
+pub const MAX_SHARE_PAGE: usize = 8;
 /// Published bound from the product schema.
 pub const MAX_MCP_CONTEXT_BYTES: usize = 8192;
 /// Published bound from the product schema.

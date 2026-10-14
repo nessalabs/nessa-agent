@@ -8,6 +8,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
+  answerQuestion,
   loadWorkspace,
   followWorkspace,
   openSession,
@@ -26,6 +27,7 @@ import { fakeSource, settle, testStore } from "../../testing"
 import { failureCopy, readFailureCopy } from "../failure-copy"
 import { approvalHead, approvalReason } from "./approval-request"
 import { spoken } from "./said"
+import { QuestionCard } from "./question-card"
 import { Transcript } from "./transcript"
 
 class Observer {
@@ -269,6 +271,515 @@ describe("a transcript", () => {
     expect(
       [...(failed?.querySelectorAll("button") ?? [])].map((b) => b.textContent),
     ).toEqual(["Send Again", "Discard"])
+  })
+
+  it("shows a failed turn's status and diagnostic apart from a message that was not sent", async () => {
+    await shown(fakeSource(), {
+      ...conversation,
+      messages: [
+        {
+          id: "m1",
+          role: "user",
+          at: 1,
+          parts: [{ kind: "text", text: "Check the deploy." }],
+          terminal: { status: "failed", error: "Provider connection lost" },
+        },
+        {
+          id: "m2",
+          role: "agent",
+          at: 2,
+          parts: [{ kind: "text", text: "Halfway" }],
+          terminal: { status: "cancelled", error: "Stopped" },
+        },
+        {
+          id: "m3",
+          role: "user",
+          at: 3,
+          parts: [{ kind: "text", text: "Wait." }],
+          terminal: { status: "unresolved" },
+        },
+      ],
+      approval: null,
+    })
+    const marks = [...host.querySelectorAll<HTMLElement>("[data-turn-terminal]")]
+    expect(marks.map((mark) => mark.dataset.turnTerminal)).toEqual([
+      "failed",
+      "cancelled",
+      "unresolved",
+    ])
+    expect(marks.map((mark) => mark.dataset.turnError ?? null)).toEqual([
+      "Provider connection lost",
+      "Stopped",
+      null,
+    ])
+    expect(marks.map((mark) => mark.querySelector("span")?.textContent)).toEqual([
+      "Failed",
+      "Cancelled",
+      "Unresolved",
+    ])
+    expect(host.textContent).toContain("Check the deploy.")
+    expect(host.textContent).toContain("Halfway")
+    expect(host.querySelector(".workspace-message-failed")).toBeNull()
+  })
+
+  it("shows the gateway's interaction notice in its own words", async () => {
+    await shown(fakeSource(), {
+      ...conversation,
+      approval: null,
+      interactionNotice: "A review was left out of this view.",
+    })
+    expect(host.querySelector("[data-interaction-notice]")?.textContent).toBe(
+      "A review was left out of this view.",
+    )
+  })
+
+  it("answers a question the conversation is showing and leaves one it is not", async () => {
+    const source = fakeSource()
+    const { store } = await shown(source, {
+      ...conversation,
+      approval: null,
+      questions: [
+        {
+          executionId: "e1",
+          questionId: "place",
+          message: "Where should this land?",
+          questions: [
+            {
+              key: "where",
+              prompt: "Pick a place",
+              multiSelect: false,
+              freeText: true,
+              required: true,
+              options: [{ value: "here", label: "Here" }],
+            },
+          ],
+        },
+      ],
+    })
+    store.dispatch(followWorkspace())
+    const card = () => host.querySelector<HTMLElement>('[data-question="place"]')
+    const button = (label: string) =>
+      [...(card()?.querySelectorAll("button") ?? [])].find(
+        (candidate) => candidate.textContent === label,
+      )
+    expect(button("Answer")?.disabled).toBe(true)
+    const words = card()?.querySelector<HTMLInputElement>('input[name="where_custom"]')
+    const setValue = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set
+    await act(async () => {
+      setValue?.call(words, "in my own words")
+      words?.dispatchEvent(new Event("input", { bubbles: true }))
+    })
+    expect(button("Answer")?.disabled).toBe(true)
+    const choice = card()?.querySelector<HTMLInputElement>('input[type="radio"]')
+    if (!choice) throw new Error("the question offers no choice")
+    await act(async () => choice.click())
+    expect(button("Answer")?.disabled).toBe(false)
+    await act(async () => {
+      button("Answer")?.click()
+      await settle()
+    })
+    expect(source.calls.find((call) => call[0] === "answerQuestion")).toEqual([
+      "answerQuestion",
+      "b",
+      "e1",
+      "place",
+      [{ key: "where", values: ["here"], ownWords: "in my own words" }],
+      "person",
+    ])
+    expect(host.querySelector('[data-question="place"]')).toBeNull()
+    const missed = await store.dispatch(
+      answerQuestion({
+        sessionId: "b",
+        executionId: "e1",
+        questionId: "place",
+        choices: null,
+        initiator: "person",
+      }),
+    )
+    expect(missed).toEqual({ status: "not-asked" })
+    expect(source.calls.filter((call) => call[0] === "answerQuestion")).toHaveLength(1)
+    expect(button("Skip")).toBeUndefined()
+  })
+
+  it("does not send a question again while the first answer is on its way", async () => {
+    const source = fakeSource()
+    source.hold("answerQuestion")
+    const { store } = await shown(source, {
+      ...conversation,
+      approval: null,
+      questions: [
+        {
+          executionId: "e1",
+          questionId: "place",
+          message: "Where should this land?",
+          questions: [
+            {
+              key: "where",
+              prompt: "Pick a place",
+              multiSelect: false,
+              freeText: false,
+              required: false,
+              options: [{ value: "here", label: "Here" }],
+            },
+          ],
+        },
+      ],
+    })
+    const ask = {
+      sessionId: "b",
+      executionId: "e1",
+      questionId: "place",
+      choices: null,
+      initiator: "person" as const,
+    }
+    const first = store.dispatch(answerQuestion(ask))
+    const second = store.dispatch(answerQuestion(ask))
+    await settle()
+    expect(source.calls.filter((call) => call[0] === "answerQuestion")).toHaveLength(1)
+    await source.release("answerQuestion")
+    expect(await first).toEqual({ status: "sent" })
+    expect(await second).toEqual({ status: "sent" })
+  })
+
+  it("does not report a different answer as sent while one is already on its way", async () => {
+    const source = fakeSource()
+    source.hold("answerQuestion")
+    const { store } = await shown(source, {
+      ...conversation,
+      approval: null,
+      questions: [
+        {
+          executionId: "e1",
+          questionId: "place",
+          message: "Where should this land?",
+          questions: [
+            {
+              key: "where",
+              prompt: "Pick a place",
+              multiSelect: false,
+              freeText: false,
+              required: false,
+              options: [{ value: "here", label: "Here" }],
+            },
+          ],
+        },
+      ],
+    })
+    const skip = {
+      sessionId: "b",
+      executionId: "e1",
+      questionId: "place",
+      choices: null,
+      initiator: "person" as const,
+    }
+    const answer = {
+      ...skip,
+      choices: [{ key: "where", values: ["here"] }],
+    }
+    const first = store.dispatch(answerQuestion(skip))
+    const otherInitiator = store.dispatch(answerQuestion({ ...skip, initiator: "agent" }))
+    const otherChoice = store.dispatch(answerQuestion(answer))
+    const same = store.dispatch(answerQuestion(skip))
+    const settled = { otherInitiator: false, otherChoice: false }
+    void otherInitiator.then(() => {
+      settled.otherInitiator = true
+    })
+    void otherChoice.then(() => {
+      settled.otherChoice = true
+    })
+    await settle()
+    expect(settled).toEqual({ otherInitiator: true, otherChoice: true })
+    expect(await otherInitiator).toEqual({ status: "different" })
+    expect(await otherChoice).toEqual({ status: "different" })
+    expect(source.calls.filter((call) => call[0] === "answerQuestion")).toEqual([
+      ["answerQuestion", "b", "e1", "place", null, "person"],
+    ])
+    source.refuse("answerQuestion", "unavailable")
+    await source.release("answerQuestion")
+    expect(await first).toEqual({ status: "unknown", reason: "unavailable" })
+    expect(await same).toEqual({ status: "unknown", reason: "unavailable" })
+    source.refuse("answerQuestion", undefined)
+    expect(await store.dispatch(answerQuestion(answer))).toEqual({ status: "sent" })
+    expect(source.calls.filter((call) => call[0] === "answerQuestion")).toEqual([
+      ["answerQuestion", "b", "e1", "place", null, "person"],
+      [
+        "answerQuestion",
+        "b",
+        "e1",
+        "place",
+        [{ key: "where", values: ["here"] }],
+        "person",
+      ],
+    ])
+  })
+
+  it("keeps a card whose answer differs from the one already on its way", async () => {
+    const source = fakeSource()
+    source.hold("answerQuestion")
+    const question = {
+      executionId: "e1",
+      questionId: "place",
+      message: "Where should this land?",
+      questions: [
+        {
+          key: "where",
+          prompt: "Pick a place",
+          multiSelect: false,
+          freeText: false,
+          required: false,
+          options: [{ value: "here", label: "Here" }],
+        },
+      ],
+    }
+    const { store } = await shown(source, {
+      ...conversation,
+      approval: null,
+      questions: [question],
+    })
+    await act(async () => {
+      root.render(
+        <StrictMode>
+          <Provider store={store}>
+            <QuestionCard sessionId="b" question={question} />
+            <QuestionCard sessionId="b" question={question} />
+          </Provider>
+        </StrictMode>,
+      )
+    })
+    const cards = () => [...host.querySelectorAll<HTMLElement>('[data-question="place"]')]
+    const button = (card: HTMLElement | undefined, label: string) =>
+      [...(card?.querySelectorAll("button") ?? [])].find(
+        (candidate) => candidate.textContent === label,
+      )
+    const choice = cards()[0]?.querySelector<HTMLInputElement>('input[type="radio"]')
+    if (!choice) throw new Error("the question offers no choice")
+    await act(async () => {
+      choice.click()
+      button(cards()[0], "Answer")?.click()
+      button(cards()[1], "Skip")?.click()
+      await settle()
+    })
+    expect(source.calls.filter((call) => call[0] === "answerQuestion")).toEqual([
+      [
+        "answerQuestion",
+        "b",
+        "e1",
+        "place",
+        [{ key: "where", values: ["here"] }],
+        "person",
+      ],
+    ])
+    const drawn = cards()
+    expect(drawn).toHaveLength(2)
+    expect(drawn[0]?.getAttribute("aria-busy")).toBe("true")
+    expect(button(drawn[0], "Answer")?.disabled).toBe(true)
+    expect(drawn[1]?.getAttribute("aria-busy")).toBe("false")
+    expect(button(drawn[1], "Skip")?.disabled).toBe(false)
+    expect(drawn[1]?.querySelector(".workspace-question-failure")?.textContent).toBe(
+      "A different answer is already on its way.",
+    )
+    expect(drawn[1]?.textContent).not.toContain("This was already answered.")
+    await source.release("answerQuestion")
+  })
+
+  it("lets a second card retry after the send already on its way is refused", async () => {
+    const source = fakeSource()
+    source.hold("answerQuestion")
+    const question = {
+      executionId: "e1",
+      questionId: "place",
+      message: "Where should this land?",
+      questions: [
+        {
+          key: "where",
+          prompt: "Pick a place",
+          multiSelect: false,
+          freeText: false,
+          required: false,
+          options: [{ value: "here", label: "Here" }],
+        },
+      ],
+    }
+    const { store } = await shown(source, {
+      ...conversation,
+      approval: null,
+      questions: [question],
+    })
+    await act(async () => {
+      root.render(
+        <StrictMode>
+          <Provider store={store}>
+            <QuestionCard sessionId="b" question={question} />
+            <QuestionCard sessionId="b" question={question} />
+          </Provider>
+        </StrictMode>,
+      )
+    })
+    const cards = () => [...host.querySelectorAll<HTMLElement>('[data-question="place"]')]
+    const skip = (card: HTMLElement | undefined) =>
+      [...(card?.querySelectorAll("button") ?? [])].find(
+        (button) => button.textContent === "Skip",
+      )
+    expect(cards()).toHaveLength(2)
+    await act(async () => {
+      skip(cards()[0])?.click()
+      skip(cards()[1])?.click()
+    })
+    expect(source.calls.filter((call) => call[0] === "answerQuestion")).toHaveLength(1)
+    source.refuse("answerQuestion", "unavailable")
+    await act(async () => {
+      await source.release("answerQuestion")
+      await settle()
+    })
+    const after = cards()
+    expect(after).toHaveLength(2)
+    for (const card of after) {
+      expect(card.querySelector(".workspace-question-failure")?.textContent).toBe(
+        failureCopy("unavailable"),
+      )
+      expect(skip(card)?.disabled).toBe(false)
+    }
+    source.refuse("answerQuestion", undefined)
+    source.hold("answerQuestion")
+    await act(async () => {
+      skip(cards()[0])?.click()
+      await settle()
+    })
+    expect(source.calls.filter((call) => call[0] === "answerQuestion")).toHaveLength(2)
+    await act(async () => {
+      await source.release("answerQuestion")
+    })
+  })
+
+  it("does not share a question send across two stores", async () => {
+    const held = fakeSource()
+    const other = fakeSource()
+    held.hold("answerQuestion")
+    const ask = {
+      sessionId: "b",
+      executionId: "e1",
+      questionId: "place",
+      choices: null,
+      initiator: "person" as const,
+    }
+    const question = {
+      executionId: "e1",
+      questionId: "place",
+      message: "Where should this land?",
+      questions: [
+        {
+          key: "where",
+          prompt: "Pick a place",
+          multiSelect: false,
+          freeText: false,
+          required: false,
+          options: [{ value: "here", label: "Here" }],
+        },
+      ],
+    }
+    const open = async (source: ReturnType<typeof fakeSource>) => {
+      source.transcripts.set("b", {
+        ...conversation,
+        approval: null,
+        questions: [question],
+      })
+      const store = testStore(source)
+      await store.dispatch(loadWorkspace())
+      store.dispatch(openSession({ sessionId: "b" }))
+      await settle()
+      return store
+    }
+    const firstStore = await open(held)
+    const secondStore = await open(other)
+    const first = firstStore.dispatch(answerQuestion(ask))
+    expect(await secondStore.dispatch(answerQuestion(ask))).toEqual({ status: "sent" })
+    expect(other.calls.filter((call) => call[0] === "answerQuestion")).toHaveLength(1)
+    expect(held.calls.filter((call) => call[0] === "answerQuestion")).toHaveLength(1)
+    await held.release("answerQuestion")
+    expect(await first).toEqual({ status: "sent" })
+  })
+
+  it("removes a question card the window is not showing, without saying it was answered", async () => {
+    const source = fakeSource()
+    const question = {
+      executionId: "e1",
+      questionId: "place",
+      message: "Where should this land?",
+      questions: [
+        {
+          key: "where",
+          prompt: "Pick a place",
+          multiSelect: false,
+          freeText: false,
+          required: false,
+          options: [{ value: "here", label: "Here" }],
+        },
+      ],
+    }
+    const store = testStore(source)
+    await store.dispatch(loadWorkspace())
+    store.dispatch(
+      workspaceActions.transcriptLoaded({
+        transcript: { ...conversation, approval: null, questions: [question] },
+      }),
+    )
+    await act(async () => {
+      root.render(
+        <Provider store={store}>
+          <QuestionCard sessionId="b" question={question} />
+        </Provider>,
+      )
+    })
+    const skip = [...host.querySelectorAll("button")].find(
+      (button) => button.textContent === "Skip",
+    )
+    await act(async () => {
+      skip?.click()
+      await settle()
+    })
+    expect(host.querySelector('[data-question="place"]')).toBeNull()
+    expect(host.textContent).not.toContain("This was already answered.")
+    expect(source.calls.filter((call) => call[0] === "answerQuestion")).toHaveLength(0)
+  })
+
+  it("says a question was already answered when the source refuses it", async () => {
+    const source = fakeSource()
+    source.refuse("answerQuestion", "not-waiting")
+    await shown(source, {
+      ...conversation,
+      approval: null,
+      questions: [
+        {
+          executionId: "e1",
+          questionId: "place",
+          message: "Where should this land?",
+          questions: [
+            {
+              key: "where",
+              prompt: "Pick a place",
+              multiSelect: false,
+              freeText: false,
+              required: false,
+              options: [{ value: "here", label: "Here" }],
+            },
+          ],
+        },
+      ],
+    })
+    const skip = [...host.querySelectorAll("button")].find(
+      (button) => button.textContent === "Skip",
+    )
+    await act(async () => {
+      skip?.click()
+      await settle()
+    })
+    expect(host.querySelector(".workspace-question-failure")?.textContent).toBe(
+      "This was already answered.",
+    )
+    expect(source.calls.find((call) => call[0] === "answerQuestion")?.[4]).toBeNull()
   })
 
   it("D17 (#390): says above a message of the person's which app wrote it, and nothing above their own", async () => {
@@ -722,7 +1233,96 @@ describe("a transcript", () => {
   })
 })
 
+const claudeRuntime = {
+  agent: "claude",
+  provider: "anthropic",
+  model: "claude-opus-5",
+  modelName: "Claude",
+  workspace: "/tmp",
+  contextWindowTokens: 200000,
+  reasoning: true,
+}
+
 describe("provider recovery ownership", () => {
+  it("keeps the auth terminal when a local retry hides recovery", async () => {
+    const source = fakeSource()
+    source.hold("send")
+    const transcript = transcriptFrom(
+      view("b", {
+        runtime: claudeRuntime,
+        messages: [
+          {
+            executionId: "m1",
+            userText: "Hello",
+            attachments: [],
+            files: [],
+            status: "failed",
+            authenticationRequired: true,
+            error: "Internal error: OAuth session expired",
+            parts: [],
+          },
+        ],
+      }),
+      1,
+      () => 1,
+      GATEWAY_NOW_MS,
+    )
+    const { store } = await shown(source, transcript)
+    expect(host.querySelector(".provider-sign-in")).not.toBeNull()
+    expect(host.querySelector("[data-turn-terminal]")).toBeNull()
+    expect(host.textContent).not.toContain("OAuth session expired")
+    let sent: Promise<unknown> | undefined
+    await act(async () => {
+      sent = store.dispatch(
+        sendMessage({ initiator: "person", sessionId: "b", text: "Try again" }),
+      )
+      await settle()
+    })
+    expect(host.querySelector(".provider-sign-in")).toBeNull()
+    expect(host.querySelector("[data-turn-terminal]")?.textContent).toContain("Failed")
+    expect(
+      host.querySelector("[data-turn-terminal]")?.getAttribute("data-turn-error"),
+    ).toBe("Internal error: OAuth session expired")
+    source.refuse("send", "unavailable")
+    await act(async () => {
+      await source.release("send")
+      await sent
+    })
+    expect(host.querySelector(".provider-sign-in")).toBeNull()
+    expect(
+      host.querySelector("[data-turn-terminal]")?.getAttribute("data-turn-error"),
+    ).toBe("Internal error: OAuth session expired")
+  })
+
+  it("keeps an independent required-work failure beside the sign-in card", async () => {
+    const transcript = transcriptFrom(
+      view("b", {
+        runtime: claudeRuntime,
+        messages: [
+          {
+            executionId: "m1",
+            userText: "Hello",
+            attachments: [],
+            files: [],
+            status: "failed",
+            authenticationRequired: true,
+            requiredWorkFailed: true,
+            error: "The turn could not complete all required work.",
+            parts: [],
+          },
+        ],
+      }),
+      1,
+      () => 1,
+      GATEWAY_NOW_MS,
+    )
+    await shown(fakeSource(), transcript)
+    expect(host.querySelector(".provider-sign-in")).not.toBeNull()
+    expect(
+      host.querySelector("[data-turn-terminal]")?.getAttribute("data-turn-error"),
+    ).toBe("The turn could not complete all required work.")
+  })
+
   it("retires recovery while a newer user-only message is sending or failed", async () => {
     const source = fakeSource()
     source.hold("send")

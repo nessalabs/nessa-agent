@@ -1,5 +1,6 @@
 import { conversation, conversationHistoryEmpty } from "../model"
 import type { LocalTabs } from "./local-tabs"
+import { takeConversationId } from "./internal"
 
 export type SavedConversationTab = { conversationId: string; title?: string }
 export type SavedConversationTabs = {
@@ -78,28 +79,40 @@ export function conversationTabSnapshot(tabs: LocalTabs): SavedConversationTabs 
   }
 }
 
-export function restoreConversationTabs(input: SavedConversationTabs): LocalTabs {
-  const conversations = input.tabs.map((item, index) => ({
-    ...conversation(`c${index}`),
-    ...(item.title ? { title: item.title, titleEdited: true as const } : {}),
-    serverConversationId: item.conversationId,
-    serverReady: true,
-  }))
-  if (!conversations.length) {
+/**
+ * Restore remote references as fresh local tab lifetimes. The existing allocator
+ * advances the current counters: callbacks retained by retired tabs must not
+ * name a replacement (saved-tabs and restored-lifetimes regression suites).
+ */
+export function restoreConversationTabs(
+  current: LocalTabs,
+  input: SavedConversationTabs,
+): LocalTabs {
+  let allocated = current
+  const restored: (SavedConversationTab | undefined)[] = input.tabs.length
+    ? input.tabs
+    : [undefined]
+  const conversations = restored.map((item) => {
+    const next = takeConversationId(allocated)
+    allocated = next.tabs
     return {
-      conversations: [conversation("c0")],
-      activeId: "c0",
-      nextConversationId: 1,
-      nextTurnId: 1,
+      ...conversation(next.id),
+      ...(item
+        ? {
+            ...(item.title ? { title: item.title, titleEdited: true as const } : {}),
+            serverConversationId: item.conversationId,
+            serverReady: true,
+          }
+        : {}),
     }
-  }
-  const activeIndex = input.tabs.findIndex(
-    (item) => item.conversationId === input.activeConversationId,
-  )
+  })
+  const active =
+    conversations.find(
+      (item) => item.serverConversationId === input.activeConversationId,
+    ) ?? conversations[0]
   return {
+    ...allocated,
     conversations,
-    activeId: conversations[Math.max(activeIndex, 0)].id,
-    nextConversationId: conversations.length,
-    nextTurnId: 1,
+    activeId: active.id,
   }
 }

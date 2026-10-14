@@ -69,6 +69,7 @@
   "include": [
     "src",
     "vite.config.ts",
-    "verification/desktop/fixtures"
+    "verification/desktop/fixtures",
+    "verification/conversation"
   ]
 }
