@@ -904,3 +904,20 @@ export const transcriptNotes = {
   /** A bounded-view history notice in the desktop transcript. */
   history: (kind) => `[data-history-extent="${kind}"]`,
 }
+
+/**
+ * The transcript-unreadable fixture (`fixtures/transcript-unreadable/`): one
+ * conversation whose saved record could not be read, as one line on the
+ * desktop window and the panel (`src/conversation/ui/unreadable-part.tsx`).
+ */
+export const transcriptUnreadable = {
+  page: "verification/desktop/fixtures/transcript-unreadable/index.html",
+  title: "Nessa: unreadable record",
+  desktop: "#root",
+  panel: "#panel",
+  anyLine: "[data-unreadable]",
+  line: (id) => `[data-unreadable="${id}"]`,
+  /** Where a future report action attaches. Present, and empty, on every line. */
+  report: "[data-unreadable-report]",
+  said: ".workspace-bubble, .workspace-message-body, [data-slot='chat-bubble']",
+}

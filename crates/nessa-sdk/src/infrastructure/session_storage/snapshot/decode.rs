@@ -55,6 +55,10 @@ struct Seed {
     /// Set only on a session-record batch or checkpoint. Nested values leave
     /// this empty so a `schemaVersion` inside a fact is not the record version.
     version: Option<Rc<Cell<RecordVersion>>>,
+    /// This value is a lease object, or a field inside one.
+    in_lease: bool,
+    /// Set when the walk fails inside that lease object.
+    lease_failed: Option<Rc<Cell<bool>>>,
 }
 impl Seed {
     fn child(&self, shape: Shape) -> Self {
@@ -98,6 +102,8 @@ impl Seed {
             },
             storage_node,
             version: None,
+            in_lease: self.in_lease || matches!(shape, Shape::LeaseRecord),
+            lease_failed: self.lease_failed.clone(),
         }
     }
     fn charge<E: de::Error>(&self, bytes: usize) -> Result<(), E> {
@@ -154,7 +160,15 @@ impl<'de> DeserializeSeed<'de> for Seed {
             }
         }
         self.limit.set(limit);
-        deserializer.deserialize_any(self)
+        let in_lease = self.in_lease;
+        let lease_failed = self.lease_failed.clone();
+        let walked = deserializer.deserialize_any(self);
+        if walked.is_err() && in_lease {
+            if let Some(flag) = lease_failed {
+                flag.set(true);
+            }
+        }
+        walked
     }
 }
 impl<'de> Visitor<'de> for Seed {
@@ -296,12 +310,37 @@ pub(super) fn preflight_semantic_batch(reader: impl Read) -> Result<(), StorageE
     preflight_shape(reader, Shape::SemanticBatch)
 }
 
+/// A semantic-batch walk. `lease_failed` is set when a current record's lease
+/// object is what the walk refused.
+pub(super) struct SemanticWalk {
+    pub(super) result: Result<(), StorageError>,
+    pub(super) lease_failed: bool,
+}
+
+pub(super) fn walk_semantic_batch(reader: impl Read) -> SemanticWalk {
+    let walk = walk_shape(reader, Shape::SemanticBatch);
+    SemanticWalk {
+        result: walk.result,
+        lease_failed: walk.lease_failed,
+    }
+}
+
+struct PreflightWalk {
+    result: Result<(), StorageError>,
+    lease_failed: bool,
+}
+
 fn preflight_shape(reader: impl Read, shape: Shape) -> Result<(), StorageError> {
+    walk_shape(reader, shape).result
+}
+
+fn walk_shape(reader: impl Read, shape: Shape) -> PreflightWalk {
     let limit = Rc::new(Cell::new(KEY_BYTES));
     let reader = TokenReader::new(reader, limit.clone());
     let mut deserializer = serde_json::Deserializer::from_reader(reader);
     let version = matches!(shape, Shape::Checkpoint | Shape::SemanticBatch)
         .then(|| Rc::new(Cell::new(RecordVersion::Unseen)));
+    let lease_flag = matches!(shape, Shape::SemanticBatch).then(|| Rc::new(Cell::new(false)));
     let walked = Seed {
         shape,
         limit,
@@ -312,6 +351,8 @@ fn preflight_shape(reader: impl Read, shape: Shape) -> Result<(), StorageError> 
         storage: matches!(shape, Shape::StorageError).then(Rc::default),
         storage_node: matches!(shape, Shape::StorageError),
         version: version.clone(),
+        in_lease: false,
+        lease_failed: lease_flag.clone(),
     }
     .deserialize(&mut deserializer)
     .map_err(|error| StorageError::Corrupt(error.to_string()));
@@ -320,7 +361,17 @@ fn preflight_shape(reader: impl Read, shape: Shape) -> Result<(), StorageError> 
             .end()
             .map_err(|error| StorageError::Corrupt(error.to_string()))
     });
-    classify_record_version(version.as_deref(), walked)
+    // Key order is not significant. A lease object can fail before the walk
+    // reaches `schemaVersion`. A marker this build does not read still wins:
+    // that record is another version, not a lease this build retired.
+    let other_version = matches!(
+        version.as_deref().map(Cell::get),
+        Some(RecordVersion::Other(_))
+    );
+    PreflightWalk {
+        result: classify_record_version(version.as_deref(), walked),
+        lease_failed: lease_flag.is_some_and(|flag| flag.get()) && !other_version,
+    }
 }
 
 /// Top-level `schemaVersion` seen while preflight walks a record.

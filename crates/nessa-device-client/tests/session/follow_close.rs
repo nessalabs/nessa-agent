@@ -146,6 +146,8 @@ fn settled_view(conversation: &str) -> ConversationView {
         lease: None,
         artifacts: Vec::new(),
         notes: Vec::new(),
+        unreadable: Vec::new(),
+        unreadable_truncated: false,
         title: None,
         questions: Vec::new(),
         approval_mode: ApprovalMode::Ask,

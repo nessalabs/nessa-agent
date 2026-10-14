@@ -229,6 +229,8 @@ function viewSaying(imageInput: boolean): Read {
     conversationId,
     artifacts: [],
     notes: [],
+    unreadable: [],
+    unreadableTruncated: false,
     approvalMode: "ask",
     approvalModes: [
       { id: "ask", name: "Provider asks", description: "Provider asks where required." },

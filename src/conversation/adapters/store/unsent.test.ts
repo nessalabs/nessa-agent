@@ -157,6 +157,8 @@ it("known-unsent follow-up does not settle the earlier running invocation before
           conversationId: "server",
           artifacts: [],
           notes: [],
+          unreadable: [],
+          unreadableTruncated: false,
           approvalMode: "ask",
           approvalModes: [
             {

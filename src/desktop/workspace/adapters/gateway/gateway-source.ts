@@ -1262,14 +1262,13 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     answerQuestion: (sessionId, executionId, questionId, choices, _initiator) =>
       within(async (live) => {
         await transcriptOf(sessionId, "person")
-        const currentRead = reads.get(sessionId)
-        const target = currentRead
-          ? questionTargets(currentRead.view).find(
-              (question) =>
-                question.executionId === executionId &&
-                question.questionId === questionId,
-            )
-          : undefined
+        const view = reads.get(sessionId)?.view
+        const target =
+          view &&
+          questionTargets(view).find(
+            (asked) =>
+              asked.executionId === executionId && asked.questionId === questionId,
+          )
         if (!target) throw new WorkspaceSourceError("not-waiting")
         await dispatch(live, (connected) => {
           try {
