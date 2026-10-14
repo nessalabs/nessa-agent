@@ -72,10 +72,9 @@
 //! `PermissionMemory` keeps an owner's remembered permission rules in
 //! `permission-rules.sqlite3` and answers them through
 //! `CedarPermissionRuleEvaluator` (`permission_rules/cedar/`). A miss asks
-//! the person. The same memory is the board a waiting review notifies, and
-//! clears when the review ends. `DurablePermissionRuleRevocationAudit` keeps
-//! each revocation, one immutable file per rule revision, written before the
-//! row is deleted.
+//! the person. A rule change and its audit row commit in that file together.
+//! The same memory is the board a waiting review notifies, and clears when
+//! the review ends.
 mod change_watch;
 pub use change_watch::{NessaRecordWatches, UuidWatchNamespaces};
 // Composed only by the Unix gateway (`composition/local_auth.rs`), as
@@ -149,11 +148,7 @@ pub use tool_policy::{
 };
 
 mod permission_rules;
-#[cfg(unix)]
-pub(crate) use permission_rules::CedarPermissionRuleEvaluator;
-pub use permission_rules::{
-    DurablePermissionRuleRevocationAudit, PermissionMemory, PublishedReview,
-};
+pub use permission_rules::{PermissionMemory, PublishedReview, RulesOpenError};
 
 mod deletion_audit;
 pub use deletion_audit::DurableConversationDeletionAudit;

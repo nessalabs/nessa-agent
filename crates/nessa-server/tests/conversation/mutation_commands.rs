@@ -1396,7 +1396,13 @@ struct RecordingRules {
 }
 
 impl PermissionRules for RecordingRules {
-    fn settle(&self, _: &str, _: &str, _: &str) -> Option<SettledRule> {
+    fn settle(
+        &self,
+        _: nessa_sdk::application::agent_execution::permissions::PermissionCaller,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Option<SettledRule> {
         None
     }
     fn offers_remember(&self, conversation_id: &str, execution: &ExecutionId) -> bool {

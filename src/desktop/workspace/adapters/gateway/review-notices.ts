@@ -3,7 +3,9 @@
  * desktop notice that names it.
  *
  * The push is the whole set still waiting. A review that leaves the set is
- * cleared. Selecting the notice opens that conversation.
+ * cleared. The notice names the tool, and the conversation by its title when
+ * the window has one, otherwise by its id. Selecting the notice opens that
+ * conversation.
  */
 
 /** One review the gateway says is waiting. */
@@ -112,7 +114,15 @@ export function waitingReviewNotices(notifier: ReviewNotifier): {
   }
 }
 
+let readConversationTitle: (conversationId: string) => string | null = () => null
 let showWaitingReviewsNow: (() => void) | undefined
+
+/** Point a waiting-review notice at the conversation's title, read when it is shown. */
+export function bindConversationTitles(
+  read: (conversationId: string) => string | null,
+): void {
+  readConversationTitle = read
+}
 
 /** Point [`showWaitingReviews`] at the window's live waiting-review notices. */
 export function bindWaitingReviewNotices(showWaiting: () => void): void {
@@ -145,8 +155,9 @@ export function browserReviewNotifier(
     const id = noticeKey(review)
     if (shown.has(id) || typeof Notification === "undefined") return
     if (Notification.permission !== "granted") return
+    const name = readConversationTitle(review.conversationId)?.trim()
     const notice = new Notification(`${review.tool} needs a decision`, {
-      body: "A permission review is waiting.",
+      body: name ? name : review.conversationId,
       tag: id,
     })
     notice.onclick = () => {

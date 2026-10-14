@@ -1019,22 +1019,20 @@ async fn agent_acp_permission_query_does_not_wait_behind_consumed_answer_audit()
     assert_eq!(queried.unwrap().unwrap(), Ok(false));
 }
 
-/// Rules a test stores, and withdraws when the selection audit fails.
+/// Rules a test stores. A failed selection audit leaves the grant in place.
 struct RememberingRules {
     live: Mutex<Vec<SettledRule>>,
-    withdrawn: Mutex<Vec<ApprovalRuleReference>>,
-    fail_acknowledge: std::sync::atomic::AtomicBool,
 }
 
 impl PermissionRules for RememberingRules {
-    fn settle(&self, _: &str, _: &str, _: &str) -> Option<SettledRule> {
+    fn settle(&self, _: PermissionCaller, _: &str, _: &str, _: &str) -> Option<SettledRule> {
         self.live.lock().unwrap().last().cloned()
     }
     fn offers_remember(&self, _: &str, _: &ExecutionId) -> bool {
         true
     }
     fn arm(&self, _: &str, _: &ExecutionId, _: bool) {}
-    fn answerer(&self, _: &ExecutionId, _: &str) -> Option<PermissionCaller> {
+    fn answerer(&self, _: &str, _: &ExecutionId, _: &str) -> Option<PermissionCaller> {
         Some(PermissionCaller::Owner)
     }
     fn remember(&self, request: RememberRequest<'_>) -> Result<SettledRule, RememberError> {
@@ -1045,33 +1043,15 @@ impl PermissionRules for RememberingRules {
         self.live.lock().unwrap().push(settled.clone());
         Ok(settled)
     }
-    fn acknowledge(&self, rule: &ApprovalRuleReference) -> Result<(), RememberError> {
-        let _ = rule;
-        if self
-            .fail_acknowledge
-            .swap(false, std::sync::atomic::Ordering::SeqCst)
-        {
-            return Err(RememberError::Unavailable);
-        }
-        Ok(())
-    }
-    fn withdraw(&self, rule: &ApprovalRuleReference) -> Result<(), RememberError> {
-        self.withdrawn.lock().unwrap().push(rule.clone());
-        self.live
-            .lock()
-            .unwrap()
-            .retain(|stored| stored.reference() != rule);
-        Ok(())
-    }
 }
 
+/// A remembered choice commits before the selection is recorded. A failed
+/// selection audit leaves that grant in place.
 #[tokio::test]
-async fn a_remembered_rule_is_withdrawn_when_the_selection_audit_fails() {
+async fn a_failed_selection_audit_leaves_the_remembered_rule() {
     let _slot = process_test_slot().await;
     let rules = Arc::new(RememberingRules {
         live: Mutex::new(Vec::new()),
-        withdrawn: Mutex::new(Vec::new()),
-        fail_acknowledge: std::sync::atomic::AtomicBool::new(false),
     });
     let audit = Arc::new(AnswerAudit {
         reject_call: Some(1),
@@ -1115,9 +1095,11 @@ async fn a_remembered_rule_is_withdrawn_when_the_selection_audit_fails() {
         .await
         .unwrap_err();
     assert_eq!(failure.error(), &AgentError::AuditFailure);
-    assert!(rules.live.lock().unwrap().is_empty());
-    assert_eq!(rules.withdrawn.lock().unwrap().len(), 1);
-    assert_eq!(rules.withdrawn.lock().unwrap()[0].rule_id(), "pr_test");
+    assert_eq!(rules.live.lock().unwrap().len(), 1);
+    assert_eq!(
+        rules.live.lock().unwrap()[0].reference().rule_id(),
+        "pr_test"
+    );
     let records = answers(&audit);
     assert_eq!(records[0].delivery(), &PermissionAnswerDelivery::Selected);
     assert!(matches!(
@@ -1137,87 +1119,6 @@ async fn a_remembered_rule_is_withdrawn_when_the_selection_audit_fails() {
     assert_gone(&root, "pid");
 }
 
-/// A failed acknowledgement withdraws the provisional rule and fails the answer.
-/// The once option is not sent while the durable row would stay provisional.
-#[tokio::test]
-async fn a_failed_acknowledgement_withdraws_the_rule_and_fails_the_answer() {
-    let _slot = process_test_slot().await;
-    let rules = Arc::new(RememberingRules {
-        live: Mutex::new(Vec::new()),
-        withdrawn: Mutex::new(Vec::new()),
-        fail_acknowledge: std::sync::atomic::AtomicBool::new(true),
-    });
-    let audit = Arc::new(AnswerAudit::default());
-    let (root, mut config, model) = test_acp_configuration("permission", 16);
-    config.shutdown_grace = Duration::from_secs(2);
-    config.execution_timeout = None;
-    config.permission_rules = rules.clone();
-    let binding = ClaudeAcpProvider::new(
-        config,
-        &model,
-        TokenLimits::new(900, 100).unwrap(),
-        audit.clone(),
-    )
-    .unwrap();
-    let mut opened = binding
-        .open(ProviderOpenRequest::without_startup_control(None))
-        .await
-        .unwrap();
-    let active = start(&opened, "write").await;
-    next(&mut opened).await;
-    let ExecutionUpdate::PermissionRequested { id, options, .. } = next(&mut opened).await else {
-        panic!("expected review")
-    };
-    let option_id = options
-        .choices()
-        .iter()
-        .find(|option| option.id().as_str() == "nessa.remember.allow")
-        .expect("owner review offers the project rule")
-        .id()
-        .clone();
-    let failure = opened
-        .session
-        .answer_permission(PermissionAnswer {
-            execution_id: ExecutionId::new("write").unwrap(),
-            id,
-            option_id,
-            attribution: attribution(),
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(
-        failure.error(),
-        &AgentError::InvalidInput("the permission rule could not be stored".into())
-    );
-    assert_eq!(
-        failure.permission_selection(),
-        Some(PermissionSelectionState::Consumed)
-    );
-    assert_eq!(
-        failure.session_state(),
-        &ProviderSessionState::CleanupRequired
-    );
-    assert!(rules.live.lock().unwrap().is_empty());
-    assert_eq!(rules.withdrawn.lock().unwrap().len(), 1);
-    let records = answers(&audit);
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].delivery(), &PermissionAnswerDelivery::Selected);
-    assert!(!root.path().join("fixture.txt").exists());
-    assert_eq!(
-        active.await.unwrap(),
-        Err(AgentError::InvalidInput(
-            "the permission rule could not be stored".into()
-        ))
-    );
-    assert!(opened
-        .session
-        .shutdown(SessionCloseRequest::Explicit(close_action()))
-        .await
-        .into_result()
-        .is_ok());
-    assert_gone(&root, "pid");
-}
-
 /// A review settled by a rule already stored also carries `ApprovalBasis::Rule`.
 /// Failing to record that answer must not withdraw the live rule.
 #[tokio::test]
@@ -1228,8 +1129,6 @@ async fn a_settled_rule_is_not_withdrawn_when_the_answer_audit_fails() {
             ApprovalRuleReference::new("pr_live", "4", attribution().actor().clone()).unwrap(),
             PermissionEffect::Allow,
         )]),
-        withdrawn: Mutex::new(Vec::new()),
-        fail_acknowledge: std::sync::atomic::AtomicBool::new(false),
     });
     let audit = Arc::new(AnswerAudit {
         reject_call: Some(1),
@@ -1254,7 +1153,6 @@ async fn a_settled_rule_is_not_withdrawn_when_the_answer_audit_fails() {
         .await
         .expect("the execution finishes");
     assert_eq!(result.unwrap(), Err(AgentError::AuditFailure));
-    assert!(rules.withdrawn.lock().unwrap().is_empty());
     {
         let live = rules.live.lock().unwrap();
         assert_eq!(live.len(), 1);
@@ -1300,8 +1198,6 @@ async fn agent_with_live_allow(hook: Arc<dyn InvocationHook>) -> (TempDir, Agent
             ApprovalRuleReference::new("pr_live", "4", attribution().actor().clone()).unwrap(),
             PermissionEffect::Allow,
         )]),
-        withdrawn: Mutex::new(Vec::new()),
-        fail_acknowledge: std::sync::atomic::AtomicBool::new(false),
     });
     let (root, mut config, model) = test_acp_configuration("permission", 16);
     config.shutdown_grace = Duration::from_secs(2);

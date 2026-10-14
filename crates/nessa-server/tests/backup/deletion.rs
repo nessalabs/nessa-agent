@@ -7,7 +7,8 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 
 use crate::backup::application::{
-    capture_fences, DeletionLogStore, ExportClock, FenceSource, InventoryFailure, MutationAdmission,
+    capture_fences, DeletionLogStore, ExportClock, FenceSource, InventoryFailure, LogStoreError,
+    MutationAdmission,
 };
 use crate::backup::domain::{CredentialKind, DeletionFence, DeletionLog, Fingerprint, GrantRole};
 use crate::backup::infrastructure::read_credentials;
@@ -436,6 +437,60 @@ async fn a_failed_inventory_append_leaves_the_fence_and_the_log() {
 }
 
 #[tokio::test]
+async fn a_stale_log_is_reconciled_again() {
+    let other = DeletionFence::conversation("other-writer").unwrap();
+    let ours = DeletionFence::conversation("this-writer").unwrap();
+    let log = StaleOnce::new(other.clone());
+    let recorded = capture_fences(&[&OneFence(ours.clone())], &log)
+        .await
+        .unwrap();
+    let keys: Vec<&str> = recorded
+        .entries()
+        .iter()
+        .map(|entry| entry.fence().key())
+        .collect();
+    assert!(keys.contains(&other.key()));
+    assert!(keys.contains(&ours.key()));
+}
+
+/// The first `store` reports [`LogStoreError::Stale`] after another fence
+/// landed. The retry has to keep that fence.
+struct StaleOnce {
+    log: Mutex<DeletionLog>,
+    other: Mutex<Option<DeletionFence>>,
+}
+
+impl StaleOnce {
+    fn new(other: DeletionFence) -> Self {
+        Self {
+            log: Mutex::new(DeletionLog::default()),
+            other: Mutex::new(Some(other)),
+        }
+    }
+}
+
+#[async_trait]
+impl DeletionLogStore for StaleOnce {
+    async fn load(&self) -> Result<DeletionLog, ()> {
+        Ok(self.log.lock().unwrap().clone())
+    }
+
+    async fn store(&self, base: &DeletionLog, next: &DeletionLog) -> Result<(), LogStoreError> {
+        let mut guard = self.log.lock().unwrap();
+        if let Some(other) = self.other.lock().unwrap().take() {
+            let (landed, _) = DeletionLog::default().append(other);
+            *guard = landed;
+            return Err(LogStoreError::Stale);
+        }
+        if guard.canonical() != base.canonical() {
+            return Err(LogStoreError::Stale);
+        }
+        *guard = next.clone();
+        Ok(())
+    }
+}
+
+#[tokio::test]
 async fn the_cut_includes_the_deletion_inventory() {
     let fence = DeletionFence::conversation("gone").unwrap();
     let source = OneFence(fence);
@@ -490,11 +545,15 @@ impl DeletionLogStore for MemLog {
         Ok(self.log.lock().unwrap().clone())
     }
 
-    async fn store(&self, next: &DeletionLog) -> Result<(), ()> {
+    async fn store(&self, base: &DeletionLog, next: &DeletionLog) -> Result<(), LogStoreError> {
         if self.fail.load(Ordering::SeqCst) {
-            return Err(());
+            return Err(LogStoreError::Failed);
         }
-        *self.log.lock().unwrap() = next.clone();
+        let mut guard = self.log.lock().unwrap();
+        if guard.canonical() != base.canonical() {
+            return Err(LogStoreError::Stale);
+        }
+        *guard = next.clone();
         Ok(())
     }
 }

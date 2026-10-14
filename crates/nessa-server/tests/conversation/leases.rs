@@ -4557,7 +4557,7 @@ async fn a_fetch_whose_lease_ends_mid_transfer_is_refused_lease_ended() {
 /// An injected pending placement read verifies both the fetch deadline and
 /// caller-cancellation outcomes in
 /// [`a_fetch_whose_placement_read_stalls_is_timed_out_or_cancelled`].
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_fetch_whose_placement_read_stalls_is_timed_out_or_cancelled() {
     let root = tempfile::tempdir().unwrap();
     let bytes = b"a picture".to_vec();
@@ -4581,6 +4581,7 @@ async fn a_fetch_whose_placement_read_stalls_is_timed_out_or_cancelled() {
     );
     harness.create_on("devbox").await.unwrap();
     let go = harness.running_turn().await;
+    let time_before_fetch = tokio::time::Instant::now();
     attachments
         .files
         .lock()
@@ -4600,6 +4601,8 @@ async fn a_fetch_whose_placement_read_stalls_is_timed_out_or_cancelled() {
     };
     // Assert the injected read is the operation the application deadline stops.
     assert!(entered.await.unwrap().is_some());
+    assert_eq!(tokio::time::Instant::now(), time_before_fetch);
+    tokio::time::advance(wait).await;
     let timed_out = match tokio::time::timeout(Duration::from_secs(5), &mut timeout_fetch).await {
         Ok(result) => result.unwrap(),
         Err(_) => {

@@ -100,6 +100,7 @@ nothing and releases the hold too. A later attempt starts from Idle.
 | Secret material | A record is marked secret, a path is not one of the named public store files, or a copied file's bytes hold a private-key PEM header or a secret JSON key (`verifier`, `privateKey`, `private_key`) | The manifest keeps a fingerprint. Bytes that hold key material are also named `skipped ... secret`. The bytes are not in the bundle. A quoted `"token"` or `"secret"` in a session file stays in the cut. A public-key or certificate header stays too. `a_secret_is_fingerprinted_and_left_out_of_the_bundle`, `an_unknown_gateway_file_is_not_copied`, `a_session_database_holding_a_private_key_is_not_copied`, `a_session_database_holding_an_rsa_ec_or_encrypted_private_key_is_not_copied`, `a_plaintext_public_file_holding_a_private_key_is_not_copied`, `a_json_record_holding_an_rsa_private_key_is_not_copied`, `a_public_jsonl_holding_a_private_key_is_not_copied`, `a_session_database_quoting_token_is_still_copied`, `a_public_key_header_in_a_session_database_is_copied`, `an_undashed_private_key_phrase_is_copied` |
 | Deferred session | The session file's `page_count * page_size` is above 64 MiB | The file stays out of the in-memory snapshot. Each active conversation is a `deferred` line on canonical records and on notes: conversation id, payload-byte size, and the digest of incarnation, floor, tail, and records. Payload bytes are hashed in chunks. The cut is still published. Fetching those bytes when the conversation is opened is not this cut. `an_oversized_session_is_deferred_and_the_cut_continues`, `a_deferred_digest_hashes_each_payload_in_chunks` |
 | Two publishes, one absent root | Concurrent | Each attempt stages in its own directory. One publish lands, and its manifest matches its files. The other attempt's staging directory is removed. An existing root is not replaced. `concurrent_publishes_of_one_root_do_not_mix`, `each_publish_attempt_has_its_own_staging_directory` |
+| Published bundle | After the mac | On Unix, the bundle directory and each directory under it are mode `0700`. Each file is mode `0600`. `a_published_bundle_is_owner_only` |
 | Raw session fallback | `records.sqlite3` exists and is not a database | A file within 64 MiB is copied. A larger file is named `skipped ... unreadable` and is not read. `an_oversized_non_database_session_is_not_read` |
 | Public file bound | A public file is above 8 MiB | The file is named `skipped ... bounded` and is not read during the admission hold. `a_public_file_over_the_bound_is_named_and_not_read` |
 | Directory body | An audit, JSONL, or relay file is inside the pin | The pin opens it and records its length. The body is read after admission is released, and a rewrite that replaces the file is not what the cut publishes. `a_directory_pin_does_not_read_the_body` |
@@ -122,7 +123,17 @@ each staged file and its directories before the rename, then the parent
 directory after the rename. A fence already committed is the input.
 A failed append leaves the file and the fence as they were. The
 replacement is synced — the temporary file, then its directory — before the
-append is acknowledged. Either fence source failing leaves the log
+append is acknowledged. Each attempt uses its own temporary file. A directory
+sync that fails after the rename restores the previous bytes, or removes the
+new file when there was none, and then returns the error.
+`a_directory_sync_failure_restores_the_previous_log` and
+`a_directory_sync_failure_removes_a_log_that_was_absent`. Two writers compare
+the log they read. The one that lost reconciles again, so a conversation
+or credential fence the winner stored stays. `a_stale_log_is_reconciled_again`,
+`a_stale_writer_does_not_replace_the_log`, and
+`concurrent_stores_keep_one_complete_log`.
+
+Either fence source failing leaves the log
 unwritten, including when the other source already has rows. A metadata
 tombstone or revocation that cannot be decoded or named fails that fence
 source the same way. Absence of the row would be read as a re-grant. The
@@ -143,4 +154,6 @@ sequences 1, 2, 3, … and are still matched by key.
 | Revoked device, peer, environment-serve, or worker credential | After the registry fence | The entry names the kind and a fingerprint, never a verifier or private key. `revoked_credentials_are_inventoried_without_secrets` |
 | Same fence again | A later capture | The original sequence is kept. `a_repeated_fence_does_not_advance_the_sequence` |
 | Append fails | The fence is already committed | The failure is returned. The previous inventory and the fence stay. `a_failed_inventory_append_leaves_the_fence_and_the_log` |
+| Directory sync fails after rename | The new file is already at the inventory path | The previous bytes are restored, or the new file is removed when the path was absent, before the error is returned. `a_directory_sync_failure_restores_the_previous_log`, `a_directory_sync_failure_removes_a_log_that_was_absent` |
+| Two inventory writers | Each read the log, then both store | One store lands a complete log. The other is refused and reconciles again, so a conversation or credential fence already stored stays. `concurrent_stores_keep_one_complete_log`, `a_stale_writer_does_not_replace_the_log`, `a_stale_log_is_reconciled_again` |
 | Capture during export | During the brief hold, after the append | The manifest's deletion-inventory watermark is the log after that append. `the_cut_includes_the_deletion_inventory` |
