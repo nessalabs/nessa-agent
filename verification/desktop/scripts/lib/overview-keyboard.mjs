@@ -88,9 +88,13 @@ export async function keysWhileRowsArrive(page) {
       )
       .then((observedHandle) => {
         handle = observedHandle
-        return observerClosed
-          ? disposeHandle().then(() => observedHandle)
-          : observedHandle
+        if (!observerClosed) return observedHandle
+        return disposeHandle()
+          .catch((error) => {
+            logCleanupFailure(error)
+            throw error
+          })
+          .then(() => observedHandle)
       })
     // A failed opening key must not leave an unobserved waiter rejection behind.
     void pending.catch(() => {})
