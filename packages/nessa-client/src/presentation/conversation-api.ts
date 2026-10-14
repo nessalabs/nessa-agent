@@ -420,7 +420,6 @@ function validConversationId(value: string): string {
   return value
 }
 
-<<<<<<< HEAD
 /** Complete logical message intent before create/admission starts. */
 export type SubmissionInput = {
   readonly conversationId: string
