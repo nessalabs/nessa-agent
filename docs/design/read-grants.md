@@ -9,7 +9,9 @@ The map's rules are in
 [Sharing a conversation](runtime-architecture.md#sharing-a-conversation) and
 [What syncs, and which way](runtime-architecture.md#what-syncs-and-which-way).
 This builds on [record subscriptions](record-subscriptions.md) (slice E), which
-left one admission point for it.
+left one admission point for it. A proposal to reuse this grant for a directory, peer write, live
+subscribe, and webhooks is [access grants](access-grants.md). This
+document stays the built contract.
 
 ## The problem
 
