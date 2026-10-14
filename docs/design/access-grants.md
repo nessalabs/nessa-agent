@@ -208,15 +208,15 @@ policy engine, a new crate, or a grant-by-list.
 | `policy_revision` | Stays, under the name grant epoch. |
 | `paired.peer_gateway` | Deleted. `grant.comment` and `grant.drive` require the capability and, until the peer-write slice, a principal signed in as the binding owner. One condition, on the permit. |
 | A stored Drive role that a peer cannot use | `conversation.share` asks those permits before it writes. A denial writes nothing and returns the policy ids. The use case does not match a gateway principal on its own. The same permits deny a hand-built row at admission. |
-| `share_grants` key `(receiver_id, conversation_id)` | Becomes `(principal_id, conversation_id)` in the refactor, one metadata version bump. `receiver_id` stays for a paired device or gateway, because admission is still `Initiation::grant(receiver, epoch)`. An integration, and a later agent, store the principal and no receiver. |
+| `share_grants` key `(receiver_id, conversation_id)` | Becomes `(principal_id, resource_kind, resource_id)` in the refactor, one metadata version bump. A conversation row uses kind `conversation` and the conversation id. A directory row uses kind `directory` and the directory identity. The directory slice does not change the key. `receiver_id` stays for a paired device or gateway, because admission is still `Initiation::grant(receiver, epoch)`. An integration, and a later agent, store the principal and no receiver. |
 | Credential `conversation.read`, `conversation.write`, `environment.serve` | Stay. They say whether this credential may read, may be the conversation authority, or may serve. They do not name a conversation or a directory. `hold.peer` stays as written. |
 | `grants.json` on the environment | Stays on that machine, so the gateway cannot widen it. The same capability and constraint words. `domain::unwritten` stays the default facts (an absent ssh entry is the host's own set; an absent dialed gateway is empty). |
 | Gateway `denyPrograms` / `allowPrograms` | Stay the host's own program list in `commands.cedar`. A grant's command rules are a further constraint, deny wins. |
 | Remembered permission rules | Stay the owner's. `rules.cedar` already refuses a grant. |
 | `#797` targets | Stay a caller contract. |
 | `#811` owner phone | Left to that issue. Pairing classes are unchanged here. |
-| `PeerPoller` timer for an Active peer | Deleted. Grant add, revoke, and epoch changes arrive on a grant subscription. Chat views arrive on `conversation.subscribe`. Both use the cursor and resume rules in [record subscriptions](record-subscriptions.md). One connection follows at most eight chats. The record copy stays `conversation.recordsHead` and `recordsPage`, woken by a frame, not by the timer. |
-| `conversation.watchRecords` | Stays the retained phone path ([#851](https://github.com/nessalabs/nessa-agent/issues/851)). Peers use `conversation.subscribe` as the wake, and `recordsHead` / `recordsPage` as the copy. |
+| `PeerPoller` timer for an Active peer | Deleted. Grant add, revoke, and epoch changes arrive on a grant subscription. Chat views arrive on `conversation.subscribe`. Both use the cursor and resume rules in [record subscriptions](record-subscriptions.md). One connection follows at most eight chats. The record copy stays `conversation.recordsHead` and `recordsPage`, woken by the subscription's record watch, including when that reread sends no frame. |
+| `conversation.watchRecords` | Stays the retained phone path ([#851](https://github.com/nessalabs/nessa-agent/issues/851)). Peers use the subscription's record watch as the wake, and `recordsHead` / `recordsPage` as the copy. |
 | Grant by channel, folder-of-chats, or default sync | Already refused. Stays refused. |
 | A webhook-only access list | Not added. The webhook's share grant is the list. |
 | Nessa copies of Claude or Codex hooks | Not added. |
@@ -347,20 +347,26 @@ on `conversation.recordsHead` and `recordsPage`, and say the view is not
 that copy. The local replica is the retained peer cache, which slice 2
 reads. Deleting the poller timer does not delete the copy.
 
-A frame that changes a followed view, and a grant frame that adds a chat
-the follower has chosen to follow, wake that copy. The copy reads
-`recordsHead` and then `recordsPage` from the cursor the cache last
-applied, and writes the records into the cache. Turns the view omits are
-still copied. The walk is not `catalogueHead` and not `peer.poll_interval`.
-A chat let go past the eight-cap keeps its cursor and is not walked until
-it is opened again. After a disconnect the follower resumes the
-subscriptions and the record cursor from what it last applied.
+The copy wakes from the record watch `conversation.subscribe` registers
+before its first read
+([record subscriptions](record-subscriptions.md)). A commit dirties that
+watch, and the task rereads. Row S9 sends no frame when the bounded view
+is unchanged, including a commit that touches only history the view omits.
+The copy still runs. `recordsHead` is the cursor-bearing read: the follower
+copies from the cursor the cache last applied through `recordsPage`, and
+writes those records into the cache. A changed view frame is not the
+signal. A grant frame that adds a chat the follower has chosen to follow
+starts the first copy. The watch wakes every copy after that. The walk is
+not `catalogueHead` and not `peer.poll_interval`. A chat let go past the
+eight-cap keeps its cursor and is not walked until it is opened again.
+After a disconnect the follower resumes the subscriptions and the record
+cursor from what it last applied.
 
 The `PeerPoller` timer goes away for an Active peer. `peer.poll_interval`
 no longer wakes a `catalogueHead`. The record copy above is the walk, and
-a frame wakes it. After a disconnect the follower opens a new pinned
-session and resumes both subscriptions from the cursors it last applied,
-the same way the sync engine resumes a pass.
+the record watch wakes it. After a disconnect the follower opens a new
+pinned session and resumes both subscriptions from the cursors it last
+applied, the same way the sync engine resumes a pass.
 
 Two waits are not that timer:
 
@@ -385,7 +391,8 @@ session that presented one would be admitted as a paired reader.
 
 `conversation.share` is still the one share command. This slice teaches it a
 second target, the integration credential, beside a paired receiver. The
-grant row is the same fact, keyed by that credential. Delivery reads those
+grant row is the same fact, keyed by the integration principal and the
+conversation resource, with no receiver. Delivery reads those
 grants. The gateway POSTs events for those conversations only. The payload
 is what a reader with that capability set may see.
 
@@ -408,9 +415,13 @@ permit finishes under the epoch it read. Revoke then advances the epoch.
 The next admission reads the new epoch and is not sent. That is the Drive
 turn's rule: admitted work finishes, and the next command is refused.
 
-- An attempt takes the permit, reads the epoch, and only then writes the
-  POST. An epoch that no longer allows delivery records `not sent` and
-  writes nothing.
+- An attempt takes the permit, reads the grant epoch, and reads whether
+  the integration credential is still current. Only then does it write the
+  POST. The credential check is the same fact a product session would
+  refuse: revoked or expired. The grant epoch does not move when the
+  credential is revoked or expires, so the epoch alone does not stop
+  delivery. An epoch that no longer allows delivery, or a credential that
+  is not current, records `not sent` and writes nothing.
 - Revoke takes the same permit. When an attempt holds it, revoke waits
   until that attempt records its outcome and drops the permit, and no
   longer than `webhook.post_deadline`. Revoke does not cancel a write that
@@ -421,7 +432,14 @@ turn's rule: admitted work finishes, and the next command is refused.
 - A retry is a new admission. After the epoch advances it reads the new
   epoch and is not sent.
 - When revoke commits before an attempt takes the permit, that attempt is
-  not sent.
+  not sent. Grant revoke and credential revoke share this rule.
+  `credential.revoke`, and credential expiry, take the same registration
+  permit. They do not advance the grant epoch. After the permit is free
+  they stop the registration: delivering, then stopped, with the cause
+  credential revoked or expired, the owner or the expiry as initiator, and
+  the delivery id waited for when there was one. Grants may still name
+  that principal. No later attempt is sent. Unsharing each conversation
+  is not required.
 - The attempt holds the permit only until `webhook.post_deadline`, a row
   this slice adds to [limits](../limits.md). The clock starts when the
   attempt takes the permit. At the deadline the sender closes its side of
@@ -532,14 +550,18 @@ Part of the access-grant proposal in `docs/design/access-grants.md`.
 ## Deliver
 
 Make the conversation share row the access grant. The primary key is
-`(principal_id, conversation_id)`, replacing `(receiver_id, conversation_id)`.
+`(principal_id, resource_kind, resource_id)`, replacing
+`(receiver_id, conversation_id)`. This slice writes kind `conversation`
+and the conversation id. The directory slice writes kind `directory` and
+a resource id that names the environment and the directory. It does not
+change the primary key and does not mint a conversation id for a
+directory. One principal may hold many directory rows.
 `receiver_id` is no longer the key and is no longer required. A paired
 device or gateway still stores the receiver its credential is bound to,
 because admission returns `Initiation::grant(receiver, epoch)`. An
 integration principal, and a later agent principal, store no receiver.
 Webhook and agent slices insert into this key. They do not migrate
-identity again. The directory slice adds its resource on this same
-principal key.
+identity again.
 
 The capability set is `read`, and for a principal Cedar permits, `comment`
 and `drive`. Constraints are the tool policy and `commandHosts` a `drive`
@@ -572,7 +594,7 @@ the Cedar policy ids. The share path has no principal-kind match of its
 own. A hand-built row that gives a gateway `comment` is denied by the same
 permits. A grant with a principal and no receiver can be stored, and a
 paired grant is still found by its receiver. Two rows for the same
-principal and conversation cannot both exist. A retry journals before
+principal, resource kind, and resource id cannot both exist. A retry journals before
 equal to after. The previous metadata version is refused. A test fails if
 the capability check is removed from the permit.
 
@@ -658,7 +680,11 @@ Part of docs/design/access-grants.md.
 A grant resource is one directory in an environment the grantor enforces:
 this gateway's machine, a remote environment it already leases, or a cloud
 environment a later agent uses. The grant names the environment and the
-directory. Capabilities are `read`, `write`, and `exec`. `read` and
+directory. The row uses the refactor's key
+`(principal_id, resource_kind, resource_id)` with kind `directory`. The
+resource id names the environment and the directory. This slice does not
+change that key and does not mint a conversation id. Capabilities are
+`read`, `write`, and `exec`. `read` and
 `write` open a named path by walking from a directory handle on the
 granted directory, no-follow against each parent handle. A component that
 is `..`, a symlink, or otherwise leaves the directory is refused.
@@ -742,8 +768,9 @@ Part of docs/design/access-grants.md.
 ## Deliver
 
 Delete the `PeerPoller` timer for an Active peer. `peer.poll_interval` no
-longer wakes a `catalogueHead`. The record copy stays, and a frame wakes
-it.
+longer wakes a `catalogueHead`. The record copy stays, and the
+subscription's record watch wakes it, including when the reread sends no
+frame.
 
 Push grant changes on a grant subscription for this receiver, on the same
 subscription machinery as `conversation.subscribe` (#851). The cursor is
@@ -771,12 +798,15 @@ resumes with `after` from the cursor last applied. There is no second
 connection and no poller for that chat. A grant change still arrives while
 eight chats are live.
 
-`conversation.subscribe` wakes the copy. It is a bounded view, not a
-record stream, and it is not written into the cache as the replica. The
-copy is `conversation.recordsHead` and `recordsPage` from the cursor the
-cache last applied, the checkpoint path in `docs/design/record-subscriptions.md`.
-Turns the view omits are still copied. A chat let go past the eight-cap
-keeps that cursor and is not walked until it is opened again.
+The record watch `conversation.subscribe` registers wakes the copy. The
+view is a bounded view, not a record stream, and it is not written into
+the cache as the replica. Row S9 in `docs/design/record-subscriptions.md`
+sends no frame when the view is unchanged. The copy still runs.
+`conversation.recordsHead` is the cursor-bearing read, and `recordsPage`
+copies from the cursor the cache last applied. Turns the view omits are
+still copied. A changed view frame is not the signal. A chat let go past
+the eight-cap keeps that cursor and is not walked until it is opened
+again.
 
 Two waits stay, and neither reads the catalogue on a timer. Until the
 enrollment is Active there is no session, so the existing status dial runs
@@ -790,8 +820,9 @@ connection's silence bound stays; it carries leases and is not this poller.
 A new share, a revoke, and an epoch change each arrive on the grant
 subscription with no `catalogueHead` from `peer.poll_interval`. A new
 message on an opened chat arrives on `conversation.subscribe` the same
-way, and the record-page walk that the frame wakes has put the new
-records in the cache, including a turn the view omitted. Reconnect resumes
+way. A commit that leaves the bounded view unchanged still copies the
+new records into the cache. A missing view frame is not a skipped copy.
+Reconnect resumes
 the subscription cursors and the record cursor, and does not move any of
 them backwards in the same incarnation. An Active peer has no poller
 timer. A pending
@@ -871,18 +902,28 @@ are written on that POST and are not sent to another origin. A redirect
 to HTTPS is still not followed.
 
 Revoke and delivery share one permit for the registration. An attempt
-takes the permit, reads the epoch, and only then writes the POST. The
-attempt holds the permit at most until `webhook.post_deadline`, a row
+takes the permit, reads the grant epoch, and reads whether the integration
+credential is still current. Only then does it write the POST. Revoked or
+expired is not current. The grant epoch does not move when the credential
+is revoked or expires. An epoch that no longer allows delivery, or a
+credential that is not current, records `not sent` and writes nothing.
+The attempt holds the permit at most until `webhook.post_deadline`, a row
 this slice adds to `docs/limits.md`. The clock starts when the attempt
 takes the permit. At the deadline the sender closes its side of the POST,
 records `timed out`, and drops the permit. Bytes already written may still
 reach the receiver. That late arrival is not recorded as `sent` and does
 not schedule a retry. Revoke waits for the attempt's outcome or for that
 deadline, whichever comes first. Revoke does not cancel a write that
-finishes inside the deadline. It then advances the epoch and records
-delivering, then stopped, with the revoke as cause, the owner as
+finishes inside the deadline. Grant revoke then advances the epoch and
+records delivering, then stopped, with the revoke as cause, the owner as
 initiator, and the delivery id it waited for.
-A retry is a new admission and is not sent after the epoch advances. An
+`credential.revoke` and credential expiry take the same permit. They do
+not advance the grant epoch. After the permit is free they stop the
+registration the same way, with cause credential revoked or expired.
+Grants may still name that principal. No later attempt is sent.
+Unsharing each conversation is not required.
+A retry is a new admission. It reads the epoch and the credential again,
+and is not sent after either revoke. An
 attempt that has not taken the permit when revoke commits is not sent.
 Each attempt records the target, the delivery id, the epoch it read, the
 outcome (sent, retry scheduled, timed out, or not sent), and the cause.
@@ -896,6 +937,9 @@ delivery id and the signature. The webhook credential cannot call
 permit; that attempt is recorded under the epoch it read, and the epoch
 then advances. A retry that takes the permit after that advance is not
 sent. An attempt that has not taken the permit when revoke commits is not
+sent. `credential.revoke`, or expiry, with the grants still present,
+sends no further POST. An attempt that already holds the permit can
+finish inside the deadline. One that has not taken the permit is not
 sent. A POST that does not finish within `webhook.post_deadline` records
 `timed out`, drops the permit, and revoke then advances the epoch without
 waiting further. A 3xx is not followed and is not a delivery. The
