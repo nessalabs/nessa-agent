@@ -3358,16 +3358,20 @@ mod tests {
             (poisoned.downloaded, poisoned.applied, poisoned.facts),
             (3, 2, 1)
         );
-        let restored = TranscriptFold::restore(
+        let mut restored = TranscriptFold::restore(
             authority.scope.clone(),
             poisoned.applied,
             &super::super::transcript::TranscriptCheckpoint::from_chunks(poisoned.checkpoint)
                 .unwrap(),
         )
         .unwrap();
+        // Position 3 is past the published save, so the checkpoint leaves the
+        // gap out. Replaying the saved suffix notes it again.
+        assert!(restored.unreadable().is_empty());
+        assert!(restored.snapshot().is_some());
+        drain_saved_records(&poison.db, &authority.scope, &mut restored).unwrap();
         assert_eq!(restored.unreadable().len(), 1);
         assert_eq!(restored.unreadable()[0].id(), "3");
-        assert!(restored.snapshot().is_some());
         assert_eq!(
             poison.load(&authority.scope).unwrap().unwrap().position(),
             poisoned.downloaded
