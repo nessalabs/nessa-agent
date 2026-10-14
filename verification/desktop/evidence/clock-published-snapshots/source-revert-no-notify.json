@@ -1,0 +1,30 @@
+{
+  "check": "clock-snapshots",
+  "ok": false,
+  "started": "2026-10-14T09:45:42.165Z",
+  "finished": "2026-10-14T09:45:54.658Z",
+  "target": {
+    "url": "http://127.0.0.1:1438/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "ok": false,
+      "failures": [],
+      "engine": "chromium",
+      "name": "published-tick-and-cleanup",
+      "cannotRun": false,
+      "error": "page.waitForFunction: Timeout 5000ms exceeded."
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "engine": "webkit",
+      "name": "published-tick-and-cleanup",
+      "cannotRun": false,
+      "error": "page.waitForFunction: Timeout 5000ms exceeded."
+    }
+  ],
+  "sourceCommit": "f1c30633d0f3d29f7cae1d68c423277fd7ab13da",
+  "sourceMutation": "          // source-revert probe: omit active listener notification"
+}
