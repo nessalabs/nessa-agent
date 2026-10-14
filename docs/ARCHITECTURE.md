@@ -585,7 +585,8 @@ matching digest and durable files and directories before the exclusive rename.
 The attempt writes the plan after its other effects. Ready is published only
 after that plan is accepted, and endpoint and credential reads return then,
 before the copy starts. Desktop quit against that ready gateway sends the
-agent stop without waiting for the copy. The attempt still waits for the copy and records its
+agent stop without waiting for the copy. While the copy runs, a join onto
+that attempt takes the writer gate back for its journal append. The attempt still waits for the copy and records its
 real result and observation before the outcome. A failure after that ready
 publish carries a strictly newer startup revision. This process keeps the bundle path while
 the installed definition still names it.

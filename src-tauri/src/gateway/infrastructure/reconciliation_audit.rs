@@ -6,7 +6,8 @@
 //! Arrows mean durable writes. One retained session validates the whole stage,
 //! holds its lock, and orders every record for its attempt. A deferred
 //! publication releases only the in-process writer gate while the copy runs,
-//! so quit in this process can append its own attempt. The file lock stays
+//! so quit in this process can append its own attempt. An append that session
+//! makes during the wait takes the gate back for the write. The file lock stays
 //! held until that publication session drops.
 use crate::gateway::{
     application::{
@@ -91,7 +92,9 @@ impl FileReconciliationAudit {
 /// unlocking either descriptor would drop the process lock. The file lock
 /// stays held for the whole publication, including the copy, so another
 /// process cannot recover that attempt. `writers_held` is released around
-/// the copy so quit in this process can append its own chain.
+/// the copy so quit in this process can append its own chain. An append on
+/// the yielded session takes the gate back for that write, so it cannot
+/// overlap the quit session removing private temporary files.
 struct StageGate {
     depth: Mutex<usize>,
     lock: Mutex<Option<File>>,
@@ -181,6 +184,17 @@ impl StageGate {
 
 fn stage_gate_unavailable() -> GatewayError {
     GatewayError::Registration("Gateway lifecycle journal state is unavailable".into())
+}
+
+/// Releases a writer-gate loan taken for one append on a yielded session.
+struct YieldedWriters<'a> {
+    gate: &'a StageGate,
+}
+
+impl Drop for YieldedWriters<'_> {
+    fn drop(&mut self) {
+        self.gate.release_writers();
+    }
 }
 
 struct FileJournalSession {
@@ -1375,6 +1389,33 @@ impl FileJournalSession {
     }
 
     fn append(
+        &self,
+        namespace: String,
+        domain_payload: LifecycleRecordPayload,
+        payload: Value,
+    ) -> Result<AuditDeliveryReceipt, JournalAppendError> {
+        // Owning the gate across the write stops `while_lock_yielded` from
+        // releasing it mid-append. A yielded session takes the gate only for
+        // this write, then gives it back so quit can proceed.
+        let session_holds = self
+            .holds_writers
+            .lock()
+            .map_err(|_| {
+                GatewayError::Registration("Gateway lifecycle journal state is unavailable".into())
+            })
+            .map_err(JournalAppendError::Delivery)?;
+        if *session_holds {
+            return self.append_record(namespace, domain_payload, payload);
+        }
+        drop(session_holds);
+        self.gate
+            .acquire_writers(self.deadline, self.clock.as_ref())
+            .map_err(JournalAppendError::Delivery)?;
+        let _loan = YieldedWriters { gate: &self.gate };
+        self.append_record(namespace, domain_payload, payload)
+    }
+
+    fn append_record(
         &self,
         namespace: String,
         domain_payload: LifecycleRecordPayload,
@@ -2893,6 +2934,103 @@ mod tests {
             restored.recovery().is_some(),
             "startup still recovers while a quit attempt is unresolved"
         );
+    }
+
+    #[test]
+    fn a_yielded_session_waits_for_the_writer_gate_before_appending_a_joined_request() {
+        struct ParkingClock {
+            now: Instant,
+            waits: AtomicUsize,
+            release: Mutex<bool>,
+            parked: Condvar,
+        }
+
+        impl MonotonicClock for ParkingClock {
+            fn now(&self) -> Instant {
+                self.now
+            }
+
+            fn wait(&self, _duration: Duration) {
+                self.waits.fetch_add(1, Ordering::SeqCst);
+                let mut release = self.release.lock().expect("writer gate clock");
+                self.parked.notify_all();
+                while !*release {
+                    release = self.parked.wait(release).expect("writer gate clock");
+                }
+            }
+        }
+
+        let clock = Arc::new(ParkingClock {
+            now: Instant::now(),
+            waits: AtomicUsize::new(0),
+            release: Mutex::new(false),
+            parked: Condvar::new(),
+        });
+        let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let audit = Arc::new(FileReconciliationAudit::new(
+            Some(temporary.path().join("Nessa")),
+            ServiceManager::Launchd,
+            clock.clone(),
+        ));
+        let publication = reconciliation_attempt(0x611, ReconciliationCause::Startup);
+        let session = audit.clone().open(&publication, None).unwrap();
+        let target = ReconciliationTarget::new(
+            "gui/501/so.nessa.gateway.prod".into(),
+            "a".repeat(64),
+            "b".repeat(64),
+        )
+        .unwrap();
+        session
+            .intent(&GatewayReconciliationIntent::new(publication.clone(), target, None).unwrap())
+            .unwrap();
+        let joined = GatewayReconciliationRequest::new(
+            ReconciliationCorrelation::parse("00000000-0000-4000-8000-000000000701".to_owned())
+                .unwrap(),
+            ReconciliationEvidence::new(
+                ReconciliationCause::CredentialLoad,
+                ReconciliationInitiator::BundledSurface(BundledSurface::Main),
+            )
+            .unwrap(),
+        );
+        let joining = Arc::clone(&session);
+        let recorded = session.while_lock_yielded(&mut || {
+            let quit = reconciliation_attempt(0x613, ReconciliationCause::DesktopQuitPolicy);
+            let quit_session = audit
+                .clone()
+                .open(&quit, Some(clock.now() + Duration::from_secs(2)))
+                .map_err(|error| error.to_string())?;
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let request = joined.clone();
+            let joining = Arc::clone(&joining);
+            std::thread::spawn(move || {
+                let result = joining.joined(&request);
+                let _ = done_tx.send(result);
+            });
+            let mut release = clock.release.lock().expect("writer gate clock");
+            let started = Instant::now();
+            while clock.waits.load(Ordering::SeqCst) == 0 {
+                let (next, timeout) = clock
+                    .parked
+                    .wait_timeout(release, Duration::from_secs(2))
+                    .expect("writer gate clock");
+                release = next;
+                if timeout.timed_out() || started.elapsed() > Duration::from_secs(2) {
+                    return Err("joined append did not wait for the writer gate".into());
+                }
+            }
+            drop(release);
+            drop(quit_session);
+            *clock.release.lock().expect("writer gate clock") = true;
+            clock.parked.notify_all();
+            match done_rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(_) => {
+                    Err("joined append did not finish after the writer gate was released".into())
+                }
+            }
+        });
+        recorded.expect("joined append waited for the quit session to release the writer gate");
     }
 
     fn reconciliation_attempt(id: u64, cause: ReconciliationCause) -> GatewayReconciliationAttempt {
