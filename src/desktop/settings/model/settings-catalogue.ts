@@ -380,6 +380,22 @@ export const settingsEntries = [
     keywords: "allow",
   },
   {
+    id: "remembered-rules",
+    tab: "access",
+    label: "Remembered rules",
+    detail:
+      "A tool you always allow or always deny in one project. Revoke one to be asked again.",
+    keywords: "allow deny permission rule revoke project",
+  },
+  {
+    id: "review-notices",
+    tab: "access",
+    label: "Review notifications",
+    detail:
+      "Allow notifications to hear about a review while you are away from this window.",
+    keywords: "notify notification desktop phone permission review waiting",
+  },
+  {
     id: "claude-native-hooks",
     tab: "access",
     label: "Claude Code hooks",

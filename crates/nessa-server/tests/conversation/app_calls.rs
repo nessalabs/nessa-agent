@@ -19,6 +19,7 @@ use nessa_protocol::conversation::view::{
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_sdk::application::agent_execution::agents::AgentError;
+use nessa_sdk::application::agent_execution::permissions::PermissionCaller;
 use nessa_sdk::domain::mcp_apps::{ToolHints, ToolUi, UiCsp, UiResource, UiVisibility};
 use serde_json::json;
 use std::sync::atomic::Ordering;
@@ -242,6 +243,7 @@ async fn a_destructive_call_waits_on_the_persons_review_and_is_sent_once_allowed
             review.execution_id.clone(),
             review.permission_id.clone(),
             DENY.into(),
+            PermissionCaller::Owner,
         )
         .await;
     // Ended, the identity names no app review: the agent's to answer, which

@@ -33,10 +33,12 @@ use crate::application::agent_execution::executions::{
 };
 
 use crate::application::agent_execution::permissions::{
-    admit_configured_outcome, ApprovalRuleReference, CancellationOrigin, ConfiguredRefusal,
-    PermissionAnswer, PermissionAnswerDelivery, PermissionAnswerRecord, PermissionCancellation,
-    PermissionCancellationRequest, PermissionResolution, PermissionSelectionState, QuestionAnswer,
-    QuestionAnswerRecord, QuestionRefusalRecord, RefusedAsk, ReviewDeclineRecord, StopKind,
+    admit_configured_outcome, remember_effect, ApprovalAttribution, ApprovalBasis,
+    ApprovalRuleReference, CancellationOrigin, ConfiguredRefusal, PermissionAnswer,
+    PermissionAnswerDelivery, PermissionAnswerRecord, PermissionCancellation,
+    PermissionCancellationRequest, PermissionResolution, PermissionRules, PermissionSelectionState,
+    QuestionAnswer, QuestionAnswerRecord, QuestionRefusalRecord, RefusedAsk, RememberRequest,
+    ReviewDeclineRecord, ReviewNotice, StopKind,
 };
 use crate::application::agent_execution::providers::{
     ApprovalMode, CleanupReport, ExecutionReport, ImageInputRefusal, ObservationFailureCause,
@@ -70,11 +72,15 @@ use std::{
     future::{poll_fn, Future},
     panic::{catch_unwind, AssertUnwindSafe},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
     task::Poll,
 };
+
+/// Remembered allows waiting on the invocation's permission-review hooks.
+pub(in crate::infrastructure::acp) type ParkedRememberedAllows =
+    Arc<std::sync::Mutex<HashMap<PermissionId, PermissionAnswer>>>;
 use tokio::sync::{mpsc, oneshot, watch, Semaphore};
 
 /// What this client says about itself in `initialize`, on every connection
@@ -380,6 +386,40 @@ struct ArmedPermission {
     settlement: PermissionDeadlineSettlement,
 }
 
+/// What a later answer needs from the request that opened the review.
+struct PermissionContext {
+    /// Execution that opened the review. An answer for another execution
+    /// does not store a rule for this one.
+    execution: ExecutionId,
+    tool: String,
+    /// The once allow option, when the review offered one that is not the
+    /// harness's persistent choice and not a Nessa remember choice.
+    once_allow: Option<PermissionOptionId>,
+    /// The once deny option, on the same terms.
+    once_deny: Option<PermissionOptionId>,
+    /// The harness named one tool. A kind alone is not a project rule.
+    specific: bool,
+}
+
+/// The once option a remember choice may store, when this review offered it
+/// for this execution. Anything else is refused and nothing is stored.
+fn accepted_remember<'a>(
+    context: &'a PermissionContext,
+    execution: &ExecutionId,
+    effect: PermissionEffect,
+) -> Result<&'a PermissionOptionId, AgentError> {
+    if execution != &context.execution {
+        return Err(AgentError::InvalidInput(
+            "this review belongs to a different execution".into(),
+        ));
+    }
+    match effect {
+        PermissionEffect::Allow => context.once_allow.as_ref(),
+        PermissionEffect::Deny => context.once_deny.as_ref(),
+    }
+    .ok_or_else(|| AgentError::InvalidInput("this review has no once choice to remember".into()))
+}
+
 struct Worker<P> {
     profile: P,
     audit: Arc<dyn ExecutionAudit>,
@@ -404,8 +444,17 @@ struct Worker<P> {
     operation_capabilities: watch::Sender<ProviderOperationCapabilities>,
     permission_authority: PermissionAuthoritySource,
     permissions: HashMap<PermissionId, RpcId>,
+    /// Tool name and harness-persistent option ids for each open review, so a
+    /// remember choice can be stored and answered as the once option.
+    permission_context: HashMap<PermissionId, PermissionContext>,
     /// Reviews waiting on a person, and the moment the deadline answers them.
     armed_permissions: HashMap<PermissionId, ArmedPermission>,
+    /// When set, a remembered allow is parked until the invocation's
+    /// permission-review hooks release it. A direct session execution leaves
+    /// this clear and answers immediately.
+    hold_remembered_allows: Arc<AtomicBool>,
+    /// Remembered allows this generation has not sent yet.
+    parked_allows: ParkedRememberedAllows,
     /// One path classification at a time. A read that outlasts its wait keeps
     /// the permit until the read returns, so the next review does not start
     /// another (`a_classification_still_running_is_not_started_again`).
@@ -508,7 +557,15 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
     launch_id: u64,
     launch_cause: NativeHooksLaunchCause,
     session_key: Option<String>,
+    hold_remembered_allows: Arc<AtomicBool>,
+    parked_allows: ParkedRememberedAllows,
 ) {
+    // A new process drops an allow the previous one parked, so this process
+    // does not send it.
+    parked_allows
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
     let reader = Reader::new(
         scope.stdout.take().expect("owned stdout"),
         config.max_incoming_frame_bytes,
@@ -534,7 +591,10 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         operation_capabilities,
         permission_authority,
         permissions: HashMap::new(),
+        permission_context: HashMap::new(),
         armed_permissions: HashMap::new(),
+        hold_remembered_allows,
+        parked_allows,
         path_classification: Arc::new(Semaphore::new(1)),
         startup_advisory_session: None,
         questions: HashMap::new(),
@@ -2072,6 +2132,93 @@ impl<P: AcpProfile> Worker<P> {
             _ => unreachable!("delivery failure and retained fact agree"),
         }
     }
+    /// A Nessa remember choice stores a project rule, then answers this review
+    /// with the harness's once option of the same effect. The harness's own
+    /// always-allow is left as the caller sent it. A refusal stores nothing
+    /// and leaves the review pending.
+    fn remembered_answer(
+        &self,
+        answer: PermissionAnswer,
+    ) -> Result<(PermissionAnswer, Option<ApprovalRuleReference>), AgentError> {
+        let Some(effect) = remember_effect(answer.option_id.as_str()) else {
+            return Ok((answer, None));
+        };
+        let context = self
+            .permission_context
+            .get(&answer.id)
+            .ok_or(AgentError::StalePermission)?;
+        // The once option and the execution are checked before anything is
+        // stored. A choice that was filtered out, never offered, or that names
+        // another execution leaves no rule behind.
+        let once = accepted_remember(context, &answer.execution_id, effect)?.clone();
+        if !context.specific {
+            return Err(AgentError::InvalidInput(
+                "this review does not name one tool".into(),
+            ));
+        }
+        let source = self
+            .profile
+            .native_hooks_launch()
+            .map(|(name, _)| name)
+            .ok_or_else(|| {
+                AgentError::InvalidInput("this harness does not remember permissions".into())
+            })?;
+        let conversation = self.session_key.as_deref().unwrap_or("");
+        if !self
+            .config
+            .permission_rules
+            .offers_remember(conversation, &answer.execution_id)
+        {
+            return Err(AgentError::InvalidInput(
+                "only the owner can remember a permission".into(),
+            ));
+        }
+        let caller = self
+            .config
+            .permission_rules
+            .answerer(
+                &answer.execution_id,
+                answer.attribution.actor().request_id(),
+            )
+            .ok_or_else(|| {
+                AgentError::InvalidInput("the caller of this answer was not verified".into())
+            })?;
+        let workspace = self.config.workspace.to_str().unwrap_or("");
+        let tool = context.tool.clone();
+        let rule = self
+            .config
+            .permission_rules
+            .remember(RememberRequest {
+                workspace,
+                source,
+                tool: &tool,
+                effect,
+                granted_by: answer.attribution.actor(),
+                caller,
+                conversation_id: conversation,
+                execution_id: &answer.execution_id,
+            })
+            .map_err(|error| match error {
+                crate::application::agent_execution::permissions::RememberError::Refused => {
+                    AgentError::InvalidInput("only the owner can remember a permission".into())
+                }
+                crate::application::agent_execution::permissions::RememberError::Unavailable => {
+                    AgentError::InvalidInput("the permission rule could not be stored".into())
+                }
+            })?;
+        let reference = rule.reference().clone();
+        Ok((
+            PermissionAnswer {
+                attribution: ApprovalAttribution::new(
+                    answer.attribution.actor().clone(),
+                    ApprovalBasis::Rule(reference.clone()),
+                ),
+                option_id: once,
+                ..answer
+            },
+            Some(reference),
+        ))
+    }
     /// Answer one pending review with the caller's selection: record it, send
     /// it, then record what delivery did. Queue admission transferred ownership
     /// to this worker, so a dropped reply waiter must not erase any of that.
@@ -2082,11 +2229,26 @@ impl<P: AcpProfile> Worker<P> {
         reply: oneshot::Sender<ProviderOperationResult<PermissionResolution>>,
     ) -> Result<(), WorkerFailure> {
         let permission_id = answer.id.clone();
-        let option_id = answer.option_id.clone();
         let answered_execution = answer.execution_id.clone();
+        let (answer, provisional) = match self.remembered_answer(answer) {
+            Ok(answer) => answer,
+            Err(error) => {
+                let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
+                    error,
+                    ProviderSessionState::Usable,
+                    PermissionSelectionState::Pending,
+                )));
+                return Ok(());
+            }
+        };
+        // Only the revision this call stored is provisional. A review settled
+        // by a rule already acknowledged also carries `ApprovalBasis::Rule`,
+        // and withdrawing that would undo a different revision.
+        let option_id = answer.option_id.clone();
         let resolution = match execution.answer_permission(answer) {
             Ok(resolution) => resolution,
             Err(error) => {
+                withdraw_unrecorded(self.config.permission_rules.as_ref(), provisional.as_ref());
                 let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
                     error,
                     ProviderSessionState::Usable,
@@ -2105,6 +2267,7 @@ impl<P: AcpProfile> Worker<P> {
             )
             .await
         {
+            withdraw_unrecorded(self.config.permission_rules.as_ref(), provisional.as_ref());
             let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
                 error.error().clone(),
                 ProviderSessionState::CleanupRequired,
@@ -2112,10 +2275,24 @@ impl<P: AcpProfile> Worker<P> {
             )));
             return Err(error);
         }
+        if let Some(rule) = &provisional {
+            if self.config.permission_rules.acknowledge(rule).is_err() {
+                withdraw_unrecorded(self.config.permission_rules.as_ref(), Some(rule));
+                let error =
+                    AgentError::InvalidInput("the permission rule could not be stored".into());
+                let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
+                    error.clone(),
+                    ProviderSessionState::CleanupRequired,
+                    PermissionSelectionState::Consumed,
+                )));
+                return Err(WorkerFailure::from(error));
+            }
+        }
         let wire_id = self
             .permissions
             .remove(&permission_id)
             .expect("pending wire permission");
+        self.permission_context.remove(&permission_id);
         let response = permission_wire::selected(&wire_id, option_id.as_str());
         let result = self.send(response).await;
         // Codex ends the turn when the person picks `cancel`. The cancelled
@@ -2617,8 +2794,33 @@ impl<P: AcpProfile> Worker<P> {
                     .await
             }
         };
-        let options = match permission_wire::permission_options(&params, &self.config.permissions) {
-            Ok(options) => options,
+        let execution_id = self
+            .active
+            .as_ref()
+            .expect("validated active prompt")
+            .execution_id
+            .clone();
+        let source = self.profile.native_hooks_launch().map(|(name, _)| name);
+        // A project rule is one tool. A kind such as Codex `execute` is every
+        // command of that kind, so it is not offered and does not settle one.
+        let specific = self.profile.permission_names_a_tool(&params);
+        let remember = source.is_some()
+            && specific
+            && self
+                .config
+                .permission_rules
+                .offers_remember(self.session_key.as_deref().unwrap_or(""), &execution_id);
+        let admitted = match permission_wire::admit(
+            &params,
+            &self.config.permissions,
+            if source.is_some() {
+                permission_wire::PersistentKinds::Keep
+            } else {
+                permission_wire::PersistentKinds::Drop
+            },
+            remember,
+        ) {
+            Ok(admitted) => admitted,
             Err(_) => {
                 return self
                     .decline_review(
@@ -2631,6 +2833,8 @@ impl<P: AcpProfile> Worker<P> {
                     .await
             }
         };
+        let options = admitted.options;
+        let persistent = admitted.persistent;
         #[allow(deprecated, reason = "Rust 1.89 MSRV; try_update requires Rust 1.95")]
         let sequence = self
             .permission_sequence
@@ -2642,11 +2846,12 @@ impl<P: AcpProfile> Worker<P> {
         let id = sequence.to_string();
         let permission_id = PermissionId::new(id.clone())
             .map_err(|error| json_rpc::protocol(&error.to_string()))?;
-        let target = &self
+        let asked = self
             .active
             .as_ref()
             .expect("validated active prompt")
-            .execution_id;
+            .execution_id
+            .clone();
         let observed = execution.observation_after(&tool);
         let class = bounded_review_class(
             &*self.config.clock,
@@ -2678,8 +2883,82 @@ impl<P: AcpProfile> Worker<P> {
             ))
             .ok();
         let armed = promised.is_some();
+        let tool_name = input.name.clone();
+        let workspace = self.config.workspace.to_str().unwrap_or("");
+        let ruled = if specific { source } else { None }.and_then(|source| {
+            self.config
+                .permission_rules
+                .settle(workspace, source, &tool_name)
+        });
+        let once_allow =
+            permission_wire::once_option(&options, PermissionEffect::Allow, &persistent);
+        let once_deny = permission_wire::once_option(&options, PermissionEffect::Deny, &persistent);
+        let once = ruled.as_ref().and_then(|rule| match rule.effect() {
+            PermissionEffect::Allow => once_allow.clone(),
+            PermissionEffect::Deny => once_deny.clone(),
+        });
+        // A live rule answers with the harness once option. The rule's own
+        // id, revision, and grantor are the audit basis. A deny is sent
+        // before the review is announced: it does not start the tool. An
+        // allow is sent the same way unless this invocation is holding
+        // allows until its permission-review hooks decide
+        // (`a_review_hook_refusal_stops_a_remembered_allow_before_the_tool_starts`).
+        // Those hooks are the per-turn tool policy. Sending the allow first
+        // would start the tool before they can refuse it.
+        if let Some((rule, once)) = ruled.zip(once) {
+            let event = execution.request_permission(
+                &asked,
+                permission_id.clone(),
+                tool,
+                input,
+                options,
+                None,
+            )?;
+            self.permissions.insert(permission_id.clone(), wire_id);
+            self.permission_context.insert(
+                permission_id.clone(),
+                PermissionContext {
+                    execution: asked.clone(),
+                    tool: tool_name,
+                    once_allow,
+                    once_deny,
+                    specific,
+                },
+            );
+            let answer = PermissionAnswer {
+                attribution: ApprovalAttribution::new(
+                    rule.reference().granted_by().clone(),
+                    ApprovalBasis::Rule(rule.reference().clone()),
+                ),
+                execution_id: asked,
+                id: permission_id.clone(),
+                option_id: once,
+            };
+            let hold_allow = matches!(rule.effect(), PermissionEffect::Allow)
+                && self.hold_remembered_allows.load(Ordering::Acquire);
+            if hold_allow {
+                // Insert before the announcement, so the invocation can take
+                // the allow as soon as it sees the review.
+                self.parked_allows
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(permission_id.clone(), answer);
+                if let Err(error) = self.emit(event) {
+                    self.parked_allows
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .remove(&permission_id);
+                    return Err(WorkerFailure::from(error));
+                }
+                return Ok(());
+            }
+            let (reply, _waiting) = oneshot::channel();
+            let answered = self.answer_permission(execution, answer, reply).await;
+            self.emit(event).map_err(WorkerFailure::from)?;
+            return answered;
+        }
         let event = execution.request_permission(
-            target,
+            &asked,
             permission_id.clone(),
             tool,
             input,
@@ -2687,12 +2966,31 @@ impl<P: AcpProfile> Worker<P> {
             promised,
         )?;
         self.permissions.insert(permission_id.clone(), wire_id);
+        self.permission_context.insert(
+            permission_id.clone(),
+            PermissionContext {
+                execution: asked.clone(),
+                tool: tool_name.clone(),
+                once_allow,
+                once_deny,
+                specific,
+            },
+        );
         if armed {
             let at = armed_at + settlement.deadline().wait();
             self.armed_permissions
-                .insert(permission_id, ArmedPermission { at, settlement });
+                .insert(permission_id.clone(), ArmedPermission { at, settlement });
         }
-        self.emit(event).map_err(Into::into)
+        self.emit(event).map_err(WorkerFailure::from)?;
+        if let Some(conversation_id) = self.session_key.clone().filter(|id| !id.is_empty()) {
+            self.config.review_notices.waiting(&ReviewNotice {
+                conversation_id,
+                execution_id: asked,
+                permission_id,
+                tool: tool_name,
+            });
+        }
+        Ok(())
     }
     /// Answer one review "no" without offering it, and leave the turn running.
     ///
@@ -3682,6 +3980,16 @@ impl<P: AcpProfile> Worker<P> {
             Ok(())
         }
     }
+    /// Drop the notice for this review. The conversation is the session key
+    /// the notice was published under. Without one, nothing was published.
+    fn clear_review(&self, execution: &ExecutionId, permission: &PermissionId) {
+        let Some(conversation_id) = self.session_key.clone().filter(|id| !id.is_empty()) else {
+            return;
+        };
+        self.config
+            .review_notices
+            .clear(&conversation_id, execution, permission);
+    }
     async fn record_answer(
         &mut self,
         resolution: PermissionResolution,
@@ -3691,6 +3999,11 @@ impl<P: AcpProfile> Worker<P> {
         let execution_id = resolution.request().execution_id().clone();
         let permission_id = resolution.request().id().clone();
         let session_id = resolution.session_id().clone();
+        // The review has been selected, including when the audit of that
+        // selection fails afterwards. A notice left up would still be asking.
+        if delivery == PermissionAnswerDelivery::Selected {
+            self.clear_review(&execution_id, &permission_id);
+        }
         let phase = if delivery == PermissionAnswerDelivery::Selected {
             AuditEffectPhase::PermissionSelection
         } else {
@@ -3740,6 +4053,10 @@ impl<P: AcpProfile> Worker<P> {
         records: Vec<PermissionCancellation>,
     ) -> Result<(), WorkerFailure> {
         let mut failure: Option<WorkerFailure> = None;
+        for record in &records {
+            self.permission_context.remove(record.request().id());
+            self.clear_review(record.request().execution_id(), record.request().id());
+        }
         // Attempt every record before publishing UI updates. A full/dropped UI queue
         // must not prevent audit capture of later cancellations in this batch.
         // Each sink call gets its own bound; one timeout cannot consume the
@@ -3794,6 +4111,7 @@ impl<P: AcpProfile> Worker<P> {
         // The turn these reviews belonged to is over. A deadline that fired
         // afterwards would answer a request the provider is no longer waiting on.
         self.armed_permissions.clear();
+        self.permission_context.clear();
         let asked: Vec<QuestionId> = self.questions.keys().cloned().collect();
         let mut failure = None;
         for id in asked {
@@ -4024,6 +4342,7 @@ impl<P: AcpProfile> Worker<P> {
             .map(|active| active.execution_id.clone())
         else {
             if let Some(wire_id) = self.permissions.remove(&id) {
+                self.permission_context.remove(&id);
                 let _ = self
                     .send(permission_wire::permission_cancel(&wire_id))
                     .await;
@@ -4067,6 +4386,7 @@ impl<P: AcpProfile> Worker<P> {
                 .permissions
                 .remove(&id)
                 .expect("pending wire permission");
+            self.permission_context.remove(&id);
             let sent = self
                 .send(permission_wire::selected_because(
                     &wire_id,
@@ -4089,6 +4409,9 @@ impl<P: AcpProfile> Worker<P> {
                 .cancel_deadline(&execution_id, &id, deadline)
                 .map_err(|error| self.record_failure(OperationEffectPhase::Worker, error))?
             {
+                // The review is settled, including when its audit fails later.
+                self.permission_context.remove(&id);
+                self.clear_review(&execution_id, &id);
                 if let Err(failure) = self
                     .record_audit(
                         ExecutionAuditRecord::Cancelled(record.clone()),
@@ -4146,6 +4469,22 @@ fn wait_for_deadline(clock: &dyn Clock, deadline: Option<ClockInstant>) -> Clock
     }
 }
 
+/// The selection was not recorded. The revision stored for it does not stay.
+/// If the withdrawal cannot be stored, the revision stays provisional and
+/// does not settle a later review.
+fn withdraw_unrecorded(rules: &dyn PermissionRules, rule: Option<&ApprovalRuleReference>) {
+    let Some(rule) = rule else {
+        return;
+    };
+    if rules.withdraw(rule).is_err() {
+        tracing::error!(
+            rule_id = rule.rule_id(),
+            revision = rule.revision(),
+            "remembered permission rule was not withdrawn after its selection was not recorded"
+        );
+    }
+}
+
 /// The first `admitted` commands in `queue`: what it held when the deadline
 /// won, counted then, and nothing admitted after.
 ///
@@ -4161,6 +4500,50 @@ fn admitted_before_deadline<T>(queue: &mut mpsc::Receiver<T>, admitted: usize) -
         }
     }
     ready
+}
+
+#[cfg(test)]
+mod remember_tests {
+    use super::{accepted_remember, PermissionContext};
+    use crate::application::agent_execution::agents::AgentError;
+    use crate::domain::agent_execution::executions::ExecutionId;
+    use crate::domain::agent_execution::permissions::{PermissionEffect, PermissionOptionId};
+
+    fn context(once_allow: bool, once_deny: bool) -> PermissionContext {
+        PermissionContext {
+            execution: ExecutionId::new("turn").unwrap(),
+            tool: "Read".into(),
+            once_allow: once_allow.then(|| PermissionOptionId::new("allow-once").unwrap()),
+            once_deny: once_deny.then(|| PermissionOptionId::new("deny-once").unwrap()),
+            specific: true,
+        }
+    }
+
+    #[test]
+    fn a_remember_choice_needs_the_once_option_of_its_own_execution() {
+        let review = context(true, false);
+        let execution = ExecutionId::new("turn").unwrap();
+        assert_eq!(
+            accepted_remember(&review, &execution, PermissionEffect::Allow)
+                .unwrap()
+                .as_str(),
+            "allow-once"
+        );
+        assert!(matches!(
+            accepted_remember(&review, &execution, PermissionEffect::Deny),
+            Err(AgentError::InvalidInput(text)) if text.contains("no once choice")
+        ));
+        let other = ExecutionId::new("other").unwrap();
+        assert!(matches!(
+            accepted_remember(&review, &other, PermissionEffect::Allow),
+            Err(AgentError::InvalidInput(text)) if text.contains("different execution")
+        ));
+        let unoffered = context(false, false);
+        assert!(matches!(
+            accepted_remember(&unoffered, &execution, PermissionEffect::Allow),
+            Err(AgentError::InvalidInput(text)) if text.contains("no once choice")
+        ));
+    }
 }
 
 #[cfg(test)]

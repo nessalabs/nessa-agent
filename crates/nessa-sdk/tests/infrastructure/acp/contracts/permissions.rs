@@ -70,12 +70,18 @@ async fn permission_is_typed_once_only_and_can_be_denied() {
                 .id()
                 .clone(),
         };
-        assert_eq!(options.choices().len(), 2);
+        // The harness's always-allow is kept, with its own id. It is still
+        // one request: the harness remembers it, Nessa does not replace it.
+        assert_eq!(options.choices().len(), 3);
+        assert!(options
+            .choices()
+            .iter()
+            .any(|option| option.id().as_str() == "never-choose"));
         assert_eq!(
             opened
                 .session
                 .answer_permission(PermissionAnswer {
-                    option_id: PermissionOptionId::new("never-choose").unwrap(),
+                    option_id: PermissionOptionId::new("not-an-option").unwrap(),
                     ..answer.clone()
                 })
                 .await
@@ -692,7 +698,15 @@ async fn websearch_permission_is_reviewed_and_can_be_denied() {
             query,
             "{mode}"
         );
-        assert_eq!(options.choices().len(), 2, "{mode}");
+        // `allow-with-updates` is the harness's always-allow, passed through.
+        assert_eq!(options.choices().len(), 3, "{mode}");
+        assert!(
+            options
+                .choices()
+                .iter()
+                .any(|option| option.id().as_str() == "allow-with-updates"),
+            "{mode}"
+        );
         let deny = options
             .choices()
             .iter()
@@ -824,8 +838,8 @@ async fn a_declined_review_refuses_the_tool_and_leaves_the_turn_running() {
             Some("Bash"),
         ),
         (
-            // No rejection was offered — only a persistent choice this binding
-            // may not make for a host — so the review is cancelled instead.
+            // No choice this binding can offer: the kind is not one it knows,
+            // so the review is cancelled instead.
             "declined-options",
             ReviewDeclineReason::UnusableOptions,
             serde_json::json!({"outcome":"cancelled"}),

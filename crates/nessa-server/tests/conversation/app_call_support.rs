@@ -29,6 +29,7 @@ use nessa_sdk::application::agent_execution::agents::{AgentError, AgentFuture};
 use nessa_sdk::application::agent_execution::executions::{
     ExecutionAudit, ExecutionAuditRecord, ExecutionUpdate,
 };
+use nessa_sdk::application::agent_execution::permissions::PermissionCaller;
 use nessa_sdk::application::agent_execution::sessions::{
     CommittedSession, SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
     SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
@@ -813,6 +814,7 @@ impl Fixture {
                 review.execution_id.clone(),
                 review.permission_id.clone(),
                 option.into(),
+                PermissionCaller::Owner,
             )
             .await
             .unwrap();

@@ -171,6 +171,7 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                     permission_authority: PermissionAuthoritySource::default(),
                     operation_capabilities,
                     permissions: HashMap::new(),
+                    permission_context: HashMap::new(),
                     armed_permissions: HashMap::new(),
                     path_classification: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
                     startup_advisory_session: None,
@@ -194,6 +195,8 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                     launch_id: 0,
                     launch_cause: crate::application::agent_execution::executions::NativeHooksLaunchCause::Open,
                     session_key: None,
+                    hold_remembered_allows: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    parked_allows: Arc::new(std::sync::Mutex::new(HashMap::new())),
                 };
                 let mut execution = (method == "session/set_config_option").then(|| {
                     ExecutionController::new(ExecutionSessionId::new("restored-context").unwrap())
