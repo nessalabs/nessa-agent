@@ -7,7 +7,9 @@
  * joins the send already started when its choices and initiator are the
  * same, and hears how that send settled, so a refusal lets every card try
  * again. A different answer does not join that send and does not receive
- * its outcome. Two stores do not share a record.
+ * its outcome. Two stores do not share a record. The states and the
+ * orderings that can arrive are
+ * `docs/design/desktop-question-flights.md`.
  */
 
 /** Returned when a caller asks to join a send that is carrying a different answer. */

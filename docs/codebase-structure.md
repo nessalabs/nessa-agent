@@ -259,14 +259,16 @@ against a private scripted gateway.
   with `testing.ts` the fake source, the store, and the animation frames its
   tests share. A failed, cancelled, or unresolved turn keeps the gateway's
   status and diagnostic on the message, including an earlier authentication
-  refusal. The refusal recovery is showing does not also carry the
+  refusal. While recovery is showing, that refusal does not also carry the
   authentication diagnostic. An independent required-work failure on that
-  refusal stays on the terminal. Questions the view lists, and the
+  refusal is the protocol's `requiredWorkFailed` flag; the terminal keeps the
+  gateway's diagnostic. Questions the view lists, and the
   gateway's `interactionViewError`, are on the transcript; answering a
   question checks it is on screen, then that the view still lists it, then
   sends `answerQuestion`. A second card joins that send when its choices and
   initiator match. A different answer is not sent and is not reported as
-  delivered. The next frame drops the question. The window has its own store (`src/desktop/store.ts`) and composition
+  delivered. Those orderings are
+  [desktop question flights](design/desktop-question-flights.md). The next frame drops the question. The window has its own store (`src/desktop/store.ts`) and composition
   (`src/desktop/dependencies.ts`). Where its workspace comes from is the
   window's too: the host's gateway, a browser's, a seeded run, or the sample, by
   `src/desktop/model/workspace-backend.ts`, with the desktop app's connection
