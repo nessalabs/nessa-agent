@@ -33,18 +33,19 @@ use nessa_protocol::product::generated::{
     product_event, product_method, wire_shape_product_session_ready,
     wire_shape_session_authenticate_params, wire_shape_session_challenge, ChangeWatchId,
     ConversationChanged, ConversationSubscribeParams, ConversationSubscribeResult,
-    ConversationSubscriptionEnded, ConversationUnsubscribeParams, ConversationViewed,
-    ConversationWatchEnded, ConversationWatchRecordsParams, ConversationWatchResult,
-    ProductClientMetadata, ProductSessionReady, ProductSurface, ProductSurfaceKind,
-    SessionAuthenticateParams, SessionChallenge, CHANGE_WATCH_ID_PATTERN,
+    ConversationSubscriptionEnded, ConversationUnsubscribeParams, ConversationViewCursor,
+    ConversationViewed, ConversationWatchEnded, ConversationWatchRecordsParams,
+    ConversationWatchResult, ProductClientMetadata, ProductSessionReady, ProductSurface,
+    ProductSurfaceKind, SessionAuthenticateParams, SessionChallenge, CHANGE_WATCH_ID_PATTERN,
     CONVERSATION_SUBSCRIPTION_ID_PATTERN, MAX_AUTH_CREDENTIAL_CHARACTERS,
     MAX_CHANGE_WATCH_ID_BYTES, MAX_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS,
     MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
     MIN_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS, PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
+    TRANSCRIPT_STATES,
 };
 use nessa_protocol::product::handshake::{authentication_close_reason, supports_product_version};
 use nessa_protocol::product::passive_read::{
-    conforming_view_cursor, encode_request, ReadEncodeError,
+    conforming_view_cursor, encode_request, view_cursor_behind, ReadEncodeError,
 };
 use nessa_protocol::product_contract::generated::{
     CatalogueReadErrorCode, ChangeWatchEndReason, ChangeWatchErrorCode, ConversationErrorCode,
@@ -224,6 +225,9 @@ struct Events {
     /// Conversation requested by the subscribe in flight, until the inbox
     /// takes it. A view for any other conversation is a protocol failure.
     opening_conversation: Option<String>,
+    /// No kept view in this incarnation may sit behind this cursor. It starts
+    /// as `conversation.subscribe`'s `after` and moves to each view kept.
+    floor: Option<ConversationViewCursor>,
 }
 impl Events {
     fn new(policy: GatewayPolicy) -> Self {
@@ -234,6 +238,7 @@ impl Events {
             subscription: None,
             opening: None,
             opening_conversation: None,
+            floor: None,
         }
     }
     /// A watch event names a watch this connection minted, or the connection
@@ -272,14 +277,17 @@ impl Events {
             .ok_or(GatewayError::Protocol)
     }
     /// A view outside the generated shape, including a cursor this client
-    /// could not pass back to `follow`, is skipped. One for another
-    /// subscription than the one this connection opened, or for a different
-    /// conversation than the one it subscribed to, is a protocol failure.
+    /// could not pass back to `follow` or a `transcriptState` outside the
+    /// published set, is skipped. One behind the resume floor in the same
+    /// incarnation is skipped. One for another subscription than the one this
+    /// connection opened, or for a different conversation than the one it
+    /// subscribed to, is a protocol failure.
     fn observe_view(&mut self, payload: serde_json::Value) -> Result<(), GatewayError> {
         let viewed = match strict_decode::<ConversationViewed>(payload) {
             Ok(viewed)
                 if conforming_subscription_id(&viewed.subscription_id)
-                    && conforming_view_cursor(&viewed.cursor) =>
+                    && conforming_view_cursor(&viewed.cursor)
+                    && published_transcript_state(&viewed.view.transcript_state) =>
             {
                 viewed
             }
@@ -299,13 +307,18 @@ impl Events {
         if expected.is_some_and(|conversation| viewed.view.conversation_id != conversation) {
             return Err(GatewayError::Protocol);
         }
-        if let Some(live) = &mut self.subscription {
+        if let Some(live) = &self.subscription {
             if viewed.subscription_id != live.id {
                 return Err(GatewayError::Protocol);
             }
             if live.closed {
                 return Ok(());
             }
+        }
+        if (self.subscription.is_some() || self.opening.is_some()) && !self.keep_at_floor(&viewed) {
+            return Ok(());
+        }
+        if let Some(live) = &mut self.subscription {
             live.parked.push_view(viewed);
             return Ok(());
         }
@@ -314,6 +327,24 @@ impl Events {
             return Ok(());
         }
         self.count_unexpected()
+    }
+    /// A view behind the floor in the same incarnation is not queued, and
+    /// does not move the floor. An equal position and another incarnation are
+    /// kept, and the floor becomes the cursor just kept.
+    fn keep_at_floor(&mut self, viewed: &ConversationViewed) -> bool {
+        if self
+            .floor
+            .as_ref()
+            .is_some_and(|floor| view_cursor_behind(&viewed.cursor, floor))
+        {
+            tracing::warn!(
+                limit = "client.subscription_view",
+                "skipped a conversation view behind the resume cursor"
+            );
+            return false;
+        }
+        self.floor = Some(owned_cursor(&viewed.cursor));
+        true
     }
     fn observe_subscription_end(&mut self, payload: serde_json::Value) -> Result<(), GatewayError> {
         let mut ended = match strict_decode::<ConversationSubscriptionEnded>(payload) {
@@ -628,6 +659,7 @@ impl Session {
             return Err(self.fail(GatewayError::Busy));
         }
         self.events.opening_conversation = Some(params.conversation_id.clone());
+        self.events.floor = params.after.as_ref().map(owned_cursor);
         self.events.opening = Some(Parked {
             views: Vec::new(),
             ended: None,
@@ -641,6 +673,7 @@ impl Session {
             Err(error) => {
                 self.events.opening = None;
                 self.events.opening_conversation = None;
+                self.events.floor = None;
                 return Err(error);
             }
         };
@@ -649,6 +682,7 @@ impl Session {
             _ => {
                 self.events.opening = None;
                 self.events.opening_conversation = None;
+                self.events.floor = None;
                 return Err(self.fail(GatewayError::Protocol));
             }
         };
@@ -886,6 +920,18 @@ fn held_file_refusal(code: String) -> GatewayError {
         },
     };
     GatewayError::HeldFile(refusal)
+}
+
+/// Whether `state` is one of the published `transcriptState` values.
+fn published_transcript_state(state: &str) -> bool {
+    TRANSCRIPT_STATES.contains(&state)
+}
+
+fn owned_cursor(cursor: &ConversationViewCursor) -> ConversationViewCursor {
+    ConversationViewCursor {
+        incarnation: cursor.incarnation.clone(),
+        position: cursor.position.clone(),
+    }
 }
 
 /// Whether `id` is within the published subscription identity: its character

@@ -34,6 +34,19 @@ pub fn conforming_view_cursor(cursor: &ConversationViewCursor) -> bool {
         && decimal_u64(&cursor.position).is_ok()
 }
 
+/// Whether `cursor` is behind `floor` in the same incarnation. Another
+/// incarnation is a replacement, and an equal position is not behind. Positions
+/// compare as [`decimal_u64`], which is how the gateway decides row S5.
+pub fn view_cursor_behind(cursor: &ConversationViewCursor, floor: &ConversationViewCursor) -> bool {
+    if cursor.incarnation != floor.incarnation {
+        return false;
+    }
+    match (decimal_u64(&cursor.position), decimal_u64(&floor.position)) {
+        (Ok(position), Ok(floor)) => position < floor,
+        _ => false,
+    }
+}
+
 pub fn decimal_u64(value: &str) -> Result<u64, ReadWireError> {
     if value.is_empty()
         || (value.len() > 1 && value.starts_with('0'))

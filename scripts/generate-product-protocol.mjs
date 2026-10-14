@@ -455,6 +455,16 @@ if (
 ts += `export const maxViewCursorIncarnationLength = ${incarnation.maxLength} as const\n`
 rs += `pub const MIN_VIEW_CURSOR_INCARNATION_CHARACTERS: usize = ${incarnation.minLength};\n`
 rs += `pub const MAX_VIEW_CURSOR_INCARNATION_CHARACTERS: usize = ${incarnation.maxLength};\n`
+const transcriptStates = schema.$defs.ConversationView.properties.transcriptState.enum
+if (
+  !Array.isArray(transcriptStates) ||
+  transcriptStates.length === 0 ||
+  transcriptStates.some((state) => typeof state !== "string" || state.length === 0) ||
+  new Set(transcriptStates).size !== transcriptStates.length
+)
+  throw new Error("Invalid transcript state publication")
+ts += `export const transcriptStates = ${JSON.stringify(transcriptStates)} as const\n`
+rs += `/// Published \`transcriptState\` values. A view carrying any other is outside the contract.\npub const TRANSCRIPT_STATES: &[&str] = &[${transcriptStates.map((state) => JSON.stringify(state)).join(", ")}];\n`
 const image = schema.$defs.ImageAttachment.properties
 const mcpCall = schema.$defs.McpCallToolParams.properties
 const mcpRead = schema.$defs.McpReadResourceParams.properties

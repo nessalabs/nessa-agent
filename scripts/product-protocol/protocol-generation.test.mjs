@@ -469,6 +469,7 @@ test("subscription identity and view cursor publish the schema to rust and types
       schema.$defs.ConversationSubscriptionId.maxLength = 5
       schema.$defs.ConversationViewCursor.properties.incarnation.minLength = 2
       schema.$defs.ConversationViewCursor.properties.incarnation.maxLength = 9
+      schema.$defs.ConversationView.properties.transcriptState.enum = ["alpha", "beta"]
     })
     const result = generate(path, "generate-product-protocol")
     assert.equal(result.status, 0, result.stderr)
@@ -490,6 +491,8 @@ test("subscription identity and view cursor publish the schema to rust and types
     assert.match(rust, /MAX_VIEW_CURSOR_INCARNATION_CHARACTERS: usize = 9;/)
     assert.match(rust, /DECIMAL_U64_PATTERN: &str =/)
     assert.match(rust, /MAX_DECIMAL_U64_CHARACTERS: usize = 20;/)
+    assert.match(rust, /TRANSCRIPT_STATES: &\[&str\] = &\["alpha", "beta"\];/)
+    assert.match(ts, /transcriptStates = \["alpha", "beta"\] as const/)
   }))
 
 for (const [name, value] of [

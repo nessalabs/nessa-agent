@@ -2509,6 +2509,15 @@ pub const MIN_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS: usize = 1;
 pub const MAX_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS: usize = 20;
 pub const MIN_VIEW_CURSOR_INCARNATION_CHARACTERS: usize = 1;
 pub const MAX_VIEW_CURSOR_INCARNATION_CHARACTERS: usize = 128;
+/// Published `transcriptState` values. A view carrying any other is outside the contract.
+pub const TRANSCRIPT_STATES: &[&str] = &[
+    "not_loaded",
+    "partial",
+    "complete_empty",
+    "complete",
+    "stale",
+    "unknown",
+];
 /// Published bound from the product schema.
 pub const MAX_AUTH_CREDENTIAL_CHARACTERS: usize = 16384;
 /// Published bound from the product schema.

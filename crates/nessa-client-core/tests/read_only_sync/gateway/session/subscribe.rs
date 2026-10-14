@@ -101,9 +101,29 @@ fn send_cursor(
     position: &str,
     text: &str,
 ) {
+    send_state(
+        socket,
+        id,
+        conversation,
+        incarnation,
+        position,
+        text,
+        "complete",
+    );
+}
+fn send_state(
+    socket: &mut PeerSocket,
+    id: &str,
+    conversation: &str,
+    incarnation: &str,
+    position: &str,
+    text: &str,
+    transcript_state: &str,
+) {
     let mut value = viewed(id, position, text);
     value["cursor"]["incarnation"] = json!(incarnation);
     value["view"]["conversationId"] = json!(conversation);
+    value["view"]["transcriptState"] = json!(transcript_state);
     send(
         socket,
         OutgoingMessage::Event(
@@ -474,6 +494,91 @@ fn a_subscription_id_outside_the_contract_is_a_protocol_failure() {
         drop(session);
         gateway.join().unwrap();
     }
+}
+
+/// A view behind the subscribe cursor in the same incarnation is not delivered,
+/// including one parked with the reply. An equal position is. Another
+/// incarnation replaces the floor, and a lower position in that incarnation
+/// is then skipped.
+#[test]
+fn a_view_behind_the_resume_cursor_is_skipped() {
+    let (endpoint, gateway) = peer(|socket| {
+        let opened = request(socket);
+        assert_eq!(opened.params["after"]["incarnation"], "inc");
+        assert_eq!(opened.params["after"]["position"], "10");
+        send_cursor(socket, "1", "conversation", "inc", "9", "parked behind");
+        send(
+            socket,
+            OutgoingMessage::Response(
+                ResponseFrame::success(&opened.id, &json!({"subscriptionId": "1"})).unwrap(),
+            ),
+        );
+        send_cursor(socket, "1", "conversation", "inc", "9", "behind");
+        send_cursor(socket, "1", "conversation", "inc", "10", "equal");
+        send_cursor(socket, "1", "conversation", "next", "1", "replaced");
+        send_cursor(
+            socket,
+            "1",
+            "conversation",
+            "next",
+            "0",
+            "behind replacement",
+        );
+        send_end(socket, "1");
+        while !socket.ended() {}
+    });
+    let mut session = connect(&endpoint);
+    session.begin().unwrap();
+    assert!(session
+        .subscribe(&params(Some(ConversationViewCursor {
+            incarnation: "inc".into(),
+            position: "10".into(),
+        })))
+        .is_ok());
+    session.finish().unwrap();
+    session.begin().unwrap();
+    let mut texts = Vec::new();
+    loop {
+        match session.next_delivery() {
+            Ok(SubscriptionDelivery::View(viewed)) => {
+                texts.push(viewed.view.messages[0].user_text.clone())
+            }
+            Ok(SubscriptionDelivery::Ended(_)) => break,
+            Err(GatewayError::Transport | GatewayError::Closed(_)) => break,
+            Err(error) => panic!("{error:?}"),
+        }
+    }
+    assert_eq!(texts, ["equal", "replaced"]);
+    drop(session);
+    gateway.join().unwrap();
+}
+
+/// A transcript state outside the published set is not queued. `unknown` is
+/// a published state and is delivered.
+#[test]
+fn a_view_with_an_unpublished_transcript_state_is_skipped() {
+    let (endpoint, gateway) = peer(|socket| {
+        admit(socket, "1");
+        // Position 5 is ahead of the view that follows. Skipping the
+        // unpublished state leaves the floor unset, so position 1 arrives.
+        send_state(socket, "1", "conversation", "inc", "5", "future", "future");
+        send_state(socket, "1", "conversation", "inc", "1", "kept", "unknown");
+        while !socket.ended() {}
+    });
+    let mut session = connect(&endpoint);
+    session.begin().unwrap();
+    session.subscribe(&params(None)).unwrap();
+    session.finish().unwrap();
+    session.begin().unwrap();
+    match session.next_delivery().unwrap() {
+        SubscriptionDelivery::View(viewed) => {
+            assert_eq!(viewed.view.messages[0].user_text, "kept");
+            assert_eq!(viewed.view.transcript_state, "unknown");
+        }
+        SubscriptionDelivery::Ended(_) => panic!("the published state is delivered"),
+    }
+    drop(session);
+    gateway.join().unwrap();
 }
 
 /// A view whose cursor follow would reject is skipped. A position of

@@ -33,6 +33,7 @@ import {
   PolicyCloseSessionSupport,
   PolicyEndTurnSupport,
   PreToolPolicySupport,
+  transcriptStates,
 } from "../generated/product.js"
 import {
   imageAttachments,
@@ -47,6 +48,9 @@ import { boundedName } from "./mcp-app-validate.js"
 import { decimal } from "./passive-read-validate.js"
 
 const utf8 = new TextEncoder()
+const maxTranscriptStateBytes = Math.max(
+  ...transcriptStates.map((state) => utf8.encode(state).byteLength),
+)
 
 /** A canonical lowercase hyphenated UUID: the schema's pattern for a conversation identity. */
 export const conversationIdPattern = new RegExp(bounds.conversationIdPattern)
@@ -144,7 +148,7 @@ function messageAppKey(value: unknown, what: string): string {
 function filesKey(files: readonly LinkedFile[]) {
   return JSON.stringify(files.map((file) => file.path))
 }
-function oneOf(value: string, values: string[]) {
+function oneOf(value: string, values: readonly string[]) {
   if (!values.includes(value)) throw new Error("Invalid conversation state")
 }
 
@@ -281,14 +285,7 @@ export function conversationView(value: unknown, expected: string): Conversation
   optionalText(item, "title", bounds.maxConversationTitleBytes)
   flag(item, "truncated")
   flag(item, "queueComplete")
-  oneOf(text(item, "transcriptState", 14, false), [
-    "not_loaded",
-    "partial",
-    "complete_empty",
-    "complete",
-    "stale",
-    "unknown",
-  ])
+  oneOf(text(item, "transcriptState", maxTranscriptStateBytes, false), transcriptStates)
   const committedMode = text(item, "approvalMode", 4, false)
   const offeredModes = approvalModeChoices(item.approvalModes)
   if (!offeredModes.some((choice) => choice.id === committedMode))
