@@ -13,6 +13,7 @@ import {
   NessaConversationControlError,
   NessaConversationMutationError,
   NessaRpcError,
+  questionTargetConversation,
   type ConversationPermission,
 } from "@nessa/client"
 import { describe, expect, it, vi } from "vitest"
@@ -633,10 +634,13 @@ describe("conversations", () => {
       "person",
     )
     const answerCall = gateway.calls.find((call) => call.method === "answerQuestion")
-    expect(answerCall?.args[0]).toMatchObject({
-      conversationId: "a",
+    if (!answerCall) throw new Error("expected the gateway to answer the question")
+    expect(questionTargetConversation(answerCall.args[0])).toBe("a")
+    expect(answerCall.args[0]).toMatchObject({
       executionId: "turn",
       questionId: "q1",
+      message: "Where should this land?",
+      questions: [{ key: "where", options: [{ value: "here", label: "Here" }] }],
     })
     expect(answerCall?.args[1]).toEqual([
       { key: "where", values: ["here"], ownWords: null },

@@ -2535,6 +2535,14 @@ export const subscriptionLimits = {
 } as const
 export const conversationSubscriptionIdPattern = "^[1-9][0-9]{0,19}$" as const
 export const maxViewCursorIncarnationLength = 128 as const
+export const transcriptStates = [
+  "not_loaded",
+  "partial",
+  "complete_empty",
+  "complete",
+  "stale",
+  "unknown",
+] as const
 /** Passive source and delivery deadlines, plus the client allowance. The minimum request deadline is their sum; clients raise shorter configured timeouts to this floor. */
 export const passiveReadTiming = {
   readTimeoutMs: 10000,

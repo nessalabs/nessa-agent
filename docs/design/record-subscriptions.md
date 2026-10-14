@@ -60,11 +60,15 @@ The agent catalog is followed the same way (issue 706, part I-3; row I10 in
   `lastDelivered`.
 
 Why views and not record batches: the desktop is TypeScript and must not keep
-a second fold (rule "one fold" in the transcript-fold design). Devices that do
-fold records themselves already have a replay-to-live path on records: verified
-`conversation.recordsHead`/`recordsPage` reads driven by
-`conversation.watchRecords` notices. That path is unchanged. The desktop shows
-the view's own `truncated` and `transcriptState` (`history` on its transcript).
+a second fold (rule "one fold" in the transcript-fold design). A linked device
+follows one conversation with `conversation.subscribe` on a new pinned
+session to the same gateway as its checkpoint read. The two calls do not
+share a connection. The checkpoint read still copies records
+(`conversation.recordsHead` / `recordsPage`). `conversation.watchRecords`
+remains for that retained path until nessa-ios is confirmed to have stopped using `conversation.watchRecords`.
+`conversation.subscribeList` stays refused to a paired device until #724
+scopes the catalogue head to the device's grants. The desktop shows the
+view's own `truncated` and `transcriptState` (`history` on its transcript).
 It does not page records to reconstruct older text, and a turn the view left
 out does not hide the turns the view did draw.
 
@@ -78,7 +82,10 @@ One task per subscription, owned by the connection
    SDK watch on every commit), and the service's live-change signal.
 2. Check access for this batch (`authorize_batch`: current session, the
    method's Cedar grant, browser presence) and read through the service, which
-   checks ownership again.
+   checks ownership again. A paired device's view subscription is admitted on
+   `conversation.read`, the grant pairing mints, or on `conversation.write`
+   when that credential still holds it; which conversation it may follow is
+   the share check (`admit_conversation`). Its list subscription is not.
 3. Send the frame if what the client would see changed. Wait until the
    connection's writer has written it before reading again: one frame in
    flight per subscription.
