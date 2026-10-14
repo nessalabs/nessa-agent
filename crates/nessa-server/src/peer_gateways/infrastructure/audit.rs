@@ -286,7 +286,7 @@ impl DurablePeerAudit {
 impl PeerAudit for DurablePeerAudit {
     /// Queued now, before the future is polled: dropping the future never
     /// drops the record.
-    fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'_> {
+    fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'static> {
         let (kept, answer) = oneshot::channel();
         let queued = self.enqueue(&record, kept);
         Box::pin(async move {

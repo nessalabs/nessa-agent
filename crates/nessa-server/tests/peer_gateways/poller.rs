@@ -701,7 +701,7 @@ struct RefusedThenPending {
     calls: AtomicUsize,
 }
 impl PeerAudit for RefusedThenPending {
-    fn record(&self, _: PeerAuditRecord) -> PeerAuditFuture<'_> {
+    fn record(&self, _: PeerAuditRecord) -> PeerAuditFuture<'static> {
         let first = self.calls.fetch_add(1, Ordering::SeqCst) == 0;
         Box::pin(async move {
             if first {

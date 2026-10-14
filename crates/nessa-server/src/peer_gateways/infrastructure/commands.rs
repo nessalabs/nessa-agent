@@ -38,8 +38,8 @@ use super::records::{
     SlotSave,
 };
 use crate::peer_gateways::application::{
-    CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerAuditUnavailable, PeerConnector,
-    PeerHolding, PeerState, PollerCause,
+    CacheState, PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerConnector, PeerHolding, PeerState,
+    PollerCause,
 };
 use nessa_auth::adapters::pairing::relay_key;
 use nessa_auth::{
@@ -197,7 +197,8 @@ pub struct PeerCommands {
     /// queue's headroom behind every poller cycle. Enroll and forget both
     /// hand an intent over before either is written. A further command waits
     /// for a place inside its audit deadline, rather than being refused
-    /// while the cycles' records are still queued.
+    /// while the cycles' records are still queued. The place stays until
+    /// that record is answered, including when the deadline passed first.
     audit_room: Arc<Semaphore>,
     /// One turn per peer. The cycle reading that peer, or the owner command
     /// that names it, holds the permit. The cycle is registered under this
@@ -705,20 +706,60 @@ impl PeerCommands {
     /// once, so a further command waits for a place inside the same deadline
     /// instead of being refused while poller cycles still fill the queue
     /// (`a_second_owner_record_waits_for_the_headroom`). A record
-    /// still on its way when the deadline passes counts as not kept.
+    /// still on its way when the deadline passes counts as not kept. Its
+    /// place stays until that record is answered, so a later command cannot
+    /// hand another over while it is still queued
+    /// (`an_owner_place_stays_until_the_queued_record_leaves`).
     async fn keep(&self, record: PeerAuditRecord) -> bool {
-        let room = Arc::clone(&self.audit_room);
-        let audit = Arc::clone(&self.audit);
-        matches!(
-            self.within(AUDIT_DEADLINE, || async move {
-                let Ok(_place) = room.acquire_owned().await else {
-                    return Err(PeerAuditUnavailable);
-                };
-                audit.record(record).await
-            })
-            .await,
-            Some(Ok(()))
-        )
+        let deadline = self
+            .clock
+            .elapsed_ms()
+            .saturating_add(u64::try_from(AUDIT_DEADLINE.as_millis()).unwrap_or(u64::MAX));
+        let acquire = Arc::clone(&self.audit_room).acquire_owned();
+        tokio::pin!(acquire);
+        let place = loop {
+            tokio::select! {
+                biased;
+                acquired = &mut acquire => {
+                    if self.clock.elapsed_ms() >= deadline {
+                        return false;
+                    }
+                    match acquired {
+                        Ok(place) => break place,
+                        Err(_) => return false,
+                    }
+                }
+                () = tokio::time::sleep(WAKE_TICK) => {
+                    if self.clock.elapsed_ms() >= deadline {
+                        return false;
+                    }
+                }
+            }
+        };
+        // Queued by the call, before this future is polled. The future does
+        // not borrow the audit, so it can outlive this command.
+        let mut answer = self.audit.record(record);
+        loop {
+            tokio::select! {
+                biased;
+                result = &mut answer => {
+                    let in_time = self.clock.elapsed_ms() < deadline;
+                    return in_time && result.is_ok();
+                }
+                () = tokio::time::sleep(WAKE_TICK) => {
+                    if self.clock.elapsed_ms() >= deadline {
+                        break;
+                    }
+                }
+            }
+        }
+        // The command is answered now. The place stays with the record
+        // until the writer takes it.
+        tokio::spawn(async move {
+            let _place = place;
+            let _ = answer.await;
+        });
+        false
     }
     /// Every kept peer, with what its reading last came to.
     pub async fn list(&self) -> Result<Vec<(PeerEntry, Option<PeerSync>)>, PeerError> {

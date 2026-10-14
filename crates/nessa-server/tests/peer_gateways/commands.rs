@@ -2,7 +2,9 @@
 //! that asks for it never finds it taken with no cycle to stop; and closing
 //! the commands for shutdown leaves no effect without its outcome.
 use super::*;
-use crate::peer_gateways::application::{PeerAuditFuture, PeerAuditRecord, PeerConnectFuture};
+use crate::peer_gateways::application::{
+    PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerConnectFuture,
+};
 use crate::peer_gateways::infrastructure::audit::DurablePeerAudit;
 use crate::peer_gateways::infrastructure::{AUDIT_HEADROOM, AUDIT_QUEUE};
 use nessa_auth::application::pairing::{ClientPendingStore, GatewayKeyStore, PrivateKeyMaterial};
@@ -11,7 +13,7 @@ use nessa_auth::domain::AudienceId;
 use nessa_protocol::pairing::socket::WAKE_TICK;
 use nessa_protocol::relay::{GatewayKey, DIRECT_HEAD_START};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -48,7 +50,7 @@ impl MonotonicClock for Still {
 }
 struct Nothing;
 impl PeerAudit for Nothing {
-    fn record(&self, _: PeerAuditRecord) -> PeerAuditFuture<'_> {
+    fn record(&self, _: PeerAuditRecord) -> PeerAuditFuture<'static> {
         Box::pin(async { Ok(()) })
     }
 }
@@ -284,6 +286,80 @@ async fn a_second_owner_record_waits_for_the_headroom() {
     );
 }
 
+/// Past [`AUDIT_DEADLINE`] the command is not kept, and its place stays until
+/// the queued record is answered. Releasing the place at the deadline would
+/// let another [`AUDIT_HEADROOM`] records be handed over while those are
+/// still queued.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_owner_place_stays_until_the_queued_record_leaves() {
+    let root = tempfile::tempdir().unwrap();
+    let clock = Arc::new(Moved(AtomicU64::new(0)));
+    let audit = Arc::new(CountingPending::default());
+    let commands = commands_with(
+        &root.path().join("root"),
+        clock.clone(),
+        audit.clone(),
+        Arc::new(Nothing),
+    );
+    let mut held = Vec::new();
+    for _ in 0..AUDIT_HEADROOM {
+        let commands = commands.clone();
+        held.push(tokio::spawn(
+            async move { commands.keep(owner_intent()).await },
+        ));
+    }
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while audit.calls.load(Ordering::SeqCst) < AUDIT_HEADROOM
+            || commands.audit_room.available_permits() != 0
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the headroom was not taken");
+    clock
+        .0
+        .store(AUDIT_DEADLINE.as_millis() as u64, Ordering::SeqCst);
+    for (index, kept) in held.into_iter().enumerate() {
+        let answered = tokio::time::timeout(Duration::from_secs(2), kept)
+            .await
+            .expect("the deadline did not answer the owner command")
+            .unwrap();
+        assert!(!answered, "owner record {index} was kept past the deadline");
+    }
+    assert_eq!(
+        commands.audit_room.available_permits(),
+        0,
+        "the owner place was released while its record was still queued"
+    );
+    let extra = tokio::spawn({
+        let commands = commands.clone();
+        async move { commands.keep(owner_intent()).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !extra.is_finished(),
+        "another owner record ran while the timed-out ones were still queued"
+    );
+    assert_eq!(
+        audit.calls.load(Ordering::SeqCst),
+        AUDIT_HEADROOM,
+        "another owner record was handed over while the timed-out ones were still queued"
+    );
+}
+
+/// Answers nothing. Counts each record handed over.
+#[derive(Default)]
+struct CountingPending {
+    calls: AtomicUsize,
+}
+impl PeerAudit for CountingPending {
+    fn record(&self, _: PeerAuditRecord) -> PeerAuditFuture<'static> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(std::future::pending())
+    }
+}
+
 fn owner_intent() -> PeerAuditRecord {
     PeerAuditRecord::ForgetRequested {
         operation: uuid::Uuid::new_v4(),
@@ -344,7 +420,7 @@ struct Gated {
     open: watch::Sender<bool>,
 }
 impl PeerAudit for Gated {
-    fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'_> {
+    fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'static> {
         let intent = matches!(
             record,
             PeerAuditRecord::EnrollRequested { .. } | PeerAuditRecord::ForgetRequested { .. }

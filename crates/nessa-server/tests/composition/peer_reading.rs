@@ -429,7 +429,7 @@ impl Changes {
     }
 }
 impl PeerAudit for Changes {
-    fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'_> {
+    fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'static> {
         let poller = matches!(record, PeerAuditRecord::PollerChanged { .. });
         let refused = poller && self.refuse;
         if refused {

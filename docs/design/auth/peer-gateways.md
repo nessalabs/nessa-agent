@@ -1466,6 +1466,7 @@ sequenceDiagram
 | R33 | A read is held, and the interval has not passed; then another peer is enrolled | The directory is not scanned on each tick of the held read. Enrolling the other peer scans it, and that peer is `synced` without waiting out the interval | `a_held_read_lists_when_the_records_change_not_on_every_tick` |
 | R34 | The audit writer is still holding a cycle's records when `AUDIT_DEADLINE` passes; then the poller stops | The cycle keeps its read slot, so a replacement cycle cannot enqueue another batch, and an owner record still fits in the headroom. The change is logged as not kept and stands. A stop releases the slot while the records are still queued, so shutdown can drain the writer. An owner command is still answered at its own deadline (row R18) | `a_read_slot_stays_until_queued_records_leave`; the owner deadline in `a_stalled_audit_never_holds_an_owner_command` |
 | R35 | A poller record's audit answers an error before `AUDIT_DEADLINE`, and a later record in that cycle is still unanswered | The error is logged and the change stands. That finished future is not polled again. The read slot stays until the unanswered record leaves or the poller stops | `an_audit_error_before_the_deadline_is_not_waited_on_again` |
+| R37 | An owner command's audit record is still queued when `AUDIT_DEADLINE` passes | The command is not kept, and is answered then. Its place stays until that record is answered, so another command cannot hand a record over while it is still queued | `an_owner_place_stays_until_the_queued_record_leaves`; the deadline in `a_stalled_audit_never_holds_an_owner_command` |
 
 ## What this part does not do
 
@@ -1500,7 +1501,9 @@ the client and gives the head an access path by receiver
   keeps its read slot until its records have left the queue, or the poller
   stops (`a_read_slot_stays_until_queued_records_leave`). A further owner
   command waits for a place inside the same deadline
-  (`a_second_owner_record_waits_for_the_headroom`). A full queue
+  (`a_second_owner_record_waits_for_the_headroom`). A command answered at
+  that deadline keeps its place until the queued record is answered
+  (`an_owner_place_stays_until_the_queued_record_leaves`). A full queue
   still refuses at once (row R22), which is more than that bound handed
   over before the writer drained it.
 - **An enrollment that loses its last reply can leave a pending record.** B
