@@ -60,8 +60,8 @@ use nessa_sdk::application::agent_execution::{
         Submitter,
     },
     permissions::{
-        ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
-        PermissionCancellationRequest, QuestionAnswer,
+        is_remember_option, ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
+        PermissionCaller, PermissionCancellationRequest, PermissionRules, QuestionAnswer,
     },
     providers::{
         AgentProvider, ApprovalMode as ProviderApprovalMode, CloseOutcome, OperationCapabilities,
@@ -181,7 +181,7 @@ impl ConversationCaller {
     /// split a log line whichever command wrote it. The conversation entity
     /// still asks the same question of its own fields, through the same
     /// function, so there is one rule and not two that have to agree.
-    pub(super) fn actor(&self) -> Result<ActionContext, ConversationError> {
+    pub(crate) fn actor(&self) -> Result<ActionContext, ConversationError> {
         Conversation::check_creator_context(&self.surface_id, &self.action_id)
             .map_err(|_| ConversationError::InvalidInput)?;
         ActionContext::new(
@@ -538,8 +538,9 @@ pub enum SubmissionMode {
 #[derive(Clone)]
 pub(super) enum Writer {
     /// The person, with who their turn is saved as started by: the owner, or
-    /// the share grant that admitted it.
-    Person(Initiation),
+    /// the share grant that admitted it. The flag is whether this membership
+    /// may use a remember choice. A grant turn is not offered one.
+    Person(Initiation, bool),
     App {
         sender: McpAppSource,
         apps: Arc<AppReviews>,
@@ -557,13 +558,22 @@ impl Writer {
     /// owner's own surface.
     fn initiation(&self) -> Initiation {
         match self {
-            Self::Person(initiation) => initiation.clone(),
+            Self::Person(initiation, _) => initiation.clone(),
             Self::App { .. } => Initiation::owner(),
+        }
+    }
+    /// Whether this message may be offered a remember choice. An app writes
+    /// on the owner's surface, so it may. A person's turn may only when the
+    /// membership that sent it can use one, and only an owner turn is armed.
+    fn offers_remember(&self) -> bool {
+        match self {
+            Self::Person(_, offered) => *offered,
+            Self::App { .. } => true,
         }
     }
     fn sender(&self) -> MessageSender {
         match self {
-            Self::Person(_) => MessageSender::Person,
+            Self::Person(_, _) => MessageSender::Person,
             Self::App { sender, .. } => MessageSender::App(sender.clone()),
         }
     }
@@ -584,7 +594,7 @@ impl Writer {
     /// admitted in ended or its mount was released. Never the person's.
     fn opening_ended(&self) -> bool {
         match self {
-            Self::Person(_) => false,
+            Self::Person(_, _) => false,
             Self::App {
                 apps, epoch, mount, ..
             } => apps.admit(*epoch, mount).is_err(),
@@ -764,6 +774,9 @@ struct Inner {
     /// What checks a Drive grant's tools. Composition binds it; until then
     /// no Drive turn is admitted (`drive_policy_unenforceable`).
     drive: Arc<OnceLock<DriveTools>>,
+    /// Remembered permission rules. Unbound, no turn is offered a remember
+    /// choice and no review is answered by a rule.
+    permission_rules: Arc<OnceLock<Arc<dyn PermissionRules>>>,
 }
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
@@ -1105,6 +1118,7 @@ impl ConversationService {
                 commands: Arc::new(OnceLock::new()),
                 note_authors: Arc::new(OnceLock::new()),
                 drive: Arc::new(OnceLock::new()),
+                permission_rules: Arc::new(OnceLock::new()),
             }),
         })
     }
@@ -2642,7 +2656,7 @@ impl ConversationService {
             execution_id,
             message,
             mode,
-            Writer::Person(Initiation::owner()),
+            Writer::Person(Initiation::owner(), true),
         )
         .await
         .map_err(SubmitFailure::into_error)
@@ -2727,6 +2741,12 @@ impl ConversationService {
     /// unbound, no Drive turn is admitted.
     pub fn bind_drive_tools(&self, drive: DriveTools) {
         let _ = self.inner.drive.set(drive);
+    }
+
+    /// Bind the remembered permission rules. A second bind is ignored.
+    /// Unbound, reviews are asked and no remember choice is offered.
+    pub fn bind_permission_rules(&self, rules: Arc<dyn PermissionRules>) {
+        let _ = self.inner.permission_rules.set(rules);
     }
 
     pub(super) async fn submit_as(
@@ -2991,6 +3011,13 @@ impl ConversationService {
                 .sent_by(writer.sender())
                 .with_app_model_context(carried)
                 .map_err(|_| ConversationError::InvalidInput)?;
+            if let Some(rules) = service.inner.permission_rules.get() {
+                rules.arm(
+                    &id.to_string(),
+                    &execution,
+                    writer.offers_remember() && matches!(initiation.initiator(), Initiator::Owner),
+                );
+            }
             let request = ExecutionRequest {
                 execution_id: execution,
                 user_message: message.clone(),
@@ -3583,6 +3610,7 @@ impl ConversationService {
         execution: String,
         permission: String,
         option: String,
+        permission_caller: PermissionCaller,
     ) -> Result<(), ConversationError> {
         let service = self.clone();
         supervised(async move {
@@ -3596,6 +3624,11 @@ impl ConversationService {
             // (`malformed_controls_do_not_open_a_dormant_owned_provider`).
             let option_id = PermissionOptionId::new(option.as_str())
                 .map_err(|_| ConversationError::InvalidInput)?;
+            if is_remember_option(option_id.as_str()) {
+                if let Some(rules) = service.inner.permission_rules.get() {
+                    rules.note_answerer(&execution_id, actor.request_id(), permission_caller);
+                }
+            }
             let live = service.resolve(&id, &caller).await?;
             // An app's review first: it is the gateway's own, not the agent's.
             match live

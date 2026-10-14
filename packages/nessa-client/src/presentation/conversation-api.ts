@@ -28,7 +28,9 @@ import type {
   ConversationReceipt,
   ConversationMutationResult,
   ConversationQuestionChoice,
+  ConversationPermissionRulesResult,
   ConversationReorderResult,
+  ConversationRevokePermissionRuleResult,
   ConversationSetApprovalModeResult,
   ConversationShareResult,
   ConversationShareRole,
@@ -36,6 +38,7 @@ import type {
   ConversationSharesResult,
   ConversationToolPolicy,
   ApprovalMode,
+  PermissionRule,
   ImageAttachment,
   LinkedFile,
 } from "../generated/product.js"
@@ -260,6 +263,21 @@ export type ConversationApi = {
     conversationId: string,
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
+  /**
+   * The owner's remembered permission rules, in the order they were stored.
+   * A shared user is refused. A rule is one tool in one workspace.
+   */
+  permissionRules: (
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationPermissionRulesResult>
+  /**
+   * Delete one remembered rule. `applied` is false when no rule has that id.
+   * A shared user is refused. Later reviews of that tool ask again.
+   */
+  revokePermissionRule: (
+    ruleId: string,
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationRevokePermissionRuleResult>
   /**
    * Delete a conversation permanently: the gateway stops it, asks its agent to
    * delete the agent's own session, records who deleted it, and erases its
@@ -496,6 +514,64 @@ export function preparedSubmissionFields(
   if (!preparedValues.has(prepared))
     throw new TypeError("Use an original prepared submission")
   return prepared
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function field(value: Record<string, unknown>, name: string): unknown {
+  return Object.hasOwn(value, name) ? value[name] : undefined
+}
+
+function rememberedRules(
+  value: unknown,
+  requestId: string,
+): ConversationPermissionRulesResult {
+  const body = record(value)
+  const rules = body && field(body, "rules")
+  if (!body || field(body, "requestId") !== requestId || !Array.isArray(rules))
+    throw new TypeError("Invalid permission rules")
+  return {
+    requestId,
+    rules: rules.map((rule) => {
+      const row = record(rule)
+      const effect = row && field(row, "effect")
+      const source = row && field(row, "source")
+      if (
+        !row ||
+        typeof field(row, "id") !== "string" ||
+        typeof field(row, "revision") !== "string" ||
+        typeof field(row, "workspace") !== "string" ||
+        (source !== "claude" && source !== "codex") ||
+        typeof field(row, "tool") !== "string" ||
+        (effect !== "allow" && effect !== "deny")
+      )
+        throw new TypeError("Invalid permission rule")
+      const listed: PermissionRule = {
+        id: field(row, "id") as string,
+        revision: field(row, "revision") as string,
+        workspace: field(row, "workspace") as string,
+        source,
+        tool: field(row, "tool") as string,
+        effect,
+      }
+      return listed
+    }),
+  }
+}
+
+function revokedRule(
+  value: unknown,
+  requestId: string,
+): ConversationRevokePermissionRuleResult {
+  const body = record(value)
+  const applied = body && field(body, "applied")
+  if (!body || field(body, "requestId") !== requestId || typeof applied !== "boolean")
+    throw new TypeError("Invalid permission rule revocation")
+  return { requestId, applied }
 }
 
 export function createConversationApi(
@@ -795,6 +871,24 @@ export function createConversationApi(
         { conversationId: id, requestId, executionId },
         (value) => conversationCommandReceipt(value, requestId),
         false,
+      )
+    },
+    permissionRules: async (options = {}) => {
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      return rememberedRules(
+        await session.request(ProductMethod.ConversationPermissionRules, { requestId }),
+        requestId,
+      )
+    },
+    revokePermissionRule: async (ruleId, options = {}) => {
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      boundedText(ruleId, "Rule ID", 256)
+      return revokedRule(
+        await session.request(ProductMethod.ConversationRevokePermissionRule, {
+          requestId,
+          ruleId,
+        }),
+        requestId,
       )
     },
     archive: (id, options) => action(ProductMethod.ConversationArchive, id, {}, options),

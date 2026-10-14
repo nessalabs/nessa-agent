@@ -408,6 +408,67 @@ fn an_approval_asked_with_no_arguments_is_still_reviewed_with_what_codex_said() 
 }
 
 #[test]
+fn a_kind_is_not_a_tool_a_project_rule_can_name() {
+    use crate::application::agent_execution::permissions::{
+        is_remember_option, REMEMBER_ALLOW, REMEMBER_DENY,
+    };
+    use crate::domain::agent_execution::permissions::PermissionOfferPolicy;
+    use crate::infrastructure::acp::permissions::wire::{admit, PersistentKinds};
+
+    let options = json!({"options":[
+        {"optionId":"allow_once", "kind":"allow_once", "name":"Yes"},
+        {"optionId":"allow_always", "kind":"allow_always", "name":"Yes, and don't ask again for this session"},
+        {"optionId":"cancel", "kind":"reject_once", "name":"No"}
+    ]});
+    let once = PermissionOfferPolicy::once_only();
+    let mut tools = ObservedTools::default();
+    let request = permission(
+        json!({"toolCallId":"command-6","kind":"execute","status":"pending","rawInput":{"command":"npm test","cwd":"/workspace"}}),
+        None,
+    );
+    assert!(!names_a_tool(&request, &tools));
+    assert_eq!(permission_input(&request, &tools).unwrap().name, "execute");
+    let offered = admit(
+        &options,
+        &once,
+        PersistentKinds::Keep,
+        names_a_tool(&request, &tools),
+    )
+    .unwrap();
+    let ids: Vec<_> = offered
+        .options
+        .choices()
+        .iter()
+        .map(|option| option.id().as_str())
+        .collect();
+    assert_eq!(ids, ["allow_once", "allow_always", "cancel"]);
+    assert!(ids.iter().all(|id| !is_remember_option(id)));
+
+    tool_call(&terminal_command("command-6"), &mut tools).unwrap();
+    assert!(names_a_tool(&request, &tools));
+    assert_eq!(
+        permission_input(&request, &tools).unwrap().name,
+        "exec_command"
+    );
+    let named = admit(
+        &options,
+        &once,
+        PersistentKinds::Keep,
+        names_a_tool(&request, &tools),
+    )
+    .unwrap();
+    let named_ids: Vec<_> = named
+        .options
+        .choices()
+        .iter()
+        .map(|option| option.id().as_str())
+        .collect();
+    assert!(named_ids.contains(&REMEMBER_ALLOW));
+    assert!(named_ids.contains(&REMEMBER_DENY));
+    assert!(named_ids.contains(&"allow_always"));
+}
+
+#[test]
 fn a_permission_nothing_can_be_said_about_is_refused_rather_than_reviewed_empty() {
     let tools = ObservedTools::default();
     for request in [

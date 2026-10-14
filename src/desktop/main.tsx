@@ -22,6 +22,7 @@ import {
   LinkedDevicesProvider,
   McpServersProvider,
   NativeHooksProvider,
+  PermissionRulesProvider,
 } from "./settings"
 import { makeDesktopStore } from "./store"
 import { DesktopIconFamilyProvider } from "./ui/icons"
@@ -110,11 +111,13 @@ createRoot(container).render(
                 <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
                   <HeldFilesProvider read={dependencies.heldFiles} save={saveFile}>
                     <NativeHooksProvider gateway={dependencies.nativeHooks}>
-                      <DesktopWindow
-                        hostKind={host.kind}
-                        browserSurface={host.kind === "browser"}
-                        inspectable={import.meta.env.DEV}
-                      />
+                      <PermissionRulesProvider gateway={dependencies.permissionRules}>
+                        <DesktopWindow
+                          hostKind={host.kind}
+                          browserSurface={host.kind === "browser"}
+                          inspectable={import.meta.env.DEV}
+                        />
+                      </PermissionRulesProvider>
                     </NativeHooksProvider>
                   </HeldFilesProvider>
                 </LinkedDevicesProvider>

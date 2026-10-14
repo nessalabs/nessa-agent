@@ -340,6 +340,10 @@ impl AcpProfile for CodexProfile {
         wire::permission_input(request, &self.tools)
     }
 
+    fn permission_names_a_tool(&self, request: &Value) -> bool {
+        wire::names_a_tool(request, &self.tools)
+    }
+
     /// Codex ACP 1.12.0 offers `decline` and `cancel` as the same ACP kind
     /// (`reject_once`). `decline` continues the turn. `cancel` stops it. File
     /// edits, MCP tool approvals, and extra-permission commands offer only
