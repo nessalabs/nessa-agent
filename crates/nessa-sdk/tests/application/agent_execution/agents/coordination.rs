@@ -7,8 +7,8 @@ use crate::application::agent_execution::permissions::QuestionAnswer;
 use crate::application::{
     agent_execution::{
         executions::{
-            AttachmentAuditStage, ExecutionAudit, ExecutionAuditRecord, ExecutionRequest,
-            SubmissionMode, Submitter,
+            AfterSaveCheck, AfterSaveRefusal, AttachmentAuditStage, ExecutionAudit,
+            ExecutionAuditRecord, ExecutionRequest, SubmissionMode, Submitter,
         },
         permissions::{
             ActionContext, PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
@@ -20,6 +20,7 @@ use crate::application::{
             ProviderExecutionReply, ProviderIdentity, ProviderObservationFuture, ProviderOpenError,
             ProviderOpenFuture, ProviderOpenRequest, ProviderOperationFailure,
             ProviderOperationFuture, ProviderSession, ProviderSessionBackend, ProviderSessionState,
+            SteeringOutcome,
         },
         sessions::SessionManager,
     },
@@ -163,6 +164,11 @@ struct RecoveryOpenFailureProvider {
 struct Backend {
     opens: AtomicUsize,
     executions: AtomicUsize,
+    steers: AtomicUsize,
+    execute_entered: Notify,
+    execute_hold: StateMutex<Option<oneshot::Receiver<()>>>,
+    hold_events: AtomicBool,
+    event_hold: StateMutex<Option<oneshot::Receiver<()>>>,
     answer: StateMutex<Option<PermissionResolution>>,
     cancellation: StateMutex<Option<PermissionCancellation>>,
     receipt_returned: Notify,
@@ -173,7 +179,7 @@ struct Backend {
     cleanup_started: StateMutex<Option<oneshot::Sender<()>>>,
     cleanup_finished: StateMutex<Option<oneshot::Sender<()>>>,
 }
-struct ExhaustedEvents;
+struct Events(Arc<Backend>);
 impl AgentProvider for Provider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("control-handoff", "fixture", "fixture").unwrap()
@@ -221,7 +227,7 @@ impl AgentProvider for Provider {
                     self.0.clone(),
                     capabilities,
                 ),
-                events: Box::new(ExhaustedEvents),
+                events: Box::new(Events(self.0.clone())),
             })
         })
     }
@@ -248,11 +254,31 @@ impl ProviderSessionBackend for Backend {
     fn execute(&self, _: ExecutionRequest) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
             self.executions.fetch_add(1, Ordering::SeqCst);
+            self.execute_entered.notify_one();
+            let hold = self.execute_hold.lock().unwrap().take();
+            if let Some(hold) = hold {
+                let _ = hold.await;
+            }
             let result: Result<ExecutionOutcome, AgentError> =
                 { async { Ok(ExecutionOutcome::Completed) } }.await;
             ProviderExecutionReply::Finished(ExecutionReport::new(
                 Some(result),
                 None,
+                ProviderSessionState::Usable,
+            ))
+        })
+    }
+    fn steer<'a>(
+        &'a self,
+        _target: ExecutionId,
+        _input: ExecutionRequest,
+        started: &'a (dyn Fn() + Send + Sync),
+    ) -> ProviderOperationFuture<'a, SteeringOutcome> {
+        Box::pin(async move {
+            self.steers.fetch_add(1, Ordering::SeqCst);
+            started();
+            Err(ProviderOperationFailure::new(
+                AgentError::Unsupported("provider does not support steering".into()),
                 ProviderSessionState::Usable,
             ))
         })
@@ -328,9 +354,19 @@ impl ProviderSessionBackend for Backend {
         })
     }
 }
-impl ExecutionEventStream for ExhaustedEvents {
+impl ExecutionEventStream for Events {
     fn next(&mut self) -> ProviderObservationFuture<'_> {
-        Box::pin(async { Ok(None) })
+        let backend = Arc::clone(&self.0);
+        Box::pin(async move {
+            if !backend.hold_events.load(Ordering::SeqCst) {
+                return Ok(None);
+            }
+            let hold = backend.event_hold.lock().unwrap().take();
+            if let Some(hold) = hold {
+                let _ = hold.await;
+            }
+            Ok(None)
+        })
     }
 }
 async fn agent() -> Agent {
@@ -931,6 +967,121 @@ async fn close_joins_a_held_started_audit_panic_before_replacement() {
         assert_eq!(agent.close(actor()).await, Err(expected));
         assert_eq!(backend.opens.load(Ordering::SeqCst), 0);
         assert!(backend.closes.lock().unwrap().is_empty());
+    }
+}
+
+/// The save check stands in for the grant permit an unshare has to take.
+struct HoldForUnshare {
+    gate: Arc<tokio::sync::Mutex<()>>,
+    permit: StateMutex<Option<tokio::sync::OwnedMutexGuard<()>>>,
+    released: AtomicBool,
+}
+
+impl AfterSaveCheck for HoldForUnshare {
+    fn after_save<'a>(
+        &'a self,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), AfterSaveRefusal>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let permit = Arc::clone(&self.gate).lock_owned().await;
+            *self.permit.lock().unwrap() = Some(permit);
+            Ok(())
+        })
+    }
+
+    fn provider_operation_started(&self) {
+        drop(self.permit.lock().unwrap().take());
+        self.released.store(true, Ordering::SeqCst);
+    }
+}
+
+/// A close after the save check and before the provider future's first poll
+/// releases the save check. The provider is never asked to take the steer.
+#[tokio::test]
+async fn scheduling_a_close_before_native_steer_is_polled_releases_the_save_check() {
+    let (agent, backend) = agent_with_backend().await;
+    backend.hold_events.store(true, Ordering::SeqCst);
+    let (execute_release, execute_hold) = oneshot::channel();
+    *backend.execute_hold.lock().unwrap() = Some(execute_hold);
+    let (event_release, event_hold) = oneshot::channel();
+    *backend.event_hold.lock().unwrap() = Some(event_hold);
+    let entered = backend.execute_entered.notified();
+    let running = agent
+        .enqueue(turn("active"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(5), entered)
+        .await
+        .expect("the active turn reached the provider");
+    let gate = Arc::new(tokio::sync::Mutex::new(()));
+    let check = Arc::new(HoldForUnshare {
+        gate: Arc::clone(&gate),
+        permit: StateMutex::new(None),
+        released: AtomicBool::new(false),
+    });
+    let (paused, reached) = oneshot::channel();
+    let (release, waiting) = oneshot::channel();
+    agent
+        .inner
+        .lifecycle
+        .pause_before_native_steer_poll(paused, waiting);
+    let steer = agent.steer(
+        turn("correction"),
+        Submitter::owner(actor()).with_after_save(check.clone()),
+    );
+    tokio::pin!(steer);
+    timeout(Duration::from_secs(5), async {
+        tokio::select! {
+            _ = &mut steer => panic!("steer finished before the provider future existed"),
+            result = reached => result.expect("pause sender dropped"),
+        }
+    })
+    .await
+    .expect("steer paused before the provider future was polled");
+    // `start_shutdown` flips the lifecycle without the scheduler lock `steer` holds.
+    let attempt = agent.start_shutdown(SessionCloseRequest::Explicit(actor()));
+    release.send(()).unwrap();
+    match timeout(Duration::from_secs(5), &mut steer)
+        .await
+        .expect("steer settled after control stopped")
+    {
+        Err(AgentError::Closed) => {}
+        Ok(_) => panic!("a steer closed before polling was delivered"),
+        Err(error) => panic!("steer failed as {error}"),
+    }
+    assert_eq!(
+        backend.steers.load(Ordering::SeqCst),
+        0,
+        "the provider future was polled after control stopped"
+    );
+    let unshare = timeout(Duration::from_millis(500), gate.lock()).await;
+    assert!(
+        unshare.is_ok(),
+        "unshare blocked after control stopped before the provider was polled"
+    );
+    drop(unshare);
+    assert!(
+        check.released.load(Ordering::SeqCst),
+        "the save check still held its permit after control stopped"
+    );
+    // Close may already have dropped the running turn.
+    let _ = execute_release.send(());
+    let _ = event_release.send(());
+    let _ = timeout(Duration::from_secs(5), running.wait()).await;
+    let _ = timeout(
+        Duration::from_secs(5),
+        agent.inner.lifecycle.complete_stop(&attempt),
+    )
+    .await;
+}
+
+fn turn(id: &str) -> ExecutionRequest {
+    ExecutionRequest {
+        execution_id: ExecutionId::new(id).unwrap(),
+        user_message: UserMessage::text_only(PromptText::new("steer").unwrap()),
+        estimated_input_tokens: 1,
+        reserved_output_tokens: 10,
     }
 }
 

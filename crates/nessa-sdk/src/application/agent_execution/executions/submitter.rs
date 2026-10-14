@@ -61,7 +61,9 @@ pub trait AfterSaveCheck: Send + Sync {
     /// commit. Called before the SDK waits for the provider's response, and
     /// on the paths that queue or refuse instead of injecting. A provider
     /// operation that panics before it calls this is still released, before
-    /// the SDK waits for that session's cleanup. A second call releases
+    /// the SDK waits for that session's cleanup. A close that lands after
+    /// the save check and before that provider future is polled releases it
+    /// too, before the SDK settles the refusal. A second call releases
     /// nothing. A check that kept nothing does nothing.
     fn provider_operation_started(&self) {}
 }

@@ -1902,6 +1902,14 @@ impl Agent {
         };
         let mut cleanup_needed = false;
         let mut delivery = Box::pin(attached.session.steer(target, input, &started));
+        // The future exists and has not been polled. A close that lands here
+        // makes `run_control` return without polling it, so the provider never
+        // calls `started`. Release on the way out, below.
+        #[cfg(test)]
+        if let Some((entered, release)) = self.inner.lifecycle.take_before_native_steer_poll() {
+            let _ = entered.send(());
+            let _ = release.await;
+        }
         let outcome = self
             .run_control(
                 admission.clone(),
@@ -1929,15 +1937,15 @@ impl Agent {
             )
             .await;
         drop(delivery);
+        // Release before either return. A close before the first poll never
+        // enters the provider future, and a panic before `started` never
+        // reaches that callback. `complete_stop` can wait, and so can the
+        // settlement after a close that did not ask for cleanup. A provider
+        // that already called `started` makes this a second, empty call.
+        started();
         if !cleanup_needed {
             return outcome;
         }
-        // A panic before the provider calls `started` never reaches that
-        // callback, and `complete_stop` can wait. Release the save check
-        // before that wait so an unshare of this grant is not blocked for
-        // the cleanup. A provider that already called `started` makes this
-        // a second, empty call.
-        started();
         // Only this operation's typed failure owns cleanup here. An unrelated
         // stop already has an owner and must not delay an interrupted response.
         // The scheduler is held, so join cleanup without acquiring it again.
