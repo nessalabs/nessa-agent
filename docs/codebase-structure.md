@@ -1898,7 +1898,8 @@ The socket admits `conversation.create`, `conversation.send`, `conversation.stee
 Tests mirror those owners under `nessa-sdk/tests/infrastructure/session_storage/creation.rs`,
 `nessa-server/tests/conversation/creation_commands.rs` and
 `nessa-server/tests/conversation/mutation_commands.rs`. The state table is in
-[command creation](design/command-creation.md).
+[command creation](design/command-creation.md). The phone send both sides share
+is [phone send](design/phone-send-contract.md).
 
 Watch shutdown is part of normal host cleanup in `composition/root.rs`: after native
 pairing is signalled to stop, it closes
