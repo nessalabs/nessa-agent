@@ -1,12 +1,10 @@
 name: Stage runtime phases
 
-# One measurement for #109. pull_request is how a branch can run it before the
-# file exists on the default branch; workflow_dispatch is not read from the
-# branch. It builds a ~390MB tree and times stage_runtime into a fresh
-# Application Support directory. Remove the pull_request trigger after the
-# numbers are recorded so later pushes do not pay for it again.
+# One measurement for #109. The before and after numbers are on the pull
+# request (runs 38473593968 and 38485815250). pull_request is gone so later
+# pushes do not pay for the ~390MB tree again. workflow_dispatch is read from
+# the default branch, so this file does not run until it is there.
 on:
-  pull_request:
   workflow_dispatch:
 
 permissions:
