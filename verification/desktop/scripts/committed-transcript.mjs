@@ -149,27 +149,36 @@ await main(
                 const saved = await page
                   .locator(css.historyTabConsumer)
                   .getAttribute("data-saved-count")
+                const empty = state === "complete_empty" && !truncated
                 await page.getByRole(...committedRoles.closeHistory).click()
                 await page.waitForFunction(
                   (selector) =>
                     document.querySelector(selector)?.dataset.originalTabPresent ===
                     "false",
                   css.historyTabConsumer,
+                  { timeout: 5_000 },
                 )
+                const tabPresent =
+                  (await page
+                    .locator(css.historyTabConsumer)
+                    .getAttribute("data-original-tab-present")) === "true"
                 const closes = await page
                   .locator(css.historyTabConsumer)
                   .getAttribute("data-close-calls")
-                const empty = state === "complete_empty" && !truncated
                 return {
                   saved: Number(saved),
                   closes: Number(closes),
-                  tabClosed: true,
+                  tabPresent,
+                  tabClosed: !tabPresent,
                   failures: [
                     ...(Number(saved) !== (empty ? 0 : 1)
                       ? ["unconfirmed history lost its saved reference"]
                       : []),
                     ...(Number(closes) !== (empty ? 1 : 0)
                       ? ["tab close dispatched an unconfirmed gateway close"]
+                      : []),
+                    ...(tabPresent
+                      ? ["closed history tab remained in the local conversations"]
                       : []),
                   ],
                 }
