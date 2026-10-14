@@ -165,6 +165,10 @@ impl CommittedTranscript {
         Ok(())
     }
     /// Drop the changes staged after `mark` without moving the fact count.
+    ///
+    /// Provider evidence and the context witness are part of that suffix, so
+    /// a unit that staged a permission cancellation and then failed does not
+    /// leave the witness pointing at the rolled-back event.
     pub(crate) fn abandon_staged(&mut self, state: &mut CommittedTransactionState, mark: usize) {
         let extra = state.undo.split_off(mark);
         self.continuation.rollback(extra);

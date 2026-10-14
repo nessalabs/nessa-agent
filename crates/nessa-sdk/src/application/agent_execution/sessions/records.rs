@@ -255,6 +255,14 @@ pub(super) enum ChangeUndo {
         Option<Result<ExecutionOutcome, AgentError>>,
     ),
     Context(ProviderContext),
+    /// Provider evidence before this change. Rollback of an abandoned unit
+    /// restores it with the mutations; a later context record must not see
+    /// evidence for an event that was rolled back.
+    Evidence(ProviderEvidence),
+    /// Context witness before this change. A permission cancellation records
+    /// the event a later context revision rechecks. Rolling the event back
+    /// without the witness leaves that check indexing a missing event.
+    ContextWitness(Option<(usize, usize)>),
     Lease(Option<super::CurrentLease>),
     Artifact,
     Note,
@@ -417,6 +425,7 @@ impl continuation::Continuation {
                     )
                 });
                 next_evidence.validate(&snapshot.provider_context)?;
+                undo.push(ChangeUndo::Evidence(*provider_evidence));
                 *provider_evidence = next_evidence;
                 undo.push(ChangeUndo::Input(record.request.execution_id.clone()));
                 *identity_bytes =
@@ -439,6 +448,7 @@ impl continuation::Continuation {
                 next_evidence.validate(&snapshot.provider_context)?;
                 let queue_undo = queue.apply_current(snapshot, positions, decision)?;
                 undo.push(ChangeUndo::Queue(queue_undo));
+                undo.push(ChangeUndo::Evidence(*provider_evidence));
                 *provider_evidence = next_evidence;
                 snapshot.queue_history.push(decision.clone());
             }
@@ -456,6 +466,8 @@ impl continuation::Continuation {
                 );
                 next_evidence.correlation |= event.target.is_some();
                 next_evidence.validate(&snapshot.provider_context)?;
+                undo.push(ChangeUndo::Evidence(*provider_evidence));
+                *provider_evidence = next_evidence;
                 if event.stage == InvocationStage::Running && !queue.selected(execution_id) {
                     return Err(corrupt("queued dispatch has no prior queue selection"));
                 }
@@ -493,7 +505,6 @@ impl continuation::Continuation {
                         Some(event),
                     )
                 })?;
-                *provider_evidence = next_evidence;
                 undo.push(ChangeUndo::Scheduling(positions[execution_id]));
                 record.scheduling.push(event.clone());
             }
@@ -504,6 +515,8 @@ impl continuation::Continuation {
                 let mut next_evidence = *provider_evidence;
                 next_evidence.observations = true;
                 next_evidence.validate(&snapshot.provider_context)?;
+                undo.push(ChangeUndo::Evidence(*provider_evidence));
+                *provider_evidence = next_evidence;
                 super::validation::validate_observation_context(&snapshot.provider_context, event)?;
                 let context = snapshot.provider_context.clone();
                 let record = invocation_at(snapshot, positions, event.execution_id())?;
@@ -522,7 +535,6 @@ impl continuation::Continuation {
                         .observe(event.execution_id(), observation)
                         .map_err(|error| corrupt(error.to_string()))
                 })?;
-                *provider_evidence = next_evidence;
                 let index = positions[event.execution_id()];
                 let observation_undo =
                     invocations[index].observe(&context, record, record.events.len(), event)?;
@@ -530,6 +542,7 @@ impl continuation::Continuation {
                 if context_witness.is_none()
                     && matches!(event.update(), ExecutionUpdate::PermissionCancelled(_))
                 {
+                    undo.push(ChangeUndo::ContextWitness(*context_witness));
                     *context_witness = Some((index, record.events.len()));
                 }
                 crate::application::agent_execution::executions::limits::reserve_observation_slot(
@@ -585,6 +598,8 @@ impl continuation::Continuation {
                 let mut next_evidence = *provider_evidence;
                 next_evidence.reports = true;
                 next_evidence.validate(&snapshot.provider_context)?;
+                undo.push(ChangeUndo::Evidence(*provider_evidence));
+                *provider_evidence = next_evidence;
                 let record = invocation_at(snapshot, positions, execution_id)?;
                 if record.provider_report.is_some() || record.local_cancellation.is_some() {
                     return Err(corrupt("provider report was already recorded"));
@@ -600,7 +615,6 @@ impl continuation::Continuation {
                         record.scheduling.last(),
                     )
                 })?;
-                *provider_evidence = next_evidence;
                 undo.push(ChangeUndo::Report(positions[execution_id]));
                 record.provider_report = Some(report.clone());
                 record.local_cancellation = local_stop.clone();
@@ -842,6 +856,8 @@ impl continuation::Continuation {
             ChangeUndo::Context(context) => {
                 self.snapshot.as_mut().expect("open").provider_context = context
             }
+            ChangeUndo::Evidence(prior) => self.evidence = prior,
+            ChangeUndo::ContextWitness(prior) => self.context_witness = prior,
             ChangeUndo::Lease(prior) => {
                 let snapshot = self.snapshot.as_mut().expect("open");
                 self.snapshot_bytes = self
