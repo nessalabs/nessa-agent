@@ -16,14 +16,14 @@ use serde_json::Value;
 use super::credentials::{read_credentials, CredentialRead, CredentialReadError};
 use super::jsonl::jsonl_cut;
 use super::sensitivity::path_sensitivity;
-use super::snapshot::{SnapshotCopy, SqliteSnapshot};
+use super::snapshot::{DeferredStream, SnapshotCopy, SqliteSnapshot};
 use crate::backup::application::{
     capture_export, Authenticator, CopiedStore, DeletionLogStore, ExportClock, ExportFailure,
     ExportRequest, ExportSource, FenceSource, ManifestPublisher, MutationAdmission, PinnedStore,
 };
 use crate::backup::domain::{
-    CapturedRecord, CredentialKind, DeletionFence, GrantRole, Sensitivity, SkipReason,
-    SkippedRecord, SourceCut, StoreKind,
+    CapturedRecord, CredentialKind, DeferredEntry, DeletionFence, Fingerprint, GrantRole,
+    Sensitivity, SkipReason, SkippedRecord, SourceCut, StoreKind,
 };
 use crate::conversation::infrastructure::{
     ExportFences, ExportSkip, MetadataSnapshot, NamedRecord, ReceiverSnapshot,
@@ -341,7 +341,7 @@ enum SessionState {
     Cold,
     Absent,
     Unreadable,
-    Oversized,
+    Deferred(Vec<DeferredStream>),
     Open(SqliteSnapshot),
     Bytes(Arc<Vec<u8>>),
 }
@@ -349,7 +349,7 @@ enum SessionState {
 enum SessionView {
     Absent,
     Unreadable,
-    Oversized,
+    Deferred(Vec<DeferredStream>),
     Bytes(Arc<Vec<u8>>),
 }
 
@@ -405,9 +405,10 @@ impl SessionFiles {
                     *guard = SessionState::Unreadable;
                     return Ok(SessionView::Unreadable);
                 }
-                SessionState::Oversized => {
-                    *guard = SessionState::Oversized;
-                    return Ok(SessionView::Oversized);
+                SessionState::Deferred(streams) => {
+                    let shared = streams.clone();
+                    *guard = SessionState::Deferred(streams);
+                    return Ok(SessionView::Deferred(shared));
                 }
                 SessionState::Bytes(bytes) => {
                     let shared = Arc::clone(&bytes);
@@ -427,9 +428,9 @@ impl SessionFiles {
                 *self.state.lock().map_err(|_| ())? = SessionState::Bytes(Arc::clone(&bytes));
                 Ok(SessionView::Bytes(bytes))
             }
-            Ok(SnapshotCopy::Oversized) => {
-                *self.state.lock().map_err(|_| ())? = SessionState::Oversized;
-                Ok(SessionView::Oversized)
+            Ok(SnapshotCopy::Deferred(streams)) => {
+                *self.state.lock().map_err(|_| ())? = SessionState::Deferred(streams.clone());
+                Ok(SessionView::Deferred(streams))
             }
             Err(()) => {
                 *self.state.lock().map_err(|_| ())? = SessionState::Unreadable;
@@ -511,12 +512,9 @@ impl PinnedStore for CanonicalPin {
         match self.files.view().await? {
             SessionView::Absent => absent(StoreKind::CanonicalRecords),
             SessionView::Unreadable => skipped_file(StoreKind::CanonicalRecords, "records.sqlite3"),
-            SessionView::Oversized => skipped_reason(
-                StoreKind::CanonicalRecords,
-                "records.sqlite3",
-                "oversized",
-                SkipReason::Oversized,
-            ),
+            SessionView::Deferred(streams) => {
+                finish_deferred(StoreKind::CanonicalRecords, &streams)
+            }
             SessionView::Bytes(bytes) => {
                 // The file is one record. A private-key header or a secret
                 // JSON key inside it cannot be stripped per event, so the
@@ -577,12 +575,7 @@ impl PinnedStore for NotesPin {
         match self.files.view().await? {
             SessionView::Absent => absent(StoreKind::Notes),
             SessionView::Unreadable => skipped_file(StoreKind::Notes, "records.sqlite3"),
-            SessionView::Oversized => skipped_reason(
-                StoreKind::Notes,
-                "records.sqlite3",
-                "oversized",
-                SkipReason::Oversized,
-            ),
+            SessionView::Deferred(streams) => finish_deferred(StoreKind::Notes, &streams),
             SessionView::Bytes(bytes) => {
                 let fingerprint = crate::backup::domain::Fingerprint::of(bytes.as_slice());
                 finish(StoreKind::Notes, &fingerprint.hex(), vec![], vec![])
@@ -1444,18 +1437,21 @@ fn skipped_file(kind: StoreKind, identity: &str) -> Result<SourceCut, ()> {
     finish(kind, "unavailable", vec![], vec![skip(kind, identity)?])
 }
 
-fn skipped_reason(
-    kind: StoreKind,
-    identity: &str,
-    watermark: &str,
-    reason: SkipReason,
-) -> Result<SourceCut, ()> {
-    finish(
-        kind,
-        watermark,
-        vec![],
-        vec![SkippedRecord::new(kind, identity, reason).map_err(|_| ())?],
-    )
+fn finish_deferred(kind: StoreKind, streams: &[DeferredStream]) -> Result<SourceCut, ()> {
+    let mut deferred = Vec::with_capacity(streams.len());
+    for stream in streams {
+        deferred.push(
+            DeferredEntry::new(
+                kind,
+                stream.conversation_id.clone(),
+                stream.size,
+                Fingerprint::from_digest(stream.digest),
+            )
+            .map_err(|_| ())?,
+        );
+    }
+    let watermark = crate::backup::domain::Watermark::new("deferred").map_err(|_| ())?;
+    SourceCut::with_deferred(kind, watermark, vec![], vec![], deferred).map_err(|_| ())
 }
 
 fn absent(kind: StoreKind) -> Result<SourceCut, ()> {

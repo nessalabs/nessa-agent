@@ -146,8 +146,6 @@ pub enum SkipReason {
     Unavailable,
     /// The record's identity or watermark was not one this cut can name.
     Unnameable,
-    /// The session file is above the export size cap, so it was not copied.
-    Oversized,
     /// The bytes hold key material. A fingerprint may still name them.
     Secret,
 }
@@ -158,7 +156,6 @@ impl SkipReason {
             Self::Unreadable => "unreadable",
             Self::Unavailable => "unavailable",
             Self::Unnameable => "unnameable",
-            Self::Oversized => "oversized",
             Self::Secret => "secret",
         }
     }
@@ -198,6 +195,50 @@ impl SkippedRecord {
     }
 }
 
+/// A conversation left out of the snapshot, named so a later fetch can find it.
+///
+/// The bytes stay in the source. `digest` is the stream's incarnation, floor,
+/// tail, and records at the cut. This cut does not fetch them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeferredEntry {
+    store: StoreKind,
+    conversation_id: String,
+    size: u64,
+    digest: Fingerprint,
+}
+
+impl DeferredEntry {
+    pub fn new(
+        store: StoreKind,
+        conversation_id: impl Into<String>,
+        size: u64,
+        digest: Fingerprint,
+    ) -> Result<Self, RecordError> {
+        Ok(Self {
+            store,
+            conversation_id: checked_identity(conversation_id.into())?,
+            size,
+            digest,
+        })
+    }
+
+    pub fn store(&self) -> StoreKind {
+        self.store
+    }
+
+    pub fn conversation_id(&self) -> &str {
+        &self.conversation_id
+    }
+
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    pub fn digest(&self) -> Fingerprint {
+        self.digest
+    }
+}
+
 /// What one store contributed from the snapshot taken while admission was held.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceCut {
@@ -205,6 +246,7 @@ pub struct SourceCut {
     watermark: Watermark,
     records: Vec<CapturedRecord>,
     skipped: Vec<SkippedRecord>,
+    deferred: Vec<DeferredEntry>,
 }
 
 impl SourceCut {
@@ -214,8 +256,19 @@ impl SourceCut {
         records: Vec<CapturedRecord>,
         skipped: Vec<SkippedRecord>,
     ) -> Result<Self, RecordError> {
+        Self::with_deferred(store, watermark, records, skipped, Vec::new())
+    }
+
+    pub fn with_deferred(
+        store: StoreKind,
+        watermark: Watermark,
+        records: Vec<CapturedRecord>,
+        skipped: Vec<SkippedRecord>,
+        deferred: Vec<DeferredEntry>,
+    ) -> Result<Self, RecordError> {
         if records.iter().any(|record| record.store != store)
             || skipped.iter().any(|record| record.store != store)
+            || deferred.iter().any(|entry| entry.store != store)
         {
             return Err(RecordError::Store);
         }
@@ -224,6 +277,7 @@ impl SourceCut {
             watermark,
             records,
             skipped,
+            deferred,
         })
     }
 
@@ -241,6 +295,10 @@ impl SourceCut {
 
     pub fn skipped(&self) -> &[SkippedRecord] {
         &self.skipped
+    }
+
+    pub fn deferred(&self) -> &[DeferredEntry] {
+        &self.deferred
     }
 }
 

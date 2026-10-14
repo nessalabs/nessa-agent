@@ -2,7 +2,9 @@
 //! fingerprints, and skips. It does not hold secret bytes.
 
 use super::inventory::{StoreKind, WRITER_INVENTORY};
-use super::record::{CapturedRecord, Fingerprint, RecordBody, SkippedRecord, SourceCut};
+use super::record::{
+    CapturedRecord, DeferredEntry, Fingerprint, RecordBody, SkippedRecord, SourceCut,
+};
 
 /// One cut, after every required store has been read.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,6 +56,9 @@ impl Manifest {
             ));
             for record in cut.records() {
                 text.push_str(&record_line(record));
+            }
+            for deferred in cut.deferred() {
+                text.push_str(&deferred_line(deferred));
             }
             for skipped in cut.skipped() {
                 text.push_str(&skip_line(skipped));
@@ -122,6 +127,16 @@ fn record_line(record: &CapturedRecord) -> String {
             fingerprint.hex()
         ),
     }
+}
+
+fn deferred_line(entry: &DeferredEntry) -> String {
+    format!(
+        "deferred {} {} {} {}\n",
+        entry.store().as_str(),
+        encode(entry.conversation_id()),
+        entry.size(),
+        entry.digest().hex()
+    )
 }
 
 fn skip_line(skipped: &SkippedRecord) -> String {

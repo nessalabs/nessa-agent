@@ -410,7 +410,7 @@ async fn a_public_key_header_in_a_session_database_is_copied() {
 }
 
 #[tokio::test]
-async fn an_oversized_session_is_skipped_and_the_cut_continues() {
+async fn an_oversized_session_is_deferred_and_the_cut_continues() {
     let namespace = tempfile::tempdir().unwrap();
     let root = namespace.path();
     let sessions = root.join("conversations/sessions");
@@ -421,32 +421,216 @@ async fn an_oversized_session_is_skipped_and_the_cut_continues() {
         b"{\"lease\":\"still-cut\"}\n",
     )
     .unwrap();
+    let kept = b"SMALL-CONVERSATION-STAYS-NAMED";
+    let kept_incarnation = [0x11u8; 16];
+    let bulk_incarnation = [0x22u8; 16];
+    let tail = [0u8, 0, 0, 0, 0, 0, 0, 1];
+    let offset = [0u8, 0, 0, 0, 0, 0, 0, 1];
+    let bulk_len = usize::try_from(crate::backup::infrastructure::snapshot::SESSION_EXPORT_LIMIT)
+        .unwrap()
+        + 4096;
     let database =
         nessa_local_database::rusqlite::Connection::open(sessions.join("records.sqlite3")).unwrap();
-    let limit =
-        i64::try_from(crate::backup::infrastructure::snapshot::SESSION_EXPORT_LIMIT).unwrap();
     database
-        .execute_batch("CREATE TABLE blob(body BLOB);")
+        .execute_batch(
+            "CREATE TABLE event_streams(
+                stream_key INTEGER PRIMARY KEY,
+                public_id TEXT NOT NULL,
+                incarnation BLOB NOT NULL,
+                floor BLOB NOT NULL,
+                tail BLOB NOT NULL,
+                retired INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE event_stream_names(
+                public_id TEXT PRIMARY KEY,
+                latest_incarnation BLOB NOT NULL,
+                active_stream_key INTEGER
+            );
+            CREATE TABLE event_records(
+                stream_key INTEGER NOT NULL,
+                offset BLOB NOT NULL,
+                event_id TEXT NOT NULL,
+                schema_id TEXT NOT NULL,
+                schema_version INTEGER NOT NULL,
+                payload BLOB NOT NULL
+            );",
+        )
         .unwrap();
     database
         .execute(
-            "INSERT INTO blob(body) VALUES (zeroblob(?1))",
-            [limit + 4096],
+            "INSERT INTO event_streams(stream_key, public_id, incarnation, floor, tail)
+             VALUES (1, 'conv-kept', ?1, ?2, ?2)",
+            [kept_incarnation.as_slice(), tail.as_slice()],
+        )
+        .unwrap();
+    database
+        .execute(
+            "INSERT INTO event_streams(stream_key, public_id, incarnation, floor, tail)
+             VALUES (2, 'conv-bulk', ?1, ?2, ?2)",
+            [bulk_incarnation.as_slice(), tail.as_slice()],
+        )
+        .unwrap();
+    database
+        .execute(
+            "INSERT INTO event_stream_names(public_id, latest_incarnation, active_stream_key)
+             VALUES ('conv-kept', ?1, 1), ('conv-bulk', ?2, 2)",
+            [kept_incarnation.as_slice(), bulk_incarnation.as_slice()],
+        )
+        .unwrap();
+    database
+        .execute(
+            "INSERT INTO event_records(stream_key, offset, event_id, schema_id, schema_version, payload)
+             VALUES (1, ?1, 'kept-event', 'nessa.record', 1, ?2)",
+            rusqlite_pair(&offset, kept),
+        )
+        .unwrap();
+    database
+        .execute(
+            "INSERT INTO event_records(stream_key, offset, event_id, schema_id, schema_version, payload)
+             VALUES (2, ?1, 'bulk-event', 'nessa.record', 1, zeroblob(?2))",
+            nessa_local_database::rusqlite::params![offset.as_slice(), bulk_len as i64],
         )
         .unwrap();
     drop(database);
     let published = publish_cut(root).await;
+    let kept_digest = deferred_digest(
+        DeferredHead {
+            incarnation: &kept_incarnation,
+            floor: &tail,
+            tail: &tail,
+        },
+        &[DeferredRecord {
+            offset: &offset,
+            schema_id: "nessa.record",
+            schema_version: 1,
+            event_id: "kept-event",
+            payload: kept,
+        }],
+    );
+    let bulk_digest = deferred_digest_zero_payload(
+        DeferredHead {
+            incarnation: &bulk_incarnation,
+            floor: &tail,
+            tail: &tail,
+        },
+        DeferredRecord {
+            offset: &offset,
+            schema_id: "nessa.record",
+            schema_version: 1,
+            event_id: "bulk-event",
+            payload: &[],
+        },
+        bulk_len,
+    );
+    assert!(published.text.contains(&format!(
+        "deferred canonical-records conv-kept {} {kept_digest}",
+        kept.len()
+    )));
+    assert!(published.text.contains(&format!(
+        "deferred canonical-records conv-bulk {bulk_len} {bulk_digest}"
+    )));
+    assert!(published.text.contains(&format!(
+        "deferred notes conv-kept {} {kept_digest}",
+        kept.len()
+    )));
+    assert!(published.text.contains(&format!(
+        "deferred notes conv-bulk {bulk_len} {bulk_digest}"
+    )));
     assert!(published
         .text
-        .contains("skipped canonical-records records.sqlite3 oversized"));
-    assert!(published
-        .text
-        .contains("skipped notes records.sqlite3 oversized"));
+        .contains("watermark canonical-records deferred"));
+    assert!(published.text.contains("watermark notes deferred"));
+    assert!(!published.text.contains("oversized"));
     assert!(holds(&published.bytes, b"still-cut"));
+    assert!(!holds(&published.bytes, kept));
     assert!(!published
         .root
         .join("records/canonical-records/records.sqlite3")
         .exists());
+}
+
+fn rusqlite_pair<'a>(offset: &'a [u8], payload: &'a [u8]) -> [&'a [u8]; 2] {
+    [offset, payload]
+}
+
+struct DeferredHead<'a> {
+    incarnation: &'a [u8],
+    floor: &'a [u8],
+    tail: &'a [u8],
+}
+
+struct DeferredRecord<'a> {
+    offset: &'a [u8],
+    schema_id: &'a str,
+    schema_version: i64,
+    event_id: &'a str,
+    payload: &'a [u8],
+}
+
+fn deferred_digest(head: DeferredHead<'_>, records: &[DeferredRecord<'_>]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hash_head(&mut hasher, head);
+    for record in records {
+        hash_record_prefix(&mut hasher, record);
+        let payload_len = u64::try_from(record.payload.len()).unwrap();
+        hasher.update(payload_len.to_be_bytes());
+        hasher.update(record.payload);
+    }
+    hex_digest(hasher.finalize().as_slice())
+}
+
+fn deferred_digest_zero_payload(
+    head: DeferredHead<'_>,
+    record: DeferredRecord<'_>,
+    payload_len: usize,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hash_head(&mut hasher, head);
+    hash_record_prefix(&mut hasher, &record);
+    hasher.update(u64::try_from(payload_len).unwrap().to_be_bytes());
+    let chunk = [0u8; 1024 * 1024];
+    let mut remaining = payload_len;
+    while remaining > 0 {
+        let take = remaining.min(chunk.len());
+        hasher.update(&chunk[..take]);
+        remaining -= take;
+    }
+    hex_digest(hasher.finalize().as_slice())
+}
+
+fn hash_head(hasher: &mut sha2::Sha256, head: DeferredHead<'_>) {
+    use sha2::Digest;
+    hasher.update(b"deferred-session/1");
+    hasher.update(head.incarnation);
+    hasher.update(head.floor);
+    hasher.update(head.tail);
+}
+
+fn hash_record_prefix(hasher: &mut sha2::Sha256, record: &DeferredRecord<'_>) {
+    use sha2::Digest;
+    hasher.update(record.offset);
+    write_prefixed(hasher, record.schema_id.as_bytes());
+    hasher.update(record.schema_version.to_be_bytes());
+    write_prefixed(hasher, record.event_id.as_bytes());
+}
+
+fn write_prefixed(hasher: &mut sha2::Sha256, bytes: &[u8]) {
+    use sha2::Digest;
+    let len = u32::try_from(bytes.len()).unwrap();
+    hasher.update(len.to_be_bytes());
+    hasher.update(bytes);
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        text.push(HEX[(byte >> 4) as usize] as char);
+        text.push(HEX[(byte & 0xf) as usize] as char);
+    }
+    text
 }
 
 #[tokio::test]
@@ -614,7 +798,7 @@ fn a_sqlite_snapshot_excludes_a_later_write() {
     });
     let bytes = match snapshot.backup_bytes().unwrap() {
         crate::backup::infrastructure::snapshot::SnapshotCopy::Ready(bytes) => bytes,
-        crate::backup::infrastructure::snapshot::SnapshotCopy::Oversized => {
+        crate::backup::infrastructure::snapshot::SnapshotCopy::Deferred(_) => {
             panic!("the fixture is within the session export limit");
         }
     };

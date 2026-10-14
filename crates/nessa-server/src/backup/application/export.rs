@@ -162,11 +162,12 @@ fn push_skip(cut: &mut SourceCut, identity: &str, reason: SkipReason) -> Result<
     let records = cut.records().to_vec();
     let mut skipped_records = cut.skipped().to_vec();
     skipped_records.push(skipped);
-    *cut = SourceCut::new(
+    *cut = SourceCut::with_deferred(
         cut.store(),
         cut.watermark().clone(),
         records,
         skipped_records,
+        cut.deferred().to_vec(),
     )
     .map_err(|_| ExportFailure::Inventory)?;
     Ok(())
