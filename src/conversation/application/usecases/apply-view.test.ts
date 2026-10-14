@@ -1,3 +1,4 @@
+import { AttachmentResource } from "../../model"
 import { expect, it } from "vitest"
 import { conversation, textContent, type Turn, type UserTurn } from "../../model"
 import { emptyLocalTabs } from "../local-tabs"
@@ -9,6 +10,8 @@ const view: ConversationView = {
   conversationId: "server",
   artifacts: [],
   notes: [],
+  unreadable: [],
+  unreadableTruncated: false,
   approvalMode: "ask",
   approvalModes: [
     { id: "ask", name: "Provider asks", description: "Provider asks where required." },
@@ -484,16 +487,18 @@ it("shows a turn it never held the bytes for as text plus image references", () 
 it("keeps a sent turn's local previews when the gateway echoes it by reference", () => {
   const file = {
     type: "file" as const,
-    id: "f",
-    name: "finder.png",
-    mimeType: "image/png",
-    size: 2048,
-    previewUrl: "blob:finder",
+    placementId: "f",
     upload: {
       status: "stored" as const,
       image: { digest: DIGEST, mimeType: "image/png" as const, size: 2048 },
     },
-    path: null,
+    resource: AttachmentResource.create({
+      name: "finder.png",
+      mimeType: "image/png",
+      size: 2048,
+      previewUrl: "blob:finder",
+      path: null,
+    }),
   }
   const base = emptyLocalTabs()
   const tabs = {
@@ -650,4 +655,16 @@ it("carries the notes left in the conversation as the view lists them, and repla
   const taken = { ...left, deliveryState: "assigned" as const }
   expect(applyView(first, { ...view, notes: [taken] }).remote?.notes).toEqual([taken])
   expect(applyView(first, { ...view, notes: [] }).remote?.notes).toEqual([])
+})
+
+it("carries each record the view could not read, and replaces them with the next view", () => {
+  const gap = { id: "12", afterExecutionId: "run" }
+  const first = applyView(conversation("tab"), { ...view, unreadable: [gap] })
+  expect(first.remote?.unreadable).toEqual([gap])
+  expect(first.turns).toEqual(applyView(conversation("tab"), view).turns)
+  expect(applyView(first, { ...view, unreadable: [] }).remote?.unreadable).toEqual([])
+  expect(first.remote?.unreadableTruncated).toBe(false)
+  expect(
+    applyView(first, { ...view, unreadableTruncated: true }).remote?.unreadableTruncated,
+  ).toBe(true)
 })

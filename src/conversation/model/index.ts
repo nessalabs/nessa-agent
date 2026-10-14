@@ -37,6 +37,8 @@ export { questionAnswerReady, questionChoices, type QuestionField } from "./ques
 
 export {
   type FileAttachment,
+  AttachmentResource,
+  type AttachmentResourceData,
   type ImageReference,
   type ImageReferencePart,
   type ImageRefusal,

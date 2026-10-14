@@ -322,7 +322,8 @@ not reading the session, which stays unread.
   focus following the focused pane and owning its queued settlement for the mounted
   subscription (`focus.ts`, [frame lifetime](design/ui-workspace-load.md#focus-frame-lifetime-730)), the page's measure of the
   panes' room (`measure.ts`, injected into the commands), the arrival of a
-  first message, and the clock's ticks. `adapters/storage/` keeps the Agents overview's
+  first message. `src/clock/` owns the shared published clock ticks used by
+  conversation and workspace readers. `adapters/storage/` keeps the Agents overview's
   filter between launches (`remembered-filter.ts`).
 - `ui/` holds each component once — source list (two variants of one
   component), session list, pane grid, pane, pane header, transcript, message,
@@ -493,16 +494,17 @@ opinion rather than the product's.
 | Path | Owns |
 | --- | --- |
 | `model/` | Shared language: `Conversation`, `Turn`, `ConversationTabs` (`conversations` + `activeId`), and `CommandFailure` — why a conversation command did not do what was asked, in the panel's words rather than the gateway's. Discriminated turns and phases. `conversationHistoryEmpty` in `types.ts` owns the explicit complete-empty history decision consumed by saved-tab selection and automatic close; display absence alone is insufficient. No id mill, and no client SDK: the model states product rules in its own terms, and `adapters/gateway/` is where they meet the wire's. |
-| `application/local-tabs.ts` | UI-session store shape: the shared tabs plus local id counters. UI-local turn counters; durable conversation and submission UUIDs remain separate identities. |
+| `application/local-tabs.ts` | UI-session store shape: the shared tabs plus local id counters. UI-local turn and placement counters (`nextPlacementId`); restoration preserves the placement counter while allocating fresh tab identities. Durable conversation and submission UUIDs remain separate identities. |
 | `application/usecases/` | One file per command. Local drafts and tabs, send/steer/queue, stop, permission replies, and replacement-view application. |
 | `application/ports.ts` | `ConversationGateway` for local draft and tab operations; `ConversationEffects` for what the panel may ask the product to do, including staging an image's bytes and listing, archiving and deleting conversations; the typed `AttachmentStagingError`, `SubmissionRefusedError` (a message the gateway did not take, so the draft comes back), and `ControlFailedError` (a control it answered with a reason, a `ControlOutcome`, or both — the reason may be absent while the outcome is certain). |
 | `adapters/gateway/local.ts` | In-process draft/tab projection. Remote effects live in `adapters/gateway/effects.ts` and use the shared authenticated client; staging is begin, then upload of the original bytes only when a ticket was issued; it answers with the reference the gateway stored, and maps the client's failure codes to the panel's typed reasons. |
 | `adapters/store/` | Redux projection and command thunks. Thunks invoke injected effects; reducers apply local UI state and returned views. `history.ts` owns the Messages list's paired active/archived catalogue follow, publication identity and cleanup ([ordering table](design/record-subscriptions.md#panel-messages-list--issue-722)), and archive and delete: the rows with an action out, the conversations known deleted, what the latest action said, and the one archive that can be undone — the table in ADR 182, "In the panel". |
 | `application/queries/roster.ts` | The Messages list's rows: the gateway's list joined to the tabs this window holds, and the search over them. |
 | `ui/` | Transcript, thinking pill, `useConversation`, and `conversation-list.tsx`, the Messages list with each row's archive and delete. Paints and dispatches. `message-images.tsx` paints a sent turn's images: the local preview when this window has one, a labelled placeholder when only a reference is known. |
-| `model/attachments.ts` | File parts with their upload state (a stored file carries the gateway's whole returned reference), reference-only image parts, the preview budgets, and the message rules counted over stored references (10 images, 10 MiB together). No per-image byte or pixel limit lives here: that is the gateway's, per model. `messageImages` decides which parts of a message go as image references, or the one reason none can, and `messageFiles` the paths it points the agent at. Which of the two a file takes is `linkedFile`: an image is carried, and anything else the host named a path for is pointed at. A file with neither — a browser gave the bytes and nothing could say where they came from — cannot be sent, and the byte budgets are counted over held bytes alone, so a video attached by path is bound only by how many files a draft shows. `declaredMediaType` names a file the browser gave no type (camera RAW, some HEIC) by its extension, and `previewableImage` says which images a webview can paint. |
+| `model/attachments.ts` | Immutable `AttachmentResource` values identify original bytes and preview metadata; independently issued placements own each draft admission and upload state (a stored file carries the gateway's whole returned reference), reference-only image parts, the preview budgets, and the message rules counted over stored references (10 images, 10 MiB together). No per-image byte or pixel limit lives here: that is the gateway's, per model. `messageImages` decides which parts of a message go as image references, or the one reason none can, and `messageFiles` the paths it points the agent at. Which of the two a file takes is `linkedFile`: an image is carried, and anything else the host named a path for is pointed at. A file with neither — a browser gave the bytes and nothing could say where they came from — cannot be sent, and the byte budgets are counted over held bytes alone, so a video attached by path is bound only by how many files a draft shows. `declaredMediaType` names a file the browser gave no type (camera RAW, some HEIC) by its extension, and `previewableImage` says which images a webview can paint. |
 | `application/usecases/attachments.ts` | Attach to the originating conversation, remove individual draft files, and own every step of a draft file's upload state; a result for a removed file changes nothing. |
-| `application/usecases/release-uploads.ts` | Forget a draft's stored images once the gateway conversation that held them has been closed, and bound how many already-sent originals are kept to paint the transcript. |
+| `application/queries/attachment-resources.ts` | One resource-usage classification across drafts and turns. Needed references take precedence over preview-only references to the same resource. |
+| `application/usecases/release-uploads.ts` | Forget a draft's stored images once the gateway conversation that held them has been closed, and evict preview-only resources across all stored references at the preview bound. |
 | `application/usecases/upload-failure.ts` | Why an upload failed, in words, and whether a retry could end differently. One owner for both, so the tile and the composer's notice cannot drift apart; exported through the barrel for the panel. |
 | `application/usecases/send-draft.ts` | Every local reason a draft is declined, as a pure `declineReason` the store shows and rejects in one place; what a refusal says; and how a submission's outcome lands on its turn. |
 | `application/usecases/control-failure.ts` | What a failed conversation control says. The client has one constant for every control — "did not return a trustworthy acknowledgement" — so this speaks wherever that would be false and stays silent wherever it is still true. Which of the three sentences is shown is decided by the `ControlOutcome` (refused, applied, unknown), never by the reason, which only shapes it; a review the gateway left pending is refused under codes this build has no word for. |
@@ -529,7 +531,7 @@ Chat adapters receive the composition-owned session handle; they do not open ano
 | `adapters/` | Host subscriptions: colour scheme, edge reveal, panel frame, frost, remembered surface, compositor flush, config-driven tab shortcuts. |
 | `ui/app.tsx` | The chrome: stage, glow, resize handle, tab strip, composer. Renders; no effects. |
 | `application/messages-tab.ts`, `ui/use-messages-tab.ts`, `ui/messages-tab.tsx`, `ui/messages-icon.tsx` | The Messages tab: where it sits in the strip, how it opens, is left and closes, and the list it shows, which is the conversation vertical's. |
-| `adapters/attachment-resources.ts`, `adapters/dropped-image.ts`, `adapters/dropped-text.ts` | Bounded object-URL resources that also hold each file's original bytes for upload and stop counting a file once its message has been taken, remote image reads, and external drop representations. `addChosen` is the other way in: a file the host's picker named by path, which this window holds nothing of and which spends none of the budget. |
+| `adapters/attachment-resources.ts`, `adapters/dropped-image.ts`, `adapters/dropped-text.ts` | Object-URL and original-byte resources keyed by immutable resource values, consuming the application's published needed/preview classification; remote image reads and external drop representations. `addChosen` is the other way in: a file the host's picker named by path, which this window holds nothing of and which spends none of the budget. |
 | `application/upload-image.ts` | The order of one upload — hash the original, then stage it, checking after the wait that the tile is still there — and which waiting images start next (three in flight per window). No image processing, which is the gateway's. |
 | `application/attachment-notice.ts`, `ui/attachment-notices.tsx` | Everything the composer says about attachments. One typed refusal per way the panel turns something away, and two subjects that are never ranked against each other: what the draft is holding, and what was just turned away. Both render when both are true, the refusal nearest the composer; one action at most, being the uploads worth retrying or the file picker where choosing again could end differently. The words for a failed upload are the conversation's. Rendered through `AgentNotification`, like every other notice in this pane; no notice is red text beside the composer, and the reading status is a live region mounted before there is anything to read. |
 | `ui/attachment-drop-zone.tsx` | The drop zone's bounds and both halves of a drop: what passed, and one refusal naming the rule that refused the rest. A component rather than props on the chrome, so the wiring the report's oversized file travels through is exercised by a test. |
@@ -544,12 +546,20 @@ Chat adapters receive the composition-owned session handle; they do not open ano
 | `ui/waveform-icon.tsx` | The voice glyph in the composer. |
 
 The composition root injects an attachment resource store into the panel. Redux
-keeps metadata, URLs, and each file's upload state; its subscription reconciles resource IDs after commands and revokes URLs
-that are in no draft and no sent turn, including closed conversations. A sent
-turn keeps its previews so the transcript can paint them and so a refused send
-can return them to the draft. The resource store shares the product store
-lifetime so React remounts do not invalidate previews. See
-[images in a message](guides/gateway-chat.md#images-in-a-message-panel-and-client).
+carries immutable resource values and store-issued placement identities, with upload
+state on each placement. `src/store.ts` publishes `attachmentResourceUsage` to the
+resource store after conversation changes. Drafts and unsettled turns retain original
+bytes; terminal failed content without a stored image fallback retains its original
+too. Settled stored references, including failed submissions, are preview-only when
+no needed reference shares their resource. Preview eviction converts all stored
+references for a selected resource together; absent resources release their URLs.
+A refused send restores its placement to the draft, so that draft keeps the bytes
+needed. Once a subsequent send accepts it, the old failed turn cannot keep the
+resource charged to the draft byte budget (AL24 in the resource-query tests).
+An evicted stored reference can be unavailable at the gateway and uses the existing
+held-file placeholder. The resource store shares the product store lifetime so React
+remounts do not invalidate previews. See [attachment lifetimes](design/attachment-lifetimes.md)
+and [images in a message](guides/gateway-chat.md#images-in-a-message-panel-and-client).
 
 ## Boundaries
 

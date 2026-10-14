@@ -258,17 +258,65 @@ impl GroupProgress {
         self.hash.update(bytes);
         Ok(())
     }
-    pub(super) fn complete(
-        &mut self,
-        key: &FactKey,
-        position: u64,
-    ) -> Result<Header, StorageError> {
+    /// Header digest and ordinal, without changing lineage.
+    pub(super) fn sound_header(&self, key: &FactKey) -> Result<Header, StorageError> {
         let header = Header::decode(&self.prefix)?;
         if key.ordinal() != header.ordinal
             || self.hash.clone().finalize().as_slice() != header.payload
         {
             return Err(invalid());
         }
+        Ok(header)
+    }
+    /// Accept a sound header whose chain does not follow, so a later unit of
+    /// this chat can apply. A header for another base or generation pair is
+    /// refused here; the caller skips it.
+    pub(super) fn adopt(
+        &mut self,
+        key: &FactKey,
+        position: u64,
+        facts: u64,
+    ) -> Result<Header, StorageError> {
+        let header = self.sound_header(key)?;
+        let identity = &header.identity;
+        if (identity.generation == 0) != (identity.base == 0) || identity.base >= position {
+            return Err(invalid());
+        }
+        match key.kind() {
+            FactKind::SaveUnit if self.payload_length != 0 => {
+                self.extent = Some(Extent {
+                    group: GroupCheckpoint {
+                        identity: header.identity.clone(),
+                        count: header.ordinal.checked_add(1).ok_or_else(invalid)?,
+                        chain: header.chain(self.payload_length),
+                        unit_previous: header.previous,
+                        unit_payload: header.payload,
+                        unit_length: self.payload_length,
+                    },
+                    complete: false,
+                });
+            }
+            FactKind::SaveComplete if self.payload_length == 0 && facts > 0 => {
+                let count = if identity.generation == 0 { facts } else { 1 };
+                let group = agreeing_group(header.identity.clone(), count);
+                self.extent = Some(Extent {
+                    group: group.clone(),
+                    complete: true,
+                });
+                self.published = position;
+                self.checkpoint = Some(group);
+            }
+            _ => return Err(invalid()),
+        }
+        self.reset_frame();
+        Ok(header)
+    }
+    pub(super) fn complete(
+        &mut self,
+        key: &FactKey,
+        position: u64,
+    ) -> Result<Header, StorageError> {
+        let header = self.sound_header(key)?;
         let same = self
             .extent
             .as_ref()
@@ -332,6 +380,22 @@ impl GroupProgress {
         }
         self.reset_frame();
         Ok(header)
+    }
+}
+fn agreeing_group(identity: SaveIdentity, count: u64) -> GroupCheckpoint {
+    let header = Header {
+        identity: identity.clone(),
+        ordinal: count.saturating_sub(1),
+        previous: EMPTY_CHAIN,
+        payload: [0; 32],
+    };
+    GroupCheckpoint {
+        identity,
+        count,
+        chain: header.chain(0),
+        unit_previous: EMPTY_CHAIN,
+        unit_payload: [0; 32],
+        unit_length: 0,
     }
 }
 fn invalid() -> StorageError {

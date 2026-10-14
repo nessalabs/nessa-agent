@@ -1,3 +1,4 @@
+import { AttachmentResource } from "../../conversation"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
@@ -7,13 +8,15 @@ import type { FileAttachment } from "../../conversation"
 function preview(name: string, size: number) {
   const file: FileAttachment = {
     type: "file",
-    id: "preview",
-    name,
-    mimeType: "application/octet-stream",
-    size,
-    previewUrl: "blob:local-preview",
+    placementId: "preview",
     upload: { status: "not-started" },
-    path: null,
+    resource: AttachmentResource.create({
+      name,
+      mimeType: "application/octet-stream",
+      size,
+      previewUrl: "blob:local-preview",
+      path: null,
+    }),
   }
   return renderToStaticMarkup(createElement(AttachmentPreview, { file }))
 }

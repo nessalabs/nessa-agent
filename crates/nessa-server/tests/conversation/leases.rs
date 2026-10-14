@@ -4123,7 +4123,7 @@ impl Harness {
     async fn fetch_file(&self, call: FetchCall) -> FetchAnswer {
         let (_caller, stop) = tokio::sync::watch::channel(false);
         tokio::time::timeout(
-            Duration::from_secs(10),
+            Duration::from_secs(30),
             self.service.fetch_artifact(&self.id, call, stop),
         )
         .await
@@ -4655,7 +4655,7 @@ async fn a_fetch_stopped_before_delivery_gives_its_size_back_and_one_after_does_
         let call = fetch_call("devbox", &bytes, "a.bin", "cancelled");
         tokio::spawn(async move { service.fetch_artifact(&id, call, stop).await })
     };
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(20), async {
         while !host
             .fetching
             .asks

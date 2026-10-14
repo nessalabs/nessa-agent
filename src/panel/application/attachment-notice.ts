@@ -13,7 +13,7 @@ const MIB = 1024 * 1024
 
 /** A draft file, as much of it as the notice needs: its upload state keeps its union. */
 export type NoticedFile = {
-  id: string
+  placementId: string
   name: string
   image: boolean
   /**
@@ -526,13 +526,15 @@ function draftFilesNotice(
   canChoosePaths: boolean,
 ): AttachmentNotice | null {
   const failed = files.flatMap((file) =>
-    file.upload.status === "failed" ? [{ id: file.id, reason: file.upload.reason }] : [],
+    file.upload.status === "failed"
+      ? [{ placementId: file.placementId, reason: file.upload.reason }]
+      : [],
   )
   const [first] = failed
   if (first) {
     const retry = failed
       .filter((file) => worthRetrying(file.reason))
-      .map((file) => file.id)
+      .map((file) => file.placementId)
     return {
       kind: "draft-files",
       title:

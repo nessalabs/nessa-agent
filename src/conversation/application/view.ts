@@ -26,6 +26,16 @@ export type ConversationView = {
    * left: who left each, where it stands, and the turn it follows.
    */
   notes: Note[]
+  /**
+   * Records this read could not apply, oldest first. Each is one line in the
+   * transcript. Empty when every record applied.
+   */
+  unreadable: { id: string; afterExecutionId?: string }[]
+  /**
+   * More records could not be read than `unreadable` lists. The transcript
+   * ends with one line for that.
+   */
+  unreadableTruncated: boolean
   approvalMode: ApprovalMode
   approvalModes: ApprovalModeChoice[]
   approvalModeChange?: {

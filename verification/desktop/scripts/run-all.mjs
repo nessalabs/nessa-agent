@@ -56,10 +56,12 @@ const functional = [
   "mcp-apps",
   "app-review",
   "approval-deadline",
+  "clock-snapshots",
   "message-sync",
   "command-order",
   "published-files",
   "transcript-notes",
+  "transcript-unreadable",
   "turn-outcomes",
 ]
 

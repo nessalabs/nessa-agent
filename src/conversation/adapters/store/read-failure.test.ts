@@ -1,3 +1,4 @@
+import { AttachmentResource } from "./slice"
 import { ConversationErrorCode, NessaRpcError, type NessaClient } from "@nessa/client"
 import { expect, it, vi } from "vitest"
 import { makeStore } from "../../../store"
@@ -69,6 +70,8 @@ const view = (conversationId: string): ConversationView => ({
   truncated: false,
   queueComplete: true,
   transcriptState: "complete",
+  unreadable: [],
+  unreadableTruncated: false,
 })
 
 /**
@@ -153,19 +156,21 @@ it.each([false, true])(
       ...textContent("Keep this draft"),
       {
         type: "file",
-        id: "notes",
-        name: "notes.txt",
-        mimeType: "text/plain",
-        size: 1,
-        previewUrl: "blob:notes",
-        path: "/tmp/notes.txt",
+        placementId: "notes",
         upload: { status: "not-started" },
+        resource: AttachmentResource.create({
+          name: "notes.txt",
+          mimeType: "text/plain",
+          size: 1,
+          previewUrl: "blob:notes",
+          path: "/tmp/notes.txt",
+        }),
       },
     ]
     store.dispatch(
       attachFiles({
         conversationId: "c0",
-        files: draft.filter((part) => part.type === "file"),
+        files: draft.filter((part) => part.type === "file").map((file) => file.resource),
       }),
     )
     store.dispatch(setDraft({ id: "c0", draft }))
@@ -177,7 +182,7 @@ it.each([false, true])(
     expect(before.readError).toBe("unavailable")
     try {
       const declined = await store.dispatch(
-        sendDraft({ id: "c0", content: draft, connected: true, steering }),
+        sendDraft({ id: "c0", content: before.draft, connected: true, steering }),
       )
       expect({
         create: create.mock.calls.length,
@@ -199,7 +204,7 @@ it.each([false, true])(
       await store.dispatch(followConversation("c0"))
       expect(store.getState().conversation.conversations[0]!.readError).toBeUndefined()
       const accepted = await store.dispatch(
-        sendDraft({ id: "c0", content: draft, connected: true, steering }),
+        sendDraft({ id: "c0", content: before.draft, connected: true, steering }),
       )
       expect(accepted.meta.requestStatus).toBe("fulfilled")
       expect(create).toHaveBeenCalledTimes(1)

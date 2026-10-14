@@ -44,6 +44,8 @@ function wireView(
     revision: "r1",
     artifacts: [],
     notes: [],
+    unreadable: [],
+    unreadableTruncated: false,
     title: null,
     messages: [],
     pending: [],

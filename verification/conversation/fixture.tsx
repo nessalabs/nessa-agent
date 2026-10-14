@@ -83,6 +83,8 @@ function publishedView(
       pending: [],
       artifacts: [],
       notes: [],
+      unreadable: [],
+      unreadableTruncated: false,
       questions: [],
       tools: [],
       permissions: actionable

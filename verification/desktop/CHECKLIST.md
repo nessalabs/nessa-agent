@@ -1455,10 +1455,30 @@ zero times, preserves the draft and paints **Attachments still loading**; read
 completion allows one send containing the text and one image. A second URL drop
 while the first fetch is pending paints **Still reading files** and starts no
 second fetch. The JSON reports send, attachment, refusal and page-error counts
-for all ten engine/scenario pairs. A late upload success or failure for a closed
-parent leaves the replacement parent's same-ID tile uploading (one rendered
-`data-upload="uploading"` tile), per [upload targets](../../docs/design/upload-targets.md). This verifies browser interactions with the
+for all twenty-six engine/scenario pairs. A late upload success or failure for a closed
+parent leaves the replacement parent's shared-resource tile uploading (one rendered
+`data-upload="uploading"` tile), per [attachment lifetimes](../../docs/design/attachment-lifetimes.md).
+The same-parent remove/re-add cases also retain one uploading tile after an old
+success/failure. Shared bytes receive two distinct placement uploads; removing
+one aborts exactly one, keeps the other alive, and releases bytes only after the
+last parent closes. A Provider replacement gives the new store's `a1` its own
+upload: the old completion leaves its single rendered tile uploading, and only
+its own reply makes that tile stored. An open original preview disappears when
+the owner changes, despite matching local conversation/placement numbers. Unmounting
+with three active uploads leaves the fourth queued after a completion; remounting
+resumes that sibling. Native SVG bytes retain their MIME type and render a 4px
+image from the object URL in both engines. This verifies browser interactions with the
 production panel; it does not exercise an operating-system file picker.
+AL24 also covers a terminal refusal followed by a restored-draft retry. In each
+engine, the fixture stages a 40 MiB native PNG as a 68 B processed image, refuses
+the first send, retries it successfully, then accepts a second 40 MiB image. Both
+reupload modes are exercised: the refused bytes remain stored, or the refused
+image is staged again. The 80 MiB of originals crosses the 64 MiB sent-preview
+cap; checks tied to the send execution IDs confirm the old failed turn becomes a
+reference, the older Blob and object URL are released, and the second file remains
+available. When the refused reference is no longer held, the transcript shows the
+existing **No longer kept** placeholder. The bounded run is
+`node verification/desktop/scripts/attachments-races.mjs --only terminal-refusal-preserved,terminal-refusal-reupload`.
 
 
 ## Provider authentication recovery (#501)
@@ -1708,3 +1728,22 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
 - [ ] **The panel fits the window.** _Check:_ `fit-1200`, `fit-420`; with
   `--shots <dir>`, screenshots of the grants, Drive form, budget, refusal,
   changed refusal and the narrow panel.
+
+## A record the chat could not read
+
+`transcript-unreadable.mjs` loads `fixtures/transcript-unreadable/`, a
+dev-server page that mounts the production transcript in the desktop window
+over a fake gateway and in a 420 px panel. The view has one completed turn
+and two records the read could not apply: one before any turn, and one after
+that turn. The script runs in Chromium and WebKit and is dev-only in
+run-all. The line is `UnreadablePartLine` (`src/conversation`), which both
+surfaces use.
+
+- [ ] **A record that could not be read is one line, and the turn around it
+  stays.** _Check:_ `transcript-unreadable.mjs --only line --shots <dir>`.
+  On both surfaces the reading order is the line for record 3, "Plan the
+  release.", "Here is the plan.", and the line for record 9. Each line says
+  "Couldn't read this part of the conversation", has an empty
+  `data-unreadable-report`, and contains no button. The empty welcome, the
+  whole-chat unread sentence, and the omitted-history sentence are absent.
+  The screenshots show both transcripts.

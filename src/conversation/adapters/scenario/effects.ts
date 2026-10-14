@@ -209,6 +209,8 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
           title: null,
           artifacts: [],
           notes: [],
+          unreadable: [],
+          unreadableTruncated: false,
           revision: "0",
           messages: [],
           pending: [],
