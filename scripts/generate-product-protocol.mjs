@@ -457,6 +457,9 @@ const catalogueDecimalFields = [
   schema.$defs.ConversationObserveCursor.properties.boundary,
   schema.$defs.ConversationObserveCursor.properties.creation,
 ]
+const toolPolicy = schema.$defs.ConversationToolPolicy.properties
+if (!Number.isSafeInteger(schema.$defs.ConversationToolPolicy["x-maxEntries"]))
+  throw new Error("ConversationToolPolicy must publish x-maxEntries")
 const bounds = {
   maxOrdinaryResponseBytes,
   // The same gateway limit, read where it bites a client: the gateway takes no
@@ -485,6 +488,20 @@ const bounds = {
     schema.$defs.AgentsSetNativeHooksResult.properties.requestId["x-utf8MaxBytes"],
   ]),
   maxConfiguredAgents: schema.$defs.AgentsListResult.properties.agents.maxItems,
+  // A drive grant's tool policy, as the share dialog budgets it: each list of
+  // patterns and the hosts on their own, and all of them together.
+  maxToolPolicyPatterns: agreeing("tool policy allow and deny lengths", [
+    toolPolicy.allow.maxItems,
+    toolPolicy.deny.maxItems,
+  ]),
+  maxToolPatternBytes: agreeing("tool policy pattern bytes", [
+    toolPolicy.allow.items["x-utf8MaxBytes"],
+    toolPolicy.deny.items["x-utf8MaxBytes"],
+  ]),
+  maxCommandHosts: toolPolicy.commandHosts.maxItems,
+  maxCommandHostBytes: toolPolicy.commandHosts.items["x-utf8MaxBytes"],
+  maxToolPolicyEntries: schema.$defs.ConversationToolPolicy["x-maxEntries"],
+  maxShareGrants: schema.$defs.ConversationSharesResult.properties.items.maxItems,
   maxAgentInstallVersionBytes: agreeing("native installation version bytes", [
     schema.$defs.AgentInstallOffer.properties.version["x-utf8MaxBytes"],
     schema.$defs.AgentInstallResult.properties.version["x-utf8MaxBytes"],

@@ -116,8 +116,8 @@ impl ConversationService {
         else {
             return Ok(None);
         };
-        record
-            .check_access(&caller.organization_id, &caller.principal_id)
+        self.access()
+            .admit(&record, caller)
             .map_err(ConversationError::from)
             .map_err(CreationFailure::Target)?;
         self.create(
@@ -158,7 +158,7 @@ impl CreationTarget for Target {
             if let Some(record) =
                 load_conversation(self.service.inner.metadata.as_ref(), &self.id).await?
             {
-                record.check_access(&self.caller.organization_id, &self.caller.principal_id)?;
+                self.service.access().admit(&record, &self.caller)?;
                 // A missing receipt is not a conflict. The creator comparison
                 // applies to a saved stage for this request. Lookup of an
                 // unknown request on a live conversation is absent evidence.

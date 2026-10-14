@@ -14,7 +14,7 @@
 //! ```
 use crate::peer_gateways::application::{PeerConnectFuture, PeerConnector};
 use crate::relay::wire::{read_frame, write_frame};
-use nessa_protocol::relay::{GatewayKey, RelayAddress, RelayFrame};
+use nessa_protocol::relay::{GatewayKey, RelayAddress, RelayFrame, RelayRefusal};
 use std::future::Future;
 use std::io;
 use std::net::{SocketAddr, TcpStream};
@@ -92,7 +92,8 @@ pub(super) async fn raced(
 
 /// Dial the relay at `address`, its name looked up now, and ask it for
 /// `key`. `Joined` returns the stream with the peer's own bytes next on it;
-/// `Offline` and `NoAnswer` are `ConnectionRefused`.
+/// `Offline` and `NoAnswer` are `ConnectionRefused` carrying the
+/// [`RelayRefusal`].
 async fn relay_leg(address: &RelayAddress, key: GatewayKey) -> io::Result<TcpStream> {
     let mut stream = tokio::net::TcpStream::connect(address.as_str()).await?;
     // Small preamble frames go out at once.
@@ -100,15 +101,8 @@ async fn relay_leg(address: &RelayAddress, key: GatewayKey) -> io::Result<TcpStr
     write_frame(&mut stream, RelayFrame::Connect { key }).await?;
     match read_frame(&mut stream).await? {
         RelayFrame::Joined => blocking(stream),
-        RelayFrame::Offline => Err(io::Error::new(
-            io::ErrorKind::ConnectionRefused,
-            "the peer is not registered at its relay",
-        )),
-        RelayFrame::NoAnswer => Err(io::Error::new(
-            io::ErrorKind::ConnectionRefused,
-            "the peer did not accept through its relay in time",
-        )),
-        _ => Err(io::ErrorKind::InvalidData.into()),
+        other => Err(RelayRefusal::of(other)
+            .map_or_else(|| io::ErrorKind::InvalidData.into(), io::Error::from)),
     }
 }
 

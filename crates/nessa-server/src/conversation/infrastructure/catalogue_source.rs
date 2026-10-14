@@ -2,10 +2,26 @@
 //! Product catalogue dispatch supplies the authenticated network boundary.
 //! This adapter accepts only a scope and caller already chosen by the host,
 //! and never opens a writer or provider.
+//!
+//! ```text
+//! manifest ──▶ ConversationCatalogue::page (granted rows, an index)
+//!          ──▶ CatalogueEntryAdmission::admits each
+//!              Shown ──▶ the page | Dropped ──▶ left out, and the index
+//!              is read on past it until the page is full or ends
+//!              | Undecided ──▶ Unavailable
+//! resolve  ──▶ ConversationCatalogue::resolve ──▶ admits
+//!              Shown ──▶ the entry | Dropped, as missing ──▶ Unavailable
+//! ```
+//!
+//! Arrows are calls. A page's continuation is its last entry's key, and a
+//! page that says more follow must hold one, so a page the policy shortened
+//! is filled from further on rather than returned short: a run of refused
+//! rows longer than a page would otherwise stop the pass for good.
 
 use crate::conversation::application::{
-    CatalogueDescriptor, CataloguePageRequest, CatalogueValue, ConversationCaller,
-    ConversationCatalogue, ConversationError, Reader,
+    CatalogueDescriptor, CatalogueEntryAccess, CatalogueEntryAnswer, CatalogueKey,
+    CataloguePageRequest, CatalogueValue, ConversationCaller, ConversationCatalogue,
+    ConversationError, Reader,
 };
 use nessa_protocol::conversation::catalogue_metadata::CatalogueMetadata;
 use nessa_protocol::conversation::catalogue_payload;
@@ -101,12 +117,21 @@ pub struct NessaCatalogueSource {
     worker: Arc<Worker>,
 }
 impl NessaCatalogueSource {
+    /// `entries` admits each entry a page or a resolve returns.
     pub fn new(
         catalogue: Arc<dyn ConversationCatalogue>,
         caller: ConversationCaller,
+        entries: CatalogueEntryAccess,
         scope: Scope,
     ) -> Result<Self, CatalogueWorkerError> {
-        Self::start_with_spawn(catalogue, caller, scope, spawn_worker, make_runtime)
+        Self::start_with_spawn(
+            catalogue,
+            caller,
+            entries,
+            scope,
+            spawn_worker,
+            make_runtime,
+        )
     }
 
     /// Capture one actual metadata head and construct its matching sync scope.
@@ -115,6 +140,7 @@ impl NessaCatalogueSource {
     pub fn discover(
         catalogue: Arc<dyn ConversationCatalogue>,
         caller: ConversationCaller,
+        entries: CatalogueEntryAccess,
         receiver: Id,
         origin: Id,
         epoch: Id,
@@ -122,6 +148,7 @@ impl NessaCatalogueSource {
         let (source, head) = Self::start_with_identity(
             catalogue,
             caller,
+            entries,
             SourceScope::Discover {
                 receiver,
                 origin,
@@ -136,6 +163,7 @@ impl NessaCatalogueSource {
     fn start_with_spawn(
         catalogue: Arc<dyn ConversationCatalogue>,
         caller: ConversationCaller,
+        entries: CatalogueEntryAccess,
         scope: Scope,
         spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> IoResult<JoinHandle<()>>,
         make_runtime: impl FnOnce() -> IoResult<Runtime> + Send + 'static,
@@ -143,6 +171,7 @@ impl NessaCatalogueSource {
         Self::start_with_identity(
             catalogue,
             caller,
+            entries,
             SourceScope::Expected(scope),
             spawn,
             make_runtime,
@@ -153,18 +182,26 @@ impl NessaCatalogueSource {
     fn start_with_identity(
         catalogue: Arc<dyn ConversationCatalogue>,
         caller: ConversationCaller,
+        entries: CatalogueEntryAccess,
         scope: SourceScope,
         spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> IoResult<JoinHandle<()>>,
         make_runtime: impl FnOnce() -> IoResult<Runtime> + Send + 'static,
     ) -> Result<(Self, Option<u64>), CatalogueWorkerError> {
-        Self::start_with_readiness(catalogue, caller, scope, spawn, make_runtime, |ready| {
-            ready.recv()
-        })
+        Self::start_with_readiness(
+            catalogue,
+            caller,
+            entries,
+            scope,
+            spawn,
+            make_runtime,
+            |ready| ready.recv(),
+        )
     }
 
     fn start_with_readiness(
         catalogue: Arc<dyn ConversationCatalogue>,
         caller: ConversationCaller,
+        entries: CatalogueEntryAccess,
         scope: SourceScope,
         spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> IoResult<JoinHandle<()>>,
         make_runtime: impl FnOnce() -> IoResult<Runtime> + Send + 'static,
@@ -243,6 +280,7 @@ impl NessaCatalogueSource {
                         let _ = reply.send(runtime.block_on(read_manifest(
                             &*catalogue,
                             &caller,
+                            &entries,
                             &expected,
                             &request,
                         )));
@@ -251,6 +289,7 @@ impl NessaCatalogueSource {
                         let _ = reply.send(runtime.block_on(read_resolved(
                             &*catalogue,
                             &caller,
+                            &entries,
                             &expected,
                             &pass,
                             &id,
@@ -407,9 +446,15 @@ async fn read_head(
     Ok(head.revision)
 }
 
+/// One page of the reader's catalogue: the index's rows after the request's
+/// cursor, each admitted by the access policy. A row it refuses is left out
+/// and the index read on past it, under the same pass, until the page is
+/// full or the index has nothing more, so the page keeps its continuation:
+/// its last entry, and more to come only when it holds one.
 async fn read_manifest(
     catalogue: &dyn ConversationCatalogue,
     caller: &ConversationCaller,
+    access: &CatalogueEntryAccess,
     expected: &Scope,
     request: &ManifestRequest,
 ) -> Result<ManifestPage, CatalogueSourceError> {
@@ -418,25 +463,52 @@ async fn read_manifest(
     }
     validate_manifest_request(request, MAX_CATALOGUE_ENTRIES)
         .map_err(|_| CatalogueSourceError::InvalidRequest)?;
-    let page = catalogue
-        .page(CataloguePageRequest {
-            organization: caller.organization_id.clone(),
-            owner: caller.principal_id.clone(),
-            reader: device(expected),
-            manifest: request.clone(),
-        })
-        .await
-        .map_err(map_error)?;
+    let receiver = expected.receiver().as_str();
+    let mut admission = access.reading(&caller.organization_id, &caller.principal_id, receiver);
+    let mut entries = Vec::with_capacity(request.max_entries);
+    let mut pass = request.pass.clone();
+    let has_more = loop {
+        let page = catalogue
+            .page(CataloguePageRequest {
+                organization: caller.organization_id.clone(),
+                owner: caller.principal_id.clone(),
+                reader: device(expected),
+                manifest: ManifestRequest {
+                    pass: pass.clone(),
+                    max_entries: request.max_entries - entries.len(),
+                },
+            })
+            .await
+            .map_err(map_error)?;
+        let last = page.entries.last().map(|entry| sync_key(&entry.key));
+        for descriptor in page.entries {
+            match admission.admits(&descriptor) {
+                CatalogueEntryAnswer::Shown => entries.push(to_entry(descriptor)),
+                CatalogueEntryAnswer::Dropped => {}
+                CatalogueEntryAnswer::Undecided => return Err(CatalogueSourceError::Unavailable),
+            }
+        }
+        if entries.len() == request.max_entries || !page.has_more {
+            break page.has_more;
+        }
+        // More follow and some were left out: read on from the last row the
+        // index returned. One that says more follow returned a row.
+        pass.cursor = Some(last.ok_or(CatalogueSourceError::Unavailable)?);
+    };
     Ok(ManifestPage {
         request: request.clone(),
-        entries: page.entries.into_iter().map(to_entry).collect(),
-        has_more: page.has_more,
+        entries,
+        has_more,
     })
 }
 
+/// One entry's current value, when the index finds it for the reader and the
+/// access policy admits it; one it refuses is missing, as an ungranted one
+/// is.
 async fn read_resolved(
     catalogue: &dyn ConversationCatalogue,
     caller: &ConversationCaller,
+    access: &CatalogueEntryAccess,
     expected: &Scope,
     pass: &CataloguePass,
     id: &Id,
@@ -461,6 +533,16 @@ async fn read_resolved(
         .await
         .map_err(map_error)?
         .ok_or(CatalogueSourceError::Unavailable)?;
+    let receiver = expected.receiver().as_str();
+    match access
+        .reading(&caller.organization_id, &caller.principal_id, receiver)
+        .admits(&value.descriptor)
+    {
+        CatalogueEntryAnswer::Shown => {}
+        CatalogueEntryAnswer::Dropped | CatalogueEntryAnswer::Undecided => {
+            return Err(CatalogueSourceError::Unavailable)
+        }
+    }
     if value.descriptor.key.creation > pass.boundary || value.descriptor.revision <= pass.completed
     {
         return Err(CatalogueSourceError::Unavailable);
@@ -477,12 +559,16 @@ async fn read_resolved(
     Ok(ResolvedEntry { manifest, payload })
 }
 
+fn sync_key(key: &CatalogueKey) -> EntryKey {
+    EntryKey {
+        creation: key.creation,
+        id: Id::new(key.id.to_string()).expect("UUID fits sync ID"),
+    }
+}
+
 fn to_entry(descriptor: CatalogueDescriptor) -> ManifestEntry {
     ManifestEntry {
-        key: EntryKey {
-            creation: descriptor.key.creation,
-            id: Id::new(descriptor.key.id.to_string()).expect("UUID fits sync ID"),
-        },
+        key: sync_key(&descriptor.key),
         revision: descriptor.revision,
         deleted: descriptor.deleted,
     }

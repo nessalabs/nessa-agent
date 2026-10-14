@@ -638,6 +638,7 @@ async fn restored_scheduling_from_a_custom_store_is_validated_before_provider_op
             request: request("corrupt"),
             actor: actor(),
             initiation: Initiation::owner(),
+            notes: Vec::new(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: history,

@@ -964,6 +964,7 @@ mod tests {
             target_event_offset: None,
             actor: ActionContext::new("user", "surface", "request").unwrap(),
             initiation: Initiation::owner(),
+            notes: Vec::new(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -1387,6 +1388,7 @@ mod tests {
             },
             actor: ActionContext::new("user", "surface", "request").unwrap(),
             initiation: Initiation::owner(),
+            notes: Vec::new(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -1647,30 +1649,36 @@ mod tests {
         ));
     }
 
-    /// A turn a share grant started keeps its grant and policy revision
-    /// through a checkpoint and the fold restored from it.
+    /// A turn a share grant started keeps its grant, policy revision and
+    /// whether its tools are checked through a checkpoint and the fold
+    /// restored from it.
     #[test]
     fn a_grant_initiation_survives_a_checkpoint_and_its_restore() {
         use crate::domain::agent_execution::executions::GrantInitiator;
-        let scope = scope();
-        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
-        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
-            .unwrap();
-        let initiation = Initiation::grant(GrantInitiator::new("receiver", 7).unwrap());
-        let mut input = accepted_input("driven");
-        let SessionChange::InputAccepted(record) = &mut input else {
-            panic!("an accepted input")
-        };
-        record.initiation = initiation.clone();
-        fold.apply(&records(&scope, 3, &save_frames(input, 2, 1)))
-            .unwrap();
-        let checkpoint = fold.checkpoint().unwrap();
-        let restored = TranscriptFold::restore(scope, fold.applied(), &checkpoint).unwrap();
-        assert_eq!(restored.snapshot(), fold.snapshot());
-        assert_eq!(
-            restored.snapshot().unwrap().invocations[0].initiation,
-            initiation
-        );
+        let grant = || GrantInitiator::new("receiver", 7).unwrap();
+        for initiation in [
+            Initiation::grant(grant()),
+            Initiation::checked_grant(grant()),
+        ] {
+            let scope = scope();
+            let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+            fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+                .unwrap();
+            let mut input = accepted_input("driven");
+            let SessionChange::InputAccepted(record) = &mut input else {
+                panic!("an accepted input")
+            };
+            record.initiation = initiation.clone();
+            fold.apply(&records(&scope, 3, &save_frames(input, 2, 1)))
+                .unwrap();
+            let checkpoint = fold.checkpoint().unwrap();
+            let restored = TranscriptFold::restore(scope, fold.applied(), &checkpoint).unwrap();
+            assert_eq!(restored.snapshot(), fold.snapshot());
+            assert_eq!(
+                restored.snapshot().unwrap().invocations[0].initiation,
+                initiation
+            );
+        }
     }
 
     /// Row J16: a note left through a grant survives a checkpoint and its
@@ -1692,6 +1700,8 @@ mod tests {
             actor: ActionContext::new("person", "phone", "note").unwrap(),
             author: Initiator::Grant(GrantInitiator::new("receiver", 7).unwrap()),
             accepted_at_ms: 1_700_000_000_000,
+            after_execution: None,
+            retired: None,
         };
         fold.apply(&records(
             &scope,

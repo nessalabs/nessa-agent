@@ -133,6 +133,10 @@ fn a_grant_initiation_keeps_exact_grant_text_and_policy_revision() {
         Initiation::grant(GrantInitiator::new(" grant-1 ", 8).unwrap())
     );
     assert!(format!("{:?}", initiation.clone()).contains("grant-1"));
+    let checked = Initiation::checked_grant(GrantInitiator::new(" grant-1 ", 7).unwrap());
+    assert_eq!(checked.initiator(), initiation.initiator());
+    assert_eq!(checked.tools(), ToolChecking::Checked);
+    assert_ne!(checked, initiation);
     let longest = "é".repeat(GrantInitiator::MAX_GRANT_BYTES / 2);
     assert_eq!(
         GrantInitiator::new(longest.clone(), 0).unwrap().grant(),

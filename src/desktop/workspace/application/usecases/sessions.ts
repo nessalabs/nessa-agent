@@ -13,7 +13,7 @@ import type { WorkspaceFailureReason } from "../../model/failure"
 import { knownToSource } from "../../model/revision"
 import type { ModelRef } from "../../model/workspace-index"
 import { startSession } from "../../model/session-lifecycle"
-import { messageText, type Message } from "../../model/transcript"
+import { messageText, type TurnMessage } from "../../model/transcript"
 import {
   draftOf,
   entry,
@@ -50,7 +50,7 @@ export function messageSent(
     sessionId,
     message,
     initiator,
-  }: { sessionId: string; message: Message; initiator: Initiator },
+  }: { sessionId: string; message: TurnMessage; initiator: Initiator },
 ): WorkspaceState {
   const draft = draftOf(state, sessionId)
   if (!draft && !sessionOf(state, sessionId)) return state
@@ -92,7 +92,7 @@ function withSent(
   state: WorkspaceState,
   sessionId: string,
   messageId: string,
-  change: (message: Message) => Message | null,
+  change: (message: TurnMessage) => TurnMessage | null,
 ): WorkspaceState {
   const sent = entry(state.outbox, sessionId)
   const index = sent?.findIndex((message) => message.id === messageId) ?? -1

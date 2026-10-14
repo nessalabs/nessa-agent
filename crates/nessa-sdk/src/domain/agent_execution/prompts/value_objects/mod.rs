@@ -24,6 +24,13 @@
 //! An MCP App can speak in the person's turn: write the message, on their
 //! behalf, or give the model context that goes ahead of a message and is not
 //! part of what it says. Arrows mean "is held by".
+//!
+//! ```text
+//! NoteAuthor + surface + text --> NoteContext --> UserMessage (what goes with it)
+//! ```
+//!
+//! A note someone left in the conversation goes with the turn that takes it,
+//! ahead of the message and not part of what it says.
 mod prompt;
 pub use prompt::{
     PromptContribution, PromptContributionView, PromptSource, PromptSourceKind, PromptText,
@@ -32,6 +39,9 @@ pub use prompt::{
 
 mod app_message;
 pub use app_message::{AppModelContext, McpAppSource, MessageSender};
+
+mod note_context;
+pub use note_context::{NoteAuthor, NoteContext};
 
 mod user_message;
 pub use user_message::{ImageReference, LinkedFile, UserMessage};

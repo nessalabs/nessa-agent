@@ -15,9 +15,10 @@ use crate::{
     },
     conversation::{
         application::{
-            ArtifactBytes, ArtifactKept, ArtifactReadFailure, AttachmentRelease,
-            AttachmentReleaseCause, ConversationAttachments, ConversationError, ConversationFuture,
-            ConversationRepository, HeldRange, HeldRangeError, PublishedArtifact,
+            AccessAction, ArtifactBytes, ArtifactKept, ArtifactReadFailure, AttachmentRelease,
+            AttachmentReleaseCause, ConversationAccessPolicyEvaluator, ConversationAttachments,
+            ConversationError, ConversationFuture, ConversationRepository, HeldRange,
+            HeldRangeError, OwnerAccess, PublishedArtifact,
         },
         domain::ConversationRefusal,
     },
@@ -230,13 +231,26 @@ impl UploadBody for PulledBytes {
     }
 }
 
-/// Conversation ownership read from the conversation context's own repository.
+/// Conversation ownership read from the conversation context's own
+/// repository and decided by its access policy, for one action: uploading
+/// into a conversation acts on it (`conversation.act`), and reading back a
+/// file it holds is `artifact.read`.
 pub struct RepositoryOwnership {
     conversations: Arc<dyn ConversationRepository>,
+    policy: Arc<dyn ConversationAccessPolicyEvaluator>,
+    action: AccessAction,
 }
 impl RepositoryOwnership {
-    pub fn new(conversations: Arc<dyn ConversationRepository>) -> Self {
-        Self { conversations }
+    pub fn new(
+        conversations: Arc<dyn ConversationRepository>,
+        policy: Arc<dyn ConversationAccessPolicyEvaluator>,
+        action: AccessAction,
+    ) -> Self {
+        Self {
+            conversations,
+            policy,
+            action,
+        }
     }
 }
 impl ConversationOwnership for RepositoryOwnership {
@@ -247,24 +261,28 @@ impl ConversationOwnership for RepositoryOwnership {
         conversation_id: &'a ConversationId,
     ) -> PortFuture<'a, Ownership, OwnershipUnavailable> {
         Box::pin(async move {
-            // The conversation's own rule decides: organization and owner must
-            // both agree, knowing an identifier grants nothing, and a deleted
-            // conversation is refused — to its owner, as deleted.
+            // The conversation's access policy decides: knowing an
+            // identifier grants nothing, and a deleted conversation is
+            // refused — as deleted only to whom the policy lets locate it.
             let found = self
                 .conversations
                 .load(conversation_id)
                 .await
                 .map_err(|_| OwnershipUnavailable)?;
-            Ok(match found {
-                None => Ownership::NotFound,
-                Some(conversation) => {
-                    match conversation.check_access(organization_id, principal_id) {
-                        Ok(()) => Ownership::Owned,
-                        Err(ConversationRefusal::NotFound) => Ownership::NotFound,
-                        Err(ConversationRefusal::Deleted) => Ownership::Deleted,
-                    }
-                }
-            })
+            let Some(conversation) = found else {
+                return Ok(Ownership::NotFound);
+            };
+            match OwnerAccess::new(self.policy.as_ref()).admit_to(
+                self.action,
+                &conversation,
+                organization_id,
+                principal_id,
+            ) {
+                Ok(()) => Ok(Ownership::Owned),
+                Err(ConversationRefusal::NotFound) => Ok(Ownership::NotFound),
+                Err(ConversationRefusal::Deleted) => Ok(Ownership::Deleted),
+                Err(ConversationRefusal::Unavailable) => Err(OwnershipUnavailable),
+            }
         })
     }
 }

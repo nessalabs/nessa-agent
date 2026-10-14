@@ -105,10 +105,12 @@ impl<'a> ProposedToolCall<'a> {
 
     /// Who started the turn this call belongs to, as its saved record says.
     ///
-    /// It is read from the turn's record when the invocation begins. Input
-    /// steered into the running turn does not change it, so every call in the
-    /// turn is judged under this one initiation. A host that judges calls per
-    /// initiator must not let one initiator steer another's turn.
+    /// It is read from the turn's record when the invocation begins. Only its
+    /// own initiator's input is steered into a running turn; anyone else's
+    /// waits for a turn of its own ([`Agent::steer`]). So every call in the
+    /// turn is judged under this one initiation.
+    ///
+    /// [`Agent::steer`]: crate::application::agent_execution::agents::Agent::steer
     pub fn initiation(&self) -> &'a Initiation {
         self.initiation
     }

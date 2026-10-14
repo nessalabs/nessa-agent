@@ -65,6 +65,7 @@ use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
 use std::{
     collections::{BTreeMap, HashMap},
+    future::poll_fn,
     path::Path,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -365,7 +366,9 @@ fn harness_working_in(
     .unwrap();
     nessa_local_storage::create_directory(&root.join("conversations")).unwrap();
     let metadata = Arc::new(
-        LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3")).unwrap(),
+        LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3"))
+            .unwrap()
+            .with_access_policy(crate::conversation_test_support::access_policy()),
     );
     let storage = Arc::new(Records {
         inner: RecordStorage::new(root.join("sessions")).unwrap(),
@@ -376,6 +379,7 @@ fn harness_working_in(
     });
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents,
             storage: storage.clone(),
             metadata: metadata.clone(),
@@ -1475,6 +1479,12 @@ struct Fetching {
     script: Mutex<FetchScript>,
     /// The bytes each fetch read, by request.
     read: Mutex<HashMap<String, Vec<u8>>>,
+    /// When set, actual host arrivals wait here before polling full-range reads,
+    /// leaving permits free for every service one-byte probe.
+    start_reads: Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
+    /// First full-range source futures polled, including semaphore waiters.
+    source_polled: AtomicUsize,
+    source_noted: tokio::sync::Notify,
     /// Said once a fetch is asked.
     noted: tokio::sync::Notify,
     /// Set, and said, once a lease's end is asked here.
@@ -1668,11 +1678,35 @@ impl LeaseHold for HostHold {
                 }
                 FetchScript::Place => {}
             }
+            let start = fetching.start_reads.lock().unwrap().clone();
+            if let Some(mut start) = start {
+                let _ = start.wait_for(|started| *started).await;
+            }
             let size = ask.file.size();
             let mut bytes = Vec::new();
             while (bytes.len() as u64) < size {
                 let max = (size - bytes.len() as u64).min(32 * 1024) as usize;
-                match ask.source.read(bytes.len() as u64, max).await {
+                let first_range = bytes.is_empty();
+                let mut source = ask.source.read(bytes.len() as u64, max);
+                let mut polled = false;
+                let read = poll_fn(|cx| {
+                    let read = source.as_mut().poll(cx);
+                    if first_range && !polled {
+                        // Observe after the real future reaches either the held
+                        // attachment read or the production semaphore wait.
+                        fetching.source_polled.fetch_add(1, Ordering::SeqCst);
+                        fetching.source_noted.notify_one();
+                        let start = fetching.start_reads.lock().unwrap().clone();
+                        if let Some(start) = start {
+                            assert!(*start.borrow(), "full reads start after all probes");
+                            assert!(read.is_pending(), "the first source poll stays held");
+                        }
+                    }
+                    polled = true;
+                    read
+                })
+                .await;
+                match read {
                     Ok(range) => bytes.extend(range),
                     Err(HeldSourceFailure::NotHeld) => return Err(FetchFailure::NotHeld),
                     Err(HeldSourceFailure::Unavailable) => {
@@ -2657,10 +2691,15 @@ fn with_command_host(
     let binding = Arc::new(Provider::new(provider.clone()));
     let environments = Environments::new(in_process_environment(), hosts, placements);
     let environments = match policy {
-        Some(policy) => environments.with_commands(policy),
+        Some(policy) => environments.with_commands(commands(&policy)),
         None => environments,
     };
     harness_in(root, environments, DELETION_BUDGETS.stop, provider, binding)
+}
+
+/// The command policy over `policy`, as composition builds it.
+fn commands(policy: &CommandPolicy) -> Arc<dyn super::CommandPolicyEvaluator> {
+    Arc::new(crate::conversation::infrastructure::CedarCommandPolicyEvaluator::new(policy).unwrap())
 }
 
 fn devbox_policy() -> CommandPolicy {
@@ -3007,6 +3046,19 @@ async fn environments_list_says_where_the_agent_runs_and_where_it_may_run_comman
     let root = tempfile::tempdir().unwrap();
     let harness = with_command_host(root.path(), CommandHost::new(), Some(devbox_policy()));
     harness.create().await;
+    // With no turn running, nobody may use a host: only here is shown.
+    assert_eq!(
+        harness
+            .service
+            .list_environments(&harness.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|listing| (listing.name, listing.commands))
+            .collect::<Vec<_>>(),
+        [(HERE.to_owned(), false)]
+    );
+    let go = harness.running_turn().await;
     let listed = harness
         .service
         .list_environments(&harness.id)
@@ -3031,6 +3083,52 @@ async fn environments_list_says_where_the_agent_runs_and_where_it_may_run_comman
             },
         ]
     );
+    go.send(()).unwrap();
+}
+
+/// A conversation service on a gateway with two hosts the policy grants
+/// commands on: `devbox`, which takes commands, and `agentbox`, which runs
+/// agents only. What `agents.list`'s `commandHosts` is read from, for the
+/// product socket's test of it.
+pub(crate) fn service_with_command_hosts(root: &Path) -> ConversationService {
+    let mut hosts: BTreeMap<String, Arc<dyn Environment>> = BTreeMap::new();
+    hosts.insert("devbox".into(), CommandHost::new());
+    hosts.insert("agentbox".into(), in_process_environment());
+    let placements =
+        Arc::new(FilePlacements::new(root.join("conversations").join("placements")).unwrap());
+    let provider = Arc::new(ProviderFactory::default());
+    let binding = Arc::new(Provider::new(provider.clone()));
+    let policy = CommandPolicy::new(["devbox".to_owned(), "agentbox".to_owned()], None, vec![]);
+    let environments = Environments::new(in_process_environment(), hosts, placements)
+        .with_commands(commands(&policy));
+    harness_in(root, environments, DELETION_BUDGETS.stop, provider, binding).service
+}
+
+/// `agents.list`'s `commandHosts`: of the places named, those the owner's
+/// turns may run commands on — a host the command policy lets the owner use
+/// that takes commands. Never `here`, never a name the gateway has no host
+/// for, never one the policy does not grant, and none at all without a
+/// command policy.
+#[test]
+fn the_owner_is_offered_only_the_hosts_its_turns_may_run_commands_on() {
+    let root = tempfile::tempdir().unwrap();
+    let service = service_with_command_hosts(root.path());
+    assert_eq!(
+        service.owner_command_hosts(["here", "agentbox", "elsewhere", "devbox"]),
+        ["devbox"]
+    );
+    // The policy decides: one that grants another host leaves devbox out.
+    let root = tempfile::tempdir().unwrap();
+    let harness = with_command_host(
+        root.path(),
+        CommandHost::new(),
+        Some(CommandPolicy::new(["elsewhere".to_owned()], None, vec![])),
+    );
+    assert!(harness.service.owner_command_hosts(["devbox"]).is_empty());
+    // No command policy: no host takes commands.
+    let root = tempfile::tempdir().unwrap();
+    let harness = with_command_host(root.path(), CommandHost::new(), None);
+    assert!(harness.service.owner_command_hosts(["devbox"]).is_empty());
 }
 
 #[tokio::test]
@@ -4556,11 +4654,12 @@ async fn a_fetch_stopped_before_delivery_gives_its_size_back_and_one_after_does_
 async fn concurrent_fetches_never_read_more_than_the_gateways_bound_at_once() {
     let root = tempfile::tempdir().unwrap();
     let bytes: Vec<u8> = (0..100_000u32).map(|i| (i % 17) as u8).collect();
-    let (harness, _host, attachments, go) =
+    let (harness, host, attachments, go) =
         fetching_turn(root.path(), &bytes, FETCH_CALL_WAIT).await;
-    // Long enough that each fetch is still reading when the next one, its
-    // asking saved after the one before's, starts to read.
-    *attachments.range_delay.lock().unwrap() = Some(Duration::from_millis(50));
+    let (start, waiting) = tokio::sync::watch::channel(false);
+    *host.fetching.start_reads.lock().unwrap() = Some(waiting);
+    let (release, held) = tokio::sync::watch::channel(false);
+    *attachments.hold_ranges.lock().unwrap() = Some(held);
     // As many as one lease may have under way, more than read at once.
     let fetches: Vec<_> = (0..CurrentLease::MAX_ASKED_FETCHES)
         .map(|n| {
@@ -4573,6 +4672,40 @@ async fn concurrent_fetches_never_read_more_than_the_gateways_bound_at_once() {
             })
         })
         .collect();
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let noted = host.fetching.noted.notified();
+            if host.fetching.asks.lock().unwrap().len() == fetches.len() {
+                break;
+            }
+            noted.await;
+        }
+        // Every service probe completed before any full range acquires a permit.
+        assert_eq!(host.fetching.source_polled.load(Ordering::SeqCst), 0);
+        assert_eq!(attachments.reading.load(Ordering::SeqCst), 0);
+        start.send(true).unwrap();
+        loop {
+            let noted = host.fetching.source_noted.notified();
+            if host.fetching.source_polled.load(Ordering::SeqCst) == fetches.len() {
+                break;
+            }
+            noted.await;
+        }
+    })
+    .await
+    .expect("every actual fetch reached its first range poll");
+    assert!(fetches.len() > crate::conversation::application::FETCH_READS);
+    assert_eq!(
+        attachments.reading.load(Ordering::SeqCst),
+        crate::conversation::application::FETCH_READS,
+        "the production permits are saturated while full reads are held"
+    );
+    assert_eq!(
+        attachments.most_reading.load(Ordering::SeqCst),
+        crate::conversation::application::FETCH_READS,
+        "the held reads reached the bound without exceeding it"
+    );
+    release.send(true).unwrap();
     for fetch in fetches {
         assert!(matches!(
             tokio::time::timeout(Duration::from_secs(20), fetch)
@@ -5101,7 +5234,11 @@ async fn k3_the_agents_tools_reach_only_this_gateways_own_worker() {
     let binding = Arc::new(Provider::new(provider.clone()));
     let environments = Environments::new(in_process_environment(), BTreeMap::new(), placements)
         .with_peers(k3_own_worker(root.path(), w, host.clone()))
-        .with_commands(CommandPolicy::new([w.name(), x.name()], None, Vec::new()));
+        .with_commands(commands(&CommandPolicy::new(
+            [w.name(), x.name()],
+            None,
+            Vec::new(),
+        )));
     let harness = harness_in(
         root.path(),
         environments,
@@ -5110,6 +5247,7 @@ async fn k3_the_agents_tools_reach_only_this_gateways_own_worker() {
         binding,
     );
     harness.create().await;
+    let go = harness.running_turn().await;
 
     let listed: Vec<String> = harness
         .service
@@ -5121,7 +5259,6 @@ async fn k3_the_agents_tools_reach_only_this_gateways_own_worker() {
         .collect();
     assert_eq!(listed, [HERE.to_owned(), w.name()]);
 
-    let go = harness.running_turn().await;
     let mine = {
         let service = harness.service.clone();
         let id = harness.id.clone();
@@ -5228,4 +5365,567 @@ async fn k3_artifacts_move_only_on_this_gateways_own_worker() {
     assert_eq!(host.asked.asks.lock().unwrap().len(), 1);
     assert!(host.fetching.asks.lock().unwrap().is_empty());
     go.send(()).unwrap();
+}
+
+/// A grant journal in which every Drive grant held the one policy it
+/// carries, at every revision.
+struct EveryRevisionHeld(crate::conversation::domain::ToolPolicy);
+
+impl super::ShareGrants for EveryRevisionHeld {
+    fn held_grant<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+    ) -> super::ConversationFuture<'a, Option<super::HeldGrant>> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+    fn change(
+        &self,
+        _: super::ShareGrantChange,
+    ) -> super::ConversationFuture<'_, crate::conversation::application::ShareGrantReceipt> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+    fn grants<'a>(
+        &'a self,
+        _: &'a ConversationId,
+    ) -> super::ConversationFuture<'a, Vec<super::ShareGrant>> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+    fn policy_at<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> super::ConversationFuture<'a, Option<crate::conversation::domain::ToolPolicy>> {
+        let policy = self.0.clone();
+        Box::pin(async move { Ok(Some(policy)) })
+    }
+}
+
+/// A Drive tool audit that keeps what it is given, or refuses it.
+#[derive(Default)]
+struct RecordedDriveTools {
+    records: Mutex<Vec<super::DriveToolAuditRecord>>,
+    unavailable: std::sync::atomic::AtomicBool,
+}
+
+impl super::DriveToolAudit for RecordedDriveTools {
+    fn record(&self, record: super::DriveToolAuditRecord) -> super::ConversationFuture<'_, ()> {
+        let result = if self.unavailable.load(std::sync::atomic::Ordering::SeqCst) {
+            Err(ConversationError::Audit)
+        } else {
+            self.records.lock().unwrap().push(record);
+            Ok(())
+        };
+        Box::pin(async move { result })
+    }
+}
+
+impl Harness {
+    /// Check Drive turns' tools against `policy`, held by every grant; the
+    /// gateway's decisions go to the audit returned.
+    fn checking_drive_tools(
+        &self,
+        policy: crate::conversation::domain::ToolPolicy,
+    ) -> Arc<RecordedDriveTools> {
+        let audit = Arc::new(RecordedDriveTools::default());
+        self.service.bind_drive_tools(super::DriveTools {
+            grants: Arc::new(EveryRevisionHeld(policy)),
+            evaluator: Arc::new(
+                crate::conversation::infrastructure::CedarToolPolicyEvaluator::new().unwrap(),
+            ),
+            audit: audit.clone(),
+        });
+        audit
+    }
+
+    /// Send turn `execution` as Drive grant `grant` at `revision`; `true`
+    /// when admitted, `false` when refused `DrivePolicyUnenforceable`.
+    async fn send_as_driver(&self, execution: &str, grant: &str, revision: u64) -> bool {
+        use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
+        let sent = self
+            .service
+            .submit_as(
+                self.id.clone(),
+                caller(execution),
+                execution.into(),
+                SubmittedMessage {
+                    text: "hello".into(),
+                    images: Vec::new(),
+                    files: Vec::new(),
+                },
+                SubmissionMode::Queue,
+                super::service::Writer::Person(Initiation::grant(
+                    GrantInitiator::new(grant, revision).unwrap(),
+                )),
+            )
+            .await;
+        match sent {
+            Ok(_) => true,
+            Err(super::service::SubmitFailure::NotAsked(
+                ConversationError::DrivePolicyUnenforceable,
+            )) => false,
+            Err(_) => panic!("admitted, or refused as unenforceable"),
+        }
+    }
+
+    /// Turn `execution`, started by Drive grant `grant` at `revision`,
+    /// running until the answer is sent.
+    async fn running_drive_turn(
+        &self,
+        execution: &str,
+        grant: &str,
+        revision: u64,
+    ) -> oneshot::Sender<()> {
+        let (go, gate) = oneshot::channel();
+        *self.provider.execution_gate.lock().unwrap() = Some(gate);
+        assert!(self.send_as_driver(execution, grant, revision).await);
+        self.provider.execution_started.notified().await;
+        go
+    }
+}
+
+/// Row J28: a Drive grant's turn runs the gateway's own `run`,
+/// `artifacts_publish` and `artifacts_fetch` only where the grant's policy at
+/// the turn's revision allows them. Refused, each answers why, has its
+/// decision in the Drive tool audit, writes no lease record and asks nothing
+/// of the host. The owner's turn is not checked.
+#[tokio::test]
+async fn j28_the_gateways_own_tools_are_checked_against_a_drive_grants_policy() {
+    use crate::conversation::domain::{ToolPolicy, ToolPreset};
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::new();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    let audit = harness.checking_drive_tools(ToolPolicy::preset(ToolPreset::ReadOnlyTools));
+    harness.create().await;
+    let go = harness.running_drive_turn("driven", "phone", 3).await;
+    let refused = harness
+        .run(command("devbox", &["echo", "hi"], "call-1"))
+        .await;
+    assert!(
+        matches!(
+            &refused,
+            Err(CommandCallError::NotAllowed(reason))
+                if reason == r#"Drive grant "phone" at revision 3 does not allow "run" (rules: none allows it)"#
+        ),
+        "{refused:?}"
+    );
+    let (_caller, stop) = tokio::sync::watch::channel(false);
+    assert_eq!(
+        harness
+            .service
+            .publish_artifact(
+                &harness.id,
+                super::PublishCall {
+                    environment: "devbox".into(),
+                    path: "report.pdf".into(),
+                    media_type: None,
+                    call: "call-2".into(),
+                },
+                stop.clone(),
+            )
+            .await,
+        super::PublishAnswer::Refused(super::PublishCallRefusal::NotAllowed)
+    );
+    assert_eq!(
+        harness
+            .service
+            .fetch_artifact(
+                &harness.id,
+                super::FetchCall {
+                    environment: "devbox".into(),
+                    digest: "ab".repeat(32),
+                    media_type: "image/png".into(),
+                    size: 20,
+                    destination: "a.png".into(),
+                    call: "call-3".into(),
+                },
+                stop,
+            )
+            .await,
+        super::FetchAnswer::Refused(super::FetchCallRefusal::NotAllowed)
+    );
+    assert!(harness.saved_commands().is_empty());
+    assert_eq!(host.granted.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(host.timeouts.lock().unwrap().is_empty());
+    let records = audit.records.lock().unwrap().clone();
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| (record.call.as_str(), record.tool.as_str(), record.allowed))
+            .collect::<Vec<_>>(),
+        [
+            ("call-1", "run", false),
+            ("call-2", "artifacts_publish", false),
+            ("call-3", "artifacts_fetch", false),
+        ]
+    );
+    for record in &records {
+        assert_eq!(record.conversation_id, harness.id);
+        assert_eq!(record.turn, "driven");
+        assert_eq!((record.grant.as_str(), record.revision), ("phone", 3));
+        assert_eq!(
+            record.initiator_principal_id,
+            caller("driven").principal_id.as_str()
+        );
+        assert!(record.rules.is_empty());
+        assert!(record
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains(&format!("{:?}", record.tool))));
+    }
+    go.send(()).unwrap();
+}
+
+/// Row J28: where its policy allows `run`, a Drive grant's turn runs a
+/// command exactly as the owner's would, on a host its policy names that the
+/// gateway grants commands on, once the decision and the rule that allowed
+/// it are in the Drive tool audit.
+#[tokio::test]
+async fn j28_a_drive_grant_allowed_run_runs_a_command_as_the_owner_would() {
+    use crate::conversation::domain::{ToolPolicy, ToolPreset};
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::new();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    let audit =
+        harness.checking_drive_tools(on_hosts(ToolPolicy::preset(ToolPreset::All), &["devbox"]));
+    harness.create().await;
+    let go = harness.running_drive_turn("driven", "phone", 3).await;
+    host.finish
+        .send_replace(Some(CommandExit::Exited { code: 0 }));
+    let answer = harness
+        .run(command("devbox", &["echo", "hi"], "call-1"))
+        .await
+        .unwrap();
+    assert!(
+        matches!(answer, CommandAnswer::Ran { recorded: true, .. }),
+        "{answer:?}"
+    );
+    let records = audit.records.lock().unwrap().clone();
+    assert_eq!(records.len(), 1);
+    assert!(records[0].allowed && records[0].reason.is_none());
+    assert_eq!(
+        (records[0].call.as_str(), records[0].tool.as_str()),
+        ("call-1", "run")
+    );
+    assert!(!records[0].rules.is_empty());
+    go.send(()).unwrap();
+}
+
+/// `policy`, whose turns may run commands on `hosts`.
+fn on_hosts(
+    policy: crate::conversation::domain::ToolPolicy,
+    hosts: &[&str],
+) -> crate::conversation::domain::ToolPolicy {
+    policy
+        .with_command_hosts(
+            crate::conversation::domain::CommandHosts::new(
+                hosts.iter().map(|host| (*host).to_owned()).collect(),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+}
+
+/// ADR 803 step 4: a Drive grant's turn whose policy allows `run` runs a
+/// command only on a host its policy names. On `devbox`, which the gateway
+/// grants commands on but the grant does not name, its `run` is refused
+/// `EnvironmentNotGranted`, recorded as refused, and asks nothing of the
+/// host; `environments_list` does not show it `devbox` at all. A grant that
+/// names no hosts uses none. The owner's turn runs there.
+#[tokio::test]
+async fn a_drive_grants_run_goes_only_to_the_hosts_its_policy_names() {
+    use crate::conversation::domain::{ToolPolicy, ToolPreset};
+    for hosts in [&["elsewhere"][..], &[]] {
+        let root = tempfile::tempdir().unwrap();
+        let host = CommandHost::new();
+        let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+        let audit =
+            harness.checking_drive_tools(on_hosts(ToolPolicy::preset(ToolPreset::All), hosts));
+        harness.create().await;
+        let go = harness.running_drive_turn("driven", "phone", 3).await;
+        assert_eq!(
+            harness
+                .service
+                .list_environments(&harness.id)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|listing| (listing.name, listing.commands))
+                .collect::<Vec<_>>(),
+            [(HERE.to_owned(), false)],
+            "{hosts:?}"
+        );
+        assert_eq!(
+            harness
+                .run(command("devbox", &["echo", "hi"], "call-1"))
+                .await,
+            Ok(CommandAnswer::Refused(
+                CommandRefusal::EnvironmentNotGranted
+            )),
+            "{hosts:?}"
+        );
+        assert_eq!(host.granted.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(matches!(
+            harness.saved_commands().as_slice(),
+            [LeaseRecord::CommandRefused {
+                refusal: CommandRefusal::EnvironmentNotGranted,
+                ..
+            }]
+        ));
+        // `run` itself was allowed by the tool policy: the host was not.
+        let records = audit.records.lock().unwrap().clone();
+        assert_eq!(records.len(), 1);
+        assert!(records[0].allowed);
+        go.send(()).unwrap();
+    }
+
+    // The owner's turn on the same gateway runs there.
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::new();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    harness.checking_drive_tools(ToolPolicy::preset(ToolPreset::All));
+    harness.create().await;
+    let go = harness.running_turn().await;
+    host.finish
+        .send_replace(Some(CommandExit::Exited { code: 0 }));
+    let answer = harness
+        .run(command("devbox", &["echo", "hi"], "call-1"))
+        .await
+        .unwrap();
+    assert!(
+        matches!(answer, CommandAnswer::Ran { recorded: true, .. }),
+        "{answer:?}"
+    );
+    go.send(()).unwrap();
+}
+
+/// ADR 803 step 4: a Drive grant's turn whose admitted policy is no longer
+/// kept, let go after `MAX_ADMITTED_POLICIES` other revisions were admitted
+/// since, may use no host. `environments_list` shows it `here`, where the
+/// conversation runs, and no host, none taking commands, though the host
+/// its policy named was listed taking commands while the policy was kept;
+/// its `run` is refused as unavailable, nothing is recorded as a command,
+/// and the host is asked nothing.
+#[tokio::test]
+async fn a_drive_turn_whose_policy_was_let_go_is_shown_no_host_and_runs_nothing() {
+    use crate::conversation::domain::{ToolPolicy, ToolPreset};
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::new();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    let audit =
+        harness.checking_drive_tools(on_hosts(ToolPolicy::preset(ToolPreset::All), &["devbox"]));
+    harness.create().await;
+    let go = harness.running_drive_turn("driven", "phone", 3).await;
+    let listed = |listings: Vec<super::EnvironmentListing>| {
+        listings
+            .into_iter()
+            .map(|listing| (listing.name, listing.commands, listing.current))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        listed(
+            harness
+                .service
+                .list_environments(&harness.id)
+                .await
+                .unwrap()
+        ),
+        [
+            (HERE.to_owned(), false, true),
+            ("devbox".to_owned(), true, false)
+        ]
+    );
+    // Every later revision admitted, queued behind the running turn, lets
+    // the least recently admitted go: revision 3 is the first to go.
+    for revision in 0..super::MAX_ADMITTED_POLICIES as u64 {
+        assert!(
+            harness
+                .send_as_driver(&format!("queued-{revision}"), "phone", 100 + revision)
+                .await
+        );
+    }
+    assert_eq!(
+        listed(
+            harness
+                .service
+                .list_environments(&harness.id)
+                .await
+                .unwrap()
+        ),
+        [(HERE.to_owned(), false, true)]
+    );
+    let refused = harness
+        .run(command("devbox", &["echo", "hi"], "call-1"))
+        .await;
+    assert!(
+        matches!(
+            &refused,
+            Err(CommandCallError::NotAllowed(reason))
+                if reason == r#"the tool policy of Drive grant "phone" at revision 3 is unavailable, so "run" is refused"#
+        ),
+        "{refused:?}"
+    );
+    assert!(harness.saved_commands().is_empty());
+    assert_eq!(host.granted.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let records = audit.records.lock().unwrap().clone();
+    assert_eq!(records.len(), 1);
+    assert!(!records[0].allowed);
+    assert_eq!(
+        (records[0].grant.as_str(), records[0].revision),
+        ("phone", 3)
+    );
+    go.send(()).unwrap();
+}
+
+/// ADR 803 step 4: a Drive grant's turn on a host its policy names is shown
+/// that host as taking commands, and its program is still the gateway's to
+/// allow: a denied one is refused `CommandDenied` there as the owner's is.
+#[tokio::test]
+async fn a_drive_grant_on_its_own_host_meets_the_gateways_programs() {
+    use crate::conversation::domain::{ToolPolicy, ToolPreset};
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::new();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    harness.checking_drive_tools(on_hosts(ToolPolicy::preset(ToolPreset::All), &["devbox"]));
+    harness.create().await;
+    let go = harness.running_drive_turn("driven", "phone", 3).await;
+    assert_eq!(
+        harness
+            .service
+            .list_environments(&harness.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|listing| (listing.name, listing.commands))
+            .collect::<Vec<_>>(),
+        [(HERE.to_owned(), false), ("devbox".to_owned(), true)]
+    );
+    assert_eq!(
+        harness
+            .run(command("devbox", &["rm", "-rf", "x"], "call-1"))
+            .await,
+        Ok(CommandAnswer::Refused(CommandRefusal::CommandDenied))
+    );
+    assert_eq!(host.granted.load(std::sync::atomic::Ordering::SeqCst), 0);
+    go.send(()).unwrap();
+}
+
+/// Row J28: a decision the Drive tool audit cannot take refuses the call,
+/// even one the grant's policy allows: nothing runs, is published or is
+/// placed.
+#[tokio::test]
+async fn j28_an_allowed_run_whose_decision_cannot_be_recorded_is_refused() {
+    use crate::conversation::domain::{ToolPolicy, ToolPreset};
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::new();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    let audit = harness.checking_drive_tools(ToolPolicy::preset(ToolPreset::All));
+    audit
+        .unavailable
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    harness.create().await;
+    let go = harness.running_drive_turn("driven", "phone", 3).await;
+    let refused = harness
+        .run(command("devbox", &["echo", "hi"], "call-1"))
+        .await;
+    assert!(
+        matches!(
+            &refused,
+            Err(CommandCallError::NotAllowed(reason)) if reason.contains("could not be recorded")
+        ),
+        "{refused:?}"
+    );
+    assert!(harness.saved_commands().is_empty());
+    assert_eq!(host.granted.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(host.timeouts.lock().unwrap().is_empty());
+    let (_caller, stop) = tokio::sync::watch::channel(false);
+    assert_eq!(
+        harness
+            .service
+            .publish_artifact(
+                &harness.id,
+                super::PublishCall {
+                    environment: "devbox".into(),
+                    path: "report.pdf".into(),
+                    media_type: None,
+                    call: "call-2".into(),
+                },
+                stop.clone(),
+            )
+            .await,
+        super::PublishAnswer::Refused(super::PublishCallRefusal::NotAllowed)
+    );
+    assert_eq!(
+        harness
+            .service
+            .fetch_artifact(
+                &harness.id,
+                super::FetchCall {
+                    environment: "devbox".into(),
+                    digest: "ab".repeat(32),
+                    media_type: "image/png".into(),
+                    size: 20,
+                    destination: "a.png".into(),
+                    call: "call-3".into(),
+                },
+                stop,
+            )
+            .await,
+        super::FetchAnswer::Refused(super::FetchCallRefusal::NotAllowed)
+    );
+    go.send(()).unwrap();
+}
+
+/// A grant journal that names no policy at any revision.
+struct NoEntry;
+
+impl super::ShareGrants for NoEntry {
+    fn held_grant<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+    ) -> super::ConversationFuture<'a, Option<super::HeldGrant>> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+    fn change(
+        &self,
+        _: super::ShareGrantChange,
+    ) -> super::ConversationFuture<'_, crate::conversation::application::ShareGrantReceipt> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+    fn grants<'a>(
+        &'a self,
+        _: &'a ConversationId,
+    ) -> super::ConversationFuture<'a, Vec<super::ShareGrant>> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+    fn policy_at<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> super::ConversationFuture<'a, Option<crate::conversation::domain::ToolPolicy>> {
+        Box::pin(async { Ok(None) })
+    }
+}
+
+/// Row J26: a Drive turn is refused `DrivePolicyUnenforceable`, and nothing
+/// reaches the agent, on a gateway that binds nothing to check its tools,
+/// and where the grant journal names no policy at its revision.
+#[tokio::test]
+async fn j26_a_drive_turn_nothing_can_check_is_refused_and_reaches_no_agent() {
+    let root = tempfile::tempdir().unwrap();
+    let harness = with_command_host(root.path(), CommandHost::new(), Some(devbox_policy()));
+    harness.create().await;
+    assert!(!harness.send_as_driver("unbound", "phone", 3).await);
+    harness.service.bind_drive_tools(super::DriveTools {
+        grants: Arc::new(NoEntry),
+        evaluator: Arc::new(
+            crate::conversation::infrastructure::CedarToolPolicyEvaluator::new().unwrap(),
+        ),
+        audit: Arc::new(RecordedDriveTools::default()),
+    });
+    assert!(!harness.send_as_driver("no-entry", "phone", 3).await);
+    assert!(harness.provider.executions.lock().unwrap().is_empty());
 }

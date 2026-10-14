@@ -25,6 +25,7 @@ pub(super) enum Initiator {
 #[derive(Serialize, Deserialize)]
 enum ToolChecking {
     NotChecked,
+    Checked,
 }
 impl From<&DomainInitiation> for Initiation {
     fn from(value: &DomainInitiation) -> Self {
@@ -32,17 +33,26 @@ impl From<&DomainInitiation> for Initiation {
             initiator: value.initiator().into(),
             tools: match value.tools() {
                 DomainToolChecking::NotChecked => ToolChecking::NotChecked,
+                DomainToolChecking::Checked => ToolChecking::Checked,
             },
         }
     }
 }
 impl Initiation {
     pub(super) fn decode(self) -> Result<DomainInitiation, StorageError> {
-        // One tool-checking case exists, and both constructors give it.
-        let ToolChecking::NotChecked = self.tools;
-        Ok(match self.initiator.decode()? {
-            DomainInitiator::Owner => DomainInitiation::owner(),
-            DomainInitiator::Grant(grant) => DomainInitiation::grant(grant),
+        // Only a grant's turn is checked; an owner's turn saved as checked
+        // is no turn the domain builds.
+        Ok(match (self.initiator.decode()?, self.tools) {
+            (DomainInitiator::Owner, ToolChecking::NotChecked) => DomainInitiation::owner(),
+            (DomainInitiator::Owner, ToolChecking::Checked) => {
+                return Err(corrupt("an owner's turn saved as tool-checked"))
+            }
+            (DomainInitiator::Grant(grant), ToolChecking::NotChecked) => {
+                DomainInitiation::grant(grant)
+            }
+            (DomainInitiator::Grant(grant), ToolChecking::Checked) => {
+                DomainInitiation::checked_grant(grant)
+            }
         })
     }
 }

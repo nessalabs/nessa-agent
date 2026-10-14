@@ -5,6 +5,7 @@
 
 use crate::conversation::application::{AdmitPassiveRead, PassiveRead, RecordReadLease};
 use nessa_auth::application::session::AuthenticatedSession;
+use nessa_auth::domain::PrincipalId;
 use nessa_protocol::conversation::read_scope::{
     passive_read_selector, validate_catalogue_selector, CatalogueReadScope, ReadRefusal,
 };
@@ -65,10 +66,13 @@ pub type CatalogueReadFuture<'a> =
 
 /// Source reads consume trusted admitted owner facts. Its worker owns the lease
 /// across caller cancellation and returns it after joining source work.
+/// `signed_in_as` is the principal the reader's session signed in as: the
+/// access policy admits each entry a read returns to that reader.
 pub trait CatalogueReadSource: Send + Sync {
     fn read(
         &self,
         admitted: CatalogueReadScope,
+        signed_in_as: PrincipalId,
         operation: CatalogueReadOperation,
         lease: RecordReadLease,
     ) -> CatalogueReadFuture<'_>;
@@ -114,7 +118,15 @@ impl ReadCatalogue<'_> {
             validate_catalogue_selector(&admitted, scope).map_err(CatalogueReadError::Admission)?;
         }
         let expected = operation.clone();
-        let response = self.source.read(admitted.clone(), operation, lease).await?;
+        let response = self
+            .source
+            .read(
+                admitted.clone(),
+                session.context().principal_id().clone(),
+                operation,
+                lease,
+            )
+            .await?;
         let scope = match (&expected, &response.value) {
             (CatalogueReadOperation::Head, CatalogueReadValue::Head { scope, .. }) => scope,
             (CatalogueReadOperation::Manifest(request), CatalogueReadValue::Manifest(page))

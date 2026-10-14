@@ -12,8 +12,9 @@
 //! Both legs share the connect's one budget. What a joined stream carries is
 //! the same pinned TLS as a direct one, so the relay leg decides nothing
 //! about the gateway: it only finds a path to it.
-use nessa_protocol::relay::{read_frame, write_frame, GatewayKey, RelayAddress, RelayFrame};
-use std::fmt;
+use nessa_protocol::relay::{
+    read_frame, write_frame, GatewayKey, RelayAddress, RelayFrame, RelayRefusal,
+};
 use std::io::{Error, ErrorKind, Result as IoResult};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -29,25 +30,6 @@ pub(super) struct RelayRoute {
     pub(super) address: RelayAddress,
     pub(super) key: GatewayKey,
 }
-
-/// Why the relay did not join the reader to its gateway. Carried inside the
-/// leg's `ConnectionRefused` error.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum RelayRefusal {
-    /// The gateway is not registered at the relay.
-    Offline,
-    /// The gateway is registered but did not accept in time.
-    NoAnswer,
-}
-impl fmt::Display for RelayRefusal {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Offline => "the gateway is not registered at the relay",
-            Self::NoAnswer => "the gateway did not accept through the relay in time",
-        })
-    }
-}
-impl std::error::Error for RelayRefusal {}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Leg {
@@ -161,19 +143,7 @@ pub(super) fn relay_leg(route: &RelayRoute, timeout: Duration) -> IoResult<TcpSt
             .filter(|left| !left.is_zero())
             .ok_or_else(|| Error::from(ErrorKind::TimedOut))
     };
-    let mut refused = None;
-    let mut stream = None;
-    for address in route.address.as_str().to_socket_addrs()? {
-        match TcpStream::connect_timeout(&address, left()?) {
-            Ok(connected) => {
-                stream = Some(connected);
-                break;
-            }
-            Err(error) => refused = Some(error),
-        }
-    }
-    let mut stream =
-        stream.ok_or_else(|| refused.unwrap_or_else(|| Error::from(ErrorKind::NotFound)))?;
+    let mut stream = connect_any(route.address.as_str(), deadline)?;
     // Small preamble frames go out at once.
     stream.set_nodelay(true)?;
     stream.set_write_timeout(Some(left()?))?;
@@ -184,16 +154,28 @@ pub(super) fn relay_leg(route: &RelayRoute, timeout: Duration) -> IoResult<TcpSt
     stream.set_write_timeout(None)?;
     match answer {
         RelayFrame::Joined => Ok(stream),
-        RelayFrame::Offline => Err(Error::new(
-            ErrorKind::ConnectionRefused,
-            RelayRefusal::Offline,
-        )),
-        RelayFrame::NoAnswer => Err(Error::new(
-            ErrorKind::ConnectionRefused,
-            RelayRefusal::NoAnswer,
-        )),
-        _ => Err(Error::from(ErrorKind::InvalidData)),
+        other => Err(RelayRefusal::of(other)
+            .map_or_else(|| Error::from(ErrorKind::InvalidData), Error::from)),
     }
+}
+
+/// Look up `address` (`host:port`) and connect to the first address it
+/// resolves to that answers before `deadline`, trying each in turn, as a
+/// TCP connect by name does. The lookup itself waits as long as the system
+/// resolver does.
+pub(super) fn connect_any(address: &str, deadline: Instant) -> IoResult<TcpStream> {
+    let mut refused = None;
+    for address in address.to_socket_addrs()? {
+        let left = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|left| !left.is_zero())
+            .ok_or_else(|| Error::from(ErrorKind::TimedOut))?;
+        match TcpStream::connect_timeout(&address, left) {
+            Ok(connected) => return Ok(connected),
+            Err(error) => refused = Some(error),
+        }
+    }
+    Err(refused.unwrap_or_else(|| Error::from(ErrorKind::NotFound)))
 }
 
 #[cfg(test)]

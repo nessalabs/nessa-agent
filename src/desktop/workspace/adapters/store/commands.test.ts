@@ -2021,6 +2021,116 @@ describe("what is typed goes when the person sends it", () => {
   })
 })
 
+describe("opening a conversation whose text was let go", () => {
+  const crowd = () => {
+    const index = testIndex()
+    const sessions = Array.from({ length: 10 }, (_, i) =>
+      summary(`s${i}`, "gateway", 1000 + i),
+    )
+    const source = fakeSource({ ...index, sessions: [...index.sessions, ...sessions] })
+    source.transcripts.set("s0", {
+      ...emptyTranscript("s0"),
+      revision: 10,
+      messages: [
+        {
+          id: "s0-message",
+          role: "user",
+          at: 1,
+          parts: [{ kind: "text", text: "s0-message" }],
+        },
+      ],
+      activity: { label: "Thinking", since: 1 },
+      approval: {
+        id: "ap",
+        command: "cargo test",
+        reason: "Runs the tests.",
+        origin: { kind: "agent" },
+        options: [],
+        ask: "tool",
+      },
+    })
+    return source
+  }
+
+  async function letGo(source = crowd()) {
+    const { store } = await ready(source)
+    store.dispatch(followWorkspace())
+    store.dispatch(openSession({ sessionId: "s0" }))
+    await settle()
+    for (let i = 1; i <= 9; i++) {
+      store.dispatch(openSession({ sessionId: `s${i}` }))
+      await settle()
+    }
+    return { store, source }
+  }
+
+  it("reads it again at the revision it remembers, including what it was doing and asking", async () => {
+    const { store } = await letGo()
+    expect(store.getState().workspace.transcripts.s0).toBeUndefined()
+    expect(store.getState().workspace.conversationRevisions.s0).toBe(10)
+    store.dispatch(openSession({ sessionId: "s0" }))
+    await settle()
+    const restored = store.getState().workspace.transcripts.s0
+    expect(restored?.revision).toBe(10)
+    expect(restored?.messages.map((message) => message.id)).toEqual(["s0-message"])
+    expect(restored?.activity).toEqual({ label: "Thinking", since: 1 })
+    expect(restored?.approval?.id).toBe("ap")
+    expect(store.getState().workspace.transcriptFailures.s0).toBeUndefined()
+  })
+
+  it("rejects an older reread, then takes a newer one from a resync, without a failure either way", async () => {
+    const source = crowd()
+    const { store } = await letGo(source)
+    source.transcripts.set("s0", {
+      ...emptyTranscript("s0"),
+      revision: 9,
+      messages: [
+        { id: "old", role: "user", at: 1, parts: [{ kind: "text", text: "old" }] },
+      ],
+    })
+    store.dispatch(openSession({ sessionId: "s0" }))
+    await settle()
+    expect(store.getState().workspace.transcripts.s0).toBeUndefined()
+    expect(store.getState().workspace.conversationRevisions.s0).toBe(10)
+    expect(store.getState().workspace.transcriptFailures.s0).toBeUndefined()
+    source.transcripts.set("s0", {
+      ...emptyTranscript("s0"),
+      revision: 11,
+      messages: [
+        {
+          id: "s0-message",
+          role: "user",
+          at: 1,
+          parts: [{ kind: "text", text: "s0-message" }],
+        },
+      ],
+    })
+    source.emit({ kind: "resync" })
+    await settle(10)
+    expect(store.getState().workspace.transcripts.s0?.revision).toBe(11)
+    expect(
+      store.getState().workspace.transcripts.s0?.messages.map((message) => message.id),
+    ).toEqual(["s0-message"])
+    expect(store.getState().workspace.transcriptFailures.s0).toBeUndefined()
+  })
+
+  it("leaves a conversation already held at that revision unchanged when resync reads it again", async () => {
+    const { store, source } = await ready()
+    store.dispatch(followWorkspace())
+    const held = store.getState().workspace.transcripts.a
+    source.transcripts.set("a", {
+      ...emptyTranscript("a"),
+      revision: held?.revision ?? 1,
+      messages: [
+        { id: "other", role: "agent", at: 1, parts: [{ kind: "text", text: "other" }] },
+      ],
+    })
+    source.emit({ kind: "resync" })
+    await settle(10)
+    expect(store.getState().workspace.transcripts.a).toBe(held)
+  })
+})
+
 describe("the source's resync", () => {
   it("reads the index again when the source says its stream may have lost updates", async () => {
     const { store, source } = await ready()

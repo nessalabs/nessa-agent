@@ -690,7 +690,7 @@ and why, in the module and in the change's report. Behind a trait is not tested.
 ## Policy goes through Cedar
 
 [Gate 18](#gates) in full. The decision record is
-[ADR 803](docs/adr/todo/803-policy-goes-through-cedar.md); it holds the audit of
+[ADR 803](docs/adr/done/803-policy-goes-through-cedar.md); it holds the audit of
 what is not yet in Cedar and the order it moves in.
 
 A policy decision answers one question: may this principal take this action on

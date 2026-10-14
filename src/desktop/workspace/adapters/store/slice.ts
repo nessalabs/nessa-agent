@@ -17,7 +17,7 @@ import type {
 } from "../../../split-panes/model/pane-layout"
 import type { EdgeMove } from "../../../split-panes"
 import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
-import type { Message, Transcript } from "../../model/transcript"
+import type { Transcript, TurnMessage } from "../../model/transcript"
 import type {
   Initiator,
   WorkspaceDependencies,
@@ -37,6 +37,9 @@ import type { AgentsGroup } from "../../model/overview/agents-glance"
 import * as panes from "../../application/usecases/panes"
 import * as sessions from "../../application/usecases/sessions"
 import * as updates from "../../application/usecases/updates"
+import * as sharing from "../../application/usecases/sharing"
+import type { ShareDraft, ShareGrant, SharingChoices } from "../../model/sharing"
+import type { ShareChange } from "../../application/workspace-state"
 
 type Payload<T> = PayloadAction<T>
 
@@ -213,7 +216,9 @@ const workspaceSlice = createSlice({
       updates.transcriptRetried(state, payload),
     messageSent: (
       state,
-      { payload }: Payload<{ sessionId: string; message: Message; initiator: Initiator }>,
+      {
+        payload,
+      }: Payload<{ sessionId: string; message: TurnMessage; initiator: Initiator }>,
     ) => sessions.messageSent(state, payload),
     messageDelivered: (
       state,
@@ -258,18 +263,61 @@ const workspaceSlice = createSlice({
       sessions.sessionRead(state, payload),
     setComposerText: (state, { payload }: Payload<{ sessionId: string; text: string }>) =>
       sessions.composerTextChanged(state, payload),
+
+    // Sharing
+    shareOpened: (
+      state,
+      { payload }: Payload<{ sessionId: string; opening: string; read: string }>,
+    ) => sharing.shareOpened(state, payload),
+    closeShare: (state) => sharing.shareClosed(state),
+    sharesReading: (state, { payload }: Payload<{ opening: string; read: string }>) =>
+      sharing.sharesReading(state, payload),
+    sharesRead: (
+      state,
+      {
+        payload,
+      }: Payload<{
+        opening: string
+        read: string
+        grants: sharing.ReadAnswer<readonly ShareGrant[]>
+        choices: sharing.ReadAnswer<SharingChoices>
+      }>,
+    ) => sharing.sharesRead(state, payload),
+    shareChanging: (
+      state,
+      { payload }: Payload<{ opening: string; change: ShareChange }>,
+    ) => sharing.shareChanging(state, payload),
+    shareChanged: (
+      state,
+      { payload }: Payload<{ settled: sharing.ChangeSettled; read: string }>,
+    ) => sharing.shareChanged(state, payload),
+    shareDrafted: (state, { payload }: Payload<{ opening: string; draft: ShareDraft }>) =>
+      sharing.shareDrafted(state, payload),
+    shareRestarted: (state, { payload }: Payload<{ opening: string }>) =>
+      sharing.shareRestarted(state, payload),
+    shareConfirming: (
+      state,
+      { payload }: Payload<{ opening: string; credentialId: string }>,
+    ) => sharing.shareConfirming(state, payload),
+    shareConfirmCancelled: (state, { payload }: Payload<{ opening: string }>) =>
+      sharing.shareConfirmCancelled(state, payload),
   },
 })
 
 export const workspaceActions = workspaceSlice.actions
 
-/** The workspace's first state, with what was kept between launches: the overview's filter. */
+/**
+ * The workspace's first state, with what was kept between launches — the
+ * overview's filter — and whether its sessions can be shared from here.
+ */
 export function initialWorkspaceFrom({
   overviewFilter,
-}: Pick<WorkspaceDependencies, "overviewFilter">): WorkspaceState {
+  sharing,
+}: Pick<WorkspaceDependencies, "overviewFilter" | "sharing">): WorkspaceState {
   return {
     ...initialWorkspace,
     overview: { ...initialWorkspace.overview, filter: overviewFilter.read() },
+    shareable: sharing !== undefined,
   }
 }
 

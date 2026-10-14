@@ -9,6 +9,7 @@ pub use conversation_deletion::{
     ConversationDeletion, DeletionContradiction, ProviderSessionErasure, ProviderSessionLink,
 };
 pub use share_access::{
-    ShareAccess, ShareAccessError, ShareRole, ToolPolicy, ToolPolicyError, ToolPreset, ToolRules,
+    CommandHosts, ShareAccess, ShareAccessError, ShareRole, ToolChoice, ToolPolicy,
+    ToolPolicyError, ToolPreset, ToolRules,
 };
 pub use tool_call::{ToolCall, ToolSource};

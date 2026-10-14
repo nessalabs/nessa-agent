@@ -8,6 +8,7 @@
 import { appWidget } from "../../widgets/app/model/app-ref"
 import type { WorkspaceFailureReason } from "./failure"
 import type { WidgetRef } from "../../widgets/model/widget-ref"
+import type { HistoryExtent, Note } from "../../../conversation"
 
 export type StepKind = "read" | "edit" | "run" | "search"
 
@@ -59,7 +60,14 @@ export type Delivery =
   | { readonly state: "sending" }
   | { readonly state: "failed"; readonly reason: WorkspaceFailureReason }
 
-export interface Message {
+/**
+ * One row of a conversation: a message from the person or the agent, or a
+ * note somebody left in it (`NoteMessage`).
+ */
+export type Message = TurnMessage | NoteMessage
+
+/** A message the person or the agent said in a turn. */
+export interface TurnMessage {
   readonly id: string
   readonly role: "user" | "agent"
   readonly at: number
@@ -72,6 +80,24 @@ export interface Message {
    * (`ui/message`, #390); absent when the person wrote it.
    */
   readonly app?: MessageApp
+  readonly note?: never
+}
+
+/**
+ * A note the owner, or someone the conversation is shared with, left in it:
+ * not a turn and not the person's message, so it is drawn as a row of its
+ * own (`TranscriptNote`), with who left it and where it stands. Nothing the window sends is a note, so it is never unsent.
+ */
+export interface NoteMessage {
+  readonly id: string
+  readonly role: "note"
+  readonly at: number
+  /** None: what it says is the note's. */
+  readonly parts: readonly Part[]
+  readonly note: Note
+  readonly observedInput?: never
+  readonly delivery?: never
+  readonly app?: never
 }
 
 /** An MCP App, as a message it wrote names it: its server, and the tool whose UI it is. */
@@ -201,6 +227,11 @@ export interface Transcript {
   readonly messages: readonly Message[]
   readonly activity: Activity | null
   readonly approval: Approval | null
+  /**
+   * What the bounded view left out (`historyExtent`). Absent when the source
+   * did not say, or said this is the whole confirmed history.
+   */
+  readonly history?: HistoryExtent
   /** A provider's typed authentication refusal on the latest turn. */
   readonly authenticationRefusal?: string
   /** Raw execution identity of the latest published input, including pending. */
@@ -223,10 +254,10 @@ export function emptyTranscript(sessionId: string): Transcript {
  * after it until the source's conversation includes them by id. The same list
  * when none was retired.
  */
-export function unconfirmed(
-  sent: readonly Message[],
+export function unconfirmed<Sent extends Message>(
+  sent: readonly Sent[],
   transcript: Transcript | undefined,
-): readonly Message[] {
+): readonly Sent[] {
   if (!transcript) return sent
   const held = new Set(transcript.messages.map((message) => message.id))
   return sent.some((message) => held.has(message.id))
