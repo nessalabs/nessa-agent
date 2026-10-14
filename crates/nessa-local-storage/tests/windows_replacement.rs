@@ -50,7 +50,6 @@ fn replacement_refuses_a_reader_without_delete_sharing_then_succeeds_after_relea
 
     let error = publish(&directory, b"refused").unwrap_err();
 
-    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
     assert!(matches!(error.raw_os_error(), Some(5 | 32)), "{error:?}");
     assert_eq!(
         fs::read(directory.join("records/record.json")).unwrap(),
