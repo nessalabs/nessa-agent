@@ -14,6 +14,9 @@ function pageWithFastCompletion({
   outsideFocus = false,
   deliverBeforeOpeningFailure = false,
   openingFailure,
+  disarmFailure,
+  jsonValueFailure,
+  disposeFailure,
 } = {}) {
   const events = []
   const view = {
@@ -83,6 +86,7 @@ function pageWithFastCompletion({
     })
   let observe
   let timeout
+  let rejectPending
   let settled = false
   let disposed = false
   const page = {
@@ -92,22 +96,29 @@ function pageWithFastCompletion({
       assert.equal(options.polling, "raf")
       return new Promise((resolve, reject) => {
         timeout = reject
+        rejectPending = reject
         observe = () => {
           const result = browser(predicate, selectors)
           if (!result) return
           settled = true
           resolve({
-            jsonValue: async () => JSON.parse(JSON.stringify(result)),
+            jsonValue: async () => {
+              if (jsonValueFailure) throw jsonValueFailure
+              return JSON.parse(JSON.stringify(result))
+            },
             dispose: async () => {
               disposed = true
+              if (disposeFailure) throw disposeFailure
             },
           })
         }
         if (view.visible) observe()
       })
     },
-    evaluate: async (operation, value) =>
-      runInNewContext(`(${operation.toString()})(value)`, { document, value }),
+    evaluate: async (operation, value) => {
+      if (view.observerId === value && disarmFailure) throw disarmFailure
+      return runInNewContext(`(${operation.toString()})(value)`, { document, value })
+    },
     keyboard: {
       press: async () => {
         events.push("open")
@@ -135,6 +146,7 @@ function pageWithFastCompletion({
     events,
     view,
     poll: () => observe?.(),
+    rejectPending: (error) => rejectPending?.(error),
     get disposed() {
       return disposed
     },
@@ -200,6 +212,49 @@ test("stops observing when an opening key is delivered but its RPC rejects", asy
   assert.deepEqual(scene.events, ["arm", "open", "delivered"])
   assert.deepEqual(scene.view.listedChecks, [])
   assert.equal(scene.view.observerId, undefined)
+})
+
+test("preserves an opening error when disarm fails and observes the later waiter error", async () => {
+  const openingFailure = new Error("opening key failed")
+  const disarmFailure = new Error("page closed during disarm")
+  const waiterFailure = new Error("bounded observation ended")
+  const scene = pageWithFastCompletion({ openingFailure, disarmFailure })
+  const unhandled = []
+  const recordUnhandled = (error) => unhandled.push(error)
+  process.on("unhandledRejection", recordUnhandled)
+  try {
+    await assert.rejects(
+      keysWhileRowsArrive(scene.page),
+      (error) => error === openingFailure,
+    )
+    scene.rejectPending(waiterFailure)
+    await new Promise((resolve) => setImmediate(resolve))
+  } finally {
+    process.off("unhandledRejection", recordUnhandled)
+  }
+  assert.deepEqual(unhandled, [])
+})
+
+test("preserves a JSON read error when disposing its handle also fails", async () => {
+  const readFailure = new Error("could not read browser result")
+  const disposeFailure = new Error("could not dispose browser result")
+  const scene = pageWithFastCompletion({
+    jsonValueFailure: readFailure,
+    disposeFailure,
+  })
+  await assert.rejects(keysWhileRowsArrive(scene.page), (error) => error === readFailure)
+  assert.equal(scene.disposed, true)
+})
+
+test("reports a cleanup failure after successful browser verification", async () => {
+  const disarmFailure = new Error("page closed during disarm")
+  const disposeFailure = new Error("could not dispose browser result")
+  const scene = pageWithFastCompletion({ disarmFailure, disposeFailure })
+  await assert.rejects(
+    keysWhileRowsArrive(scene.page),
+    (error) => error === disarmFailure,
+  )
+  assert.equal(scene.disposed, true)
 })
 
 test("does not act before its own rows and focus are mounted", () => {

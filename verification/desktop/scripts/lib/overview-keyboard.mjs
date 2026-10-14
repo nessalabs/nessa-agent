@@ -1,4 +1,4 @@
-import { CannotRun } from "./cli.mjs"
+import { CannotRun, log } from "./cli.mjs"
 import { css, keys } from "./selectors.mjs"
 
 const observerAttribute = "data-overview-key-observer"
@@ -50,29 +50,57 @@ export function pressMountedOverviewKeys(sel) {
   return { missed: false, first, last, afterEnd, afterDown, afterHome }
 }
 
-/** Arm before opening; this wait's page token makes stale polls inert after it settles. */
+/** A per-wait page token lets cleanup stop stale polls when the opening RPC settles. */
 export async function keysWhileRowsArrive(page) {
   const observerId = String(++nextObserverId)
-  await page.evaluate(
-    (id) => document.documentElement.setAttribute("data-overview-key-observer", id),
-    observerId,
-  )
-  const pending = page.waitForFunction(
-    pressMountedOverviewKeys,
-    { column: css.overviewColumn, item: css.overviewItem, observerId, observerAttribute },
-    { timeout: 2000, polling: "raf" },
-  )
-  // A failed opening key must not leave an unobserved waiter rejection behind.
-  void pending.catch(() => {})
-  try {
-    await page.keyboard.press(keys.overview)
-    const handle = await pending
-    let read
+  let outcome
+  let observerClosed = false
+  let handle
+  let handleDisposal
+  const logCleanupFailure = (error) => {
     try {
-      read = await handle.jsonValue()
-    } finally {
-      await handle.dispose()
+      log("secondary overview keyboard cleanup fault:", error?.message ?? String(error))
+    } catch {
+      // A diagnostic failure must not replace the operation's primary outcome.
+      return
     }
+  }
+  const disposeHandle = () => {
+    if (!handle) return Promise.resolve()
+    handleDisposal ??= Promise.resolve().then(() => handle.dispose())
+    return handleDisposal
+  }
+  try {
+    await page.evaluate(
+      (id) => document.documentElement.setAttribute("data-overview-key-observer", id),
+      observerId,
+    )
+    const pending = page
+      .waitForFunction(
+        pressMountedOverviewKeys,
+        {
+          column: css.overviewColumn,
+          item: css.overviewItem,
+          observerId,
+          observerAttribute,
+        },
+        { timeout: 2000, polling: "raf" },
+      )
+      .then((observedHandle) => {
+        handle = observedHandle
+        if (!observerClosed) return observedHandle
+        return disposeHandle()
+          .catch((error) => {
+            logCleanupFailure(error)
+            throw error
+          })
+          .then(() => observedHandle)
+      })
+    // A failed opening key must not leave an unobserved waiter rejection behind.
+    void pending.catch(() => {})
+    await page.keyboard.press(keys.overview)
+    handle = await pending
+    const read = await handle.jsonValue()
     if (read.missed)
       throw new CannotRun("the overview completed without a qualifying partial list")
     const failures = []
@@ -89,12 +117,34 @@ export async function keysWhileRowsArrive(page) {
     aligned("End", read.afterEnd, read.last)
     aligned("↓", read.afterDown, read.last)
     aligned("Home", read.afterHome, read.first)
-    return { ...read, failures }
-  } finally {
-    await page.evaluate((id) => {
-      const root = document.documentElement
-      if (root?.getAttribute("data-overview-key-observer") === id)
-        root.removeAttribute("data-overview-key-observer")
-    }, observerId)
+    outcome = { kind: "success", value: { ...read, failures } }
+  } catch (error) {
+    outcome = { kind: "failure", error }
   }
+  observerClosed = true
+  const cleanupFailures = []
+  for (const cleanup of [
+    () =>
+      page.evaluate((id) => {
+        const root = document.documentElement
+        if (root?.getAttribute("data-overview-key-observer") === id)
+          root.removeAttribute("data-overview-key-observer")
+      }, observerId),
+    disposeHandle,
+  ]) {
+    try {
+      await cleanup()
+    } catch (error) {
+      cleanupFailures.push(error)
+    }
+  }
+  if (outcome.kind === "failure") {
+    for (const error of cleanupFailures) logCleanupFailure(error)
+    throw outcome.error
+  }
+  if (cleanupFailures.length > 0) {
+    for (const error of cleanupFailures.slice(1)) logCleanupFailure(error)
+    throw cleanupFailures[0]
+  }
+  return outcome.value
 }
