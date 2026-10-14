@@ -1259,6 +1259,10 @@ await main(meta, async ({ options, rep, url }) => {
               await need(fresh.page, css.composer, "a composer")
               await focusComposer(fresh.page)
               const result = await regroupKeepsKeyboard(fresh.page, from)
+              if (options.shots && from === "away")
+                await fresh.page.locator(css.overviewColumn).screenshot({
+                  path: `${options.shots}/focus-regroup-away-${engine}-${layout}.png`,
+                })
               return { ...result, failures: [...result.failures, ...fresh.errors] }
             } finally {
               await fresh.close()

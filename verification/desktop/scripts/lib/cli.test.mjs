@@ -200,6 +200,34 @@ describe("resultOfThrown", () => {
     assert.equal(result.error, "broke")
   })
 
+  it("includes the original operation error in fatal recovery diagnostics", async () => {
+    const operationFailure = new Error("opening key acknowledgement failed")
+    const fatal = new UnsafeToContinueError("page retirement failed", {
+      cause: operationFailure,
+    })
+    let result
+    const written = await stderrOf(() => (result = resultOfThrown({ name: "s" }, fatal)))
+    assert.match(written, /UnsafeToContinueError: page retirement failed/)
+    assert.match(written, /caused by: Error: opening key acknowledgement failed/)
+    assert.equal(
+      result.error,
+      "page retirement failed (caused by: Error: opening key acknowledgement failed)",
+    )
+  })
+
+  it("retains a non-Error operation cause in the fatal result", async () => {
+    const fatal = new UnsafeToContinueError("page retirement failed", {
+      cause: "opening key acknowledgement failed",
+    })
+    let result
+    const written = await stderrOf(() => (result = resultOfThrown({ name: "s" }, fatal)))
+    assert.match(written, /caused by: opening key acknowledgement failed/)
+    assert.equal(
+      result.error,
+      "page retirement failed (caused by: opening key acknowledgement failed)",
+    )
+  })
+
   it("writes nothing for could-not-run, which is not a fault", async () => {
     const written = await stderrOf(() =>
       resultOfThrown({ name: "s" }, new CannotRun("no server")),
