@@ -1,4 +1,8 @@
-import { imageAttachmentsProblem, linkedFilesProblem } from "@nessa/client"
+import {
+  preparedSubmissionFields,
+  executionTargetConversation,
+  type PreparedSubmission,
+} from "@nessa/client"
 import {
   AttachmentStagingError,
   ControlFailedError,
@@ -9,7 +13,7 @@ import {
   type ConversationFollower,
   type ConversationListFollower,
 } from "../../application/ports"
-import type { ConversationView, Submission } from "../../application/view"
+import type { ConversationView } from "../../application/view"
 import { STORED_IMAGE_TYPES } from "../../model"
 
 /** The most published files a view lists, newest last, as the gateway's view does. */
@@ -131,26 +135,12 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
   const listsChanged = () => {
     for (const registration of listFollowers) tellList(registration)
   }
-  const send = async (input: Submission) => {
+  const submit = async (input: PreparedSubmission) => {
+    preparedSubmissionFields(input)
     if (deleted.has(input.conversationId))
       throw new SubmissionRefusedError("conversation-deleted")
     // A conversation somebody is writing in is not archived, as on the gateway.
     archived.delete(input.conversationId)
-    // A substitute that cannot refuse is a substitute that proves nothing. The
-    // gateway adapter is held to the client's verdict on a message's images, so
-    // this one asks the client the same question and refuses the same way.
-    const problem = imageAttachmentsProblem(input.attachments)
-    if (problem) {
-      const refused = new SubmissionRefusedError("invalid-request")
-      refused.message = `Invalid message attachments: ${problem}`
-      throw refused
-    }
-    const pathProblem = linkedFilesProblem(input.files)
-    if (pathProblem) {
-      const refused = new SubmissionRefusedError("invalid-request")
-      refused.message = `Invalid message files: ${pathProblem}`
-      throw refused
-    }
     const view = get(input.conversationId)
     if (!view.messages.some((message) => message.executionId === input.executionId)) {
       // Demo behaviour only, nothing a real agent is promised to do: the echo
@@ -174,8 +164,8 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
       view.messages.push({
         executionId: input.executionId,
         userText: input.text,
-        attachments: input.attachments,
-        files: input.files,
+        attachments: input.attachments.map((image) => ({ ...image })),
+        files: input.files.map((file) => ({ ...file })),
         parts: [
           { offset: 0, kind: "thought", text: "", toolId: "", noticeId: "" },
           { offset: 1, kind: "text", text: input.text, toolId: "", noticeId: "" },
@@ -187,7 +177,11 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
       changed(input.conversationId)
       listsChanged()
     }
-    return { executionId: input.executionId, disposition: "queued" }
+    return {
+      conversationId: input.conversationId,
+      executionId: input.executionId,
+      disposition: "queued",
+    }
   }
   return {
     async setApprovalMode() {
@@ -291,8 +285,7 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
         following.delete(follower)
       }
     },
-    send,
-    steer: send,
+    submit,
     async stageAttachment(id, file, bytes, signal) {
       get(id)
       if (signal.aborted) throw new AttachmentStagingError("interrupted")
@@ -336,7 +329,9 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
       view.revision = String(Number(view.revision) + 1)
       return "applied"
     },
-    async remove() {},
+    async remove(target) {
+      executionTargetConversation(target)
+    },
     async answer() {},
     async answerQuestion(target) {
       // The scripted gateway has no agent waiting, so answering only closes the
@@ -347,7 +342,9 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
       )
     },
     async cancel() {},
-    async stop(id, executionId) {
+    async stop(target) {
+      const id = executionTargetConversation(target)
+      const executionId = target.executionId
       const view = get(id)
       view.messages = view.messages.map((message) =>
         message.executionId === executionId &&

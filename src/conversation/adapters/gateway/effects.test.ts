@@ -1,4 +1,9 @@
-import { permissionTargets, questionTargets } from "@nessa/client"
+import {
+  prepareSubmission,
+  executionTargets,
+  permissionTargets,
+  questionTargets,
+} from "@nessa/client"
 import {
   IMAGE_ATTACHMENT_TYPES,
   linkedFileProblem,
@@ -48,7 +53,7 @@ function gatewayView(): ConversationView {
     notes: [],
     unreadable: [],
     unreadableTruncated: false,
-    conversationId: "server",
+    conversationId: "00000000-0000-4000-8000-000000000001",
     title: null,
     revision: "capabilities",
     serverNowMs: SERVER_NOW_MS,
@@ -109,35 +114,42 @@ function deferred<T>() {
 it("joins concurrent creation and forwards exact stable submission IDs", async () => {
   const gate = deferred<{ conversationId: string }>()
   const create = vi.fn(() => gate.promise)
-  const send = vi.fn(async () => ({
+  const submit = vi.fn(async () => ({
     executionId: "execution",
     requestId: "action",
     disposition: "queued" as const,
   }))
   const effects = effectsOf(
-    () => ({ conversation: { create, send } }) as unknown as NessaClient,
+    () => ({ conversation: { create, submit } }) as unknown as NessaClient,
   )
-  const first = effects.create("server")
-  const second = effects.create("server")
+  const first = effects.create("00000000-0000-4000-8000-000000000001")
+  const second = effects.create("00000000-0000-4000-8000-000000000001")
   // The agent setup chose is asked for before the creation goes out, so the
   // call lands a turn later; joining it does not wait for that.
   expect(first).toBe(second)
   await Promise.resolve()
   expect(create).toHaveBeenCalledOnce()
-  gate.resolve({ conversationId: "server" })
+  gate.resolve({ conversationId: "00000000-0000-4000-8000-000000000001" })
   await Promise.all([first, second])
-  await effects.send({
-    conversationId: "server",
-    executionId: "execution",
-    actionId: "action",
-    text: "exact",
-    attachments: [],
-    files: [],
-  })
-  expect(send).toHaveBeenCalledWith("server", "exact", [], [], {
-    executionId: "execution",
-    requestId: "action",
-  })
+  await effects.submit(
+    prepareSubmission({
+      mode: "queued",
+      conversationId: "00000000-0000-4000-8000-000000000001",
+      executionId: "execution",
+      requestId: "action",
+      text: "exact",
+      attachments: [],
+      files: [],
+    }),
+  )
+  expect(submit).toHaveBeenCalledWith(
+    expect.objectContaining({
+      conversationId: "00000000-0000-4000-8000-000000000001",
+      executionId: "execution",
+      requestId: "action",
+      text: "exact",
+    }),
+  )
 })
 
 it("creates a draft with its exact selected agent, model and approval mode", async () => {
@@ -151,10 +163,14 @@ it("creates a draft with its exact selected agent, model and approval mode", asy
     panelNow,
     chosenAgent,
   )
-  await effects.create("server", { agent: "codex", model: "astra", approvalMode: "auto" })
+  await effects.create("00000000-0000-4000-8000-000000000001", {
+    agent: "codex",
+    model: "astra",
+    approvalMode: "auto",
+  })
   expect(chosenAgent).not.toHaveBeenCalled()
   expect(create).toHaveBeenCalledExactlyOnceWith({
-    conversationId: "server",
+    conversationId: "00000000-0000-4000-8000-000000000001",
     agent: "codex",
     model: "astra",
     approvalMode: "auto",
@@ -171,14 +187,14 @@ it("creates a draft on the SSH host it was to run on", async () => {
     panelNow,
     vi.fn(async () => "claude"),
   )
-  await effects.create("server", {
+  await effects.create("00000000-0000-4000-8000-000000000001", {
     agent: "claude",
     model: "sonnet",
     approvalMode: "ask",
     environment: "devbox",
   })
   expect(create).toHaveBeenCalledExactlyOnceWith({
-    conversationId: "server",
+    conversationId: "00000000-0000-4000-8000-000000000001",
     agent: "claude",
     model: "sonnet",
     approvalMode: "ask",
@@ -265,12 +281,18 @@ it("P1: tells the follower each frame, and after lagging follows on at once from
   const gateway = subscribing()
   const effects = effectsOf(() => gateway.client)
   const { said, follower } = told()
-  const stop = effects.follow("server", follower)
+  const stop = effects.follow("00000000-0000-4000-8000-000000000001", follower)
   await settle()
   expect(gateway.opens).toHaveLength(1)
   expect(gateway.opens[0]!.after).toBeUndefined()
   gateway.opens[0]!.handlers.view({ cursor: cursor("3"), view: gatewayView() })
-  expect(said).toEqual([{ view: expect.objectContaining({ conversationId: "server" }) }])
+  expect(said).toEqual([
+    {
+      view: expect.objectContaining({
+        conversationId: "00000000-0000-4000-8000-000000000001",
+      }),
+    },
+  ])
   gateway.opens[0]!.handlers.ended({ reason: "lagging" })
   await settle()
   // Too slow is not a failure: nothing is said, and no time is waited.
@@ -295,7 +317,7 @@ it("puts a review's deadline on the panel's clock as the view arrives, so skew b
       () => panelMs,
     )
     const { said, follower } = told()
-    const stop = effects.follow("server", follower)
+    const stop = effects.follow("00000000-0000-4000-8000-000000000001", follower)
     await settle()
     gateway.opens[0]!.handlers.view({
       cursor: cursor("1"),
@@ -343,7 +365,7 @@ it("P2: follows from the start when the gateway holds no history that far", asyn
   const gateway = subscribing()
   const effects = effectsOf(() => gateway.client)
   const { follower } = told()
-  const stop = effects.follow("server", follower)
+  const stop = effects.follow("00000000-0000-4000-8000-000000000001", follower)
   await settle()
   gateway.opens[0]!.handlers.view({ cursor: cursor("9"), view: gatewayView() })
   gateway.opens[0]!.handlers.ended({ reason: "lagging" })
@@ -367,7 +389,7 @@ it("P3: says why it could not follow, and tries again after a wait", async () =>
   ])
   const effects = gatewayEffects(() => gateway.client, wait, panelNow)
   const { said, follower } = told()
-  const stop = effects.follow("server", follower)
+  const stop = effects.follow("00000000-0000-4000-8000-000000000001", follower)
   await settle()
   expect(said).toEqual([{ failed: "configuration-changed", cause: expect.anything() }])
   expect(wait).toHaveBeenCalledExactlyOnceWith(FOLLOW_RETRY_MS)
@@ -377,7 +399,9 @@ it("P3: says why it could not follow, and tries again after a wait", async () =>
   expect(gateway.opens).toHaveLength(1)
   gateway.opens[0]!.handlers.view({ cursor: cursor("1"), view: gatewayView() })
   expect(said.at(-1)).toEqual({
-    view: expect.objectContaining({ conversationId: "server" }),
+    view: expect.objectContaining({
+      conversationId: "00000000-0000-4000-8000-000000000001",
+    }),
   })
   // A subscription the gateway ends is a failure too: said, and tried again.
   gateway.opens[0]!.handlers.ended({
@@ -394,7 +418,7 @@ it("P3: stops trying for a conversation somebody deleted", async () => {
   const gateway = subscribing([new NessaRpcError("conversation_deleted", "deleted")])
   const effects = gatewayEffects(() => gateway.client, wait, panelNow)
   const { said, follower } = told()
-  effects.follow("server", follower)
+  effects.follow("00000000-0000-4000-8000-000000000001", follower)
   await settle()
   expect(said).toEqual([{ failed: "deleted", cause: expect.anything() }])
   expect(wait).not.toHaveBeenCalled()
@@ -405,7 +429,7 @@ it("P4: closes a subscription answered after its follow was stopped, and tells n
   const gateway = subscribing([answered.promise])
   const effects = effectsOf(() => gateway.client)
   const { said, follower } = told()
-  const stop = effects.follow("server", follower)
+  const stop = effects.follow("00000000-0000-4000-8000-000000000001", follower)
   await settle()
   stop()
   answered.resolve()
@@ -426,21 +450,25 @@ it("P4: a follow stopped before its open is answered is closed before the next f
   const effects = effectsOf(() => gateway.client)
   const first = told()
   const second = told()
-  const stopFirst = effects.follow("server", first.follower)
+  const stopFirst = effects.follow("00000000-0000-4000-8000-000000000001", first.follower)
   await settle()
   // Its caller stops it, then follows again (the store's one rule, P8).
   stopFirst()
-  const stop = effects.follow("server", second.follower)
+  const stop = effects.follow("00000000-0000-4000-8000-000000000001", second.follower)
   await settle()
-  expect(gateway.log).toEqual(["subscribe server"])
+  expect(gateway.log).toEqual(["subscribe 00000000-0000-4000-8000-000000000001"])
   answered.resolve()
   await settle()
   // Answered, and being closed: still only the one subscribe.
   expect(gateway.opens[0]!.close).toHaveBeenCalledOnce()
-  expect(gateway.log).toEqual(["subscribe server"])
+  expect(gateway.log).toEqual(["subscribe 00000000-0000-4000-8000-000000000001"])
   closed.resolve()
   await settle()
-  expect(gateway.log).toEqual(["subscribe server", "closed s1", "subscribe server"])
+  expect(gateway.log).toEqual([
+    "subscribe 00000000-0000-4000-8000-000000000001",
+    "closed s1",
+    "subscribe 00000000-0000-4000-8000-000000000001",
+  ])
   gateway.opens[1]!.handlers.view({ cursor: cursor("1"), view: gatewayView() })
   expect(second.said).toHaveLength(1)
   expect(first.said).toEqual([])
@@ -451,11 +479,14 @@ it("P8: a follow is stopped only by its own function: following the conversation
   const gateway = subscribing()
   const effects = effectsOf(() => gateway.client)
   const first = told()
-  const stopFirst = effects.follow("server", first.follower)
+  const stopFirst = effects.follow("00000000-0000-4000-8000-000000000001", first.follower)
   await settle()
   expect(gateway.opens).toHaveLength(1)
   // Its caller replaces it by stopping it first; the effects do not.
-  const stopSecond = effects.follow("server", told().follower)
+  const stopSecond = effects.follow(
+    "00000000-0000-4000-8000-000000000001",
+    told().follower,
+  )
   await settle()
   expect(gateway.opens[0]!.close).not.toHaveBeenCalled()
   gateway.opens[0]!.handlers.view({ cursor: cursor("1"), view: gatewayView() })
@@ -483,11 +514,16 @@ it("asks the host again after a failed answer instead of keeping the failure", a
     panelNow,
     chosenAgent,
   )
-  await expect(effects.create("server")).rejects.toThrow("the host module would not load")
+  await expect(effects.create("00000000-0000-4000-8000-000000000001")).rejects.toThrow(
+    "the host module would not load",
+  )
   expect(create).not.toHaveBeenCalled()
-  await effects.create("server")
+  await effects.create("00000000-0000-4000-8000-000000000001")
   expect(asked).toBe(2)
-  expect(create).toHaveBeenCalledWith({ conversationId: "server", agent: "codex" })
+  expect(create).toHaveBeenCalledWith({
+    conversationId: "00000000-0000-4000-8000-000000000001",
+    agent: "codex",
+  })
 })
 
 it("sends the creation over the session of the moment, not the one checked first", async () => {
@@ -507,7 +543,7 @@ it("sends the creation over the session of the moment, not the one checked first
       return undefined
     },
   )
-  await effects.create("server")
+  await effects.create("00000000-0000-4000-8000-000000000001")
   expect(retired).not.toHaveBeenCalled()
   expect(live).toHaveBeenCalledOnce()
 })
@@ -519,7 +555,7 @@ it("sends the creation over the session of the moment, not the one checked first
 const reading = async (error: unknown, client = subscribing([error as Error]).client) => {
   const effects = effectsOf(() => client)
   return new Promise<unknown>((done) => {
-    const stop = effects.follow("server", {
+    const stop = effects.follow("00000000-0000-4000-8000-000000000001", {
       view: () => done(new Error("a view was told")),
       failed: (_reason, cause) => {
         stop()
@@ -690,27 +726,25 @@ it("refuses locally exactly the paths the published rule refuses", () => {
 
 it("forwards a message's images and files with its text, for send and steer alike", async () => {
   const receipt = { executionId: "execution", requestId: "action", disposition: "queued" }
-  const send = vi.fn(async () => receipt)
-  const steer = vi.fn(async () => receipt)
+  const submit = vi.fn(async () => receipt)
   const effects = effectsOf(
-    () => ({ conversation: { send, steer } }) as unknown as NessaClient,
+    () => ({ conversation: { submit } }) as unknown as NessaClient,
   )
   const linked = { path: "/Users/ada/report.pdf" }
-  const submission = {
-    conversationId: "server",
+  const submission = prepareSubmission({
+    mode: "queued",
+    conversationId: "00000000-0000-4000-8000-000000000001",
     executionId: "execution",
-    actionId: "action",
+    requestId: "action",
     text: "",
     attachments: [stored],
     files: [linked],
-  }
-  await effects.send(submission)
-  await effects.steer(submission)
-  const ids = { executionId: "execution", requestId: "action" }
-  // The two lists stay apart all the way to the client: an image's bytes were
-  // carried here and a file's path was not.
-  expect(send).toHaveBeenCalledExactlyOnceWith("server", "", [stored], [linked], ids)
-  expect(steer).toHaveBeenCalledExactlyOnceWith("server", "", [stored], [linked], ids)
+  })
+  await effects.submit(submission)
+  const steering = prepareSubmission({ ...submission, mode: "steering" })
+  await effects.submit(steering)
+  expect(submit).toHaveBeenNthCalledWith(1, submission)
+  expect(submit).toHaveBeenNthCalledWith(2, steering)
 })
 
 it.each([
@@ -737,17 +771,18 @@ it.each([
         ),
       )
     const effects = effectsOf(
-      () => ({ conversation: { send: refuse, steer: refuse } }) as unknown as NessaClient,
+      () => ({ conversation: { submit: refuse } }) as unknown as NessaClient,
     )
-    const submission = {
-      conversationId: "server",
+    const submission = prepareSubmission({
+      mode: "queued",
+      conversationId: "00000000-0000-4000-8000-000000000001",
       executionId: "execution",
-      actionId: "action",
+      requestId: "action",
       text: "look",
       attachments: [stored],
       files: [],
-    }
-    for (const submit of [effects.send, effects.steer]) {
+    })
+    for (const submit of [effects.submit]) {
       const error = await submit(submission).catch((error: unknown) => error)
       expect(error).toBeInstanceOf(SubmissionRefusedError)
       expect(error).toMatchObject({ reason })
@@ -765,17 +800,20 @@ it("reports the client refusing a message's images as a certain refusal, for sen
     )
   }
   const effects = effectsOf(
-    () => ({ conversation: { send: refuse, steer: refuse } }) as unknown as NessaClient,
+    () => ({ conversation: { submit: refuse } }) as unknown as NessaClient,
   )
-  for (const submit of [effects.send, effects.steer]) {
-    const error = await submit({
-      conversationId: "server",
-      executionId: "execution",
-      actionId: "action",
-      text: "look",
-      attachments: [{ ...stored, size: MAX_IMAGE_ATTACHMENT_BYTES + 1 }],
-      files: [],
-    }).catch((error: unknown) => error)
+  for (const submit of [effects.submit]) {
+    const error = await submit(
+      prepareSubmission({
+        mode: "queued",
+        conversationId: "00000000-0000-4000-8000-000000000001",
+        executionId: "execution",
+        requestId: "action",
+        text: "look",
+        attachments: [stored],
+        files: [],
+      }),
+    ).catch((error: unknown) => error)
     expect(error).toBeInstanceOf(SubmissionRefusedError)
     expect(error).toMatchObject({ reason: "invalid-request" })
     // The client's sentence names what is wrong with the message; keep it.
@@ -785,7 +823,7 @@ it("reports the client refusing a message's images as a certain refusal, for sen
 
 it("passes an uncertain send failure on untouched: a lost answer is not a refusal", async () => {
   const lost = new NessaConversationMutationError(
-    "server",
+    "00000000-0000-4000-8000-000000000001",
     "action",
     "execution",
     new NessaRpcError("temporarily_unavailable", "attachment_not_found"),
@@ -793,24 +831,29 @@ it("passes an uncertain send failure on untouched: a lost answer is not a refusa
   )
   const effects = effectsOf(
     () =>
-      ({ conversation: { send: () => Promise.reject(lost) } }) as unknown as NessaClient,
+      ({
+        conversation: { submit: () => Promise.reject(lost) },
+      }) as unknown as NessaClient,
   )
   const error = await effects
-    .send({
-      conversationId: "server",
-      executionId: "execution",
-      actionId: "action",
-      text: "look",
-      attachments: [],
-      files: [],
-    })
+    .submit(
+      prepareSubmission({
+        mode: "queued",
+        conversationId: "00000000-0000-4000-8000-000000000001",
+        executionId: "execution",
+        requestId: "action",
+        text: "look",
+        attachments: [],
+        files: [],
+      }),
+    )
     .catch((error: unknown) => error)
   expect(error).toBe(lost)
 })
 
 const controlError = (code: string) =>
   new NessaConversationControlError(
-    "server",
+    "00000000-0000-4000-8000-000000000001",
     "action",
     undefined,
     // The message names another code: only the typed one is read.
@@ -820,7 +863,7 @@ const controlError = (code: string) =>
 /** A permission answer the gateway failed, reporting what became of the review. */
 const answerError = (code: string, selectionState: string) =>
   new NessaConversationControlError(
-    "server",
+    "00000000-0000-4000-8000-000000000001",
     "action",
     "execution",
     new NessaRpcError(code, "temporarily_unavailable", { selectionState }),
@@ -877,12 +920,19 @@ it.each([
         }) as unknown as NessaClient,
     )
     const controls = [
-      () => effects.close("server"),
-      () => effects.remove("server", "execution"),
+      () => effects.close("00000000-0000-4000-8000-000000000001"),
+      () =>
+        effects.remove(
+          executionTargets({
+            conversationId: "00000000-0000-4000-8000-000000000001",
+            messages: [],
+            pending: [{ executionId: "execution" }],
+          })[0]!,
+        ),
       () => effects.answer(reviewTarget(), "option"),
       () => effects.answerQuestion(askTarget(), null),
       () => effects.cancel(reviewTarget()),
-      () => effects.reorder("server", ["execution"]),
+      () => effects.reorder("00000000-0000-4000-8000-000000000001", ["execution"]),
     ]
     for (const control of controls) {
       const error = await control().catch((error: unknown) => error)
@@ -912,7 +962,9 @@ it("keeps a cleanup failure's reason even though the close itself may have appli
         conversation: { close: () => Promise.reject(uncertain) },
       }) as unknown as NessaClient,
   )
-  const error = await effects.close("server").catch((error: unknown) => error)
+  const error = await effects
+    .close("00000000-0000-4000-8000-000000000001")
+    .catch((error: unknown) => error)
   expect(error).toMatchObject({
     reason: "attachment-cleanup-unavailable",
     outcome: "unknown",
@@ -975,7 +1027,7 @@ it("gives every code the client decides before admission a word of its own", asy
     // this adapter never sends: no conversation command meets them.
     if (code.startsWith("mcp_")) continue
     const rejection = new NessaConversationMutationError(
-      "server",
+      "00000000-0000-4000-8000-000000000001",
       "action",
       "execution",
       new NessaRpcError(code, code),
@@ -985,18 +1037,21 @@ it("gives every code the client decides before admission a word of its own", asy
     const effects = effectsOf(
       () =>
         ({
-          conversation: { send: () => Promise.reject(rejection) },
+          conversation: { submit: () => Promise.reject(rejection) },
         }) as unknown as NessaClient,
     )
     const error = await effects
-      .send({
-        conversationId: "server",
-        executionId: "execution",
-        actionId: "action",
-        text: "look",
-        attachments: [],
-        files: [],
-      })
+      .submit(
+        prepareSubmission({
+          mode: "queued",
+          conversationId: "00000000-0000-4000-8000-000000000001",
+          executionId: "execution",
+          requestId: "action",
+          text: "look",
+          attachments: [],
+          files: [],
+        }),
+      )
       .catch((error: unknown) => error)
     expect(
       error,
@@ -1014,7 +1069,11 @@ it("passes a control failure this build has no word for on untouched", async () 
         conversation: { close: () => Promise.reject(unknown) },
       }) as unknown as NessaClient,
   )
-  expect(await effects.close("server").catch((error: unknown) => error)).toBe(unknown)
+  expect(
+    await effects
+      .close("00000000-0000-4000-8000-000000000001")
+      .catch((error: unknown) => error),
+  ).toBe(unknown)
 })
 
 it("refuses an unopenable conversation in the panel's words, once, for every waiter", async () => {
@@ -1023,7 +1082,7 @@ it("refuses an unopenable conversation in the panel's words, once, for every wai
   const create = vi.fn(() =>
     Promise.reject(
       new NessaConversationMutationError(
-        "server",
+        "00000000-0000-4000-8000-000000000001",
         "action",
         undefined,
         new NessaRpcError("agent_startup_deadline", "agent_startup_deadline"),
@@ -1035,9 +1094,10 @@ it("refuses an unopenable conversation in the panel's words, once, for every wai
     () => ({ conversation: { create } }) as unknown as NessaClient,
   )
   const failures = await Promise.all(
-    [effects.create("server"), effects.create("server")].map((pending) =>
-      pending.catch((error: unknown) => error),
-    ),
+    [
+      effects.create("00000000-0000-4000-8000-000000000001"),
+      effects.create("00000000-0000-4000-8000-000000000001"),
+    ].map((pending) => pending.catch((error: unknown) => error)),
   )
   expect(create).toHaveBeenCalledOnce()
   for (const error of failures) {
@@ -1052,9 +1112,17 @@ it("uploads nothing when the conversation already holds the bytes, and answers w
   const begin = vi.fn(async () => ({ requestId: "r", state: "stored", stored }))
   const upload = vi.fn()
   expect(
-    await staging({ begin, upload }).stageAttachment("server", file, bytes, live()),
+    await staging({ begin, upload }).stageAttachment(
+      "00000000-0000-4000-8000-000000000001",
+      file,
+      bytes,
+      live(),
+    ),
   ).toEqual(stored)
-  expect(begin).toHaveBeenCalledExactlyOnceWith("server", file)
+  expect(begin).toHaveBeenCalledExactlyOnceWith(
+    "00000000-0000-4000-8000-000000000001",
+    file,
+  )
   expect(upload).not.toHaveBeenCalled()
 })
 
@@ -1062,7 +1130,7 @@ it("uploads the original bytes under the ticket and answers with what was stored
   const begin = vi.fn(async () => owed)
   const upload = vi.fn(async () => stored)
   const reference = await staging({ begin, upload }).stageAttachment(
-    "server",
+    "00000000-0000-4000-8000-000000000001",
     file,
     bytes,
     live(),
@@ -1103,7 +1171,12 @@ it.each([
       { begin: async () => owed, upload: async () => kept },
     ])
       await expect(
-        staging(attachments).stageAttachment("server", file, bytes, live()),
+        staging(attachments).stageAttachment(
+          "00000000-0000-4000-8000-000000000001",
+          file,
+          bytes,
+          live(),
+        ),
       ).rejects.toMatchObject({ reason })
   },
 )
@@ -1112,7 +1185,7 @@ it("keeps an image at exactly the protocol's bound", async () => {
   const kept = { ...stored, size: MAX_IMAGE_ATTACHMENT_BYTES }
   expect(
     await staging({ begin: async () => owed, upload: async () => kept }).stageAttachment(
-      "server",
+      "00000000-0000-4000-8000-000000000001",
       file,
       bytes,
       live(),
@@ -1140,7 +1213,7 @@ it.each([
   const cause = new NessaAttachmentError(code, 400)
   const upload = vi.fn(() => Promise.reject(cause))
   const error = await staging({ begin: async () => owed, upload })
-    .stageAttachment("server", file, bytes, live())
+    .stageAttachment("00000000-0000-4000-8000-000000000001", file, bytes, live())
     .catch((error: unknown) => error)
   expect(error).toBeInstanceOf(AttachmentStagingError)
   expect(error).toMatchObject({ reason, cause })
@@ -1177,7 +1250,7 @@ it("offers the same ticket again after a short wait when the gateway had no room
     .mockRejectedValueOnce(busy())
     .mockResolvedValueOnce(stored)
   const staged = staging({ begin, upload }, clock.wait).stageAttachment(
-    "server",
+    "00000000-0000-4000-8000-000000000001",
     file,
     bytes,
     live(),
@@ -1200,7 +1273,7 @@ it("gives up as busy after a bounded number of tries, and says so on the tile's 
   const clock = manualWait()
   const upload = vi.fn(() => Promise.reject(busy()))
   const staged = staging({ begin: async () => owed, upload }, clock.wait)
-    .stageAttachment("server", file, bytes, live())
+    .stageAttachment("00000000-0000-4000-8000-000000000001", file, bytes, live())
     .catch((error: unknown) => error)
   for (let index = 0; index < BUSY_RETRY_DELAYS_MS.length; index++) {
     await clock.reached(index + 1)
@@ -1225,7 +1298,7 @@ it("stops offering the ticket when the session went away during the wait", async
     panelNow,
   )
   const staged = effects
-    .stageAttachment("server", file, bytes, live())
+    .stageAttachment("00000000-0000-4000-8000-000000000001", file, bytes, live())
     .catch((error: unknown) => error)
   await clock.reached(1)
   status = "reconnecting"
@@ -1253,7 +1326,12 @@ it.each([
       new NessaAttachmentError("begin_refused", undefined, undefined, refusal),
     )
   await expect(
-    staging({ begin, upload }).stageAttachment("server", file, bytes, live()),
+    staging({ begin, upload }).stageAttachment(
+      "00000000-0000-4000-8000-000000000001",
+      file,
+      bytes,
+      live(),
+    ),
   ).rejects.toMatchObject({ reason })
   expect(upload).not.toHaveBeenCalled()
 })
@@ -1267,7 +1345,7 @@ it("maps an unanswered begin, and one the client would not send, without reachin
   ] as const) {
     await expect(
       staging({ begin: () => Promise.reject(error), upload }).stageAttachment(
-        "server",
+        "00000000-0000-4000-8000-000000000001",
         file,
         bytes,
         live(),
@@ -1281,7 +1359,7 @@ it("reports staging with no live connection as unavailable, asking nothing", asy
   const begin = vi.fn()
   const offline = effectsOf(() => null)
   await expect(
-    offline.stageAttachment("server", file, bytes, live()),
+    offline.stageAttachment("00000000-0000-4000-8000-000000000001", file, bytes, live()),
   ).rejects.toMatchObject({
     reason: "unavailable",
   })
@@ -1293,7 +1371,12 @@ it("reports staging with no live connection as unavailable, asking nothing", asy
       }) as unknown as NessaClient,
   )
   await expect(
-    reconnecting.stageAttachment("server", file, bytes, live()),
+    reconnecting.stageAttachment(
+      "00000000-0000-4000-8000-000000000001",
+      file,
+      bytes,
+      live(),
+    ),
   ).rejects.toBeInstanceOf(AttachmentStagingError)
   expect(begin).not.toHaveBeenCalled()
 })
@@ -1307,7 +1390,7 @@ it("hands the caller's signal to the upload, and stops offering a busy ticket on
     throw busy()
   })
   const error = await staging({ begin, upload }, unexpectedWait)
-    .stageAttachment("server", file, bytes, stopping.signal)
+    .stageAttachment("00000000-0000-4000-8000-000000000001", file, bytes, stopping.signal)
     .catch((cause: unknown) => cause)
   expect(upload).toHaveBeenCalledExactlyOnceWith(
     ticket,
@@ -1385,12 +1468,14 @@ it("archives, unarchives and deletes through the matching client calls", async (
         conversation: { archive, unarchive, delete: remove },
       }) as unknown as NessaClient,
   )
-  await effects.archive("server", true)
-  await effects.archive("server", false)
-  await effects.delete("server")
-  expect(archive).toHaveBeenCalledExactlyOnceWith("server")
-  expect(unarchive).toHaveBeenCalledExactlyOnceWith("server")
-  expect(remove).toHaveBeenCalledExactlyOnceWith("server")
+  await effects.archive("00000000-0000-4000-8000-000000000001", true)
+  await effects.archive("00000000-0000-4000-8000-000000000001", false)
+  await effects.delete("00000000-0000-4000-8000-000000000001")
+  expect(archive).toHaveBeenCalledExactlyOnceWith("00000000-0000-4000-8000-000000000001")
+  expect(unarchive).toHaveBeenCalledExactlyOnceWith(
+    "00000000-0000-4000-8000-000000000001",
+  )
+  expect(remove).toHaveBeenCalledExactlyOnceWith("00000000-0000-4000-8000-000000000001")
 })
 
 it.each([
@@ -1413,7 +1498,7 @@ it.each([
             delete: () =>
               Promise.reject(
                 new NessaConversationControlError(
-                  "server",
+                  "00000000-0000-4000-8000-000000000001",
                   "action",
                   undefined,
                   new NessaRpcError(code, code),
@@ -1422,7 +1507,9 @@ it.each([
           },
         }) as unknown as NessaClient,
     )
-    const failure = await effects.delete("server").catch((error: unknown) => error)
+    const failure = await effects
+      .delete("00000000-0000-4000-8000-000000000001")
+      .catch((error: unknown) => error)
     expect(failure).toBeInstanceOf(ControlFailedError)
     expect(failure).toMatchObject({ reason, outcome })
   },
@@ -1431,8 +1518,12 @@ it.each([
 it("refuses an archive or delete for certain when there is no gateway connection", async () => {
   const effects = effectsOf(() => null)
   for (const failure of [
-    await effects.archive("server", true).catch((error: unknown) => error),
-    await effects.delete("server").catch((error: unknown) => error),
+    await effects
+      .archive("00000000-0000-4000-8000-000000000001", true)
+      .catch((error: unknown) => error),
+    await effects
+      .delete("00000000-0000-4000-8000-000000000001")
+      .catch((error: unknown) => error),
   ])
     expect(failure).toMatchObject({ reason: "not-connected", outcome: "refused" })
 })
@@ -1450,7 +1541,7 @@ it.each([
             delete: () =>
               Promise.reject(
                 new NessaConversationControlError(
-                  "server",
+                  "00000000-0000-4000-8000-000000000001",
                   "action",
                   undefined,
                   new NessaRpcError(code, code),
@@ -1459,7 +1550,9 @@ it.each([
           },
         }) as unknown as NessaClient,
     )
-    const failure = await effects.delete("server").catch((error: unknown) => error)
+    const failure = await effects
+      .delete("00000000-0000-4000-8000-000000000001")
+      .catch((error: unknown) => error)
     expect(failure).not.toMatchObject({ outcome: "refused" })
     // Nor read as a delete that happened: no tab is let go on its word.
     const reason = failure instanceof ControlFailedError ? failure.reason : undefined
@@ -1471,7 +1564,7 @@ it("tells the follower the files its agent published, by what they are held as a
   const gateway = subscribing()
   const effects = effectsOf(() => gateway.client)
   const { said, follower } = told()
-  const stop = effects.follow("server", follower)
+  const stop = effects.follow("00000000-0000-4000-8000-000000000001", follower)
   await settle()
   const held = { digest: `sha256:${"a".repeat(64)}`, mimeType: "image/png", size: 3 }
   gateway.opens[0]!.handlers.view({
@@ -1569,17 +1662,27 @@ it("reads a held file back through the client's verified fetch", async () => {
   const effects = effectsOf(() => ({ attachments: { fetch } }) as unknown as NessaClient)
   const file = { digest: `sha256:${"a".repeat(64)}`, mimeType: "image/png", size: 3 }
   const signal = new AbortController().signal
-  expect(await effects.readHeldFile("server", file, signal)).toBe(bytes)
-  expect(fetch).toHaveBeenCalledExactlyOnceWith("server", file, { signal })
+  expect(
+    await effects.readHeldFile("00000000-0000-4000-8000-000000000001", file, signal),
+  ).toBe(bytes)
+  expect(fetch).toHaveBeenCalledExactlyOnceWith(
+    "00000000-0000-4000-8000-000000000001",
+    file,
+    { signal },
+  )
   // No gateway to ask: not now, and said in the panel's words.
   await expect(
-    effectsOf(() => null).readHeldFile("server", file, signal),
+    effectsOf(() => null).readHeldFile(
+      "00000000-0000-4000-8000-000000000001",
+      file,
+      signal,
+    ),
   ).rejects.toMatchObject({ reason: "unavailable" })
 })
 
 function reviewTarget() {
   return permissionTargets({
-    conversationId: "server",
+    conversationId: "00000000-0000-4000-8000-000000000001",
     permissions: [
       {
         executionId: "execution",

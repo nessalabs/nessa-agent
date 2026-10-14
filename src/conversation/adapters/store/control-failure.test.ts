@@ -1,3 +1,4 @@
+import { executionTargets } from "@nessa/client"
 import { permissionTargets } from "@nessa/client"
 import {
   ConversationErrorCode,
@@ -286,7 +287,7 @@ it("does not tell a refused retry its message is back in the draft, because it i
     createDependencies({
       conversation: {
         ...effects,
-        send: () => {
+        submit: () => {
           attempts += 1
           // First the acknowledgement is lost, which is what leaves a turn to
           // retry at all. Then the gateway refuses the retry outright.
@@ -305,7 +306,15 @@ it("does not tell a refused retry its message is back in the draft, because it i
   await store.dispatch(
     controlConversation({
       id: "c0",
-      control: { kind: "retry", executionId: turn.executionId },
+      control: {
+        kind: "retry",
+        target: executionTargets({
+          conversationId:
+            store.getState().conversation.conversations[0]!.serverConversationId!,
+          messages: [{ executionId: turn.executionId }],
+          pending: [],
+        })[0]!,
+      },
     }),
   )
   expect(attempts).toBe(2)

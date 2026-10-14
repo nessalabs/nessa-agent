@@ -115,7 +115,7 @@ pub struct Dropped {
 /// `..Default::default()` through a `From<FileNotAttached>` that had none to
 /// give — the folder walk's refusals and the stalled filesystem, which are the
 /// slowest paths and so the ones most likely to outlive the tab they started
-/// on. The panel resolves an unknown name by falling back to whatever is open,
+/// on. The panel then resolved an unknown name by falling back to whatever was open,
 /// which is the guess the name exists to remove.
 ///
 /// Dropping `Default` and `From` was a speed bump rather than enforcement: the

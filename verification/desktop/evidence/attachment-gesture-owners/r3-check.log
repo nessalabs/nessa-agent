@@ -1,0 +1,18 @@
+R3 source base: 1a96c53e3ef8a7ff75435f2a50125f9c5f4e611a
+R3 product commit: 172804abf08aeec8534563b95e528438cf9df798
+PASS direct Node TypeScript: node node_modules/typescript/bin/tsc --noEmit --pretty false
+PASS `node node_modules/vitest/vitest.mjs run --config vitest.config.ts --silent`: 4,384 tests / 331 files
+PASS focused attachment tests: 53 tests / 3 files
+PASS changed-source ESLint: node node_modules/eslint/bin/eslint.js (8 changed TS/TSX/MJS files)
+PASS `node --test scripts/architecture/*.test.mjs`: 104 tests
+PASS architecture policy: node scripts/check-architecture.mjs
+PASS `node node_modules/prettier/bin/prettier.cjs --check src scripts packages verification eslint.config.js prettier.config.js`
+PASS UI dependency check: node scripts/ensure-nessa-ui.mjs --check
+PASS `node verification/desktop/scripts/attachments-races.mjs`: 32 / 32 Chromium and WebKit
+PASS conversation-refusals browser scenario: 2 / 2 Chromium and WebKit
+Revert: active-conversation-only refusal guard -> delayed A refusal missing on revisiting A.
+Revert: provider/resource dependencies on host-batch effect -> second listener registered during provider replacement.
+Revert: actions-object dependency on host-drop effect -> second drag/drop listener registered during action replacement.
+All source probes restored before final verification.
+Screenshots: refusal A and B in Chromium and WebKit, 800x900 each.
+Historical R2 check is retained; its recorded pnpm command has no raw output to verify execution provenance.

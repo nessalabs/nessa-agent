@@ -15,7 +15,11 @@ import {
 } from "./conversation/adapters/store/slice"
 import { sessionReducer } from "./session/adapters/store/slice"
 
-import { createDependencies, type AppDependencies } from "./composition/dependencies"
+import {
+  createDependencies,
+  createPreparedOperationTable,
+  type AppDependencies,
+} from "./composition/dependencies"
 
 /** The dependencies the store itself owns and passes to conversation commands. */
 export type StoreDependencies = Pick<
@@ -24,6 +28,7 @@ export type StoreDependencies = Pick<
 >
 
 export function makeStore(dependencies: StoreDependencies = createDependencies()) {
+  const preparedOperations = createPreparedOperationTable()
   const store = configureStore({
     middleware: (getDefaultMiddleware) =>
       getDefaultMiddleware({
@@ -35,6 +40,7 @@ export function makeStore(dependencies: StoreDependencies = createDependencies()
           extraArgument: {
             conversation: dependencies.conversation,
             canChoosePaths: dependencies.canChoosePaths,
+            preparedOperations,
           },
         },
       }),
@@ -48,6 +54,7 @@ export function makeStore(dependencies: StoreDependencies = createDependencies()
   // whether shared originals are still needed or retained only for previews;
   // every command reconciles, including rejected attachment admissions.
   store.subscribe(() => {
+    preparedOperations.prune(store.getState().conversation.conversations)
     dependencies.attachments.retain(
       attachmentResourceUsage(store.getState().conversation),
     )

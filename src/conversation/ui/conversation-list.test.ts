@@ -1,3 +1,4 @@
+import { prepareSubmission } from "@nessa/client"
 // @vitest-environment jsdom
 import * as React from "react"
 import { createRoot, type Root } from "react-dom/client"
@@ -74,14 +75,17 @@ async function gatewayWithClosedConversation(
 ) {
   const effects = scenarioEffects("echo")
   await effects.create(written)
-  await effects.send({
-    conversationId: written,
-    executionId: "e1",
-    actionId: "a1",
-    text: "Book the   Lisbon flight",
-    attachments: [],
-    files: [],
-  })
+  await effects.submit(
+    prepareSubmission({
+      mode: "queued",
+      conversationId: written,
+      executionId: "e1",
+      requestId: "a1",
+      text: "Book the   Lisbon flight",
+      attachments: [],
+      files: [],
+    }),
+  )
   const list = vi.fn(effects.list)
   const store = makeStore(
     createDependencies({
@@ -224,14 +228,17 @@ it("deletes a conversation only once the row's own confirmation is pressed", asy
 it("puts a row back and says why when the gateway refuses to archive it", async () => {
   const effects = scenarioEffects("echo")
   await effects.create(written)
-  await effects.send({
-    conversationId: written,
-    executionId: "e1",
-    actionId: "a1",
-    text: "Book the Lisbon flight",
-    attachments: [],
-    files: [],
-  })
+  await effects.submit(
+    prepareSubmission({
+      mode: "queued",
+      conversationId: written,
+      executionId: "e1",
+      requestId: "a1",
+      text: "Book the Lisbon flight",
+      attachments: [],
+      files: [],
+    }),
+  )
   const archive = vi.fn(async () => {
     throw new ControlFailedError("conversation-not-found", "refused")
   })
@@ -269,14 +276,17 @@ it("keeps a row out while its action is unanswered, even across leaving the list
 it("announces each action, even the same one twice", async () => {
   const { store, effects } = await gatewayWithClosedConversation()
   await effects.create(other)
-  await effects.send({
-    conversationId: other,
-    executionId: "e2",
-    actionId: "a2",
-    text: "Book the Lisbon flight too",
-    attachments: [],
-    files: [],
-  })
+  await effects.submit(
+    prepareSubmission({
+      mode: "queued",
+      conversationId: other,
+      executionId: "e2",
+      requestId: "a2",
+      text: "Book the Lisbon flight too",
+      attachments: [],
+      files: [],
+    }),
+  )
   await render(store)
   await vi.waitFor(() => expect(rows()).toHaveLength(2))
   const region = () =>
@@ -509,14 +519,17 @@ it("PL2: Messages stays current through another caller's create, archive, undo a
   expect(rows()).toHaveLength(0)
   await React.act(async () => {
     await effects.create(written)
-    await effects.send({
-      conversationId: written,
-      executionId: "external-turn",
-      actionId: "external-send",
-      text: "External conversation",
-      attachments: [],
-      files: [],
-    })
+    await effects.submit(
+      prepareSubmission({
+        mode: "queued",
+        conversationId: written,
+        executionId: "external-turn",
+        requestId: "external-send",
+        text: "External conversation",
+        attachments: [],
+        files: [],
+      }),
+    )
   })
   expect(rows()).toHaveLength(1)
   expect(rows()[0]!.textContent).toContain("External conversation")
@@ -548,14 +561,17 @@ it("PL4: leaving Messages closes both list follows; a later external change appl
   await React.act(async () => root.render(React.createElement("div")))
   expect(store.getState().conversationHistory.following).toBe(false)
   await effects.create(written)
-  await effects.send({
-    conversationId: written,
-    executionId: "gone-turn",
-    actionId: "gone-send",
-    text: "After leaving",
-    attachments: [],
-    files: [],
-  })
+  await effects.submit(
+    prepareSubmission({
+      mode: "queued",
+      conversationId: written,
+      executionId: "gone-turn",
+      requestId: "gone-send",
+      text: "After leaving",
+      attachments: [],
+      files: [],
+    }),
+  )
   expect(store.getState().conversationHistory.rows).toBe(previous)
   expect(followList.mock.calls.map(([archived]) => archived)).toEqual([false, true])
 })
