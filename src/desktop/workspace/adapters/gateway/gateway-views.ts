@@ -5,10 +5,11 @@
  * (`gateway-source.ts`) knows besides the wire is passed in, and the
  * revisions it mints are its own. A turn the gateway says failed, was
  * cancelled, or was left unresolved keeps that status and the diagnostic it
- * sent. A typed authentication refusal does not also carry them when Claude
- * or Codex can show sign-in, unless the gateway's `requiredWorkFailed` says
- * independent required work failed. OpenCode, an unknown agent, and no agent
- * keep the failure: they have no sign-in card. Questions
+ * sent, including a typed authentication refusal. The pane omits that
+ * refusal's mark only while the sign-in card is showing. A local retry that
+ * hides the card therefore still has the mark. `requiredWorkFailed` stays on
+ * the message that carries the mark, so the pane keeps an independent
+ * required-work failure beside the card. Questions
  * the view lists, and a notice that a review or question was left out, are
  * kept; a question or notice that names nothing is left out.
  *
@@ -25,7 +26,6 @@ import {
   type ConversationTool,
   type ConversationView,
 } from "@nessa/client"
-import { signInProvider } from "../../../../provider-authentication/model/recovery"
 import {
   historyExtent,
   placeNotes,
@@ -314,7 +314,6 @@ export function transcriptFrom(
   // Recovery owns a typed refusal only while that turn is still the latest
   // input. A later turn or a later waiting input leaves the older mark.
   const latestInputId = unlisted.at(-1)?.executionId ?? view.messages.at(-1)?.executionId
-  const signIn = signInProvider(view.runtime?.agent) !== undefined
   const notes = placeNotes(
     view.notes,
     listed,
@@ -374,13 +373,22 @@ export function transcriptFrom(
       }
     }
     parts.push(...(published.byExecution.get(turn.executionId) ?? []).map(publishedPart))
-    const terminal = turnTerminal(turn, turn.executionId === latestInputId, signIn)
+    const terminal = turnTerminal(turn)
+    const marked = terminal
+      ? {
+          terminal,
+          executionId: turn.executionId,
+          ...(turn.requiredWorkFailed === true
+            ? { requiredWorkFailed: true as const }
+            : {}),
+        }
+      : undefined
     if (parts.length > 0) {
       const reply = replyId(turn.executionId)
       const agent: TurnMessage = { id: reply, role: "agent", at: seen(reply), parts }
       messages.push(user)
-      messages.push(terminal ? { ...agent, terminal } : agent)
-    } else messages.push(terminal ? { ...user, terminal } : user)
+      messages.push(marked ? { ...agent, ...marked } : agent)
+    } else messages.push(marked ? { ...user, ...marked } : user)
     pushNotes(notes.byExecution.get(turn.executionId) ?? [])
     // A turn at work with nothing streaming yet: what it is doing, and since it was asked.
     if (
@@ -459,33 +467,17 @@ export function transcriptFrom(
 }
 
 /**
- * A terminal status the gateway reported. A typed authentication refusal
- * that recovery still owns — it is the latest input — does not also carry
- * the mark when Claude or Codex will show sign-in and that refusal is the
- * only failure. Any other agent keeps the mark: there is no card to replace
- * it. `requiredWorkFailed` is the gateway's fact that independent required
- * work failed; the diagnostic in `error` stays beside sign-in and is not
- * how this decides. An earlier refusal keeps its mark and diagnostic,
- * including the authentication diagnostic. Any other status is still
- * running or finished and has no mark. A blank diagnostic is left off; the
- * text itself is not rewritten.
+ * A terminal status the gateway reported. The mark stays on the message,
+ * including a typed authentication refusal: the pane hides a pure refusal's
+ * mark only while the sign-in card is showing, and a local retry can hide
+ * that card without a new gateway view. Any other status is still running
+ * or finished and has no mark. A blank diagnostic is left off; the text
+ * itself is not rewritten.
  */
 function turnTerminal(
   turn: ConversationView["messages"][number],
-  /** This turn is the conversation's latest input, pending ones included. */
-  latestInput: boolean,
-  /** Claude or Codex: the only agents with a sign-in card. */
-  signIn: boolean,
 ): TurnTerminal | undefined {
   const error = reportedText(turn.error)
-  if (
-    turn.authenticationRequired &&
-    latestInput &&
-    signIn &&
-    turn.requiredWorkFailed !== true
-  ) {
-    return undefined
-  }
   switch (turn.status) {
     case "failed":
     case "cancelled":

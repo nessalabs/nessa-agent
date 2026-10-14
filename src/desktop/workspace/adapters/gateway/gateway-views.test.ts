@@ -866,12 +866,12 @@ it("shows auth recovery without duplicating its diagnostic and preserves unrelat
     { kind: "text", text: "Chart the sales" },
     { kind: "text", text: "Nessa declined a tool review." },
   ])
-  expect(
-    transcript.messages.every(
-      (message) => message.role === "note" || message.terminal === undefined,
-    ),
-  ).toBe(true)
-  expect(JSON.stringify(transcript)).not.toContain("OAuth session expired")
+  expect(transcript.messages[1]).toMatchObject({
+    role: "agent",
+    executionId: "e1",
+    terminal: { status: "failed", error: "Internal error: OAuth session expired" },
+  })
+  expect(transcript.messages[1]).not.toHaveProperty("requiredWorkFailed")
 })
 
 it("keeps an independent failure beside authentication recovery", () => {
@@ -894,6 +894,8 @@ it("keeps an independent failure beside authentication recovery", () => {
   expect(recovery(transcript)).toBe(true)
   expect(transcript.messages[0]).toMatchObject({
     role: "user",
+    executionId: "e1",
+    requiredWorkFailed: true,
     terminal: {
       status: "failed",
       error: "The turn could not complete all required work.",
@@ -919,12 +921,10 @@ it("does not treat the required-work sentence as the independent failure", () =>
     GATEWAY_NOW_MS,
   )
   expect(recovery(transcript)).toBe(true)
-  expect(
-    transcript.messages.every(
-      (message) => message.role === "note" || message.terminal === undefined,
-    ),
-  ).toBe(true)
-  expect(JSON.stringify(transcript)).not.toContain(sentence)
+  expect(transcript.messages[0]).toMatchObject({
+    terminal: { status: "failed", error: sentence },
+  })
+  expect(transcript.messages[0]).not.toHaveProperty("requiredWorkFailed")
   const flagged = transcriptFrom(
     view("auth", {
       runtime: signInRuntime("codex"),
@@ -942,6 +942,7 @@ it("does not treat the required-work sentence as the independent failure", () =>
     GATEWAY_NOW_MS,
   )
   expect(flagged.messages[0]).toMatchObject({
+    requiredWorkFailed: true,
     terminal: { status: "failed", error: "storage write failed" },
   })
 })
@@ -1025,8 +1026,11 @@ it("keeps an authentication failure when sign-in cannot render", () => {
       view("auth", { runtime: signInRuntime(agent), messages: [refused] }),
     )
     expect(recovery(transcript)).toBe(true)
-    expect(transcript.messages[0]).not.toHaveProperty("terminal")
-    expect(JSON.stringify(transcript)).not.toContain("OAuth session expired")
+    expect(transcript.messages[0]).toMatchObject({
+      executionId: "e1",
+      terminal: { status: "failed", error: "OAuth session expired" },
+    })
+    expect(transcript.messages[0]).not.toHaveProperty("requiredWorkFailed")
   }
 })
 

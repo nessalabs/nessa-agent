@@ -1447,7 +1447,9 @@ transcript removes the card. Both browser engines report geometry, launch counts
 and zero page errors. The raw authentication diagnostic is absent and unrelated
 local notices remain. On the panel, an authentication diagnostic folded into
 the turn's status stays off the card unless `requiredWorkFailed` is set, in
-which case the required-work sentence is shown once beside it.
+which case the required-work sentence is shown once beside it. On the desktop,
+a local retry that hides the card shows the authentication terminal once, and
+a failed retry still shows it.
 
 The same script drives an older failed local submission through a later wire
 refusal, a newer local submission after seeing that refusal, repeated replacement

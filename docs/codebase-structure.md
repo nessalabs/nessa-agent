@@ -259,8 +259,9 @@ against a private scripted gateway.
   with `testing.ts` the fake source, the store, and the animation frames its
   tests share. A failed, cancelled, or unresolved turn keeps the gateway's
   status and diagnostic on the message, including an earlier authentication
-  refusal. While Claude or Codex recovery is showing, that refusal does not
-  also carry the authentication diagnostic. OpenCode, an unknown agent, and
+  refusal. While Claude or Codex recovery is showing, the pane omits that
+  refusal's terminal. The transcript keeps the mark, so a local retry that
+  hides the card shows the failure. OpenCode, an unknown agent, and
   no agent keep the failure, because they have no sign-in card. An independent
   required-work failure on that
   refusal is the protocol's `requiredWorkFailed` flag; the terminal keeps the
@@ -1906,7 +1907,8 @@ surfaces: the refused execution must be the latest published input, and no retai
 local submission may have begun after observing that input. Local sends retain
 that observed identity (null before any input); repeated views preserve it.
 An older delivery failure cannot hide a newly observed refusal. A local send made
-after observing a refusal retires its recovery even if delivery fails; `ui/transcript/transcript.test.tsx` and the
+after observing a refusal retires its recovery even if delivery fails, and the
+pane shows the refusal's terminal that the card had replaced; `ui/transcript/transcript.test.tsx` and the
 provider-sign-in browser fixture exercise both states and the accepted queued,
 running and output transitions.
 The floating panel carries the same typed fact through `applyView` and replaces

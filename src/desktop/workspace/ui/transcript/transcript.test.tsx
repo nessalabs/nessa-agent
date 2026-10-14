@@ -1233,7 +1233,96 @@ describe("a transcript", () => {
   })
 })
 
+const claudeRuntime = {
+  agent: "claude",
+  provider: "anthropic",
+  model: "claude-opus-5",
+  modelName: "Claude",
+  workspace: "/tmp",
+  contextWindowTokens: 200000,
+  reasoning: true,
+}
+
 describe("provider recovery ownership", () => {
+  it("keeps the auth terminal when a local retry hides recovery", async () => {
+    const source = fakeSource()
+    source.hold("send")
+    const transcript = transcriptFrom(
+      view("b", {
+        runtime: claudeRuntime,
+        messages: [
+          {
+            executionId: "m1",
+            userText: "Hello",
+            attachments: [],
+            files: [],
+            status: "failed",
+            authenticationRequired: true,
+            error: "Internal error: OAuth session expired",
+            parts: [],
+          },
+        ],
+      }),
+      1,
+      () => 1,
+      GATEWAY_NOW_MS,
+    )
+    const { store } = await shown(source, transcript)
+    expect(host.querySelector(".provider-sign-in")).not.toBeNull()
+    expect(host.querySelector("[data-turn-terminal]")).toBeNull()
+    expect(host.textContent).not.toContain("OAuth session expired")
+    let sent: Promise<unknown> | undefined
+    await act(async () => {
+      sent = store.dispatch(
+        sendMessage({ initiator: "person", sessionId: "b", text: "Try again" }),
+      )
+      await settle()
+    })
+    expect(host.querySelector(".provider-sign-in")).toBeNull()
+    expect(host.querySelector("[data-turn-terminal]")?.textContent).toContain("Failed")
+    expect(
+      host.querySelector("[data-turn-terminal]")?.getAttribute("data-turn-error"),
+    ).toBe("Internal error: OAuth session expired")
+    source.refuse("send", "unavailable")
+    await act(async () => {
+      await source.release("send")
+      await sent
+    })
+    expect(host.querySelector(".provider-sign-in")).toBeNull()
+    expect(
+      host.querySelector("[data-turn-terminal]")?.getAttribute("data-turn-error"),
+    ).toBe("Internal error: OAuth session expired")
+  })
+
+  it("keeps an independent required-work failure beside the sign-in card", async () => {
+    const transcript = transcriptFrom(
+      view("b", {
+        runtime: claudeRuntime,
+        messages: [
+          {
+            executionId: "m1",
+            userText: "Hello",
+            attachments: [],
+            files: [],
+            status: "failed",
+            authenticationRequired: true,
+            requiredWorkFailed: true,
+            error: "The turn could not complete all required work.",
+            parts: [],
+          },
+        ],
+      }),
+      1,
+      () => 1,
+      GATEWAY_NOW_MS,
+    )
+    await shown(fakeSource(), transcript)
+    expect(host.querySelector(".provider-sign-in")).not.toBeNull()
+    expect(
+      host.querySelector("[data-turn-terminal]")?.getAttribute("data-turn-error"),
+    ).toBe("The turn could not complete all required work.")
+  })
+
   it("retires recovery while a newer user-only message is sending or failed", async () => {
     const source = fakeSource()
     source.hold("send")

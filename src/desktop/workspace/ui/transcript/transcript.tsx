@@ -24,6 +24,19 @@ import { readFailureCopy } from "../failure-copy"
 
 const noMessages: readonly MessageValue[] = []
 
+/**
+ * A pure authentication refusal keeps its mark on the transcript. The pane
+ * draws that mark only once the sign-in card is gone — a local retry hides
+ * the card without a new gateway view. An independent required-work failure
+ * stays beside the card.
+ */
+function shownWhileRecovery(message: MessageValue, refusalId: string): MessageValue {
+  if (message.role === "note" || !message.terminal || message.requiredWorkFailed === true)
+    return message
+  if (message.executionId !== refusalId) return message
+  return { ...message, terminal: undefined }
+}
+
 /** How close to the end the reader must be for a growing reply to keep them there. */
 const pinnedWithin = 24
 
@@ -56,6 +69,13 @@ export const Transcript = memo(function Transcript({
   )
   const model = useWorkspaceSelector((state) => selectSession(state, sessionId)?.model)
   const provider = signInProvider(transcript?.agent)
+  const recoveryShown =
+    provider !== undefined &&
+    offersAuthenticationRecovery(
+      transcript?.authenticationRefusal,
+      transcript?.latestInputId,
+      outbox,
+    )
   const titleRef = useRef<HTMLHeadingElement>(null)
   const pinned = useRef(true)
   // Messages there when the conversation first showed stay put; later ones rise
@@ -103,10 +123,12 @@ export const Transcript = memo(function Transcript({
 
   // The source's conversation, then what the person sent that it does not hold yet.
   const held = transcript?.messages ?? noMessages
-  const messages = useMemo(
-    () => (outbox.length === 0 ? held : [...held, ...outbox]),
-    [held, outbox],
-  )
+  const refusalId = recoveryShown ? transcript?.authenticationRefusal : undefined
+  const messages = useMemo(() => {
+    const combined = outbox.length === 0 ? held : [...held, ...outbox]
+    if (refusalId === undefined) return combined
+    return combined.map((message) => shownWhileRecovery(message, refusalId))
+  }, [held, outbox, refusalId])
   if (stayPut.current === null && transcript) {
     // Initial content and messages already shown while the read was pending
     // stay put. Later additions have their own entrance.
@@ -166,12 +188,7 @@ export const Transcript = memo(function Transcript({
             isNew={stayPut.current !== null && !stayPut.current.has(message.id)}
           />
         ))}
-        {provider &&
-        offersAuthenticationRecovery(
-          transcript?.authenticationRefusal,
-          transcript?.latestInputId,
-          outbox,
-        ) ? (
+        {recoveryShown && provider ? (
           <ProviderSignIn key={provider} provider={provider} />
         ) : null}
         {transcript?.interactionNotice ? (

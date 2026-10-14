@@ -140,6 +140,16 @@ export interface TurnMessage {
    */
   readonly terminal?: TurnTerminal
   /**
+   * The execution this terminal belongs to, so a surface can match it to
+   * `authenticationRefusal`. Set only with `terminal`.
+   */
+  readonly executionId?: string
+  /**
+   * Independent required work failed on this authentication refusal.
+   * The pane keeps `terminal` beside the sign-in card when this is set.
+   */
+  readonly requiredWorkFailed?: boolean
+  /**
    * The MCP App that wrote a message of the person's on their behalf
    * (`ui/message`, #390); absent when the person wrote it.
    */

@@ -108,8 +108,30 @@ await main(
                 await page.evaluate(() => window.__providerSignIn.sendRetry())
                 await card.waitFor({ state: "detached" })
                 await page.getByText("Try again", { exact: true }).waitFor()
+                const oauth = page.getByText(OAUTH_DIAGNOSTIC, { exact: true })
+                if ((await oauth.count()) !== 1)
+                  throw new Error(
+                    "local retry hid recovery and dropped the authentication terminal",
+                  )
+                if (options.shots && provider === "claude" && width === 1000) {
+                  await page.screenshot({
+                    path: resolve(options.shots, `${engine}-desktop-auth-terminal.png`),
+                  })
+                }
                 await page.evaluate(() => window.__providerSignIn.failRetry())
                 await page.locator(".workspace-message-failed").waitFor()
+                if ((await oauth.count()) !== 1)
+                  throw new Error(
+                    "failed local retry dropped the authentication terminal",
+                  )
+                if (options.shots && provider === "claude" && width === 1000) {
+                  await page.screenshot({
+                    path: resolve(
+                      options.shots,
+                      `${engine}-desktop-auth-terminal-failed-retry.png`,
+                    ),
+                  })
+                }
                 if ((await card.count()) !== 0)
                   throw new Error("failed newer outbox turn retained old recovery")
                 for (const phase of ["acceptRetry", "runRetry", "finishRetry"]) {
