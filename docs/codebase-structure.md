@@ -652,9 +652,10 @@ Client message preparation in `presentation/conversation-api.ts` issues copied
 `application/execution-target.ts` captures read-only conversation/execution intent
 for stop/remove from those values or an enclosing view.
 `adapters/store/prepared-operation-table.ts` owns the panel's internal prepared
-operation table and retention rule; `src/store.ts` creates one table per Redux
-store and reconciles it on publication, outside serializable state. The store
-injects it into `adapters/store/slice.ts` thunks. Client regressions live in
+operation table and retention rule; composition's `createPreparedOperationTable`
+factory creates one per Redux store. `src/store.ts` injects it into
+`adapters/store/slice.ts` thunks and reconciles it on publication, outside
+serializable state. Client regressions live in
 `presentation/prepared-submission.test.ts`; panel interleavings in
 `adapters/store/prepared-operations.test.ts`. See
 [prepared submissions](design/prepared-submissions.md) for ordering and ownership.
