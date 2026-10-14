@@ -1,11 +1,29 @@
 //! Owner-scoped current conversation metadata for bounded linked readers.
 //! The repository owns revisions; this port exposes no receiver progress.
+//!
+//! ```text
+//! paired catalogue read ──▶ ConversationCatalogue::page | resolve
+//!                             rows narrowed in SQL to the receiver's
+//!                             grants: an index, each row with the role held
+//!                       ──▶ CatalogueEntryAdmission::admits(descriptor)
+//!                             ──▶ ConversationAccessPolicyEvaluator
+//!                                 (catalogue.entry, a PairedReader)
+//!                             ──▶ Shown | Dropped (logged) | Undecided
+//! ```
+//!
+//! Arrows are calls. The index finds what a reader may be shown; the access
+//! policy decides each entry it found, and an entry it refuses is left out.
 
-use super::{ConversationFuture, Reader};
-use crate::conversation::domain::Conversation;
+use super::{
+    AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
+    ConversationAccessPolicyEvaluator, ConversationFuture, Reader, RequestShape,
+};
+use crate::conversation::domain::{Conversation, ShareRole};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::{ConversationId, ConversationSummary};
 use nessa_sync::replication::catalogue::ManifestRequest;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogueHead {
@@ -24,6 +42,9 @@ pub struct CatalogueDescriptor {
     pub key: CatalogueKey,
     pub revision: u64,
     pub deleted: bool,
+    /// The role of the share grant the reader holds on the conversation,
+    /// read with the row; `None` for the owner, who holds none.
+    pub held: Option<ShareRole>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,4 +100,124 @@ pub trait ConversationCatalogue: Send + Sync {
         incarnation: &str,
         id: &ConversationId,
     ) -> ConversationFuture<'_, Option<CatalogueValue>>;
+}
+
+/// Who reads a paired catalogue, and the policy each entry it is shown is
+/// admitted by (`catalogue.entry`). Built once per read source.
+#[derive(Clone)]
+pub struct CatalogueEntryAccess {
+    policy: Arc<dyn ConversationAccessPolicyEvaluator>,
+    signed_in_as: PrincipalId,
+}
+
+impl CatalogueEntryAccess {
+    /// A reader whose session signed in as `signed_in_as`, admitted by
+    /// `policy`.
+    pub fn new(
+        policy: Arc<dyn ConversationAccessPolicyEvaluator>,
+        signed_in_as: PrincipalId,
+    ) -> Self {
+        Self {
+            policy,
+            signed_in_as,
+        }
+    }
+
+    /// The admission of the entries `receiver`, bound to `owner` in
+    /// `organization`, is shown of that owner's catalogue, for one read.
+    pub fn reading<'a>(
+        &'a self,
+        organization: &'a OrganizationId,
+        owner: &'a PrincipalId,
+        receiver: &'a str,
+    ) -> CatalogueEntryAdmission<'a> {
+        CatalogueEntryAdmission {
+            access: self,
+            organization,
+            owner,
+            receiver,
+            decided: HashMap::new(),
+        }
+    }
+}
+
+/// What the policy said of one catalogue entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CatalogueEntryAnswer {
+    /// Admitted: the reader is shown it.
+    Shown,
+    /// Refused: it is left out, and that logged.
+    Dropped,
+    /// The policy could not decide: the read is unavailable.
+    Undecided,
+}
+
+/// One read's admission of the entries a paired reader is shown.
+///
+/// Within one read the reader, the organization and the owner are fixed:
+/// the rows are the owner's, as the store checks each record. An ask varies
+/// by entry only in whether it was deleted and the role held, so each
+/// distinct pair is asked once and the answer reused: a page costs at most
+/// a handful of evaluations however many entries it has.
+pub struct CatalogueEntryAdmission<'a> {
+    access: &'a CatalogueEntryAccess,
+    organization: &'a OrganizationId,
+    owner: &'a PrincipalId,
+    receiver: &'a str,
+    decided: HashMap<(bool, Option<ShareRole>), CatalogueEntryAnswer>,
+}
+
+impl CatalogueEntryAdmission<'_> {
+    /// Whether the reader is shown `entry`. A refusal is logged at warn: the
+    /// SQL index found the entry by the reader's grant, so the policy
+    /// refusing it means the two disagree.
+    pub fn admits(&mut self, entry: &CatalogueDescriptor) -> CatalogueEntryAnswer {
+        let key = (entry.deleted, entry.held);
+        let answer = match self.decided.get(&key) {
+            Some(answer) => *answer,
+            None => {
+                let answer = self.decide(entry);
+                self.decided.insert(key, answer);
+                answer
+            }
+        };
+        if answer == CatalogueEntryAnswer::Dropped {
+            tracing::warn!(
+                conversation = %entry.key.id,
+                receiver = self.receiver,
+                held = ?entry.held,
+                deleted = entry.deleted,
+                "the access policy refused a catalogue entry its grant index returned; it is left out"
+            );
+        }
+        answer
+    }
+
+    fn decide(&self, entry: &CatalogueDescriptor) -> CatalogueEntryAnswer {
+        let ask = AccessAsk {
+            subject: AccessSubject::PairedReader {
+                organization: self.organization,
+                signed_in_as: &self.access.signed_in_as,
+                binding_owner: self.owner,
+                receiver: self.receiver,
+            },
+            action: AccessAction::CatalogueEntry,
+            resource: AccessResource::Conversation {
+                organization: self.organization,
+                owner: self.owner,
+                deleted: entry.deleted,
+            },
+            held: entry.held,
+            request: RequestShape::default(),
+            target: None,
+        };
+        match self.access.policy.evaluate(&ask) {
+            AccessDecision::Allow { .. } => CatalogueEntryAnswer::Shown,
+            AccessDecision::Deny(AccessDenial::Unavailable) => CatalogueEntryAnswer::Undecided,
+            AccessDecision::Deny(denial) => {
+                tracing::debug!(?denial, "a catalogue entry was refused");
+                CatalogueEntryAnswer::Dropped
+            }
+        }
+    }
 }

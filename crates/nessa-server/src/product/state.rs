@@ -8,9 +8,9 @@ use crate::attachments::{
     entrypoint::http::UploadRoute,
 };
 use crate::conversation::application::{
-    CatalogueReadSource, ConversationRepository, ConversationService, McpAppAudit,
-    ReceiverAuthority, RecordReadSource, ShareGrants, WatchCatalogue, WatchNamespaces,
-    WatchRecords,
+    CatalogueReadSource, ConversationAccessPolicyEvaluator, ConversationRepository,
+    ConversationService, McpAppAudit, ReceiverAuthority, RecordReadSource, ShareGrants,
+    WatchCatalogue, WatchNamespaces, WatchRecords,
 };
 use crate::conversation::infrastructure::UuidWatchNamespaces;
 pub(crate) use crate::core::limit_log::note_limit;
@@ -119,6 +119,9 @@ pub struct ProductRouteState {
     /// The read grants are also what every socket read asks for a paired
     /// device (`read_access`).
     pub(crate) passive_read: Option<PassiveReadAuthorities>,
+    /// What decides a paired party's access to a conversation or a
+    /// catalogue; set with `passive_read`.
+    pub(crate) conversation_access: Option<Arc<dyn ConversationAccessPolicyEvaluator>>,
     pub(crate) catalogue_source: Option<Arc<dyn CatalogueReadSource>>,
     pub(crate) record_source: Option<Arc<dyn RecordReadSource>>,
     pub(crate) agent_installations: Option<Arc<dyn AgentInstallations>>,
@@ -285,6 +288,7 @@ impl ProductRouteState {
             peers: None,
             conversations: None,
             passive_read: None,
+            conversation_access: None,
             record_source: None,
             catalogue_source: None,
             agents_catalog: None,
@@ -370,14 +374,17 @@ impl ProductRouteState {
         self
     }
 
-    /// Bind the server-owned receiver state and conversation ownership source.
+    /// Bind the server-owned receiver state and conversation ownership
+    /// source, and the access policy a paired party's reads are decided by.
     pub fn with_passive_read(
         mut self,
         receivers: Arc<dyn ReceiverAuthority>,
         conversations: Arc<dyn ConversationRepository>,
         share_grants: Arc<dyn ShareGrants>,
+        access: Arc<dyn ConversationAccessPolicyEvaluator>,
     ) -> Self {
         self.passive_read = Some((receivers, conversations, share_grants));
+        self.conversation_access = Some(access);
         self
     }
 
@@ -455,7 +462,8 @@ impl ProductRouteState {
     }
 
     /// The agent catalog as it is now: the agents and SSH hosts composed at
-    /// startup, then the paired environments connected at this moment.
+    /// startup, then the paired environments connected at this moment, and
+    /// which of those take the owner's commands.
     /// `None` where conversations are not configured. `agents.list` answers
     /// it and every `agents.listed` frame carries it, so the two are read
     /// the same way.
@@ -468,6 +476,19 @@ impl ProductRouteState {
                 places.extend((connected.names)().into_iter().map(Value::String));
             }
         }
+        // Of those places, the ones the owner's turns may run commands on,
+        // read with them: the conversation service asks the command policy.
+        // The composed catalog's own copy is never shown.
+        let places: Vec<&str> = catalog["environments"]
+            .as_array()
+            .map(|places| places.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let command_hosts = self
+            .conversations
+            .as_ref()
+            .map(|service| service.owner_command_hosts(places))
+            .unwrap_or_default();
+        catalog["commandHosts"] = Value::from(command_hosts);
         // The stored hooks choice, read now. The composed catalog's own copy
         // is never shown.
         let selection = self

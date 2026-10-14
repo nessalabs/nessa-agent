@@ -1,6 +1,7 @@
 //! Test-only provider and metadata ports; all scheduling runs through the real SDK Agent.
 use crate::conversation::application::{
-    ArtifactKept, AttachmentRelease, ConversationAgent, ConversationAgentFuture,
+    AccessAsk, AccessDecision, AccessDenial, ArtifactKept, AttachmentRelease, CatalogueEntryAccess,
+    ConversationAccessPolicyEvaluator, ConversationAgent, ConversationAgentFuture,
     ConversationAgentSource, ConversationAgents, ConversationAttachments, ConversationCreation,
     ConversationCreationAudit, ConversationCreationAuditRecord, ConversationCreationDisposition,
     ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionBudgets,
@@ -12,6 +13,7 @@ use crate::conversation::application::{
     ProviderSessionErasers, PublishedArtifact, UnfinishedDeletions,
 };
 use crate::conversation::domain::{Conversation, ConversationDeletion, ProviderSessionErasure};
+use crate::conversation::infrastructure::CedarConversationAccessPolicy;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::ConversationApprovalMode;
@@ -896,6 +898,12 @@ pub(crate) struct ProviderFactory {
     pub(crate) execution_observation_failure: Mutex<Option<ObservationFailure>>,
     pub(crate) request_permission: AtomicUsize,
     pub(crate) permission_gate: Mutex<Option<Receiver<()>>>,
+    /// Every permission answer the agent was given, in order.
+    pub(crate) permission_answers: Mutex<Vec<PermissionAnswer>>,
+    /// Whether the agent's own hooks may answer a review first.
+    pub(crate) native_hooks: AtomicBool,
+    /// Offer "Reject once" beside "Allow once", so a refusal can be answered.
+    pub(crate) offer_deny: AtomicBool,
     /// Gate after domain consumption rather than before it.
     pub(crate) consume_before_answer_gate: AtomicBool,
     /// Return the controller's actual confirmed selection for successful corpus fixtures.
@@ -962,8 +970,9 @@ pub(crate) struct MemoryAttachments {
     pub(crate) ranges: Mutex<Vec<(String, u64)>>,
     /// When set, every file is let go once this many ranges were read.
     pub(crate) let_go_after: Mutex<Option<usize>>,
-    /// When set, every range takes this long to read.
-    pub(crate) range_delay: Mutex<Option<std::time::Duration>>,
+    /// Full fetch ranges wait for true (or sender drop). One-byte service probes
+    /// proceed; the host fixture's start gate lets all probes finish first.
+    pub(crate) hold_ranges: Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
     /// Ranges being read now, and the most ever read at once.
     pub(crate) reading: AtomicUsize,
     pub(crate) most_reading: AtomicUsize,
@@ -1027,9 +1036,13 @@ impl ConversationAttachments for MemoryAttachments {
         Box::pin(async move {
             let now = self.reading.fetch_add(1, Ordering::SeqCst) + 1;
             self.most_reading.fetch_max(now, Ordering::SeqCst);
-            let delay = *self.range_delay.lock().unwrap();
-            if let Some(delay) = delay {
-                tokio::time::sleep(delay).await;
+            let hold = if range.max_bytes > 1 {
+                self.hold_ranges.lock().unwrap().clone()
+            } else {
+                None
+            };
+            if let Some(mut hold) = hold {
+                let _ = hold.wait_for(|released| *released).await;
             }
             let read = self.read_range(range);
             self.reading.fetch_sub(1, Ordering::SeqCst);
@@ -1164,6 +1177,7 @@ pub(crate) fn image_fixture_with_model(
     let summaries = Arc::new(MemorySummaries::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
             metadata: repository.clone(),
@@ -1305,6 +1319,7 @@ pub(crate) fn mode_fixture_with_summaries(
     let mode_audit = Arc::new(RecordingModeAudit::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: mode_agents(provider.clone(), execution_audit.clone()),
             storage,
             metadata: repository.clone(),
@@ -1343,6 +1358,7 @@ pub(crate) fn fixture(
     let summaries = Arc::new(MemorySummaries::default());
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
             metadata: repository.clone(),
@@ -1520,6 +1536,7 @@ impl ProviderSessionBackend for Backend {
         ProviderOperationCapabilities {
             image_input: self.factory.image_input.load(Ordering::SeqCst),
             negotiated: !self.factory.answer_unknown.load(Ordering::SeqCst),
+            native_hooks_allowed: self.factory.native_hooks.load(Ordering::SeqCst),
             ..ProviderOperationCapabilities::default()
         }
     }
@@ -1598,19 +1615,27 @@ impl ProviderSessionBackend for Backend {
                 return reply;
             }
             if self.factory.request_permission.load(Ordering::SeqCst) != 0 {
-                let options = PermissionOptions::new(
-                    vec![PermissionOption::new(
-                        PermissionOptionId::new("allow").unwrap(),
-                        "Allow once",
-                        PermissionDecision::new(
-                            PermissionEffect::Allow,
-                            PermissionScope::request(),
-                        ),
-                    )
-                    .unwrap()],
-                    &PermissionOfferPolicy::once_only(),
+                let mut choices = vec![PermissionOption::new(
+                    PermissionOptionId::new("allow").unwrap(),
+                    "Allow once",
+                    PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request()),
                 )
-                .unwrap();
+                .unwrap()];
+                if self.factory.offer_deny.load(Ordering::SeqCst) {
+                    choices.push(
+                        PermissionOption::new(
+                            PermissionOptionId::new("reject").unwrap(),
+                            "Reject once",
+                            PermissionDecision::new(
+                                PermissionEffect::Deny,
+                                PermissionScope::request(),
+                            ),
+                        )
+                        .unwrap(),
+                    );
+                }
+                let options =
+                    PermissionOptions::new(choices, &PermissionOfferPolicy::once_only()).unwrap();
                 let event = self
                     .controller
                     .lock()
@@ -1688,6 +1713,11 @@ impl ProviderSessionBackend for Backend {
         answer: PermissionAnswer,
     ) -> ProviderOperationFuture<'_, PermissionResolution> {
         Box::pin(async move {
+            self.factory
+                .permission_answers
+                .lock()
+                .unwrap()
+                .push(answer.clone());
             if self.factory.answer_succeeds.load(Ordering::SeqCst) {
                 return self
                     .controller
@@ -1859,7 +1889,7 @@ impl crate::conversation::application::ShareGrants for EveryConversationGranted 
     fn change(
         &self,
         _: crate::conversation::application::ShareGrantChange,
-    ) -> ConversationFuture<'_, bool> {
+    ) -> ConversationFuture<'_, crate::conversation::application::ShareGrantReceipt> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
     fn grants<'a>(
@@ -1867,6 +1897,14 @@ impl crate::conversation::application::ShareGrants for EveryConversationGranted 
         _: &'a ConversationId,
     ) -> ConversationFuture<'a, Vec<crate::conversation::application::ShareGrant>> {
         Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+    fn policy_at<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> ConversationFuture<'a, Option<crate::conversation::domain::ToolPolicy>> {
+        Box::pin(async { Ok(None) })
     }
 }
 
@@ -1899,7 +1937,7 @@ pub(crate) async fn grant_as(
         .await
         .unwrap()
         .expect("a conversation to share");
-    crate::conversation::application::ShareGrants::change(
+    let receipt = crate::conversation::application::ShareGrants::change(
         store,
         crate::conversation::application::ShareGrantChange {
             transition: crate::conversation::application::ShareGrantTransition::Grant(access),
@@ -1907,6 +1945,7 @@ pub(crate) async fn grant_as(
             receiver_id: Some(receiver.to_owned()),
             credential_id: nessa_auth::domain::CredentialId::new(format!("{receiver}-credential"))
                 .unwrap(),
+            expected_policy_revision: None,
             initiator: crate::conversation::application::ConversationCaller {
                 organization_id: conversation.organization().clone(),
                 principal_id: conversation.owner().clone(),
@@ -1918,6 +1957,7 @@ pub(crate) async fn grant_as(
     )
     .await
     .unwrap();
+    assert!(receipt.applied);
 }
 
 /// A Comment grant and a Drive grant under a preset policy: every role
@@ -1928,7 +1968,7 @@ pub(crate) fn roles_beyond_read() -> [crate::conversation::domain::ShareAccess; 
         ShareAccess::new(ShareRole::Comment, None).unwrap(),
         ShareAccess::new(
             ShareRole::Drive,
-            Some(ToolPolicy::Preset(ToolPreset::NoShell)),
+            Some(ToolPolicy::preset(ToolPreset::NoShell)),
         )
         .unwrap(),
     ]
@@ -1947,4 +1987,62 @@ fn mode_panic(payload_drop: bool, message: &'static str) -> ! {
         std::panic::panic_any(ModePanicPayload);
     }
     panic!("{message}");
+}
+
+/// The checked-in conversation access policy, as composition builds it:
+/// every service, store and passive read these tests build asks it, so they
+/// exercise the rules the gateway runs. Validated once per test process.
+fn checked_in_access_policy() -> &'static Arc<CedarConversationAccessPolicy> {
+    static POLICY: std::sync::OnceLock<Arc<CedarConversationAccessPolicy>> =
+        std::sync::OnceLock::new();
+    POLICY.get_or_init(|| {
+        Arc::new(
+            CedarConversationAccessPolicy::new()
+                .expect("the checked-in conversation access policy validates"),
+        )
+    })
+}
+
+/// [`checked_in_access_policy`], as a dependency is injected.
+pub(crate) fn access_policy() -> Arc<dyn ConversationAccessPolicyEvaluator> {
+    checked_in_access_policy().clone()
+}
+
+/// [`checked_in_access_policy`], borrowed for as long as the test runs.
+pub(crate) fn access_policy_ref() -> &'static dyn ConversationAccessPolicyEvaluator {
+    checked_in_access_policy().as_ref()
+}
+
+/// The checked-in access policy, counting what it is asked, until
+/// [`Self::undecide`]: from then on it cannot decide anything, as an
+/// evaluator whose bundle or entities failed answers.
+#[derive(Default)]
+pub(crate) struct ObservedPolicy {
+    undecided: AtomicBool,
+    asked: AtomicUsize,
+}
+impl ObservedPolicy {
+    /// Answer every later ask `Deny(Unavailable)`.
+    pub(crate) fn undecide(&self) {
+        self.undecided.store(true, Ordering::SeqCst);
+    }
+    /// How many asks it has answered.
+    pub(crate) fn asked(&self) -> usize {
+        self.asked.load(Ordering::SeqCst)
+    }
+}
+impl ConversationAccessPolicyEvaluator for ObservedPolicy {
+    fn evaluate(&self, ask: &AccessAsk<'_>) -> AccessDecision {
+        self.asked.fetch_add(1, Ordering::SeqCst);
+        if self.undecided.load(Ordering::SeqCst) {
+            return AccessDecision::Deny(AccessDenial::Unavailable);
+        }
+        access_policy_ref().evaluate(ask)
+    }
+}
+
+/// A paired catalogue reader signed in as `signed_in_as`, its entries
+/// admitted by the checked-in access policy.
+pub(crate) fn catalogue_entries(signed_in_as: &str) -> CatalogueEntryAccess {
+    CatalogueEntryAccess::new(access_policy(), PrincipalId::new(signed_in_as).unwrap())
 }

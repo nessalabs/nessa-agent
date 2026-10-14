@@ -201,6 +201,7 @@ pub(crate) fn history_fixture(count: usize) -> SessionSnapshot {
             },
             actor: ActionContext::new("user", "fixture", "send").unwrap(),
             initiation: Initiation::owner(),
+            notes: Vec::new(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),

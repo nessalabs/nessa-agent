@@ -51,26 +51,22 @@ function removedSince(state: WorkspaceState, session: SessionSummary): boolean {
  * summary is the one sign that the source has begun it: a conversation that
  * arrives first is read again once the summary does, while a pane shows the
  * session or when one first does (`effects.ts`).
+ *
+ * Content let go keeps its revision (`conversationRevisions`). A read at
+ * that revision or a newer one is accepted; an older one is not. Whether
+ * the body stays is retention's decision (`withTranscript`): a session on
+ * screen keeps it, and so do the recent unshown ones. Content still held
+ * at that revision stays as it is. Summaries are not part of this
+ * exception (`supersedes`).
  */
 function holdsConversation(state: WorkspaceState, transcript: Transcript): boolean {
   const session = sessionOf(state, transcript.sessionId)
-  return (
-    session !== undefined &&
-    knownToSource(session) &&
-    fromSource(transcript) &&
-    supersedes(transcript, heldConversation(state, transcript.sessionId))
-  )
-}
-
-/**
- * The conversation revision held for a session: the content's, or — its
- * content let go to keep the window small — the newest revision it had.
- */
-function heldConversation(state: WorkspaceState, sessionId: string) {
-  const held = entry(state.transcripts, sessionId)
-  if (held) return held
-  const revision = entry(state.conversationRevisions, sessionId)
-  return revision === undefined ? undefined : { revision }
+  if (session === undefined || !knownToSource(session) || !fromSource(transcript))
+    return false
+  const held = entry(state.transcripts, transcript.sessionId)
+  if (held) return supersedes(transcript, held)
+  const remembered = entry(state.conversationRevisions, transcript.sessionId)
+  return remembered === undefined || transcript.revision >= remembered
 }
 
 /**
@@ -345,18 +341,18 @@ export function sessionRemoved(
   return removeSession(marked, sessionId, draftId)
 }
 
-/** A session's conversation, read because a pane shows it; kept only if nothing newer is. */
+/**
+ * A session's conversation, read because a pane shows it. Kept when it is
+ * the one to hold; a read that is not replaces nothing, including a failure
+ * already shown. An accepted read clears that failure (`withTranscript`).
+ */
 export function transcriptLoaded(
   state: WorkspaceState,
   { transcript }: { transcript: Transcript },
 ): WorkspaceState {
-  // A read that outlived its session, removed meanwhile, is let go.
-  if (!sessionOf(state, transcript.sessionId)) return state
-  const read = {
-    ...state,
-    transcriptFailures: without(state.transcriptFailures, transcript.sessionId),
-  }
-  return holdsConversation(read, transcript) ? withTranscript(read, transcript) : read
+  if (!sessionOf(state, transcript.sessionId) || !holdsConversation(state, transcript))
+    return state
+  return withTranscript(state, transcript)
 }
 
 /**

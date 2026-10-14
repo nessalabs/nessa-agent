@@ -18,19 +18,70 @@
 //! the one place a note, its retry and its quota are decided, not a ledger
 //! here. Who may leave one is the socket's admission
 //! (`product::read_access::admit_request`), which hands this the author.
-use super::{conversation_session, load_conversation, ConversationService};
-use crate::conversation::application::{ConversationCaller, ConversationError};
+use super::{conversation_session, load_conversation, ConversationService, LiveConversation};
+use crate::conversation::application::{
+    note_candidates, ConversationCaller, ConversationError, ShareGrants,
+};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::sessions::{
-    NoteDelivery, NoteRecord, NoteRecordError, NoteRequest, NoteText, StorageError,
+    NoteCandidates, NoteDelivery, NoteRecord, NoteRecordError, NoteRequest, NoteState, NoteText,
+    StorageError,
 };
 use nessa_sdk::domain::agent_execution::executions::Initiator;
+use std::sync::Arc;
 
 impl ConversationService {
+    /// Bind the share grants a waiting note's author is checked against
+    /// before a turn takes it (row J23). A second bind is ignored.
+    pub fn bind_note_authors(&self, grants: Arc<dyn ShareGrants>) {
+        let _ = self.inner.note_authors.set(grants);
+    }
+
+    /// The verdict on each note waiting in `live`'s committed records for a
+    /// turn ([`note_candidates`]), asked of the conversation as it is stored
+    /// now. Without bound grants, only the owner's notes are allowed and a
+    /// grant's wait; the records unreadable, none is judged and every note
+    /// waits.
+    pub(super) async fn note_candidates(
+        &self,
+        id: &ConversationId,
+        live: &LiveConversation,
+    ) -> NoteCandidates {
+        let Some(snapshot) = live.agent.session_manager().snapshot().await else {
+            return NoteCandidates::default();
+        };
+        let waiting: Vec<NoteRecord> = snapshot
+            .notes
+            .iter()
+            .filter(|note| snapshot.note_state(note) == NoteState::Pending)
+            .cloned()
+            .collect();
+        let owners_only = || NoteCandidates {
+            authorized: waiting
+                .iter()
+                .filter(|note| note.author == Initiator::Owner)
+                .map(|note| note.id.clone())
+                .collect(),
+            revoked: Vec::new(),
+        };
+        let Some(grants) = self.inner.note_authors.get() else {
+            return owners_only();
+        };
+        note_candidates(
+            self.inner.access_policy.as_ref(),
+            self.inner.metadata.as_ref(),
+            grants.as_ref(),
+            id,
+            &waiting,
+        )
+        .await
+    }
+
     /// Leave a note in conversation `id`, from `caller` under `author`, the
-    /// authority it was admitted under. A note starts no turn and steers
-    /// none (row J21). The same request again answers its first note
-    /// (row J18).
+    /// authority it was admitted under, and where it stands once saved. A
+    /// note starts no turn and steers none (row J21): a `next_turn` note
+    /// waits for the next turn a person starts (row J23). The same request
+    /// again answers its first note, where it stands now (row J18).
     ///
     /// # Errors
     /// `InvalidInput` for text outside [`NoteText`]'s bounds;
@@ -45,13 +96,13 @@ impl ConversationService {
         author: Initiator,
         text: String,
         delivery: NoteDelivery,
-    ) -> Result<NoteRecord, ConversationError> {
+    ) -> Result<(NoteRecord, NoteState), ConversationError> {
         let text = NoteText::new(text).map_err(|_| ConversationError::InvalidInput)?;
         let actor = caller.actor()?;
         let _admission = self.admit().await?;
         let live = self.resolve(&id, &caller).await?;
-        live.agent
-            .session_manager()
+        let manager = live.agent.session_manager();
+        let record = manager
             .record_note(NoteRequest {
                 text,
                 delivery,
@@ -66,12 +117,20 @@ impl ConversationService {
                 }
                 NoteRecordError::NotLoaded => ConversationError::Unavailable,
                 NoteRecordError::Storage(error) => ConversationError::Storage(error),
-            })
+            })?;
+        // Saved before the answer, so the committed records hold it.
+        let state = manager
+            .snapshot()
+            .await
+            .map(|snapshot| snapshot.note_state(&record))
+            .ok_or(ConversationError::Unavailable)?;
+        Ok((record, state))
     }
 
     /// The note `caller`'s principal left in conversation `id` under its
-    /// request, as the conversation's committed records hold it: `None` when
-    /// it left none, or none was saved (row J20). Nothing is opened.
+    /// request, and where it stands, as the conversation's committed records
+    /// hold them: `None` when it left none, or none was saved (row J20).
+    /// Nothing is opened.
     ///
     /// # Errors
     /// `NotFound` or `Deleted` as for [`Self::leave_note`]; a storage
@@ -80,13 +139,13 @@ impl ConversationService {
         &self,
         id: ConversationId,
         caller: ConversationCaller,
-    ) -> Result<Option<NoteRecord>, ConversationError> {
+    ) -> Result<Option<(NoteRecord, NoteState)>, ConversationError> {
         caller.actor()?;
         let _admission = self.admit().await?;
         let record = load_conversation(self.inner.metadata.as_ref(), &id)
             .await?
             .ok_or(ConversationError::NotFound)?;
-        record.check_access(&caller.organization_id, &caller.principal_id)?;
+        self.access().admit(&record, &caller)?;
         let session_id = conversation_session(&id);
         let committed = self
             .inner
@@ -102,7 +161,10 @@ impl ConversationService {
         Ok(committed
             .as_ref()
             .and_then(|committed| committed.snapshot())
-            .and_then(|snapshot| snapshot.note(caller.principal_id.as_str(), &caller.action_id))
-            .cloned())
+            .and_then(|snapshot| {
+                snapshot
+                    .note(caller.principal_id.as_str(), &caller.action_id)
+                    .map(|note| (note.clone(), snapshot.note_state(note)))
+            }))
     }
 }

@@ -1067,6 +1067,7 @@ fn service(root: &Path, resolver: Arc<CurrentAgentResolver>) -> ConversationServ
     .unwrap();
     ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents,
             storage: Arc::new(InMemoryStorage::new()),
             metadata: Arc::new(MemoryRepository::default()),

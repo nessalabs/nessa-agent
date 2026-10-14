@@ -3212,6 +3212,7 @@ dependencies = [
  "sha2",
  "subtle",
  "tempfile",
+ "tracing",
  "zeroize",
 ]
 
@@ -3372,6 +3373,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "cedar-policy",
  "core-foundation 0.10.1",
  "core-foundation-sys",
  "flate2",

@@ -43,6 +43,7 @@ function wireView(
     conversationId,
     revision: "r1",
     artifacts: [],
+    notes: [],
     title: null,
     messages: [],
     pending: [],

@@ -121,11 +121,13 @@ impl CompositionRoot {
             #[cfg(unix)]
             Command::EnvDial {
                 address,
+                relay,
                 drain_deadline_ms,
                 enroll_code_file,
             } => {
                 super::env_dial_command::dial_in(
                     &address,
+                    relay.as_ref(),
                     drain_deadline_ms.map(std::time::Duration::from_millis),
                     enroll_code_file.as_deref(),
                 )

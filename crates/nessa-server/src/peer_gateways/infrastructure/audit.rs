@@ -43,6 +43,7 @@ use nessa_auth::{
 use nessa_local_storage::{sync_directory, PrivateTempFile};
 use nessa_protocol::clock::Clock as MonotonicClock;
 use nessa_protocol::pairing::socket::WAKE_TICK;
+use nessa_protocol::relay::RelayAddress;
 use serde_json::{json, Value};
 use std::{
     io::Write,
@@ -347,21 +348,36 @@ fn state(of: &PeerState) -> Value {
     phase(of)
 }
 
+/// `value` with `relay` added, when one is set: a record without a relay
+/// reads as it did before relays.
+fn with_relay(mut value: Value, relay: &Option<RelayAddress>) -> Value {
+    if let Some(relay) = relay {
+        value["relay"] = json!(relay.as_str());
+    }
+    value
+}
+
 fn phase(state: &PeerState) -> Value {
     match state {
         PeerState::Absent => json!({"phase": "absent"}),
-        PeerState::Pending { address } => {
-            json!({"phase": "pending", "address": address.to_string()})
-        }
+        PeerState::Pending { address, relay } => with_relay(
+            json!({"phase": "pending", "address": address.to_string()}),
+            relay,
+        ),
         PeerState::Active {
             address,
+            relay,
             credential,
             receiver,
-        } => json!({"phase": "active", "address": address.to_string(),
-            "credentialId": credential, "receiverId": receiver}),
-        PeerState::Revoked { address } => {
-            json!({"phase": "revoked", "address": address.to_string()})
-        }
+        } => with_relay(
+            json!({"phase": "active", "address": address.to_string(),
+                "credentialId": credential, "receiverId": receiver}),
+            relay,
+        ),
+        PeerState::Revoked { address, relay } => with_relay(
+            json!({"phase": "revoked", "address": address.to_string()}),
+            relay,
+        ),
         PeerState::Unreadable => json!({"phase": "unreadable"}),
         PeerState::Unknown => json!({"phase": "unknown"}),
         PeerState::NotRead => json!({"phase": "not_read"}),
@@ -408,10 +424,11 @@ pub(super) fn record_value(record: &PeerAuditRecord) -> Value {
             operation,
             initiator,
             address,
+            relay,
         } => json!({
             "kind": "peer_enroll_requested",
             "operationId": operation.to_string(),
-            "target": {"address": address.to_string()},
+            "target": with_relay(json!({"address": address.to_string()}), relay),
             "cause": "owner_requested",
             "initiator": person(initiator),
         }),
@@ -419,6 +436,7 @@ pub(super) fn record_value(record: &PeerAuditRecord) -> Value {
             operation,
             initiator,
             address,
+            relay,
             peer,
             before,
             after,
@@ -426,7 +444,10 @@ pub(super) fn record_value(record: &PeerAuditRecord) -> Value {
         } => json!({
             "kind": "peer_enroll_finished",
             "operationId": operation.to_string(),
-            "target": {"address": address.to_string(), "peerKey": peer.as_ref().map(hex)},
+            "target": with_relay(
+                json!({"address": address.to_string(), "peerKey": peer.as_ref().map(hex)}),
+                relay,
+            ),
             "transition": {"before": state(before), "after": state(after)},
             "outcome": outcome(result),
             "cause": "owner_requested",
@@ -454,6 +475,35 @@ pub(super) fn record_value(record: &PeerAuditRecord) -> Value {
             "kind": "peer_forget_finished",
             "operationId": operation.to_string(),
             "target": {"peerKey": hex(peer)},
+            "transition": {"before": state(before), "after": state(after)},
+            "outcome": outcome(result),
+            "cause": "owner_requested",
+            "initiator": person(initiator),
+        }),
+        PeerAuditRecord::RelayRequested {
+            operation,
+            initiator,
+            peer,
+            relay,
+        } => json!({
+            "kind": "peer_relay_requested",
+            "operationId": operation.to_string(),
+            "target": {"peerKey": hex(peer), "relay": relay.as_ref().map(RelayAddress::as_str)},
+            "cause": "owner_requested",
+            "initiator": person(initiator),
+        }),
+        PeerAuditRecord::RelayFinished {
+            operation,
+            initiator,
+            peer,
+            relay,
+            before,
+            after,
+            outcome: result,
+        } => json!({
+            "kind": "peer_relay_finished",
+            "operationId": operation.to_string(),
+            "target": {"peerKey": hex(peer), "relay": relay.as_ref().map(RelayAddress::as_str)},
             "transition": {"before": state(before), "after": state(after)},
             "outcome": outcome(result),
             "cause": "owner_requested",

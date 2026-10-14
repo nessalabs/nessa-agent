@@ -20,7 +20,8 @@
 //! its calls and an app's would reach different sessions.
 use super::agent::{agent_search_path, AgentsConfig};
 use super::runtime_config::{RuntimeConfig, MAX_CONFIG_BYTES};
-use crate::conversation::application::{DroppedContexts, McpAppAudit};
+use crate::conversation::application::{AppCallPolicyEvaluator, DroppedContexts, McpAppAudit};
+use crate::conversation::infrastructure::CedarAppCallPolicyEvaluator;
 use crate::core::RunError;
 use crate::mcp_authorization::application::AuthorizationOwner;
 use crate::mcp_authorization::infrastructure::{
@@ -91,6 +92,9 @@ pub(super) struct McpComposition {
     /// unsent (`audit_context_drops`), once started: stopped beside the
     /// ticket recorder, after the conversations whose drops it records.
     pub(super) context_drop_recorder: Option<AuditRecorder>,
+    /// Which server and tools an MCP App may reach: the Cedar bundle,
+    /// loaded and strictly validated once, for every conversation's apps.
+    pub(super) app_policy: Arc<dyn AppCallPolicyEvaluator>,
 }
 
 impl McpComposition {
@@ -323,7 +327,7 @@ pub(super) fn configuration_key(tokens: &dyn TokenSource) -> Option<Configuratio
 /// # Errors
 ///
 /// [`RunError::Agent`] when the configured servers could not all be launched
-/// as configured.
+/// as configured, or the MCP App call policy's bundle does not validate.
 pub(super) async fn compose(
     agents: &mut AgentsConfig,
     socket: &Path,
@@ -332,6 +336,10 @@ pub(super) async fn compose(
     bundled: bool,
     built_in: Option<Arc<dyn BuiltInServer>>,
 ) -> Result<Option<McpComposition>, RunError> {
+    let app_policy: Arc<dyn AppCallPolicyEvaluator> =
+        Arc::new(CedarAppCallPolicyEvaluator::new().map_err(|_| {
+            RunError::Agent("the MCP App call policy bundle does not validate".into())
+        })?);
     let configured = std::mem::take(&mut agents.mcp_servers);
     let launches = LaunchSettings::new(&configured, bundled, agents.workspace.clone(), environment);
     let (launch_set, remotes) = launches
@@ -404,6 +412,7 @@ pub(super) async fn compose(
         ticket_events: Some(ticket_events),
         ticket_recorder: None,
         context_drop_recorder: None,
+        app_policy,
     }))
 }
 

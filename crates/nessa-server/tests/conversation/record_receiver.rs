@@ -1,19 +1,25 @@
 // Separate gateway and receiver processes exercise the authenticated product
 // route. Receiver files are test data, never a second gateway journal.
 use super::*;
-use nessa_protocol::agents::AgentId;
-use crate::conversation::application::{ConversationRepository, ReceiverAuthority, ReceiverBinding};
-use nessa_protocol::conversation::read_scope::ReadRefusal;
+use crate::conversation::application::{
+    ConversationRepository, ReceiverAuthority, ReceiverBinding,
+};
 use crate::conversation::domain::Conversation;
-use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationId, ConversationModelId};
 use crate::conversation::infrastructure::{LocalConversationStore, NessaRecordReadSource};
-use nessa_protocol::product::generated::{ConversationRecordsHeadResult, ConversationRecordsPageResult};
-use nessa_protocol::product::passive_read::{decode_scope, wire_scope};
-use nessa_protocol::product::record_read::decode_page_request;
-use nessa_protocol::product_contract::generated::RecordReadErrorCode;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use nessa_local_database::rusqlite::{params, Connection};
+use nessa_protocol::agents::AgentId;
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationId, ConversationModelId,
+};
+use nessa_protocol::conversation::read_scope::ReadRefusal;
+use nessa_protocol::product::generated::{
+    ConversationRecordsHeadResult, ConversationRecordsPageResult,
+};
+use nessa_protocol::product::passive_read::{decode_scope, wire_scope};
+use nessa_protocol::product::record_read::decode_page_request;
+use nessa_protocol::product_contract::generated::RecordReadErrorCode;
 use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
 use nessa_sdk::application::agent_execution::sessions::{
     ProviderContext, SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
@@ -76,8 +82,11 @@ async fn gateway_child() {
     let root = Path::new(&root);
     let private = root.join("conversations");
     nessa_local_storage::create_directory(&private).unwrap();
-    let conversations =
-        Arc::new(LocalConversationStore::open(&private.join("metadata.sqlite3")).unwrap());
+    let conversations = Arc::new(
+        LocalConversationStore::open(&private.join("metadata.sqlite3"))
+            .unwrap()
+            .with_access_policy(crate::conversation_test_support::access_policy()),
+    );
     let conversation = ConversationId::new(CONVERSATION).unwrap();
     if conversations.load(&conversation).await.unwrap().is_none() {
         conversations
@@ -210,7 +219,12 @@ async fn gateway_child() {
         Handle::current(),
     ));
     let state = state
-        .with_passive_read(Arc::new(Binding), conversations, Arc::new(crate::conversation_test_support::EveryConversationGranted))
+        .with_passive_read(
+            Arc::new(Binding),
+            conversations,
+            Arc::new(crate::conversation_test_support::EveryConversationGranted),
+            crate::conversation_test_support::access_policy(),
+        )
         .with_record_source(source);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     println!(
@@ -298,8 +312,7 @@ impl RecordSource for ProductSource {
         }
         let response: ConversationRecordsPageResult =
             serde_json::from_value(reply["payload"].clone()).unwrap();
-        let echoed =
-            decode_page_request(&response.request).unwrap();
+        let echoed = decode_page_request(&response.request).unwrap();
         let records = response
             .records
             .into_iter()

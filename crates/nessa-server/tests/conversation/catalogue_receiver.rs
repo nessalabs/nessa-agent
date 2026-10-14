@@ -73,7 +73,9 @@ async fn receiver_child() {
     let cache_path = PathBuf::from(std::env::var("NESSA_259_CHILD_CACHE").unwrap());
     let receiver = std::env::var("NESSA_259_CHILD_RECEIVER").unwrap();
     let store = Arc::new(
-        super::super::store::LocalConversationStore::open(Path::new(&source_path)).unwrap(),
+        super::super::store::LocalConversationStore::open(Path::new(&source_path))
+            .unwrap()
+            .with_access_policy(crate::conversation_test_support::access_policy()),
     );
     let head = store
         .head(
@@ -84,7 +86,13 @@ async fn receiver_child() {
         .await
         .unwrap();
     let scope = scope(&receiver, &head.incarnation);
-    let source = NessaCatalogueSource::new(store, owner(), scope.clone()).unwrap();
+    let source = NessaCatalogueSource::new(
+        store,
+        owner(),
+        crate::conversation_test_support::catalogue_entries(owner().principal_id.as_str()),
+        scope.clone(),
+    )
+    .unwrap();
     let stop_after_page = std::env::var_os("NESSA_259_CHILD_STOP_AFTER_PAGE").is_some();
     tokio::task::spawn_blocking(move || {
         let mut cache = SqliteReceiver::open(&cache_path);
@@ -143,7 +151,9 @@ async fn two_receiver_processes_reopen_independent_durable_progress() {
     let private = directory.path().join("conversations");
     nessa_local_storage::create_directory(&private).unwrap();
     let source_path = private.join("metadata.sqlite3");
-    let store = super::super::store::LocalConversationStore::open(&source_path).unwrap();
+    let store = super::super::store::LocalConversationStore::open(&source_path)
+        .unwrap()
+        .with_access_policy(crate::conversation_test_support::access_policy());
     let mut first = None;
     for index in 0..620 {
         let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();

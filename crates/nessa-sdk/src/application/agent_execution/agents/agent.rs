@@ -41,6 +41,7 @@ use crate::application::agent_execution::sessions::{
     SessionManager, StorageError,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
+use crate::domain::agent_execution::executions::{Initiation, Initiator, ToolChecking};
 use crate::domain::agent_execution::permissions::{
     CustomPermissionCancellationReason, PermissionAuthorityError, PermissionCancellationReason,
     PermissionEffect, PermissionId, PermissionOptionId, PermissionScope, RefusalOutcome,
@@ -141,6 +142,15 @@ impl Drop for ClearHookGuard {
     }
 }
 
+/// The review a hook thread judges, owned so the thread can outlive the event lock.
+///
+/// It carries the proposed call and who started the turn, never the review's options.
+struct ProposedReview {
+    tool_id: ToolCallId,
+    call: ToolReviewInput,
+    initiation: Initiation,
+}
+
 /// Run the permission-review hooks without holding the evidence lock.
 ///
 /// Stop wins when it is already signaled and returns [`ToolVerdict::Stopped`].
@@ -153,8 +163,7 @@ impl Drop for ClearHookGuard {
 /// session clock's wake for the hook limit.
 async fn run_pre_tool_hook<Execution>(
     hooks: InvocationHooks,
-    tool_id: ToolCallId,
-    call: ToolReviewInput,
+    proposed: ProposedReview,
     suffix: EvaluationSuffix,
     running: &Arc<AtomicBool>,
     deadline: MessageCommitSleep,
@@ -202,7 +211,12 @@ where
         if !matches!(admission.has_changed(), Ok(false)) {
             return None;
         }
-        let decision = hooks.before_permission_review(&tool_id, &call, &suffix);
+        let decision = hooks.before_permission_review(
+            &proposed.tool_id,
+            &proposed.call,
+            &proposed.initiation,
+            &suffix,
+        );
         drop(guard);
         Some(decision)
     });
@@ -271,6 +285,35 @@ fn hook_attribution(
     let explanation = refusal.reason().to_owned();
     let attribution = ApprovalAttribution::hook(id, refusal)?;
     Ok((id.clone(), attribution, explanation))
+}
+
+/// Why a turn started as `initiation` may not be sent to `attached`, if it
+/// may not. The owner's turns always may. A grant's turn must have been saved
+/// as [`ToolChecking::Checked`], since only then were its grant's tools
+/// checked at admission; one saved before that, and restored, is not sent.
+/// A checked turn needs a process that asks about every call, so in
+/// [`ApprovalMode::Ask`] with its own hooks not allowed to answer first.
+fn checked_tools_unsupported(
+    initiation: &Initiation,
+    approval_mode: Option<ApprovalMode>,
+    capabilities: OperationCapabilities,
+) -> Result<(), AgentError> {
+    let checked = initiation.tools() == ToolChecking::Checked;
+    if !checked && !matches!(initiation.initiator(), Initiator::Grant(_)) {
+        return Ok(());
+    }
+    if !checked {
+        return Err(AgentError::Unsupported(
+            "a grant's turn needs its tools checked, and this one was not admitted as checked"
+                .into(),
+        ));
+    }
+    if approval_mode != Some(ApprovalMode::Ask) || capabilities.native_hooks_allowed() {
+        return Err(AgentError::Unsupported(
+            "a checked turn needs a process that asks about every tool call".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn deny_option(event: &ExecutionEvent) -> Option<PermissionOptionId> {
@@ -1384,6 +1427,33 @@ impl Agent {
         }
     }
 
+    /// `input` as the provider is given it: with the notes its saved turn
+    /// took, when it took any.
+    async fn with_taken_notes(
+        &self,
+        index: usize,
+        input: &ExecutionRequest,
+    ) -> Result<ExecutionRequest, AgentError> {
+        let notes = self
+            .inner
+            .manager
+            .taken_notes(index)
+            .await
+            .map_err(AgentError::Storage)?;
+        if notes.is_empty() {
+            return Ok(input.clone());
+        }
+        let user_message = input
+            .user_message
+            .clone()
+            .with_notes(notes)
+            .map_err(|error| AgentError::Storage(StorageError::Corrupt(error.to_string())))?;
+        Ok(ExecutionRequest {
+            user_message,
+            ..input.clone()
+        })
+    }
+
     pub(super) async fn execute_invocation(
         &self,
         input: ExecutionRequest,
@@ -1416,40 +1486,51 @@ impl Agent {
         let registered = self.inner.hooks.read().expect("hook registry").clone();
         let hooks = InvocationHooks::new(registered);
         let session_id = attached.session.id().clone();
-        let before_gate = if hooks.is_empty() {
-            Ok(())
-        } else {
-            match self
-                .inner
-                .manager
-                .with_invocation_events(index, EvaluationSuffix::capture)
-                .await
-                .map(|evaluation| hooks.before(&session_id, &input, &evaluation))
-            {
-                Ok(result) => result,
-                Err(error) => Err(AgentError::Storage(error)),
+        // The saved record says who started this turn. Hooks read it from
+        // there, so a resumed turn is judged as the turn it was saved as.
+        // It is read for every invocation, so a review always has it.
+        let capture = !hooks.is_empty();
+        let before_gate = match self
+            .inner
+            .manager
+            .with_invocation(index, |record| {
+                (
+                    capture.then(|| EvaluationSuffix::capture(&record.events)),
+                    record.initiation.clone(),
+                )
+            })
+            .await
+        {
+            Ok((evaluation, initiation)) => evaluation
+                .map_or(Ok(()), |evaluation| {
+                    hooks.before(&session_id, &input, &evaluation)
+                })
+                .map(|()| initiation),
+            Err(error) => Err(AgentError::Storage(error)),
+        };
+        let initiation = match before_gate {
+            Ok(initiation) => initiation,
+            Err(mut error) => {
+                if let Err(storage) = self
+                    .record_undispatched_stop(index, saved_index, work)
+                    .await
+                {
+                    error = AgentError::StorageAfterExecution {
+                        error: storage,
+                        execution_result: Box::new(Err(error)),
+                    }
+                    .bounded();
+                }
+                return match self.inner.manager.finish(index, Err(error.clone())).await {
+                    Ok(()) => Err(error),
+                    Err(storage) => Err(AgentError::StorageAfterExecution {
+                        error: storage,
+                        execution_result: Box::new(Err(error)),
+                    }),
+                }
+                .map_err(AgentError::bounded);
             }
         };
-        if let Err(mut error) = before_gate {
-            if let Err(storage) = self
-                .record_undispatched_stop(index, saved_index, work)
-                .await
-            {
-                error = AgentError::StorageAfterExecution {
-                    error: storage,
-                    execution_result: Box::new(Err(error)),
-                }
-                .bounded();
-            }
-            return match self.inner.manager.finish(index, Err(error.clone())).await {
-                Ok(()) => Err(error),
-                Err(storage) => Err(AgentError::StorageAfterExecution {
-                    error: storage,
-                    execution_result: Box::new(Err(error)),
-                }),
-            }
-            .map_err(AgentError::bounded);
-        }
         let work_generation = self.inner.lifecycle.work_generation();
         let preparation = match self.accept_preparation() {
             Err(error) => Err(error),
@@ -1477,29 +1558,54 @@ impl Agent {
             },
             Err(error) => Err(error),
         };
-        if let Err(mut error) = preparation {
-            if let Err(storage) = self
-                .record_undispatched_stop(index, saved_index, work)
-                .await
-            {
-                error = AgentError::StorageAfterExecution {
-                    error: storage,
-                    execution_result: Box::new(Err(error)),
+        // A turn saved as checked is sent only to a process that asks about
+        // every call it is to check: in Ask mode, its own hooks not allowed.
+        // Read here, after preparation, because a restart re-reads both.
+        let preparation = preparation.and_then(|()| {
+            checked_tools_unsupported(
+                &initiation,
+                self.approval_mode(),
+                attached.session.operation_capabilities(),
+            )
+        });
+        // The notes the saved turn took reach the provider with its message,
+        // read from the conversation's records: the saved request never holds
+        // them, so history and retries see the person's words alone.
+        // Checked again with them: what the provider is handed must fit it,
+        // or the turn fails here with nothing sent.
+        let dispatched = match preparation {
+            Ok(()) => match self.with_taken_notes(index, &input).await {
+                Ok(dispatched) => attached.session.validate(&dispatched).map(|()| dispatched),
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(error),
+        };
+        let dispatched = match dispatched {
+            Ok(dispatched) => dispatched,
+            Err(mut error) => {
+                if let Err(storage) = self
+                    .record_undispatched_stop(index, saved_index, work)
+                    .await
+                {
+                    error = AgentError::StorageAfterExecution {
+                        error: storage,
+                        execution_result: Box::new(Err(error)),
+                    }
+                    .bounded();
                 }
-                .bounded();
+                let result = Err(error);
+                let settled = match self.inner.manager.finish(index, result.clone()).await {
+                    Ok(()) => result,
+                    Err(error) => Err(AgentError::StorageAfterExecution {
+                        error,
+                        execution_result: Box::new(result),
+                    }),
+                };
+                return self
+                    .settle_after_hooks(&hooks, &session_id, &input, index, settled)
+                    .await;
             }
-            let result = Err(error);
-            let settled = match self.inner.manager.finish(index, result.clone()).await {
-                Ok(()) => result,
-                Err(error) => Err(AgentError::StorageAfterExecution {
-                    error,
-                    execution_result: Box::new(result),
-                }),
-            };
-            return self
-                .settle_after_hooks(&hooks, &session_id, &input, index, settled)
-                .await;
-        }
+        };
         let mut events = attached.events.lock().await;
         let mut execution = Box::pin(async {
             self.inner.manager.begin_dispatch(&input.execution_id);
@@ -1511,7 +1617,7 @@ impl Agent {
                     }
                 };
             work.mark_execution_started();
-            let outcome = attached.session.execute(input.clone()).await;
+            let outcome = attached.session.execute(dispatched).await;
             // Capture the existing stop authority with the reply. A later Stop
             // cannot retroactively authorize an earlier cancellation report.
             let cancellation_at_reply = work.cancellation();
@@ -1750,13 +1856,15 @@ impl Agent {
                                     if event.execution_id() == &input.execution_id
                                         && hooks.reviews_permissions() =>
                                 {
-                                    // The hook thread owns only the proposed
-                                    // call, never the review's options.
-                                    Some((tool_id.clone(), call.clone()))
+                                    Some(ProposedReview {
+                                        tool_id: tool_id.clone(),
+                                        call: call.clone(),
+                                        initiation: initiation.clone(),
+                                    })
                                 }
                                 _ => None,
                             };
-                            if let Some((tool_id, call)) = proposed {
+                            if let Some(proposed) = proposed {
                                 drop(events);
                                 // The hook wait cannot poll the message-commit
                                 // deadline, so earlier output is saved first.
@@ -1786,8 +1894,7 @@ impl Agent {
                                 );
                                 decision = run_pre_tool_hook(
                                     hooks.clone(),
-                                    tool_id,
-                                    call,
+                                    proposed,
                                     suffix,
                                     &self.inner.permission_hook_running,
                                     deadline,
@@ -2519,10 +2626,13 @@ mod hook_wait_tests {
         tokio::pin!(execution);
         let decision = run_pre_tool_hook(
             hooks,
-            ToolCallId::new("bash").unwrap(),
-            ToolReviewInput {
-                name: "bash".into(),
-                arguments_json: "{}".into(),
+            ProposedReview {
+                tool_id: ToolCallId::new("bash").unwrap(),
+                call: ToolReviewInput {
+                    name: "bash".into(),
+                    arguments_json: "{}".into(),
+                },
+                initiation: Initiation::owner(),
             },
             EvaluationSuffix::incomplete(),
             &Arc::new(AtomicBool::new(false)),
@@ -2573,10 +2683,13 @@ mod hook_wait_tests {
             };
             let review = run_pre_tool_hook(
                 hooks,
-                ToolCallId::new("bash").unwrap(),
-                ToolReviewInput {
-                    name: "bash".into(),
-                    arguments_json: "{}".into(),
+                ProposedReview {
+                    tool_id: ToolCallId::new("bash").unwrap(),
+                    call: ToolReviewInput {
+                        name: "bash".into(),
+                        arguments_json: "{}".into(),
+                    },
+                    initiation: Initiation::owner(),
                 },
                 EvaluationSuffix::incomplete(),
                 &running,

@@ -12,7 +12,10 @@ use crate::{
             RepositoryOwnership, StoredUserImages,
         },
     },
-    conversation::application::{ConversationAttachments, ConversationRepository},
+    conversation::application::{
+        AccessAction, ConversationAccessPolicyEvaluator, ConversationAttachments,
+        ConversationRepository,
+    },
     core::RunError,
 };
 use nessa_auth::application::ports::Clock;
@@ -32,10 +35,13 @@ pub(super) struct Attachments {
 ///
 /// `conversations` is the conversation context's own repository: beginning an
 /// upload asks it who owns a conversation, and never opens an agent to find out.
+/// `access` is the conversation access policy that answers: an upload acts on
+/// the conversation, and a read back of a held file is `artifact.read`.
 /// `normalizer` is how an uploaded image becomes the image that is kept.
 pub(super) fn attachments(
     root: &Path,
     conversations: Arc<dyn ConversationRepository>,
+    access: Arc<dyn ConversationAccessPolicyEvaluator>,
     normalizer: Arc<dyn ImageNormalizer>,
     clock: Arc<dyn Clock>,
 ) -> Result<Attachments, RunError> {
@@ -47,19 +53,30 @@ pub(super) fn attachments(
         DurableAttachmentAudit::new(root.join("audit"), clock.clone())
             .map_err(|_| RunError::Agent("attachment audit storage is not private".into()))?,
     );
-    let ownership = Arc::new(RepositoryOwnership::new(conversations));
+    let ownership = Arc::new(RepositoryOwnership::new(
+        conversations.clone(),
+        access.clone(),
+        AccessAction::Act,
+    ));
     let service = AttachmentService::new(
         AttachmentDependencies {
             store: store.clone(),
             audit,
-            ownership: ownership.clone(),
+            ownership,
             secrets: Arc::new(OsTicketSecrets),
             normalizer,
             clock,
         },
         AttachmentLimits::default(),
     );
-    let reads = HeldReads::new(store.clone(), ownership);
+    let reads = HeldReads::new(
+        store.clone(),
+        Arc::new(RepositoryOwnership::new(
+            conversations,
+            access,
+            AccessAction::ArtifactRead,
+        )),
+    );
     Ok(Attachments {
         conversations: Arc::new(ConversationHolds::new(service.clone(), reads.clone())),
         reads,

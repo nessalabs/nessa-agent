@@ -21,8 +21,7 @@
 //! paired environment is placed on only while it is connected, so a name
 //! nobody serves is never kept; once placed, the conversation waits for it
 //! to dial in again, and its key's credential is asked before every lease.
-use super::{ConversationError, Environment, EnvironmentFuture};
-use crate::conversation::domain::CommandPolicy;
+use super::{CommandPolicyEvaluator, ConversationError, Environment, EnvironmentFuture};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::agent_execution::leases::{EnvironmentRef, PeerEnvironment};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
@@ -106,9 +105,10 @@ pub(crate) struct Environments {
     /// `None` when this gateway pairs no environments.
     peers: Option<Arc<dyn PairedEnvironments>>,
     placements: Option<Arc<dyn ConversationPlacements>>,
-    /// Which commands an agent may run, and on which hosts; `None` when this
-    /// gateway grants none, and the environment tools are absent.
-    commands: Option<CommandPolicy>,
+    /// Who may run which commands on which hosts, asked of the command
+    /// policy; `None` when this gateway grants none, and the environment
+    /// tools are absent.
+    commands: Option<Arc<dyn CommandPolicyEvaluator>>,
     /// How long an `artifacts_publish` call waits for its file to be kept.
     publish_wait: Duration,
     /// How long an `artifacts_fetch` call waits for its file to be placed.
@@ -158,9 +158,10 @@ impl Environments {
         self
     }
 
-    /// These environments, with commands granted by `policy`.
+    /// These environments, with commands granted as `policy` answers: the
+    /// command policy composition built over the gateway's configuration.
     #[cfg_attr(not(unix), allow(dead_code, reason = "the Unix gateway composes it"))]
-    pub(crate) fn with_commands(mut self, policy: CommandPolicy) -> Self {
+    pub(crate) fn with_commands(mut self, policy: Arc<dyn CommandPolicyEvaluator>) -> Self {
         self.commands = Some(policy);
         self
     }
@@ -191,8 +192,9 @@ impl Environments {
         self.fetch_wait
     }
 
-    /// Which commands an agent may run, and where; `None` when none.
-    pub(crate) fn command_policy(&self) -> Option<&CommandPolicy> {
+    /// Who may run which commands, and where; `None` when this gateway
+    /// grants none.
+    pub(crate) fn command_policy(&self) -> Option<&Arc<dyn CommandPolicyEvaluator>> {
         self.commands.as_ref()
     }
 

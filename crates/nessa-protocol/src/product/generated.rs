@@ -675,6 +675,7 @@ pub struct ConversationView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease: Option<ConversationLease>,
     pub artifacts: Vec<ConversationArtifact>,
+    pub notes: Vec<ConversationNote>,
     #[serde(deserialize_with = "Option::deserialize")]
     pub title: Option<String>,
     pub questions: Vec<ConversationQuestion>,
@@ -986,6 +987,8 @@ pub struct ConversationToolPolicy {
     pub allow: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deny: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_hosts: Option<Vec<String>>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -996,6 +999,8 @@ pub struct ConversationShareParams {
     pub role: ConversationShareRole,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<ConversationToolPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_policy_revision: Option<u64>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1003,6 +1008,8 @@ pub struct ConversationUnshareParams {
     pub conversation_id: String,
     pub request_id: String,
     pub credential_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_policy_revision: Option<u64>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1023,6 +1030,13 @@ pub struct ConversationShare {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationSharesResult {
     pub items: Vec<ConversationShare>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationShareResult {
+    pub request_id: String,
+    pub applied: bool,
+    pub policy_revision: u64,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1707,6 +1721,7 @@ pub struct AgentsSetNativeHooksResult {
 pub struct AgentsListResult {
     pub agents: Vec<AgentOption>,
     pub environments: Vec<String>,
+    pub command_hosts: Vec<String>,
     pub native_hooks: AgentsNativeHooks,
 }
 #[derive(Deserialize, Serialize)]
@@ -2105,11 +2120,20 @@ impl PairingErrorCode {
 pub struct PeerEnrollParams {
     pub address: String,
     pub code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PeerForgetParams {
     pub peer_key: [u8; DeviceKey::LENGTH],
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerRelayParams {
+    pub peer_key: [u8; DeviceKey::LENGTH],
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub relay: Option<String>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -2137,6 +2161,8 @@ pub struct PeerGateway {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receiver_id: Option<String>,
@@ -2150,6 +2176,7 @@ pub enum PeerSyncState {
     Synced,
     Syncing,
     Unreachable,
+    Away,
     Failed,
     Quota,
 }
@@ -2160,6 +2187,7 @@ impl PeerSyncState {
             Self::Synced => "synced",
             Self::Syncing => "syncing",
             Self::Unreachable => "unreachable",
+            Self::Away => "away",
             Self::Failed => "failed",
             Self::Quota => "quota",
         }
@@ -2344,11 +2372,13 @@ impl ConversationSubscriptionErrorCode {
 #[serde(rename_all = "snake_case")]
 pub enum ConversationMessageDelivery {
     RecordOnly,
+    NextTurn,
 }
 impl ConversationMessageDelivery {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::RecordOnly => "record_only",
+            Self::NextTurn => "next_turn",
         }
     }
 }
@@ -2356,13 +2386,69 @@ impl ConversationMessageDelivery {
 #[serde(rename_all = "snake_case")]
 pub enum ConversationMessageState {
     Recorded,
+    Pending,
+    Assigned,
+    Retired,
 }
 impl ConversationMessageState {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Recorded => "recorded",
+            Self::Pending => "pending",
+            Self::Assigned => "assigned",
+            Self::Retired => "retired",
         }
     }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationMessageRetiredReason {
+    Expired,
+    PermissionLost,
+}
+impl ConversationMessageRetiredReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Expired => "expired",
+            Self::PermissionLost => "permission_lost",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationNote {
+    pub message_id: String,
+    pub text: String,
+    pub accepted_at_ms: u64,
+    pub delivery: ConversationMessageDelivery,
+    pub delivery_state: ConversationMessageState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired_reason: Option<ConversationMessageRetiredReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_execution_id: Option<String>,
+    pub author: ConversationNoteAuthor,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationNoteAuthorKind {
+    Owner,
+    Grant,
+}
+impl ConversationNoteAuthorKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+            Self::Grant => "grant",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationNoteAuthor {
+    pub kind: ConversationNoteAuthorKind,
+    pub surface: String,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2379,6 +2465,10 @@ pub struct ConversationMessageReceipt {
     pub message_id: String,
     pub accepted_at_ms: u64,
     pub delivery_state: ConversationMessageState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired_reason: Option<ConversationMessageRetiredReason>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2397,6 +2487,10 @@ pub struct ConversationMessageStatusResult {
     pub accepted_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery_state: Option<ConversationMessageState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired_reason: Option<ConversationMessageRetiredReason>,
 }
 pub const MAX_CHANGE_WATCH_ID_BYTES: usize = 57;
 pub const CHANGE_WATCH_ID_PATTERN: &str =
@@ -2506,6 +2600,7 @@ pub mod product_method {
     pub const PEER_ENROLL: &str = "peer.enroll";
     pub const PEER_LIST: &str = "peer.list";
     pub const PEER_FORGET: &str = "peer.forget";
+    pub const PEER_RELAY: &str = "peer.relay";
     pub const CONVERSATION_WATCH_RECORDS: &str = "conversation.watchRecords";
     pub const CONVERSATION_WATCH_CATALOGUE: &str = "conversation.watchCatalogue";
     pub const CONVERSATION_UNWATCH: &str = "conversation.unwatch";
@@ -2704,7 +2799,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 67
+                items.len() <= 68
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -2787,6 +2882,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "peer.enroll",
     "peer.list",
     "peer.forget",
+    "peer.relay",
     "conversation.watchRecords",
     "conversation.watchCatalogue",
     "conversation.unwatch",
@@ -2833,6 +2929,7 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "peer.enroll"
         | "peer.list"
         | "peer.forget"
+        | "peer.relay"
         | "conversation.share"
         | "conversation.unshare"
         | "conversation.shares" => Some("credential.manage"),

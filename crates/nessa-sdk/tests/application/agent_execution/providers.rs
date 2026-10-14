@@ -186,6 +186,7 @@ pub(super) async fn provider_agent_with_review(
             },
             actor: close_action(),
             initiation: Initiation::owner(),
+            notes: Vec::new(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: vec![review],
             scheduling: Vec::new(),

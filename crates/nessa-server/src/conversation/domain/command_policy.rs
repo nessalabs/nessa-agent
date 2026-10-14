@@ -1,17 +1,14 @@
-//! Which commands a conversation's agent may run, and where (issue #700):
-//! the hosts this gateway grants commands on, and the programs it allows.
+//! Which commands a conversation's agent may run, and where (issue #700), as
+//! this gateway is configured: the hosts it grants commands on, the programs
+//! it allows, and the programs it denies.
 //!
-//! ```text
-//! admit(host, program) ──▶ host granted? ── no ──▶ EnvironmentNotGranted
-//!                          program denied, or not allowed? ── yes ──▶ CommandDenied
-//!                          ──▶ admitted
-//! ```
-//!
-//! Arrows are checks, in order. A program is matched by its file name, the
-//! part after its last `/`, so `/usr/bin/rm` is `rm`. A denial wins over an
-//! allowance, and with an allow-list only a bare name is allowed. This is the gateway's tool policy, not a sandbox: an allowed
-//! program can still run any other it is given as an argument.
-use nessa_sdk::domain::agent_execution::leases::CommandRefusal;
+//! This is configuration, not a decision. Whether a turn may use a host or
+//! run a program there is the command policy's (`CommandPolicyEvaluator`,
+//! ADR 803 step 4), answered by Cedar (`infrastructure::tool_policy::cedar`),
+//! which reads these lists and [`program_name`] as facts. A program is
+//! matched by its file name, the part after its last `/`, so `/usr/bin/rm` is
+//! `rm`. This is the gateway's tool policy, not a sandbox: an allowed program
+//! can still run any other it is given as an argument.
 use std::collections::BTreeSet;
 
 /// The hosts commands are granted on, and the programs allowed there.
@@ -38,9 +35,20 @@ impl CommandPolicy {
         }
     }
 
-    /// Whether commands are granted on `host` at all.
-    pub fn grants(&self, host: &str) -> bool {
-        self.hosts.contains(host)
+    /// The hosts commands are granted on.
+    pub fn hosts(&self) -> &BTreeSet<String> {
+        &self.hosts
+    }
+
+    /// The programs allowed by file name; `None` when there is no allow-list
+    /// and every program not denied is allowed.
+    pub fn allow(&self) -> Option<&BTreeSet<String>> {
+        self.allow.as_ref()
+    }
+
+    /// The programs denied by file name.
+    pub fn deny(&self) -> &BTreeSet<String> {
+        &self.deny
     }
 
     /// The policy as lines, each one fact, in a fixed order: what a digest of
@@ -58,29 +66,11 @@ impl CommandPolicy {
         lines.extend(self.deny.iter().map(|program| format!("deny {program}")));
         lines
     }
-
-    /// Whether `program` may run on `host`, or the refusal it meets.
-    pub fn admit(&self, host: &str, program: &str) -> Result<(), CommandRefusal> {
-        if !self.grants(host) {
-            return Err(CommandRefusal::EnvironmentNotGranted);
-        }
-        let name = program_name(program);
-        // With an allow-list, a program is named bare, and the host finds
-        // it only in absolute search directories outside its workspace, so
-        // a file the agent wrote under an allowed name is not run.
-        let allowed = self
-            .allow
-            .as_ref()
-            .is_none_or(|allow| name == program && allow.contains(name));
-        if !allowed || self.deny.contains(name) {
-            return Err(CommandRefusal::CommandDenied);
-        }
-        Ok(())
-    }
 }
 
-/// A program's file name: what follows its last `/`.
-fn program_name(program: &str) -> &str {
+/// A program's file name: what follows its last `/`, so `/usr/bin/rm` is
+/// `rm`. A fact the command policy is read with, not a decision.
+pub fn program_name(program: &str) -> &str {
     program.rsplit('/').next().unwrap_or(program)
 }
 

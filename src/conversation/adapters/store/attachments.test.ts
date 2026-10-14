@@ -228,6 +228,7 @@ function viewSaying(imageInput: boolean): Read {
   return async (conversationId): Promise<ConversationView> => ({
     conversationId,
     artifacts: [],
+    notes: [],
     approvalMode: "ask",
     approvalModes: [
       { id: "ask", name: "Provider asks", description: "Provider asks where required." },
