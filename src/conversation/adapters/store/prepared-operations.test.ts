@@ -24,9 +24,11 @@ import {
   setActive,
   setDraft,
   submissionStarted,
+  submissionAccepted,
   stopGenerating,
   type Control,
 } from "./slice"
+import { PreparedOperationTable } from "./prepared-operation-table"
 
 const first = "00000000-0000-4000-8000-000000000001"
 const second = "00000000-0000-4000-8000-000000000002"
@@ -212,6 +214,37 @@ it("retry consumes the original immutable mode, action and message after edits a
   )
 })
 
+it.each([
+  ["unknown", false, true],
+  ["unknown", true, true],
+  ["accepted", true, true],
+  ["accepted", false, false],
+] as const)(
+  "retention: receipt=%s inflight=%s retained=%s",
+  (receipt, inflight, retained) => {
+    const prepared = prepareSubmission({
+      conversationId: first,
+      executionId: "execution",
+      requestId: "request",
+      mode: "queued",
+      text: "original",
+      attachments: [],
+      files: [],
+    })
+    const operation = { prepared, stopRequested: false, inflight }
+    const table = new PreparedOperationTable()
+    table.set("c0", prepared.executionId, operation)
+
+    table.prune([
+      {
+        id: "c0",
+        turns: [{ from: "user", executionId: prepared.executionId, receipt }],
+      },
+    ])
+    expect(table.get("c0", prepared.executionId)).toBe(retained ? operation : undefined)
+  },
+)
+
 it.each(["conversation", "execution"] as const)(
   "a mismatched %s receipt remains unknown and retries the original value (PS10)",
   async (field) => {
@@ -274,6 +307,7 @@ it("stop during retry admission reaches its captured target immediately and afte
     controlConversation({ id: "c0", control: { kind: "retry", target } }),
   )
   await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+  store.dispatch(submissionAccepted({ id: "c0", executionId: target.executionId }))
   const stopping = store.dispatch(stopGenerating())
   expect(stop).toHaveBeenCalledOnce()
   await stopping

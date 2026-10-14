@@ -27,6 +27,7 @@ import {
   verdictOf,
 } from "./lib/cli.mjs"
 import { functionalPreviewEnv, target } from "./lib/server.mjs"
+import { argsForCheck } from "./lib/run-all-args.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 // workspace-load.mjs stays off this list. CHECKLIST.md › Seeded workspace load.
@@ -185,18 +186,12 @@ try {
       continue
     }
     const out = join(dir, `${check}.json`)
-    const args = [...passThrough(), "--out", out]
-    if (!sharesPage(check)) {
-      if (check === "perf-budget" && options.url) args.push("--url", options.url)
-      if (options.runs) args.push("--runs", options.runs)
-      if (check === "message-sync" || check === "committed-transcript")
-        args.push("--mode", "prod")
-    } else {
-      args.push("--url", page.url)
-      // The shared page is already started. The child must still hear prod,
-      // or a step that needs the dev server's modules reports could-not-run.
-      if (page.mode === "dev" || page.mode === "prod") args.push("--mode", page.mode)
-    }
+    const args = argsForCheck(check, options, {
+      base: passThrough(),
+      out,
+      page,
+      sharesPage: sharesPage(check),
+    })
     log(`\n=== ${check}`)
     verbose(options, `node ${check}.mjs ${args.join(" ")}`)
     const { code, seconds } = await run(check, args)
