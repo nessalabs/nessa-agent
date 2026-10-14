@@ -23,4 +23,6 @@ pub use ports::{
     GatewayStopRequest, GatewayStopSession, LoginShellError, LoginShellPath, MonotonicClock,
     ReconciledGateway, StartupStep, SystemMonotonicClock,
 };
+#[cfg(any(target_os = "macos", test))]
+pub use ports::{DeferredStageLaunch, DeferredStageReporter};
 pub use service::{Gateway, GatewayRuntimeDependencies};

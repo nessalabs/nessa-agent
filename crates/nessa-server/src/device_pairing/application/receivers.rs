@@ -74,9 +74,29 @@ pub enum ReceiverError {
     NotPaired,
 }
 
+/// Held across a receiver write and the credential publish that follows it.
+/// Dropping it releases the lock. A test double may hold no file.
+pub struct PublicationGuard {
+    _file: Option<std::fs::File>,
+}
+
+impl PublicationGuard {
+    pub fn held(file: std::fs::File) -> Self {
+        Self { _file: Some(file) }
+    }
+
+    /// No file. Test doubles that do not share a namespace use this.
+    pub fn none() -> Self {
+        Self { _file: None }
+    }
+}
+
 /// The canonical receiver authority, as device enrollment reaches it. Calls run
 /// on the caller's thread: enrollment work is already on a blocking worker.
 pub trait PairingReceivers: Send + Sync {
+    /// Exclusive lock held from a receiver write through the credential
+    /// publish. Export takes the same file while it snapshots both stores.
+    fn lock_publication(&self) -> Result<PublicationGuard, ReceiverError>;
     /// Pair a receiver for this stage. A repeat of the same stage returns the
     /// original receipt, with no second receiver or epoch.
     fn pair(&self, request: &ReceiverRequest) -> Result<ReceiverOutcome, ReceiverError>;

@@ -162,6 +162,12 @@ impl PairingOwner<'_> {
         session: &AuthenticatedSession,
         stage: &StageOwnership,
     ) -> Result<PairingRecord, ActivationError> {
+        // Held through the credential publish. Export snapshots the receiver
+        // authority and the registry under this same lock.
+        let _publication = self
+            .receivers
+            .lock_publication()
+            .map_err(ActivationError::Receiver)?;
         let mut current = stage.current().map_err(store)?;
         let id = current.id();
         let request = ReceiverRequest::for_stage(&current).ok_or_else(conflict)?;
