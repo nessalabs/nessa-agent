@@ -8,12 +8,22 @@
 import { appWidget } from "../../widgets/app/model/app-ref"
 import type { WorkspaceFailureReason } from "./failure"
 import type { WidgetRef } from "../../widgets/model/widget-ref"
-import type { HistoryExtent, Note } from "../../../conversation"
+import type {
+  HistoryExtent,
+  Note,
+  ImageReferencePart,
+  LinkedFileReferencePart,
+} from "../../../conversation"
 
 export type StepKind = "read" | "edit" | "run" | "search"
 
 export type Part =
   | { readonly kind: "text"; readonly text: string }
+  /** Sent inputs retain references, distinct from files the agent published. */
+  | {
+      readonly kind: "attachments"
+      readonly content: readonly (ImageReferencePart | LinkedFileReferencePart)[]
+    }
   | {
       readonly kind: "step"
       readonly step: StepKind

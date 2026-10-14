@@ -40,7 +40,7 @@ export function MessageImages({
   content,
   conversationId,
 }: {
-  content: MessageContent
+  content: Readonly<MessageContent>
   /** The gateway's identity for the conversation, to read referenced images from. */
   conversationId?: string
 }) {

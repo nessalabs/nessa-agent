@@ -21,12 +21,15 @@
 import {
   clientDueAtMs,
   type ConversationMessageApp,
+  type ImageAttachment,
+  type LinkedFile,
   type ConversationPermission,
   type ConversationSummary,
   type ConversationTool,
   type ConversationView,
 } from "@nessa/client"
 import {
+  referencedContent,
   historyExtent,
   placeNotes,
   placePublished,
@@ -281,6 +284,21 @@ function writtenBy(app: ConversationMessageApp | undefined): { app?: MessageApp 
   return app ? { app: { server: app.server, tool: app.tool } } : {}
 }
 
+/** Input references use the conversation owner's mapping, without reconstructed metadata. */
+function inputParts(
+  text: string,
+  images: readonly ImageAttachment[],
+  files: readonly LinkedFile[],
+): Part[] {
+  const content = referencedContent("", images, files).filter(
+    (part) => part.type === "image-reference" || part.type === "file-reference",
+  )
+  return [
+    { kind: "text", text },
+    ...(content.length ? [{ kind: "attachments" as const, content }] : []),
+  ]
+}
+
 /**
  * A conversation view as the session's transcript, at the revision the
  * adapter minted for it. `seen` answers when the adapter first saw a message
@@ -375,7 +393,7 @@ export function transcriptFrom(
       id: input,
       role: "user",
       at: seen(input),
-      parts: [{ kind: "text", text: turn.userText }],
+      parts: inputParts(turn.userText, turn.attachments, turn.files),
       ...writtenBy(turn.app),
     }
     const parts: Part[] = []
@@ -445,7 +463,7 @@ export function transcriptFrom(
       id: input,
       role: "user",
       at: seen(input),
-      parts: [{ kind: "text", text: waiting.text }],
+      parts: inputParts(waiting.text, waiting.attachments, waiting.files),
       // Waiting, it is labelled as it will be once it is a turn (D-H).
       ...writtenBy(waiting.app),
     })
