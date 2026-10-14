@@ -27,7 +27,8 @@ owns the #324 ordering table and platform evidence boundaries.
 | `tests/support/physical_operation.rs` | Source-included cfg(test)-only actual adapter capture observations and OS watchdog fixtures; no execution/admission policy. |
 | `src/retained_directory.rs` | `PrivateDirectory`, native entry snapshots, origin-bound temporary files, and typed publication evidence. |
 | `src/unix/retained_directory.rs` | Retained directory descriptors through private roots or safe absolute locator ancestry, independent `openat(".")` enumeration cursors, identity checks, exclusive publication, atomic replacement, cleanup, and directory sync. |
-| `src/windows/retained_directory.rs` | Top-down non-delete-sharing directory handles, transient identity probes, handle enumeration, `FileRenameInfo` exclusive publication/replacement, and handle disposition cleanup. |
+| `src/windows.rs` | Path-based private Win32 storage and the shared handle rename encoder: exclusive publication or POSIX replacement that retains delete-sharing readers. |
+| `src/windows/retained_directory.rs` | Top-down non-delete-sharing directory handles, transient identity probes, handle enumeration, delegation to the shared rename encoder, and handle disposition cleanup. |
 | `tests/retained_directory.rs` | Cross-platform authority, enumeration, publication, cleanup, replacement, and native Windows handle-lifetime coverage. |
 | `tests/windows_replacement.rs` | Native Windows path-based replacement with retained readers, denied delete sharing, and read-only destinations (#874). |
 
