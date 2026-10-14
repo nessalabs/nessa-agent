@@ -744,13 +744,25 @@ fn audit_maps_explicit_close_without_claiming_physical_cleanup() {
     assert!(value.get("resourcesConfirmed").is_none());
 }
 
+fn decline_record(
+    id: ReviewDeclineId,
+    decline: ReviewDecline,
+    delivery: PermissionAnswerDelivery,
+    rule: Option<ApprovalRuleReference>,
+) -> Result<ReviewDeclineRecord, AgentError> {
+    let mut controller = ExecutionController::new(ExecutionSessionId::new("session").unwrap());
+    let execution = ExecutionId::new("run").unwrap();
+    controller.begin_execution(execution.clone())?;
+    controller
+        .decline_review(&execution, id, decline, rule)
+        .map(|selected| selected.with_delivery(delivery))
+}
+
 #[test]
 fn audit_maps_a_declined_review_as_a_claim_about_a_tool_nobody_was_offered() {
     let declined = |tool, reason, delivery| {
         record_value(&ExecutionAuditRecord::ReviewDeclined(
-            ReviewDeclineRecord::new(
-                ExecutionSessionId::new("session").unwrap(),
-                ExecutionId::new("run").unwrap(),
+            decline_record(
                 ReviewDeclineId::new("1").unwrap(),
                 ReviewDecline::new(
                     tool,
@@ -812,9 +824,7 @@ fn audit_maps_a_declined_review_as_a_claim_about_a_tool_nobody_was_offered() {
 fn audit_maps_a_stopping_refusal_as_the_cause_of_the_stop() {
     let rule = ApprovalRuleReference::new("refuse-shell", "3", actor()).unwrap();
     let value = record_value(&ExecutionAuditRecord::ReviewDeclined(
-        ReviewDeclineRecord::new(
-            ExecutionSessionId::new("session").unwrap(),
-            ExecutionId::new("run").unwrap(),
+        decline_record(
             ReviewDeclineId::new("9").unwrap(),
             ReviewDecline::new(
                 Some("Bash"),
@@ -836,9 +846,7 @@ fn audit_maps_a_stopping_refusal_as_the_cause_of_the_stop() {
     assert!(value.get("actor").is_none());
 
     let closed = record_value(&ExecutionAuditRecord::ReviewDeclined(
-        ReviewDeclineRecord::new(
-            ExecutionSessionId::new("session").unwrap(),
-            ExecutionId::new("run").unwrap(),
+        decline_record(
             ReviewDeclineId::new("9").unwrap(),
             ReviewDecline::new(
                 None,
