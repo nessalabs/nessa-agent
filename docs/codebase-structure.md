@@ -236,7 +236,10 @@ against a private scripted gateway.
   `WorkspaceSource` port and pure use cases over the workspace's state),
   `adapters/` (the Redux slice, commands, effects, typed hooks, selectors and
   the split panes' source in `store/`; the gateway's source and its mapping
-  of conversation views in `gateway/`; the in-memory source in `in-memory/`;
+  of conversation views in `gateway/` (its `fake-gateway.ts` keeps SDK-typed
+  answer records and captured callbacks for tests and the
+  [app-review fixture](design/app-review-verification.md)); the in-memory
+  source in `in-memory/`;
   focus, Escape for the widget in front (`widget-escape.ts`), the panes'
   room, what the workspace adds to a drag, first-send motion (`arrival.ts`),
   keys and the clock in `dom/`; the
