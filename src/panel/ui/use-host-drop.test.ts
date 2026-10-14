@@ -25,6 +25,7 @@ vi.mock("../../host", () => ({ onAttachmentDragging, onAttachmentDropped }))
 
 import { useHostDrop } from "./use-host-drop"
 import type { AttachmentDestination } from "./use-file-attachments"
+import type { ChosenFile } from "../../host"
 
 type Dropped = Parameters<Parameters<typeof onAttachmentDropped>[0]>[0]
 
@@ -45,8 +46,6 @@ const destination = (conversationId: string) =>
 const bound = new Map<string, AttachmentDestination>()
 const currentDestination = destination("focused")
 const actions = {
-  owner: {},
-  resources: {},
   captureDestination: vi.fn(() => currentDestination),
   addChosenFiles: vi.fn(),
   consumeDropDestination: vi.fn((batch: string) => {
@@ -66,8 +65,8 @@ let container: HTMLElement
 let root: Root
 let dragging: boolean
 
-function Surface() {
-  dragging = useHostDrop(actions).dragging
+function Surface({ value = actions }: { value?: typeof actions }) {
+  dragging = useHostDrop(value).dragging
   return null
 }
 
@@ -137,6 +136,51 @@ it("sends dropped files down the same route a picked selection takes", async () 
   expect(actions.pasteAttachment).not.toHaveBeenCalled()
   expect(actions.addImageUrl).not.toHaveBeenCalled()
   expect(actions.refuse).not.toHaveBeenCalled()
+})
+
+it("keeps one host subscription across owner replacement and ignores it after unmount", async () => {
+  let resolveRegistration!: () => void
+  const registration = new Promise<void>((resolve) => (resolveRegistration = resolve))
+  onAttachmentDragging.mockImplementation(() => registration.then(() => () => {}))
+  onAttachmentDropped.mockImplementation((handler: (dropped: Dropped) => void) => {
+    deliver = handler
+    return registration.then(() => () => {})
+  })
+
+  let received: AttachmentDestination | undefined
+  const replacement = {
+    ...actions,
+    captureDestination: vi.fn(() => destination("replacement")),
+    consumeDropDestination: vi.fn(() => destination("replacement")),
+    addChosenFiles: vi.fn(
+      (_chosen: readonly ChosenFile[], target: AttachmentDestination) => {
+        received = target
+      },
+    ),
+  }
+  await act(async () => {
+    root.render(React.createElement(Surface, { value: replacement }))
+  })
+  expect(onAttachmentDragging).toHaveBeenCalledTimes(1)
+  expect(onAttachmentDropped).toHaveBeenCalledTimes(1)
+
+  resolveRegistration()
+  await act(async () => registration)
+  const listener = deliver
+  await act(async () =>
+    listener(dropOf({ files: [file("late.pdf", "application/pdf")] })),
+  )
+  expect(received?.conversationId).toBe("replacement")
+  expect(replacement.addChosenFiles).toHaveBeenCalledWith(
+    [file("late.pdf", "application/pdf")],
+    expect.objectContaining({ conversationId: "replacement" }),
+  )
+
+  await act(async () => root.unmount())
+  await act(async () =>
+    listener(dropOf({ files: [file("after-unmount.pdf", "application/pdf")] })),
+  )
+  expect(replacement.addChosenFiles).toHaveBeenCalledTimes(1)
 })
 
 it("pastes dragged prose, which no longer reaches the page any other way", async () => {

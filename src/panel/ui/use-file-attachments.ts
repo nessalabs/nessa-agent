@@ -148,10 +148,12 @@ export function useFileAttachments(
    * draft restored after a refused send brings its files back under the same
    * identities, so a refusal that had been answered came back with them.
    */
-  const [refused, setRefused] = React.useState<{
-    destination: AttachmentDestination
-    refusal: AttachmentRefusal
-  } | null>(null)
+  const [refused, setRefused] = React.useState<
+    ReadonlyMap<
+      string,
+      { destination: AttachmentDestination; refusal: AttachmentRefusal }
+    >
+  >(new Map())
   const [viewed, setViewed] = React.useState<{
     destination: AttachmentDestination
     placementId: string
@@ -162,8 +164,9 @@ export function useFileAttachments(
    * dropped into, so its refusal is not shown above another draft quoting
    * another draft's bounds.
    *
-   * Replaces whatever was there. There is one of these at a time, and it is
-   * always the most recent thing the panel turned away.
+   * Kept by local conversation within the live provider scope. A delayed
+   * refusal for an open inactive tab remains there until that tab is shown
+   * again; a refusal for a retired provider or a closed tab has no owner.
    */
   const refuse = React.useCallback(
     (
@@ -173,13 +176,33 @@ export function useFileAttachments(
       const destination = typeof target === "string" ? currentDestination(target) : target
       if (
         !destinationIsCurrent(destination) ||
-        destination.conversationId !== activeId.current
+        !conversationsOf(destination).some(
+          (conversation) => conversation.id === destination.conversationId,
+        )
       )
         return
-      setRefused({ destination, refusal })
+      setRefused((current) => {
+        const next = new Map(current)
+        next.set(destination.conversationId, { destination, refusal })
+        return next
+      })
     },
     [currentDestination, destinationIsCurrent],
   )
+  React.useEffect(() => {
+    const open = new Set(chat.conversations.map((conversation) => conversation.id))
+    setRefused((current) => {
+      const next = new Map(
+        [...current].filter(
+          ([id, entry]) =>
+            entry.destination.store === store &&
+            entry.destination.resources === resources &&
+            open.has(id),
+        ),
+      )
+      return next.size === current.size ? current : next
+    })
+  }, [chat.conversations, resources, store])
   React.useEffect(() => {
     const operations = operationsRef.current
     const drops = dropDestinations.current
@@ -249,7 +272,7 @@ export function useFileAttachments(
       void batch.then((stop) => stop())
       void subscription.then((stop) => stop())
     }
-  }, [currentDestination, destinationForBatch, refuse, resources, store])
+  }, [currentDestination, destinationForBatch, refuse])
   React.useEffect(() => {
     if (
       viewed &&
@@ -296,19 +319,23 @@ export function useFileAttachments(
    * refusal must be what survives the pair.
    */
   const answerRefusal = (destination: AttachmentDestination) =>
-    setRefused((current) =>
-      current?.destination.store === destination.store &&
-      current.destination.resources === destination.resources &&
-      current.destination.conversationId === destination.conversationId
-        ? null
-        : current,
-    )
+    setRefused((current) => {
+      const entry = current.get(destination.conversationId)
+      if (
+        entry?.destination.store !== destination.store ||
+        entry.destination.resources !== destination.resources
+      )
+        return current
+      const next = new Map(current)
+      next.delete(destination.conversationId)
+      return next
+    })
   /** Said only to the conversation it was said about. */
+  const activeRefusal = refused.get(chat.active.id)
   const refusal =
-    refused?.destination.store === store &&
-    refused.destination.resources === resources &&
-    refused.destination.conversationId === chat.active.id
-      ? refused.refusal
+    activeRefusal?.destination.store === store &&
+    activeRefusal.destination.resources === resources
+      ? activeRefusal.refusal
       : null
   /**
    * Put files on a draft, whatever route they came in by.
@@ -758,10 +785,7 @@ export function useFileAttachments(
      * being shown.
      */
     draftSent: (id: string) => answerRefusal(currentDestination(id)),
-    clearRefusal: () =>
-      setRefused((current) =>
-        current && destinationIsCurrent(current.destination) ? null : current,
-      ),
+    clearRefusal: () => answerRefusal(currentDestination()),
     addFiles,
     addImageUrl,
     consumeDropDestination,

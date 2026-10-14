@@ -46,6 +46,7 @@ import {
   closeConversation,
   openConversation,
   scenarioEffects,
+  setActive,
   useConversation,
   MAX_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENTS,
@@ -847,6 +848,41 @@ it("keeps refusals with the actual store when the mounted provider changes", asy
   const refusalB = hook.refusal
   await act(async () => refuseFromA({ reason: "too-many-files" }))
   expect(hook.refusal).toEqual(refusalB)
+})
+
+it("keeps delayed refusals by open conversation and answers only that conversation", async () => {
+  const firstId = chat.active.id
+  const firstDestination = hook.captureDestination()
+  await act(async () => store.dispatch(openConversation()))
+  const secondId = chat.active.id
+  const secondDestination = hook.captureDestination()
+  expect(secondId).not.toBe(firstId)
+
+  // This result belongs to the still-open first tab, even though the second
+  // tab is active when it arrives.
+  await act(async () => hook.refuse({ reason: "too-many-files" }, firstDestination))
+  expect(hook.refusal).toBeNull()
+  await act(async () =>
+    hook.refuse({ reason: "file-too-large", files: [] }, secondDestination),
+  )
+  expect(hook.refusal).toEqual({ reason: "file-too-large", files: [] })
+
+  await act(async () => store.dispatch(setActive(firstId)))
+  expect(hook.refusal).toEqual({ reason: "too-many-files" })
+  await act(async () => store.dispatch(setActive(secondId)))
+  expect(hook.refusal).toEqual({ reason: "file-too-large", files: [] })
+
+  await act(async () => hook.draftSent(firstId))
+  expect(hook.refusal).toEqual({ reason: "file-too-large", files: [] })
+  await act(async () => store.dispatch(setActive(firstId)))
+  expect(hook.refusal).toBeNull()
+
+  // Closing a tab prunes its still-unanswered notice without disturbing B.
+  await act(async () => hook.refuse({ reason: "too-many-files" }, firstDestination))
+  expect(hook.refusal).toEqual({ reason: "too-many-files" })
+  await act(async () => store.dispatch(closeConversation(firstId)))
+  expect(chat.active.id).toBe(secondId)
+  expect(hook.refusal).toEqual({ reason: "file-too-large", files: [] })
 })
 
 it("keeps an older image read in its store and its finally out of the newer operation", async () => {
