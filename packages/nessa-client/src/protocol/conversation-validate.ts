@@ -184,6 +184,9 @@ export function conversationCommandReceipt(
       "withdrawn",
       "cancelled",
       "already_final",
+      "no_effect",
+      "refused_after_save",
+      "unavailable_after_save",
     ])
   return item as { requestId: string; stage: string; outcome?: string }
 }

@@ -115,7 +115,7 @@ fn kind(record: &PeerAuditRecord) -> &'static str {
     }
 }
 impl PeerAudit for Audit {
-    fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'_> {
+    fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'static> {
         if *self.refuse.lock().unwrap() == Some(kind(&record)) {
             return Box::pin(async { Err(PeerAuditUnavailable) });
         }
