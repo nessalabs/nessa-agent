@@ -259,6 +259,7 @@ pub use service::{
     McpAppResource, QuestionChoiceInput, ReadOpening, RequestedAgent, RequestedConversation,
     SubmissionMode, MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
 };
+pub(crate) use service::{ExportAdmission, ExportHoldFailure};
 pub use service::{
     FetchAnswer, FetchCall, FetchCallRefusal, PublishAnswer, PublishCall, PublishCallRefusal,
     FETCH_BUSY_BACKOFF, FETCH_READS,

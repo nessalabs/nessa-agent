@@ -19,6 +19,8 @@ use super::{
     GatewayStopRequest, GatewayStopSession, LoginShellPath, MonotonicClock, ReconciledGateway,
     ReconciliationHistoryFact, StartupStep,
 };
+#[cfg(any(target_os = "macos", test))]
+use super::{DeferredStageLaunch, DeferredStageReporter};
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, BundledSurface, LifecycleCommandResult, LifecycleEffect,
     LifecycleEffectPredicate, LifecycleFailedPhase, LifecycleObservation,
@@ -64,6 +66,10 @@ enum JournalState {
 
 struct AttemptState {
     settlement: Option<AttemptSettlement>,
+    /// Set once the gateway is ready and a deferred publication may still be
+    /// running. Surface waiters return here. The receipt stays unsettled until
+    /// that publication's real completion is journaled.
+    surface_ready: bool,
     waiters: usize,
 }
 
@@ -223,6 +229,7 @@ impl AttemptReceipt {
             request,
             state: Mutex::new(AttemptState {
                 settlement: None,
+                surface_ready: false,
                 waiters: 0,
             }),
             settled: Condvar::new(),
@@ -260,7 +267,38 @@ impl AttemptReceipt {
     }
 
     fn wait(&self) -> Result<(), GatewayError> {
-        self.wait_settlement()?.reported
+        let mut state = self.state.lock().map_err(|_| state_unavailable())?;
+        state.waiters += 1;
+        self.settled.notify_all();
+        loop {
+            if let Some(settlement) = &state.settlement {
+                return settlement.reported.clone();
+            }
+            // A deferred publication keeps this receipt until the copy is
+            // journaled. Endpoint and credential reads return at Ready.
+            if state.surface_ready {
+                return Ok(());
+            }
+            state = self.settled.wait(state).map_err(|_| state_unavailable())?;
+        }
+    }
+
+    fn release_surface(&self) -> Result<(), GatewayError> {
+        let mut state = self.state.lock().map_err(|_| state_unavailable())?;
+        state.surface_ready = true;
+        self.settled.notify_all();
+        Ok(())
+    }
+
+    /// The attempt has published Ready and is still finishing deferred work.
+    ///
+    /// Quit reads this instead of waiting for settlement. A later attempt that
+    /// is only starting has not released the surface, so it still waits.
+    fn surface_released(&self) -> bool {
+        self.state
+            .lock()
+            .map(|state| state.surface_ready)
+            .unwrap_or(false)
     }
 
     fn wait_physical_until(
@@ -289,21 +327,6 @@ impl AttemptReceipt {
             .ok_or_else(state_unavailable)?
             .physical
             .clone()
-    }
-
-    fn wait_settlement(&self) -> Result<AttemptSettlement, GatewayError> {
-        let mut state = self.state.lock().map_err(|_| state_unavailable())?;
-        state.waiters += 1;
-        self.settled.notify_all();
-        let settlement = self
-            .settled
-            .wait_while(state, |state| state.settlement.is_none())
-            .map_err(|_| state_unavailable())?;
-        settlement
-            .settlement
-            .as_ref()
-            .cloned()
-            .ok_or_else(state_unavailable)
     }
 
     fn settle(&self, result: AttemptSettlement) -> Result<(), GatewayError> {
@@ -353,15 +376,42 @@ struct StartupProgress {
         )
     )]
     events: Arc<dyn GatewayStartupEvents>,
-    #[cfg_attr(
-        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
-        expect(
-            dead_code,
-            reason = "native reconciliation is supported only on macOS and Linux"
-        )
-    )]
+    // Read on every platform: quit yields this session's writer gate while a
+    // deferred copy runs. The other fields stay macOS and Linux only.
     journal: Arc<dyn GatewayReconciliationJournalSession>,
     state: Arc<Mutex<ProgressState>>,
+    deferred_stage: Mutex<Option<DeferredStageWait>>,
+}
+
+struct DeferredStageWait {
+    plan_id: String,
+    step_id: String,
+    fingerprint: String,
+    #[cfg(any(target_os = "macos", test))]
+    launch: DeferredStageLaunch,
+}
+
+impl DeferredStageWait {
+    /// The publication result. The copy starts here, after the plan was accepted.
+    fn publication_result(&mut self) -> Result<(), String> {
+        #[cfg(any(target_os = "macos", test))]
+        {
+            let (reporter, result) = DeferredStageReporter::pair();
+            self.launch.start(reporter);
+            result.recv().unwrap_or_else(|_| {
+                Err("deferred runtime publication ended without a result".into())
+            })
+        }
+        #[cfg(not(any(target_os = "macos", test)))]
+        {
+            Err("deferred runtime publication is unavailable".into())
+        }
+    }
+}
+
+struct StartupRestore {
+    startup: GatewayStartup,
+    ready_gateway: Option<ReconciledGateway>,
 }
 
 #[derive(Clone)]
@@ -671,6 +721,148 @@ impl GatewayReconciliationProgress for StartupProgress {
         state.pending_observation = None;
         state.latest_observation = Some(observation.clone());
         Ok(observation)
+    }
+
+    #[cfg(any(target_os = "macos", test))]
+    fn begin_deferred_stage(
+        &self,
+        fingerprint: &str,
+        launch: DeferredStageLaunch,
+    ) -> Result<(), GatewayError> {
+        // The plan is written later, after this attempt's other effects. A
+        // plan recorded here would stay pending and block every later effect.
+        // `launch` stays uncalled until that plan is accepted.
+        *self
+            .deferred_stage
+            .lock()
+            .map_err(|_| state_unavailable())? = Some(DeferredStageWait {
+            plan_id: "stage-runtime".into(),
+            step_id: "primary".into(),
+            fingerprint: fingerprint.to_owned(),
+            launch,
+        });
+        Ok(())
+    }
+}
+
+impl StartupProgress {
+    fn take_deferred_stage(&self) -> Option<DeferredStageWait> {
+        self.deferred_stage.lock().ok()?.take()
+    }
+}
+
+fn publish_ready_while_stage_finishes(
+    executor: &ReconciliationExecutor,
+    receipt: &Arc<AttemptReceipt>,
+    gateway: &ReconciledGateway,
+) -> Option<StartupRestore> {
+    let Ok(mut current) = executor.lifecycle.lock() else {
+        return None;
+    };
+    let owns = current
+        .running
+        .as_ref()
+        .is_some_and(|running| Arc::ptr_eq(running, receipt));
+    if !owns {
+        return None;
+    }
+    let previous = StartupRestore {
+        startup: current.startup.clone(),
+        ready_gateway: current.ready_gateway.clone(),
+    };
+    current.ready_gateway = Some(gateway.clone());
+    current.startup = current.startup.next(GatewayStartupPhase::Ready);
+    let startup = current.startup.clone();
+    // Same critical section as Ready, so quit cannot observe the phase
+    // without the surface flag that lets it skip this receipt.
+    let _ = receipt.release_surface();
+    drop(current);
+    publish(&executor.startup_events, &startup);
+    Some(previous)
+}
+
+fn restore_startup(executor: &ReconciliationExecutor, previous: StartupRestore) {
+    if let Ok(mut current) = executor.lifecycle.lock() {
+        // Ready may already have been published at `current`'s revision. The
+        // restored phase keeps that revision so the Failed publish that follows
+        // is strictly newer. This snapshot is not published.
+        let revision = current.startup.revision().max(previous.startup.revision());
+        current.startup = previous.startup.at_revision(revision);
+        current.ready_gateway = previous.ready_gateway;
+    }
+}
+
+fn plan_deferred_stage(
+    progress: &StartupProgress,
+    deferred: &DeferredStageWait,
+    physical: &Result<ReconciledGateway, GatewayError>,
+) -> Result<(), GatewayError> {
+    let step = LifecyclePlanStep::new(
+        deferred.step_id.clone(),
+        LifecycleEffect::StageRuntime {
+            fingerprint: deferred.fingerprint.clone(),
+        },
+        LifecycleEffectPredicate::Always,
+    )
+    .map_err(|error| audit_around(GatewayError::Registration(error.to_string()), physical))?;
+    // No cleanup. An interrupted plan is settled without replay; a prune
+    // owed here could remove the directory the staging thread still holds.
+    progress
+        .effect_planned(&deferred.plan_id, &step, &[])
+        .map_err(|error| audit_around(error, physical))?;
+    Ok(())
+}
+
+fn complete_deferred_stage(
+    progress: &StartupProgress,
+    host: &dyn GatewayHost,
+    deferred: &DeferredStageWait,
+    physical: &Result<ReconciledGateway, GatewayError>,
+    stage_result: Result<(), String>,
+) -> Result<(), GatewayError> {
+    let completion = match &stage_result {
+        Ok(()) => LifecycleCommandResult::Accepted,
+        Err(error) => LifecycleCommandResult::Failed(error.clone()),
+    };
+    if let Err(error) = progress.effect_completed(&deferred.plan_id, &deferred.step_id, &completion)
+    {
+        return Err(audit_around(error, physical));
+    }
+    let incarnation = match physical {
+        Ok(gateway) => Some(
+            gateway
+                .audit_identity()
+                .map_err(|error| audit_around(error, physical))?,
+        ),
+        Err(_) => None,
+    };
+    let present = host
+        .published_runtime_is_present(&deferred.fingerprint)
+        .map_err(|error| audit_around(error, physical))?;
+    progress
+        .physical_observed(
+            &LifecycleObservationSource::Effect {
+                plan_id: deferred.plan_id.clone(),
+                step_id: deferred.step_id.clone(),
+            },
+            incarnation,
+            present,
+        )
+        .map_err(|error| audit_around(error, physical))?;
+    Ok(())
+}
+
+fn audit_around(
+    error: GatewayError,
+    physical: &Result<ReconciledGateway, GatewayError>,
+) -> GatewayError {
+    let physical = match physical {
+        Ok(_) => GatewayPhysicalResult::Succeeded,
+        Err(error) => GatewayPhysicalResult::Failed(Box::new(error.clone())),
+    };
+    GatewayError::Audit {
+        audit: error.to_string(),
+        physical: Some(physical),
     }
 }
 
@@ -1188,7 +1380,20 @@ impl Gateway {
                 .lifecycle
                 .lock()
                 .map_err(|_| GatewayError::NotReconciled)?;
-            let Some(attempt) = lifecycle.running.clone() else {
+            let running = lifecycle.running.clone();
+            // Deferred publication leaves this receipt running after Ready.
+            // The copy is not the stop. A later attempt that has not released
+            // the surface still waits, even if an older ready identity remains.
+            if matches!(lifecycle.startup.phase(), GatewayStartupPhase::Ready)
+                && running
+                    .as_ref()
+                    .is_some_and(|attempt| attempt.surface_released())
+            {
+                if let Some(ready) = lifecycle.ready_gateway.clone() {
+                    break ready;
+                }
+            }
+            let Some(attempt) = running else {
                 break lifecycle
                     .retained_gateway
                     .clone()
@@ -1755,34 +1960,52 @@ fn execute_attempt(
         }),
     };
     let mut journal = open_journal();
-    let restored = journal.as_ref().ok().cloned();
-    if let Some(recovery) = restored.as_ref().and_then(|session| session.recovery()) {
-        if let Some(restored) = restored {
-            let recovery_result = catch_unwind(AssertUnwindSafe(|| {
-                executor.host.recover(&recovery, restored.as_ref())
-            }))
-            .unwrap_or_else(|_| {
-                Err(GatewayError::Registration(
-                    "gateway host panicked during lifecycle recovery".into(),
-                ))
-            });
-            drop(restored);
-            drop(journal);
-            journal = match recovery_result {
-                Ok(()) => open_journal(),
-                Err(error) => Err(error),
-            };
-            if journal
-                .as_ref()
-                .ok()
-                .and_then(|session| session.recovery())
-                .is_some()
-            {
-                journal = Err(GatewayError::Registration(
-                    "Gateway lifecycle recovery returned without terminal settlement".into(),
-                ));
-            }
+    // A crash during quit can leave the publication attempt and the quit
+    // attempt both unresolved. Settle each one. The same attempt coming back
+    // means recovery did not close it.
+    for _ in 0..2 {
+        let Some(session) = journal.as_ref().ok().cloned() else {
+            break;
+        };
+        let Some(recovery) = session.recovery() else {
+            break;
+        };
+        let recovered_attempt = recovery.attempt().clone();
+        let recovery_result = catch_unwind(AssertUnwindSafe(|| {
+            executor.host.recover(&recovery, session.as_ref())
+        }))
+        .unwrap_or_else(|_| {
+            Err(GatewayError::Registration(
+                "gateway host panicked during lifecycle recovery".into(),
+            ))
+        });
+        drop(session);
+        drop(journal);
+        journal = match recovery_result {
+            Ok(()) => open_journal(),
+            Err(error) => Err(error),
+        };
+        let still_open = journal
+            .as_ref()
+            .ok()
+            .and_then(|next| next.recovery())
+            .is_some_and(|again| again.attempt() == &recovered_attempt);
+        if still_open {
+            journal = Err(GatewayError::Registration(
+                "Gateway lifecycle recovery returned without terminal settlement".into(),
+            ));
+            break;
         }
+    }
+    if journal
+        .as_ref()
+        .ok()
+        .and_then(|session| session.recovery())
+        .is_some()
+    {
+        journal = Err(GatewayError::Registration(
+            "Gateway lifecycle recovery returned without terminal settlement".into(),
+        ));
     }
     if let Err(error) = receipt.publish_journal(journal.clone()) {
         return AttemptExecution {
@@ -1818,6 +2041,7 @@ fn execute_attempt(
             failed_phase: None,
             step: StartupStep::Preparing,
         })),
+        deferred_stage: Mutex::new(None),
     };
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         let agent_path = executor
@@ -1836,6 +2060,50 @@ fn execute_attempt(
             "gateway host panicked during reconciliation".into(),
         ))
     });
+    if let Some(mut deferred) = progress.take_deferred_stage() {
+        // The plan is durable before Ready is published and before the copy
+        // starts. A rejected plan drops `deferred` with its launch, so nothing
+        // is copied and Ready is not published. Recovery of a crash after
+        // acceptance settles the plan without pruning.
+        let planned = plan_deferred_stage(&progress, &deferred, &physical);
+        let recorded = match planned {
+            Err(error) => Err(error),
+            Ok(()) => {
+                let early = physical.as_ref().ok().and_then(|gateway| {
+                    publish_ready_while_stage_finishes(executor, receipt, gateway)
+                });
+                // Surface readers already returned from `publish_ready`. This
+                // thread still waits for the copy, but it drops the in-process
+                // writer gate first so quit can record a stop against the
+                // ready gateway. The stage file lock stays held.
+                let stage_result = if early.is_some() {
+                    progress
+                        .journal
+                        .while_lock_yielded(&mut || deferred.publication_result())
+                } else {
+                    deferred.publication_result()
+                };
+                match complete_deferred_stage(
+                    &progress,
+                    executor.host.as_ref(),
+                    &deferred,
+                    &physical,
+                    stage_result,
+                ) {
+                    Ok(()) => Ok(()),
+                    Err(error) => {
+                        if let Some(early) = early {
+                            restore_startup(executor, early);
+                        }
+                        Err(error)
+                    }
+                }
+            }
+        };
+        if let Err(error) = recorded {
+            physical = Err(error);
+        }
+    }
     let state = progress.state.lock().ok().map(|state| state.clone());
     let admission = state.as_ref().map(|state| state.admission.clone());
     let facts = state
