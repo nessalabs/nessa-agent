@@ -102,3 +102,20 @@ fn snapshot_receipt_cannot_cross_conversations_with_the_same_incarnation_and_cou
         Err(StorageError::Corrupt(_))
     ));
 }
+
+#[test]
+fn snapshot_binding_load_and_receipt_disagree_when_counters_disagree() {
+    let id = SessionId::new("conversation").unwrap();
+    let backend = SessionSaveBackend::Snapshot {
+        session: id.clone(),
+        incarnation: [1; 16],
+    };
+    let original = SessionSaveGeneration::new(backend.clone(), 4, 3);
+    assert!(
+        SessionLoad::new(None, original.clone(), SessionLoadState::Published)
+            .into_published(&id)
+            .is_ok()
+    );
+    let next = SessionSaveGeneration::new(backend, 5, 5);
+    assert!(SessionSaveReceipt::new(original, next, 1, [3; 32]).is_err());
+}
