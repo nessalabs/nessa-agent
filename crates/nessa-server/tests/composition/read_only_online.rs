@@ -3,6 +3,8 @@
 mod fixtures;
 #[path = "read_only_online/native_session.rs"]
 mod native_session;
+#[path = "read_only_online/relay_reading.rs"]
+mod relay_reading;
 #[path = "read_only_online/retained_library.rs"]
 mod retained_library;
 #[path = "read_only_online/semantic.rs"]

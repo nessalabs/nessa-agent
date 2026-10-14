@@ -4,6 +4,7 @@ import { createAgentsApi } from "./agents-api.js"
 
 const offered = {
   environments: ["devbox", "me@build.example"],
+  commandHosts: ["me@build.example"],
   nativeHooks: { claude: "off", codex: "off" },
   agents: [
     {
@@ -57,6 +58,12 @@ describe("authenticated agent choices", () => {
     { ...offered, environments: [7] },
     { ...offered, environments: ["d".repeat(254)] },
     { ...offered, environments: Array.from({ length: 25 }, (_, n) => `host-${n}`) },
+    // The places that take commands: some of those, each once, in their order.
+    { ...offered, commandHosts: undefined },
+    { ...offered, commandHosts: ["elsewhere"] },
+    { ...offered, commandHosts: ["devbox", "devbox"] },
+    { ...offered, commandHosts: ["me@build.example", "devbox"] },
+    { ...offered, commandHosts: [7] },
   ])("rejects contradictory catalog facts before display", async (invalid) => {
     const api = createAgentsApi({ request: vi.fn().mockResolvedValue(invalid) })
     await expect(api.list()).rejects.toThrow()
@@ -113,6 +120,7 @@ it("enforces the schema-owned configured-agent count for unique valid rows", asy
     request: vi.fn().mockResolvedValue({
       agents,
       environments: [],
+      commandHosts: [],
       nativeHooks: offered.nativeHooks,
     }),
   })

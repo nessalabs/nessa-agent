@@ -208,6 +208,84 @@ async fn agent_queue_and_native_steering_share_one_acp_execution_at_a_time() {
     assert_gone(&root, "pid");
 }
 
+/// A turn is steered only by who started it: a grant's input sent while the
+/// owner's turn runs is not injected into it, and runs as a turn of its own
+/// saved with the grant, which the grant can then steer.
+#[tokio::test]
+async fn native_steering_from_another_initiator_waits_for_its_own_turn() {
+    use crate::domain::agent_execution::executions::{GrantInitiator, Initiation};
+    let _slot = process_test_slot().await;
+    // This agent ends a running turn only when it is steered.
+    let (root, provider) = test_acp_binding("steering-injected", 32);
+    let manager = SessionManager::open(
+        Some(SessionId::new("steered-by-another").unwrap()),
+        Arc::new(InMemoryStorage::new()),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+    )
+    .await
+    .unwrap();
+    let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
+    let mut events = agent.subscribe();
+    let first = agent
+        .enqueue(prompt("first"), Submitter::owner(close_action()))
+        .await
+        .unwrap();
+    assert_eq!(
+        events
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .execution_id()
+            .as_str(),
+        "first"
+    );
+    let grant = Initiation::checked_grant(GrantInitiator::new("receiver", 3).unwrap());
+    let driver = || Submitter {
+        context: close_action(),
+        initiation: grant.clone(),
+    };
+    let SteeringDelivery::Queued(steered) = agent.steer(prompt("driver"), driver()).await.unwrap()
+    else {
+        panic!("another initiator's input is queued, never injected");
+    };
+    assert!(matches!(
+        agent.steer(prompt("owner-ends-first"), Submitter::owner(close_action())).await.unwrap(),
+        SteeringDelivery::Injected { target, .. } if target.as_str() == "first"
+    ));
+    assert_eq!(first.wait().await.unwrap(), ExecutionOutcome::Completed);
+    loop {
+        let event = events.next().await.unwrap().unwrap();
+        if event.execution_id().as_str() == "driver" {
+            break;
+        }
+    }
+    assert!(matches!(
+        agent.steer(prompt("grant-ends-its-own"), driver()).await.unwrap(),
+        SteeringDelivery::Injected { target, .. } if target.as_str() == "driver"
+    ));
+    assert_eq!(steered.wait().await.unwrap(), ExecutionOutcome::Completed);
+    let saved = agent.session_manager().snapshot().await.unwrap();
+    let record = |id: &str| {
+        saved
+            .invocations
+            .iter()
+            .find(|record| record.request.execution_id.as_str() == id)
+            .unwrap()
+    };
+    assert_eq!(record("first").initiation, Initiation::owner());
+    assert_eq!(record("driver").initiation, grant);
+    assert!(record("first")
+        .events
+        .iter()
+        .all(|event| event.execution_id().as_str() == "first"
+            && !matches!(event.update(), ExecutionUpdate::Message(chunk) if chunk.as_str().contains("driver") || chunk.as_str().contains("grant"))));
+    agent.close(close_action()).await.unwrap();
+    assert_gone(&root, "pid");
+}
+
 #[tokio::test]
 async fn idle_generation_failure_is_reported_before_restoration_can_send_a_prompt() {
     let _slot = process_test_slot().await;

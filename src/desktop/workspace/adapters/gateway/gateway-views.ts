@@ -18,7 +18,12 @@ import {
   type ConversationTool,
   type ConversationView,
 } from "@nessa/client"
-import { placeNotes, placePublished, shownNote } from "../../../../conversation"
+import {
+  historyExtent,
+  placeNotes,
+  placePublished,
+  shownNote,
+} from "../../../../conversation"
 import { composerModels } from "../../../model/composer-options"
 import { decodeId, encodeId } from "../../../model/id-encoding"
 import type {
@@ -267,7 +272,12 @@ function writtenBy(app: ConversationMessageApp | undefined): { app?: MessageApp 
  * the turn it followed, or the input still waiting it followed; one left
  * before any turn, or after a turn the bounded view left out, is first
  * (`placeNotes`).
+ *
+ * The view's `truncated` and `transcriptState` are carried as `history`.
+ * This surface does not fold committed records to fill in what the view
+ * left out (one fold, `docs/design/record-subscriptions.md`).
  */
+
 export function transcriptFrom(
   view: ConversationView,
   revision: number,
@@ -375,6 +385,7 @@ export function transcriptFrom(
   }
   const latestInputId = unlisted.at(-1)?.executionId ?? view.messages.at(-1)?.executionId
   const latestTurn = view.messages.at(-1)
+  const history = historyExtent(view)
   // What runs is the tool and its exact input, which the gateway offers a
   // review only when it can show whole; why is the provider's title for it.
   const asked = view.permissions[0]
@@ -417,5 +428,6 @@ export function transcriptFrom(
       ? latestTurn.executionId
       : undefined,
     latestInputId,
+    ...(history ? { history } : {}),
   }
 }

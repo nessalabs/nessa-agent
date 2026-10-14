@@ -41,7 +41,7 @@ use crate::application::agent_execution::sessions::{
     SessionManager, StorageError,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
-use crate::domain::agent_execution::executions::Initiation;
+use crate::domain::agent_execution::executions::{Initiation, Initiator, ToolChecking};
 use crate::domain::agent_execution::permissions::{
     CustomPermissionCancellationReason, PermissionAuthorityError, PermissionCancellationReason,
     PermissionEffect, PermissionId, PermissionOptionId, PermissionScope, RefusalOutcome,
@@ -285,6 +285,35 @@ fn hook_attribution(
     let explanation = refusal.reason().to_owned();
     let attribution = ApprovalAttribution::hook(id, refusal)?;
     Ok((id.clone(), attribution, explanation))
+}
+
+/// Why a turn started as `initiation` may not be sent to `attached`, if it
+/// may not. The owner's turns always may. A grant's turn must have been saved
+/// as [`ToolChecking::Checked`], since only then were its grant's tools
+/// checked at admission; one saved before that, and restored, is not sent.
+/// A checked turn needs a process that asks about every call, so in
+/// [`ApprovalMode::Ask`] with its own hooks not allowed to answer first.
+fn checked_tools_unsupported(
+    initiation: &Initiation,
+    approval_mode: Option<ApprovalMode>,
+    capabilities: OperationCapabilities,
+) -> Result<(), AgentError> {
+    let checked = initiation.tools() == ToolChecking::Checked;
+    if !checked && !matches!(initiation.initiator(), Initiator::Grant(_)) {
+        return Ok(());
+    }
+    if !checked {
+        return Err(AgentError::Unsupported(
+            "a grant's turn needs its tools checked, and this one was not admitted as checked"
+                .into(),
+        ));
+    }
+    if approval_mode != Some(ApprovalMode::Ask) || capabilities.native_hooks_allowed() {
+        return Err(AgentError::Unsupported(
+            "a checked turn needs a process that asks about every tool call".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn deny_option(event: &ExecutionEvent) -> Option<PermissionOptionId> {
@@ -1529,6 +1558,16 @@ impl Agent {
             },
             Err(error) => Err(error),
         };
+        // A turn saved as checked is sent only to a process that asks about
+        // every call it is to check: in Ask mode, its own hooks not allowed.
+        // Read here, after preparation, because a restart re-reads both.
+        let preparation = preparation.and_then(|()| {
+            checked_tools_unsupported(
+                &initiation,
+                self.approval_mode(),
+                attached.session.operation_capabilities(),
+            )
+        });
         // The notes the saved turn took reach the provider with its message,
         // read from the conversation's records: the saved request never holds
         // them, so history and retries see the person's words alone.

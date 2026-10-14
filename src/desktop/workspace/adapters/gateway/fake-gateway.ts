@@ -28,6 +28,17 @@ import {
   type ViewSubscriptionHandlers,
 } from "@nessa/client"
 import type { GatewayClient } from "./gateway-source"
+import type { SharingClient } from "./sharing-gateway"
+
+/**
+ * The fake's client: the source's, and sharing's conversation methods, which
+ * reject — no test of the source shares, and one that did would say so.
+ */
+export type FakeGatewayClient = GatewayClient & {
+  readonly conversation: GatewayClient["conversation"] & SharingClient["conversation"]
+}
+
+const notShared = () => Promise.reject(new Error("the fake gateway does not share"))
 
 /** Canonical identities for named test conversations; display names stay separate. */
 export const gatewayConversationIds = {
@@ -165,7 +176,7 @@ export function view(
 }
 
 export interface FakeGateway {
-  readonly client: GatewayClient
+  readonly client: FakeGatewayClient
   /** Every call made, in order. */
   readonly calls: Call[]
   readonly rows: Map<string, ConversationSummary>
@@ -367,8 +378,11 @@ export function fakeGateway(
         live.handlers.ended(end)
       }
   }
-  const client: GatewayClient = {
+  const client: FakeGatewayClient = {
     conversation: {
+      share: notShared,
+      unshare: notShared,
+      shares: notShared,
       observe: (options) =>
         answer("observe", [options], () => observePage(options)) as never,
       create: (options) =>

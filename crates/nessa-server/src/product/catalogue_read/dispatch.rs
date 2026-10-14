@@ -80,6 +80,10 @@ pub(in crate::product) async fn dispatch(
         .passive_read
         .as_ref()
         .ok_or(CatalogueReadErrorCode::SourceUnavailable)?;
+    let access_policy = state
+        .conversation_access
+        .as_ref()
+        .ok_or(CatalogueReadErrorCode::SourceUnavailable)?;
     let source = state
         .catalogue_source
         .as_ref()
@@ -96,6 +100,7 @@ pub(in crate::product) async fn dispatch(
             conversations: repository.as_ref(),
             grants: &PUBLISHED_PASSIVE_READ_GRANTS,
             share_grants: share_grants.as_ref(),
+            access_policy: access_policy.as_ref(),
         },
         source: source.as_ref(),
     };

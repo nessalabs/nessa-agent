@@ -44,7 +44,9 @@ use nessa_server::{
         RecordReadSource, ShareConversation, ShareGrants,
     },
     conversation::domain::{Conversation, ShareRole},
-    conversation::infrastructure::{LocalConversationStore, NessaCatalogueReadSource},
+    conversation::infrastructure::{
+        CedarConversationAccessPolicy, LocalConversationStore, NessaCatalogueReadSource,
+    },
     device_pairing::infrastructure::ProtectedSessions,
     product::{DeviceCredentials, NativeSessions, ProductDependencies, ProductRouteState},
 };
@@ -56,6 +58,11 @@ use std::{
     sync::Arc,
 };
 use uuid::Uuid;
+
+/// The checked-in conversation access policy, as composition builds it.
+fn access_policy() -> Arc<CedarConversationAccessPolicy> {
+    Arc::new(CedarConversationAccessPolicy::new().unwrap())
+}
 
 struct NoAgents;
 impl AgentProbe for NoAgents {
@@ -127,7 +134,11 @@ fn sessions_with(
 /// The fixture's conversation store, which a native session reads.
 fn conversation_store(fixture: &Fixture) -> Arc<LocalConversationStore> {
     let root = private_root(fixture.directory.path(), "conversation-metadata");
-    Arc::new(LocalConversationStore::open(&root.join("metadata.sqlite3")).unwrap())
+    Arc::new(
+        LocalConversationStore::open(&root.join("metadata.sqlite3"))
+            .unwrap()
+            .with_access_policy(access_policy()),
+    )
 }
 /// A record source whose every read answers `history_pruned`: a read that
 /// reaches it was admitted, and one refused by admission never does.
@@ -165,9 +176,11 @@ fn sessions_on(
         fixture.receivers.clone(),
         metadata.clone(),
         metadata.clone(),
+        access_policy(),
     )
     .with_catalogue_source(Arc::new(NessaCatalogueReadSource::new(
         metadata,
+        access_policy(),
         Id::new("gateway").unwrap(),
     )))
     .with_record_source(Arc::new(PrunedRecords));
@@ -643,12 +656,14 @@ async fn an_environment_is_paired_but_never_shared_with() {
     .unwrap();
     let id = conversation.id().clone();
     metadata.create(conversation).await.unwrap();
+    let policy = access_policy();
     let shares = ShareConversation {
         conversations: metadata.as_ref(),
         receivers: fixture.receivers.as_ref(),
         grants: metadata.as_ref(),
         access: fixture.registry.as_ref(),
         gateway: &gateway(),
+        policy: policy.as_ref(),
     };
     let caller = ConversationCaller {
         organization_id: fixture.session.context().organization_id().clone(),
@@ -658,7 +673,15 @@ async fn an_environment_is_paired_but_never_shared_with() {
     };
     assert!(matches!(
         shares
-            .share(caller, id.clone(), credential, ShareRole::Read, None, 110)
+            .share(
+                caller,
+                id.clone(),
+                credential,
+                ShareRole::Read,
+                None,
+                None,
+                110
+            )
             .await,
         Err(ConversationError::ShareTargetNotPaired)
     ));
@@ -704,12 +727,14 @@ async fn k3_a_worker_reads_nothing_on_the_gateway_it_serves() {
     .unwrap();
     let id = conversation.id().clone();
     metadata.create(conversation).await.unwrap();
+    let policy = access_policy();
     let shares = ShareConversation {
         conversations: metadata.as_ref(),
         receivers: fixture.receivers.as_ref(),
         grants: metadata.as_ref(),
         access: fixture.registry.as_ref(),
         gateway: &gateway(),
+        policy: policy.as_ref(),
     };
     let caller = ConversationCaller {
         organization_id: fixture.session.context().organization_id().clone(),
@@ -717,17 +742,21 @@ async fn k3_a_worker_reads_nothing_on_the_gateway_it_serves() {
         surface_id: "panel".into(),
         action_id: "share-device".into(),
     };
-    assert!(shares
-        .share(
-            caller,
-            id.clone(),
-            CredentialId::new(device.credential.clone()).unwrap(),
-            ShareRole::Read,
-            None,
-            110
-        )
-        .await
-        .unwrap());
+    assert!(
+        shares
+            .share(
+                caller,
+                id.clone(),
+                CredentialId::new(device.credential.clone()).unwrap(),
+                ShareRole::Read,
+                None,
+                None,
+                110
+            )
+            .await
+            .unwrap()
+            .applied
+    );
     // The same calls, made by `paired`: its session's answer, and each
     // call's.
     let calls = |paired: &Paired| {
@@ -861,12 +890,14 @@ async fn a_peer_reads_only_what_it_was_granted() {
         (&elsewhere, "share-peer-elsewhere"),
     ];
     for (access, request) in readers {
+        let policy = access_policy();
         let shares = ShareConversation {
             conversations: metadata.as_ref(),
             receivers: fixture.receivers.as_ref(),
             grants: metadata.as_ref(),
             access,
             gateway: &gateway(),
+            policy: policy.as_ref(),
         };
         assert!(matches!(
             shares
@@ -876,6 +907,7 @@ async fn a_peer_reads_only_what_it_was_granted() {
                     peer_credential.clone(),
                     ShareRole::Read,
                     None,
+                    None,
                     110,
                 )
                 .await,
@@ -883,24 +915,30 @@ async fn a_peer_reads_only_what_it_was_granted() {
         ));
         assert!(!metadata.is_granted(&id, &peer.receiver).await.unwrap());
     }
+    let policy = access_policy();
     let shares = ShareConversation {
         conversations: metadata.as_ref(),
         receivers: fixture.receivers.as_ref(),
         grants: metadata.as_ref(),
         access: fixture.registry.as_ref(),
         gateway: &gateway(),
+        policy: policy.as_ref(),
     };
-    assert!(shares
-        .share(
-            caller("share-peer"),
-            id.clone(),
-            peer_credential.clone(),
-            ShareRole::Read,
-            None,
-            110
-        )
-        .await
-        .unwrap());
+    assert!(
+        shares
+            .share(
+                caller("share-peer"),
+                id.clone(),
+                peer_credential.clone(),
+                ShareRole::Read,
+                None,
+                None,
+                110
+            )
+            .await
+            .unwrap()
+            .applied
+    );
     assert!(metadata.is_granted(&id, &peer.receiver).await.unwrap());
     let reads = |paired: &Paired| {
         let credential = paired.credential.clone();
@@ -983,17 +1021,21 @@ async fn a_peer_reads_only_what_it_was_granted() {
     }
     // The owner's work on a conversation the peer was not granted moves the
     // owner's head (here, a share to the device) and not the peer's.
-    assert!(shares
-        .share(
-            caller("share-device"),
-            ungranted.clone(),
-            CredentialId::new(device.credential.clone()).unwrap(),
-            ShareRole::Read,
-            None,
-            110,
-        )
-        .await
-        .unwrap());
+    assert!(
+        shares
+            .share(
+                caller("share-device"),
+                ungranted.clone(),
+                CredentialId::new(device.credential.clone()).unwrap(),
+                ShareRole::Read,
+                None,
+                None,
+                110,
+            )
+            .await
+            .unwrap()
+            .applied
+    );
     let (head, _, calls) = reads(&device).await;
     assert_ne!(head["payload"]["head"].as_str().unwrap(), peer_head);
     // The device signs in as the owner, so its catalogue watch is admitted
@@ -1076,7 +1118,13 @@ async fn a_peer_reads_only_what_it_was_granted() {
     assert_eq!(code(&page), "wrong_owner", "{page}");
     // An unshare takes it away, and moves the peer's head forward.
     assert!(shares
-        .unshare(caller("unshare-peer"), id.clone(), peer_credential, 110)
+        .unshare(
+            caller("unshare-peer"),
+            id.clone(),
+            peer_credential,
+            None,
+            110
+        )
         .await
         .unwrap());
     let (head, manifest, calls) = reads(&peer).await;

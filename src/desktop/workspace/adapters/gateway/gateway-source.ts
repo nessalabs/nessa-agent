@@ -56,6 +56,13 @@
  * - **A failed connect is waited out.** For `timing.retryMs` after it,
  *   neither the subscriptions nor an MCP App connects again; a person's call
  *   connects at once (#419).
+ * - **A client already closed is not kept** (S19). `connect` can resolve
+ *   after the close, and `onConnectionStateChange` reports only a later
+ *   transition — `connectionState` is the snapshot. That client is closed
+ *   and dropped. The attempt fails as `connectFailure` would have failed
+ *   `connect`, so a revoked credential stays `signed-out`. The background
+ *   retry wait starts as for any failed connect; a person's next call
+ *   connects again.
  * - **What the gateway does not keep**: pins and "always" answers are
  *   refused as `not-supported`, and so is a message asking a conversation
  *   for another model than the one the gateway says it runs (before a frame
@@ -437,8 +444,16 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   const connectFailed = () => {
     waitUntil = clock.now() + timing.retryMs
   }
-  /** Takes a client that connected as the current one. */
-  const adopt = (connected: C) => {
+  /**
+   * Takes a client that connected as the current one.
+   *
+   * A client already closed is refused instead: the close was published
+   * before this subscription, and a later transition never comes (S19).
+   * The handler ignores a close that arrives before `current` is this
+   * client, so the snapshot after subscribing is what decides. Returns
+   * that failure. The caller closes the client and fails the attempt.
+   */
+  const adopt = (connected: C): WorkspaceSourceError | undefined => {
     const off = connected.onConnectionStateChange((state) => {
       if (current?.client !== connected) return
       if (state.status === "connected") {
@@ -454,6 +469,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         scheduleRetry()
       }
     })
+    const state = connected.connectionState
+    if (state.status === "closed") {
+      off()
+      return connectFailure(state.error)
+    }
     current = { client: connected, off }
     waitUntil = 0
     // A connection after another is a reconnect: what it missed is read again.
@@ -462,6 +482,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       resync()
     }
     connectedBefore = true
+    return undefined
   }
   /**
    * The current client, or one connecting for every caller at once — and,
@@ -508,8 +529,15 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
             if (!over) giveUp()
             return
           }
+          // Closed before this source subscribed: not held, and classified
+          // the same way a refused connect is (S19).
+          const failure = adopt(connected)
+          if (failure) {
+            connected.close()
+            giveUp(failure)
+            return
+          }
           over = true
-          adopt(connected)
           resolve(connected)
         },
         (error: unknown) => {
@@ -1525,7 +1553,9 @@ function reasonFor(
     case ConversationErrorCode.ConversationStateUnreadable:
     case ConversationErrorCode.ConversationConfigurationChanged:
     case ConversationErrorCode.ShareTargetNotPaired:
+    case ConversationErrorCode.ShareGrantChanged:
     case ConversationErrorCode.IdempotencyConflict:
+    case ConversationErrorCode.DrivePolicyUnenforceable:
       return uncertain ? "unavailable" : "not-supported"
     // Not done now, or not known to be: busy, starting, stopped, storage or
     // audit that did not answer, an outcome the gateway could not settle.

@@ -183,6 +183,65 @@ describe("a conversation that cannot be read", () => {
   })
 })
 
+describe("a bounded conversation", () => {
+  const notices = () =>
+    [...host.querySelectorAll("[data-history-extent]")].map(
+      (notice) => notice.textContent,
+    )
+
+  it("says at once when the view left history out, and when that history is not confirmed", async () => {
+    await shown(fakeSource(), {
+      ...conversation,
+      history: { omitted: true, unconfirmed: true },
+    })
+    expect(notices()).toEqual([
+      "Some conversation content is not shown.",
+      "Conversation history is not confirmed. Recent activity may be missing.",
+    ])
+    expect(host.querySelector(".workspace-bubble")?.textContent).toContain("cargo")
+  })
+
+  it("says nothing of history the view says is whole", async () => {
+    await shown()
+    expect(notices()).toEqual([])
+  })
+
+  it("replaces the notice and the messages when a later view is the whole conversation", async () => {
+    const source = fakeSource()
+    const { store } = await shown(source, {
+      ...conversation,
+      revision: 4,
+      history: { omitted: true, unconfirmed: false },
+    })
+    expect(notices()).toEqual(["Some conversation content is not shown."])
+    store.dispatch(followWorkspace())
+    const next: TranscriptValue = {
+      ...conversation,
+      revision: 5,
+      messages: [
+        ...conversation.messages,
+        {
+          id: "m3",
+          role: "agent",
+          at: 3,
+          parts: [{ kind: "text", text: "The rest of it." }],
+        },
+      ],
+    }
+    await act(async () => {
+      source.emit({ kind: "transcript", transcript: next })
+      await settle()
+    })
+    expect(notices()).toEqual([])
+    const texts = [...host.querySelectorAll(".workspace-message")].map(
+      (message) => message.textContent,
+    )
+    expect(texts).toHaveLength(3)
+    expect(texts.filter((text) => text?.includes("Why cargo fails?"))).toHaveLength(1)
+    expect(texts.filter((text) => text?.includes("The rest of it."))).toHaveLength(1)
+  })
+})
+
 describe("a transcript", () => {
   it("draws prose, steps, code and lists, and says when a message was not sent", async () => {
     const source = fakeSource()

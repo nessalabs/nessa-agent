@@ -245,7 +245,8 @@ against a private scripted gateway.
   and conversion from server deadlines to the panel clock.
 - The desktop window's workspace is its own vertical, nested in the window:
   `src/desktop/workspace/` with `model/` (index, conversations,
-  revisions, how the window fits the side columns, failures, retention,
+  revisions, the history extent a bounded view left out — classified once in
+  `src/conversation/model/history.ts` — how the window fits the side columns, failures, retention,
   session groups, the new-session lifecycle, and what a pane shows —
   `pane-item.ts`, a session or a widget, with the one codec to split panes'
   opaque key), `application/` (the
