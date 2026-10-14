@@ -8,13 +8,14 @@ use crate::conversation::application::ConversationError;
 use nessa_local_database::rusqlite::{Connection, Error, OpenFlags, Row};
 use serde_json::{json, Value};
 
-/// One grant whose latest journal row took the role away.
+/// One grant whose latest journal row took the capabilities away.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RevocationFact {
     pub conversation_id: String,
     pub receiver_id: String,
     pub credential_id: String,
-    pub role: String,
+    /// The capabilities the revoke took away, as [`Capabilities::as_str`].
+    pub capabilities: String,
     pub sequence: u64,
 }
 
@@ -147,7 +148,7 @@ pub(super) fn read(connection: &Connection) -> Result<ExportFacts, ConversationE
     let tombstones = tombstones(connection, &mut skipped)?;
     let grants = json_rows(
         connection,
-        "SELECT conversation_id, receiver_id, credential_id, role, policy, policy_revision
+        "SELECT conversation_id, receiver_id, credential_id, capabilities, policy, policy_revision
          FROM share_grants ORDER BY conversation_id, receiver_id",
         &mut skipped,
         grant_skip,
@@ -211,15 +212,15 @@ fn tombstone_row(row: &Row<'_>) -> Result<Value, Error> {
 }
 
 fn grant_row(row: &Row<'_>) -> Result<Value, Error> {
-    let role: String = row.get(3)?;
-    if !known_role(&role) {
+    let capabilities: String = row.get(3)?;
+    if !known_capabilities(&capabilities) {
         return Ok(Value::Null);
     }
     Ok(json!({
         "conversationId": row.get::<_, String>(0)?,
         "receiverId": row.get::<_, String>(1)?,
         "credentialId": row.get::<_, String>(2)?,
-        "role": role,
+        "capabilities": capabilities,
         "policy": row.get::<_, Option<String>>(4)?,
         "policyRevision": row.get::<_, i64>(5)?,
     }))
@@ -285,11 +286,18 @@ fn revocation_rows(
             let conversation_id: String = row.get(0)?;
             let receiver_id: String = row.get(1)?;
             let credential_id: String = row.get(2)?;
-            let role: String = row.get(3)?;
+            let capabilities: String = row.get(3)?;
             let sequence: i64 = row.get(4)?;
-            Ok::<_, Error>((conversation_id, receiver_id, credential_id, role, sequence))
+            Ok::<_, Error>((
+                conversation_id,
+                receiver_id,
+                credential_id,
+                capabilities,
+                sequence,
+            ))
         })();
-        let Ok((conversation_id, receiver_id, credential_id, role, sequence)) = parsed else {
+        let Ok((conversation_id, receiver_id, credential_id, capabilities, sequence)) = parsed
+        else {
             skipped.push(ExportSkip::Grant {
                 identity: format!("revoke-{index}"),
             });
@@ -304,7 +312,7 @@ fn revocation_rows(
             });
             continue;
         };
-        if !known_role(&role)
+        if !known_capabilities(&capabilities)
             || !nameable(&conversation_id)
             || !nameable(&receiver_id)
             || !nameable(&credential_id)
@@ -318,7 +326,7 @@ fn revocation_rows(
             conversation_id,
             receiver_id,
             credential_id,
-            role,
+            capabilities,
             sequence,
         });
     }
@@ -350,8 +358,8 @@ fn grant_skip(identity: String) -> ExportSkip {
     ExportSkip::Grant { identity }
 }
 
-fn known_role(role: &str) -> bool {
-    matches!(role, "read" | "comment" | "drive")
+fn known_capabilities(capabilities: &str) -> bool {
+    matches!(capabilities, "read" | "read+comment" | "read+comment+drive")
 }
 
 fn nameable(value: &str) -> bool {

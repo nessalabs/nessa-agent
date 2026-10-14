@@ -1,7 +1,7 @@
 //! A share's role and tool policy, tested without storage or a socket
 //! (`docs/design/read-grants.md`, rows J1 and J3).
 use super::{
-    CommandHosts, ShareAccess, ShareAccessError, ShareRole, ToolPolicy, ToolPolicyError,
+    Capabilities, CommandHosts, ShareAccess, ShareAccessError, ToolPolicy, ToolPolicyError,
     ToolPreset, ToolRules,
 };
 
@@ -12,27 +12,59 @@ fn rules(allow: &[&str], deny: &[&str]) -> Result<ToolRules, ToolPolicyError> {
     )
 }
 
+/// The only capability sets are the three cumulative ones, in any order.
+#[test]
+fn a_capability_set_is_read_or_read_and_comment_or_all_three() {
+    assert_eq!(
+        Capabilities::from_names(["comment", "read"]).unwrap(),
+        Capabilities::comment()
+    );
+    assert_eq!(
+        Capabilities::from_names(["drive", "read", "comment"]).unwrap(),
+        Capabilities::drive()
+    );
+    for names in [
+        &[][..],
+        &["read", "read"][..],
+        &["comment"][..],
+        &["drive"][..],
+        &["read", "drive"][..],
+        &["owner"][..],
+    ] {
+        assert_eq!(
+            Capabilities::from_names(names.iter().copied()),
+            Err(ShareAccessError::Capabilities),
+            "{names:?}"
+        );
+    }
+    assert_eq!(Capabilities::drive().as_str(), "read+comment+drive");
+    assert_eq!(
+        Capabilities::parse("read+comment"),
+        Some(Capabilities::comment())
+    );
+}
+
 /// Row J3: Drive needs a policy, and Read and Comment take none.
 #[test]
 fn drive_needs_a_policy_and_read_and_comment_take_none() {
     let policy = || Some(ToolPolicy::preset(ToolPreset::NoShell));
     assert_eq!(
-        ShareAccess::new(ShareRole::Drive, None),
+        ShareAccess::new(Capabilities::drive(), None),
         Err(ShareAccessError::PolicyRequired)
     );
-    for role in [ShareRole::Read, ShareRole::Comment] {
+    for role in [Capabilities::read(), Capabilities::comment()] {
         assert_eq!(
             ShareAccess::new(role, policy()),
             Err(ShareAccessError::PolicyNotAllowed)
         );
         assert_eq!(ShareAccess::new(role, None).unwrap().policy(), None);
     }
-    let drive = ShareAccess::new(ShareRole::Drive, policy()).unwrap();
-    assert_eq!(drive.role(), ShareRole::Drive);
+    let drive = ShareAccess::new(Capabilities::drive(), policy()).unwrap();
+    assert_eq!(drive.capabilities(), Capabilities::drive());
     assert_eq!(drive.policy(), policy().as_ref());
     assert_eq!(
         ShareAccess::read(),
-        ShareAccess::new(ShareRole::Read, None).unwrap()
+        ShareAccess::new(Capabilities::read(), None).unwrap()
     );
 }
 

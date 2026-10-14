@@ -2070,7 +2070,15 @@
     },
     "ConversationCommandOutcome": {
       "type": "string",
-      "enum": ["dispatched", "withdrawn", "cancelled", "already_final", "no_effect", "refused_after_save", "unavailable_after_save"],
+      "enum": [
+        "dispatched",
+        "withdrawn",
+        "cancelled",
+        "already_final",
+        "no_effect",
+        "refused_after_save",
+        "unavailable_after_save"
+      ],
       "description": "What a settled submit or stop did. Absent until the stage is settled. Already final means nothing was sent. No effect means the submit was refused before anything was enqueued or injected; retrying that request answers the same refusal and does not dispatch. Refused after save means the submit saved the turn and then refused before injection; retrying that request answers revoked_after_save and does not inject. Unavailable after save means the submit saved the turn and then could not decide before injection; retrying that request answers unavailable_after_save and does not inject."
     },
     "ConversationCommandReceipt": {
@@ -2376,10 +2384,10 @@
       },
       "required": ["conversationId", "requestId"]
     },
-    "ConversationShareRole": {
+    "ConversationCapability": {
       "type": "string",
       "enum": ["read", "comment", "drive"],
-      "description": "What a share grant lets its holder do; each role allows everything the roles before it do. read: list, read and watch the conversation's records. comment: also leave notes with conversation.message and ask where its own note stands with conversation.messageStatus. drive: also start, steer and stop turns, answer or cancel their permission requests, answer their questions and look up those commands' receipts (conversation.send, steer, stop, answer, answerQuestion, cancel, receipt), with text only and under the grant's tool policy. A paired peer gateway neither comments nor drives whatever its role, and no role deletes, archives, exports, re-shares or changes the model: those stay the owner's."
+      "description": "One capability a conversation grant may include. read: list, read and watch the conversation's records. comment: leave notes with conversation.message and ask where its own note stands with conversation.messageStatus. drive: start, steer and stop turns, answer or cancel their permission requests, answer their questions and look up those commands' receipts (conversation.send, steer, stop, answer, answerQuestion, cancel, receipt), with text only and under the grant's constraints. The only sets are read; read and comment; and read, comment and drive. Comment and drive are refused for a gateway principal. No capability deletes, archives, exports, re-shares or changes the model: those stay the owner's."
     },
     "ConversationToolPreset": {
       "type": "string",
@@ -2434,7 +2442,7 @@
     "ConversationShareParams": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Grant (conversation.share) one paired device or peer gateway a role on one of the caller's conversations, or change the role and policy it already holds there. Nothing is granted by default or by list: a paired party sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and not watchable. Every role reads; drive needs a policy and read and comment take none, and either mistake is refused invalid_request. A grant is refused share_target_not_paired unless the credential is an active paired device or peer gateway of the conversation's owner that holds conversation.read (an environment's credential never does), and conversation_deleted on a deleted conversation. The result names the grant's policyRevision once the share is made; applied is false when nothing changed: granting the role and policy already held, whose revision is kept. With expectedPolicyRevision, a grant that is no longer at that revision (changed or revoked since) is refused share_grant_changed, and nothing is changed. A conversation holds at most 64 grants, and at most 8 drive grants; one more is refused invalid_request. A retried requestId answers what it answered the first time, its policyRevision included, before expectedPolicyRevision is compared, so a share retried after a later unshare grants nothing; the same requestId naming another device, another role or policy, or the other change is refused invalid_request. A retried share is checked like a new one first, so once the conversation is deleted or the device unpaired it is refused conversation_deleted or share_target_not_paired and changes nothing.",
+      "description": "Grant (conversation.share) one paired device or peer gateway a capability set on one of the caller's conversations, or change the capabilities and constraints it already holds there. Nothing is granted by default or by list: a paired party sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and not watchable. The only sets are read; read and comment; and read, comment and drive. drive needs a policy and the others take none, and either mistake is refused invalid_request. Comment and drive for a gateway principal are refused invalid_request and write nothing. A grant is refused share_target_not_paired unless the credential is an active paired device or peer gateway of the conversation's owner that holds conversation.read (an environment's credential never does), and conversation_deleted on a deleted conversation. The result names the grant's policyRevision, the grant epoch, once the share is made; applied is false when nothing changed: granting the capabilities and constraints already held, whose epoch is kept. With expectedPolicyRevision, a grant that is no longer at that epoch (changed or revoked since) is refused share_grant_changed, and nothing is changed. A conversation holds at most 64 grants, and at most 8 drive grants; one more is refused invalid_request. A retried requestId answers what it answered the first time, its policyRevision included, before expectedPolicyRevision is compared, so a share retried after a later unshare grants nothing; the same requestId naming another device, another capability set or policy, or the other change is refused invalid_request. A retried share is checked like a new one first, so once the conversation is deleted or the device unpaired it is refused conversation_deleted or share_target_not_paired and changes nothing.",
       "properties": {
         "conversationId": {
           "type": "string",
@@ -2456,13 +2464,17 @@
           "maxLength": 256,
           "description": "The paired device's credential, as credential.list names it."
         },
-        "role": {
-          "$ref": "#/$defs/ConversationShareRole",
-          "description": "The role to grant."
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/ConversationCapability" },
+          "description": "The capabilities to grant, in any order. read; or read and comment; or read, comment and drive."
         },
         "policy": {
           "$ref": "#/$defs/ConversationToolPolicy",
-          "description": "The tool policy. Present exactly when role is drive."
+          "description": "The constraints: the tool policy. Present exactly when capabilities includes drive."
         },
         "expectedPolicyRevision": {
           "type": "integer",
@@ -2471,12 +2483,12 @@
           "description": "The policyRevision of the grant this change was made from, as conversation.shares or an earlier share's result named it. When given, the change is made only while the device's grant is still at that revision, decided in the same transaction that writes it; otherwise it is refused share_grant_changed and nothing is changed. 0 names no grant held (revisions start at 1): a first grant built on a list without one is refused once another lands. Absent, the change is made whatever the device holds."
         }
       },
-      "required": ["conversationId", "requestId", "credentialId", "role"]
+      "required": ["conversationId", "requestId", "credentialId", "capabilities"]
     },
     "ConversationUnshareParams": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Revoke (conversation.unshare) one paired party's grant on one of the caller's conversations, whatever its role. A revoke needs only ownership, so it works on a deleted conversation and for a party since unpaired. Revoking ends the party's next read; a read already admitted may finish. applied is false when no grant was held. Either way the party holds no grant afterwards, so the result names no revision: the revoked grant's row is gone, and a later grant takes a revision of its own. With expectedPolicyRevision, a grant that is no longer at that revision (changed or revoked since) is refused share_grant_changed, and nothing is changed. A retried requestId answers what it answered the first time; the same requestId naming another device or the other change is refused invalid_request.",
+      "description": "Revoke (conversation.unshare) one paired party's grant on one of the caller's conversations, whatever its capabilities. A revoke needs only ownership, so it works on a deleted conversation and for a party since unpaired. Revoking ends the party's next read; a read already admitted may finish. applied is false when no grant was held. Either way the party holds no grant afterwards, so the result names no revision: the revoked grant's row is gone, and a later grant takes an epoch of its own. With expectedPolicyRevision, a grant that is no longer at that epoch (changed or revoked since) is refused share_grant_changed, and nothing is changed. A retried requestId answers what it answered the first time; the same requestId naming another device or the other change is refused invalid_request.",
       "properties": {
         "conversationId": {
           "type": "string",
@@ -2563,19 +2575,23 @@
           "maxLength": 256,
           "description": "The paired device's credential, as credential.list names it."
         },
-        "role": {
-          "$ref": "#/$defs/ConversationShareRole",
-          "description": "What the grant allows."
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/ConversationCapability" },
+          "description": "What the grant allows: read; or read and comment; or read, comment and drive."
         },
         "policy": {
           "$ref": "#/$defs/ConversationToolPolicy",
-          "description": "The tool policy. Present exactly when role is drive."
+          "description": "The constraints. Present exactly when capabilities includes drive."
         },
         "policyRevision": {
           "type": "integer",
           "minimum": 1,
           "maximum": 9007199254740991,
-          "description": "Moves each time the owner changes this grant's role or policy, and never otherwise. A later release stamps it on the turns a drive grant starts."
+          "description": "The grant epoch. Moves each time the owner changes this grant's capabilities or constraints, and never otherwise. A drive turn is checked at the epoch it was admitted under."
         },
         "grantedAtMs": {
           "type": "integer",
@@ -2584,7 +2600,7 @@
           "description": "When the grant was made, Unix milliseconds."
         }
       },
-      "required": ["credentialId", "role", "policyRevision", "grantedAtMs"]
+      "required": ["credentialId", "capabilities", "policyRevision", "grantedAtMs"]
     },
     "ConversationSharesResult": {
       "type": "object",
@@ -2602,7 +2618,7 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 9007199254740991,
-          "description": "The conversation's catalogue revision when this page was read, with its grants. A grant or a revoke moves it; a change of role or policy does not. A later page belongs to the same read only when it names this revision."
+          "description": "The conversation's catalogue revision when this page was read, with its grants. A grant or a revoke moves it; a change of capabilities or constraints does not. A later page belongs to the same read only when it names this revision."
         },
         "cursor": {
           "$ref": "#/$defs/ConversationSharesCursor",
@@ -2625,7 +2641,7 @@
         },
         "applied": {
           "type": "boolean",
-          "description": "Whether the role or policy changed. False when the grant already held them."
+          "description": "Whether the capabilities or constraints changed. False when the grant already held them."
         },
         "policyRevision": {
           "type": "integer",

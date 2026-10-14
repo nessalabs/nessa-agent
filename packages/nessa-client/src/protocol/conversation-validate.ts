@@ -21,7 +21,7 @@ import {
   CompactionReportingSupport,
   ConversationPermissionAsk,
   ConversationPermissionOptionEffect,
-  ConversationShareRole,
+  ConversationCapability,
   ConversationToolPreset,
   ElicitationForwardingSupport,
   IncomingElicitationSupport,
@@ -1279,11 +1279,36 @@ function toolPolicy(value: unknown) {
   }
 }
 
+/** The three cumulative capability sets, in any order, each name once. */
+function capabilitySet(item: Record<string, unknown>): ConversationCapability[] {
+  const value = item.capabilities
+  if (!Array.isArray(value)) throw new Error("Invalid conversation capabilities")
+  const names = value.map((name) => {
+    if (typeof name !== "string") throw new Error("Invalid conversation capabilities")
+    oneOf(name, Object.values(ConversationCapability))
+    return name
+  })
+  if (new Set(names).size !== names.length)
+    throw new Error("Invalid conversation capabilities")
+  const held = new Set(names)
+  const legal =
+    (held.size === 1 && held.has(ConversationCapability.Read)) ||
+    (held.size === 2 &&
+      held.has(ConversationCapability.Read) &&
+      held.has(ConversationCapability.Comment)) ||
+    (held.size === 3 &&
+      held.has(ConversationCapability.Read) &&
+      held.has(ConversationCapability.Comment) &&
+      held.has(ConversationCapability.Drive))
+  if (!legal) throw new Error("Invalid conversation capabilities")
+  return names as ConversationCapability[]
+}
+
 /**
  * Validate one page of `conversation.shares`: each grant once, a policy
- * exactly on a Drive grant, the catalogue revision the page was read at, and
- * a cursor only when it names this page's last grant. A page holds at most
- * the published page size.
+ * exactly when the capability set includes drive, the catalogue revision the
+ * page was read at, and a cursor only when it names this page's last grant.
+ * A page holds at most the published page size.
  */
 export function conversationShares(value: unknown): ConversationSharesResult {
   const result = record(value)
@@ -1294,13 +1319,18 @@ export function conversationShares(value: unknown): ConversationSharesResult {
   const seen = new Set<string>()
   let last: { credentialId: string; grantedAtMs: number } | undefined
   for (const item of items(result, "items", sharePage.pageSize)) {
-    exact(item, ["credentialId", "role", "policy", "policyRevision", "grantedAtMs"])
+    exact(item, [
+      "credentialId",
+      "capabilities",
+      "policy",
+      "policyRevision",
+      "grantedAtMs",
+    ])
     const credential = identity(item, "credentialId")
     if (seen.has(credential)) throw new Error("Repeated conversation share")
     seen.add(credential)
-    const role = text(item, "role", 16)
-    oneOf(role, Object.values(ConversationShareRole))
-    if ((role === ConversationShareRole.Drive) !== (item.policy !== undefined))
+    const granted = capabilitySet(item)
+    if (granted.includes(ConversationCapability.Drive) !== (item.policy !== undefined))
       throw new Error("Invalid conversation share policy")
     if (item.policy !== undefined) toolPolicy(item.policy)
     // A listed grant holds a revision the journal gave, never 0 (no grant held).

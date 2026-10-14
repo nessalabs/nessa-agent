@@ -353,7 +353,7 @@ export type {
 } from "./generated/product.js"
 export {
   ConversationErrorCode,
-  ConversationShareRole,
+  ConversationCapability,
   ConversationToolPreset,
 } from "./generated/product.js"
 export { sharePage, toolPolicyBounds } from "./protocol/conversation-validate.js"

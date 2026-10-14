@@ -956,12 +956,12 @@ pub struct ConversationDeleteParams {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ConversationShareRole {
+pub enum ConversationCapability {
     Read,
     Comment,
     Drive,
 }
-impl ConversationShareRole {
+impl ConversationCapability {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Read => "read",
@@ -1006,7 +1006,7 @@ pub struct ConversationShareParams {
     pub conversation_id: String,
     pub request_id: String,
     pub credential_id: String,
-    pub role: ConversationShareRole,
+    pub capabilities: Vec<ConversationCapability>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<ConversationToolPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1039,7 +1039,7 @@ pub struct ConversationSharesParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationShare {
     pub credential_id: String,
-    pub role: ConversationShareRole,
+    pub capabilities: Vec<ConversationCapability>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<ConversationToolPolicy>,
     pub policy_revision: u64,

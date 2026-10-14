@@ -2357,7 +2357,7 @@ mod tests {
         RecordReadResponse, RecordReadSource, RevisionHold, RulePrincipal, ShareGrantChange,
         ShareGrantList, ShareGrantReceipt, ShareGrants,
     };
-    use crate::conversation::domain::{Conversation, ShareRole, ToolPolicy};
+    use crate::conversation::domain::{Capabilities, Conversation, ToolPolicy};
     use crate::conversation::infrastructure::{LocalConversationStore, NessaRecordReadSource};
     use crate::product::ProductDependencies;
     use base64::engine::general_purpose::STANDARD;
@@ -2457,7 +2457,7 @@ mod tests {
             let allowed = receiver_id == "device" && id.to_string() == self.0;
             Box::pin(async move {
                 Ok(allowed.then_some(HeldGrant {
-                    role: ShareRole::Read,
+                    capabilities: Capabilities::read(),
                     policy_revision: 1,
                 }))
             })
@@ -2502,7 +2502,7 @@ mod tests {
                 && id.to_string() == self.conversation;
             Box::pin(async move {
                 Ok(allowed.then_some(HeldGrant {
-                    role: ShareRole::Read,
+                    capabilities: Capabilities::read(),
                     policy_revision: 1,
                 }))
             })
@@ -3196,6 +3196,9 @@ mod tests {
         snapshot: Mutex<AccessSnapshot>,
         now: AtomicU64,
         proof_expires_at: Mutex<Option<u64>>,
+        /// A share target's principal, by credential id, when it is not the
+        /// session's. Absent, every read is the session's actor.
+        target_principal: Mutex<std::collections::HashMap<String, PrincipalId>>,
     }
 
     impl CredentialVerifier for Authority {
@@ -3227,10 +3230,17 @@ mod tests {
                     .unwrap_or_else(|error| error.into_inner())
                     .clone();
                 let named = &snapshot.credential;
-                if named.id() != credential {
+                let principal = self
+                    .target_principal
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .get(credential.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| named.principal_id().clone());
+                if named.id() != credential || principal != *named.principal_id() {
                     snapshot.credential = Credential::new(
                         credential.clone(),
-                        named.principal_id().clone(),
+                        principal.clone(),
                         named.organization_id().clone(),
                         named.audience_id().clone(),
                         named.issued_at(),
@@ -3238,6 +3248,14 @@ mod tests {
                         named.grants().to_vec(),
                     )
                     .unwrap();
+                    let membership = snapshot.membership.clone();
+                    snapshot.membership = Membership::new(
+                        membership.id().clone(),
+                        principal,
+                        membership.organization_id().clone(),
+                        membership.role(),
+                        membership.status(),
+                    );
                 }
                 Ok(snapshot)
             })
@@ -3300,6 +3318,7 @@ mod tests {
             snapshot: Mutex::new(snapshot(role, MembershipStatus::Active)),
             now: AtomicU64::new(100),
             proof_expires_at: Mutex::new(Some(200)),
+            target_principal: Mutex::new(std::collections::HashMap::new()),
         });
         let state = ProductRouteState::new(
             ResourceId::new("gateway-resource").unwrap(),

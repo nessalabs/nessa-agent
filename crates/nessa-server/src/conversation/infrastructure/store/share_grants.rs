@@ -2,16 +2,17 @@
 //! the conversations and the catalogue revisions a grant change moves.
 //!
 //! [`granted`] is the one statement of "this receiver holds a grant on this
-//! conversation", of any role. `held_grant` reads the role and policy
-//! revision from the same row for one conversation, and
-//! the catalogue page and resolve ask it for a paired device's rows
-//! (`store.rs`), so a device's list and its reads cannot disagree about what
-//! it may see. They read the role from that row too ([`held_role`]), for
-//! the access policy to admit each entry they return.
+//! conversation". `held_grant` reads the capabilities and grant epoch from
+//! the same row for one conversation, and the catalogue page and resolve
+//! ask it for a paired device's rows (`store.rs`), so a device's list and
+//! its reads cannot disagree about what it may see. They read the
+//! capabilities from that row too ([`held_capabilities`]), for the access
+//! policy to admit each entry they return.
 //!
-//! A grant's role and policy are stored as this adapter spells them: the
-//! role as `read`, `comment` or `drive`, and a Drive grant's policy as JSON
-//! ([`policy_text`]), read back through the domain's constructors.
+//! A grant's capabilities and constraints are stored as this adapter spells
+//! them: the set as [`Capabilities::as_str`], and a drive grant's tool
+//! policy as JSON ([`policy_text`]), read back through the domain's
+//! constructors.
 use super::{
     cells, failed, next_revision, read, stored_time, time, unreadable, LocalConversationStore,
 };
@@ -22,7 +23,7 @@ use crate::conversation::application::{
     MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 use crate::conversation::domain::{
-    CommandHosts, ShareAccess, ShareRole, ToolChoice, ToolPolicy, ToolPreset, ToolRules,
+    Capabilities, CommandHosts, ShareAccess, ToolChoice, ToolPolicy, ToolPreset, ToolRules,
 };
 use nessa_auth::domain::{CredentialId, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
@@ -205,7 +206,7 @@ enum ChangeAttempt {
 /// SQL naming the one grant row the receiver bound to parameter `receiver`
 /// holds on the conversation whose id is `conversation`, as `g`. Both are
 /// names this adapter writes, never a caller's text. [`granted`] asks whether
-/// it exists and `held_grant` reads its role and revision, so the two cannot
+/// it exists and `held_grant` reads its capabilities and epoch, so the two cannot
 /// disagree.
 fn grant_row(conversation: &str, receiver: &str) -> String {
     format!(
@@ -215,7 +216,7 @@ fn grant_row(conversation: &str, receiver: &str) -> String {
 }
 
 /// SQL that is true when the receiver bound to parameter `receiver` holds a
-/// grant, of any role, on the conversation whose id is `conversation`.
+/// grant on the conversation whose id is `conversation`.
 pub(super) fn granted(conversation: &str, receiver: &str) -> String {
     format!(
         "EXISTS (SELECT 1 FROM {})",
@@ -223,45 +224,34 @@ pub(super) fn granted(conversation: &str, receiver: &str) -> String {
     )
 }
 
-/// SQL naming the role the receiver bound to parameter `receiver` holds on
-/// the conversation whose id is `conversation`, as stored, or NULL when it
-/// holds none: the row [`granted`] asks about. Read back by [`stored_role`].
-pub(super) fn held_role(conversation: &str, receiver: &str) -> String {
-    format!("(SELECT g.role FROM {})", grant_row(conversation, receiver))
+/// SQL naming the capabilities the receiver bound to parameter `receiver`
+/// holds on the conversation whose id is `conversation`, as stored, or NULL
+/// when it holds none: the row [`granted`] asks about. Read back by
+/// [`stored_capabilities`].
+pub(super) fn held_capabilities(conversation: &str, receiver: &str) -> String {
+    format!(
+        "(SELECT g.capabilities FROM {})",
+        grant_row(conversation, receiver)
+    )
 }
 
-/// The role [`held_role`] read for row `id`; a spelling this adapter never
-/// writes is that row's damage.
-pub(super) fn stored_role(
+/// The capabilities [`held_capabilities`] read for row `id`; a spelling this
+/// adapter never writes is that row's damage.
+pub(super) fn stored_capabilities(
     stored: Option<String>,
     id: &str,
-) -> Result<Option<ShareRole>, ConversationError> {
+) -> Result<Option<Capabilities>, ConversationError> {
     stored
-        .map(|name| role_named(&name).ok_or_else(|| unreadable("share_grants", id)))
+        .map(|name| Capabilities::parse(&name).ok_or_else(|| unreadable("share_grants", id)))
         .transpose()
 }
 
-/// What a party holds on a conversation, as stored: the role, or [`NONE`],
-/// and the policy text a Drive grant carries.
+/// What a party holds on a conversation, as stored: the capabilities, or
+/// [`NONE`], and the constraint text a drive grant carries.
 type Held = (String, Option<String>);
 
 /// The journal's spelling of "no grant", before a grant or after a revoke.
 const NONE: &str = "none";
-
-/// The role's stored spelling.
-fn role_name(role: ShareRole) -> &'static str {
-    match role {
-        ShareRole::Read => "read",
-        ShareRole::Comment => "comment",
-        ShareRole::Drive => "drive",
-    }
-}
-
-fn role_named(name: &str) -> Option<ShareRole> {
-    [ShareRole::Read, ShareRole::Comment, ShareRole::Drive]
-        .into_iter()
-        .find(|role| role_name(*role) == name)
-}
 
 /// The preset's stored spelling.
 fn preset_name(preset: ToolPreset) -> &'static str {
@@ -354,7 +344,7 @@ fn sequence(value: i64) -> Option<u64> {
 fn wanted(transition: &ShareGrantTransition) -> Held {
     match transition {
         ShareGrantTransition::Grant(access) => (
-            role_name(access.role()).to_owned(),
+            access.capabilities().as_str().to_owned(),
             access.policy().map(policy_text),
         ),
         ShareGrantTransition::Revoke => (NONE.to_owned(), None),
@@ -363,7 +353,7 @@ fn wanted(transition: &ShareGrantTransition) -> Held {
 
 /// The policy revision `receiver`'s grant on conversation `id` held once
 /// journal row `at` was written: the latest row at or before it that changed
-/// the grant's role or policy, which is the row that stamped the grant then.
+/// the grant's capabilities or constraints, which is the row that stamped the grant then.
 /// Read for a retried share, which answers what its first answer did; only
 /// asked of a row that left the party a grant, so one such row exists.
 fn revision_after(
@@ -403,7 +393,7 @@ impl ShareGrants for LocalConversationStore {
             let held = connection
                 .query_row(
                     &format!(
-                        "SELECT g.role, g.policy_revision FROM conversations AS c, {} AND c.id = ?1",
+                        "SELECT g.capabilities, g.policy_revision FROM conversations AS c, {} AND c.id = ?1",
                         grant_row("c.id", "?2")
                     ),
                     params![id, receiver_id],
@@ -412,10 +402,10 @@ impl ShareGrants for LocalConversationStore {
                 .optional()
                 .map_err(failed)?;
             held.map(|(name, revision)| {
-                role_named(&name)
+                Capabilities::parse(&name)
                     .zip(sequence(revision))
-                    .map(|(role, policy_revision)| HeldGrant {
-                        role,
+                    .map(|(capabilities, policy_revision)| HeldGrant {
+                        capabilities,
                         policy_revision,
                     })
                     .ok_or_else(|| unreadable("share_grants", &id))
@@ -491,7 +481,7 @@ impl ShareGrants for LocalConversationStore {
             let grants = {
                 let mut statement = transaction
                     .prepare(&format!(
-                        "SELECT receiver_id, {}, role, {}, policy_revision, granted_at_ms
+                        "SELECT receiver_id, {}, capabilities, {}, policy_revision, granted_at_ms
                          FROM share_grants
                          WHERE conversation_id = ?1 ORDER BY granted_at_ms, credential_id",
                         super::acquisition::text("credential_id", MAX_IDENTIFIER_BYTES, false),
@@ -512,7 +502,14 @@ impl ShareGrants for LocalConversationStore {
                         ))
                     })())?;
                     let grant = stored.and_then(
-                        |(receiver_id, credential, role, policy, policy_revision, granted_at)| {
+                        |(
+                            receiver_id,
+                            credential,
+                            capabilities,
+                            policy,
+                            policy_revision,
+                            granted_at,
+                        )| {
                             let policy = match policy {
                                 Some(text) => Some(policy_from(&text)?),
                                 None => None,
@@ -521,7 +518,11 @@ impl ShareGrants for LocalConversationStore {
                                 conversation_id: id.clone(),
                                 receiver_id,
                                 credential_id: CredentialId::new(credential).ok()?,
-                                access: ShareAccess::new(role_named(&role)?, policy).ok()?,
+                                access: ShareAccess::new(
+                                    Capabilities::parse(&capabilities)?,
+                                    policy,
+                                )
+                                .ok()?,
                                 policy_revision: sequence(policy_revision)?,
                                 granted_at_ms: time(granted_at)?,
                             })
@@ -564,7 +565,7 @@ impl ShareGrants for LocalConversationStore {
                 .optional()
                 .map_err(failed)?;
             match entry {
-                Some((after, Some(text))) if after == role_name(ShareRole::Drive) => {
+                Some((after, Some(text))) if after == Capabilities::drive().as_str() => {
                     policy_from(&text)
                         .map(Some)
                         .ok_or_else(|| unreadable("share_grant_changes", &id))
@@ -674,7 +675,7 @@ impl LocalConversationStore {
                 // a share whose reply was lost cannot, retried after a later
                 // unshare, grant again (row G16). That holds for a request that
                 // changed nothing too: it is journaled with before equal to after.
-                // The same request naming another device, another role or policy,
+                // The same request naming another device, other capabilities or constraints,
                 // or the other change is refused (row J6). A retry is answered
                 // before the expected revision is compared: its first answer may
                 // be what moved the grant past it (row J29).
@@ -721,7 +722,7 @@ impl LocalConversationStore {
                 }
                 let existing: Option<(String, Held, i64)> = transaction
                     .query_row(
-                        "SELECT receiver_id, role, policy, policy_revision FROM share_grants
+                        "SELECT receiver_id, capabilities, policy, policy_revision FROM share_grants
                      WHERE conversation_id = ?1 AND (receiver_id = ?2 OR credential_id = ?3)",
                         params![
                             id,
@@ -792,13 +793,13 @@ impl LocalConversationStore {
                         return Err(ConversationError::InvalidInput);
                     }
                 }
-                let drive = role_name(ShareRole::Drive);
+                let drive = Capabilities::drive().as_str();
                 if applied && before.0 != drive && after.0 == drive {
                     let driving = count(
                         &transaction,
                         &format!(
                             "SELECT COUNT(*) FROM share_grants
-                         WHERE conversation_id = ?1 AND role = '{drive}'"
+                         WHERE conversation_id = ?1 AND capabilities = '{drive}'"
                         ),
                         &id,
                     )?;
@@ -808,7 +809,7 @@ impl LocalConversationStore {
                 }
                 // A grant or a revoke is a catalogue change: the device's next
                 // pass starts past what it completed, so a newly granted row must
-                // carry a revision past it (row G5). A change of role or policy
+                // carry a revision past it (row G5). A change of capabilities or constraints
                 // leaves what the device reads as it was, so it keeps the
                 // revision it found, as a request that changed nothing does (rows
                 // G9, J4).
@@ -855,7 +856,7 @@ impl LocalConversationStore {
                         ],
                     )
                     .map_err(failed)?;
-                // The role and policy a grant holds are stamped with the journal
+                // The capabilities and constraints a grant holds are stamped with the journal
                 // row that set them, so a later change moves its policy revision
                 // and a request that changed nothing leaves it (rows J4, J5).
                 let sequence = transaction.last_insert_rowid();
@@ -875,7 +876,7 @@ impl LocalConversationStore {
                     ),
                     (NONE, _) => transaction.execute(
                         "INSERT INTO share_grants
-                             (conversation_id, receiver_id, credential_id, role, policy,
+                             (conversation_id, receiver_id, credential_id, capabilities, policy,
                               policy_revision, granted_at_ms)
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                         params![
@@ -889,7 +890,7 @@ impl LocalConversationStore {
                         ],
                     ),
                     _ => transaction.execute(
-                        "UPDATE share_grants SET role = ?3, policy = ?4, policy_revision = ?5
+                        "UPDATE share_grants SET capabilities = ?3, policy = ?4, policy_revision = ?5
                          WHERE conversation_id = ?1 AND receiver_id = ?2",
                         params![id, receiver, after.0, after.1, sequence],
                     ),
@@ -908,8 +909,8 @@ impl LocalConversationStore {
                     conversation_id = %change.conversation_id,
                     credential_id = change.credential_id.as_str(),
                     change = change.transition.as_str(),
-                    role_before = before.0.as_str(),
-                    role_after = after.0.as_str(),
+                    capabilities_before = before.0.as_str(),
+                    capabilities_after = after.0.as_str(),
                     initiator = change.initiator.principal_id.as_str(),
                     revision,
                     policy_revision = sequence,

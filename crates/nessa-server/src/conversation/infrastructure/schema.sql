@@ -85,22 +85,24 @@ CREATE TABLE summaries (
     archived INTEGER NOT NULL CHECK (archived IN (0, 1))
 ) STRICT;
 
--- Which paired party may do what in which conversation (issues 704, 707). A
--- row is a grant; revoking removes it. Nothing is granted by default or by
--- list. The party is named by its receiver binding and by the credential the
--- owner chose it by; both are minted when it paired and never reused. Every
--- role reads; a Drive grant alone carries a tool policy, the JSON of its
--- `ToolPolicy`. `policy_revision` is the journal sequence of the change that
--- last set the role or the policy.
+-- Which paired party may do what in which conversation (issues 704, 707,
+-- 889). A row is the access grant; revoking removes it. Nothing is granted
+-- by default or by list. The party is named by its receiver binding and by
+-- the credential the owner chose it by; both are minted when it paired and
+-- never reused. `capabilities` is the set, spelled `read`, `read+comment`,
+-- or `read+comment+drive`. A drive grant alone carries constraints: the
+-- JSON of its `ToolPolicy`, tool policy and command hosts. `policy_revision`
+-- is the grant epoch, the journal sequence of the change that last set the
+-- capabilities or the constraints.
 CREATE TABLE share_grants (
     conversation_id TEXT NOT NULL REFERENCES conversations (id),
     receiver_id TEXT NOT NULL,
     credential_id TEXT NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('read', 'comment', 'drive')),
+    capabilities TEXT NOT NULL CHECK (capabilities IN ('read', 'read+comment', 'read+comment+drive')),
     policy TEXT,
     policy_revision INTEGER NOT NULL REFERENCES share_grant_changes (sequence),
     granted_at_ms INTEGER NOT NULL,
-    CHECK ((role = 'drive') = (policy IS NOT NULL)),
+    CHECK ((capabilities = 'read+comment+drive') = (policy IS NOT NULL)),
     PRIMARY KEY (receiver_id, conversation_id),
     UNIQUE (credential_id, conversation_id)
 ) STRICT;
@@ -108,19 +110,19 @@ CREATE TABLE share_grants (
 -- A conversation's grants, for its shares list, count and revoke.
 CREATE INDEX share_grants_conversation ON share_grants (conversation_id);
 
--- Every grant, change of role or policy, and revoke as the owner made it:
--- the role and policy before and after, who, from which surface, under which
--- request, and the catalogue revision it took. A request that changed
--- nothing is kept too, with before equal to after, so a retry of it replays
--- that answer.
+-- Every grant, change of capabilities or constraints, and revoke as the
+-- owner made it: the capabilities and constraints before and after, who,
+-- from which surface, under which request, and the catalogue revision it
+-- took. A request that changed nothing is kept too, with before equal to
+-- after, so a retry of it replays that answer.
 -- Never changed or removed.
 CREATE TABLE share_grant_changes (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id TEXT NOT NULL REFERENCES conversations (id),
     receiver_id TEXT NOT NULL,
     credential_id TEXT NOT NULL,
-    before TEXT NOT NULL CHECK (before IN ('none', 'read', 'comment', 'drive')),
-    after TEXT NOT NULL CHECK (after IN ('none', 'read', 'comment', 'drive')),
+    before TEXT NOT NULL CHECK (before IN ('none', 'read', 'read+comment', 'read+comment+drive')),
+    after TEXT NOT NULL CHECK (after IN ('none', 'read', 'read+comment', 'read+comment+drive')),
     policy_before TEXT,
     policy_after TEXT,
     initiator TEXT NOT NULL,
@@ -128,8 +130,8 @@ CREATE TABLE share_grant_changes (
     request TEXT NOT NULL,
     changed_at_ms INTEGER NOT NULL,
     revision INTEGER NOT NULL,
-    CHECK ((before = 'drive') = (policy_before IS NOT NULL)),
-    CHECK ((after = 'drive') = (policy_after IS NOT NULL))
+    CHECK ((before = 'read+comment+drive') = (policy_before IS NOT NULL)),
+    CHECK ((after = 'read+comment+drive') = (policy_after IS NOT NULL))
 ) STRICT;
 
 -- One journal row per request: a retried request is answered from it.
@@ -140,4 +142,4 @@ CREATE UNIQUE INDEX share_grant_changes_request
 CREATE INDEX share_grant_changes_by_receiver
     ON share_grant_changes (receiver_id, revision);
 
-PRAGMA user_version = 5;
+PRAGMA user_version = 6;

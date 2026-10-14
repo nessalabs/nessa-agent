@@ -1,30 +1,137 @@
-//! What a share grant lets its holder do (issue 707): a role, and for Drive
-//! the tool policy that holder's turns will run under.
+//! What a share grant lets its holder do (issue 889): a capability set, and
+//! for a grant that includes `drive` the constraints that holder's turns
+//! run under — the tool policy and the command hosts.
 //!
-//! This value checks shape and size only. What a policy allows is decided
-//! by the application's `ToolPolicyEvaluator`, which Cedar answers; this
-//! value never matches a pattern itself.
+//! This value checks shape and size only. What a capability allows is
+//! decided by the conversation access policy, which Cedar answers; what a
+//! tool policy allows is the application's `ToolPolicyEvaluator`, also
+//! Cedar. This value never matches a pattern itself.
 //!
 //! ```text
-//! ShareAccess ──role──▶ ShareRole (Read, Comment or Drive)
-//!      └──────policy──▶ ToolPolicy (Drive only) ──tools──▶ ToolPreset | ToolRules
-//!                                  └──command_hosts──▶ CommandHosts
+//! ShareAccess ──capabilities──▶ Capabilities (read, and comment, and drive)
+//!      └────────constraints──▶ ToolPolicy (drive only) ──tools──▶ ToolPreset | ToolRules
+//!                                         └──command_hosts──▶ CommandHosts
 //! ```
 
 use nessa_sdk::domain::agent_execution::leases::{EnvironmentRef, SshDestination};
 use std::collections::BTreeSet;
 
-/// How much a share lets its holder do. What each role allows is the
-/// conversation access policy's, which Cedar answers; this value only names
-/// the role.
+/// One capability a conversation grant may name. What it allows is Cedar's;
+/// this value only names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ShareRole {
+pub enum Capability {
     /// Fold the records and watch them live.
     Read,
-    /// Read, and leave notes the agent sees on the owner's next turn.
+    /// Leave notes the agent sees on the owner's next turn.
     Comment,
-    /// Comment, and start, steer and stop turns under a tool policy.
+    /// Start, steer and stop turns under the grant's constraints.
     Drive,
+}
+
+/// The capabilities one conversation grant holds.
+///
+/// A grant always includes [`Capability::Read`]. Comment is read and
+/// comment. Drive is those and drive. Those are the only sets
+/// ([`Self::parse`] accepts); a set that names drive without comment, or
+/// comment without read, is not a grant. The stored spelling is
+/// [`Self::as_str`], which the metadata journal and the deletion fence
+/// record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Capabilities {
+    comment: bool,
+    drive: bool,
+}
+
+impl Capabilities {
+    /// Read only.
+    pub const fn read() -> Self {
+        Self {
+            comment: false,
+            drive: false,
+        }
+    }
+
+    /// Read and comment.
+    pub const fn comment() -> Self {
+        Self {
+            comment: true,
+            drive: false,
+        }
+    }
+
+    /// Read, comment and drive.
+    pub const fn drive() -> Self {
+        Self {
+            comment: true,
+            drive: true,
+        }
+    }
+
+    /// Whether the grant includes `capability`. Read is always included.
+    pub const fn contains(self, capability: Capability) -> bool {
+        match capability {
+            Capability::Read => true,
+            Capability::Comment => self.comment,
+            Capability::Drive => self.drive,
+        }
+    }
+
+    /// The stored spelling: `read`, `read+comment`, or `read+comment+drive`.
+    /// One set has one spelling, so two grants hold the same capabilities
+    /// exactly when their spellings are equal.
+    pub const fn as_str(self) -> &'static str {
+        match (self.comment, self.drive) {
+            (false, false) => "read",
+            (true, false) => "read+comment",
+            (_, true) => "read+comment+drive",
+        }
+    }
+
+    /// The capabilities [`Self::as_str`] wrote, or `None` for any other text.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "read" => Some(Self::read()),
+            "read+comment" => Some(Self::comment()),
+            "read+comment+drive" => Some(Self::drive()),
+            _ => None,
+        }
+    }
+
+    /// A wire set, in any order. The only sets are read, read and comment,
+    /// and read, comment and drive. A duplicate, an empty set, or any other
+    /// combination is refused.
+    pub fn from_names<'a>(
+        names: impl IntoIterator<Item = &'a str>,
+    ) -> Result<Self, ShareAccessError> {
+        let mut read = false;
+        let mut comment = false;
+        let mut drive = false;
+        for name in names {
+            match name {
+                "read" if !read => read = true,
+                "comment" if !comment => comment = true,
+                "drive" if !drive => drive = true,
+                _ => return Err(ShareAccessError::Capabilities),
+            }
+        }
+        match (read, comment, drive) {
+            (true, false, false) => Ok(Self::read()),
+            (true, true, false) => Ok(Self::comment()),
+            (true, true, true) => Ok(Self::drive()),
+            _ => Err(ShareAccessError::Capabilities),
+        }
+    }
+
+    /// The capability names, in the order read, comment, drive.
+    pub fn names(self) -> impl Iterator<Item = &'static str> {
+        [
+            Some("read"),
+            self.comment.then_some("comment"),
+            self.drive.then_some("drive"),
+        ]
+        .into_iter()
+        .flatten()
+    }
 }
 
 /// A named tool policy a Drive grant may use instead of its own rules.
@@ -226,51 +333,59 @@ pub enum ToolPolicyError {
     MalformedHost,
 }
 
-/// A role with the policy it needs: a Drive grant always has a tool policy,
-/// and a Read or Comment grant never has one, because neither starts a turn.
+/// Capabilities with the constraints they need. A grant that includes
+/// [`Capability::Drive`] always carries a tool policy, and one that does
+/// not never does, because only drive starts a turn.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShareAccess {
-    role: ShareRole,
+    capabilities: Capabilities,
     policy: Option<ToolPolicy>,
 }
 
 impl ShareAccess {
-    /// `role` with `policy`, refused when a Drive grant names no policy or
-    /// a Read or Comment grant names one.
-    pub fn new(role: ShareRole, policy: Option<ToolPolicy>) -> Result<Self, ShareAccessError> {
-        match (role, &policy) {
-            (ShareRole::Drive, None) => Err(ShareAccessError::PolicyRequired),
-            (ShareRole::Read | ShareRole::Comment, Some(_)) => {
-                Err(ShareAccessError::PolicyNotAllowed)
-            }
-            _ => Ok(Self { role, policy }),
+    /// `capabilities` with `policy`, refused when a drive grant names no
+    /// policy or any other grant names one.
+    pub fn new(
+        capabilities: Capabilities,
+        policy: Option<ToolPolicy>,
+    ) -> Result<Self, ShareAccessError> {
+        match (capabilities.contains(Capability::Drive), &policy) {
+            (true, None) => Err(ShareAccessError::PolicyRequired),
+            (false, Some(_)) => Err(ShareAccessError::PolicyNotAllowed),
+            _ => Ok(Self {
+                capabilities,
+                policy,
+            }),
         }
     }
 
     /// Read, which takes no policy.
     pub fn read() -> Self {
         Self {
-            role: ShareRole::Read,
+            capabilities: Capabilities::read(),
             policy: None,
         }
     }
 
-    pub fn role(&self) -> ShareRole {
-        self.role
+    pub fn capabilities(&self) -> Capabilities {
+        self.capabilities
     }
 
-    /// The tool policy, present exactly when the role is Drive.
+    /// The tool policy, present exactly when the grant includes drive.
+    /// Those are the grant's constraints.
     pub fn policy(&self) -> Option<&ToolPolicy> {
         self.policy.as_ref()
     }
 }
 
-/// Why a role and policy were refused together.
+/// Why capabilities and a policy were refused together.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShareAccessError {
+    /// The set is not read, read and comment, or read, comment and drive.
+    Capabilities,
     /// Drive names no tool policy.
     PolicyRequired,
-    /// Read or Comment names a tool policy.
+    /// A grant without drive names a tool policy.
     PolicyNotAllowed,
 }
 

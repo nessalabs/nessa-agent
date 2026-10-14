@@ -12,8 +12,8 @@ use crate::conversation::{
         ConversationSummaries, Reader, WatchCatalogue,
     },
     domain::{
-        Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink,
-        ShareAccess, ShareRole, ToolPolicy, ToolPreset, ToolRules,
+        Capabilities, Conversation, ConversationDeletion, ProviderSessionErasure,
+        ProviderSessionLink, ShareAccess, ToolPolicy, ToolPreset, ToolRules,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId, MAX_IDENTIFIER_BYTES};
@@ -230,7 +230,7 @@ fn an_alpha_v1_database_is_refused_without_migrating_its_rows() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 1,
-            expected: 5
+            expected: 6
         })
     ));
     let old_row: String = raw(&path)
@@ -257,7 +257,7 @@ fn an_alpha_v2_database_is_refused_without_erasing_ownership() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 2,
-            expected: 5
+            expected: 6
         })
     ));
     let retained: String = raw(&path)
@@ -2855,9 +2855,9 @@ async fn a_revoke_takes_the_row_out_of_the_devices_catalogue() {
     assert!(!opened.store.is_granted(&id, "phone").await.unwrap());
 }
 
-/// A version 4 file, whose grants hold no role but Read and no policy, is
-/// refused rather than read into the version 5 shape, and keeps its rows
-/// (docs/adr/todo/202-versioned-local-datasets.md).
+/// A version 4 file, whose grants hold no capability set but read and no
+/// policy, is refused rather than read into the version 6 shape, and keeps
+/// its rows (docs/adr/todo/202-versioned-local-datasets.md).
 #[test]
 fn a_version_4_database_is_refused_without_erasing_its_grants() {
     let directory = tempfile::tempdir().unwrap();
@@ -2880,13 +2880,111 @@ fn a_version_4_database_is_refused_without_erasing_its_grants() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 4,
-            expected: 5
+            expected: 6
         })
     ));
     let kept: String = raw(&path)
         .query_row("SELECT receiver_id FROM read_grants", [], |row| row.get(0))
         .unwrap();
     assert_eq!(kept, "phone");
+}
+
+/// The previous metadata version, whose grants name a role, is refused and
+/// left untouched. This build reads version 6 only.
+#[test]
+fn a_version_5_database_is_refused_without_erasing_its_grants() {
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let path = private.join("metadata.sqlite3");
+    let old = nessa_local_database::Schema::new(
+        "CREATE TABLE share_grants (
+            receiver_id TEXT NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('read', 'comment', 'drive'))
+         ) STRICT;
+         PRAGMA user_version = 5;",
+    )
+    .unwrap();
+    let connection = nessa_local_database::open(&path, &old).unwrap();
+    connection
+        .execute(
+            "INSERT INTO share_grants (receiver_id, role) VALUES ('phone', 'drive')",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    assert!(matches!(
+        LocalConversationStore::open(&path),
+        Err(nessa_local_database::OpenError::Version {
+            found: 5,
+            expected: 6
+        })
+    ));
+    let kept: String = raw(&path)
+        .query_row("SELECT role FROM share_grants", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(kept, "drive");
+}
+
+/// A comment grant written through the store, past `conversation.share`, is
+/// a legal capability set. Cedar lets the device that is signed in as the
+/// binding owner comment, and denies the gateway comment because it is not.
+/// Neither may drive: the set does not contain `drive`.
+#[tokio::test]
+async fn a_hand_built_comment_grant_for_a_gateway_is_denied_by_cedar() {
+    use crate::conversation::application::{
+        AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
+        ConversationAccessPolicyEvaluator, RequestShape, ShareGrants,
+    };
+    use crate::conversation::infrastructure::CedarConversationAccessPolicy;
+    let opened = opened();
+    let id = new_id();
+    let record = owned(&id);
+    opened.store.create(record.clone()).await.unwrap();
+    let comment = ShareAccess::new(Capabilities::comment(), None).unwrap();
+    assert!(share_as(&opened.store, &id, "peer", comment, "hand")
+        .await
+        .unwrap());
+    let held = opened.store.held_capabilities(&id, "peer").await.unwrap();
+    assert_eq!(held, Some(Capabilities::comment()));
+    let policy = CedarConversationAccessPolicy::new().unwrap();
+    let (organization, owner, gateway) =
+        (org(), alice(), PrincipalId::new("gateway:peer").unwrap());
+    let ask = |signed_in_as: &PrincipalId, action: AccessAction| {
+        policy.evaluate(&AccessAsk {
+            subject: AccessSubject::PairedReader {
+                organization: &organization,
+                signed_in_as,
+                binding_owner: &owner,
+                receiver: "peer",
+            },
+            action,
+            resource: AccessResource::of(&record),
+            held,
+            request: RequestShape::default(),
+            target: None,
+        })
+    };
+    assert!(matches!(
+        ask(&gateway, AccessAction::Read),
+        AccessDecision::Allow { .. }
+    ));
+    assert!(matches!(
+        ask(&owner, AccessAction::Comment),
+        AccessDecision::Allow { .. }
+    ));
+    assert_eq!(
+        ask(&gateway, AccessAction::Comment),
+        AccessDecision::Deny(AccessDenial::NotPermitted)
+    );
+    assert_eq!(
+        ask(&owner, AccessAction::Drive),
+        AccessDecision::Deny(AccessDenial::NotPermitted)
+    );
+    assert_eq!(
+        ask(&gateway, AccessAction::Drive),
+        AccessDecision::Deny(AccessDenial::NotPermitted)
+    );
 }
 
 /// Row H9 (`docs/design/auth/peer-gateways.md`): a paired reader's head
@@ -3292,7 +3390,7 @@ async fn every_grant_change_is_journaled_with_its_initiator() {
 // docs/design/read-grants.md.
 
 fn drive_with(policy: ToolPolicy) -> ShareAccess {
-    ShareAccess::new(ShareRole::Drive, Some(policy)).unwrap()
+    ShareAccess::new(Capabilities::drive(), Some(policy)).unwrap()
 }
 fn no_shell() -> ShareAccess {
     drive_with(ToolPolicy::preset(ToolPreset::NoShell))
@@ -3496,9 +3594,14 @@ async fn a_change_of_role_or_policy_is_applied_journaled_and_moves_the_policy_re
             .collect::<Vec<_>>(),
         vec![
             row("none", "read", &None, &None),
-            row("read", "drive", &None, &no_shell_text),
-            row("drive", "drive", &no_shell_text, &rules_text),
-            row("drive", "read", &rules_text, &None),
+            row("read", "read+comment+drive", &None, &no_shell_text),
+            row(
+                "read+comment+drive",
+                "read+comment+drive",
+                &no_shell_text,
+                &rules_text
+            ),
+            row("read+comment+drive", "read", &rules_text, &None),
         ]
     );
     assert!(journal.iter().all(|entry| entry.4 == revision));
@@ -3539,7 +3642,7 @@ async fn an_identical_share_changes_nothing_and_keeps_the_policy_revision() {
     assert_eq!(journal.len(), 2);
     let (before, after, policy_before, policy_after, _, _) = &journal[1];
     assert_eq!((before, policy_before), (after, policy_after));
-    assert_eq!(after, "drive");
+    assert_eq!(after, "read+comment+drive");
 }
 
 /// Row J6: a share retried with its request id answers what it answered the
@@ -3564,7 +3667,7 @@ async fn a_retried_share_replays_its_role_and_policy_or_is_refused() {
         .await
         .unwrap());
     assert_eq!(only_grant(store, &id).await.access, ShareAccess::read());
-    let comment = ShareAccess::new(ShareRole::Comment, None).unwrap();
+    let comment = ShareAccess::new(Capabilities::comment(), None).unwrap();
     for other in [comment, rules(), ShareAccess::read()] {
         let refused = share_as(store, &id, "phone", other.clone(), "share-1").await;
         assert!(
@@ -3897,12 +4000,12 @@ async fn a_first_grant_naming_no_revision_is_refused_once_another_landed() {
 #[tokio::test]
 async fn a_revoke_ends_a_grant_of_any_role() {
     use crate::conversation::application::ShareGrants;
-    let comment = ShareAccess::new(ShareRole::Comment, None).unwrap();
-    for (access, role, policy) in [
-        (comment, "comment", None),
+    let comment = ShareAccess::new(Capabilities::comment(), None).unwrap();
+    for (access, capabilities, policy) in [
+        (comment, "read+comment", None),
         (
             no_shell(),
-            "drive",
+            "read+comment+drive",
             Some(r#"{"preset":"no_shell"}"#.to_owned()),
         ),
     ] {
@@ -3922,7 +4025,7 @@ async fn a_revoke_ends_a_grant_of_any_role() {
         let last = journal.last().unwrap();
         assert_eq!(
             (last.0.as_str(), last.1.as_str(), &last.2, &last.3),
-            (role, "none", &policy, &None)
+            (capabilities, "none", &policy, &None)
         );
     }
 }
@@ -3974,7 +4077,7 @@ async fn a_conversation_holds_a_bounded_number_of_drive_grants() {
     let grants = store.grants(&id).await.unwrap().grants;
     let driving = grants
         .iter()
-        .filter(|grant| grant.access.role() == ShareRole::Drive)
+        .filter(|grant| grant.access.capabilities() == Capabilities::drive())
         .count();
     assert_eq!(driving as i64, MAX_DRIVE_GRANTS_PER_CONVERSATION);
     // A driver's own policy can still change: it takes no new Drive grant,

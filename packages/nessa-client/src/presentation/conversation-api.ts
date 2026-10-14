@@ -32,8 +32,8 @@ import type {
   ConversationReorderResult,
   ConversationRevokePermissionRuleResult,
   ConversationSetApprovalModeResult,
+  ConversationCapability,
   ConversationShareResult,
-  ConversationShareRole,
   ConversationSharesCursor,
   ConversationSharesResult,
   ConversationToolPolicy,
@@ -300,17 +300,21 @@ export type ConversationApi = {
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
   /**
-   * Grant one paired device or peer gateway `role` on one of the caller's
-   * conversations, or change the role and policy it holds there
-   * (`conversation.share`, `credential.manage`). `credentialId` is one
-   * `client.credentials.list()` names. A Drive grant needs `policy`; read and
-   * comment take none, and the gateway refuses either mistake
-   * `invalid_request`, as it does a policy past the schema's bounds (published
-   * in `bounds`: `maxToolPolicyPatterns`, `maxToolPatternBytes`,
-   * `maxCommandHosts`, `maxCommandHostBytes`). A grant that names no
-   * `commandHosts` runs commands nowhere. The answer names the
-   * grant's `policyRevision` once the share is made; `applied` is false when
-   * the grant already held that role and policy, and its revision was kept.
+   * Grant one paired device or peer gateway a capability set on one of the
+   * caller's conversations, or change the capabilities and constraints it
+   * holds there (`conversation.share`, `credential.manage`). `credentialId`
+   * is one `client.credentials.list()` names. The only sets are `read`,
+   * `read` and `comment`, and those plus `drive`. A set that includes
+   * `drive` needs `policy`; the others take none, and the gateway refuses
+   * either mistake `invalid_request`, as it does a set that is not one of
+   * those three and a policy past the schema's bounds (published in
+   * `bounds`: `maxToolPolicyPatterns`, `maxToolPatternBytes`,
+   * `maxCommandHosts`, `maxCommandHostBytes`). Comment and drive for a
+   * gateway principal are refused `invalid_request` and write nothing. A
+   * grant that names no `commandHosts` runs commands nowhere. The answer
+   * names the grant's `policyRevision`, the grant epoch, once the share is
+   * made; `applied` is false when the grant already held those capabilities
+   * and constraints, and its epoch was kept.
    * With `expectedPolicyRevision`, a grant no longer at that revision is
    * refused `share_grant_changed`. The same `requestId` answers what it
    * answered first, its revision included, so a failure's `retry()` grants at
@@ -322,13 +326,13 @@ export type ConversationApi = {
   share: (
     conversationId: string,
     credentialId: string,
-    role: ConversationShareRole,
+    capabilities: readonly ConversationCapability[],
     policy?: ConversationToolPolicy,
     options?: ConversationShareOptions,
   ) => Promise<ConversationShareResult>
   /**
    * Revoke one paired party's grant on one of the caller's conversations,
-   * whatever its role (`conversation.unshare`). It needs only ownership, so it
+   * whatever capabilities it holds (`conversation.unshare`). It needs only ownership, so it
    * works on a deleted conversation and for a party since unpaired. `applied`
    * is false when no grant was held; either way none is held afterwards. With
    * `expectedPolicyRevision`, a grant no longer at that revision is refused
@@ -898,23 +902,24 @@ export function createConversationApi(
       action(ProductMethod.ConversationDelete, id, {}, options, false, {
         atLeastMs: conversationDeleteTimeoutMs,
       }),
-    share: (id, credentialId, role, policy, options = {}) => {
+    share: (id, credentialId, capabilities, policy, options = {}) => {
       validConversationId(id)
       const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
       boundedText(credentialId, "Credential ID", 256)
-      // Copied, so a caller changing its policy between a failure and its
-      // retry cannot send another grant under the same request ID.
+      // Copied, so a caller changing its policy or the set between a failure
+      // and its retry cannot send another grant under the same request ID.
       const frozen =
         policy === undefined
           ? undefined
           : (JSON.parse(JSON.stringify(policy)) as ConversationToolPolicy)
+      const granted = [...capabilities]
       return mutate(
         ProductMethod.ConversationShare,
         {
           conversationId: id,
           requestId,
           credentialId,
-          role,
+          capabilities: granted,
           ...(frozen === undefined ? {} : { policy: frozen }),
           ...expectedRevision(options),
         },

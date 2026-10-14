@@ -710,7 +710,7 @@ fn checked_descriptor(
     owner: &PrincipalId,
 ) -> Result<CatalogueDescriptor, ConversationError> {
     let id = stored.id.clone();
-    let held = share_grants::stored_role(held, &id)?;
+    let held = share_grants::stored_capabilities(held, &id)?;
     let conversation = stored
         .read()
         .ok_or_else(|| unreadable("conversations", &id))?;
@@ -1611,7 +1611,7 @@ impl ConversationCatalogue for LocalConversationStore {
                    AND (?8 IS NULL OR {})
                  ORDER BY creation_revision, id LIMIT ?7",
                 acquisition::conversation(""),
-                share_grants::held_role("conversations.id", "?8"),
+                share_grants::held_capabilities("conversations.id", "?8"),
                 share_grants::granted("conversations.id", "?8"),
             )).map_err(failed)?;
             let mut rows = statement.query(params![
@@ -1657,7 +1657,7 @@ impl ConversationCatalogue for LocalConversationStore {
                         {}
                  FROM conversations WHERE id = ?1 AND organization = ?2 AND owner = ?3
                    AND (?4 IS NULL OR {})",
-                        share_grants::held_role("conversations.id", "?4"),
+                        share_grants::held_capabilities("conversations.id", "?4"),
                         share_grants::granted("conversations.id", "?4")
                     ),
                     params![
@@ -1680,7 +1680,7 @@ impl ConversationCatalogue for LocalConversationStore {
             let Some((creation, revision, deleted, held)) = row else {
                 return Ok(None);
             };
-            let held = share_grants::stored_role(held, &id.to_string())?;
+            let held = share_grants::stored_capabilities(held, &id.to_string())?;
             let conversation = read(&transaction, &id)?
                 .ok_or_else(|| unreadable("conversations", &id.to_string()))?;
             // Record integrity, not access: the row was selected by these

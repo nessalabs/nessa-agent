@@ -16,7 +16,9 @@ use crate::backup::infrastructure::{capture_namespace, DirectoryPublisher, FileD
 use crate::conversation::application::{
     ConversationRepository, ShareGrantChange, ShareGrantTransition, ShareGrants,
 };
-use crate::conversation::domain::{Conversation, ShareAccess, ShareRole, ToolPolicy, ToolPreset};
+use crate::conversation::domain::{
+    Capabilities, Conversation, ShareAccess, ToolPolicy, ToolPreset,
+};
 use crate::conversation::infrastructure::{ExportSkip, LocalConversationStore, MetadataSnapshot};
 use nessa_auth::application::dto::{CredentialGrantDto, CredentialMetadataDto, ResourceDto};
 use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId};
@@ -40,7 +42,7 @@ async fn revoked_grants_of_every_role_are_inventoried() {
         &opened.store,
         &comment,
         "comment-party",
-        ShareAccess::new(ShareRole::Comment, None).unwrap(),
+        ShareAccess::new(Capabilities::comment(), None).unwrap(),
     )
     .await;
     grant(
@@ -48,7 +50,7 @@ async fn revoked_grants_of_every_role_are_inventoried() {
         &drive,
         "drive-party",
         ShareAccess::new(
-            ShareRole::Drive,
+            Capabilities::drive(),
             Some(ToolPolicy::preset(ToolPreset::ReadOnlyTools)),
         )
         .unwrap(),
@@ -59,7 +61,7 @@ async fn revoked_grants_of_every_role_are_inventoried() {
         &kept,
         "kept-party",
         ShareAccess::new(
-            ShareRole::Drive,
+            Capabilities::drive(),
             Some(ToolPolicy::preset(ToolPreset::NoShell)),
         )
         .unwrap(),
@@ -73,12 +75,12 @@ async fn revoked_grants_of_every_role_are_inventoried() {
     let roles: Vec<_> = facts
         .revocations
         .iter()
-        .map(|revocation| revocation.role.as_str())
+        .map(|revocation| revocation.capabilities.as_str())
         .collect();
-    assert_eq!(roles, ["read", "comment", "drive"]);
+    assert_eq!(roles, ["read", "read+comment", "read+comment+drive"]);
     assert_eq!(facts.grants.len(), 1);
     let live = String::from_utf8(facts.grants[0].bytes.clone()).unwrap();
-    assert!(live.contains("\"role\":\"drive\""));
+    assert!(live.contains("\"capabilities\":\"read+comment+drive\""));
     assert!(live.contains("policyRevision"));
     assert!(live.contains("kept-party"));
 
@@ -515,7 +517,7 @@ impl FenceSource for GrantFences {
                     &revocation.conversation_id,
                     &revocation.receiver_id,
                     &revocation.credential_id,
-                    GrantRole::parse(&revocation.role).unwrap(),
+                    GrantRole::parse(&revocation.capabilities).unwrap(),
                     revocation.sequence,
                 )
                 .map_err(|_| ())

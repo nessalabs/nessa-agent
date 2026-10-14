@@ -3,14 +3,17 @@
 //! owner's conversations. `docs/design/read-grants.md` holds the rules and
 //! the state table its tests are written from.
 //!
-//! A grant has a role, Read, Comment or Drive, and a Drive grant a tool
-//! policy ([`ShareAccess`]). What each role lets its holder do is the
-//! conversation access policy's (`ConversationAccessPolicyEvaluator`, ADR
-//! 803 step 3): every role reads, and reads exactly as Read does (row J1);
-//! only a Drive grant drives the conversation it names, and a Comment or
-//! Drive grant leaves notes in it (rows J11 and J17). This module reads the
-//! facts the policy is asked with, the conversation and the role its
-//! receiver holds there ([`paired_facts`]), and never compares roles itself.
+//! A grant has a capability set, read and for a device also comment and
+//! drive, and a drive grant its constraints ([`ShareAccess`]): the tool
+//! policy and command hosts. What each capability lets its holder do is the
+//! conversation access policy's (`ConversationAccessPolicyEvaluator`): a
+//! grant that includes read reads, and reads exactly as read alone does
+//! (row J1); only a grant that includes drive drives the conversation it
+//! names, and one that includes comment leaves notes in it (rows J11 and
+//! J17). Comment and drive also require a principal signed in as the
+//! binding owner, which is the device. This module reads the facts the
+//! policy is asked with, the conversation and the capabilities its receiver
+//! holds there ([`paired_facts`]), and never compares capabilities itself.
 //!
 //! Every read path a paired party reaches asks the policy, and none keeps
 //! its own copy:
@@ -51,9 +54,10 @@ use super::{
 };
 use crate::conversation::application::ReceiverAuthority;
 use crate::conversation::domain::{
-    Conversation, ReceiverBinding, ShareAccess, ShareRole, ToolPolicy,
+    Capabilities, Capability, Conversation, ReceiverBinding, ShareAccess, ToolPolicy,
 };
 use nessa_auth::application::ports::{AccessError, AccessReader};
+use nessa_auth::domain::pairing::is_peer_principal;
 use nessa_auth::domain::{AuthContext, CredentialId, Resource};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
@@ -135,12 +139,12 @@ pub async fn paired_facts(
 /// next turn (ADR 0011 phase B, row J23): each `notes` entry pending
 /// delivery is authorized, revoked, or left out. An owner's note is
 /// authorized. A grant's note is asked of the access policy (`note.deliver`)
-/// about the conversation as it is stored now, with the role its grant
-/// holds now: allowed, authorized; refused (revoked, lowered below Comment,
+/// about the conversation as it is stored now, with the capabilities its
+/// grant holds now: allowed, authorized; refused (revoked, lowered below comment,
 /// or the conversation deleted), revoked, and the turn retires it; a
 /// conversation or grant that could not be read, or a policy that could not
 /// decide, left out, so the note waits for a turn that can check it. A
-/// change of policy that keeps the role changes nothing: the note keeps the
+/// change of constraints that keeps comment changes nothing: the note keeps the
 /// revision it was left under, as its attribution.
 ///
 /// The conversation is read only when a grant left a note, and each grant
@@ -196,7 +200,10 @@ async fn deliverable(
     conversation: &Conversation,
     receiver: &str,
 ) -> Option<bool> {
-    let held = grants.held_role(conversation.id(), receiver).await.ok()?;
+    let held = grants
+        .held_capabilities(conversation.id(), receiver)
+        .await
+        .ok()?;
     match policy.evaluate(&AccessAsk {
         subject: AccessSubject::GrantHolder { receiver },
         action: AccessAction::NoteDeliver,
@@ -211,12 +218,12 @@ async fn deliverable(
     }
 }
 
-/// The role a party holds on one conversation, and the revision of the
-/// grant that set it, read together.
+/// The capabilities a party holds on one conversation, and the grant epoch
+/// that set them, read together. The epoch is [`ShareGrant::policy_revision`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeldGrant {
-    pub role: ShareRole,
-    /// As [`ShareGrant::policy_revision`].
+    pub capabilities: Capabilities,
+    /// As [`ShareGrant::policy_revision`]: the grant epoch.
     pub policy_revision: u64,
 }
 
@@ -227,15 +234,16 @@ pub struct ShareGrant {
     pub receiver_id: String,
     pub credential_id: CredentialId,
     pub access: ShareAccess,
-    /// The journal sequence of the change that last set the role or the
-    /// policy, which every turn a Drive grant starts is saved with.
+    /// The grant epoch: the journal sequence of the change that last set
+    /// the capabilities or the constraints, which every turn a drive grant
+    /// starts is saved with.
     pub policy_revision: u64,
     pub granted_at_ms: u64,
 }
 
 /// The grants on one conversation, and the catalogue revision they were read
-/// with. A grant or a revoke moves `change_revision`; a change of role or
-/// policy does not. `conversation.shares` names it on every page, so a later
+/// with. A grant or a revoke moves `change_revision`; a change of
+/// capabilities or constraints does not. `conversation.shares` names it on every page, so a later
 /// page belongs to the same read only when it names the same revision.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShareGrantList {
@@ -243,8 +251,8 @@ pub struct ShareGrantList {
     pub change_revision: u64,
 }
 
-/// Grant with a role and policy, or revoke, as the owner decided it. A grant
-/// on a party that already holds one replaces its role and policy.
+/// Grant with capabilities and constraints, or revoke, as the owner decided
+/// it. A grant on a party that already holds one replaces them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ShareGrantTransition {
     Grant(ShareAccess),
@@ -323,31 +331,31 @@ pub trait ShareGrants: Send + Sync {
         id: &'a ConversationId,
         receiver_id: &'a str,
     ) -> ConversationFuture<'a, Option<HeldGrant>>;
-    /// The role `receiver_id` holds on `id`, or `None` when it holds no
-    /// grant there.
-    fn held_role<'a>(
+    /// The capabilities `receiver_id` holds on `id`, or `None` when it holds
+    /// no grant there.
+    fn held_capabilities<'a>(
         &'a self,
         id: &'a ConversationId,
         receiver_id: &'a str,
-    ) -> ConversationFuture<'a, Option<ShareRole>> {
+    ) -> ConversationFuture<'a, Option<Capabilities>> {
         Box::pin(async move {
             Ok(self
                 .held_grant(id, receiver_id)
                 .await?
-                .map(|held| held.role))
+                .map(|held| held.capabilities))
         })
     }
-    /// Whether `receiver_id` holds a grant on `id`, of any role.
+    /// Whether `receiver_id` holds a grant on `id`.
     fn is_granted<'a>(
         &'a self,
         id: &'a ConversationId,
         receiver_id: &'a str,
     ) -> ConversationFuture<'a, bool> {
-        Box::pin(async move { Ok(self.held_role(id, receiver_id).await?.is_some()) })
+        Box::pin(async move { Ok(self.held_capabilities(id, receiver_id).await?.is_some()) })
     }
     /// Apply one change. Not `applied` when it changed nothing (granting the
-    /// role and policy already held, revoking a grant not held). A grant
-    /// naming another role or policy than the one held replaces them and is
+    /// capabilities and constraints already held, revoking a grant not held). A grant
+    /// naming other capabilities or constraints than the one held replaces them and is
     /// `applied` (row J4). Every admitted request is journaled under its
     /// request id, a no-op too (before equal to after), and a retry of the
     /// same request answers from that row and changes nothing (rows G9, G16,
@@ -434,10 +442,13 @@ pub struct ShareConversation<'a> {
 }
 
 impl ShareConversation<'_> {
-    /// Grant `credential`'s receiver `role` on `id` with `policy`, or replace
-    /// the role and policy it holds there. A Drive grant needs a policy and a
-    /// Read or Comment grant takes none; either mistake is `InvalidInput` and
-    /// writes nothing (row J3). The credential must have an active receiver
+    /// Grant `credential`'s receiver `capabilities` on `id` with `policy`, or
+    /// replace the capabilities and constraints it holds there. A drive grant
+    /// needs a policy and any other grant takes none; either mistake is
+    /// `InvalidInput` and writes nothing (row J3). Comment and drive for a
+    /// gateway principal are refused the same way and write nothing: Cedar
+    /// would deny them, because a gateway is not signed in as the binding
+    /// owner. The credential must have an active receiver
     /// binding and a registry answer about that exact credential, or
     /// `ShareTargetNotPaired`. Whether the caller may share this
     /// conversation with it is the access policy's (`conversation.share`):
@@ -461,13 +472,14 @@ impl ShareConversation<'_> {
         caller: ConversationCaller,
         id: ConversationId,
         credential: CredentialId,
-        role: ShareRole,
+        capabilities: Capabilities,
         policy: Option<ToolPolicy>,
         expected_policy_revision: Option<u64>,
         at_ms: u64,
     ) -> Result<GrantedShare, ConversationError> {
         caller.actor()?;
-        let access = ShareAccess::new(role, policy).map_err(|_| ConversationError::InvalidInput)?;
+        let access =
+            ShareAccess::new(capabilities, policy).map_err(|_| ConversationError::InvalidInput)?;
         // The caller's own conversation is asked about first, so what it is
         // told about an id it may not act on (`NotFound`, `Deleted`) never
         // depends on the credential it names.
@@ -499,6 +511,13 @@ impl ShareConversation<'_> {
             || named.organization_id() != target.membership.organization_id()
         {
             return Err(ConversationError::ShareTargetNotPaired);
+        }
+        // A gateway signs in as itself, so Cedar's comment and drive permits
+        // do not match it. Refusing here writes no row Cedar would deny.
+        if access.capabilities().contains(Capability::Comment)
+            && is_peer_principal(named.principal_id())
+        {
+            return Err(ConversationError::InvalidInput);
         }
         let ask = AccessAsk {
             subject: AccessSubject::Person {

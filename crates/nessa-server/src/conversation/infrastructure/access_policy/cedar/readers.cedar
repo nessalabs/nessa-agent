@@ -2,13 +2,16 @@
 // is a reader: the `organization` its binding and session are in, the
 // principal it `signedInAs`, the `bindingOwner` whose conversations the
 // binding reads, and its `receiver`. A device signs in as its binding's
-// owner; a peer gateway signs in as itself. `context.role` is the role of
-// the share grant it holds on the conversation, read now: "read",
-// "comment" or "drive", absent when it holds none. Each role allows
-// everything the roles before it do. `context.request` is what a command
-// carries.
+// owner; a peer gateway signs in as itself. `context.capabilities` is the
+// capability set of the grant it holds on the conversation, read now:
+// "read", and when granted "comment" and "drive", absent when it holds
+// none. `context.request` is what a command carries.
+//
+// Comment and drive require the capability and a principal signed in as
+// the binding owner. That is the device case. A gateway signs in as itself,
+// so those permits do not match it even when a row names the capability.
 
-// Any grant reads the conversation it names, until it is deleted.
+// A grant that includes read reads the conversation it names, until it is deleted.
 @id("grant.read")
 permit (
     principal is NessaConversation::Reader,
@@ -16,14 +19,15 @@ permit (
     resource is NessaConversation::Conversation
 )
 when {
-    context has role &&
+    context has capabilities &&
+    context.capabilities.contains("read") &&
     principal.organization == resource.organization &&
     principal.bindingOwner == resource.owner &&
     !resource.deleted
 };
 
-// Any grant shows the conversation it names in the reader's catalogue, a
-// tombstone included, so the reader learns it was deleted.
+// A grant that includes read shows the conversation it names in the reader's
+// catalogue, a tombstone included, so the reader learns it was deleted.
 @id("grant.catalogue_entry")
 permit (
     principal is NessaConversation::Reader,
@@ -31,12 +35,14 @@ permit (
     resource is NessaConversation::Conversation
 )
 when {
-    context has role &&
+    context has capabilities &&
+    context.capabilities.contains("read") &&
     principal.organization == resource.organization &&
     principal.bindingOwner == resource.owner
 };
 
-// A Comment or Drive grant leaves notes in the conversation it names.
+// A grant that includes comment leaves notes in the conversation it names,
+// and only when the principal is signed in as the binding owner.
 @id("grant.comment")
 permit (
     principal is NessaConversation::Reader,
@@ -44,14 +50,17 @@ permit (
     resource is NessaConversation::Conversation
 )
 when {
-    context has role &&
-    ["comment", "drive"].contains(context.role) &&
+    context has capabilities &&
+    context.capabilities.contains("comment") &&
+    principal.signedInAs == principal.bindingOwner &&
     principal.organization == resource.organization &&
     principal.bindingOwner == resource.owner &&
     !resource.deleted
 };
 
-// A Drive grant starts, steers and stops turns in the conversation it names.
+// A grant that includes drive starts, steers and stops turns in the
+// conversation it names, and only when the principal is signed in as the
+// binding owner.
 @id("grant.drive")
 permit (
     principal is NessaConversation::Reader,
@@ -59,25 +68,13 @@ permit (
     resource is NessaConversation::Conversation
 )
 when {
-    context has role &&
-    context.role == "drive" &&
+    context has capabilities &&
+    context.capabilities.contains("drive") &&
+    principal.signedInAs == principal.bindingOwner &&
     principal.organization == resource.organization &&
     principal.bindingOwner == resource.owner &&
     !resource.deleted
 };
-
-// A peer gateway signs in as its own principal and never comments or
-// drives: forwarding its people's commands is a later slice.
-@id("paired.peer_gateway")
-forbid (
-    principal is NessaConversation::Reader,
-    action in [
-        NessaConversation::Action::"conversation.comment",
-        NessaConversation::Action::"conversation.drive"
-    ],
-    resource
-)
-when { principal.signedInAs != principal.bindingOwner };
 
 // A driver sends text. An image is named by a digest in the owner's
 // attachment store and a linked file by a path on the owner's machine, so a
@@ -112,8 +109,8 @@ when {
     principal.bindingOwner == resource.owner
 };
 
-// A note a Comment or Drive grant left is delivered while the grant still
-// holds that role and the conversation is not deleted.
+// A note a grant that includes comment left is delivered while the grant
+// still holds that capability and the conversation is not deleted.
 @id("grant.note_deliver")
 permit (
     principal is NessaConversation::GrantHolder,
@@ -121,11 +118,12 @@ permit (
     resource is NessaConversation::Conversation
 )
 when {
-    context has role &&
-    ["comment", "drive"].contains(context.role) &&
+    context has capabilities &&
+    context.capabilities.contains("comment") &&
     !resource.deleted
 };
 
 // Any other owner command a paired reader sends is `conversation.write` on
-// the catalogue its binding reads. No role names one, so no permit does:
-// a device never deletes, archives, exports, re-shares or changes the model.
+// the catalogue its binding reads. No capability names one, so no permit
+// does: a device never deletes, archives, exports, re-shares or changes
+// the model.
