@@ -1664,7 +1664,7 @@ describe("a connection that could not be made says why (#419)", () => {
   })
 
   it("a connection that is not up clears waiting-review notices", async () => {
-    const waiting: readonly { conversationId: string }[][] = []
+    const waiting: (readonly { conversationId: string }[])[] = []
     const gateway = fakeGateway()
     const { clock } = manualClock()
     const source = gatewaySource({
