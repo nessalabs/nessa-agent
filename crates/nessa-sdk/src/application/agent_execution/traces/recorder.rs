@@ -620,10 +620,7 @@ impl TraceRecorder {
             trace_id: turn.agent.trace_id.clone(),
             span_id: turn.agent.span_id.clone(),
             provider: turn.agent.string_attr(ATTR_PROVIDER).map(str::to_owned),
-            conversation: turn
-                .agent
-                .string_attr(ATTR_CONVERSATION)
-                .map(str::to_owned),
+            conversation: turn.agent.string_attr(ATTR_CONVERSATION).map(str::to_owned),
             execution: turn.agent.string_attr(NESSA_EXECUTION).map(str::to_owned),
             capture: turn.capture,
         }) else {
