@@ -19,7 +19,6 @@ import {
   conversationSelectionOpen,
   MAX_SENT_PREVIEW_BYTES,
   messageFiles,
-  messageImages,
   storedImages,
   type CommandFailure,
   type ConversationSelection,

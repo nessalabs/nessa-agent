@@ -852,7 +852,7 @@ it.each(["remove", "close", "delete"] as const)(
           conversationId: "c0",
           content,
           prepared: prepareSubmission({
-            conversationId: `server-${index}`,
+            conversationId: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
             executionId: `e${index}`,
             requestId: `q${index}`,
             mode: "queued",
