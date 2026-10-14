@@ -105,6 +105,7 @@ fn settled_view(conversation: &str) -> ConversationView {
             status: ConversationMessageStatus::Completed,
             error: None,
             authentication_required: None,
+            required_work_failed: None,
             steering_target: None,
             parts: Vec::new(),
             steering_offset: None,

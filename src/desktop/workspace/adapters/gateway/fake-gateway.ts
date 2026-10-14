@@ -402,19 +402,16 @@ export function fakeGateway(
         const behaviour = answerOverrides.shift()
         return behaviour ? behaviour(normal, args) : Promise.resolve().then(normal)
       },
-      answerQuestion: (...args) =>
-        answer("answerQuestion", args, () => {
-          const conversationId = args[0]
-          const executionId = args[1]
-          const questionId = args[2]
-          const current = views.get(conversationId)
+      answerQuestion: (target, choices) =>
+        answer("answerQuestion", [target, choices], () => {
+          const current = views.get(target.conversationId)
           if (current)
-            views.set(conversationId, {
+            views.set(target.conversationId, {
               ...current,
               questions: current.questions.filter(
                 (question) =>
-                  question.executionId !== executionId ||
-                  question.questionId !== questionId,
+                  question.executionId !== target.executionId ||
+                  question.questionId !== target.questionId,
               ),
             })
           return { requestId: "answer-question", applied: true }

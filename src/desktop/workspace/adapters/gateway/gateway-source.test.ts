@@ -613,9 +613,11 @@ describe("conversations", () => {
       "person",
     )
     expect(gateway.calls.find((call) => call.method === "answerQuestion")?.args).toEqual([
-      "a",
-      "turn",
-      "q1",
+      expect.objectContaining({
+        conversationId: "a",
+        executionId: "turn",
+        questionId: "q1",
+      }),
       [{ key: "where", values: ["here"], ownWords: null }],
     ])
     gateway.publish("a")
@@ -650,7 +652,7 @@ describe("conversations", () => {
     )
     await source.transcript("a")
     await source.answerQuestion("a", "turn", "q1", null, "agent")
-    expect(gateway.calls.find((call) => call.method === "answerQuestion")?.args[3]).toBe(
+    expect(gateway.calls.find((call) => call.method === "answerQuestion")?.args[1]).toBe(
       null,
     )
     await expect(
