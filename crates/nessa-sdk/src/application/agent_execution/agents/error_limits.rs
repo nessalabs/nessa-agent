@@ -95,7 +95,9 @@ impl AgentError {
                 | Self::AuditAndCleanupFailure
                 | Self::AttachmentUnavailable(_)
                 | Self::AttachmentAuthorizationStale
-                | Self::PermissionAnswerDeliveryAndAuditFailure { .. } => {}
+                | Self::PermissionAnswerDeliveryAndAuditFailure { .. }
+                | Self::RefusedAfterSave
+                | Self::AfterSaveUnavailable => {}
             }
             if bytes > MAX_BYTES || nodes > MAX_NODES {
                 return Err(limit_error());

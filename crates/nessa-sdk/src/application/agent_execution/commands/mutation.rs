@@ -38,6 +38,21 @@ pub enum MutationOutcome {
     Cancelled,
     /// The named turn was already final. No withdraw or cancel was sent.
     AlreadyFinal,
+    /// The submit was refused before anything was enqueued or injected.
+    ///
+    /// Saved only from `Attempted`. A retry returns this receipt and does not
+    /// perform the effect again.
+    NoEffect,
+    /// The submit saved the turn and then refused before injection.
+    ///
+    /// Saved only from `Attempted`. A retry returns this receipt and does not
+    /// inject the turn again.
+    RefusedAfterSave,
+    /// The submit saved the turn and then could not decide before injection.
+    ///
+    /// Saved only from `Attempted`. A retry returns this receipt and does not
+    /// inject the turn again.
+    UnavailableAfterSave,
 }
 
 /// Immutable principal/request binding for one submit or stop.
@@ -129,7 +144,12 @@ impl MutationReceipt {
     ///
     /// `Accepted` may become `Attempted` with no outcome, or `Settled` with
     /// [`MutationOutcome::AlreadyFinal`] when classification proved nothing
-    /// would be sent. `Attempted` may become `Settled` with the effect's outcome.
+    /// would be sent. `Attempted` may become `Settled` with the effect's outcome,
+    /// including [`MutationOutcome::NoEffect`] when the effect refused before
+    /// it enqueued or injected anything, [`MutationOutcome::RefusedAfterSave`]
+    /// when a saved steer was refused before injection, and
+    /// [`MutationOutcome::UnavailableAfterSave`] when a saved steer could not
+    /// be checked before injection.
     ///
     /// # Errors
     /// Returns [`StorageError::Corrupt`] for a skipped, reversed, or outcome-less transition.
@@ -149,6 +169,9 @@ impl MutationReceipt {
                             | MutationOutcome::Withdrawn
                             | MutationOutcome::Cancelled
                             | MutationOutcome::AlreadyFinal
+                            | MutationOutcome::NoEffect
+                            | MutationOutcome::RefusedAfterSave
+                            | MutationOutcome::UnavailableAfterSave
                     )
                 )
                 | (

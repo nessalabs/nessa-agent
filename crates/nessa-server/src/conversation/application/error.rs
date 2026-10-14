@@ -53,6 +53,25 @@ pub enum ConversationError {
     /// (OpenCode), an approval mode other than Ask, native hooks allowed, or
     /// the policy unreadable. Nothing was saved or sent.
     DrivePolicyUnenforceable,
+    /// A Drive grant's turn whose grant was revoked, or whose revision moved,
+    /// before the turn was saved. A queued turn saves nothing. A steer that
+    /// is queued rather than injected saves nothing. The command receipt is
+    /// settled as no effect, and retrying that same request is answered
+    /// `revoked` again. A new request is admitted only under the grant as it
+    /// stands now (row J31).
+    Revoked,
+    /// A native steer that was saved, then refused because the grant moved
+    /// before injection. The saved attempt is settled as refused and nothing
+    /// reached the agent. The command receipt is settled as refused after
+    /// save, and a retry of that same request is answered the same way and
+    /// is not admitted again (row J31).
+    RevokedAfterSave,
+    /// A native steer that was saved, then could not be checked because the
+    /// grant record could not be read before injection. Nothing reached the
+    /// agent. The command receipt is settled as unavailable after save, and
+    /// a retry of that same request is answered the same way and is not
+    /// admitted again (row J31).
+    UnavailableAfterSave,
     /// A delete that happened — the conversation is tombstoned, left out of
     /// every list, and refused — and did not finish. Repeating the delete
     /// finishes it.

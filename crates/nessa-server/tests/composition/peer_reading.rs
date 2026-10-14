@@ -28,7 +28,7 @@ use crate::peer_gateways::application::{
 use crate::peer_gateways::infrastructure::{
     DurablePeerAudit, EnrollmentEntropy, EnrollmentEntropySource, PeerCommands, PeerEntry,
     PeerError, PeerPhase, PeerPoller, PeerSync, PollInputs, PollPolicy, SyncState,
-    TcpPeerConnector, AUDIT_DEADLINE,
+    TcpPeerConnector, AUDIT_DEADLINE, READS_AT_ONCE,
 };
 use crate::product::{ProductDependencies, ProductRouteState};
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
@@ -46,7 +46,7 @@ use nessa_auth::domain::pairing::{ConsentClass, DeviceKey};
 use nessa_auth::domain::{
     AudienceId, CredentialId, OrganizationId, PrincipalId, Resource, ResourceId,
 };
-use nessa_client_core::retained::RetainedCache;
+use nessa_client_core::retained::{RetainedCache, HANDSHAKE};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId,
@@ -71,6 +71,7 @@ const POLICY: PollPolicy = PollPolicy {
     interval: Duration::from_millis(100),
     backoff_cap: Duration::from_millis(400),
     read_budget: Duration::from_secs(60),
+    reads_at_once: READS_AT_ONCE,
 };
 /// Well under the handshake deadline a held read would otherwise reach (5 s),
 /// so an end inside it was a stop, not that deadline.
@@ -428,7 +429,7 @@ impl Changes {
     }
 }
 impl PeerAudit for Changes {
-    fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'_> {
+    fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'static> {
         let poller = matches!(record, PeerAuditRecord::PollerChanged { .. });
         let refused = poller && self.refuse;
         if refused {
@@ -1434,4 +1435,306 @@ async fn a_full_queue_refuses_the_owner_and_drops_the_poller_record() {
 
     drop(relay);
     stop(a).await;
+}
+
+/// The sync last reported for `key`, if it is still listed.
+async fn sync_of(b: &Reader, key: &DeviceKey) -> Option<PeerSync> {
+    b.peers
+        .list()
+        .await
+        .unwrap()
+        .into_iter()
+        .find_map(|(entry, sync)| {
+            let PeerEntry::Readable(record) = entry else {
+                return None;
+            };
+            (*record.key() == *key).then_some(sync).flatten()
+        })
+}
+
+/// Two grantors and one reader, each grantor behind its own relay. Neither
+/// peer is enrolled until the test says so.
+struct TwoPeers {
+    a: Peer,
+    c: Peer,
+    b: Reader,
+    relay_a: Relay,
+    relay_c: Relay,
+    key_a: DeviceKey,
+    key_c: DeviceKey,
+}
+impl TwoPeers {
+    async fn start(root: &Path) -> Self {
+        let a = Peer::start(&root.join("a")).await;
+        let c = Peer::start(&root.join("c")).await;
+        let b = Reader::prepare(&root.join("b"), false).await;
+        let relay_a = Relay::start(a.native).await;
+        let relay_c = Relay::start(c.native).await;
+        Self {
+            a,
+            c,
+            b,
+            relay_a,
+            relay_c,
+            key_a: DeviceKey::new([0; 32]),
+            key_c: DeviceKey::new([0; 32]),
+        }
+    }
+    async fn enroll_both(&mut self) {
+        let (key_a, _) = enroll(&self.a, &self.b, &self.relay_a, true).await;
+        let (key_c, _) = enroll(&self.c, &self.b, &self.relay_c, true).await;
+        self.key_a = key_a;
+        self.key_c = key_c;
+    }
+}
+
+/// A slow peer's read stays open while another peer, enrolled after that
+/// read has already started, is read through to `synced`. Forgetting the
+/// finished peer does not stop the slow one, and a forget that cannot take
+/// the record set does not either.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_slow_peer_does_not_hold_up_the_others() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut peers = TwoPeers::start(directory.path()).await;
+    // C's status goes through and its read is held. A is not enrolled yet,
+    // so the only read that can start is C's.
+    let (key_c, _) = enroll(&peers.c, &peers.b, &peers.relay_c, true).await;
+    peers.key_c = key_c;
+    peers.relay_c.hold_after(1);
+    let poller = peers.b.poller(POLICY);
+    peers.relay_c.until_held(0).await;
+    let held = peers.relay_c.held();
+
+    // Enrolled while C's read is held. The poller lists again on its tick
+    // and reads A without waiting out C's budget.
+    let (key_a, _) = enroll(&peers.a, &peers.b, &peers.relay_a, true).await;
+    peers.key_a = key_a;
+    let since = SystemClock.unix_milliseconds();
+    // A connection the relay accepts and never speaks ends at the handshake
+    // deadline. This wait is inside that deadline, so a scheduler that waits
+    // out C cannot reach A, and one that reads A beside C can.
+    let beside = HANDSHAKE.saturating_sub(Duration::from_secs(2));
+    let synced = tokio::time::timeout(beside, async {
+        loop {
+            if sync_of(&peers.b, &peers.key_a).await.is_some_and(|sync| {
+                sync.state == SyncState::Synced && sync.last_synced_ms.is_some_and(|at| at >= since)
+            }) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(
+        synced.is_ok(),
+        "A was not read while C's read was held; C held {} connections",
+        peers.relay_c.held()
+    );
+    assert_eq!(
+        peers.relay_c.held(),
+        held,
+        "reading A restarted C's held read"
+    );
+
+    // Forgetting A stops A's cycle only. C's held read is the same one.
+    peers
+        .b
+        .peers
+        .forget(peers.key_a, &peers.b.owner)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(
+        peers.relay_c.held(),
+        held,
+        "forgetting A stopped C's read, and it started another"
+    );
+
+    // An enrollment holds the record set. Forgetting C is busy, and that
+    // refusal does not stop C's read: the record set is taken before, and
+    // instead of, C's turn.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (sent, accepted) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        if let Ok((socket, _)) = listener.accept().await {
+            let _ = sent.send(socket);
+        }
+    });
+    let created = peers
+        .a
+        .commands
+        .create(&peers.a.session, ConsentClass::PeerRead)
+        .await
+        .unwrap();
+    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+    let enroll_task = tokio::spawn({
+        let (commands, owner) = (peers.b.peers.clone(), peers.b.owner.clone());
+        async move { commands.enroll(address, None, code, &owner).await }
+    });
+    let socket = tokio::time::timeout(WAIT, accepted)
+        .await
+        .expect("the enrollment did not connect")
+        .unwrap();
+    assert_eq!(
+        peers
+            .b
+            .peers
+            .forget(peers.key_c, &peers.b.owner)
+            .await
+            .err(),
+        Some(PeerError::Busy)
+    );
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(peers.relay_c.held(), held, "a busy forget stopped C's read");
+    drop(socket);
+    let enrolled = tokio::time::timeout(WAIT, enroll_task)
+        .await
+        .expect("the enrollment did not end once its socket closed")
+        .unwrap();
+    assert!(enrolled.is_err(), "the silent peer enrolled: {enrolled:?}");
+    assert_eq!(peers.relay_c.held(), held);
+
+    peers.relay_c.pass_all();
+    tokio::time::timeout(WAIT, poller.join())
+        .await
+        .expect("a stop joins the slow read");
+    stop(peers.a).await;
+    stop(peers.c).await;
+}
+
+/// One peer's listener is gone. That peer is reported unreachable and the
+/// other is still read through to synced. The failure is not the pass's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failing_peer_is_reported_and_the_other_is_read() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut peers = TwoPeers::start(directory.path()).await;
+    peers.enroll_both().await;
+    stop(peers.c).await;
+    let since = SystemClock.unix_milliseconds();
+    let poller = peers.b.poller(POLICY);
+    let reached = tokio::time::timeout(WAIT, async {
+        loop {
+            let a = sync_of(&peers.b, &peers.key_a).await;
+            let c = sync_of(&peers.b, &peers.key_c).await;
+            let a_synced = a.is_some_and(|sync| {
+                sync.state == SyncState::Synced && sync.last_synced_ms.is_some_and(|at| at >= since)
+            });
+            let c_failed = c.is_some_and(|sync| sync.state == SyncState::Unreachable);
+            if a_synced && c_failed {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    tokio::time::timeout(WAIT, poller.join()).await.unwrap();
+    assert!(
+        reached.is_ok(),
+        "A synced: {:?}; C: {:?}",
+        sync_of(&peers.b, &peers.key_a).await,
+        sync_of(&peers.b, &peers.key_c).await
+    );
+    stop(peers.a).await;
+}
+
+/// With one read slot, a second peer's read does not start until the first
+/// gives the slot back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_read_past_the_cap_waits_for_a_slot() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut peers = TwoPeers::start(directory.path()).await;
+    peers.enroll_both().await;
+    let (accepted_a, accepted_c) = (peers.relay_a.accepted(), peers.relay_c.accepted());
+    peers.relay_a.hold_after(1);
+    peers.relay_c.hold_after(1);
+    let poller = peers.b.poller(PollPolicy {
+        reads_at_once: 1,
+        ..POLICY
+    });
+    tokio::time::timeout(WAIT, async {
+        while peers.relay_a.held() == 0 && peers.relay_c.held() == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("no read was held");
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let (busy, waiting, waiting_before) = if peers.relay_a.held() > 0 {
+        (&peers.relay_a, &peers.relay_c, accepted_c)
+    } else {
+        (&peers.relay_c, &peers.relay_a, accepted_a)
+    };
+    assert_eq!(
+        waiting.accepted(),
+        waiting_before,
+        "the second peer was read while the only slot was taken"
+    );
+    let waiting_accepted = waiting_before;
+    busy.pass_all();
+    tokio::time::timeout(WAIT, async {
+        while waiting.accepted() == waiting_accepted {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the waiting peer was not read once a slot was free");
+    tokio::time::timeout(WAIT, poller.join()).await.unwrap();
+    stop(peers.a).await;
+    stop(peers.c).await;
+}
+
+/// A held read wakes every tick. It scans the peer records when they change,
+/// not on each of those ticks, and an enrollment during the hold is still
+/// read. The new record is saved pending before its owner approves it, and
+/// that approval does not change the record, so the first pending status is
+/// read again soon (`a_peer_seen_pending_is_read_again_soon_and_then_waits_the_interval`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_held_read_lists_when_the_records_change_not_on_every_tick() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut peers = TwoPeers::start(directory.path()).await;
+    let (key_c, _) = enroll(&peers.c, &peers.b, &peers.relay_c, true).await;
+    peers.key_c = key_c;
+    peers.relay_c.hold_after(1);
+    let poller = peers.b.poller(PollPolicy {
+        interval: Duration::from_secs(60),
+        backoff_cap: Duration::from_secs(60),
+        ..POLICY
+    });
+    peers.relay_c.until_held(0).await;
+    let listed = poller.lists();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let during = poller.lists();
+    assert!(
+        during <= listed + 1,
+        "a held read scanned the records {during} times after {listed}"
+    );
+
+    let since = SystemClock.unix_milliseconds();
+    let (key_a, _) = enroll(&peers.a, &peers.b, &peers.relay_a, true).await;
+    peers.key_a = key_a;
+    let synced = tokio::time::timeout(WAIT, async {
+        loop {
+            if sync_of(&peers.b, &peers.key_a).await.is_some_and(|sync| {
+                sync.state == SyncState::Synced && sync.last_synced_ms.is_some_and(|at| at >= since)
+            }) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(
+        synced.is_ok(),
+        "A was not read after its record changed; scans went from {during} to {}",
+        poller.lists()
+    );
+    assert!(
+        poller.lists() > during,
+        "enrolling A did not scan the records again"
+    );
+    peers.relay_c.pass_all();
+    tokio::time::timeout(WAIT, poller.join()).await.unwrap();
+    stop(peers.a).await;
+    stop(peers.c).await;
 }

@@ -21,7 +21,8 @@ use super::{
     ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
     ConversationRepository, ConversationSummaries, DeletionFailures, FetchRequests,
     ListedConversation, ObservationCursor, ObservedConversations, OwnerAccess, PublishRequests,
-    RuntimeReadiness, StopFailure, SubmittedMessage, UnfinishedDeletions,
+    RevisionHold, RuntimeReadiness, ShareGrants, StopFailure, SubmittedMessage,
+    UnfinishedDeletions,
 };
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink, ToolSource,
@@ -54,7 +55,10 @@ use nessa_sdk::application::agent_execution::{
         QueueReorder, SteeringDelivery, SteeringEvidence,
     },
     commands::{CreationStorage, CreationTaskFault},
-    executions::{ExecutionAudit, ExecutionRequest, ExecutionUpdate, Submitter},
+    executions::{
+        AfterSaveCheck, AfterSaveRefusal, ExecutionAudit, ExecutionRequest, ExecutionUpdate,
+        Submitter,
+    },
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
         PermissionCancellationRequest, QuestionAnswer,
@@ -493,6 +497,12 @@ impl Reach {
         match error {
             ConversationError::Agent(AgentError::SubmissionUnresolved) => Self::Unknown,
             ConversationError::AdmissionEvidence { .. } => Self::Taken,
+            // Saved with the turn, then refused or left unchecked before
+            // injection. The contexts went with that turn and are lost with
+            // it (C13), not dropped unsent.
+            ConversationError::RevokedAfterSave | ConversationError::UnavailableAfterSave => {
+                Self::Taken
+            }
             _ => Self::NotTaken,
         }
     }
@@ -2840,6 +2850,9 @@ impl ConversationService {
             // the agent's conflict to refuse.
             let retried = saved_initiation
                 .filter(|saved| saved.initiator() == writer.initiation().initiator());
+            // Read before `retried` moves into `initiation`. A saved turn's
+            // retry is not checked again.
+            let fresh = retried.is_none();
             let initiation = match (retried, writer.initiation().initiator()) {
                 (Some(saved), _) => saved,
                 (None, Initiator::Owner) => Initiation::owner(),
@@ -2963,19 +2976,20 @@ impl ConversationService {
                 estimated_input_tokens: u64::from(limits.max_context_window() - reserved),
                 reserved_output_tokens: reserved,
             };
-            // Asked from here: whatever becomes of this task, what it took
-            // follows the message, and only the agent's own refusal hands
-            // it back (C11b).
-            if let Some(took) = taken.as_mut() {
-                took.asking();
-            }
-            asking.store(true, Ordering::SeqCst);
-            // Saved as started by whom it was admitted for: the owner, or
-            // the Drive grant as it stood at admission, its tools checked
-            // (rows J15 and J27).
-            let submitter = Submitter {
-                context: actor,
-                initiation,
+            // A fresh Drive turn names the grant and revision admission
+            // read. The note verdict is taken before that grant is held, so
+            // a slow verdict does not block a revoke. A retry of a turn
+            // already saved is answered from that save and is not checked
+            // again (row J31).
+            let fresh_grant = if fresh {
+                match initiation.initiator() {
+                    Initiator::Grant(grant) => {
+                        Some((grant.grant().to_owned(), grant.policy_revision()))
+                    }
+                    Initiator::Owner => None,
+                }
+            } else {
+                None
             };
             // A person's queued message may start the next turn, so it may
             // take the notes waiting for one: each author is checked now, and
@@ -2987,6 +3001,52 @@ impl ConversationService {
             } else {
                 None
             };
+            // The hold is this grant only. Taken before the agent is asked,
+            // so a revoke that already landed is `NotAsked`. A queued turn
+            // keeps it until enqueue returns. A native steer moves it into
+            // the save check, which drops the first permit after the save,
+            // compares the live revision, and keeps that second permit until
+            // the provider operation starts (row J31).
+            let mut revision_hold = None;
+            let mut saved_grant = None;
+            if let Some((receiver, revision)) = fresh_grant {
+                let grants = Arc::clone(
+                    &service
+                        .inner
+                        .drive
+                        .get()
+                        .ok_or(ConversationError::DrivePolicyUnenforceable)?
+                        .grants,
+                );
+                revision_hold = Some(grants.hold_revision(&id, &receiver, revision).await?);
+                saved_grant = Some((grants, receiver, revision));
+            }
+            // Asked from here: whatever becomes of this task, what it took
+            // follows the message, and only the agent's own refusal hands
+            // it back (C11b).
+            if let Some(took) = taken.as_mut() {
+                took.asking();
+            }
+            asking.store(true, Ordering::SeqCst);
+            // Saved as started by whom it was admitted for: the owner, or
+            // the Drive grant as it stood at admission, its tools checked
+            // (rows J15 and J27).
+            let mut submitter = Submitter::new(actor, initiation);
+            if matches!(mode, SubmissionMode::Steer)
+                && live.agent.operation_capabilities().native_steering()
+            {
+                if let (Some(hold), Some((grants, receiver, revision))) =
+                    (revision_hold.take(), saved_grant)
+                {
+                    submitter = submitter.with_after_save(Arc::new(ConfirmSavedGrant {
+                        hold: std::sync::Mutex::new(Some(hold)),
+                        grants,
+                        id: id.clone(),
+                        receiver,
+                        revision,
+                    }));
+                }
+            }
             let delivery = match (mode, notes) {
                 (SubmissionMode::Queue, Some(candidates)) => live
                     .agent
@@ -3020,12 +3080,26 @@ impl ConversationService {
                         })
                 }
             };
+            // Enqueue kept the permit through the save and through starting
+            // the runner, and drops it here, before the turn is watched. A
+            // native steer released its second permit when the provider
+            // operation started, before the response wait. A revoke of this
+            // grant applies from here, not across the turn itself.
+            drop(revision_hold);
             // Refused: what it took went nowhere, and each is reported
             // dropped unsent (`c11_a_refused_submission_drops_what_it_took_on_record`).
             // Admitted, and saved before the agent answered: what it carried
             // went with it, and should the turn then fail, it is lost (C13).
+            // A steer refused or left unchecked after that save is the same:
+            // the contexts stay with the saved turn
+            // (`c13_a_saved_steer_refused_after_save_does_not_drop_the_contexts_it_carried`,
+            // `c13_a_saved_steer_unavailable_after_save_does_not_drop_the_contexts_it_carried`).
             // Unresolved: it follows the message, whose record covers it.
-            let delivery = delivery.map_err(ConversationError::Agent);
+            let delivery = delivery.map_err(|error| match error {
+                AgentError::RefusedAfterSave => ConversationError::RevokedAfterSave,
+                AgentError::AfterSaveUnavailable => ConversationError::UnavailableAfterSave,
+                other => ConversationError::Agent(other),
+            });
             if let (Err(error), Some(took)) = (&delivery, taken) {
                 if Reach::of_asked(error) == Reach::NotTaken {
                     took.refused();
@@ -5631,6 +5705,60 @@ fn completed_reply(snapshot: Option<&SessionSnapshot>, execution: &str) -> Optio
 /// not the conversation looks idle now; the agent decides that under the
 /// lock that admits the turn, so a turn that ends in between cannot leave an
 /// idle admission without the notes it should take.
+/// Drops one grant's admission permit after the steer is saved, then
+/// compares the live revision. A match keeps that second permit until the
+/// provider operation starts. Drop releases it if `steer` never asks.
+struct ConfirmSavedGrant {
+    hold: std::sync::Mutex<Option<RevisionHold>>,
+    grants: Arc<dyn ShareGrants>,
+    id: ConversationId,
+    receiver: String,
+    revision: u64,
+}
+
+impl AfterSaveCheck for ConfirmSavedGrant {
+    fn after_save<'a>(
+        &'a self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), AfterSaveRefusal>> + Send + 'a>> {
+        Box::pin(async move {
+            // The permit taken before the save. Released before the
+            // compare, so a change that waited on the save can land and
+            // this compare can see it. The std mutex is not held across
+            // the compare.
+            drop(
+                self.hold
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take(),
+            );
+            match self
+                .grants
+                .hold_revision(&self.id, &self.receiver, self.revision)
+                .await
+            {
+                Ok(again) => {
+                    *self
+                        .hold
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(again);
+                    Ok(())
+                }
+                Err(ConversationError::Revoked) => Err(AfterSaveRefusal::Refused),
+                Err(_) => Err(AfterSaveRefusal::Unavailable),
+            }
+        })
+    }
+
+    fn provider_operation_started(&self) {
+        drop(
+            self.hold
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take(),
+        );
+    }
+}
+
 fn offers_notes(known: bool, is_app: bool, mode: &SubmissionMode) -> bool {
     !known && !is_app && matches!(mode, SubmissionMode::Queue)
 }

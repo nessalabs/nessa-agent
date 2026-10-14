@@ -51,7 +51,11 @@ async fn steering_injects_into_the_target_and_keeps_output_with_its_invocation()
     assert_eq!(
         opened
             .session
-            .steer(ExecutionId::new("first").unwrap(), prompt("adjust course"))
+            .steer(
+                ExecutionId::new("first").unwrap(),
+                prompt("adjust course"),
+                &|| {}
+            )
             .await
             .map_err(|failure| failure.into_error())
             .unwrap(),
@@ -96,7 +100,7 @@ async fn idle_race_returns_prompt_required_without_a_detached_invocation() {
     assert_eq!(
         opened
             .session
-            .steer(ExecutionId::new("first").unwrap(), prompt("later"))
+            .steer(ExecutionId::new("first").unwrap(), prompt("later"), &|| {})
             .await
             .map_err(|failure| failure.into_error())
             .unwrap(),
@@ -124,7 +128,11 @@ async fn stale_target_and_unsupported_steering_never_send_the_message() {
         next(&mut opened).await;
         let result = opened
             .session
-            .steer(ExecutionId::new("old").unwrap(), prompt("must not arrive"))
+            .steer(
+                ExecutionId::new("old").unwrap(),
+                prompt("must not arrive"),
+                &|| {},
+            )
             .await
             .map_err(|failure| failure.into_error());
         if mode == "steering-unsupported" {
@@ -138,7 +146,7 @@ async fn stale_target_and_unsupported_steering_never_send_the_message() {
         assert!(matches!(
             opened
                 .session
-                .steer(ExecutionId::new("newer").unwrap(), invalid)
+                .steer(ExecutionId::new("newer").unwrap(), invalid, &|| {})
                 .await
                 .map_err(|failure| failure.into_error()),
             Err(AgentError::InvalidInput(_))
@@ -169,9 +177,11 @@ async fn ambiguous_steering_errors_are_terminal_and_never_replayed() {
         next(&mut opened).await;
         let result = timeout(
             Duration::from_secs(5),
-            opened
-                .session
-                .steer(ExecutionId::new("first").unwrap(), prompt("ambiguous")),
+            opened.session.steer(
+                ExecutionId::new("first").unwrap(),
+                prompt("ambiguous"),
+                &|| {},
+            ),
         )
         .await
         .unwrap()
@@ -210,7 +220,11 @@ async fn pending_steering_blocks_new_prompts_and_close_settles_the_reply() {
     let session = opened.session.clone();
     let steering = tokio::spawn(async move {
         session
-            .steer(ExecutionId::new("first").unwrap(), prompt("pending"))
+            .steer(
+                ExecutionId::new("first").unwrap(),
+                prompt("pending"),
+                &|| {},
+            )
             .await
             .map_err(|failure| failure.into_error())
     });
@@ -222,7 +236,11 @@ async fn pending_steering_blocks_new_prompts_and_close_settles_the_reply() {
     assert_eq!(
         opened
             .session
-            .steer(ExecutionId::new("first").unwrap(), prompt("another"))
+            .steer(
+                ExecutionId::new("first").unwrap(),
+                prompt("another"),
+                &|| {}
+            )
             .await
             .map_err(|failure| failure.into_error()),
         Err(AgentError::Busy)
@@ -261,7 +279,11 @@ async fn steering_has_a_deadline_even_when_execution_has_none() {
     let session = opened.session.clone();
     let steering = tokio::spawn(async move {
         session
-            .steer(ExecutionId::new("first").unwrap(), prompt("pending"))
+            .steer(
+                ExecutionId::new("first").unwrap(),
+                prompt("pending"),
+                &|| {},
+            )
             .await
             .map_err(|failure| failure.into_error())
     });
@@ -309,7 +331,11 @@ async fn a_completed_target_cannot_steer_the_next_running_invocation() {
     assert_eq!(
         opened
             .session
-            .steer(ExecutionId::new("first").unwrap(), prompt("finish first"))
+            .steer(
+                ExecutionId::new("first").unwrap(),
+                prompt("finish first"),
+                &|| {}
+            )
             .await
             .map_err(|failure| failure.into_error())
             .unwrap(),
@@ -329,7 +355,7 @@ async fn a_completed_target_cannot_steer_the_next_running_invocation() {
     assert_eq!(
         opened
             .session
-            .steer(ExecutionId::new("first").unwrap(), prompt("stale"))
+            .steer(ExecutionId::new("first").unwrap(), prompt("stale"), &|| {})
             .await
             .map_err(|failure| failure.into_error())
             .unwrap(),
@@ -519,7 +545,11 @@ async fn oversized_steering_is_rejected_without_interrupting_the_active_prompt()
     assert!(matches!(
         opened
             .session
-            .steer(ExecutionId::new("active-survives").unwrap(), oversized)
+            .steer(
+                ExecutionId::new("active-survives").unwrap(),
+                oversized,
+                &|| {}
+            )
             .await
             .map_err(|failure| failure.into_error()),
         Err(AgentError::MessageTooLarge { .. })
@@ -532,7 +562,8 @@ async fn oversized_steering_is_rejected_without_interrupting_the_active_prompt()
             .session
             .steer(
                 ExecutionId::new("active-survives").unwrap(),
-                prompt("valid-followup")
+                prompt("valid-followup"),
+                &|| {},
             )
             .await
             .map_err(|failure| failure.into_error())
