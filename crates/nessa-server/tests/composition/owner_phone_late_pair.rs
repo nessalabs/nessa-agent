@@ -2,7 +2,9 @@
 //! Actual signed socket request loses its observer while its real Pair is held.
 use super::*;
 use crate::device_pairing::{
-    application::{PairingReceivers, ReceiverDispatch, ReceiverError, ReceiverRequest},
+    application::{
+        PairingReceivers, PublicationGuard, ReceiverDispatch, ReceiverError, ReceiverRequest,
+    },
     infrastructure::{
         restore_gateway_identity, ConversationReceivers, GatewayPairing,
         NativeEnrollmentConnections, NativeEnrollmentListener, PairingOwnerCommands,
@@ -40,6 +42,10 @@ struct HeldPair {
     fences: AtomicUsize,
 }
 impl PairingReceivers for HeldPair {
+    fn lock_publication(&self) -> Result<PublicationGuard, ReceiverError> {
+        self.real.lock_publication()
+    }
+
     fn pair(&self, dispatch: &ReceiverDispatch<'_>) -> Result<ReceiverOutcome, ReceiverError> {
         self.pairs.fetch_add(1, Ordering::SeqCst);
         let outcome = self.real.pair(dispatch)?;
