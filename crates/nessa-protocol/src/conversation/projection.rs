@@ -386,17 +386,34 @@ fn authentication_refusal(record: &InvocationRecord) -> Option<&AgentError> {
         }
     }
 }
+/// A typed authentication refusal kept a separate cleanup or storage failure.
+/// The view publishes this fact as `required_work_failed`; `error` still
+/// carries the person-facing sentence and is not how a surface decides.
+fn authentication_independent_failure(record: &InvocationRecord) -> bool {
+    let Some(refusal) = authentication_refusal(record) else {
+        return false;
+    };
+    let Some(final_error) = record
+        .result
+        .as_ref()
+        .and_then(|result| result.as_ref().err())
+    else {
+        return false;
+    };
+    let report_error = record
+        .provider_report
+        .as_ref()
+        .and_then(|report| report.clone().into_result().err());
+    report_error.as_ref().is_some_and(|error| error != refusal) || refusal != final_error
+}
 fn failure_notice(record: &InvocationRecord) -> Option<String> {
     let final_error = record.result.as_ref()?.as_ref().err()?;
     let report = record.provider_report.as_ref();
     let provider_error = report
         .and_then(|report| report.provider_result())
         .and_then(|result| result.as_ref().err());
-    if let Some(refusal) = authentication_refusal(record) {
-        let report_error = report.and_then(|report| report.clone().into_result().err());
-        return (report_error.as_ref().is_some_and(|error| error != refusal)
-            || refusal != final_error)
-            .then(|| REQUIRED_WORK_FAILURE.into());
+    if authentication_refusal(record).is_some() {
+        return authentication_independent_failure(record).then(|| REQUIRED_WORK_FAILURE.into());
     }
     let Some(AgentError::Provider {
         diagnostic: Some(diagnostic),
@@ -838,6 +855,7 @@ impl Projection {
         }
         self.view.messages.push(ConversationMessage {
             authentication_required: None,
+            required_work_failed: None,
             parts: Vec::new(),
             steering_offset: None,
             event_count: 0,
@@ -1507,6 +1525,10 @@ impl Projection {
             .then_some(record)
             .and_then(authentication_refusal)
             .map(|_| true);
+        self.view.messages[index].required_work_failed = (self.view.messages[index].status
+            == ConversationMessageStatus::Failed
+            && authentication_independent_failure(record))
+        .then_some(true);
         // An ask is offered only while its execution is the one running here.
         // A settled or restarted message drops it, and so does a turn that is
         // running but not active: the gap around liveness is not an open ask.

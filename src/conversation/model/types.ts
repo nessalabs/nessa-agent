@@ -317,6 +317,11 @@ export type AgentPart = {
 export type AssistantTurn = {
   /** Provider-published authentication refusal, distinct from diagnostic status text. */
   authenticationRequired?: boolean
+  /**
+   * Independent required work failed on this authentication refusal.
+   * The person-facing diagnostic stays in `status`.
+   */
+  requiredWorkFailed?: boolean
   parts: AgentPart[]
   executionId?: string
   id: string

@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest"
 import { makeDesktopStore } from "../../../store"
 import type { SharingSource } from "../../application/ports"
 import { SharingError } from "../../application/ports"
+import { createQuestionFlights } from "../../application/question-flights"
 import {
   emptyDraft,
   type ShareDraft,
@@ -38,11 +39,12 @@ function storeWith(sharing: SharingSource | undefined) {
     newId: () => `id-${++next}`,
     measure: () => roomyGrid,
     overviewFilter: keptFilter(),
+    questionFlights: createQuestionFlights(),
     sharing,
   })
 }
 
-const limits = { patterns: 16, hosts: 16, hostBytes: 96, entries: 32 }
+const limits = { patterns: 16, hosts: 16, hostBytes: 96 }
 const choices: SharingChoices = {
   targets: [{ credentialId: "sample-phone", issuedAt: 1 }],
   commandHosts: [],

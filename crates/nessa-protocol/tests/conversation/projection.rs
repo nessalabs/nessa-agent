@@ -2174,7 +2174,13 @@ fn authentication_recovery_keeps_independent_required_work_failure() {
         assert_eq!(view.messages[0].authentication_required, Some(true));
         assert_eq!(
             view.messages[0].error.as_deref(),
-            independent.map(|_| "The turn could not complete all required work.")
+            independent
+                .as_ref()
+                .map(|_| "The turn could not complete all required work.")
+        );
+        assert_eq!(
+            view.messages[0].required_work_failed,
+            independent.as_ref().map(|_| true)
         );
     }
 }
@@ -2498,8 +2504,16 @@ fn startup_authentication_uses_primary_retained_cause_without_a_provider_report(
         let live = shown_snapshot(&snapshot);
         assert_eq!(live.messages[0].authentication_required, expected);
         assert_eq!(live.messages[0].error.as_deref(), notice);
+        assert_eq!(
+            live.messages[0].required_work_failed,
+            (expected == Some(true) && notice.is_some()).then_some(true)
+        );
         assert_eq!(restored.messages[0].authentication_required, expected);
         assert_eq!(restored.messages[0].error.as_deref(), notice);
+        assert_eq!(
+            restored.messages[0].required_work_failed,
+            live.messages[0].required_work_failed
+        );
     }
     // A real report remains authoritative even if a later local operation is auth-related.
     for provider_result in [

@@ -160,8 +160,7 @@ export function draftReasonCopy(reason: DraftHold, limits: SharingLimits): strin
       "This device’s sharing changed since this draft began. Start again from what it holds now.",
     "no-pattern": "Name at least one tool to allow or deny.",
     "too-many-patterns": `At most ${limits.patterns} tools in each of Allow and Deny.`,
-    "too-many-hosts":
-      "Too many hosts for the tools named. Uncheck a host or remove a tool.",
+    "too-many-hosts": `At most ${limits.hosts} hosts.`,
   }
   return said[reason]
 }

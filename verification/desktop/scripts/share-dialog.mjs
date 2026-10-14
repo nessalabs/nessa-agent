@@ -3,7 +3,8 @@
  * The owner's share dialog (nessa_ui#128, #129) against a scripted product
  * session: Share… on a session's menu, its grants and what each holds, a
  * Drive grant with a preset and hosts sent as the wire takes it, the host
- * list held to the room the tool patterns leave, a refusal said in words,
+ * list held to the hosts' own bound however full the tool patterns are, a
+ * refusal said in words,
  * a revoke, a change refused because another window changed the grant and
  * started again from what it holds, a list held while it predates this
  * window's own change, focus kept in the dialog and given back,
@@ -107,6 +108,8 @@ const devices = [
   credential("device-tablet-0002", ["conversation.read"], 1_710_000_000),
 ]
 
+const protocol = JSON.parse(readFileSync(join(repo, "protocol/product/v1.json"), "utf8"))
+const sharePageSize = protocol.$defs.ConversationSharesParams.properties.pageSize.maximum
 const hosts = ["devbox", "me@build.example", "ci-runner", "staging"]
 
 /**
@@ -114,6 +117,8 @@ const hosts = ["devbox", "me@build.example", "ci-runner", "staging"]
  * `scenario.refuseShare` refuses every share with that code;
  * `scenario.holdShare` answers each share only once `release()` is called;
  * after `holdReads()`, each `conversation.shares` read waits for it too.
+ * A shares read names a page size and is answered with one page: a cursor
+ * only when further grants remain, naming that page's last grant.
  * As the gateway does, a policy revision comes from one count that only goes
  * up, a share answers the grant's revision, and a share or unshare naming an
  * `expectedPolicyRevision` the grant no longer holds is refused
@@ -124,6 +129,7 @@ const hosts = ["devbox", "me@build.example", "ci-runner", "staging"]
  */
 function scriptedGateway(scenario = {}) {
   let revision = 2
+  let catalogue = 1
   let grants = [
     {
       credentialId: "device-phone-0001",
@@ -171,6 +177,9 @@ function scriptedGateway(scenario = {}) {
         },
       }
     revision += 1
+    // A new grant moves the catalogue. A change of role or policy does not,
+    // as the gateway's change_revision does not.
+    if (!before) catalogue += 1
     const next = {
       credentialId: params.credentialId,
       role: params.role,
@@ -184,6 +193,35 @@ function scriptedGateway(scenario = {}) {
     return {
       ok: true,
       payload: { requestId: params.requestId, applied: true, policyRevision: revision },
+    }
+  }
+
+  /** One page of grants, oldest first, as `conversation.shares` answers. */
+  function sharesPage(params) {
+    const pageSize = params?.pageSize
+    if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > sharePageSize)
+      return { ok: false, error: { code: "invalid_request", message: "page" } }
+    let start = 0
+    if (params.cursor) {
+      const at = grants.findIndex(
+        (each) =>
+          each.grantedAtMs === params.cursor.grantedAtMs &&
+          each.credentialId === params.cursor.credentialId,
+      )
+      start = at < 0 ? grants.length : at + 1
+    }
+    const items = grants.slice(start, start + pageSize)
+    const last = items[items.length - 1]
+    const more = start + items.length < grants.length
+    return {
+      ok: true,
+      payload: {
+        items,
+        changeRevision: catalogue,
+        ...(more && last
+          ? { cursor: { grantedAtMs: last.grantedAtMs, credentialId: last.credentialId } }
+          : {}),
+      },
     }
   }
 
@@ -216,16 +254,16 @@ function scriptedGateway(scenario = {}) {
             commandHosts: hosts,
           },
         }
-      case "conversation.shares":
+      case "conversation.shares": {
         if (failingReads)
           return {
             ok: false,
             error: { code: "temporarily_unavailable", message: "busy" },
           }
-        if (!holdingReads) return { ok: true, payload: { items: grants } }
-        return new Promise((resolve) =>
-          held.push(() => resolve({ ok: true, payload: { items: grants } })),
-        )
+        const answer = () => sharesPage(params)
+        if (!holdingReads) return answer()
+        return new Promise((resolve) => held.push(() => resolve(answer())))
+      }
       case "conversation.share": {
         sent.push({ method, params })
         if (scenario.refuseShare)
@@ -237,6 +275,7 @@ function scriptedGateway(scenario = {}) {
         sent.push({ method, params })
         const { before, stale } = expected(params)
         if (stale) return changed
+        if (before) catalogue += 1
         grants = grants.filter((each) => each !== before)
         return {
           ok: true,
@@ -413,8 +452,8 @@ Per engine, against a scripted product session:
   drive     a Drive grant with a preset and two hosts is sent as the wire
             takes it, naming revision 0 as a first grant, said as done, and
             listed as the gateway read it back
-  budget    29 tool patterns leave room for 3 of the 4 hosts: the 4th is
-            unavailable, and Share is held until the hosts fit
+  budget    both pattern lists full still leave every host: "4 of 16", and
+            Share can send
   refusal   a refused share is said in words; no wire code on the page
   held      while a share is on its way, and the read after it, the form,
             Share and Revoke are held; once that read answers they take input
@@ -545,45 +584,20 @@ await main(meta, async ({ options, rep, url }) => {
       const many = (prefix, count) =>
         Array.from({ length: count }, (_, index) => `${prefix}${index}`).join(", ")
       await page.locator(selectorFor.sharePattern("allow")).fill(many("Allowed", 16))
-      await page.locator(selectorFor.sharePattern("deny")).fill(many("Denied", 13))
+      await page.locator(selectorFor.sharePattern("deny")).fill(many("Denied", 16))
       const boxes = page.locator(`${css.shareHosts} input[type="checkbox"]`)
-      for (const index of [0, 1, 2]) await boxes.nth(index).check()
-      const fourth = {
-        unavailable: await boxes
-          .nth(3)
-          .evaluate(
-            (box) => box.disabled || box.getAttribute("aria-disabled") === "true",
-          ),
-        checked: await boxes.nth(3).isChecked(),
-      }
+      for (const index of [0, 1, 2, 3]) await boxes.nth(index).check()
       const count = await page.locator(css.shareHostCount).innerText()
-      const heldBefore = await page.locator(selectorFor.shareAction("submit")).isEnabled()
-      // One more pattern leaves room for two: the three checked no longer fit.
-      await page
-        .locator(selectorFor.sharePattern("deny"))
-        .fill(`${many("Denied", 13)}, Extra`)
-      const reason = await page.locator(css.shareReason).innerText()
-      const over = await page.locator(css.shareHostCount).innerText()
-      const heldAfter = await page.locator(selectorFor.shareAction("submit")).isEnabled()
+      const canSend = await page.locator(selectorFor.shareAction("submit")).isEnabled()
       const evidence = await shot(page, options, engine, "budget")
       return {
         count,
-        fourth,
-        reason,
         evidence,
         failures: [
-          count.includes("3 of 3 selected")
+          count.includes("4 of 16 selected")
             ? null
             : `the count read ${JSON.stringify(count)}`,
-          fourth.unavailable && !fourth.checked ? null : "the 4th host could be checked",
-          heldBefore ? null : "Share was held with the hosts in room",
-          reason.includes("Too many hosts")
-            ? null
-            : `the reason read ${JSON.stringify(reason)}`,
-          heldAfter ? "Share could send past the room" : null,
-          over.includes("3 selected, room for 2")
-            ? null
-            : `the count read ${JSON.stringify(over)}`,
+          canSend ? null : "Share was held with a full pattern list and every host",
           gate.sent.length === 0 ? null : "a change was sent",
         ].filter(Boolean),
       }

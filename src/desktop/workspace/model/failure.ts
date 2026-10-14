@@ -10,7 +10,7 @@
  * did nothing; either way trying again is right, so a message is sent again
  * under its id and the source's updates say what happened. `unknown-session`: the source holds no such session, archived
  * ones included, and begins none under an archived id. `not-waiting`: the
- * approval was already answered, or never asked. `not-supported`: the source
+ * approval or question was already answered, or never asked. `not-supported`: the source
  * has no such thing to do — a pin, or an answer it does not offer — so it
  * did nothing, and asking again changes nothing. `signed-out`: the window
  * could not connect because the gateway refused its credential — or, in a
