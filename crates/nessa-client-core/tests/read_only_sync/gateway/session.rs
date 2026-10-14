@@ -129,21 +129,21 @@ fn prepare_then_start_does_not_start_peer_after_preparation_error() {
     assert_eq!(result, Err("preparation failed"));
     assert!(!started.load(Ordering::SeqCst));
 }
+/// How long a scripted peer waits for the client, and how long one test
+/// operation may take. A 32KiB `artifact.read` on a busy Windows runner
+/// does not finish inside a couple of seconds, and the peer then reports
+/// a missing frame instead of the client's own outcome.
+const TEST_IO_BUDGET: Duration = Duration::from_secs(15);
+
 fn bounded_accept(listener: &TcpListener) -> (TcpStream, SocketAddr) {
     listener.set_nonblocking(true).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + TEST_IO_BUDGET;
     loop {
         match listener.accept() {
             Ok(accepted) => {
                 accepted.0.set_nonblocking(false).unwrap();
-                accepted
-                    .0
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .unwrap();
-                accepted
-                    .0
-                    .set_write_timeout(Some(Duration::from_secs(2)))
-                    .unwrap();
+                accepted.0.set_read_timeout(Some(TEST_IO_BUDGET)).unwrap();
+                accepted.0.set_write_timeout(Some(TEST_IO_BUDGET)).unwrap();
                 return accepted;
             }
             Err(error) if error.kind() == ErrorKind::WouldBlock && Instant::now() < deadline => {
@@ -320,7 +320,8 @@ pub(crate) fn peer(script: impl FnOnce(&mut PeerSocket) + Send + 'static) -> (En
     })
 }
 fn policy() -> GatewayPolicy {
-    GatewayPolicy::new(2000, 1000, 2).unwrap()
+    let budget_ms = u64::try_from(TEST_IO_BUDGET.as_millis()).unwrap();
+    GatewayPolicy::new(budget_ms, budget_ms, 2).unwrap()
 }
 pub(crate) fn connect(endpoint: &Endpoint) -> Session {
     Session::connect(

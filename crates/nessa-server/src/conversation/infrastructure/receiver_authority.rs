@@ -7,7 +7,9 @@ use crate::conversation::domain::{
 use nessa_auth::application::ports::Clock;
 use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId};
 use nessa_local_database::{
-    rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior},
+    rusqlite::{
+        params, Connection, Error, OpenFlags, OptionalExtension, Transaction, TransactionBehavior,
+    },
     OpenError, Schema,
 };
 use nessa_protocol::conversation::read_scope::ReadRefusal;
@@ -25,6 +27,10 @@ const DEFINITION: &str = include_str!("receiver_authority.sql");
 pub struct LocalReceiverAuthority {
     connection: Arc<Mutex<Connection>>,
     clock: Arc<dyn Clock>,
+    /// `publication.lock` beside the database. Device pairing holds it from
+    /// the receiver write through the credential publish. Export holds it
+    /// while it snapshots both.
+    publication_lock: std::path::PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,6 +49,7 @@ impl LocalReceiverAuthority {
     ) -> Result<Self, OpenError> {
         Self::opened(
             nessa_local_database::open(path, &Schema::new(DEFINITION)?)?,
+            path,
             policy_revision,
             clock,
         )
@@ -56,6 +63,7 @@ impl LocalReceiverAuthority {
     ) -> Result<Self, OpenError> {
         Self::opened(
             nessa_local_database::open_existing(path, &Schema::new(DEFINITION)?)?,
+            path,
             policy_revision,
             clock,
         )
@@ -63,6 +71,7 @@ impl LocalReceiverAuthority {
 
     fn opened(
         mut connection: Connection,
+        path: &Path,
         policy_revision: &str,
         clock: Arc<dyn Clock>,
     ) -> Result<Self, OpenError> {
@@ -75,7 +84,20 @@ impl LocalReceiverAuthority {
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
             clock,
+            publication_lock: path.with_file_name("publication.lock"),
         })
+    }
+
+    /// Exclusive hold of [`Self`]'s publication lock. The caller keeps the
+    /// file until the credential that belongs with this receiver write is
+    /// published. Closing the file releases the lock.
+    pub fn lock_publication(&self) -> std::io::Result<std::fs::File> {
+        let file = nessa_local_storage::open(
+            &self.publication_lock,
+            nessa_local_storage::OpenMode::OpenOrCreate,
+        )?;
+        file.lock()?;
+        Ok(file)
     }
 
     /// Pair a server-minted receiver with a verified credential. The caller of
@@ -679,6 +701,145 @@ impl ReceiverAuthority for LocalReceiverAuthority {
             }).await.map_err(|_| ReadRefusal::Unverifiable)?
         })
     }
+}
+
+/// One receiver the export cut may keep. No secret is a field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExportedReceiver {
+    pub receiver_id: String,
+    pub credential_id: String,
+    pub access_epoch: u64,
+    pub active: bool,
+}
+
+/// The receiver-access file could not be snapshotted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReceiverSnapshotError {
+    /// The file could not be opened, or the read transaction failed.
+    Unavailable,
+}
+
+/// A read transaction on the receiver-access database.
+///
+/// [`Self::open`] records the transition head. [`Self::read`] lists receivers
+/// from that snapshot after admission has been released. Opening this does
+/// not go through [`LocalReceiverAuthority::open`], which would advance the
+/// policy row.
+pub struct ReceiverSnapshot {
+    connection: Connection,
+    watermark: String,
+}
+
+impl ReceiverSnapshot {
+    /// Begin a read transaction. A missing or unreadable file is
+    /// [`ReceiverSnapshotError::Unavailable`]. The file is not created.
+    pub fn open(path: &std::path::Path) -> Result<Self, ReceiverSnapshotError> {
+        let connection = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(unavailable)?;
+        connection.execute_batch("BEGIN").map_err(unavailable)?;
+        let head: i64 = connection
+            .query_row(
+                "SELECT COALESCE(MAX(sequence), 0) FROM receiver_transitions",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(unavailable)?;
+        Ok(Self {
+            connection,
+            watermark: head.to_string(),
+        })
+    }
+
+    /// Receivers visible to this snapshot. The watermark is the one [`Self::open`]
+    /// recorded. A row that cannot be named is skipped.
+    pub fn read(
+        &self,
+    ) -> Result<(String, Vec<ExportedReceiver>, Vec<String>), ReceiverSnapshotError> {
+        read_receivers(&self.connection, &self.watermark)
+    }
+}
+
+/// Read `path` without opening it through [`LocalReceiverAuthority::open`],
+/// which would advance the policy row. A row that cannot be named is omitted
+/// from the returned list and counted in the `Err` only when the file itself
+/// cannot be read. Skipped rows are the second value.
+pub fn export_receivers(
+    path: &std::path::Path,
+) -> Result<(String, Vec<ExportedReceiver>, Vec<String>), ReceiverSnapshotError> {
+    ReceiverSnapshot::open(path)?.read()
+}
+
+fn unavailable(_error: Error) -> ReceiverSnapshotError {
+    ReceiverSnapshotError::Unavailable
+}
+
+fn read_receivers(
+    connection: &Connection,
+    watermark: &str,
+) -> Result<(String, Vec<ExportedReceiver>, Vec<String>), ReceiverSnapshotError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT receiver_id, credential_id, access_epoch, active
+             FROM receivers ORDER BY receiver_id",
+        )
+        .map_err(unavailable)?;
+    let mut rows = statement.query([]).map_err(unavailable)?;
+    let mut receivers = Vec::new();
+    let mut skipped = Vec::new();
+    let mut index = 0u64;
+    while let Some(row) = rows.next().map_err(unavailable)? {
+        index += 1;
+        let receiver_id: String = match row.get(0) {
+            Ok(value) => value,
+            Err(_) => {
+                skipped.push(format!("row-{index}"));
+                continue;
+            }
+        };
+        let credential_id: String = match row.get(1) {
+            Ok(value) => value,
+            Err(_) => {
+                skipped.push(format!("row-{index}"));
+                continue;
+            }
+        };
+        let epoch: i64 = match row.get(2) {
+            Ok(value) => value,
+            Err(_) => {
+                skipped.push(format!("row-{index}"));
+                continue;
+            }
+        };
+        let active: i64 = match row.get(3) {
+            Ok(value) => value,
+            Err(_) => {
+                skipped.push(format!("row-{index}"));
+                continue;
+            }
+        };
+        let Some(access_epoch) = u64::try_from(epoch).ok().filter(|epoch| *epoch > 0) else {
+            skipped.push(format!("row-{index}"));
+            continue;
+        };
+        if !nameable(&receiver_id) || !nameable(&credential_id) || (active != 0 && active != 1) {
+            skipped.push(format!("row-{index}"));
+            continue;
+        }
+        receivers.push(ExportedReceiver {
+            receiver_id,
+            credential_id,
+            access_epoch,
+            active: active == 1,
+        });
+    }
+    Ok((watermark.to_owned(), receivers, skipped))
+}
+
+fn nameable(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 512 && value.bytes().all(|byte| byte >= 0x20)
 }
 
 #[cfg(test)]

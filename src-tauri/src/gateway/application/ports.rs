@@ -17,6 +17,8 @@ use crate::gateway::domain::value_objects::{
     ReconciliationRejectedReport, ReconciliationRequestRecord, ReconciliationTarget, SearchPath,
     SearchPathError, SystemdJobAttempt, SystemdRuntimeObservation,
 };
+#[cfg(any(target_os = "macos", test))]
+use std::sync::mpsc;
 use std::{
     error::Error,
     fmt,
@@ -607,6 +609,17 @@ impl GatewayStartup {
         }
     }
 
+    /// The same phase at `revision`.
+    ///
+    /// Restoring an earlier phase after a newer one was published keeps the
+    /// newer revision, so the next publish stays strictly after it.
+    pub(super) fn at_revision(&self, revision: u64) -> Self {
+        Self {
+            revision,
+            phase: self.phase.clone(),
+        }
+    }
+
     pub fn revision(&self) -> u64 {
         self.revision
     }
@@ -622,6 +635,52 @@ impl GatewayStartup {
 /// reported by its adapter and never changes the authoritative startup state.
 pub trait GatewayStartupEvents: Send + Sync {
     fn publish(&self, startup: &GatewayStartup);
+}
+
+/// The staging thread's report of one deferred publication.
+///
+/// Dropping it without [`Self::finish`] is a missing result. The attempt
+/// records that as a failed publication rather than waiting forever.
+#[cfg(any(target_os = "macos", test))]
+pub struct DeferredStageReporter {
+    result: mpsc::Sender<Result<(), String>>,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl DeferredStageReporter {
+    pub(crate) fn pair() -> (Self, mpsc::Receiver<Result<(), String>>) {
+        let (result, receiver) = mpsc::channel();
+        (Self { result }, receiver)
+    }
+
+    pub fn finish(self, result: Result<(), String>) {
+        let _ = self.result.send(result);
+    }
+}
+
+/// Starts one deferred publication after its plan has been accepted.
+///
+/// Dropping this without [`Self::start`] drops the launch. The copy does not
+/// run, and the label lock held inside the launch is released with it.
+#[cfg(any(target_os = "macos", test))]
+pub struct DeferredStageLaunch {
+    start: Option<Box<dyn FnOnce(DeferredStageReporter) + Send>>,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl DeferredStageLaunch {
+    pub fn new(start: impl FnOnce(DeferredStageReporter) + Send + 'static) -> Self {
+        Self {
+            start: Some(Box::new(start)),
+        }
+    }
+
+    pub(crate) fn start(&mut self, reporter: DeferredStageReporter) {
+        match self.start.take() {
+            Some(start) => start(reporter),
+            None => drop(reporter),
+        }
+    }
 }
 
 /// Reports readiness invalidation and the ordered native history for one attempt.
@@ -698,6 +757,25 @@ pub trait GatewayReconciliationProgress: Send + Sync {
         incarnation: Option<ReconciliationIncarnation>,
         target_artifact_present: bool,
     ) -> Result<LifecycleObservation, GatewayError>;
+
+    /// Stores a runtime publication that may finish after this attempt has
+    /// reported the gateway ready.
+    ///
+    /// The attempt writes the plan — with no cleanup, so recovery settles an
+    /// interrupted copy without pruning a generation the staging thread may
+    /// still be writing — only once its other effects have completed. It calls
+    /// [`DeferredStageLaunch::start`] only after that plan is accepted, then
+    /// waits for [`DeferredStageReporter`] and records the completion and
+    /// artifact observation before its outcome. A progress port that does not
+    /// journal the copy drops `launch` here, so the copy never starts.
+    #[cfg(any(target_os = "macos", test))]
+    fn begin_deferred_stage(
+        &self,
+        _fingerprint: &str,
+        _launch: DeferredStageLaunch,
+    ) -> Result<(), GatewayError> {
+        Ok(())
+    }
 
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn systemd_observed(
@@ -1073,6 +1151,21 @@ pub trait GatewayReconciliationJournalSession: Send + Sync {
         None
     }
 
+    /// Runs `wait` without this session's in-process writer gate.
+    ///
+    /// The stage file lock stays held, so another process cannot recover the
+    /// attempt. Quit in this process can record its own stop. The file journal
+    /// takes the writer gate back for an append this session makes during
+    /// `wait`. Deferred publication calls this around the copy, which outlasts the
+    /// desktop quit budget. Journals that do not take that gate run `wait`
+    /// directly.
+    fn while_lock_yielded(
+        &self,
+        wait: &mut dyn FnMut() -> Result<(), String>,
+    ) -> Result<(), String> {
+        wait()
+    }
+
     fn intent(&self, intent: &GatewayReconciliationIntent) -> Result<(), GatewayError>;
 
     fn outcome(
@@ -1409,6 +1502,17 @@ pub trait GatewayHost: Send + Sync {
         attempt: &GatewayReconciliationAttempt,
         progress: &dyn GatewayReconciliationProgress,
     ) -> Result<ReconciledGateway, GatewayError>;
+
+    /// Whether the private directory for `fingerprint` is present.
+    ///
+    /// Called after a deferred publication reports, so the attempt can record
+    /// the artifact without reading launchd itself. The default is for a host
+    /// that never defers one.
+    fn published_runtime_is_present(&self, _fingerprint: &str) -> Result<bool, GatewayError> {
+        Err(GatewayError::Registration(
+            "this gateway host does not publish a staged runtime".into(),
+        ))
+    }
 
     /// Reobserve and settle one validated persisted lifecycle before current
     /// configuration is allowed to allocate or mutate anything.

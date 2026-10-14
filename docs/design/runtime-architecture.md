@@ -1615,13 +1615,15 @@ forwarded to the surface's own loopback, for the life of the lease.
   longest real history.
 - Backup is an export cut, not a cache: records, metadata and audit from
   their owners at one consistent boundary, plus a deletion inventory
-  (#270). The cut also holds live leases, which a restore marks
-  `Interrupted` (row L11), and the grants, follow rules and peer table,
-  so a restore keeps the mesh and a revoked grant does not return. A
-  restored gateway is quarantined: it serves reads and issues no leases
-  until the person accepts it as the authority and every device and peer
-  is told, through a restore generation they see on their next connection
-  or by re-pairing if the key was not in the backup; #272 chooses which.
+  (#270). The cut's order is [the export cut](export-cut.md). It keeps
+  live leases and the grants, follow rules and peer table. Restore and
+  quarantine are not built. A restore has to fence a host that may still
+  be running a lease, not only mark that lease `Interrupted`, and a
+  revoked grant must not return. A restored gateway is quarantined: it
+  serves reads and issues no leases until the person accepts it as the
+  authority and every device, peer, environment and worker is told,
+  through a restore generation they see on their next connection or by
+  re-pairing if the key was not in the backup; #272 chooses which.
 
 ## Commands
 

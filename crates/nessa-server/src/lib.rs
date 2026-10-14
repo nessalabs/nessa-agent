@@ -4,6 +4,7 @@ pub mod agent_warm_up;
 pub mod agents;
 pub mod app;
 pub mod attachments;
+pub mod backup;
 pub mod browser_session;
 pub mod cli;
 pub mod composition;
