@@ -3135,7 +3135,7 @@ async fn a_conversation_holds_a_bounded_number_of_grants() {
     assert!(matches!(refused, Err(ConversationError::InvalidInput)));
     assert!(!opened.store.is_granted(&id, "one-more").await.unwrap());
     assert_eq!(
-        opened.store.grants(&id).await.unwrap().len() as i64,
+        opened.store.grants(&id).await.unwrap().grants.len() as i64,
         MAX_SHARE_GRANTS_PER_CONVERSATION
     );
 }
@@ -3328,7 +3328,7 @@ async fn only_grant(
     id: &ConversationId,
 ) -> crate::conversation::application::ShareGrant {
     use crate::conversation::application::ShareGrants;
-    let mut grants = store.grants(id).await.unwrap();
+    let mut grants = store.grants(id).await.unwrap().grants;
     assert_eq!(grants.len(), 1);
     grants.remove(0)
 }
@@ -3418,6 +3418,7 @@ async fn a_comment_or_drive_grant_pages_and_resolves_as_read_does() {
 /// not change.
 #[tokio::test]
 async fn a_change_of_role_or_policy_is_applied_journaled_and_moves_the_policy_revision() {
+    use crate::conversation::application::ShareGrants;
     let opened = opened();
     let store = &opened.store;
     let id = new_id();
@@ -3425,6 +3426,7 @@ async fn a_change_of_role_or_policy_is_applied_journaled_and_moves_the_policy_re
     assert!(share_as(store, &id, "phone", ShareAccess::read(), "share")
         .await
         .unwrap());
+    let catalogue = store.grants(&id).await.unwrap().change_revision;
     let read = only_grant(store, &id).await;
     let head = owner_head(store).await;
     let device_head = store
@@ -3454,6 +3456,11 @@ async fn a_change_of_role_or_policy_is_applied_journaled_and_moves_the_policy_re
     assert_eq!(back.access, ShareAccess::read());
     assert!(back.policy_revision > ruled.policy_revision);
     assert_eq!(owner_head(store).await, head, "no catalogue revision moved");
+    assert_eq!(
+        store.grants(&id).await.unwrap().change_revision,
+        catalogue,
+        "a policy change leaves the revision a shares page is bound to"
+    );
     assert_eq!(
         store
             .head(&org(), &alice(), &device("phone"))
@@ -3907,7 +3914,7 @@ async fn a_revoke_ends_a_grant_of_any_role() {
             .unwrap());
         assert!(revoke(&opened.store, &id, "phone").await);
         assert!(!opened.store.is_granted(&id, "phone").await.unwrap());
-        assert!(opened.store.grants(&id).await.unwrap().is_empty());
+        assert!(opened.store.grants(&id).await.unwrap().grants.is_empty());
         assert!(device_pass(&opened.store, device("phone"), 0)
             .await
             .is_empty());
@@ -3949,26 +3956,37 @@ async fn a_conversation_holds_a_bounded_number_of_drive_grants() {
         Err(ConversationError::InvalidInput)
     ));
     assert!(!store.is_granted(&id, "one-more").await.unwrap());
+    let before_reader = store.grants(&id).await.unwrap().change_revision;
     assert!(
         share_as(store, &id, "reader", ShareAccess::read(), "reader")
             .await
             .unwrap()
+    );
+    assert!(
+        store.grants(&id).await.unwrap().change_revision > before_reader,
+        "a new grant moves the revision a shares page is bound to"
     );
     assert!(matches!(
         share_as(store, &id, "reader", no_shell(), "reader-drives").await,
         Err(ConversationError::InvalidInput)
     ));
     assert_eq!(role_journal(&opened.path).len(), journaled + 1);
-    let grants = store.grants(&id).await.unwrap();
+    let grants = store.grants(&id).await.unwrap().grants;
     let driving = grants
         .iter()
         .filter(|grant| grant.access.role() == ShareRole::Drive)
         .count();
     assert_eq!(driving as i64, MAX_DRIVE_GRANTS_PER_CONVERSATION);
-    // A driver's own policy can still change: it takes no new Drive grant.
+    // A driver's own policy can still change: it takes no new Drive grant,
+    // and the revision a shares page is bound to stays.
+    let before_policy = store.grants(&id).await.unwrap().change_revision;
     assert!(share_as(store, &id, "driver-0", rules(), "driver-0-rules")
         .await
         .unwrap());
+    assert_eq!(
+        store.grants(&id).await.unwrap().change_revision,
+        before_policy
+    );
 }
 
 /// A share change is admitted by the access policy inside its transaction:

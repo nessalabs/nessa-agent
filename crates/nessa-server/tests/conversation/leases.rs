@@ -5428,7 +5428,7 @@ impl super::ShareGrants for EveryRevisionHeld {
     fn grants<'a>(
         &'a self,
         _: &'a ConversationId,
-    ) -> super::ConversationFuture<'a, Vec<super::ShareGrant>> {
+    ) -> super::ConversationFuture<'a, super::ShareGrantList> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
     fn policy_at<'a>(
@@ -5945,7 +5945,7 @@ impl super::ShareGrants for NoEntry {
     fn grants<'a>(
         &'a self,
         _: &'a ConversationId,
-    ) -> super::ConversationFuture<'a, Vec<super::ShareGrant>> {
+    ) -> super::ConversationFuture<'a, super::ShareGrantList> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
     fn policy_at<'a>(

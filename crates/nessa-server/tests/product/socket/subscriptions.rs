@@ -3172,7 +3172,7 @@ async fn a_turn_is_saved_with_who_started_it() {
         .grant_to(ShareGrantTransition::Grant(drive_access()))
         .await;
     let revision = || async {
-        let held = fixture.metadata.grants(&fixture.id).await.unwrap();
+        let held = fixture.metadata.grants(&fixture.id).await.unwrap().grants;
         held[0].policy_revision
     };
     let granted = revision().await;
@@ -3373,7 +3373,7 @@ async fn a_comment_or_drive_grant_leaves_notes_on_the_conversation_it_names() {
     assert_eq!(answer["error"]["code"], "forbidden", "{answer}");
     grants(&fixture.authority, &["conversation.read", "server.read"]);
     let revision =
-        || async { fixture.metadata.grants(&fixture.id).await.unwrap()[0].policy_revision };
+        || async { fixture.metadata.grants(&fixture.id).await.unwrap().grants[0].policy_revision };
     let commented = revision().await;
     let answer = fixture
         .call(
@@ -3537,12 +3537,12 @@ async fn a_retried_note_answers_its_first_receipt_and_another_conflicts() {
         )
         .await;
     assert_eq!(left["ok"], true, "{left}");
-    let commented = fixture.metadata.grants(&fixture.id).await.unwrap()[0].policy_revision;
+    let commented = fixture.metadata.grants(&fixture.id).await.unwrap().grants[0].policy_revision;
     fixture
         .grant_to(ShareGrantTransition::Grant(drive_access()))
         .await;
     assert_ne!(
-        fixture.metadata.grants(&fixture.id).await.unwrap()[0].policy_revision,
+        fixture.metadata.grants(&fixture.id).await.unwrap().grants[0].policy_revision,
         commented
     );
     let retried = fixture
@@ -3872,7 +3872,7 @@ async fn a_drive_grants_command_hosts_round_trip_and_their_bounds_are_refused() 
         .await;
     assert_eq!(answer["payload"]["applied"], true, "{answer}");
     assert_eq!(policy_of("phone").await, named);
-    let held = fixture.metadata.grants(&fixture.id).await.unwrap();
+    let held = fixture.metadata.grants(&fixture.id).await.unwrap().grants;
     assert_eq!(
         held[0]
             .access
@@ -3976,6 +3976,8 @@ async fn shares_returns_one_page_and_refuses_a_page_size_past_its_bound() {
         .await;
     let items = first["payload"]["items"].as_array().unwrap();
     assert_eq!(items.len(), 1, "{first}");
+    let revision = first["payload"]["changeRevision"].as_u64().unwrap();
+    assert!(revision >= 1, "{first}");
     let cursor = first["payload"]["cursor"].clone();
     assert_eq!(cursor["credentialId"], items[0]["credentialId"]);
     let second = fixture
@@ -3985,6 +3987,7 @@ async fn shares_returns_one_page_and_refuses_a_page_size_past_its_bound() {
         )
         .await;
     assert_eq!(second["payload"]["items"].as_array().unwrap().len(), 1);
+    assert_eq!(second["payload"]["changeRevision"].as_u64(), Some(revision));
     assert!(second["payload"].get("cursor").is_none(), "{second}");
     assert_ne!(
         second["payload"]["items"][0]["credentialId"],
@@ -4958,7 +4961,7 @@ async fn a_drivers_tool_call_is_checked_against_the_grants_policy() {
             ToolPreset::ReadOnlyTools,
         )))
         .await;
-    let revision = fixture.metadata.grants(&fixture.id).await.unwrap()[0].policy_revision;
+    let revision = fixture.metadata.grants(&fixture.id).await.unwrap().grants[0].policy_revision;
     grants(
         &fixture.authority,
         &["conversation.write", "conversation.read", "server.read"],

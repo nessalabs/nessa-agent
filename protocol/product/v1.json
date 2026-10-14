@@ -2570,7 +2570,7 @@
       "type": "object",
       "additionalProperties": false,
       "x-maxGrants": 64,
-      "description": "One page of conversation.shares: this page's grants, oldest first, and a cursor when further grants remain. A conversation holds at most 64 grants; one page holds at most its page size.",
+      "description": "One page of conversation.shares: this page's grants, oldest first, the conversation's catalogue revision when they were read, and a cursor when further grants remain. A later page belongs to the same read only when it names the same revision. A conversation holds at most 64 grants; one page holds at most its page size.",
       "properties": {
         "items": {
           "type": "array",
@@ -2578,12 +2578,18 @@
           "maxItems": 8,
           "description": "This page's grants, oldest first, at most the page size asked for. A conversation's grants may take more than one page."
         },
+        "changeRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "The conversation's catalogue revision when this page was read, with its grants. A grant or a revoke moves it; a change of role or policy does not. A later page belongs to the same read only when it names this revision."
+        },
         "cursor": {
           "$ref": "#/$defs/ConversationSharesCursor",
           "description": "Present when further grants remain after this page. Absent when this page finishes the list. The next page echoes it."
         }
       },
-      "required": ["items"]
+      "required": ["items", "changeRevision"]
     },
     "ConversationShareResult": {
       "type": "object",

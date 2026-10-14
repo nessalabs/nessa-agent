@@ -2,7 +2,8 @@
 //! `docs/design/read-grants.md`.
 use super::share_page;
 use crate::conversation::application::{
-    ShareGrant, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
+    ShareGrant, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_POLICY_REVISION,
+    MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 use crate::conversation::domain::{CommandHosts, ShareAccess, ShareRole, ToolPolicy, ToolRules};
 use nessa_auth::domain::{CredentialId, MAX_IDENTIFIER_BYTES};
@@ -46,8 +47,9 @@ fn largest_policy() -> ToolPolicy {
 
 /// Row J10: one `conversation.shares` page of grants at the largest policy,
 /// every command host at its longest, every identifier and pattern at its
-/// longest, the cursor naming the last of them, and the longest request id,
-/// still fits the frame a client takes. A page is not every grant a
+/// longest, the cursor naming the last of them, the catalogue revision at
+/// the largest safe integer, and the longest request id, still fits the
+/// frame a client takes. A page is not every grant a
 /// conversation may hold.
 #[test]
 fn a_full_page_of_largest_grants_fits_one_frame() {
@@ -71,6 +73,7 @@ fn a_full_page_of_largest_grants_fits_one_frame() {
         &ConversationSharesResult {
             items: page.items,
             cursor: page.cursor,
+            change_revision: MAX_POLICY_REVISION,
         },
     )
     .unwrap();
@@ -180,6 +183,10 @@ fn the_schema_states_the_share_bounds_the_domain_enforces() {
     assert_eq!(
         definitions["ConversationSharesResult"]["x-maxGrants"].as_i64(),
         Some(MAX_SHARE_GRANTS_PER_CONVERSATION)
+    );
+    assert_eq!(
+        definitions["ConversationSharesResult"]["properties"]["changeRevision"]["maximum"].as_u64(),
+        Some(MAX_POLICY_REVISION)
     );
     // The page is what fits the frame. The conversation may hold more grants
     // than one page, Drive ones included.

@@ -1023,10 +1023,12 @@ export interface ConversationShare {
   /** When the grant was made, Unix milliseconds. */
   grantedAtMs: number
 }
-/** One page of conversation.shares: this page's grants, oldest first, and a cursor when further grants remain. A conversation holds at most 64 grants; one page holds at most its page size. */
+/** One page of conversation.shares: this page's grants, oldest first, the conversation's catalogue revision when they were read, and a cursor when further grants remain. A later page belongs to the same read only when it names the same revision. A conversation holds at most 64 grants; one page holds at most its page size. */
 export interface ConversationSharesResult {
   /** This page's grants, oldest first, at most the page size asked for. A conversation's grants may take more than one page. */
   items: ConversationShare[]
+  /** The conversation's catalogue revision when this page was read, with its grants. A grant or a revoke moves it; a change of role or policy does not. A later page belongs to the same read only when it names this revision. */
+  changeRevision: number
   /** Present when further grants remain after this page. Absent when this page finishes the list. The next page echoes it. */
   cursor?: ConversationSharesCursor
 }

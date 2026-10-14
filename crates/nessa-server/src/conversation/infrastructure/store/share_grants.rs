@@ -17,8 +17,9 @@ use super::{
 };
 use crate::conversation::application::{
     AccessAction, ConversationError, ConversationFuture, HeldGrant, OwnerAccess, RevisionHold,
-    ShareGrant, ShareGrantChange, ShareGrantReceipt, ShareGrantTransition, ShareGrants,
-    MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
+    ShareGrant, ShareGrantChange, ShareGrantList, ShareGrantReceipt, ShareGrantTransition,
+    ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_POLICY_REVISION,
+    MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 use crate::conversation::domain::{
     CommandHosts, ShareAccess, ShareRole, ToolChoice, ToolPolicy, ToolPreset, ToolRules,
@@ -469,9 +470,21 @@ impl ShareGrants for LocalConversationStore {
         })
     }
 
-    fn grants<'a>(&'a self, id: &'a ConversationId) -> ConversationFuture<'a, Vec<ShareGrant>> {
+    fn grants<'a>(&'a self, id: &'a ConversationId) -> ConversationFuture<'a, ShareGrantList> {
         let id = id.clone();
         self.run(move |connection| {
+            // The same connection the grant rows are read on, so a writer
+            // cannot land between the revision and the list.
+            let revision: i64 = connection
+                .query_row(
+                    "SELECT change_revision FROM conversations WHERE id = ?1",
+                    [id.to_string()],
+                    |row| row.get(0),
+                )
+                .map_err(failed)?;
+            let change_revision = time(revision)
+                .filter(|value| *value <= MAX_POLICY_REVISION)
+                .ok_or_else(|| unreadable("conversations", &id.to_string()))?;
             let mut statement = connection
                 .prepare(&format!(
                     "SELECT receiver_id, {}, role, {}, policy_revision, granted_at_ms
@@ -512,7 +525,10 @@ impl ShareGrants for LocalConversationStore {
                 );
                 grants.push(grant.ok_or_else(|| unreadable("share_grants", &id.to_string()))?);
             }
-            Ok(grants)
+            Ok(ShareGrantList {
+                grants,
+                change_revision,
+            })
         })
     }
 

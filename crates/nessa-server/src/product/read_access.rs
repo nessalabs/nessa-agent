@@ -427,15 +427,16 @@ pub(super) async fn dispatch_share(
                     }
                 }
                 let id = conversation_id(&params.conversation_id)?;
-                let grants = shares
+                let listed = shares
                     .shares(&caller(session, frame.id.clone()), &id)
                     .await?;
-                let page = share_page(&grants, params.cursor.as_ref(), page_size);
+                let page = share_page(&listed.grants, params.cursor.as_ref(), page_size);
                 Ok(success(
                     &frame.id,
                     &ConversationSharesResult {
                         items: page.items,
                         cursor: page.cursor,
+                        change_revision: listed.change_revision,
                     },
                 ))
             }

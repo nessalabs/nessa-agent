@@ -227,12 +227,33 @@ tools](#checking-a-drive-turns-tools)).
   and is the grants strictly after that pair in oldest-first order
   (`grantedAtMs`, then credential). The answer's cursor is present when
   further grants remain, and names that page's last grant. A cursor that
-  matches no grant is still a position. `conversation.unshare` names no
-  role and ends a grant of any role (row J8).
+  matches no grant is still a position. Each page also names the
+  conversation's catalogue revision (`changeRevision`), read with that
+  page's grants. A grant or a revoke moves it; a change of role or policy
+  does not, and a later write still names the grant's own `policyRevision`.
+  The dialog keeps a page only while the next page names the same revision.
+  When it does not, the dialog drops what it has read and starts again from
+  the first page. After two such starts, a further move is unanswered
+  (row D12). `conversation.unshare` names no role and ends a grant of any
+  role (row J8).
 - **Bounds.** A conversation holds at most 64 grants and at most 8 Drive
   grants (row J9). One `conversation.shares` answer holds at most the page
   size, and a page of that many grants at the largest policy fits one frame
   (row J10). The caps and the page size are in [limits](../limits.md).
+
+```mermaid
+sequenceDiagram
+    participant Dialog
+    participant Gateway
+    Dialog->>Gateway: conversation.shares pageSize, no cursor
+    Gateway-->>Dialog: items, changeRevision R, cursor
+    Dialog->>Gateway: conversation.shares pageSize, cursor
+    Gateway-->>Dialog: changeRevision other than R
+    Note over Dialog: drop the grants and the cursor
+    Dialog->>Gateway: conversation.shares pageSize, no cursor
+    Gateway-->>Dialog: items, changeRevision S, no cursor
+    Note over Dialog: the list is that page
+```
 
 ```mermaid
 sequenceDiagram
@@ -730,8 +751,11 @@ Every rule stays with the gateway; the dialog only reads what it publishes:
   client): at most 16 hosts of at most 253 bytes each, the longest
   destination `config.json` accepts, apart from the patterns. The host
   list's `max` is that host bound. A host whose name is too long is shown
-  unavailable. The dialog reads the grants a page at a time (`sharePage`)
-  on one connection until a page names no cursor (row D12). A page that
+  unavailable.   The dialog reads the grants a page at a time (`sharePage`)
+  on one connection until a page names no cursor (row D12). Each page names
+  the catalogue revision it was read at. A later page that names another
+  revision is not kept: the walk starts again from the first page, and after
+  two such starts the read is unanswered. A page that
   repeats a credential, or a walk past the conversation's grant cap, is
   unanswered.
 - **What a policy cannot stop** is said beside the Drive controls: calls the
@@ -792,7 +816,7 @@ row's tests are named by the row: the transitions in
 | D9 | A Drive draft with both pattern lists full and hosts checked up to the hosts' own bound; a custom policy naming no pattern; more hosts than that bound; a change to a grant holding a host the gateway does not offer now, or a pattern holding a comma; another device chosen after Change | Share disabled with why when there is no pattern or more hosts than the host bound; a full pattern list still leaves every host that fits; a host whose name is too long is unavailable; the held host is shown, checked and sent unless unchecked; the grant's patterns are sent exactly while their field is unchanged; a device without a grant starts from an empty form | `model/sharing.test.ts` (*D9*, *carries a preset and every host checked…*, *a grant's patterns*); `share-dialog.test.tsx` (*keeps every fitting host…*, *keeps, and shows, a held host…*, *starts from nothing for a device without a grant…*) |
 | D10 | The list and the form while a change is on its way, while any read is, or while the grants listed predate this window's last settled change (made, refused or unanswered) because no read of them has answered since — the read after it on its way or failed | Held, by one rule (`formHeld`): no edit is taken, the fieldset, Share, Change, Revoke and its confirm are disabled, Start Again does nothing, and no reason is said, since the draft is not compared with a list that predates it; a failed read offers only Try Again. A change made to the draft's own device builds the draft on the revision the gateway answered, keeping what the form showed; a revoke leaves no basis; a refused or unanswered change, or one to another device, leaves the draft as it was. Once the grants are read after the change, a draft whose basis the listed grant no longer holds is held as changed, with Start Again, which starts it from what that read holds. Share sends the draft as the store holds it then, built by `requestFrom`, so what is sent and the basis the answer moves the draft onto are one; a change names its basis, 0 for a first grant; one sent on a basis another window moved is refused by the gateway (`share_grant_changed`), said in words naming no cause, and changes nothing | `sharing.test.ts` (*D10*, eight, among them *after %s, the list and the form are held…* and *a read that fails after any settled change…*); `model/sharing.test.ts` (*D9: is held when the device's grant changed…*, *D10: builds on the revision the gateway answered…*, *starts again…*); `sharing-commands.test.ts` (*D5, D10: a change to a grant another window moved…*, *D10: a first grant names revision 0…*, *D10: Share sends the draft as the store holds it…*); `share-dialog.test.tsx` (*holds the form while a change is on its way…*, *says a change refused because another window changed the grant…*, *holds the list and the form during the read after %s…*); `share-dialog.mjs` (`held`, `changed`, `stale`) |
 | D11 | Revoke asked to confirm; then the person confirms, cancels, begins any change (an Update to the same device among them), or a read answers | The ask is the dialog's state (`confirming`), holding the device and the revision listed when the person was asked, and begins only when a change could. Confirmed, the revoke names that revision, so a grant moved since is refused `changed`. Cancelled, or any change beginning, ends it; a read listing that device at another revision, or not at all, ends it, while one listing it as it was, or failing, keeps it | `sharing.test.ts` (*D11: a Revoke asked keeps the revision listed then…*); `sharing-commands.test.ts` (*D11: a Revoke names the revision listed when it was asked…*); `share-dialog.test.tsx` (*stops asking about a Revoke once a read lists the grant changed…*, *stops asking about a Revoke when this window's own change…*) |
-| D12 | The grants read as pages: the first page, then each page after the cursor the previous page returned, until a page names no cursor | The dialog lists every grant, in order, from one connection. A page that repeats a credential, or a walk that passes the conversation's grant cap, is unanswered | `sharing-gateway.test.ts` (*D12: reads every page…*, *D12: is unanswered when a later page…*) |
+| D12 | The grants read as pages: the first page, then each page after the cursor the previous page returned, until a page names no cursor. A later page that names another catalogue revision drops the pages already read and the walk starts again, at most twice | The dialog lists every grant, in order, from one connection, all from one catalogue revision. A page that repeats a credential, a walk that passes the conversation's grant cap, or a catalogue that keeps moving, is unanswered | `sharing-gateway.test.ts` (*D12: reads every page…*, *D12: is unanswered when a later page…*, *D12: starts again when a later page…*, *D12: is unanswered when the catalogue revision keeps moving*) |
 
 ## What this slice does not do
 
@@ -911,7 +935,7 @@ otherwise.
 | J7 | `conversation.shares` | Each grant's role, its policy when Drive, and its policy revision, which moves only with its own role or policy | `shares_reports_each_grants_role_policy_and_policy_revision` |
 | J8 | Unshare a Comment or a Drive grant | Revoked like Read, journaled with the role and policy it took away | `a_revoke_ends_a_grant_of_any_role`; `share_refuses_what_the_owner_cannot_grant` (unshare names no role) |
 | J9 | A Drive grant past `MAX_DRIVE_GRANTS_PER_CONVERSATION` (8), new or a change from another role | Refused `InvalidInput`, nothing written; a driver's own policy can still change | `a_conversation_holds_a_bounded_number_of_drive_grants` |
-| J10 | One page of `conversation.shares`: the page size of grants, each a Drive grant with the largest policy (both pattern lists full, 16 hosts of 253 bytes), every text at its longest, and a cursor | Fits one frame (`MAX_PAYLOAD_BYTES`); the schema states the page size, the grant cap, and the host bounds the domain enforces. A later page resumes after the cursor | `a_full_page_of_largest_grants_fits_one_frame`, `a_shares_page_resumes_after_its_cursor`, `the_schema_states_the_share_bounds_the_domain_enforces` (`tests/product/read_access.rs`) |
+| J10 | One page of `conversation.shares`: the page size of grants, each a Drive grant with the largest policy (both pattern lists full, 16 hosts of 253 bytes), every text at its longest, a cursor, and the catalogue revision at the largest safe integer | Fits one frame (`MAX_PAYLOAD_BYTES`); the schema states the page size, the grant cap, the host bounds the domain enforces, and the revision bound. A later page resumes after the cursor and names the same revision | `a_full_page_of_largest_grants_fits_one_frame`, `a_shares_page_resumes_after_its_cursor`, `the_schema_states_the_share_bounds_the_domain_enforces` (`tests/product/read_access.rs`); `shares_returns_one_page_and_refuses_a_page_size_past_its_bound` |
 | J11 | A paired session with pairing's `conversation.read` and a Drive grant sends, steers, stops, answers, cancels, or asks a receipt, naming the granted conversation; then naming another of the owner's | Admitted, and its message starts a turn there; the other is `conversation_not_found` | `a_drive_grant_drives_only_the_conversation_it_names` |
 | J12 | A paired session, holding `conversation.write` and a Drive grant, calls any other method whose grant is `conversation.write`; or, holding a Read or Comment grant, a Drive command; or a party signed in as a principal other than its grantor, as a peer is, holding Drive, a Drive command | `forbidden` | `a_paired_session_writes_only_what_a_drive_grant_admits` |
 | J13 | A Drive grant lowered to Read, then revoked; the device unpaired; or a device without pairing's `conversation.read` | The next command `forbidden`, `conversation_not_found`, `unauthorized`, and `forbidden` before its grant is read | `a_drive_grant_lowered_revoked_or_unpaired_drives_no_more` |

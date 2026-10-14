@@ -6,7 +6,10 @@
  * read into the model's words (`model/sharing.ts`). The bounds a Drive
  * grant is held to are the ones the schema publishes (`toolPolicyBounds`).
  * Grants are read a page at a time (`sharePage`) on one connection until a
- * page names no cursor.
+ * page names no cursor. Each page names the catalogue revision it was read
+ * at. A later page that names another revision is not kept: the grants and
+ * the cursor are dropped and the walk starts again from the first page.
+ * After two such starts the read is unanswered.
  *
  * Who may be granted what is the gateway's to say, by its answers. Each
  * refusal is mapped by total tables — one over the conversation codes, one
@@ -46,6 +49,12 @@ import type {
   SharingFailure,
   ToolPolicy,
 } from "../../model/sharing"
+
+/**
+ * How many times a walk may start again after a later page names another
+ * catalogue revision. The next drift is unanswered.
+ */
+const shareWalkRestarts = 2
 
 /** What sharing asks of the window's gateway client. */
 export interface SharingClient {
@@ -245,22 +254,35 @@ export function sharingGateway(options: {
     grants: (sessionId) =>
       typed(async () => {
         const client = await connected()
-        const grants: ShareGrant[] = []
-        const seen = new Set<string>()
-        let cursor: ConversationSharesCursor | undefined
+        let restarts = 0
         for (;;) {
-          const page = await client.conversation.shares(sessionId, {
-            pageSize: sharePage.pageSize,
-            ...(cursor === undefined ? {} : { cursor }),
-          })
-          for (const item of page.items) {
-            if (seen.has(item.credentialId) || grants.length >= sharePage.grants)
-              throw new Error("conversation.shares page did not advance")
-            seen.add(item.credentialId)
-            grants.push(grantOf(item))
+          const grants: ShareGrant[] = []
+          const seen = new Set<string>()
+          let cursor: ConversationSharesCursor | undefined
+          let revision: number | undefined
+          for (;;) {
+            const page = await client.conversation.shares(sessionId, {
+              pageSize: sharePage.pageSize,
+              ...(cursor === undefined ? {} : { cursor }),
+            })
+            // This page was sliced with the cursor of another revision, so
+            // it is not part of the list that revision names.
+            if (revision !== undefined && page.changeRevision !== revision) {
+              restarts += 1
+              if (restarts > shareWalkRestarts)
+                throw new Error("conversation.shares page did not advance")
+              break
+            }
+            revision = page.changeRevision
+            for (const item of page.items) {
+              if (seen.has(item.credentialId) || grants.length >= sharePage.grants)
+                throw new Error("conversation.shares page did not advance")
+              seen.add(item.credentialId)
+              grants.push(grantOf(item))
+            }
+            if (page.cursor === undefined) return grants
+            cursor = page.cursor
           }
-          if (page.cursor === undefined) return grants
-          cursor = page.cursor
         }
       }),
     choices: async () =>

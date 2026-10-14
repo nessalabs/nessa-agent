@@ -336,8 +336,9 @@ export type ConversationApi = {
    * published page size (`sharePage.pageSize`). The first page names no
    * cursor. A later page echoes the cursor the previous page returned, and is
    * the grants after that one. The answer's cursor is present when further
-   * grants remain, and names that page's last grant. A conversation holds at
-   * most `sharePage.grants`. An answer with more grants than the page size
+   * grants remain, and names that page's last grant. Every page names the
+   * catalogue revision (`changeRevision`) it was read at. A conversation holds
+   * at most `sharePage.grants`. An answer with more grants than the page size
    * this call sent is refused, the same as any other answer the client will
    * not read.
    * @throws TypeError before anything is sent for a malformed conversation ID,

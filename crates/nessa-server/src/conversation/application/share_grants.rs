@@ -233,6 +233,16 @@ pub struct ShareGrant {
     pub granted_at_ms: u64,
 }
 
+/// The grants on one conversation, and the catalogue revision they were read
+/// with. A grant or a revoke moves `change_revision`; a change of role or
+/// policy does not. `conversation.shares` names it on every page, so a later
+/// page belongs to the same read only when it names the same revision.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShareGrantList {
+    pub grants: Vec<ShareGrant>,
+    pub change_revision: u64,
+}
+
 /// Grant with a role and policy, or revoke, as the owner decided it. A grant
 /// on a party that already holds one replaces its role and policy.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -347,8 +357,9 @@ pub trait ShareGrants: Send + Sync {
     /// grant no longer holds is refused `ShareGrantChanged` and writes
     /// nothing (row J30).
     fn change(&self, change: ShareGrantChange) -> ConversationFuture<'_, ShareGrantReceipt>;
-    /// The grants on one conversation, oldest first.
-    fn grants<'a>(&'a self, id: &'a ConversationId) -> ConversationFuture<'a, Vec<ShareGrant>>;
+    /// The grants on one conversation, oldest first, with the catalogue
+    /// revision they were read at.
+    fn grants<'a>(&'a self, id: &'a ConversationId) -> ConversationFuture<'a, ShareGrantList>;
     /// The tool policy `receiver_id`'s grant on `id` held at
     /// `policy_revision`, as the journal entry of that revision says; `None`
     /// when that entry is no Drive grant of that party on that conversation.
@@ -574,7 +585,7 @@ impl ShareConversation<'_> {
         &self,
         caller: &ConversationCaller,
         id: &ConversationId,
-    ) -> Result<Vec<ShareGrant>, ConversationError> {
+    ) -> Result<ShareGrantList, ConversationError> {
         self.owner_of(caller, id).await?;
         self.grants.grants(id).await
     }

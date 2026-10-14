@@ -1045,6 +1045,7 @@ pub struct ConversationShare {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationSharesResult {
     pub items: Vec<ConversationShare>,
+    pub change_revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<ConversationSharesCursor>,
 }

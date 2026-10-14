@@ -129,6 +129,7 @@ const hosts = ["devbox", "me@build.example", "ci-runner", "staging"]
  */
 function scriptedGateway(scenario = {}) {
   let revision = 2
+  let catalogue = 1
   let grants = [
     {
       credentialId: "device-phone-0001",
@@ -176,6 +177,7 @@ function scriptedGateway(scenario = {}) {
         },
       }
     revision += 1
+    catalogue += 1
     const next = {
       credentialId: params.credentialId,
       role: params.role,
@@ -213,6 +215,7 @@ function scriptedGateway(scenario = {}) {
       ok: true,
       payload: {
         items,
+        changeRevision: catalogue,
         ...(more && last
           ? { cursor: { grantedAtMs: last.grantedAtMs, credentialId: last.credentialId } }
           : {}),
@@ -270,6 +273,7 @@ function scriptedGateway(scenario = {}) {
         sent.push({ method, params })
         const { before, stale } = expected(params)
         if (stale) return changed
+        if (before) catalogue += 1
         grants = grants.filter((each) => each !== before)
         return {
           ok: true,

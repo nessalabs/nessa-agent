@@ -1251,12 +1251,16 @@ function toolPolicy(value: unknown) {
 
 /**
  * Validate one page of `conversation.shares`: each grant once, a policy
- * exactly on a Drive grant, and a cursor only when it names this page's last
- * grant. A page holds at most the published page size.
+ * exactly on a Drive grant, the catalogue revision the page was read at, and
+ * a cursor only when it names this page's last grant. A page holds at most
+ * the published page size.
  */
 export function conversationShares(value: unknown): ConversationSharesResult {
   const result = record(value)
-  exact(result, ["items", "cursor"])
+  exact(result, ["items", "cursor", "changeRevision"])
+  // Read with the grants. A later page belongs to the same read only when it
+  // names the same revision.
+  time(result, "changeRevision")
   const seen = new Set<string>()
   let last: { credentialId: string; grantedAtMs: number } | undefined
   for (const item of items(result, "items", sharePage.pageSize)) {

@@ -317,6 +317,7 @@
         "grantedAtMs": 1
       }
     ],
+    "changeRevision": 1,
     "cursor": {
       "grantedAtMs": 1,
       "credentialId": "phone"

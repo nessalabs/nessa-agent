@@ -1838,6 +1838,7 @@ const page = { pageSize: bounds.maxSharePage }
 
 it("lists one page of a conversation's grants within the published bounds", async () => {
   const request = vi.fn().mockResolvedValue({
+    changeRevision: 1,
     items: [
       grant,
       { credentialId: "phone", role: "read", policyRevision: 1, grantedAtMs: 1 },
@@ -1852,6 +1853,7 @@ it("lists one page of a conversation's grants within the published bounds", asyn
   // A full allow list, a full deny list, and every host, including one at the
   // longest destination config.json accepts.
   request.mockResolvedValue({
+    changeRevision: 1,
     items: [
       {
         ...grant,
@@ -1868,7 +1870,7 @@ it("lists one page of a conversation's grants within the published bounds", asyn
   })
   await expect(api.shares(conversationId, page)).resolves.toBeDefined()
   const cursor = { grantedAtMs: grant.grantedAtMs, credentialId: grant.credentialId }
-  request.mockResolvedValue({ items: [grant], cursor })
+  request.mockResolvedValue({ changeRevision: 1, items: [grant], cursor })
   await api.shares(conversationId, { pageSize: 1, cursor })
   expect(request).toHaveBeenLastCalledWith("conversation.shares", {
     conversationId,
@@ -1879,6 +1881,7 @@ it("lists one page of a conversation's grants within the published bounds", asyn
 
 it("refuses a shares answer larger than the page size it asked for", async () => {
   const request = vi.fn().mockResolvedValue({
+    changeRevision: 1,
     items: [
       grant,
       { credentialId: "phone", role: "read", policyRevision: 1, grantedAtMs: 1 },
@@ -1960,9 +1963,16 @@ it.each([
       cursor: { grantedAtMs: grant.grantedAtMs, credentialId: "other" },
     },
   ],
-])("rejects %s in a shares answer", async (_name, answer) => {
+  ["no catalogue revision", { items: [grant] }],
+  [
+    "a catalogue revision that is not a safe integer",
+    { items: [grant], changeRevision: 1.5 },
+  ],
+])("rejects %s in a shares answer", async (name, answer) => {
+  const payload =
+    name === "no catalogue revision" ? answer : { changeRevision: 1, ...answer }
   const api = createConversationApi(
-    { request: vi.fn().mockResolvedValue(answer) },
+    { request: vi.fn().mockResolvedValue(payload) },
     () => "action",
   )
   await expect(api.shares(conversationId, page)).rejects.toThrow()
