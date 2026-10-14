@@ -63,14 +63,7 @@ impl Default for SnapshotSaveState {
 }
 impl SnapshotSaveState {
     fn binding(&self, id: &SessionId) -> SessionSaveGeneration {
-        SessionSaveGeneration::new(
-            SessionSaveBackend::Snapshot {
-                session: id.clone(),
-                incarnation: self.incarnation,
-            },
-            self.revision,
-            self.revision,
-        )
+        SessionSaveGeneration::snapshot(id.clone(), self.incarnation, self.revision)
     }
 }
 impl SavedState {
@@ -93,14 +86,8 @@ impl SavedState {
             self.save.revision.checked_add(1).ok_or_else(|| {
                 StorageError::Corrupt("fixture snapshot revision exhausted".into())
             })?;
-        let next = SessionSaveGeneration::new(
-            SessionSaveBackend::Snapshot {
-                session: snapshot.id.clone(),
-                incarnation: self.save.incarnation,
-            },
-            revision,
-            revision,
-        );
+        let next =
+            SessionSaveGeneration::snapshot(snapshot.id.clone(), self.save.incarnation, revision);
         let count = u64::try_from(units.len())
             .map_err(|_| StorageError::Corrupt("fixture unit count exhausted".into()))?;
         let receipt = SessionSaveReceipt::new(binding, next, count, digest)?;

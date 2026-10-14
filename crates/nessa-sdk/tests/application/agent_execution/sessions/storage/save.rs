@@ -2,34 +2,27 @@
 use super::*;
 use nessa_sync::replication::domain::Id;
 
+fn snapshot(session: &str, incarnation: [u8; 16], revision: u64) -> SessionSaveGeneration {
+    SessionSaveGeneration::snapshot(SessionId::new(session).unwrap(), incarnation, revision)
+}
+fn record(base: u64, generation: u64) -> SessionSaveGeneration {
+    SessionSaveGeneration::record(Id::new("conversation").unwrap(), [1; 16], base, generation)
+}
+
 #[test]
 fn receipt_requires_original_scope_and_entire_unit_count_before_next_work() {
-    let backend = SessionSaveBackend::Snapshot {
-        session: SessionId::new("conversation").unwrap(),
-        incarnation: [1; 16],
-    };
-    let original = SessionSaveGeneration::new(backend.clone(), 4, 4);
-    let next = SessionSaveGeneration::new(backend, 5, 5);
+    let original = snapshot("conversation", [1; 16], 4);
+    let next = snapshot("conversation", [1; 16], 5);
     let receipt = SessionSaveReceipt::new(original.clone(), next.clone(), 2, [3; 32]).unwrap();
     assert_eq!(receipt.next_for(&original, 2).unwrap(), next);
+    for units in [1, 3] {
+        assert_eq!(
+            receipt.next_for(&original, units),
+            Err(StorageError::IdentityMismatch)
+        );
+    }
     assert_eq!(
-        receipt.next_for(&original, 1),
-        Err(StorageError::IdentityMismatch)
-    );
-    assert_eq!(
-        receipt.next_for(&original, 3),
-        Err(StorageError::IdentityMismatch)
-    );
-    let foreign = SessionSaveGeneration::new(
-        SessionSaveBackend::Snapshot {
-            session: SessionId::new("conversation").unwrap(),
-            incarnation: [2; 16],
-        },
-        4,
-        4,
-    );
-    assert_eq!(
-        receipt.next_for(&foreign, 2),
+        receipt.next_for(&snapshot("conversation", [2; 16], 4), 2),
         Err(StorageError::IdentityMismatch)
     );
     assert!(SessionSaveReceipt::new(original.clone(), original.clone(), 2, [3; 32]).is_err());
@@ -38,62 +31,47 @@ fn receipt_requires_original_scope_and_entire_unit_count_before_next_work() {
 
 #[test]
 fn record_receipt_cannot_skip_generation_or_cross_reset_incarnation() {
-    let backend = SessionSaveBackend::Record {
-        stream: Id::new("conversation").unwrap(),
-        incarnation: [1; 16],
-    };
-    let original = SessionSaveGeneration::new(backend.clone(), 8, 3);
-    let skipped = SessionSaveGeneration::new(backend.clone(), 10, 5);
-    assert!(SessionSaveReceipt::new(original.clone(), skipped, 1, [3; 32]).is_err());
-    let replacement = SessionSaveGeneration::new(
-        SessionSaveBackend::Record {
-            stream: Id::new("conversation").unwrap(),
-            incarnation: [2; 16],
-        },
-        10,
-        4,
-    );
+    let original = record(8, 3);
+    assert_eq!((original.base(), original.generation()), (8, 3));
+    assert!(SessionSaveReceipt::new(original.clone(), record(10, 5), 1, [3; 32]).is_err());
+    let replacement =
+        SessionSaveGeneration::record(Id::new("conversation").unwrap(), [2; 16], 10, 4);
     assert!(SessionSaveReceipt::new(original, replacement, 1, [3; 32]).is_err());
-    let exhausted = SessionSaveGeneration::new(backend.clone(), 8, u64::MAX);
-    let wrapped = SessionSaveGeneration::new(backend, 10, 0);
-    assert!(SessionSaveReceipt::new(exhausted, wrapped, 1, [3; 32]).is_err());
+    assert!(SessionSaveReceipt::new(record(8, u64::MAX), record(10, 0), 1, [3; 32]).is_err());
 }
 
 #[test]
 fn immutable_unit_and_snapshot_receipt_constructor_refuse_each_invalid_capability() {
     assert!(SessionSaveUnit::new(Vec::new()).is_err());
-    let backend = SessionSaveBackend::Snapshot {
-        session: SessionId::new("conversation").unwrap(),
-        incarnation: [1; 16],
-    };
-    let original = SessionSaveGeneration::new(backend.clone(), 4, 4);
-    let next = SessionSaveGeneration::new(backend.clone(), 5, 5);
-    let receipt = SessionSaveReceipt::new(original.clone(), next.clone(), 1, [3; 32]).unwrap();
-    assert_eq!(receipt.next_for(&original, 1).unwrap(), next);
-    for changed in [
-        SessionSaveGeneration::new(backend.clone(), 3, 4),
-        SessionSaveGeneration::new(backend.clone(), 4, 3),
-    ] {
+    let original = snapshot("conversation", [1; 16], 4);
+    let next = snapshot("conversation", [1; 16], 5);
+    let receipt = SessionSaveReceipt::new(original.clone(), next, 1, [3; 32]).unwrap();
+    assert_eq!(
+        receipt.next_for(&original, 1).unwrap(),
+        snapshot("conversation", [1; 16], 5)
+    );
+    for revision in [3, 5] {
         assert_eq!(
-            receipt.next_for(&changed, 1),
+            receipt.next_for(&snapshot("conversation", [1; 16], revision), 1),
             Err(StorageError::IdentityMismatch)
         );
     }
-    let invalid_original = SessionSaveGeneration::new(backend.clone(), 4, 3);
-    assert!(SessionSaveReceipt::new(invalid_original, next.clone(), 1, [3; 32]).is_err());
-    let invalid_next = SessionSaveGeneration::new(backend, 5, 6);
-    assert!(SessionSaveReceipt::new(original, invalid_next, 1, [3; 32]).is_err());
+    for revision in [3, 4] {
+        assert!(SessionSaveReceipt::new(
+            original.clone(),
+            snapshot("conversation", [1; 16], revision),
+            1,
+            [3; 32]
+        )
+        .is_err());
+    }
 }
 
 #[test]
 fn snapshot_receipt_cannot_cross_conversations_with_the_same_incarnation_and_counters() {
-    let backend = |name| SessionSaveBackend::Snapshot {
-        session: SessionId::new(name).unwrap(),
-        incarnation: [1; 16],
-    };
-    let a = SessionSaveGeneration::new(backend("a"), 4, 4);
-    let b = SessionSaveGeneration::new(backend("b"), 4, 4);
-    let next_b = SessionSaveGeneration::new(backend("b"), 5, 5);
+    let a = snapshot("a", [1; 16], 4);
+    let b = snapshot("b", [1; 16], 4);
+    let next_b = snapshot("b", [1; 16], 5);
     let receipt = SessionSaveReceipt::new(b.clone(), next_b.clone(), 1, [3; 32]).unwrap();
     assert_eq!(receipt.next_for(&b, 1).unwrap(), next_b);
     assert_eq!(receipt.next_for(&a, 1), Err(StorageError::IdentityMismatch));
@@ -104,18 +82,29 @@ fn snapshot_receipt_cannot_cross_conversations_with_the_same_incarnation_and_cou
 }
 
 #[test]
-fn snapshot_binding_load_and_receipt_disagree_when_counters_disagree() {
+fn snapshot_binding_uses_one_revision_for_load_and_acknowledgement() {
     let id = SessionId::new("conversation").unwrap();
-    let backend = SessionSaveBackend::Snapshot {
-        session: id.clone(),
-        incarnation: [1; 16],
-    };
-    let original = SessionSaveGeneration::new(backend.clone(), 4, 3);
-    assert!(
-        SessionLoad::new(None, original.clone(), SessionLoadState::Published)
+    for revision in [0, 4, u64::MAX] {
+        let original = snapshot("conversation", [1; 16], revision);
+        assert_eq!(original.base(), revision);
+        assert_eq!(original.generation(), revision);
+        let (_, loaded) = SessionLoad::new(None, original.clone(), SessionLoadState::Published)
             .into_published(&id)
-            .is_ok()
-    );
-    let next = SessionSaveGeneration::new(backend, 5, 5);
-    assert!(SessionSaveReceipt::new(original, next, 1, [3; 32]).is_err());
+            .unwrap();
+        assert_eq!(loaded, original);
+        if let Some(next) = revision.checked_add(1) {
+            let next = snapshot("conversation", [1; 16], next);
+            let receipt =
+                SessionSaveReceipt::new(original.clone(), next.clone(), 1, [3; 32]).unwrap();
+            assert_eq!(receipt.next_for(&original, 1).unwrap(), next);
+        } else {
+            assert!(SessionSaveReceipt::new(
+                original,
+                snapshot("conversation", [1; 16], 0),
+                1,
+                [3; 32]
+            )
+            .is_err());
+        }
+    }
 }

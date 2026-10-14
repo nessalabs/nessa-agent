@@ -11,7 +11,7 @@ use crate::{
         providers::ProviderIdentity,
         sessions::{
             records::{FactKey, FactKind},
-            SessionChange, SessionSaveBackend, SessionSaveGeneration,
+            SessionChange, SessionSaveGeneration,
         },
     },
     domain::agent_execution::sessions::{ProviderContext, SessionId},
@@ -80,11 +80,9 @@ fn save_facts(stream: &StreamKey, base: u64, generation: u64, bytes: usize) -> [
     // JSON trailing whitespace preserves the typed unit while controlling the
     // physical piece budget without inventing an unsupported semantic codec.
     payload.resize(payload.len().max(bytes), b' ');
-    let binding = SessionSaveGeneration::new(
-        SessionSaveBackend::Record {
-            stream: sid(stream.id.as_str()),
-            incarnation: stream.incarnation.0,
-        },
+    let binding = SessionSaveGeneration::record(
+        sid(stream.id.as_str()),
+        stream.incarnation.0,
         base,
         generation,
     );
