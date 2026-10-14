@@ -3965,6 +3965,16 @@ impl<P: AcpProfile> Worker<P> {
             Ok(())
         }
     }
+    /// Drop the notice for this review. The conversation is the session key
+    /// the notice was published under. Without one, nothing was published.
+    fn clear_review(&self, execution: &ExecutionId, permission: &PermissionId) {
+        let Some(conversation_id) = self.session_key.clone().filter(|id| !id.is_empty()) else {
+            return;
+        };
+        self.config
+            .review_notices
+            .clear(&conversation_id, execution, permission);
+    }
     async fn record_answer(
         &mut self,
         resolution: PermissionResolution,
@@ -3977,9 +3987,7 @@ impl<P: AcpProfile> Worker<P> {
         // The review has been selected, including when the audit of that
         // selection fails afterwards. A notice left up would still be asking.
         if delivery == PermissionAnswerDelivery::Selected {
-            self.config
-                .review_notices
-                .clear(&execution_id, &permission_id);
+            self.clear_review(&execution_id, &permission_id);
         }
         let phase = if delivery == PermissionAnswerDelivery::Selected {
             AuditEffectPhase::PermissionSelection
@@ -4032,9 +4040,7 @@ impl<P: AcpProfile> Worker<P> {
         let mut failure: Option<WorkerFailure> = None;
         for record in &records {
             self.permission_context.remove(record.request().id());
-            self.config
-                .review_notices
-                .clear(record.request().execution_id(), record.request().id());
+            self.clear_review(record.request().execution_id(), record.request().id());
         }
         // Attempt every record before publishing UI updates. A full/dropped UI queue
         // must not prevent audit capture of later cancellations in this batch.
@@ -4390,7 +4396,7 @@ impl<P: AcpProfile> Worker<P> {
             {
                 // The review is settled, including when its audit fails later.
                 self.permission_context.remove(&id);
-                self.config.review_notices.clear(&execution_id, &id);
+                self.clear_review(&execution_id, &id);
                 if let Err(failure) = self
                     .record_audit(
                         ExecutionAuditRecord::Cancelled(record.clone()),

@@ -370,10 +370,11 @@ impl ReviewNotices for PermissionMemory {
         let execution_id = notice.execution_id.as_str().to_owned();
         let permission_id = notice.permission_id.as_str().to_owned();
         let mut notices = lock(&self.notices);
-        if let Some(existing) = notices
-            .iter_mut()
-            .find(|item| item.execution_id == execution_id && item.permission_id == permission_id)
-        {
+        if let Some(existing) = notices.iter_mut().find(|item| {
+            item.conversation_id == notice.conversation_id
+                && item.execution_id == execution_id
+                && item.permission_id == permission_id
+        }) {
             if existing.conversation_id == notice.conversation_id && existing.tool == notice.tool {
                 return;
             }
@@ -394,11 +395,13 @@ impl ReviewNotices for PermissionMemory {
         self.bump();
     }
 
-    fn clear(&self, execution: &ExecutionId, permission: &PermissionId) {
+    fn clear(&self, conversation: &str, execution: &ExecutionId, permission: &PermissionId) {
         let mut notices = lock(&self.notices);
         let before = notices.len();
         notices.retain(|item| {
-            item.execution_id != execution.as_str() || item.permission_id != permission.as_str()
+            item.conversation_id != conversation
+                || item.execution_id != execution.as_str()
+                || item.permission_id != permission.as_str()
         });
         let removed = notices.len() != before;
         drop(notices);
@@ -806,11 +809,37 @@ mod tests {
             tool: "Bash".into(),
         });
         assert_eq!(memory.current().0, 1);
-        memory.clear(&execution, &permission);
+        memory.clear("conversation", &execution, &permission);
         assert!(memory.current().1.is_empty());
         assert_eq!(memory.current().0, 2);
-        memory.clear(&execution, &permission);
+        memory.clear("conversation", &execution, &permission);
         assert_eq!(memory.current().0, 2);
+    }
+
+    #[test]
+    fn another_conversation_keeps_a_review_with_the_same_execution_permission() {
+        let (_directory, memory, _) = opened();
+        let execution = execution("turn");
+        let permission = PermissionId::new("perm").unwrap();
+        let notice = |conversation: &str| ReviewNotice {
+            conversation_id: conversation.into(),
+            execution_id: execution.clone(),
+            permission_id: permission.clone(),
+            tool: "Bash".into(),
+        };
+        memory.waiting(&notice("one"));
+        memory.waiting(&notice("two"));
+        let (_generation, reviews) = memory.current();
+        let mut conversations: Vec<_> = reviews
+            .iter()
+            .map(|review| review.conversation_id.as_str())
+            .collect();
+        conversations.sort();
+        assert_eq!(conversations, ["one", "two"]);
+        memory.clear("one", &execution, &permission);
+        let left = memory.current().1;
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].conversation_id, "two");
     }
 
     #[test]

@@ -199,9 +199,17 @@ pub struct ReviewNotice {
 /// Notices a waiting review raises, and clears when the review ends.
 pub trait ReviewNotices: Send + Sync {
     /// `notice` is waiting. A second call for the same review replaces it.
+    ///
+    /// The same execution and permission ids in another conversation are a
+    /// different review. `permissionId` is only unique within one execution,
+    /// and two conversations can use the same execution id.
     fn waiting(&self, notice: &ReviewNotice);
     /// The review was answered, cancelled, or settled by its deadline.
-    fn clear(&self, execution: &ExecutionId, permission: &PermissionId);
+    ///
+    /// `conversation` is part of the identity, with the execution and the
+    /// permission. Clearing one conversation leaves another conversation's
+    /// review that happens to reuse those ids.
+    fn clear(&self, conversation: &str, execution: &ExecutionId, permission: &PermissionId);
 }
 
 /// No notices.
@@ -210,5 +218,5 @@ pub struct IdleReviewNotices;
 
 impl ReviewNotices for IdleReviewNotices {
     fn waiting(&self, _: &ReviewNotice) {}
-    fn clear(&self, _: &ExecutionId, _: &PermissionId) {}
+    fn clear(&self, _: &str, _: &ExecutionId, _: &PermissionId) {}
 }
