@@ -21,6 +21,14 @@ callers when moving files. Review the resulting tree and verify affected links
 and checks before considering the change complete. A new folder alone does not
 establish an architectural boundary.
 
+Upload progress is owned by the conversation application and carries its local
+conversation and admitted placement together; see [attachment lifetimes](design/attachment-lifetimes.md).
+The panel carries that target through hashing and the store through staging.
+The conversation application mints placements and publishes one resource-usage
+snapshot for retention and preview eviction. The immutable resource value carries
+byte identity and authoritative metadata together; storage and accounting use
+that value's object identity.
+
 ## Today
 
 Nessa has a Rust desktop host (window, tray, settings, OS integration), a React
@@ -29,6 +37,12 @@ The conversation vertical has earned the split: the panel is a projection, and
 the gateway owns commands through the SDK Agent. New contexts establish the
 feature-first, role-below layout immediately, including their module map and test
 locations. Existing SDK layout changes are tracked in [the SDK organization task](todo/sdk-context-first-organization.md).
+
+The pure public [conversation resource contract](../src/conversation/resources.ts)
+exports construction/recognition of the immutable resource value and its ownership
+snapshot type. The implementation remains in the conversation model/query; resource
+adapters use this entry without loading conversation UI. Placements retain that
+exact value; byte storage, accounting and preview eviction use its object identity.
 
 ## Target shape
 
@@ -239,7 +253,10 @@ against a private scripted gateway.
   `WorkspaceSource` port and pure use cases over the workspace's state),
   `adapters/` (the Redux slice, commands, effects, typed hooks, selectors and
   the split panes' source in `store/`; the gateway's source and its mapping
-  of conversation views in `gateway/`; the in-memory source in `in-memory/`;
+  of conversation views in `gateway/` (its `fake-gateway.ts` keeps SDK-typed
+  answer records and captured callbacks for tests and the
+  [app-review fixture](design/app-review-verification.md)); the in-memory
+  source in `in-memory/`;
   focus, Escape for the widget in front (`widget-escape.ts`), the panes'
   room, what the workspace adds to a drag, first-send motion (`arrival.ts`),
   keys and the clock in `dom/`; the
@@ -250,14 +267,31 @@ against a private scripted gateway.
   share one header bar (`pane-header-frame.tsx`);
   `ui/overview/` the Agents overview, with its rules in `model/overview/`),
   with `testing.ts` the fake source, the store, and the animation frames its
-  tests share. The window has its own store (`src/desktop/store.ts`) and composition
+  tests share. A failed, cancelled, or unresolved turn keeps the gateway's
+  status and diagnostic on the message, including an earlier authentication
+  refusal. While Claude or Codex recovery is showing, the pane omits that
+  refusal's terminal. The transcript keeps the mark, so a local retry that
+  hides the card shows the failure. OpenCode, an unknown agent, and
+  no agent keep the failure, because they have no sign-in card. An independent
+  required-work failure on that
+  refusal is the protocol's `requiredWorkFailed` flag; the terminal keeps the
+  gateway's diagnostic. Questions the view lists, and the
+  gateway's `interactionViewError`, are on the transcript; answering a
+  question checks it is on screen, then that the view still lists it, then
+  sends `answerQuestion`. A second card joins that send when its choices and
+  initiator match. A different answer is not sent and is not reported as
+  delivered. Those orderings are
+  [desktop question flights](design/desktop-question-flights.md). The next frame drops the question. The window has its own store (`src/desktop/store.ts`) and composition
   (`src/desktop/dependencies.ts`). Where its workspace comes from is the
   window's too: the host's gateway, a browser's, a seeded run, or the sample, by
   `src/desktop/model/workspace-backend.ts`, with the desktop app's connection
   in `src/desktop/adapters/host-gateway.ts`. How the window's keys are matched and
   written on this platform is the window's, not the workspace's:
   `src/desktop/model/keyboard.ts`, with the platform read once in
-  `src/desktop/adapters/platform.ts`. So is the one id encoder
+  `src/desktop/adapters/platform.ts`. The shared binding adapter consumes a matched
+  chord before running its command; availability does not release native key
+  defaults ([workspace shortcuts](design/workspace-shortcuts.md)).
+  So is the one id encoder
   (`src/desktop/model/id-encoding.ts`), which writes any string, a lone
   surrogate too, in an alphabet a separator is never part of; whatever joins
   ids into one string encodes them through it. Views select what they show — a pane its own
@@ -492,8 +526,13 @@ hand their evidence (`application/`, the `PeerAudit` port) to
 TCP adapter is `infrastructure/connector.rs`. `infrastructure/poller.rs`
 reads each kept peer's pinned status and what it granted, into a retained
 cache beside its record, through `nessa-client-core`'s public `retained`
-module, under the commands' turn, which an owner command takes back by
-stopping the cycle; every change it makes is audited through
+module, up to `READS_AT_ONCE` peers at once. It scans the peer records
+when they change and on the poll interval, not on every tick of a read in
+flight. Each cycle holds that peer's
+turn; `peer.forget` and `peer.relay` take that turn back by stopping that
+peer's cycle. `peer.enroll`, `peer.forget`, and `peer.relay` share the
+record set, and a command that cannot take it does not stop a read.
+Every change a cycle makes is audited through
 `PeerCommands::poller_changed`. The
 product methods are `nessa-server/src/product/peers.rs`, composed beside native
 pairing in `composition/native_pairing.rs`, which starts and joins the poller.
@@ -710,7 +749,7 @@ Named record-read owners: `conversation/application/record_read/read.rs` owns pa
 `product/change_watch/` owns live change hints on the product socket: `registration.rs` the watch identity and the one current-admission call (through `AdmitPassiveRead`), `connection.rs` a connection's two target positions and their authority tasks, `delivery.rs` the pending/in-flight notice positions the single writer in `socket.rs` takes from, and `owner.rs` the gateway-wide watch permits and first task fault. Producers are injected through `conversation/application/change_watch.rs` (`WatchRecords`, `WatchNamespaces`) with adapters in `conversation/infrastructure/change_watch.rs`; a watch never reads a head or takes a passive-read permit. The client side is `packages/nessa-client/src/presentation/change-watch-api.ts` and `protocol/change-watch-validate.ts`, through the existing dispatcher. The state and order table is in [committed change watches](design/committed-change-watches.md#298b-authorized-live-hints-over-the-product-socket); socket tests are `tests/product/socket/watches.rs`.
 `product/subscription/` owns replay-to-live view and list subscriptions on the product socket ([record subscriptions](design/record-subscriptions.md)): `connection.rs` a connection's subscriptions and their limits, `target.rs` one task per subscription — wake sources registered before each read, every batch admitted in `authorize_batch`, read through the same fold as `conversation.read` and `conversation.list`, `lagging` when a frame is not taken in time — and `delivery.rs` the frames the single writer in `socket.rs` takes, one in flight per subscription. `conversation/application/live_changes.rs` wakes a reader on live facts that are not records. The client side is `packages/nessa-client/src/presentation/subscription-api.ts` and `protocol/subscription-validate.ts`; socket tests are `tests/product/socket/subscriptions.rs`. The desktop workspace's gateway source (`src/desktop/workspace/adapters/gateway/gateway-source.ts`) follows these subscriptions and polls nothing.
 
-Share grants ([share grants](design/read-grants.md)): `conversation/domain/value_objects/share_access.rs` is what a grant lets its holder do — a role (Read, Comment, Drive) and, for Drive, a tool policy checked for shape and size; `conversation/application/share_grants.rs` owns whether a reader may read a conversation — a session with a receiver binding is a paired device and reads only what it was granted, whatever the role — and the owner's share commands; `conversation/infrastructure/store/share_grants.rs` keeps the grant table and its journal in the metadata database and states the one SQL predicate the catalogue pages with; `product/read_access.rs` asks it for `conversation.read` and every view subscription batch, refuses the owner's lists to a paired device, and serves `conversation.share`, `.unshare` and `.shares`, mapping a role and policy between the wire and the domain.
+Share grants ([share grants](design/read-grants.md)): `conversation/domain/value_objects/share_access.rs` is what a grant lets its holder do — a role (Read, Comment, Drive) and, for Drive, a tool policy checked for shape and size; `conversation/application/share_grants.rs` owns whether a reader may read a conversation — a session with a receiver binding is a paired device and reads only what it was granted, whatever the role — and the owner's share commands; `conversation/infrastructure/store/share_grants.rs` keeps the grant table and its journal in the metadata database and states the one SQL predicate the catalogue pages with; `product/read_access.rs` asks it for `conversation.read` and every view subscription batch, refuses the owner's lists to a paired device, and serves `conversation.share`, `.unshare` and `.shares`, mapping a role and policy between the wire and the domain. A Drive turn proceeds only while `hold_revision` still finds that grant at the admitted revision. The permit is that `(conversation, receiver)` pair and is removed when the last one drops. A native steer drops the first permit after the save, compares the revision again, and keeps the second until the provider operation starts, releasing it before the response wait.
 The live slot owns a prepared SDK `Agent` before provider attachment. It captures
 caller-attributed attachment authority, returns create/read/queue commands without
 waiting for runtime readiness, and retains one bounded task that joins readiness
@@ -949,7 +988,9 @@ and stable execution-scoped identity. The gateway upserts selection with its lat
 local write evidence before the agent-stream adapter renders it; it is not a
 permission decision, provider message, tool failure, or execution status.
 `ui/transcript.tsx` renders a turn's terminal status once at row level,
-independently of whether that turn contains text.
+independently of whether that turn contains text. The desktop transcript
+keeps that status and the gateway's diagnostic as separate marks
+(`workspace/model/transcript.ts`).
 
 ### Packaged gateway lifecycle
 
@@ -1393,11 +1434,15 @@ folder is walked here under `MOST_FOLDER_FILES` and `MOST_FOLDER_ENTRIES`
 instead of by the page, and a `dragging` event tells the panel when to draw the
 drop target.
 
-Both gestures name themselves, through `Announce::began` — a drop when it lands,
-a `+` selection the moment the picker's answer comes back — and that name is a
-`Batch`: a private-field newtype minted in `attachments/batch.rs` and nowhere
-else, so no answer can be built without one. Dropping `Default` alone had been a
-speed bump, since a struct literal with `String::new()` still compiled.
+Both gestures name themselves through `Announce::began`. A drop receives a
+host-minted `Batch` when it lands; a `+` selection receives a `Batch` that wraps
+the panel's validated picker request ID, registered before the command starts.
+That identity travels through the picked event and every readiness event, so
+overlapping picker calls need no invocation or delivery order assumption.
+Unknown and retired batch names have no destination and are ignored instead of
+falling back to the active tab. The
+[attachment gesture design](design/attachment-gestures.md) records the panel's
+destination ownership and race table.
 
 A **drop** gives one of three answers, and two of them land on a draft: the
 files and the refusal. Both travel back on the `Dropped` with the name attached,
@@ -1407,27 +1452,20 @@ announced, and the name it is given anyway is never looked up. That is
 `attach_begun_by`, and it is a rule with a test rather than a condition inside a
 function that needs a window.
 
-A **`+`** differs in what needs the name, not in where the name comes from. The
-page begins that gesture, so it captured the draft at the press and passes it
-straight to `addChosenFiles`; the name is what the *tile* needs, because the
-host draws that mid-call and has nothing else to go on. `began` says
-`gesture: "picked"`, and the panel answers with the draft it is already holding
-rather than reading the open tab a second time — one capture either way. Two
-reads of one fact agreed only while nothing could change between them, and what
-guaranteed that was the picker being modal: rfd's presentation choice, not a
-promise. `readiness.rs` has the seam test that pins `"picked"`, because that
-literal is the whole of what makes the distinction work and nothing else checked
-it.
+A **`+`** captures the whole destination at the gesture boundary: the Redux
+store, conversation ID, resource manager, and attach command. It registers a
+picker request ID before invoking the host and uses the captured destination
+for the returned files. Readiness events use that same request ID to find their
+captured destination, even if another picker started or settled in between.
+`gesture: "picked"` remains part of the event contract; its seam is in
+`readiness.rs`.
 
 The name exists because an attach can be three quarters of a minute behind its
-gesture, and by then the open tab is no evidence of anything. Only the drop
-announced itself for a while, so a `+` selection of two placeholders put its
-second tile on whichever tab was open when the second file finished; and the
-refusal branch read the open tab even for a drop that had a name, so a folder
-refused late took a tile off one draft and told a different one about a file it
-had never seen. Neither guesses now. A drag of text is deliberately not named:
-it pastes into the focused composer and never looks a name up, and naming it
-spent one of the sixty-four the panel remembers.
+gesture, and by then the open tab is no evidence of anything. Picker readiness,
+returned files, refusals, and drops keep the destination captured for their
+gesture; an older completion cannot clear a newer pending operation. A drag of
+text is deliberately not named: it pastes into the focused composer and never
+looks a name up.
 
 `attachments/readiness.rs` is the seam for a file that is not readable yet. A
 file iCloud is keeping answers a `stat` with a real name, type and length and
@@ -1668,6 +1706,14 @@ the command's output.
 
 ## Command-line surface
 
+Pinned UI preparation is owned by `scripts/ensure-nessa-ui.mjs`, with filesystem
+and subprocess-seam regressions beside it in `scripts/ensure-nessa-ui.test.mjs`.
+The calling checkout's `.vendor/nessa_ui` clone owns dependency installation and
+package build artifacts. Preparation replaces a borrowed vendor link without
+changing its target and refuses a symlinked `.vendor` parent before effects;
+`nessa-ui-revision` remains the revision owner. The offline check reads the current
+vendor without preparing it. See [the UI dependency](../README.md#the-nessa-ui-dependency).
+
 Developer worktree lifecycle is owned by `scripts/worktree.sh`. Manual sibling
 worktrees and Claude Code's nested worktrees use different naming namespaces,
 but both keep Cargo output in a real `target/` directory inside the checkout.
@@ -1751,7 +1797,9 @@ gate refuses any client dependency path to `nessa-server`, including renamed
 and transitive edges. Both ends depend on `nessa-protocol` for shared rules.
 
 The public `retained` library selects owner-device or granted-peer catalogue reads
-through the existing source authorizer. `retained/saved.rs` maps saved scope,
+through the existing source authorizer. `retained/subscribe.rs` is the live
+`conversation.subscribe` feed on a new pinned session to the same gateway; it does not write
+the checkpoint `RetainedCache::read` still copies. `retained/saved.rs` maps saved scope,
 catalogue pages and transcript/progress/deletion values through the existing
 private cache and passive projection, with no CLI, second fold or receiver.
 Scope discovery and each page have separate snapshots; pages carry their actual
@@ -1886,12 +1934,14 @@ surfaces: the refused execution must be the latest published input, and no retai
 local submission may have begun after observing that input. Local sends retain
 that observed identity (null before any input); repeated views preserve it.
 An older delivery failure cannot hide a newly observed refusal. A local send made
-after observing a refusal retires its recovery even if delivery fails; `ui/transcript/transcript.test.tsx` and the
+after observing a refusal retires its recovery even if delivery fails, and the
+pane shows the refusal's terminal that the card had replaced; `ui/transcript/transcript.test.tsx` and the
 provider-sign-in browser fixture exercise both states and the accepted queued,
 running and output transitions.
 The floating panel carries the same typed fact through `applyView` and replaces
-that turn's error divider with the shared card; its App receives the login action
-from composition. The card imports neither a store nor a host. See [ADR 501](adr/todo/501-provider-authentication-recovery.md)
+that turn's error divider with the shared card. It shows the required-work
+diagnostic beside the card only when that turn's `requiredWorkFailed` is set.
+Its App receives the login action from composition. The card imports neither a store nor a host. See [ADR 501](adr/todo/501-provider-authentication-recovery.md)
 for states and the Claude internal-error limitation.
 
 The panel's causal recovery integration test is

@@ -8,6 +8,7 @@ import { attempt, CannotRun } from "./lib/cli.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { panelTarget, startGatewayStack } from "./lib/gateway-stack.mjs"
 import { attachmentVerification, keys, modePublication } from "./lib/selectors.mjs"
+import { modeIndependentContent } from "./lib/mode-content.mjs"
 
 const meta = {
   name: "mode-publication",
@@ -15,10 +16,6 @@ const meta = {
     "confirmed approval mode without transcript output: public read, panel tray and subscribed source revisions",
   defaults: { engine: "chromium,webkit" },
   options: { agent: { type: "string", default: "claude" }, evidence: { type: "string" } },
-}
-const content = (view) => {
-  const { revision: _revision, approvalMode: _approvalMode, ...rest } = view
-  return JSON.stringify(rest)
 }
 await main(
   meta,
@@ -92,7 +89,7 @@ await main(
             before.messages.length ||
             after.messages.length ||
             accepted.sourceMessages ||
-            content(before) !== content(after)
+            modeIndependentContent(before) !== modeIndependentContent(after)
           )
             failures.push(
               "mode change required a transcript or other semantic side effect",

@@ -1,0 +1,37 @@
+#827 published-view verification contract
+Base after restack: codex/812-fresh-restored-tab-identities at 6985df620c02f9c593dfc9dde4c89d450111434c
+Current code head tested: a38586c02ddb191514ec3965a070bc323001325b
+The final evidence commit changes only this evidence directory.
+
+Fixture path: SDK conversationView decode -> production gateway conversationView mapper with the fixture's panel clock -> applyView. The typed SDK view supplies required serverNowMs and notes; the production mapper owns SDK-note to panel-note conversion and deadline clock conversion.
+Mode comparison: ignores exactly revision, approvalMode and serverNowMs; all other current and future fields remain semantic content.
+Lease lookup: Object.hasOwn protects prototype keys before indexing the case table.
+
+Checks on the code head above, after advancing the owned private UI clone to the pinned revision `30900b8644ce9b1bb49681ed28067dad4537a70d`, running `pnpm install --frozen-lockfile` in that clone, and building both linked packages:
+- TypeScript: node node_modules/typescript/lib/tsc.js --noEmit — passed.
+- ESLint and Prettier checks on changed TypeScript, scripts and docs — passed.
+- Verification script library: 167/167 passed.
+- Architecture tests: 102/102 passed; architecture check passed.
+- lease-details: 108/108 held; Chromium and WebKit; widths 360, 600 and 1440; includes __proto__, constructor, and Run on cases. Output: /tmp/nessa-836-lease-restack.json.
+- mode-publication: 2/2 held; Chromium and WebKit; dev mode; reused the current-main native binary at /tmp/nessa-797-combined-cargo-target/debug/nessa. Output: /tmp/nessa-836-mode-restack-shots.json; run evidence and gateway log: `/tmp/nessa-836-mode-evidence`.
+- Visual evidence: `mode-publication-auto.png` shows the confirmed Auto setting; `mode-publication-unavailable.png` shows mode controls disabled while the draft is retained.
+
+Revert probes; each source change was restored:
+- Remove serverNowMs from the typed SDK view: TypeScript TS1360, required property missing.
+- Restore obsolete policyEndTurn variant unsupported_not_implemented: TypeScript TS2322.
+- Bypass the production mapper and pass SDK view directly to applyView: TypeScript TS2345 because SDK ConversationNote[] lacks the panel Note.id field.
+- Include serverNowMs in mode-independent content: mode-content test failed because the two observation clocks differed.
+- Remove Object.hasOwn from lease case lookup: Chromium reported pageerror Invalid conversation lease state for __proto__; the fixture then failed to render. Output: /tmp/nessa-827-prototype-revert-current.json.
+- The five source-asserted probes below were performed before restacking at the earlier code head. Restored source was revalidated at the current code head: the full lease-details run above held 108/108; TypeScript, lint, format, library, architecture and whitespace checks passed.
+
+Current-main replay (2026-10-14 America/Vancouver)
+Tested source: c3e46d39ca181f62f18d88f86d50768c53dd5d22
+Base: 254473c7ea449a67804e8319b66833f00490ed61
+Private UI:30900b8644ce9b1bb49681ed28067dad4537a70d; fonts resolve inside checkout.
+TypeScript passed; verification helper tests167/167; scoped lease fixture lint passed.
+lease-details:108/108 held, Chromium/WebKit at360/600/1440.
+mode-publication:2/2 held, Chromium/WebKit real gateway publications.
+Mode replay reused read-only /tmp/nessa-797-combined-cargo-target/debug/nessa, built at4fb33cd5e.
+Diff of Cargo.toml/Cargo.lock/crates between4fb and this source was empty; no native build ran concurrently.
+Raw current-head logs:/tmp/nessa-836-c3e-lease.log and /tmp/nessa-836-c3e-mode.log.
+Fresh independent full10-file scoped review: no findings; reviewer did not rerun browser/test workloads.

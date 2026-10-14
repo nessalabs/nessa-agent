@@ -15,18 +15,19 @@ const structuredKinds = new Set(["text", "markdown", "json", "csv"])
 /** Render local file bytes using the design system's kind-specific preview. */
 export default function AttachmentPreview({ file }: { file: FileAttachment }) {
   const largeStructuredFile =
-    file.size > MAX_STRUCTURED_PREVIEW_BYTES && structuredKinds.has(detectFileKind(file))
+    file.resource.size > MAX_STRUCTURED_PREVIEW_BYTES &&
+    structuredKinds.has(detectFileKind(file.resource))
   // A file that travels as a path was never read, so there is nothing here to
   // show — and an empty `src` is not nothing, it is a viewer pointed at a file
   // that does not exist, chosen by the name's extension. Say so instead.
-  const nothingRead = file.previewUrl === ""
+  const nothingRead = file.resource.previewUrl === ""
   return (
     <FilePreview
       file={{
-        src: file.previewUrl,
-        name: file.name,
-        mimeType: file.mimeType,
-        size: file.size,
+        src: file.resource.previewUrl,
+        name: file.resource.name,
+        mimeType: file.resource.mimeType,
+        size: file.resource.size,
       }}
     >
       <FilePreviewHeader />

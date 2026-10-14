@@ -82,6 +82,18 @@ describe("gateway startup", () => {
   })
 })
 
+describe("native attachment picker", () => {
+  it("passes the caller's pre-registered batch identity to the host", async () => {
+    invoke.mockResolvedValue([])
+    const { chooseAttachmentFiles } = await import("./window")
+    const requestId = "p-01234567-89ab-cdef-0123-456789abcdef"
+
+    await expect(chooseAttachmentFiles(requestId)).resolves.toEqual([])
+
+    expect(invoke).toHaveBeenCalledWith("choose_attachment_files", { requestId })
+  })
+})
+
 describe("native agent credential saves", () => {
   it.each(["saved", "saved-audit-failed"] as const)(
     "accepts the exact %s acknowledgement",

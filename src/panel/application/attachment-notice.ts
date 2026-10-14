@@ -13,7 +13,7 @@ const MIB = 1024 * 1024
 
 /** A draft file, as much of it as the notice needs: its upload state keeps its union. */
 export type NoticedFile = {
-  id: string
+  placementId: string
   name: string
   image: boolean
   /**
@@ -42,8 +42,9 @@ export type NoticedFile = {
  * window takes one at a time. `sending-while-reading`: send was pressed while
  * one was. `too-many-files`, `file-too-large` and `draft-too-large`: the
  * draft's own three bounds, which used to be told as one sentence listing all
- * three. `window-budget`: every open draft together, whose figure belongs to
- * the resource store and so arrives with the refusal. `empty-folder`,
+ * three. `too-many-selections`: the bounded set of host drops still waiting
+ * for a result is full. `window-budget`: every open draft together, whose
+ * figure belongs to the resource store and so arrives with the refusal. `empty-folder`,
  * `folder-too-large` and `unreadable-folder`: walking a dropped folder.
  * `unreadable-files` and `unreadable-image-url`: bytes that were there and
  * could not be taken.
@@ -52,6 +53,7 @@ export type AttachmentRefusal =
   | { reason: "reading-files" }
   | { reason: "reading-folder" }
   | { reason: "sending-while-reading" }
+  | { reason: "too-many-selections" }
   | { reason: "too-many-files" }
   /**
    * The files over the per-file bound, in the order dropped, each with the
@@ -206,6 +208,11 @@ export function refusalNotice(
       return say(
         "Still reading a folder",
         "Wait for the dropped folder to finish, then attach more.",
+      )
+    case "too-many-selections":
+      return say(
+        "Too many selections",
+        "Wait for the file drops already in progress to finish, then try again.",
       )
     case "sending-while-reading":
       return say("Attachments still loading", "Send again once they have finished.")
@@ -526,13 +533,15 @@ function draftFilesNotice(
   canChoosePaths: boolean,
 ): AttachmentNotice | null {
   const failed = files.flatMap((file) =>
-    file.upload.status === "failed" ? [{ id: file.id, reason: file.upload.reason }] : [],
+    file.upload.status === "failed"
+      ? [{ placementId: file.placementId, reason: file.upload.reason }]
+      : [],
   )
   const [first] = failed
   if (first) {
     const retry = failed
       .filter((file) => worthRetrying(file.reason))
-      .map((file) => file.id)
+      .map((file) => file.placementId)
     return {
       kind: "draft-files",
       title:

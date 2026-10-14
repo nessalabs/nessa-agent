@@ -689,7 +689,7 @@ async fn an_environment_is_paired_but_never_shared_with() {
         .is_granted(&id, &environment.receiver)
         .await
         .unwrap());
-    assert!(metadata.grants(&id).await.unwrap().is_empty());
+    assert!(metadata.grants(&id).await.unwrap().grants.is_empty());
     stop.send(()).unwrap();
     listener.await.unwrap().unwrap();
 }

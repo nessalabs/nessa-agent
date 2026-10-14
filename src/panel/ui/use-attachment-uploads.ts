@@ -3,6 +3,23 @@ import { isImageFile, type useConversation } from "../../conversation"
 import type { AttachmentResources } from "../adapters/attachment-resources"
 import { nextUploads, uploadImage } from "../application/upload-image"
 
+type UploadQueue = {
+  inFlight: Map<string, AbortController>
+  settled: Set<string>
+  pump?: () => void
+}
+// One resource manager belongs to one store lifetime. Weak ownership keeps
+// placement numbers local without sharing slots when a Provider changes stores.
+const queues = new WeakMap<AttachmentResources, UploadQueue>()
+function queueOf(resources: AttachmentResources): UploadQueue {
+  let queue = queues.get(resources)
+  if (!queue) {
+    queue = { inFlight: new Map(), settled: new Set() }
+    queues.set(resources, queue)
+  }
+  return queue
+}
+
 /**
  * Starts uploads for draft images that have not had one, in any tab, a few at a
  * time.
@@ -40,11 +57,10 @@ export function useAttachmentUploads(
   resources: AttachmentResources,
   digest: (bytes: Blob) => Promise<string>,
 ) {
-  const inFlight = React.useRef(new Map<string, AbortController>())
-  const settled = React.useRef(new Set<string>())
-  const latest = React.useRef({ chat, resources, digest })
+  const queue = queueOf(resources)
+  const latest = React.useRef({ chat, resources, digest, queue })
   const pump = React.useCallback(() => {
-    const { chat, resources, digest } = latest.current
+    const { chat, resources, digest, queue } = latest.current
     const waiting = chat.conversations.flatMap((conversation) =>
       // An agent that has said it takes no images is not asked to take one.
       // Attaching refuses an image for such a conversation outright, so the
@@ -61,21 +77,21 @@ export function useAttachmentUploads(
         : conversation.draft.flatMap((part) =>
             part.type === "file" &&
             part.upload.status === "not-started" &&
-            isImageFile(part.mimeType) &&
-            !settled.current.has(part.id)
+            isImageFile(part.resource.mimeType) &&
+            !queue.settled.has(part.placementId)
               ? [
                   {
                     conversationId: conversation.id,
-                    id: part.id,
-                    mimeType: part.mimeType,
+                    placementId: part.placementId,
+                    resource: part.resource,
                   },
                 ]
               : [],
           ),
     )
-    for (const file of nextUploads(waiting, new Set(inFlight.current.keys()))) {
+    for (const file of nextUploads(waiting, new Set(queue.inFlight.keys()))) {
       const stopping = new AbortController()
-      inFlight.current.set(file.id, stopping)
+      queue.inFlight.set(file.placementId, stopping)
       void uploadImage(
         file,
         {
@@ -88,30 +104,42 @@ export function useAttachmentUploads(
       ).finally(() => {
         // Only this upload's own entry: a removed file's slot was given back
         // already, and may since have gone to another file.
-        if (inFlight.current.get(file.id) === stopping) inFlight.current.delete(file.id)
-        settled.current.add(file.id)
-        pump()
+        if (queue.inFlight.get(file.placementId) === stopping)
+          queue.inFlight.delete(file.placementId)
+        queue.settled.add(file.placementId)
+        queue.pump?.()
       })
     }
   }, [])
   React.useEffect(() => {
-    latest.current = { chat, resources, digest }
+    latest.current = { chat, resources, digest, queue }
     // A render after an upload settled has that upload's outcome in it.
-    settled.current.clear()
+    queue.settled.clear()
     const drafted = new Set(
       chat.conversations.flatMap((conversation) =>
-        conversation.draft.flatMap((part) => (part.type === "file" ? [part.id] : [])),
+        conversation.draft.flatMap((part) =>
+          part.type === "file" ? [part.placementId] : [],
+        ),
       ),
     )
-    for (const [fileId, stopping] of inFlight.current) {
-      if (drafted.has(fileId)) continue
+    for (const [placementId, stopping] of queue.inFlight) {
+      if (drafted.has(placementId)) continue
       stopping.abort()
-      inFlight.current.delete(fileId)
+      queue.inFlight.delete(placementId)
     }
+    queue.pump = pump
     pump()
-  }, [chat, resources, digest, pump])
+    return () => {
+      if (queue.pump === pump) delete queue.pump
+    }
+  }, [chat, resources, digest, queue, pump])
   return {
     /** Try a failed upload again. The effect above picks it up from there. */
-    retry: (fileId: string) => chat.changeUpload({ fileId, to: "not-started" }),
+    retry: (placementId: string) =>
+      chat.changeUpload({
+        conversationId: chat.active.id,
+        placementId,
+        to: "not-started",
+      }),
   }
 }

@@ -2,14 +2,20 @@
 //! that asks for it never finds it taken with no cycle to stop; and closing
 //! the commands for shutdown leaves no effect without its outcome.
 use super::*;
-use crate::peer_gateways::application::{PeerAuditFuture, PeerConnectFuture};
+use crate::peer_gateways::application::{
+    PeerAudit, PeerAuditFuture, PeerAuditRecord, PeerConnectFuture,
+};
+use crate::peer_gateways::infrastructure::audit::DurablePeerAudit;
+use crate::peer_gateways::infrastructure::{AUDIT_HEADROOM, AUDIT_QUEUE};
 use nessa_auth::application::pairing::{ClientPendingStore, GatewayKeyStore, PrivateKeyMaterial};
 use nessa_auth::application::ports::Clock as WallClock;
 use nessa_auth::domain::AudienceId;
 use nessa_protocol::pairing::socket::WAKE_TICK;
 use nessa_protocol::relay::{GatewayKey, DIRECT_HEAD_START};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Mutex;
+use std::time::Duration;
 use tokio::sync::watch;
 
 struct NoKey;
@@ -44,7 +50,7 @@ impl MonotonicClock for Still {
 }
 struct Nothing;
 impl PeerAudit for Nothing {
-    fn record(&self, _: PeerAuditRecord) -> PeerAuditFuture<'_> {
+    fn record(&self, _: PeerAuditRecord) -> PeerAuditFuture<'static> {
         Box::pin(async { Ok(()) })
     }
 }
@@ -62,11 +68,12 @@ impl PeerConnector for Nothing {
 }
 
 fn commands(root: &Path) -> Arc<PeerCommands> {
-    commands_with(root, Arc::new(Nothing), Arc::new(Nothing))
+    commands_with(root, Arc::new(Still), Arc::new(Nothing), Arc::new(Nothing))
 }
 
 fn commands_with(
     root: &Path,
+    clock: Arc<dyn MonotonicClock>,
     audit: Arc<dyn PeerAudit>,
     connector: Arc<dyn PeerConnector>,
 ) -> Arc<PeerCommands> {
@@ -82,7 +89,7 @@ fn commands_with(
     .unwrap();
     Arc::new(PeerCommands::new(
         Arc::new(records),
-        Arc::new(Still),
+        clock,
         audit,
         connector,
         Arc::new(|| {
@@ -91,35 +98,319 @@ fn commands_with(
     ))
 }
 
-/// Cycles take and give back the turn as fast as they can while an owner
-/// command asks for it over and over: each time it finds the turn free or a
-/// cycle to stop, never `Busy`, which would mean the turn was still taken
-/// after its cycle had been cleared.
+/// Cycles of one peer take and give back that peer's turn as fast as they
+/// can while an owner command asks for it over and over: each time it finds
+/// the turn free or a cycle to stop, never `Busy`, which would mean the turn
+/// was still taken after its cycle had been cleared.
 #[test]
 fn a_cycle_gives_back_the_turn_as_it_clears_itself() {
     let directory = tempfile::tempdir().unwrap();
     let commands = commands(&directory.path().join("root"));
+    let key = DeviceKey::new([7; 32]);
     let done = Arc::new(AtomicBool::new(false));
     let cycles = std::thread::spawn({
         let (commands, done) = (commands.clone(), done.clone());
         move || {
             let cycle = CycleStop::new();
             while !done.load(Ordering::SeqCst) {
-                drop(commands.try_cycle_turn(&cycle));
+                drop(commands.try_cycle_turn(key, &cycle));
             }
         }
     });
     let mut busy = 0;
     for _ in 0..200_000 {
-        match commands.try_owner_turn() {
+        match commands.try_peer_turn(key) {
             OwnerTurn::Taken(permit) => drop(permit),
-            OwnerTurn::Cycle(_) => {}
+            OwnerTurn::Cycle(..) => {}
             OwnerTurn::Busy | OwnerTurn::Closed => busy += 1,
         }
     }
     done.store(true, Ordering::SeqCst);
     cycles.join().unwrap();
     assert_eq!(busy, 0, "the turn was found taken with no cycle to stop");
+}
+
+/// Two peers' turns are independent, and the record set is a third: a cycle
+/// of one peer does not take the other's turn or the record set.
+#[test]
+fn each_peer_has_its_own_turn_and_the_record_set_is_separate() {
+    let directory = tempfile::tempdir().unwrap();
+    let commands = commands(&directory.path().join("root"));
+    let (left, right) = (DeviceKey::new([1; 32]), DeviceKey::new([2; 32]));
+    let (cycle_left, cycle_right) = (CycleStop::new(), CycleStop::new());
+    let turn_left = commands.try_cycle_turn(left, &cycle_left).unwrap();
+    let turn_right = commands.try_cycle_turn(right, &cycle_right).unwrap();
+    assert!(
+        matches!(commands.try_peer_turn(left), OwnerTurn::Cycle(..)),
+        "the peer's own cycle holds its turn"
+    );
+    assert!(
+        matches!(commands.try_peer_turn(right), OwnerTurn::Cycle(..)),
+        "the other peer's cycle holds its own turn"
+    );
+    assert!(
+        commands.try_record_set().is_ok(),
+        "a cycle does not hold the record set"
+    );
+    drop(turn_left);
+    assert!(matches!(commands.try_peer_turn(left), OwnerTurn::Taken(_)));
+    assert!(
+        matches!(commands.try_peer_turn(right), OwnerTurn::Cycle(..)),
+        "giving one peer's turn back leaves the other's cycle holding it"
+    );
+    drop(turn_right);
+}
+
+/// A turn nobody holds is removed. A forgotten peer, and a key that was
+/// never a peer, do not keep a semaphore for the life of the process.
+#[test]
+fn a_peer_turn_is_dropped_when_nothing_holds_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let commands = commands(&directory.path().join("root"));
+    let key = DeviceKey::new([9; 32]);
+    let OwnerTurn::Taken(permit) = commands.try_peer_turn(key) else {
+        panic!("the turn was not free");
+    };
+    assert_eq!(peer_turns(&commands), 1);
+    commands.end_peer_turn(key, permit);
+    assert_eq!(peer_turns(&commands), 0, "a free turn was kept");
+
+    let cycle = CycleStop::new();
+    let held = commands.try_cycle_turn(key, &cycle).unwrap();
+    assert_eq!(peer_turns(&commands), 1);
+    drop(held);
+    assert_eq!(peer_turns(&commands), 0, "a cycle left its turn behind");
+}
+
+/// The cycle gives the turn back while the command still holds the semaphore
+/// it cloned. The wait then ends, because the clock is already past it, and
+/// that late acquire is discarded. The entry is removed with the clone.
+#[tokio::test(flavor = "current_thread")]
+async fn a_peer_turn_is_dropped_when_its_wait_ends_after_the_cycle() {
+    let directory = tempfile::tempdir().unwrap();
+    let clock = Arc::new(Moved(AtomicU64::new(0)));
+    let commands = commands_with(
+        &directory.path().join("root"),
+        clock.clone(),
+        Arc::new(Nothing),
+        Arc::new(Nothing),
+    );
+    let key = DeviceKey::new([9; 32]);
+    let cycle = CycleStop::new();
+    let held = commands.try_cycle_turn(key, &cycle).unwrap();
+    let waiting = tokio::spawn({
+        let commands = commands.clone();
+        async move { commands.peer_turn(key).await }
+    });
+    cycle.stopped().await;
+    drop(held);
+    clock.0.store(u64::MAX, Ordering::SeqCst);
+    let ended = tokio::time::timeout(Duration::from_secs(2), waiting)
+        .await
+        .expect("the wait did not end")
+        .expect("the wait task finishes");
+    assert_eq!(ended.unwrap_err(), PeerError::Busy);
+    assert_eq!(
+        peer_turns(&commands),
+        0,
+        "a turn whose wait ended after its cycle was kept"
+    );
+}
+
+/// The queue holds [`AUDIT_HEADROOM`] owner records behind every poller
+/// cycle, so an enroll and a forget can both hand an intent over before
+/// either is written. One more command waits for a place while the writer
+/// is stalled, and is kept once the writer goes on, rather than being
+/// refused at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_owner_record_waits_for_the_headroom() {
+    let root = tempfile::tempdir().unwrap();
+    let peers = root.path().join("root");
+    let directory = root.path().join("audit");
+    nessa_local_storage::create_directory(&directory).unwrap();
+    let stall = HeadroomStall::new();
+    let release = HeadroomRelease(stall.clone());
+    let audit = Arc::new(DurablePeerAudit::with_writer_hook(
+        directory,
+        Arc::new(Wall),
+        Arc::new(Still),
+        AUDIT_QUEUE,
+        stall.hook(),
+    ));
+    let commands = commands_with(
+        peers.as_path(),
+        Arc::new(Still),
+        audit.clone(),
+        Arc::new(Nothing),
+    );
+    // One record for the writer to block on, then enough to leave exactly
+    // the headroom free once that record has been taken out of the queue.
+    drop(audit.record(owner_intent()));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !stall.reached.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the writer did not take the first record");
+    for _ in 0..(AUDIT_QUEUE - AUDIT_HEADROOM) {
+        drop(audit.record(owner_intent()));
+    }
+    let mut held = Vec::new();
+    for _ in 0..AUDIT_HEADROOM {
+        let commands = commands.clone();
+        held.push(tokio::spawn(
+            async move { commands.keep(owner_intent()).await },
+        ));
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let extra = tokio::spawn({
+        let commands = commands.clone();
+        async move { commands.keep(owner_intent()).await }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !extra.is_finished(),
+        "an owner record past the headroom was refused while the writer was stalled"
+    );
+    drop(release);
+    for (index, kept) in held.into_iter().enumerate() {
+        assert!(
+            kept.await.unwrap(),
+            "owner record {index} inside the headroom was not kept"
+        );
+    }
+    assert!(
+        extra.await.unwrap(),
+        "the owner record past the headroom was not kept"
+    );
+}
+
+/// Past [`AUDIT_DEADLINE`] the command is not kept, and its place stays until
+/// the queued record is answered. Releasing the place at the deadline would
+/// let another [`AUDIT_HEADROOM`] records be handed over while those are
+/// still queued.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_owner_place_stays_until_the_queued_record_leaves() {
+    let root = tempfile::tempdir().unwrap();
+    let clock = Arc::new(Moved(AtomicU64::new(0)));
+    let audit = Arc::new(CountingPending::default());
+    let commands = commands_with(
+        &root.path().join("root"),
+        clock.clone(),
+        audit.clone(),
+        Arc::new(Nothing),
+    );
+    let mut held = Vec::new();
+    for _ in 0..AUDIT_HEADROOM {
+        let commands = commands.clone();
+        held.push(tokio::spawn(
+            async move { commands.keep(owner_intent()).await },
+        ));
+    }
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while audit.calls.load(Ordering::SeqCst) < AUDIT_HEADROOM
+            || commands.audit_room.available_permits() != 0
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the headroom was not taken");
+    clock
+        .0
+        .store(AUDIT_DEADLINE.as_millis() as u64, Ordering::SeqCst);
+    for (index, kept) in held.into_iter().enumerate() {
+        let answered = tokio::time::timeout(Duration::from_secs(2), kept)
+            .await
+            .expect("the deadline did not answer the owner command")
+            .unwrap();
+        assert!(!answered, "owner record {index} was kept past the deadline");
+    }
+    assert_eq!(
+        commands.audit_room.available_permits(),
+        0,
+        "the owner place was released while its record was still queued"
+    );
+    let extra = tokio::spawn({
+        let commands = commands.clone();
+        async move { commands.keep(owner_intent()).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !extra.is_finished(),
+        "another owner record ran while the timed-out ones were still queued"
+    );
+    assert_eq!(
+        audit.calls.load(Ordering::SeqCst),
+        AUDIT_HEADROOM,
+        "another owner record was handed over while the timed-out ones were still queued"
+    );
+}
+
+/// Answers nothing. Counts each record handed over.
+#[derive(Default)]
+struct CountingPending {
+    calls: AtomicUsize,
+}
+impl PeerAudit for CountingPending {
+    fn record(&self, _: PeerAuditRecord) -> PeerAuditFuture<'static> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(std::future::pending())
+    }
+}
+
+fn owner_intent() -> PeerAuditRecord {
+    PeerAuditRecord::ForgetRequested {
+        operation: uuid::Uuid::new_v4(),
+        initiator: PrincipalId::new("owner").unwrap(),
+        peer: DeviceKey::new([4; 32]),
+    }
+}
+
+/// Blocks the audit writer on its first record until dropped.
+struct HeadroomStall {
+    reached: AtomicBool,
+    open: Mutex<bool>,
+    opened: std::sync::Condvar,
+}
+impl HeadroomStall {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            reached: AtomicBool::new(false),
+            open: Mutex::new(false),
+            opened: std::sync::Condvar::new(),
+        })
+    }
+    fn hook(self: &Arc<Self>) -> Arc<dyn Fn(u64) + Send + Sync> {
+        let stall = Arc::clone(self);
+        Arc::new(move |sequence| {
+            if sequence != 1 {
+                return;
+            }
+            stall.reached.store(true, Ordering::SeqCst);
+            let mut open = stall.open.lock().unwrap();
+            while !*open {
+                open = stall.opened.wait(open).unwrap();
+            }
+        })
+    }
+}
+struct HeadroomRelease(Arc<HeadroomStall>);
+impl Drop for HeadroomRelease {
+    fn drop(&mut self) {
+        *self.0.open.lock().unwrap() = true;
+        self.0.opened.notify_all();
+    }
+}
+
+fn peer_turns(commands: &Arc<PeerCommands>) -> usize {
+    commands
+        .peers
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .peers
+        .len()
 }
 
 /// An audit that keeps every record as it is handed over, and answers an
@@ -129,7 +420,7 @@ struct Gated {
     open: watch::Sender<bool>,
 }
 impl PeerAudit for Gated {
-    fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'_> {
+    fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'static> {
         let intent = matches!(
             record,
             PeerAuditRecord::EnrollRequested { .. } | PeerAuditRecord::ForgetRequested { .. }
@@ -174,7 +465,12 @@ async fn a_command_admitted_before_shutdown_ends_with_its_outcome_and_no_effect(
         open: watch::channel(false).0,
     });
     let dials = Arc::new(Dials(0.into()));
-    let commands = commands_with(&directory.path().join("root"), audit.clone(), dials.clone());
+    let commands = commands_with(
+        &directory.path().join("root"),
+        Arc::new(Still),
+        audit.clone(),
+        dials.clone(),
+    );
     let owner = PrincipalId::new("owner").unwrap();
     let forget = tokio::spawn({
         let (commands, owner) = (commands.clone(), owner.clone());
@@ -248,7 +544,12 @@ async fn a_command_asked_after_close_is_refused_before_its_intent() {
         open: watch::channel(true).0,
     });
     let dials = Arc::new(Dials(0.into()));
-    let commands = commands_with(&directory.path().join("root"), audit.clone(), dials.clone());
+    let commands = commands_with(
+        &directory.path().join("root"),
+        Arc::new(Still),
+        audit.clone(),
+        dials.clone(),
+    );
     assert!(commands.close(Duration::from_secs(5)).await);
     let owner = PrincipalId::new("owner").unwrap();
     assert_eq!(
@@ -304,7 +605,12 @@ async fn close_waits_for_a_command_holding_the_turn_and_keeps_its_outcome() {
         dialed: AtomicBool::new(false),
         open: watch::channel(false).0,
     });
-    let commands = commands_with(&directory.path().join("root"), audit.clone(), dial.clone());
+    let commands = commands_with(
+        &directory.path().join("root"),
+        Arc::new(Still),
+        audit.clone(),
+        dial.clone(),
+    );
     let enroll = tokio::spawn({
         let commands = commands.clone();
         async move {

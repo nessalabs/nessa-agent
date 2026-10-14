@@ -1,0 +1,17 @@
+{"engine":"webkit","scenario":"picker-owner-correlation","errors":[],"body":"New chat\n\nConnected\n\nImage didn't upload\nCouldn't reach the gateway.\n\ninclude this image","serverLog":"9:45:28 AM [vite] (client) Re-optimizing dependencies because vite config has changed\n\n  VITE v7.3.6  ready in 1392 ms\n\n  ➜  Local:   http://127.0.0.1:1486/\n"}
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+locator.click: Timeout 30000ms exceeded.
+Call log:
+[2m  - waiting for getByRole('button', { name: 'Add attachment', exact: true })[22m
+
+    at /Users/nessa/.codex/worktrees/797-combined-verification/nessa-agent/verification/desktop/scripts/attachments-races.mjs:274:62 {
+  log: [
+    "  - waiting for getByRole('button', { name: 'Add attachment', exact: true })"
+  ],
+  name: 'TimeoutError'
+}
+
+Node.js v26.8.1

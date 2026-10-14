@@ -927,6 +927,46 @@ it("accepts typed authentication only on a failed turn and rejects untyped value
       "conversation",
     ),
   ).toThrow(/authenticationRequired/)
+  const independent = {
+    ...refused,
+    messages: [
+      {
+        ...refused.messages[0],
+        requiredWorkFailed: true,
+        error: "The turn could not complete all required work.",
+      },
+    ],
+  }
+  expect(
+    conversationView(independent, "conversation").messages[0].requiredWorkFailed,
+  ).toBe(true)
+  expect(() =>
+    conversationView(
+      {
+        ...independent,
+        messages: [{ ...independent.messages[0], requiredWorkFailed: "true" }],
+      },
+      "conversation",
+    ),
+  ).toThrow(/requiredWorkFailed/)
+  expect(() =>
+    conversationView(
+      {
+        ...independent,
+        messages: [{ ...independent.messages[0], authenticationRequired: undefined }],
+      },
+      "conversation",
+    ),
+  ).toThrow(/required-work failure/)
+  expect(() =>
+    conversationView(
+      {
+        ...independent,
+        messages: [{ ...independent.messages[0], error: undefined }],
+      },
+      "conversation",
+    ),
+  ).toThrow(/required-work failure/)
 })
 
 function protocolFile(path: string) {

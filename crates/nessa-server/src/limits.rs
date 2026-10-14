@@ -15,7 +15,8 @@ use crate::conversation::domain::{CommandHosts, ToolRules};
 use crate::conversation::infrastructure::{DISCOVERY_STEPS_PER_READ, MAX_CATALOGUE_CHANGE_WATCHES};
 use crate::mcp_servers::infrastructure::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_BYTES};
 use crate::peer_gateways::infrastructure::{
-    AUDIT_QUEUE, POLL_BACKOFF_CAP, POLL_INTERVAL, PREEMPT, READ_BUDGET, WITHDRAWN_PER_READ,
+    AUDIT_QUEUE, POLL_BACKOFF_CAP, POLL_INTERVAL, PREEMPT, READS_AT_ONCE, READ_BUDGET,
+    WITHDRAWN_PER_READ,
 };
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
 use crate::product::{OperationalLimits, SessionSettings, RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
@@ -26,7 +27,7 @@ use nessa_protocol::lease::{
 use nessa_protocol::product::generated::{
     MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_CONNECTION_LIST_SUBSCRIPTIONS,
     MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
-    MAX_RECORD_RESPONSE_BYTES, SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
+    MAX_RECORD_RESPONSE_BYTES, MAX_SHARE_PAGE, SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
 };
 use nessa_protocol::protocol::MAX_PAYLOAD_BYTES;
 use nessa_sdk::application::agent_execution::sessions::{ArtifactRecord, NoteRecord, NoteText};
@@ -207,14 +208,20 @@ fn catalogue() -> &'static [Limit] {
         Limit {
             id: "conversation.share_grants",
             tier: "fixed",
-            owner: "MAX_SHARE_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/share_grants.rs, the schema's ConversationSharesResult maxItems",
-            meaning: "the paired parties one conversation is shared with, any role; one more conversation.share is refused invalid_request, so a conversation.shares answer always fits one frame",
+            owner: "MAX_SHARE_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/share_grants.rs, the schema's ConversationSharesResult x-maxGrants",
+            meaning: "the paired parties one conversation is shared with, any role; one more conversation.share is refused invalid_request. conversation.shares returns them a page at a time",
+        },
+        Limit {
+            id: "conversation.share_page",
+            tier: "fixed",
+            owner: "MAX_SHARE_PAGE in the generated product protocol, the schema's ConversationSharesParams pageSize",
+            meaning: "the grants one conversation.shares answer holds; a pageSize outside 1 through this is refused invalid_request, and a page of this many grants, each at its largest policy, fits one frame",
         },
         Limit {
             id: "conversation.drive_grants",
             tier: "fixed",
             owner: "MAX_DRIVE_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/share_grants.rs",
-            meaning: "the drive grants one conversation holds; one more conversation.share naming drive is refused invalid_request, so a conversation.shares answer with every policy at its largest still fits one frame",
+            meaning: "the drive grants one conversation holds; one more conversation.share naming drive is refused invalid_request",
         },
         Limit {
             id: "conversation.drive_policies",
@@ -274,13 +281,13 @@ fn catalogue() -> &'static [Limit] {
             id: "conversation.tool_policy_command_hosts",
             tier: "fixed",
             owner: "CommandHosts::MAX_HOSTS in crates/nessa-server/src/conversation/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
-            meaning: "the hosts a drive grant's policy names for its turns' commands, which with its patterns are at most 32, so a policy whose allow and deny already hold 32 patterns names none; a conversation.share with more is refused invalid_request, and a grant naming none runs commands nowhere",
+            meaning: "the hosts a drive grant's policy names for its turns' commands, apart from its allow and deny patterns; a conversation.share with more is refused invalid_request, and a grant naming none runs commands nowhere",
         },
         Limit {
             id: "conversation.tool_policy_command_host_bytes",
             tier: "fixed",
             owner: "CommandHosts::MAX_HOST_BYTES in crates/nessa-server/src/conversation/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
-            meaning: "the longest command host a drive grant's policy names, in bytes, so a host is never longer on the wire than a pattern; a conversation.share with a longer one is refused invalid_request, so an SSH destination longer than this cannot be granted until conversation.shares pages (issue #832)",
+            meaning: "the longest command host a drive grant's policy names, in bytes, the longest SSH destination config.json accepts; a conversation.share with a longer one is refused invalid_request",
         },
         Limit {
             id: "record.read_work_budget",
@@ -413,31 +420,37 @@ fn catalogue() -> &'static [Limit] {
             id: "peer.poll_backoff_cap",
             tier: "fixed",
             owner: "POLL_BACKOFF_CAP in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs",
-            meaning: "the longest wait a peer is scheduled for between reads, jitter included; a peer that keeps failing waits twice as long each time, from the interval up to this; peers are read one at a time, so reads of other peers ahead of it can add to it",
+            meaning: "the longest wait a peer is scheduled for between reads, jitter included; a peer that keeps failing waits twice as long each time, from the interval up to this; a peer that is due while every read slot is taken waits for a slot on top of this",
         },
         Limit {
             id: "peer.read_budget",
             tier: "fixed",
             owner: "READ_BUDGET in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs",
-            meaning: "the longest one read of a peer gateway runs; a read that reaches it having saved something ends incomplete and continues on the next cycle, and one that saved nothing is unreachable and backs off, so a slow peer cannot hold the peer commands, and holds the other peers, read one at a time, at most this long per read",
+            meaning: "the longest one read of one peer gateway runs, on the injected clock; a read that reaches it having saved something ends incomplete and continues on the next cycle, and one that saved nothing is unreachable and backs off. Each peer has this timeout of its own, so a slow or failing peer is reported and the others are read without waiting it out",
         },
         Limit {
             id: "peer.preempt",
             tier: "fixed",
             owner: "PREEMPT in crates/nessa-server/src/peer_gateways/infrastructure/commands.rs",
-            meaning: "the longest peer.enroll, peer.forget or peer.relay waits for a peer read it stopped to give back its turn; at least twice the read's unstoppable connect (the 5 s handshake), and the read only queues its audit records before it gives the turn back, so past it the command answers peer_busy only if local storage stalls",
+            meaning: "the longest peer.forget or peer.relay waits for the read of the peer it names to give back that peer's turn; peer.enroll does not stop a read. At least twice the read's unstoppable connect (the 5 s handshake), and the read only queues its audit records before it gives the turn back, so past it the command answers peer_busy only if local storage stalls",
         },
         Limit {
             id: "peer.audit_queue",
             tier: "fixed",
             owner: "AUDIT_QUEUE in crates/nessa-server/src/peer_gateways/infrastructure/audit.rs",
-            meaning: "the most peer audit records waiting to be written, one at a time in the order they were handed over; one poller cycle queues at most about half of it, so it fills only when the store falls behind; a record past it is refused at once, its sequence left as a gap, so peer.enroll, peer.forget or peer.relay answers peer_audit_unavailable before any effect and a peer read's change stands with its record logged as not kept; an owner command's record waits behind at most this many, well inside its 5 s audit deadline",
+            meaning: "the most peer audit records waiting to be written, one at a time in the order they were handed over; sized for every read running at once plus two owner records, and a further owner command waits for a place inside its 5 s audit deadline; a record past it is refused at once, its sequence left as a gap, so peer.enroll, peer.forget or peer.relay answers peer_audit_unavailable before any effect and a peer read's change stands with its record logged as not kept",
+        },
+        Limit {
+            id: "peer.reads_at_once",
+            tier: "fixed",
+            owner: "READS_AT_ONCE in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs",
+            meaning: "how many peer gateways are read at once; one more stays due until a read finishes and frees a place, and is not failed or skipped. A slow peer holds only its own place, until that cycle ends, and its read is bounded by its own read budget",
         },
         Limit {
             id: "peer.withdrawn_per_read",
             tier: "fixed",
             owner: "WITHDRAWN_PER_READ in crates/nessa-server/src/peer_gateways/infrastructure/poller.rs",
-            meaning: "the most conversations one read of a peer gateway withdraws, a quarter of peer.audit_queue's records of 64 each; a read that reaches it ends incomplete and the next cycle, soon, withdraws the rest",
+            meaning: "the most conversations one read of a peer gateway withdraws, sixteen records of 64; a read that reaches it ends incomplete and the next cycle, soon, withdraws the rest",
         },
         Limit {
             id: "command.default_timeout_ms",
@@ -582,6 +595,7 @@ pub(crate) fn effective_json(
         "conversation.share_grants",
         MAX_SHARE_GRANTS_PER_CONVERSATION.unsigned_abs(),
     );
+    put("conversation.share_page", count(MAX_SHARE_PAGE));
     put(
         "conversation.drive_grants",
         MAX_DRIVE_GRANTS_PER_CONVERSATION.unsigned_abs(),
@@ -665,6 +679,7 @@ pub(crate) fn effective_json(
     put("peer.poll_interval", millis(POLL_INTERVAL));
     put("peer.poll_backoff_cap", millis(POLL_BACKOFF_CAP));
     put("peer.read_budget", millis(READ_BUDGET));
+    put("peer.reads_at_once", count(READS_AT_ONCE));
     put("peer.preempt", millis(PREEMPT));
     put("peer.audit_queue", count(AUDIT_QUEUE));
     put("peer.withdrawn_per_read", count(WITHDRAWN_PER_READ));

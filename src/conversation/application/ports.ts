@@ -10,7 +10,7 @@ import {
   type ApprovalMode,
   type CommandFailure,
   type ConversationSelection,
-  type FileAttachment,
+  type AttachmentResource,
   type HeldFile,
   type HeldFileFailure,
   type ImageReference,
@@ -22,7 +22,11 @@ import type { LocalTabs } from "./local-tabs"
 
 /** Pure local draft and tab operations. Remote work uses injected effects below. */
 export interface ConversationGateway {
-  attachFiles(tabs: LocalTabs, files: FileAttachment[], conversationId: string): LocalTabs
+  attachFiles(
+    tabs: LocalTabs,
+    files: AttachmentResource[],
+    conversationId: string,
+  ): LocalTabs
   removeFile(tabs: LocalTabs, id: string): LocalTabs
   changeUpload(tabs: LocalTabs, change: UploadChange): LocalTabs
   forgetStoredUploads(tabs: LocalTabs, conversationId: string): LocalTabs
@@ -249,8 +253,8 @@ export class AttachmentStagingError extends Error {
   }
 }
 
-/** One step in a draft file's upload. `stored` carries the gateway's reference. */
-export type UploadChange = { fileId: string } & (
+/** One step in the named local conversation's draft upload. `stored` carries the gateway's reference. */
+export type UploadChange = { conversationId: string; placementId: string } & (
   | { to: "uploading" }
   | { to: "stored"; image: ImageReference }
   | { to: "failed"; reason: UploadFailure }

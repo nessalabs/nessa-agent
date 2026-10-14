@@ -322,7 +322,12 @@ async fn gateway_child() {
     // Gated reads need the receiver, known after the first start pairs.
     let receiver_slot = Arc::new(OnceLock::new());
     let heads = Arc::new(HeadHold::default());
-    let state = ProductRouteState::new(
+    // Built before bind: the socket answers `conversation.subscribe` from
+    // this service. Other modes keep conversations unset, so they still
+    // answer `conversations_not_configured`.
+    let semantic =
+        (mode == "semantic").then(|| super::semantic::prepare(storage.clone(), metadata.clone()));
+    let mut state = ProductRouteState::new(
         ResourceId::new(gateway.clone()).unwrap(),
         OrganizationId::new(organization.clone()).unwrap(),
         AudienceId::new(gateway.clone()).unwrap(),
@@ -362,6 +367,11 @@ async fn gateway_child() {
         crate::conversation_test_support::access_policy(),
         Id::new(&gateway).unwrap(),
     )));
+    if let Some(corpus) = &semantic {
+        state = state
+            .with_conversations(corpus.service.clone())
+            .with_agents_catalog(super::semantic::catalog());
+    }
     let bound = bind(prepared, RuntimeDependencies::default().clock, state)
         .await
         .unwrap();
@@ -442,8 +452,8 @@ async fn gateway_child() {
         })
         .unwrap();
     }
-    if mode == "semantic" {
-        super::semantic::serve(root, &setup, storage, metadata, heads).await;
+    if let Some(corpus) = semantic {
+        super::semantic::serve(root, &setup, metadata, corpus, heads).await;
         return;
     }
     for (target, large) in [(&setup.conversation, true), (&setup.empty, false)] {

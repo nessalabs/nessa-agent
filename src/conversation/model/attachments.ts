@@ -1,4 +1,4 @@
-import type { MessageContent } from "./content"
+import type { MessageContent, MessagePart } from "./content"
 
 /**
  * Why an upload did not finish, as something to branch on.
@@ -48,7 +48,7 @@ export type ImageReference = { digest: string; mimeType: StoredImageType; size: 
  * A file that is not an image stays `not-started`, and always will: nothing
  * uploads it, because nothing needs to. Its bytes are already on the machine
  * the agent runs on, so the message names where it is instead — see
- * {@link FileAttachment.path} and {@link messageFiles}. Only `stored` carries a
+ * {@link FileAttachment.resource} and {@link messageFiles}. Only `stored` carries a
  * reference, and it carries the whole one, so there is no way to write down an
  * upload that finished without saying what it finished as.
  */
@@ -58,32 +58,79 @@ export type UploadState =
   | { status: "stored"; image: ImageReference }
   | { status: "failed"; reason: UploadFailure }
 
-/**
- * A file attached in this window. `name`, `mimeType`, `size`, and `previewUrl`
- * describe the original file, which is what is previewed and what is uploaded.
- * What a message will refer to is `upload.image` and may be none of those.
- * Plain data: the bytes themselves stay with the panel's resource store.
- */
-export type FileAttachment = {
-  type: "file"
-  id: string
+/** Scalar metadata for the one immutable local resource value. */
+export type AttachmentResourceData = {
   name: string
   mimeType: string
   size: number
-  /** Empty when this window holds no bytes to paint, which a path-only file does not. */
   previewUrl: string
-  upload: UploadState
-  /**
-   * Where the file is on this machine, when the host said so, and `null` when
-   * nobody could: a browser `File` deliberately does not carry one, so a file
-   * dropped or chosen outside the desktop app has no path at all.
-   *
-   * This is what makes a file that is not an image sendable. The panel never
-   * opens it; the path travels to the gateway, which checks that it can be
-   * said and puts it in the prompt as a link the agent may open. See
-   * {@link messageFiles}.
-   */
   path: string | null
+}
+
+/**
+ * Identity and original metadata together; AL17–AL23 enforce construction and
+ * reference continuity. Bytes stay with the resource manager, keyed by this
+ * exact value. A class is non-draftable in Immer, so reducers retain its identity.
+ */
+const resourceBrand: unique symbol = Symbol("attachment resource")
+/** Opaque metadata view; the symbol survives Immer's mapped draft type. */
+export type AttachmentResource = Readonly<AttachmentResourceData> & {
+  readonly [resourceBrand]: true
+}
+class ResourceValue implements AttachmentResource {
+  declare readonly [resourceBrand]: true
+  readonly #identity = undefined
+  readonly name: string
+  readonly mimeType: string
+  readonly size: number
+  readonly previewUrl: string
+  readonly path: string | null
+
+  private constructor(input: AttachmentResourceData) {
+    const { name, mimeType, size, previewUrl, path } = input
+    if (
+      typeof name !== "string" ||
+      typeof mimeType !== "string" ||
+      typeof size !== "number" ||
+      !Number.isSafeInteger(size) ||
+      size < 0 ||
+      typeof previewUrl !== "string" ||
+      (path !== null && typeof path !== "string")
+    )
+      throw new TypeError("Invalid attachment resource metadata")
+    Object.defineProperty(this, resourceBrand, { value: true })
+    this.name = name
+    this.mimeType = declaredMediaType(name, mimeType)
+    this.size = size
+    this.previewUrl = previewUrl
+    this.path = path
+    Object.freeze(this)
+  }
+
+  /** Pure construction for native/host adapters and headless callers; owns no bytes. */
+  static create(input: AttachmentResourceData): AttachmentResource {
+    return new ResourceValue(input)
+  }
+
+  /** Recognize issued values; copying metadata or its prototype does not issue one. */
+  static is(value: unknown): value is AttachmentResource {
+    return (
+      typeof value === "object" &&
+      value !== null &&
+      #identity in value &&
+      Object.getPrototypeOf(value) === ResourceValue.prototype
+    )
+  }
+}
+
+export const AttachmentResource = ResourceValue
+
+/** One application-owned admission into a draft, retained through its local turn. */
+export type FileAttachment = {
+  type: "file"
+  placementId: string
+  resource: AttachmentResource
+  upload: UploadState
 }
 
 /**
@@ -153,15 +200,22 @@ const digestPattern = /^sha256:[0-9a-f]{64}$/
  * may hold, which is about the draft rather than about memory, and that every
  * file's size is a number that could be one.
  */
-export function validDraftAttachments(content: MessageContent): boolean {
-  const files = content.filter((part) => part.type === "file")
-  const held = files.filter((file) => !linkedFile(file))
+export function validDraftAttachments(
+  content: readonly (MessagePart | AttachmentResource)[],
+): boolean {
+  const resources = content.flatMap((part) =>
+    AttachmentResource.is(part) ? [part] : part.type === "file" ? [part.resource] : [],
+  )
+  const held = resources.filter((resource) => !linkedFile(resource))
   return (
-    files.length <= MAX_DRAFT_ATTACHMENTS &&
-    new Set(files.map((file) => file.id)).size === files.length &&
-    files.every((file) => Number.isSafeInteger(file.size) && file.size >= 0) &&
-    held.every((file) => file.size <= MAX_ATTACHMENT_BYTES) &&
-    held.reduce((bytes, file) => bytes + file.size, 0) <= MAX_DRAFT_ATTACHMENT_BYTES
+    resources.length <= MAX_DRAFT_ATTACHMENTS &&
+    new Set(resources).size === resources.length &&
+    resources.every(
+      (resource) => Number.isSafeInteger(resource.size) && resource.size >= 0,
+    ) &&
+    held.every((resource) => resource.size <= MAX_ATTACHMENT_BYTES) &&
+    held.reduce((bytes, resource) => bytes + resource.size, 0) <=
+      MAX_DRAFT_ATTACHMENT_BYTES
   )
 }
 
@@ -313,7 +367,7 @@ export function storedImages(content: MessageContent): ImageReference[] {
  * these, even when its path is known — an image is carried, so that the model
  * sees it without having to decide to look.
  */
-export function linkedFile(file: FileAttachment): boolean {
+export function linkedFile(file: AttachmentResource): boolean {
   return !isImageFile(file.mimeType) && file.path !== null
 }
 
@@ -375,8 +429,10 @@ function controlCharacter(character: string): boolean {
 export function messageFiles(content: MessageContent): LinkedFile[] {
   return content.flatMap((part) => {
     if (part.type === "file-reference") return [{ path: part.path }]
-    return part.type === "file" && part.path !== null && linkedFile(part)
-      ? [{ path: part.path }]
+    return part.type === "file" &&
+      part.resource.path !== null &&
+      linkedFile(part.resource)
+      ? [{ path: part.resource.path }]
       : []
   })
 }
@@ -386,16 +442,20 @@ export function messageImages(
 ): { ok: true; images: ImageReference[] } | { ok: false; refusal: ImageRefusal } {
   const parts = content.filter((part) => part.type === "file")
   // What travels as a path is not waited for, not uploaded, and not an image.
-  const files = parts.filter((file) => !linkedFile(file))
-  const unsupported = files.find((file) => !isImageFile(file.mimeType))
+  const files = parts.filter((file) => !linkedFile(file.resource))
+  const unsupported = files.find((file) => !isImageFile(file.resource.mimeType))
   if (unsupported)
-    return { ok: false, refusal: { kind: "unsupported-file", name: unsupported.name } }
+    return {
+      ok: false,
+      refusal: { kind: "unsupported-file", name: unsupported.resource.name },
+    }
   const failed = files.find(
     (file) =>
       file.upload.status === "failed" ||
       (file.upload.status === "stored" && !validImageReference(file.upload.image)),
   )
-  if (failed) return { ok: false, refusal: { kind: "upload-failed", name: failed.name } }
+  if (failed)
+    return { ok: false, refusal: { kind: "upload-failed", name: failed.resource.name } }
   if (files.some((file) => file.upload.status !== "stored"))
     return { ok: false, refusal: { kind: "upload-in-flight" } }
   const images = storedImages(content)

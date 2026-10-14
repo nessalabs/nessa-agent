@@ -1,6 +1,6 @@
 import { questionTargets, type QuestionTarget } from "@nessa/client"
 import { useState } from "react"
-import type { Conversation } from "../model"
+import { questionAnswerReady, questionChoices, type Conversation } from "../model"
 import { controlConversation } from "../adapters/store/slice"
 import { useConversationDispatch } from "../adapters/store/hooks"
 
@@ -82,13 +82,7 @@ function ConversationQuestion({
   const [chosen, setChosen] = useState<ReadonlyMap<string, string[]>>(new Map())
   const [ownWords, setOwnWords] = useState<ReadonlyMap<string, string>>(new Map())
   const busy = !gatewayAvailable || conversation.controlPending
-  const hasAnswer = (question: Asked["questions"][number]) =>
-    Boolean(chosen.get(question.key)?.length || ownWords.get(question.key)?.trim())
-  const answered =
-    ask.questions.some(hasAnswer) &&
-    ask.questions.every(
-      (question) => !question.required || Boolean(chosen.get(question.key)?.length),
-    )
+  const answered = questionAnswerReady(ask.questions, chosen, ownWords)
 
   const send = (
     choices: { key: string; values: string[]; ownWords?: string }[] | null,
@@ -181,17 +175,7 @@ function ConversationQuestion({
         <QuestionnaireSubmit
           disabled={busy || !answered}
           onClick={() => {
-            send(
-              ask.questions
-                .map((question) => ({
-                  key: question.key,
-                  values: chosen.get(question.key) ?? [],
-                  ownWords: ownWords.get(question.key)?.trim() || undefined,
-                }))
-                // A question nobody touched is left out rather than sent empty,
-                // which is how the agent's own form expresses a skip.
-                .filter((choice) => choice.values.length || choice.ownWords),
-            )
+            send(questionChoices(ask.questions, chosen, ownWords))
           }}
         >
           Answer

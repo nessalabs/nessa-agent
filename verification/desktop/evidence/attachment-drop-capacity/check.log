@@ -1,0 +1,6 @@
+Feature source head: f7fb12c2de2a9a39c025a32d7fd7b555ea8196d6
+Command: node verification/desktop/scripts/attachments-races.mjs
+Attachment matrix: 26/26 passed
+chromium: 13/13 passed; drop-capacity refusalCount=1; pageErrors=0
+webkit: 13/13 passed; drop-capacity refusalCount=1; pageErrors=0
+Verification script: prettier, ESLint, node --check, desktop script tests 164/164 passed

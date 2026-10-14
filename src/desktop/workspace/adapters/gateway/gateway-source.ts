@@ -74,10 +74,10 @@
  *   protocol carries it.
  * - **What it cannot see without following**: a list row says whether a
  *   conversation runs, not whether it waits on the person, so a summary says
- *   `needs-you` only for a conversation the window follows; and a question
- *   the agent asks (`view.questions`) has no place in the workspace's model
- *   and is not shown; nor is a review the gateway withholds from its view
- *   (`interactionViewError`) — the session shows no approval while it waits.
+ *   `needs-you` only for a conversation the window follows, and only when
+ *   that conversation asks for an approval or holds a question. A review the
+ *   gateway withholds is the view's `interactionViewError`, shown as that
+ *   notice and not as an approval.
  * - **For MCP Apps (#384)**: a widget part is named in its conversation
  *   (`gatewayToolWidget`, from `transcriptFrom`); each view applied is handed
  *   to `apps.observe`, in the order applied, and a subscription the gateway
@@ -94,6 +94,7 @@
 import {
   prepareSubmission,
   permissionTargets,
+  questionTargets,
   ConversationErrorCode,
   conversationErrorCode,
   isRetryableConnectionError,
@@ -142,7 +143,7 @@ import {
 export interface GatewayClient {
   readonly conversation: Pick<
     ConversationApi,
-    "observe" | "create" | "submit" | "answer" | "archive"
+    "observe" | "create" | "submit" | "answer" | "answerQuestion" | "archive"
   >
   readonly subscriptions: Pick<SubscriptionApi, "view" | "list">
   readonly connectionState: ConnectionState
@@ -250,6 +251,11 @@ interface Read {
  */
 function viewKey(view: ConversationView): string {
   return JSON.stringify({ ...view, revision: undefined, serverNowMs: undefined })
+}
+
+/** An approval or a question is the person being asked. A withheld-review notice is not. */
+function waitsOnPerson(transcript: Transcript | undefined): boolean {
+  return Boolean(transcript?.approval) || (transcript?.questions?.length ?? 0) > 0
 }
 
 /** A caller waiting for a subscription's first frame. */
@@ -596,7 +602,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     if (!row) return
     const said = summaryFrom(row, {
       model: modelOf(sessionId),
-      waitingOnPerson: Boolean(reads.get(sessionId)?.transcript.approval),
+      waitingOnPerson: waitsOnPerson(reads.get(sessionId)?.transcript),
     })
     const held = summaries.get(sessionId)
     if (held && !takenOut(sessionId) && sameSummary(held, said)) return
@@ -1266,6 +1272,40 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         : answer(sessionId, approvalId, optionId, "allow"),
     deny: (sessionId, approvalId, _initiator, optionId) =>
       answer(sessionId, approvalId, optionId, "deny"),
+    answerQuestion: (sessionId, executionId, questionId, choices, _initiator) =>
+      within(async (live) => {
+        await transcriptOf(sessionId, "person")
+        const currentRead = reads.get(sessionId)
+        const target = currentRead
+          ? questionTargets(currentRead.view).find(
+              (question) =>
+                question.executionId === executionId &&
+                question.questionId === questionId,
+            )
+          : undefined
+        if (!target) throw new WorkspaceSourceError("not-waiting")
+        await dispatch(live, (connected) => {
+          try {
+            return connected.conversation.answerQuestion(
+              target,
+              choices === null
+                ? null
+                : choices.map((choice) => ({
+                    key: choice.key,
+                    values: [...choice.values],
+                    ownWords: choice.ownWords ?? null,
+                  })),
+            )
+          } catch (error) {
+            // The SDK validates the captured target and offered choices
+            // before it sends anything. Its TypeError means this answer is
+            // stale locally, not that an unanswered RPC has an unknown
+            // outcome.
+            if (error instanceof TypeError) throw new WorkspaceSourceError("not-waiting")
+            throw error
+          }
+        })
+      }),
     // The gateway keeps no pin.
     setPinned: () => Promise.reject(new WorkspaceSourceError("not-supported")),
     archive: (sessionId) =>
@@ -1556,6 +1596,7 @@ function reasonFor(
     case ConversationErrorCode.ShareGrantChanged:
     case ConversationErrorCode.IdempotencyConflict:
     case ConversationErrorCode.DrivePolicyUnenforceable:
+    case ConversationErrorCode.Revoked:
       return uncertain ? "unavailable" : "not-supported"
     // Not done now, or not known to be: busy, starting, stopped, storage or
     // audit that did not answer, an outcome the gateway could not settle.
@@ -1581,6 +1622,15 @@ function reasonFor(
     case ConversationErrorCode.AttachmentCleanupUnavailable:
     case ConversationErrorCode.ConversationErasureIncomplete:
     case ConversationErrorCode.MessageQuotaExceeded:
+      return "unavailable"
+    // A native steer was saved, then refused because its grant moved before
+    // injection. The attempt is settled, so it is not a clean refusal.
+    case ConversationErrorCode.RevokedAfterSave:
+      return "unavailable"
+    // A native steer was saved, then could not be checked because the grant
+    // record could not be read. The attempt is settled, so it is not a clean
+    // refusal.
+    case ConversationErrorCode.UnavailableAfterSave:
       return "unavailable"
     // An MCP App's own calls: this source makes none, so none of these can
     // answer it; one that did would be no answer it knows.

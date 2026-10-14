@@ -33,7 +33,7 @@ import {
 } from "./attachment-notice"
 
 const stored: NoticedFile = {
-  id: "a",
+  placementId: "a",
   name: "a.png",
   image: true,
   linked: false,
@@ -41,7 +41,7 @@ const stored: NoticedFile = {
 }
 
 const failed = (id: string, reason: "unavailable" | "too-large"): NoticedFile => ({
-  id,
+  placementId: id,
   name: `${id}.heic`,
   image: true,
   linked: false,
@@ -106,7 +106,7 @@ describe("what the composer says about a draft's files", () => {
     expect(
       draft([
         {
-          id: "n",
+          placementId: "n",
           name: "notes.pdf",
           image: false,
           linked: false,
@@ -130,7 +130,7 @@ describe("what the composer says about a draft's files", () => {
     const inBrowser = draft(
       [
         {
-          id: "n",
+          placementId: "n",
           name: "notes.pdf",
           image: false,
           linked: false,
@@ -148,7 +148,7 @@ describe("what the composer says about a draft's files", () => {
     expect(
       draft([
         {
-          id: "n",
+          placementId: "n",
           name: "notes.pdf",
           image: false,
           linked: true,
@@ -161,7 +161,7 @@ describe("what the composer says about a draft's files", () => {
       draft(
         [
           {
-            id: "n",
+            placementId: "n",
             name: "notes.pdf",
             image: false,
             linked: true,
@@ -521,6 +521,7 @@ describe("why something was not attached", () => {
       "reading-files": { reason: "reading-files" },
       "reading-folder": { reason: "reading-folder" },
       "sending-while-reading": { reason: "sending-while-reading" },
+      "too-many-selections": { reason: "too-many-selections" },
       "too-many-files": { reason: "too-many-files" },
       "file-too-large": {
         reason: "file-too-large",

@@ -1,3 +1,4 @@
+import { AttachmentResource } from "../../model"
 import { expect, it } from "vitest"
 import { conversation, textContent, type Turn, type UserTurn } from "../../model"
 import { emptyLocalTabs } from "../local-tabs"
@@ -133,6 +134,19 @@ it("keeps error and status separate from actual assistant text, and handles empt
   })
   expect(projected.remote?.permissions).toEqual([])
   expect(projected.remote?.interactionViewError).toBe("Review exceeds safe view limit")
+})
+
+it("keeps a question while the view lists it and drops it when a later view does not", () => {
+  const question = {
+    executionId: "run",
+    questionId: "place",
+    message: "Where should this land?",
+    questions: [],
+  }
+  const shown = applyView(conversation("tab"), { ...view, questions: [question] })
+  expect(shown.remote?.questions).toEqual([question])
+  const gone = applyView(shown, { ...view, questions: [] })
+  expect(gone.remote?.questions).toEqual([])
 })
 
 it("replaces server-only queue rows when the next complete view removes them", () => {
@@ -471,16 +485,18 @@ it("shows a turn it never held the bytes for as text plus image references", () 
 it("keeps a sent turn's local previews when the gateway echoes it by reference", () => {
   const file = {
     type: "file" as const,
-    id: "f",
-    name: "finder.png",
-    mimeType: "image/png",
-    size: 2048,
-    previewUrl: "blob:finder",
+    placementId: "f",
     upload: {
       status: "stored" as const,
       image: { digest: DIGEST, mimeType: "image/png" as const, size: 2048 },
     },
-    path: null,
+    resource: AttachmentResource.create({
+      name: "finder.png",
+      mimeType: "image/png",
+      size: 2048,
+      previewUrl: "blob:finder",
+      path: null,
+    }),
   }
   const base = emptyLocalTabs()
   const tabs = {
@@ -536,9 +552,32 @@ it("carries authentication-required evidence separately from its diagnostic", ()
       },
     ],
   })
-  expect(result.turns.find((turn) => turn.from === "assistant")).toMatchObject({
+  const assistant = result.turns.find((turn) => turn.from === "assistant")
+  expect(assistant).toMatchObject({
     authenticationRequired: true,
     status: "OAuth session expired",
+  })
+  expect(assistant).not.toHaveProperty("requiredWorkFailed")
+})
+
+it("carries an independent required-work failure separately from the diagnostic", () => {
+  const result = applyView(conversation("tab"), {
+    ...view,
+    pending: [],
+    messages: [
+      {
+        ...view.messages[0]!,
+        status: "failed",
+        error: "The turn could not complete all required work.",
+        authenticationRequired: true,
+        requiredWorkFailed: true,
+      },
+    ],
+  })
+  expect(result.turns.find((turn) => turn.from === "assistant")).toMatchObject({
+    authenticationRequired: true,
+    requiredWorkFailed: true,
+    status: "The turn could not complete all required work.",
   })
 })
 

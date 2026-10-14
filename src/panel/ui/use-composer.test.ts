@@ -1,3 +1,4 @@
+import { AttachmentResource } from "../../conversation/testing"
 // @vitest-environment jsdom
 /**
  * What pressing send does when the draft cannot go, driven through the form.
@@ -27,13 +28,15 @@ import { useComposer } from "./use-composer"
 
 const file = {
   type: "file" as const,
-  id: "f",
-  name: "finder.png",
-  mimeType: "image/png",
-  size: 1,
-  previewUrl: "blob:test-file",
+  placementId: "f",
   upload: { status: "not-started" as const },
-  path: null,
+  resource: AttachmentResource.create({
+    name: "finder.png",
+    mimeType: "image/png",
+    size: 1,
+    previewUrl: "blob:test-file",
+    path: null,
+  }),
 }
 
 /** An editor holding "hello"; file tiles live in the draft, never in the editor. */
@@ -95,7 +98,9 @@ function storeWithAttachedFile(connected = true) {
     store.dispatch(
       sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),
     )
-  store.dispatch(attachFiles({ files: [file], conversationId: "c0" }))
+  store.dispatch(
+    attachFiles({ files: [file].map((file) => file.resource), conversationId: "c0" }),
+  )
   return { send, store }
 }
 
@@ -117,7 +122,7 @@ it("shows why a draft whose image has not uploaded did not send, and keeps the d
   await pressSend(store, () => false)
   const conversation = store.getState().conversation.conversations[0]!
   expect(conversation.error).toMatch(/still uploading/)
-  expect(conversation.draft).toContainEqual(file)
+  expect(conversation.draft).toContainEqual({ ...file, placementId: "a1" })
   expect(conversation.turns).toEqual([])
   expect(send).not.toHaveBeenCalled()
   // Nothing left the composer, so nothing downstream is told that it did. The
@@ -154,8 +159,18 @@ it("asks the panel to explain a read still in flight, and submits nothing", asyn
 
 it("shows why a draft holding a file that is not an image did not send", async () => {
   const { send, store } = storeWithAttachedFile()
-  const notes = { ...file, id: "n", name: "notes.pdf", mimeType: "application/pdf" }
-  store.dispatch(attachFiles({ files: [notes], conversationId: "c0" }))
+  const notes = {
+    ...file,
+    placementId: "a2",
+    resource: AttachmentResource.create({
+      ...file.resource,
+      name: "notes.pdf",
+      mimeType: "application/pdf",
+    }),
+  }
+  store.dispatch(
+    attachFiles({ files: [notes].map((file) => file.resource), conversationId: "c0" }),
+  )
   await pressSend(store, () => false)
   const conversation = store.getState().conversation.conversations[0]!
   expect(conversation.error).toMatch(/notes\.pdf.*cannot be sent/)
@@ -173,7 +188,7 @@ it("says why nothing was sent when there is no session yet, and keeps the draft"
   expect(conversation.error).toMatch(
     /Not connected to the gateway yet.*draft has been kept/,
   )
-  expect(conversation.draft).toContainEqual(file)
+  expect(conversation.draft).toContainEqual({ ...file, placementId: "a1" })
   expect(conversation.turns).toEqual([])
   expect(send).not.toHaveBeenCalled()
 })

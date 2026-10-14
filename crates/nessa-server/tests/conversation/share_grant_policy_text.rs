@@ -1,7 +1,6 @@
 //! A Drive grant's stored policy text (`store::share_grants`): one spelling
 //! per policy, read back through the domain, within the bound it is read under.
 use super::*;
-use crate::conversation::domain::ToolPolicyError;
 
 /// A policy reads back as itself, and the stored text of the longest one
 /// fits the bound its read is acquired under.
@@ -25,11 +24,10 @@ fn a_policy_reads_back_as_itself_within_its_bound() {
     let most = CommandHosts::MAX_HOSTS;
     let mut policies = vec![
         rules(full, full),
-        rules(full, 0).with_command_hosts(hosts(most)).unwrap(),
-        rules(0, full).with_command_hosts(hosts(most)).unwrap(),
-        rules(full / 2, full / 2)
-            .with_command_hosts(hosts(most))
-            .unwrap(),
+        rules(full, full).with_command_hosts(hosts(most)),
+        rules(full, 0).with_command_hosts(hosts(most)),
+        rules(0, full).with_command_hosts(hosts(most)),
+        rules(full / 2, full / 2).with_command_hosts(hosts(most)),
     ];
     for preset in [
         ToolPreset::ReadOnlyTools,
@@ -38,16 +36,16 @@ fn a_policy_reads_back_as_itself_within_its_bound() {
         ToolPreset::All,
     ] {
         policies.push(ToolPolicy::preset(preset));
-        policies.push(
-            ToolPolicy::preset(preset)
-                .with_command_hosts(hosts(most))
-                .unwrap(),
-        );
+        policies.push(ToolPolicy::preset(preset).with_command_hosts(hosts(most)));
     }
-    // Hosts take the room of patterns: a full policy takes none.
+    // Hosts are not counted against the patterns.
     assert_eq!(
-        rules(full, full).with_command_hosts(hosts(1)),
-        Err(ToolPolicyError::TooManyHosts)
+        rules(full, full)
+            .with_command_hosts(hosts(1))
+            .command_hosts()
+            .names()
+            .len(),
+        1
     );
     for policy in policies {
         let text = policy_text(&policy);
@@ -70,11 +68,6 @@ fn a_policy_reads_back_as_itself_within_its_bound() {
         r#"{"preset":"all","commandHosts":["devbox","devbox"]}"#,
         r#"{"preset":"all","commandHosts":[" devbox"]}"#,
         r#"{"preset":"all","commandHosts":"devbox"}"#,
-        &format!(
-            r#"{{"allow":{},"deny":{},"commandHosts":["devbox"]}}"#,
-            serde_json::json!(vec!["Read"; ToolRules::MAX_RULES]),
-            serde_json::json!(vec!["Bash"; ToolRules::MAX_RULES]),
-        ),
     ] {
         assert_eq!(policy_from(damaged), None, "{damaged}");
     }
@@ -96,9 +89,7 @@ fn command_hosts_round_trip_and_a_policy_without_them_names_none() {
         "devbox".to_owned(),
     ])
     .unwrap();
-    let on = ToolPolicy::preset(ToolPreset::All)
-        .with_command_hosts(hosts.clone())
-        .unwrap();
+    let on = ToolPolicy::preset(ToolPreset::All).with_command_hosts(hosts.clone());
     let text = policy_text(&on);
     assert_eq!(policy_from(&text), Some(on.clone()));
     assert_ne!(text, stored);
@@ -112,7 +103,6 @@ fn command_hosts_round_trip_and_a_policy_without_them_names_none() {
         ["devbox", &format!("peer:{}", "ab".repeat(32))]
     );
     let rules = ToolPolicy::rules(ToolRules::new(vec!["Read".into()], Vec::new()).unwrap())
-        .with_command_hosts(hosts)
-        .unwrap();
+        .with_command_hosts(hosts);
     assert_eq!(policy_from(&policy_text(&rules)), Some(rules));
 }

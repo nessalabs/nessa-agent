@@ -32,6 +32,7 @@ import type {
   ConversationSetApprovalModeResult,
   ConversationShareResult,
   ConversationShareRole,
+  ConversationSharesCursor,
   ConversationSharesResult,
   ConversationToolPolicy,
   ApprovalMode,
@@ -277,8 +278,8 @@ export type ConversationApi = {
    * comment take none, and the gateway refuses either mistake
    * `invalid_request`, as it does a policy past the schema's bounds (published
    * in `bounds`: `maxToolPolicyPatterns`, `maxToolPatternBytes`,
-   * `maxCommandHosts`, `maxCommandHostBytes`, `maxToolPolicyEntries`). A grant
-   * that names no `commandHosts` runs commands nowhere. The answer names the
+   * `maxCommandHosts`, `maxCommandHostBytes`). A grant that names no
+   * `commandHosts` runs commands nowhere. The answer names the
    * grant's `policyRevision` once the share is made; `applied` is false when
    * the grant already held that role and policy, and its revision was kept.
    * With `expectedPolicyRevision`, a grant no longer at that revision is
@@ -311,8 +312,25 @@ export type ConversationApi = {
     credentialId: string,
     options?: ConversationShareOptions,
   ) => Promise<ConversationMutationResult>
-  /** The grants on one of the caller's conversations, oldest first (`conversation.shares`). */
-  shares: (conversationId: string) => Promise<ConversationSharesResult>
+  /**
+   * One page of the grants on one of the caller's conversations, oldest first
+   * (`conversation.shares`). `pageSize` is a whole number from 1 through the
+   * published page size (`sharePage.pageSize`). The first page names no
+   * cursor. A later page echoes the cursor the previous page returned, and is
+   * the grants after that one. The answer's cursor is present when further
+   * grants remain, and names that page's last grant. Every page names the
+   * catalogue revision (`changeRevision`) it was read at. A conversation holds
+   * at most `sharePage.grants`. An answer with more grants than the page size
+   * this call sent is refused, the same as any other answer the client will
+   * not read.
+   * @throws TypeError before anything is sent for a malformed conversation ID,
+   * a page size outside that range, or a cursor whose credential or time is
+   * not one the schema takes.
+   */
+  shares: (
+    conversationId: string,
+    options: { pageSize: number; cursor?: ConversationSharesCursor },
+  ) => Promise<ConversationSharesResult>
 }
 
 const utf8 = new TextEncoder()
@@ -332,6 +350,28 @@ function expectedRevision(options: ConversationShareOptions): {
     )
   return { expectedPolicyRevision: expected }
 }
+/** The page size `conversation.shares` sends: a whole number the schema takes. */
+function sharePageSize(pageSize: number): number {
+  if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > bounds.maxSharePage)
+    throw new TypeError(
+      `Page size must be a whole number from 1 to ${bounds.maxSharePage}`,
+    )
+  return pageSize
+}
+
+/** The cursor a later shares page echoes, copied so the caller cannot change it after. */
+function shareCursor(cursor: ConversationSharesCursor | undefined): {
+  cursor?: ConversationSharesCursor
+} {
+  if (cursor === undefined) return {}
+  boundedText(cursor.credentialId, "Credential ID", 256)
+  if (!Number.isSafeInteger(cursor.grantedAtMs) || cursor.grantedAtMs < 0)
+    throw new TypeError("Cursor time must be a whole number from 0 to 2^53 - 1")
+  return {
+    cursor: { credentialId: cursor.credentialId, grantedAtMs: cursor.grantedAtMs },
+  }
+}
+
 function boundedText(value: string, name: string, maxBytes: number): string {
   if (
     typeof value !== "string" ||
@@ -786,11 +826,20 @@ export function createConversationApi(
         (value) => conversationMutation(value, requestId),
       )
     },
-    shares: async (id) =>
-      conversationShares(
+    shares: async (id, options) => {
+      const pageSize = sharePageSize(options.pageSize)
+      const page = conversationShares(
         await session.request(ProductMethod.ConversationShares, {
           conversationId: validConversationId(id),
+          pageSize,
+          ...shareCursor(options.cursor),
         }),
-      ),
+      )
+      // The schema allows up to the published page size. This call asked for
+      // `pageSize`, and an answer past that is not the page it asked for.
+      if (page.items.length > pageSize)
+        throw new Error("Invalid conversation shares page")
+      return page
+    },
   }
 }

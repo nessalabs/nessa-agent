@@ -243,10 +243,7 @@ async fn native_steering_from_another_initiator_waits_for_its_own_turn() {
         "first"
     );
     let grant = Initiation::checked_grant(GrantInitiator::new("receiver", 3).unwrap());
-    let driver = || Submitter {
-        context: close_action(),
-        initiation: grant.clone(),
-    };
+    let driver = || Submitter::new(close_action(), grant.clone());
     let SteeringDelivery::Queued(steered) = agent.steer(prompt("driver"), driver()).await.unwrap()
     else {
         panic!("another initiator's input is queued, never injected");

@@ -1,5 +1,7 @@
 import * as React from "react"
+import { useStore } from "react-redux"
 import {
+  type AttachmentResource,
   declaredMediaType,
   isImageFile,
   linkablePath,
@@ -11,12 +13,14 @@ import {
   type FileAttachment,
   type useConversation,
 } from "../../conversation"
+import type { AppStore } from "../../store"
 import {
   chooseAttachmentFiles,
   onAttachmentBatch,
   onAttachmentReadying,
   readAttachmentBytes,
   type ChosenFile,
+  type PickerRequestId,
 } from "../../host"
 import { readDroppedImage } from "../adapters/dropped-image"
 import {
@@ -27,21 +31,22 @@ import { pickerRefusal, type AttachmentRefusal } from "../application/attachment
 
 const MIB = 1024 * 1024
 
-/**
- * How many gestures the panel remembers the conversation of.
- *
- * One entry is two short strings, and nothing removes one when its attach
- * finishes — an attach can end in files, in a refusal, or in a conversation
- * that has since closed, and only the first of those comes back here. Rather
- * than three cleanup paths that a fourth outcome would quietly escape, the map
- * is a window over the most recent gestures.
- *
- * Far more than can ever be in flight: the longest an attach waits is
- * forty-five seconds, and nobody drops sixty-four times in forty-five seconds.
- * An entry evicted while still in flight falls back to the open tab, which is
- * what the panel did for every gesture before any of this existed.
- */
-const MOST_REMEMBERED_BATCHES = 64
+/** How many host-minted drops may wait for their terminal result at once. */
+const MAX_ACTIVE_DROP_BATCHES = 64
+
+export type AttachmentDestination = Readonly<{
+  store: AppStore
+  conversationId: string
+  resources: AttachmentResources
+  attachFiles: (files: AttachmentResource[], conversationId: string) => void
+}>
+
+type AttachmentOperation = Readonly<{
+  destination: AttachmentDestination
+  files: { name: string; mimeType: string; previewUrl?: string }[]
+  controller?: AbortController
+  pickerRequestId?: PickerRequestId
+}>
 
 /** Coordinates local file selection and preview against the originating conversation. */
 /**
@@ -65,15 +70,36 @@ export function useFileAttachments(
   chat: ReturnType<typeof useConversation>,
   resources: AttachmentResources,
 ) {
-  const conversationsRef = React.useRef(chat.conversations)
+  const store = useStore() as AppStore
+  const currentScope = React.useRef({ store, resources, attachFiles: chat.attachFiles })
   React.useLayoutEffect(() => {
-    conversationsRef.current = chat.conversations
-  }, [chat.conversations])
+    currentScope.current = { store, resources, attachFiles: chat.attachFiles }
+  }, [chat.attachFiles, resources, store])
+  const activeId = React.useRef(chat.active.id)
+  React.useLayoutEffect(() => {
+    activeId.current = chat.active.id
+  }, [chat.active.id])
+  const currentDestination = React.useCallback(
+    (conversationId = activeId.current): AttachmentDestination => {
+      const scope = currentScope.current
+      return Object.freeze({ ...scope, conversationId })
+    },
+    [],
+  )
+  const destinationIsCurrent = React.useCallback(
+    (destination: AttachmentDestination) =>
+      destination.store === currentScope.current.store &&
+      destination.resources === currentScope.current.resources,
+    [],
+  )
+  const conversationsOf = (destination: AttachmentDestination) =>
+    destination.store.getState().conversation.conversations
   const inputRef = React.useRef<HTMLInputElement>(null)
-  const [pending, setPending] = React.useState<{
-    conversationId: string
-    files: { name: string; mimeType: string; previewUrl?: string }[]
-  } | null>(null)
+  const browserPicker = React.useRef<AttachmentOperation | null>(null)
+  const operationsRef = React.useRef(new Set<AttachmentOperation>())
+  const [operations, setOperations] = React.useState<ReadonlySet<AttachmentOperation>>(
+    new Set(),
+  )
   /**
    * Files the host is making readable: its identity for each one, and what to
    * put on the tile.
@@ -83,37 +109,29 @@ export function useFileAttachments(
    * the first to settle took the other's tile away, and the draft became
    * sendable while the second was still being fetched.
    *
-   * Their own state rather than `pending` above, which one call owns from
-   * beginning to end. These arrive and leave on the host's schedule, one event
-   * each way.
+   * Host readiness events are separate from local read operations and arrive
+   * and leave on the host's schedule, one event each way.
    */
   const [readying, setReadying] = React.useState<
-    Map<string, { name: string; conversationId: string }>
+    Map<string, { name: string; destination: AttachmentDestination }>
   >(new Map())
   /**
-   * Which conversation each batch of work belongs to.
+   * Which conversation each host-minted drop belongs to.
    *
-   * Recorded when the *gesture* happens — the drop, or the moment `+` is
-   * pressed — and not when the host finally speaks, which can be three
-   * quarters of a minute later. Reading the open tab then put the tile over
-   * whichever conversation somebody had since switched to: it blocked *that*
-   * draft's send for forty-five seconds for a file it was never going to get,
-   * while the draft the file was actually joining showed nothing at all.
-   */
-  const batches = React.useRef(new Map<string, string>())
-  /**
-   * The draft a `+` was pressed in, while its picker is open.
+   * Recorded when the drop gesture happens, not when the host finally speaks, which can be
+   * three quarters of a minute later. Reading the open tab then put the tile
+   * over whichever conversation somebody had since switched to: it blocked
+   * *that* draft's send for forty-five seconds for a file it was never going
+   * to get, while the draft the file was joining showed nothing at all.
    *
-   * Null the rest of the time, and a drop never reads it — the host says which
-   * gesture a name belongs to, so a drop landing during a pick still binds to
-   * the tab it landed on.
+   * Accepted batches stay here until their terminal host result is consumed.
+   * A fixed admission limit bounds the map without evicting any result that is
+   * still in flight.
    */
-  const picking = React.useRef<string | null>(null)
-  const download = React.useRef<AbortController | null>(null)
-  const busyRef = React.useRef(false)
-  const pendingConversation = React.useRef<string | null>(null)
+  // Picker identity and lifetime are retained by their live operation values
+  // above; this map owns only host-minted drops.
+  const dropDestinations = React.useRef(new Map<string, AttachmentDestination>())
   const mounted = React.useRef(true)
-  const [reading, setReading] = React.useState(false)
   /**
    * Why the last thing offered was not taken, and which conversation it was
    * said to.
@@ -130,37 +148,92 @@ export function useFileAttachments(
    * draft restored after a refused send brings its files back under the same
    * identities, so a refusal that had been answered came back with them.
    */
-  const [refused, setRefused] = React.useState<{
-    conversationId: string
-    refusal: AttachmentRefusal
-  } | null>(null)
+  const [refused, setRefused] = React.useState<
+    ReadonlyMap<
+      string,
+      { destination: AttachmentDestination; refusal: AttachmentRefusal }
+    >
+  >(new Map())
   const [viewed, setViewed] = React.useState<{
-    conversationId: string
-    file: FileAttachment
+    destination: AttachmentDestination
+    placementId: string
   } | null>(null)
+  /**
+   * Say why something was not taken. Defaults to the active conversation; a
+   * folder walk that finishes after somebody has moved on names the one it was
+   * dropped into, so its refusal is not shown above another draft quoting
+   * another draft's bounds.
+   *
+   * Kept by local conversation within the live provider scope. A delayed
+   * refusal for an open inactive tab remains there until that tab is shown
+   * again; a refusal for a retired provider or a closed tab has no owner.
+   */
+  const refuse = React.useCallback(
+    (
+      refusal: AttachmentRefusal,
+      target: AttachmentDestination | string = currentDestination(),
+    ) => {
+      const destination = typeof target === "string" ? currentDestination(target) : target
+      if (
+        !destinationIsCurrent(destination) ||
+        !conversationsOf(destination).some(
+          (conversation) => conversation.id === destination.conversationId,
+        )
+      )
+        return
+      setRefused((current) => {
+        const next = new Map(current)
+        next.set(destination.conversationId, { destination, refusal })
+        return next
+      })
+    },
+    [currentDestination, destinationIsCurrent],
+  )
   React.useEffect(() => {
+    const open = new Set(chat.conversations.map((conversation) => conversation.id))
+    setRefused((current) => {
+      const next = new Map(
+        [...current].filter(
+          ([id, entry]) =>
+            entry.destination.store === store &&
+            entry.destination.resources === resources &&
+            open.has(id),
+        ),
+      )
+      return next.size === current.size ? current : next
+    })
+  }, [chat.conversations, resources, store])
+  React.useEffect(() => {
+    const operations = operationsRef.current
+    const drops = dropDestinations.current
     mounted.current = true
     return () => {
       mounted.current = false
-      download.current?.abort()
+      for (const operation of operations) operation.controller?.abort()
+      operations.clear()
+      browserPicker.current = null
+      drops.clear()
     }
   }, [])
-  const activeId = React.useRef(chat.active.id)
-  React.useLayoutEffect(() => {
-    activeId.current = chat.active.id
-  })
   /**
    * The conversation a batch belongs to. The host's identity for a waiting
    * file begins with its batch, so the tile finds its draft through the
    * gesture that started it rather than through whatever is on screen now.
    *
-   * A batch nobody recorded falls back to the open tab. That is a real
-   * fallback rather than the ordinary path — both gestures announce
-   * themselves — and it covers the panel having reloaded mid-attach, where
-   * the open tab is the only thing left to go on.
+   * A batch nobody recorded has no destination. The active conversation is
+   * not evidence of where a delayed host event began.
    */
-  const conversationOf = (id: string) =>
-    batches.current.get(id.split(":")[0] ?? "") ?? activeId.current
+  const destinationForBatch = React.useCallback(
+    (batch: string) =>
+      [...operationsRef.current].find((operation) => operation.pickerRequestId === batch)
+        ?.destination ?? dropDestinations.current.get(batch),
+    [],
+  )
+  const consumeDropDestination = React.useCallback((batch: string) => {
+    const destination = dropDestinations.current.get(batch)
+    if (destination) dropDestinations.current.delete(batch)
+    return destination
+  }, [])
   React.useEffect(() => {
     let live = true
     // The gesture's own moment, for both gestures. Everything after it can be
@@ -168,25 +241,16 @@ export function useFileAttachments(
     // of anything by then.
     const batch = onAttachmentBatch((named, gesture) => {
       if (!live) return
-      // A `+` selection was begun here, and `chooseFiles` has been holding the
-      // draft it was begun on ever since; the host's word arrives when the
-      // picker closes. Answering with the press is one source of truth for the
-      // files *and* the tile — reading the tab again was a second, and the two
-      // agreed only while nothing could change between the press and the close.
-      // What guaranteed that was the picker being modal, which is rfd's
-      // presentation choice and not a promise to us.
-      const began = gesture === "picked" ? picking.current : null
-      // Bounded: the oldest are dropped once there are more than a window's
-      // worth of gestures in flight, because nothing removes an entry when an
-      // attach finishes and a long session would otherwise keep one string
-      // pair per drop and per `+` for as long as the window lives. Insertion
-      // order is age here — the host's counter never reuses a name.
-      const held = batches.current
-      held.set(named, began ?? activeId.current)
-      for (const oldest of held.keys()) {
-        if (held.size <= MOST_REMEMBERED_BATCHES) break
-        held.delete(oldest)
+      // A picker identity was registered before its command invocation, and
+      // its event must not replace that captured owner. Drop identities are
+      // host-minted, so their destination is captured at this event.
+      const held = dropDestinations.current
+      if (gesture === "picked" || held.has(named)) return
+      if (held.size >= MAX_ACTIVE_DROP_BATCHES) {
+        refuse({ reason: "too-many-selections" }, currentDestination())
+        return
       }
+      held.set(named, currentDestination())
     })
     const subscription = onAttachmentReadying(({ id, name, readying: waiting }) => {
       if (!live) return
@@ -195,8 +259,11 @@ export function useFileAttachments(
         // Settling always removes, whatever the outcome was: the sentence for
         // a file that is not coming is the refusal's, and a tile left spinning
         // beside it would be the panel disagreeing with itself.
-        if (waiting) next.set(id, { name, conversationId: conversationOf(id) })
-        else next.delete(id)
+        if (waiting) {
+          const destination = destinationForBatch(id.split(":")[0] ?? "")
+          if (!destination) return current
+          next.set(id, { name, destination })
+        } else next.delete(id)
         return next
       })
     })
@@ -205,20 +272,22 @@ export function useFileAttachments(
       void batch.then((stop) => stop())
       void subscription.then((stop) => stop())
     }
-  }, [])
+  }, [currentDestination, destinationForBatch, refuse])
   React.useEffect(() => {
     if (
       viewed &&
-      !chat.conversations.some(
-        (conversation) =>
-          conversation.id === viewed.conversationId &&
-          conversation.draft.some(
-            (part) => part.type === "file" && part.id === viewed.file.id,
-          ),
-      )
+      (viewed.destination.store !== store ||
+        viewed.destination.resources !== resources ||
+        !chat.conversations.some(
+          (conversation) =>
+            conversation.id === viewed.destination.conversationId &&
+            conversation.draft.some(
+              (part) => part.type === "file" && part.placementId === viewed.placementId,
+            ),
+        ))
     )
       setViewed(null)
-  }, [chat.conversations, viewed])
+  }, [chat.conversations, resources, store, viewed])
   // Somebody with a file attached is somebody who may open it.
   const anyFiles = chat.conversations.some((conversation) =>
     conversation.draft.some((part) => part.type === "file"),
@@ -230,16 +299,14 @@ export function useFileAttachments(
     (part): part is FileAttachment => part.type === "file",
   )
   /**
-   * Say why something was not taken. Defaults to the active conversation; a
-   * folder walk that finishes after somebody has moved on names the one it was
-   * dropped into, so its refusal is not shown above another draft quoting
-   * another draft's bounds.
-   *
-   * Replaces whatever was there. There is one of these at a time, and it is
-   * always the most recent thing the panel turned away.
+   * A closed tab in the current owner has nobody left to tell, so its notice
+   * goes to that owner's active tab. A retired owner must not notify the
+   * replacement provider's tab with the same local conversation ID.
    */
-  const refuse = (refusal: AttachmentRefusal, conversationId = chat.active.id) =>
-    setRefused({ conversationId, refusal })
+  function refuseClosedConversation(destination: AttachmentDestination) {
+    if (!destinationIsCurrent(destination)) return
+    refuse({ reason: "conversation-closed" }, currentDestination(activeId.current))
+  }
   /**
    * Put down a refusal this conversation has now answered, leaving another
    * tab's alone. The answers are: files actually attached, a file taken off the
@@ -251,10 +318,25 @@ export function useFileAttachments(
    * the drop zone hands over what passed before what it refused, and the
    * refusal must be what survives the pair.
    */
-  const answerRefusal = (conversationId: string) =>
-    setRefused((current) => (current?.conversationId === conversationId ? null : current))
+  const answerRefusal = (destination: AttachmentDestination) =>
+    setRefused((current) => {
+      const entry = current.get(destination.conversationId)
+      if (
+        entry?.destination.store !== destination.store ||
+        entry.destination.resources !== destination.resources
+      )
+        return current
+      const next = new Map(current)
+      next.delete(destination.conversationId)
+      return next
+    })
   /** Said only to the conversation it was said about. */
-  const refusal = refused?.conversationId === chat.active.id ? refused.refusal : null
+  const activeRefusal = refused.get(chat.active.id)
+  const refusal =
+    activeRefusal?.destination.store === store &&
+    activeRefusal.destination.resources === resources
+      ? activeRefusal.refusal
+      : null
   /**
    * Put files on a draft, whatever route they came in by.
    *
@@ -274,21 +356,18 @@ export function useFileAttachments(
   function attach(
     held: readonly File[],
     linked: readonly ChosenFile[],
-    targetId: string,
+    destination: AttachmentDestination,
   ) {
+    if (!mounted.current) return
     if (!held.length && !linked.length) return
-    if (busyRef.current) {
-      refuse({ reason: "reading-files" }, targetId)
-      return
-    }
-    const target = conversationsRef.current.find(
-      (conversation) => conversation.id === targetId,
+    const target = conversationsOf(destination).find(
+      (conversation) => conversation.id === destination.conversationId,
     )
     // The draft these were for is gone — closed during a fetch that can take
     // three quarters of a minute, or during the read that follows it. There is
     // nothing to attach them to, and saying so on the conversation that no
-    // longer exists would be saying it to nobody, so it is said where the
-    // person is looking.
+    // longer exists would be saying it to nobody, so a notice stays in the
+    // captured owner and goes to its active tab.
     //
     // It is said at all because the alternative is the silence this module
     // refuses everywhere else: a person who chose five files and got none has
@@ -298,7 +377,7 @@ export function useFileAttachments(
     // it: every route into a draft passes here, including the ones that never
     // read a byte.
     if (!target) {
-      refuse({ reason: "conversation-closed" }, activeId.current)
+      refuseClosedConversation(destination)
       return
     }
     // Three states, and only one of them refuses. `imageInput` is the
@@ -318,7 +397,7 @@ export function useFileAttachments(
       target.remote?.capabilities.imageInput === false &&
       held.some((file) => isImageFile(declaredMediaType(file.name, file.type)))
     ) {
-      refuse({ reason: "images-not-supported" }, targetId)
+      refuse({ reason: "images-not-supported" }, destination)
       return
     }
     const targetFiles = target.draft.filter((part) => part.type === "file")
@@ -332,46 +411,57 @@ export function useFileAttachments(
           reason: "file-too-large",
           files: tooLarge.map((file) => ({ name: file.name, type: file.type })),
         },
-        targetId,
+        destination,
       )
       return
     }
     if (targetFiles.length + held.length + linked.length > MAX_DRAFT_ATTACHMENTS) {
-      refuse({ reason: "too-many-files" }, targetId)
+      refuse({ reason: "too-many-files" }, destination)
       return
     }
-    const carrying = targetFiles.filter((file) => !linkedFile(file))
+    const carrying = targetFiles
+      .filter((file) => !linkedFile(file.resource))
+      .map((file) => file.resource)
     if (
       [...carrying, ...held].reduce((total, file) => total + file.size, 0) >
       MAX_DRAFT_ATTACHMENT_BYTES
     ) {
-      refuse({ reason: "draft-too-large" }, targetId)
+      refuse({ reason: "draft-too-large" }, destination)
       return
     }
-    if (!resources.canAdd(held.reduce((total, file) => total + file.size, 0))) {
+    if (
+      !destination.resources.canAdd(held.reduce((total, file) => total + file.size, 0))
+    ) {
       refuse(
         {
           reason: "window-budget",
           maxMiB: MAX_SESSION_ATTACHMENT_BYTES / MIB,
-          draftsHoldFiles: conversationsRef.current.some((conversation) =>
+          draftsHoldFiles: conversationsOf(destination).some((conversation) =>
             conversation.draft.some((part) => part.type === "file"),
           ),
         },
-        targetId,
+        destination,
       )
       return
     }
-    answerRefusal(targetId)
+    answerRefusal(destination)
     try {
       // Object URLs are ready synchronously; no FileReader or duplicate thumbnail URLs.
-      chat.attachFiles([...resources.add(held), ...resources.addChosen(linked)], targetId)
+      destination.attachFiles(
+        [...destination.resources.add(held), ...destination.resources.addChosen(linked)],
+        destination.conversationId,
+      )
     } catch {
-      refuse({ reason: "unreadable-files" }, targetId)
+      refuse({ reason: "unreadable-files" }, destination)
     }
   }
 
-  function addFiles(selected: readonly File[], targetId = chat.active.id) {
-    attach(selected, [], targetId)
+  function addFiles(
+    selected: readonly File[],
+    target: AttachmentDestination | string = currentDestination(),
+  ) {
+    const destination = typeof target === "string" ? currentDestination(target) : target
+    attach(selected, [], destination)
   }
 
   /**
@@ -387,31 +477,137 @@ export function useFileAttachments(
    * own file input is used instead. That reads bytes and never says where they
    * came from, so images work there and nothing else can be sent.
    */
-  async function chooseFiles() {
-    const targetId = chat.active.id
-    // Held for the host's word, which comes when the picker closes and carries
-    // no conversation of its own. One capture answers both the files below and
-    // the tile the host draws in between.
-    picking.current = targetId
+  async function chooseFiles(destination = currentDestination()) {
+    if (!mounted.current) return
+    if (browserPicker.current) {
+      refuse({ reason: "picker-unavailable" }, destination)
+      return
+    }
+    // The request identity travels with the host's separate readiness events,
+    // so a second picker can overlap without borrowing the first one's owner.
+    const requestId: PickerRequestId = `p-${crypto.randomUUID()}`
+    if (
+      [...operationsRef.current].some(
+        (operation) => operation.pickerRequestId === requestId,
+      )
+    ) {
+      refuse({ reason: "picker-unavailable" }, destination)
+      return
+    }
+    const pickerOperation: AttachmentOperation = {
+      destination,
+      files: [],
+      pickerRequestId: requestId,
+    }
+    operationsRef.current.add(pickerOperation)
+    if (mounted.current) setOperations(new Set(operationsRef.current))
     let chosen
+    let retainForBrowser = false
     try {
-      chosen = await chooseAttachmentFiles()
+      chosen = await chooseAttachmentFiles(requestId)
+      if (!operationIsActive(pickerOperation)) return
+      if (chosen === null) {
+        const input = inputRef.current
+        if (!input || browserPicker.current) {
+          refuse({ reason: "picker-unavailable" }, destination)
+          return
+        }
+        browserPicker.current = pickerOperation
+        try {
+          input.click()
+          retainForBrowser = true
+        } catch (error) {
+          if (browserPicker.current === pickerOperation) browserPicker.current = null
+          refuse(pickerRefusal(error), destination)
+        }
+        return
+      }
     } catch (error) {
-      refuse(pickerRefusal(error), targetId)
+      if (operationIsActive(pickerOperation)) refuse(pickerRefusal(error), destination)
       return
     } finally {
-      picking.current = null
+      if (!retainForBrowser) finishPickerOperation(pickerOperation)
     }
-    if (chosen === null) {
-      inputRef.current?.click()
-      return
-    }
-    await addChosenFiles(chosen, targetId)
+    await addChosenFiles(chosen, destination)
+  }
+
+  /** Settle the one browser input against the owner that opened its chooser. */
+  function completeBrowserPicker(files: readonly File[]) {
+    const operation = browserPicker.current
+    browserPicker.current = null
+    if (!operation || !operationIsActive(operation)) return
+    finishPickerOperation(operation)
+    if (files.length > 0) addFiles(files, operation.destination)
   }
 
   /** Whether a conversation is still open to attach to. */
-  const stillOpen = (conversationId: string) =>
-    conversationsRef.current.some((conversation) => conversation.id === conversationId)
+  const stillOpen = (destination: AttachmentDestination) =>
+    conversationsOf(destination).some(
+      (conversation) => conversation.id === destination.conversationId,
+    )
+
+  function beginPending(
+    destination: AttachmentDestination,
+    files: { name: string; mimeType: string; previewUrl?: string }[],
+    controller?: AbortController,
+  ) {
+    if (!mounted.current) return null
+    if (
+      [...operationsRef.current].some(
+        (operation) =>
+          !operation.pickerRequestId &&
+          operation.destination.store === destination.store &&
+          operation.destination.resources === destination.resources,
+      )
+    ) {
+      refuse({ reason: "reading-files" }, destination)
+      return null
+    }
+    const operation: AttachmentOperation = {
+      destination,
+      files,
+      ...(controller ? { controller } : {}),
+    }
+    operationsRef.current.add(operation)
+    if (mounted.current) setOperations(new Set(operationsRef.current))
+    answerRefusal(destination)
+    return operation
+  }
+
+  function finishOperation(operation: AttachmentOperation) {
+    if (!operationsRef.current.delete(operation)) return
+    if (mounted.current) setOperations(new Set(operationsRef.current))
+  }
+
+  const finishPickerOperation = React.useCallback((operation: AttachmentOperation) => {
+    if (operationsRef.current.delete(operation) && mounted.current)
+      setOperations(new Set(operationsRef.current))
+    const requestId = operation.pickerRequestId
+    if (!requestId || !mounted.current) return
+    setReadying((current) => {
+      const next = new Map(current)
+      for (const id of next.keys()) {
+        if (id.startsWith(`${requestId}:`)) next.delete(id)
+      }
+      return next
+    })
+  }, [])
+
+  const cancelBrowserPicker = React.useCallback(() => {
+    const operation = browserPicker.current
+    browserPicker.current = null
+    if (operation) finishPickerOperation(operation)
+  }, [finishPickerOperation])
+
+  React.useEffect(() => {
+    const input = inputRef.current
+    if (!input) return
+    input.addEventListener("cancel", cancelBrowserPicker)
+    return () => input.removeEventListener("cancel", cancelBrowserPicker)
+  }, [cancelBrowserPicker])
+
+  const operationIsActive = (operation: AttachmentOperation) =>
+    mounted.current && operationsRef.current.has(operation)
 
   /**
    * Attach what the picker chose: read the images, point at everything else.
@@ -422,21 +618,19 @@ export function useFileAttachments(
    */
   async function addChosenFiles(
     chosen: readonly ChosenFile[],
-    targetId = chat.active.id,
+    target: AttachmentDestination | string = currentDestination(),
   ) {
+    if (!mounted.current) return
+    const destination = typeof target === "string" ? currentDestination(target) : target
     if (!chosen.length) return
-    if (busyRef.current) {
-      refuse({ reason: "reading-files" }, targetId)
-      return
-    }
     // Checked before the read as well as inside `attach`, which is what makes
     // the common case cheap: a selection can be forty-five seconds behind its
     // gesture, and a draft closed in that time has nothing to read images for.
     // It is a short-circuit, not the authority — a conversation closed *during*
     // the read still reaches `attach`, and the bytes for that one are spent and
     // thrown away. Both end in the same sentence.
-    if (!stillOpen(targetId)) {
-      refuse({ reason: "conversation-closed" }, activeId.current)
+    if (!stillOpen(destination)) {
+      refuseClosedConversation(destination)
       return
     }
     // The platform's own answer first, the extension table only as the
@@ -453,30 +647,28 @@ export function useFileAttachments(
     // can still be swapped, rather than at send.
     const unusable = linked.find((file) => !linkablePath(file.path))
     if (unusable) {
-      refuse({ reason: "file-not-linkable", name: unusable.name }, targetId)
+      refuse({ reason: "file-not-linkable", name: unusable.name }, destination)
       return
     }
     // A conversation on an SSH host reads that host's files: a path on this
     // machine would name nothing there, or something else. Images carry
     // their bytes and still go.
-    const target = conversationsRef.current.find(
-      (conversation) => conversation.id === targetId,
+    const conversation = conversationsOf(destination).find(
+      (conversation) => conversation.id === destination.conversationId,
     )
-    if (linked.length && target && !linksFilesHere(target)) {
-      refuse({ reason: "file-not-on-host", name: linked[0].name }, targetId)
+    if (linked.length && conversation && !linksFilesHere(conversation)) {
+      refuse({ reason: "file-not-on-host", name: linked[0].name }, destination)
       return
     }
     if (!images.length) {
-      attach([], linked, targetId)
+      attach([], linked, destination)
       return
     }
-    busyRef.current = true
-    pendingConversation.current = targetId
-    setReading(true)
-    setPending({
-      conversationId: targetId,
-      files: images.map((image) => ({ name: image.name, mimeType: image.mimeType })),
-    })
+    const operation = beginPending(
+      destination,
+      images.map((image) => ({ name: image.name, mimeType: image.mimeType })),
+    )
+    if (!operation) return
     let held: File[]
     try {
       held = await Promise.all(
@@ -490,58 +682,44 @@ export function useFileAttachments(
           })
         }),
       )
+      if (!operationIsActive(operation)) return
     } catch (error) {
-      if (mounted.current) refuse(pickerRefusal(error), targetId)
+      if (operationIsActive(operation)) refuse(pickerRefusal(error), destination)
       return
     } finally {
-      pendingConversation.current = null
-      busyRef.current = false
-      if (mounted.current) {
-        setReading(false)
-        setPending(null)
-      }
+      finishOperation(operation)
     }
-    if (!mounted.current) return
-    attach(held, linked, targetId)
+    attach(held, linked, destination)
   }
 
-  async function addImageUrl(url: string) {
-    const targetId = chat.active.id
-    if (busyRef.current) {
-      refuse({ reason: "reading-files" }, targetId)
-      return
-    }
-    busyRef.current = true
-    pendingConversation.current = targetId
-    setReading(true)
-    answerRefusal(targetId)
-    setPending({
-      conversationId: targetId,
-      files: [{ name: "Image", mimeType: "image/" }],
-    })
+  async function addImageUrl(
+    url: string,
+    target: AttachmentDestination | string = currentDestination(),
+  ) {
+    const destination = typeof target === "string" ? currentDestination(target) : target
     const controller = new AbortController()
-    download.current = controller
+    const operation = beginPending(
+      destination,
+      [{ name: "Image", mimeType: "image/" }],
+      controller,
+    )
+    if (!operation) return
     try {
       const file = await readDroppedImage(url, controller.signal, MAX_ATTACHMENT_BYTES)
-      if (!mounted.current) return
-      busyRef.current = false
-      setReading(false)
-      setPending(null)
-      addFiles([file], targetId)
+      if (!operationIsActive(operation)) return
+      finishOperation(operation)
+      attach([file], [], destination)
     } catch {
-      if (mounted.current) refuse({ reason: "unreadable-image-url" }, targetId)
+      if (operationIsActive(operation))
+        refuse({ reason: "unreadable-image-url" }, destination)
     } finally {
-      download.current = null
-      pendingConversation.current = null
-      busyRef.current = false
-      if (mounted.current) {
-        setReading(false)
-        setPending(null)
-      }
+      finishOperation(operation)
     }
   }
   return {
     inputRef,
+    completeBrowserPicker,
+    cancelBrowserPicker,
     /**
      * Whether this conversation is waiting on something that has to finish
      * before a draft can go — selected image bytes being read, an image being
@@ -550,45 +728,94 @@ export function useFileAttachments(
      * already has for it.
      */
     isPending: (conversationId: string) =>
-      pendingConversation.current === conversationId ||
-      [...readying.values()].some((file) => file.conversationId === conversationId),
+      [...operations].some(
+        (operation) =>
+          !operation.pickerRequestId &&
+          operation.destination.store === store &&
+          operation.destination.resources === resources &&
+          operation.destination.conversationId === conversationId,
+      ) ||
+      [...readying.values()].some(
+        (file) =>
+          file.destination.store === store &&
+          file.destination.resources === resources &&
+          file.destination.conversationId === conversationId,
+      ),
     /**
      * Tiles for files that are on their way but not attached. Both kinds
      * together, because they are the same thing to look at and the same thing
      * to wait for; neither claims the file is on the draft.
      */
     pendingFiles: [
-      ...(pending?.conversationId === chat.active.id ? pending.files : []),
+      ...[...operations]
+        .filter(
+          (operation) =>
+            !operation.pickerRequestId &&
+            operation.destination.store === store &&
+            operation.destination.resources === resources &&
+            operation.destination.conversationId === chat.active.id,
+        )
+        .flatMap((operation) => operation.files),
       ...[...readying.values()]
-        .filter((file) => file.conversationId === chat.active.id)
+        .filter(
+          (file) =>
+            file.destination.store === store &&
+            file.destination.resources === resources &&
+            file.destination.conversationId === chat.active.id,
+        )
         .map((file) => ({ name: file.name, mimeType: "", previewUrl: undefined })),
     ],
     files,
-    reading,
+    reading: [...operations].some(
+      (operation) =>
+        !operation.pickerRequestId &&
+        operation.destination.store === store &&
+        operation.destination.resources === resources &&
+        operation.destination.conversationId === chat.active.id,
+    ),
     refusal,
-    refuse,
+    refuse: (
+      refusal: AttachmentRefusal,
+      target: AttachmentDestination | string = currentDestination(),
+    ) => refuse(refusal, target),
     /**
      * The draft has gone to the gateway, so whatever was refused before it is
      * over. Called for a submission that was actually taken — a send the panel
      * turned away has not moved anybody on, and is usually itself the refusal
      * being shown.
      */
-    draftSent: answerRefusal,
-    clearRefusal: () => setRefused(null),
+    draftSent: (id: string) => answerRefusal(currentDestination(id)),
+    clearRefusal: () => answerRefusal(currentDestination()),
     addFiles,
     addImageUrl,
-    conversationOf,
-    chooseFiles: () => void chooseFiles(),
+    consumeDropDestination,
+    captureDestination: currentDestination,
+    isCurrent: (destination: AttachmentDestination) =>
+      destinationIsCurrent(destination) &&
+      destination.conversationId === activeId.current,
+    chooseFiles: () => void chooseFiles(currentDestination()),
     addChosenFiles,
-    viewed: viewed?.conversationId === chat.active.id ? viewed.file : null,
-    open: (file: FileAttachment) => setViewed({ conversationId: chat.active.id, file }),
+    viewed:
+      viewed?.destination.store === store &&
+      viewed.destination.resources === resources &&
+      viewed.destination.conversationId === chat.active.id
+        ? (chat.active.draft.find(
+            (part): part is FileAttachment =>
+              part.type === "file" && part.placementId === viewed.placementId,
+          ) ?? null)
+        : null,
+    open: (file: FileAttachment) =>
+      setViewed({
+        destination: currentDestination(),
+        placementId: file.placementId,
+      }),
     close: () => setViewed(null),
     remove: (id: string) => {
       chat.removeFile(id)
       // Taking a tile off is an answer to "attach fewer" and to "this draft is
       // too heavy" alike, whichever of them was being said.
-      answerRefusal(chat.active.id)
-      if (viewed?.file.id === id) setViewed(null)
+      answerRefusal(currentDestination())
+      if (viewed?.placementId === id) setViewed(null)
     },
   }
 }

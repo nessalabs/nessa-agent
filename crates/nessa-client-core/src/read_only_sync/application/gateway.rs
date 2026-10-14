@@ -94,6 +94,45 @@ pub(crate) enum GatewayError {
     Watch(ChangeWatchErrorCode),
     /// The gateway refused one `artifact.read` range with its typed code.
     HeldFile(HeldFileRefusal),
+    /// The gateway refused `conversation.subscribe` or `conversation.unsubscribe`
+    /// with a code this client was taught.
+    Subscription(SubscriptionRefusal),
+}
+
+/// How the gateway refuses a conversation subscription. A code this client
+/// was not taught is a protocol failure, never stored here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SubscriptionRefusal {
+    /// The socket's access refusal, which is no conversation code.
+    Forbidden,
+    /// The socket's access refusal, which is no conversation code.
+    Unauthorized,
+    /// `subscription_capacity`, `subscription_duplicate`, `unknown_subscription`,
+    /// or `cursor_ahead`.
+    Subscription(SubscriptionCode),
+    /// A conversation code, including `conversation_not_found` for a
+    /// conversation this device was not granted.
+    Conversation(ConversationErrorCode),
+}
+
+/// The subscription codes the product schema publishes, apart from the
+/// conversation codes a subscribe is also refused with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SubscriptionCode {
+    Capacity,
+    Duplicate,
+    Unknown,
+    CursorAhead,
+}
+impl SubscriptionCode {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Capacity => "subscription_capacity",
+            Self::Duplicate => "subscription_duplicate",
+            Self::Unknown => "unknown_subscription",
+            Self::CursorAhead => "cursor_ahead",
+        }
+    }
 }
 
 /// How the gateway refuses an `artifact.read` range: a conversation code, or

@@ -3,7 +3,15 @@
  * as a session's summary, a conversation view as its transcript, a pending
  * permission as its approval. Pure — no client, no clock: what the adapter
  * (`gateway-source.ts`) knows besides the wire is passed in, and the
- * revisions it mints are its own.
+ * revisions it mints are its own. A turn the gateway says failed, was
+ * cancelled, or was left unresolved keeps that status and the diagnostic it
+ * sent, including a typed authentication refusal. The pane omits that
+ * refusal's mark only while the sign-in card is showing. A local retry that
+ * hides the card therefore still has the mark. `requiredWorkFailed` stays on
+ * the message that carries the mark, so the pane keeps an independent
+ * required-work failure beside the card. Questions
+ * the view lists, and a notice that a review or question was left out, are
+ * kept; a question or notice that names nothing is left out.
  *
  * The gateway has no sections or channels, so the index has one of each and
  * every conversation is in it. It keeps no pin and no unread mark, so every
@@ -36,6 +44,9 @@ import type {
   Part,
   StepKind,
   Transcript,
+  TranscriptQuestion,
+  TurnMessage,
+  TurnTerminal,
 } from "../../model/transcript"
 import {
   defaultModel,
@@ -262,7 +273,14 @@ function writtenBy(app: ConversationMessageApp | undefined): { app?: MessageApp 
  * the agent's reply: its text fragments joined where the provider says they
  * belong together, a Nessa notice as text, each tool call a step and — for a
  * tool that declared an MCP App — the widget part its UI is drawn in
- * (`gatewayToolWidget`). Thoughts are not shown. A file the agent published
+ * (`gatewayToolWidget`). A turn the gateway says failed, was cancelled, or
+ * was left unresolved keeps that status and, when the gateway sent one, its
+ * diagnostic — on the reply when there is one, otherwise on the input.
+ * Authentication recovery stays the latest input's typed refusal, and that
+ * turn does not also carry the diagnostic. An earlier refusal keeps the
+ * mark the gateway reported. Thoughts are not shown. A question
+ * the agent is waiting on is kept as the view listed it. A notice that a
+ * review or question was left out of the view is kept in the view's words. A file the agent published
  * ends the reply of the turn that was running when it was published; one
  * published by a turn the bounded view left out is in a message of its own
  * before the first turn, and one published while none ran in one after the
@@ -293,6 +311,9 @@ export function transcriptFrom(
   // The inputs still waiting that the view lists apart from its turns: drawn
   // after every turn, as the panel draws them.
   const unlisted = view.pending.filter((waiting) => !listed.has(waiting.executionId))
+  // Recovery owns a typed refusal only while that turn is still the latest
+  // input. A later turn or a later waiting input leaves the older mark.
+  const latestInputId = unlisted.at(-1)?.executionId ?? view.messages.at(-1)?.executionId
   const notes = placeNotes(
     view.notes,
     listed,
@@ -316,13 +337,13 @@ export function transcriptFrom(
   let activity: Transcript["activity"] = null
   for (const turn of view.messages) {
     const input = inputId(turn.executionId)
-    messages.push({
+    const user: TurnMessage = {
       id: input,
       role: "user",
       at: seen(input),
       parts: [{ kind: "text", text: turn.userText }],
       ...writtenBy(turn.app),
-    })
+    }
     const parts: Part[] = []
     // The provider message the last text part came from, while text is last.
     let textOf: string | undefined
@@ -352,10 +373,22 @@ export function transcriptFrom(
       }
     }
     parts.push(...(published.byExecution.get(turn.executionId) ?? []).map(publishedPart))
+    const terminal = turnTerminal(turn)
+    const marked = terminal
+      ? {
+          terminal,
+          executionId: turn.executionId,
+          ...(turn.requiredWorkFailed === true
+            ? { requiredWorkFailed: true as const }
+            : {}),
+        }
+      : undefined
     if (parts.length > 0) {
       const reply = replyId(turn.executionId)
-      messages.push({ id: reply, role: "agent", at: seen(reply), parts })
-    }
+      const agent: TurnMessage = { id: reply, role: "agent", at: seen(reply), parts }
+      messages.push(user)
+      messages.push(marked ? { ...agent, ...marked } : agent)
+    } else messages.push(marked ? { ...user, ...marked } : user)
     pushNotes(notes.byExecution.get(turn.executionId) ?? [])
     // A turn at work with nothing streaming yet: what it is doing, and since it was asked.
     if (
@@ -383,7 +416,6 @@ export function transcriptFrom(
     })
     pushNotes(notes.byWaiting.get(waiting.executionId) ?? [])
   }
-  const latestInputId = unlisted.at(-1)?.executionId ?? view.messages.at(-1)?.executionId
   const latestTurn = view.messages.at(-1)
   const history = historyExtent(view)
   // What runs is the tool and its exact input, which the gateway offers a
@@ -427,7 +459,88 @@ export function transcriptFrom(
     authenticationRefusal: latestTurn?.authenticationRequired
       ? latestTurn.executionId
       : undefined,
+    questions: questionsFrom(view),
+    interactionNotice: reportedText(view.interactionViewError),
     latestInputId,
     ...(history ? { history } : {}),
   }
+}
+
+/**
+ * A terminal status the gateway reported. The mark stays on the message,
+ * including a typed authentication refusal: the pane hides a pure refusal's
+ * mark only while the sign-in card is showing, and a local retry can hide
+ * that card without a new gateway view. Any other status is still running
+ * or finished and has no mark. A blank diagnostic is left off; the text
+ * itself is not rewritten.
+ */
+function turnTerminal(
+  turn: ConversationView["messages"][number],
+): TurnTerminal | undefined {
+  const error = reportedText(turn.error)
+  switch (turn.status) {
+    case "failed":
+    case "cancelled":
+    case "unresolved":
+      return error === undefined
+        ? { status: turn.status }
+        : { status: turn.status, error }
+    case "queued":
+    case "running":
+    case "completed":
+    case "injected":
+      return undefined
+  }
+}
+
+/** The gateway's text when it sent some. Blank is the same as absent. */
+function reportedText(value: string | undefined): string | undefined {
+  if (value === undefined || value.trim() === "") return undefined
+  return value
+}
+
+/**
+ * Questions the view lists that name an ask and at least one field. One that
+ * does not is left out; the rest of the conversation is still shown.
+ */
+function questionsFrom(view: ConversationView): readonly TranscriptQuestion[] {
+  const questions: TranscriptQuestion[] = []
+  for (const ask of view.questions) {
+    if (!ask.executionId || !ask.questionId || !reportedText(ask.message)) continue
+    const fields = ask.questions.flatMap((question) => {
+      if (!question.key || !reportedText(question.prompt)) return []
+      const options = question.options.flatMap((option) => {
+        if (!option.value || !reportedText(option.label)) return []
+        const description = reportedText(option.description ?? undefined)
+        return [
+          {
+            value: option.value,
+            label: option.label,
+            ...(description === undefined ? {} : { description }),
+          },
+        ]
+      })
+      if (options.length === 0 && !question.freeText) return []
+      const header = reportedText(question.header ?? undefined)
+      return [
+        {
+          key: question.key,
+          prompt: question.prompt,
+          ...(header === undefined ? {} : { header }),
+          multiSelect: question.multiSelect,
+          freeText: question.freeText,
+          required: question.required,
+          options,
+        },
+      ]
+    })
+    if (fields.length === 0) continue
+    questions.push({
+      executionId: ask.executionId,
+      questionId: ask.questionId,
+      message: ask.message,
+      questions: fields,
+    })
+  }
+  return questions
 }

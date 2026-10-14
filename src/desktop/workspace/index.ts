@@ -97,6 +97,11 @@ export * from "./adapters/store/commands"
 export { useWorkspaceDispatch, useWorkspaceSelector } from "./adapters/store/hooks"
 export { selectSessionListChosen, selectSessionListing } from "./adapters/store/selectors"
 export { WorkspaceSourceError } from "./application/ports"
+export {
+  createQuestionFlights,
+  differentFlight,
+  type QuestionFlights,
+} from "./application/question-flights"
 export type {
   OutgoingMessage,
   RememberedFilter,

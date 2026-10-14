@@ -310,6 +310,11 @@ _ADR 238 › Focus follows the focused pane_; keys in
   held callbacks after the old workspace unmounts; they enqueue zero new frame
   work, and the current layout still focuses its composer. _Check:_ `focus.mjs`
   (`focus-retired-layout`); [frame lifetime](../../docs/design/ui-workspace-load.md#focus-frame-lifetime-730), #730.
+- [ ] **Bound workspace keys stay consumed while their actions are unavailable.**
+  With the quick switcher open, ⌘N and ⌘W prevent the native default, leave the
+  panes unchanged, and retain the switcher. An unbound key remains unconsumed;
+  closing the switcher restores ordinary split commands.
+  _Check:_ `focus.mjs` (`focus-bound-keys`), [workspace shortcuts](../../docs/design/workspace-shortcuts.md).
 - [ ] **A burst of keys leaves a working window**: no error, a focused pane.
   _Check:_ `focus.mjs` (`focus-mash`).
 - [ ] **A pane command from the overview**: one that is a navigation leaves
@@ -693,7 +698,11 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   each between FSI and PDI. _#436_ (`appCall` in
   `gateway-source.ts`, the `callTool` routing in `dependencies.ts`;
   `approvalHead` and `approvalAsker` in `approval-request.tsx`).
-  _Check:_ `app-review.mjs --shots <dir>`.
+  Other conversation, turn or review answers leave the original simulated
+  request waiting; its own Deny settles tool and message requests. Answer
+  records and callbacks use the SDK method's parameter/result types
+  (`fake-gateway.test.ts`, fixture typecheck).
+  _Check:_ `app-review.mjs --shots <dir>` (including `target`).
 - [ ] **An app's message is reviewed as a message, and lands labelled** (#390,
   rows D9, D17, D18, D19), in the same fixture: a context the app gives is
   taken at once, draws no card and starts no read; the app's message is read
@@ -1430,8 +1439,57 @@ zero times, preserves the draft and paints **Attachments still loading**; read
 completion allows one send containing the text and one image. A second URL drop
 while the first fetch is pending paints **Still reading files** and starts no
 second fetch. The JSON reports send, attachment, refusal and page-error counts
-for all six engine/scenario pairs. This verifies browser interactions with the
-production panel; it does not exercise an operating-system file picker.
+for all forty engine/scenario pairs. The `drop-capacity` case begins 64
+batches in A/c0, switches to empty B/c0, and checks that the visible 65th-drop
+refusal belongs to B. The rejected overflow and unknown results do nothing;
+the oldest result attaches once to A, a duplicate does nothing, and B accepts a
+new drop after the terminal result frees capacity. Committed feature evidence
+for this flow records the source head, Chromium and WebKit screenshots, the
+concise matrix output and the source-revert result in
+[`attachment-drop-capacity`](evidence/attachment-drop-capacity/README.md).
+Overlapping picker requests are
+announced and resolved in reverse order across two providers with the same
+conversation ID; each readiness tile and returned file stays with the provider
+that started it. A late upload success or failure for a closed
+parent leaves the replacement parent's shared-resource tile uploading (one rendered
+`data-upload="uploading"` tile), per [attachment lifetimes](../../docs/design/attachment-lifetimes.md).
+The same-parent remove/re-add cases also retain one uploading tile after an old
+success/failure. Shared bytes receive two distinct placement uploads; removing
+one aborts exactly one, keeps the other alive, and releases bytes only after the
+last parent closes. A Provider replacement gives the new store's `a1` its own
+upload: the old completion leaves its single rendered tile uploading, and only
+its own reply makes that tile stored. An open original preview disappears when
+the owner changes, despite matching local conversation/placement numbers. Unmounting
+with three active uploads leaves the fourth queued after a completion; remounting
+resumes that sibling. Native SVG bytes retain their MIME type and render a 4px
+image from the object URL in both engines. This verifies browser interactions with the
+production panel; it does not exercise an operating-system file picker. The
+`folder-owner-send` and `folder-owner-drop` keep a same-ID pending folder walk
+in A from blocking B's immediate send or next folder gesture; each settled walk
+still writes to its captured provider. The JSON reports send, attachment,
+refusal and page-error counts for all forty engine/scenario pairs.
+`pathless-host-drop` case proves prose and image URLs delivered without a batch
+beginning still reach the composer and the destination captured before the image
+fetch waits. `browser-picker-fallback` cancels and reopens the native browser input,
+then resolves its delayed file change after the provider has changed; the original
+owner receives it. Cropped views of both results are retained in
+[`attachment-gesture-owners`](evidence/attachment-gesture-owners/README.md).
+`conversation-refusals` leaves one refused folder in each of two open tabs,
+delivers A's result while B is active, revisits and answers A, and verifies B's
+notice remains. The paired screenshots show each tab's own notice. A delayed
+host-batch registration test also replaces the provider before the subscription
+resolves and verifies the single mounted listener still captures the current
+destination; a retained callback after unmount has no effect.
+AL24 also covers a terminal refusal followed by a restored-draft retry. In each
+engine, the fixture stages a 40 MiB native PNG as a 68 B processed image, refuses
+the first send, retries it successfully, then accepts a second 40 MiB image. Both
+reupload modes are exercised: the refused bytes remain stored, or the refused
+image is staged again. The 80 MiB of originals crosses the 64 MiB sent-preview
+cap; checks tied to the send execution IDs confirm the old failed turn becomes a
+reference, the older Blob and object URL are released, and the second file remains
+available. When the refused reference is no longer held, the transcript shows the
+existing **No longer kept** placeholder. The bounded run is
+`node verification/desktop/scripts/attachments-races.mjs --only terminal-refusal-preserved,terminal-refusal-reupload`.
 
 
 ## Provider authentication recovery (#501)
@@ -1445,7 +1503,11 @@ within the card, keyboard activation opens the selected provider once, an
 acknowledged launch keeps the card, a failed launch says so, and a newer
 transcript removes the card. Both browser engines report geometry, launch counts,
 and zero page errors. The raw authentication diagnostic is absent and unrelated
-local notices remain.
+local notices remain. On the panel, an authentication diagnostic folded into
+the turn's status stays off the card unless `requiredWorkFailed` is set, in
+which case the required-work sentence is shown once beside it. On the desktop,
+a local retry that hides the card shows the authentication terminal once, and
+a failed retry still shows it.
 
 The same script drives an older failed local submission through a later wire
 refusal, a newer local submission after seeing that refusal, repeated replacement
@@ -1559,6 +1621,31 @@ WebKit and is dev-only in run-all.
 - [ ] **A conversation with no turn, only a file published while none ran,
   shows that file and not the empty welcome.** _Check:_ `--only empty`.
 
+## Turn outcomes
+
+`turn-outcomes.mjs` loads `fixtures/turn-outcomes/`, a dev-server page that
+mounts the desktop window over a fake gateway and the panel's transcript of
+the same view. One turn failed before it replied, one was cancelled after a
+partial reply, one was left unresolved with no diagnostic, and one is still
+running and asking three questions. The view also carries the gateway's
+notice that a review was left out. The script runs in Chromium and WebKit
+and is dev-only in run-all.
+
+- [ ] **A failed, cancelled, or unresolved turn stays visible, with the
+  gateway's status and diagnostic apart from a message that was not sent.**
+  _Check:_ `turn-outcomes.mjs --only terminals`. The desktop shows Failed
+  with "Provider connection lost", Cancelled with "Stopped", and Unresolved
+  with no diagnostic. "Check the deploy.", "Halfway", and "Wait." stay.
+  Nothing says "Not sent" for those turns.
+- [ ] **The gateway's withheld-review notice is shown in its own words, and
+  the questions it listed are on both surfaces.** _Check:_ `--only asked`.
+  The notice is "A review was left out of this view." Both surfaces show
+  "Where should this land?", "When should it ship?", and "Who should hear?".
+- [ ] **Answering or skipping a question, or a later frame that no longer
+  lists one, drops it on both surfaces.** _Check:_ `--only cleared`. Choosing
+  Staging and Answer drops the first question. Skip drops the second. A frame
+  that no longer lists the third drops it on the desktop and the panel.
+
 ## Transcript notes
 
 `transcript-notes.mjs` loads `fixtures/transcript-notes/`, a dev-server page
@@ -1603,8 +1690,8 @@ use.
 
 `share-dialog.mjs` opens the dev server's page with `?gateway` against a
 scripted product session that lists one conversation already shared Drive
-with one linked device, and answers `conversation.shares`, `.share`,
-`.unshare`, `credential.list` and `agents.list` (four command hosts). It runs
+with one linked device, and answers `conversation.shares` a page at a time,
+`.share`, `.unshare`, `credential.list` and `agents.list` (four command hosts). It runs
 in Chromium and WebKit. The rules are the gateway's; the dialog's order is
 the table in `docs/design/read-grants.md` › "Dialog state and order".
 
@@ -1619,10 +1706,10 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
   "2 of 16"; the notice says "Shared."; the
   notes say what a policy does not stop (unasked calls, hosts named and
   allowed or nowhere, Ask mode / hooks off / not OpenCode).
-- [ ] **The hosts are held to the room the tool patterns leave.** _Check:_
-  `budget`. 29 patterns: "3 of 3", the 4th host unavailable; a 30th pattern:
-  the count reads "3 selected, room for 2" and Share is held with "Too many
-  hosts…"; nothing sent.
+- [ ] **The hosts keep their own bound however full the tool patterns are.**
+  _Check:_ `budget`. Both pattern lists full (16 and 16): "4 of 16", Share
+  able to send; nothing sent. A host past the byte bound stays unavailable
+  in `share-dialog.test.tsx`.
 - [ ] **A refusal is said in words, never a wire code.** _Check:_ `refusal`,
   and every step's scan for codes.
 - [ ] **While a change is on its way, and the read after it, the form,

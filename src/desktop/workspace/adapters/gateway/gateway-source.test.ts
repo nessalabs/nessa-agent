@@ -13,6 +13,7 @@ import {
   NessaConversationControlError,
   NessaConversationMutationError,
   NessaRpcError,
+  questionTargetConversation,
   type ConversationPermission,
 } from "@nessa/client"
 import { describe, expect, it, vi } from "vitest"
@@ -597,6 +598,224 @@ describe("conversations", () => {
     )
     const transcript = await source.transcript(conversationA)
     expect(transcript.approval?.deadline?.dueAtMs).toBe(1_000_000 + 30_000)
+  })
+
+  it("a summary says a session waits on the person when its conversation holds a question", async () => {
+    const { gateway, source, updates, follow } = started()
+    const question = {
+      executionId: "turn",
+      questionId: "q1",
+      message: "Where should this land?",
+      questions: [
+        {
+          key: "where",
+          prompt: "Pick a place",
+          multiSelect: false,
+          freeText: false,
+          required: true,
+          options: [{ value: "here", label: "Here" }],
+        },
+      ],
+    }
+    const otherQuestion = {
+      ...question,
+      questionId: "q2",
+      message: "What priority should this have?",
+      questions: [
+        {
+          ...question.questions[0],
+          key: "priority",
+          prompt: "Pick a priority",
+          options: [{ value: "high", label: "High" }],
+        },
+      ],
+    }
+    gateway.rows.set("a", row("a", { running: true }))
+    gateway.views.set(
+      "a",
+      view("a", { messages: [running()], questions: [question, otherQuestion] }),
+    )
+    await source.index()
+    follow()
+    await source.transcript("a")
+    expect(updates).toContainEqual({
+      kind: "session",
+      session: expect.objectContaining({ id: "a", status: "needs-you", revision: 2 }),
+    })
+    expect(transcriptsOf(updates, "a").at(-1)?.questions).toEqual([
+      expect.objectContaining({ questionId: "q1", message: "Where should this land?" }),
+      expect.objectContaining({
+        questionId: "q2",
+        message: "What priority should this have?",
+      }),
+    ])
+    await source.answerQuestion(
+      "a",
+      "turn",
+      "q1",
+      [{ key: "where", values: ["here"] }],
+      "person",
+    )
+    const answerCall = gateway.calls.find((call) => call.method === "answerQuestion")
+    if (!answerCall) throw new Error("expected the gateway to answer the question")
+    expect(questionTargetConversation(answerCall.args[0])).toBe("a")
+    expect(answerCall.args[0]).toMatchObject({
+      executionId: "turn",
+      questionId: "q1",
+      message: "Where should this land?",
+      questions: [{ key: "where", options: [{ value: "here", label: "Here" }] }],
+    })
+    expect(answerCall?.args[1]).toEqual([
+      { key: "where", values: ["here"], ownWords: null },
+    ])
+    gateway.publish("a")
+    await flush()
+    expect(transcriptsOf(updates, "a").at(-1)?.questions).toEqual([
+      expect.objectContaining({ questionId: "q2" }),
+    ])
+  })
+
+  it("declines a question with a null answer and refuses one the view does not list", async () => {
+    const { gateway, source } = started()
+    gateway.views.set(
+      "a",
+      view("a", {
+        messages: [running()],
+        questions: [
+          {
+            executionId: "turn",
+            questionId: "q1",
+            message: "Where should this land?",
+            questions: [
+              {
+                key: "where",
+                prompt: "Pick a place",
+                multiSelect: false,
+                freeText: false,
+                required: false,
+                options: [{ value: "here", label: "Here" }],
+              },
+            ],
+          },
+        ],
+      }),
+    )
+    await source.transcript("a")
+    await source.answerQuestion("a", "turn", "q1", null, "agent")
+    expect(gateway.calls.find((call) => call.method === "answerQuestion")?.args[1]).toBe(
+      null,
+    )
+    gateway.publish("a")
+    await flush()
+    await expect(
+      source.answerQuestion("a", "turn", "q1", null, "person"),
+    ).rejects.toMatchObject({ reason: "not-waiting" })
+    expect(gateway.count("answerQuestion")).toBe(1)
+  })
+
+  it("maps synchronous stale-choice validation without mapping later TypeErrors", async () => {
+    const { gateway, source } = started()
+    const question = {
+      executionId: "turn",
+      questionId: "q1",
+      message: "Where should this land?",
+      questions: [
+        {
+          key: "where",
+          prompt: "Pick a place",
+          multiSelect: false,
+          freeText: false,
+          required: true,
+          options: [{ value: "here", label: "Here" }],
+        },
+      ],
+    }
+    gateway.views.set("a", view("a", { messages: [running()], questions: [question] }))
+    await source.transcript("a")
+
+    gateway.views.set(
+      "a",
+      view("a", {
+        messages: [running()],
+        questions: [
+          {
+            ...question,
+            questions: [
+              {
+                ...question.questions[0],
+                options: [{ value: "there", label: "There" }],
+              },
+            ],
+          },
+        ],
+      }),
+    )
+    gateway.publish("a")
+    await flush()
+
+    // The SDK's local target/choice validation throws before sending its RPC.
+    const answerQuestion = vi
+      .spyOn(gateway.client.conversation, "answerQuestion")
+      .mockImplementation(() => {
+        throw new TypeError("Select a field and choice offered by the captured question")
+      })
+    await expect(
+      source.answerQuestion(
+        "a",
+        "turn",
+        "q1",
+        [{ key: "where", values: ["here"] }],
+        "person",
+      ),
+    ).rejects.toMatchObject({ reason: "not-waiting" })
+
+    expect(answerQuestion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionId: "turn",
+        questionId: "q1",
+        questions: [
+          expect.objectContaining({
+            key: "where",
+            options: [{ value: "there", label: "There" }],
+          }),
+        ],
+      }),
+      [{ key: "where", values: ["here"], ownWords: null }],
+    )
+    expect(gateway.count("answerQuestion")).toBe(0)
+
+    answerQuestion.mockRestore()
+    gateway.once("answerQuestion", () => Promise.reject(new TypeError("late failure")))
+    await expect(
+      source.answerQuestion(
+        "a",
+        "turn",
+        "q1",
+        [{ key: "where", values: ["there"] }],
+        "person",
+      ),
+    ).rejects.toBeInstanceOf(TypeError)
+    expect(gateway.count("answerQuestion")).toBe(1)
+  })
+
+  it("shows a withheld-review notice without saying the session waits on the person", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.rows.set("a", row("a"))
+    gateway.views.set(
+      "a",
+      view("a", {
+        messages: [{ ...running(), status: "completed" }],
+        interactionViewError: "A review was left out of this view.",
+      }),
+    )
+    await source.index()
+    follow()
+    const transcript = await source.transcript("a")
+    expect(transcript.interactionNotice).toBe("A review was left out of this view.")
+    expect(updates).not.toContainEqual({
+      kind: "session",
+      session: expect.objectContaining({ id: "a", status: "needs-you" }),
+    })
   })
 
   it("a summary says a session waits on the person when its conversation asks", async () => {
@@ -2841,7 +3060,7 @@ describe("an app's review is shown after its turn ended (#436)", () => {
       view(conversationA, { revision: "2", messages: [ended], permissions: [appReview] }),
     )
     await flush()
-    gateway.once("answer", async (normal) => {
+    gateway.onceAnswer(async (normal) => {
       answer.resolve("allowed")
       return normal()
     })

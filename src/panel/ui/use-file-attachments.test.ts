@@ -1,3 +1,4 @@
+import { AttachmentResource } from "../../conversation/testing"
 // @vitest-environment jsdom
 /**
  * When a refusal is said, and for how long — over the whole path, because every
@@ -61,32 +62,29 @@ const photo = () => weighing("photo.png", 1024, "image/png")
  * out a distinct identity per file, the way the real one does, so that a draft
  * restored with the same files is genuinely the same files.
  */
-let taken = 0
 const resources: AttachmentResources = {
   add: (files) =>
-    files.map((file) => ({
-      type: "file" as const,
-      id: `r${taken++}`,
-      name: file.name,
-      mimeType: file.type || "application/octet-stream",
-      size: file.size,
-      previewUrl: "blob:test",
-      upload: { status: "not-started" as const },
-      path: null,
-    })),
+    files.map((file) =>
+      AttachmentResource.create({
+        name: file.name,
+        mimeType: file.type || "application/octet-stream",
+        size: file.size,
+        previewUrl: "blob:test",
+        path: null,
+      }),
+    ),
   // The host's picker never reads bytes, so a chosen file arrives with its
   // path and nothing to preview.
   addChosen: (chosen) =>
-    chosen.map((file) => ({
-      type: "file" as const,
-      id: `r${taken++}`,
-      name: file.name,
-      mimeType: "application/octet-stream",
-      size: file.size,
-      previewUrl: "",
-      upload: { status: "not-started" as const },
-      path: file.path,
-    })),
+    chosen.map((file) =>
+      AttachmentResource.create({
+        name: file.name,
+        mimeType: "application/octet-stream",
+        size: file.size,
+        previewUrl: "",
+        path: file.path,
+      }),
+    ),
   canAdd: () => true,
   bytes: () => undefined,
   retain: () => {},
@@ -123,7 +121,7 @@ function Surface() {
           "data-remove": true,
           onClick: () => {
             const [first] = attachments.files
-            if (first) attachments.remove(first.id)
+            if (first) attachments.remove(first.placementId)
           },
         },
         "Remove",
@@ -220,9 +218,9 @@ it("says why a file was refused even when the same drop attached another", async
   // it did not while what to show was worked out by comparing the draft.
   const store = await mount()
   await drop([photo(), huge()])
-  expect(draftOf(store).map((part) => part.type === "file" && part.name)).toEqual([
-    "photo.png",
-  ])
+  expect(
+    draftOf(store).map((part) => part.type === "file" && part.resource.name),
+  ).toEqual(["photo.png"])
   expect(announced()).toEqual([expect.stringContaining("File is too large")])
   expect(announced()[0]).toContain("holiday.mp4")
 })
@@ -233,11 +231,16 @@ it("says a refusal at the moment it happens, without taking a failed upload's Re
   const [file] = draftOf(store)
   await React.act(async () => {
     store.dispatch(
-      uploadChanged({ fileId: (file as { id: string }).id, to: "uploading" }),
+      uploadChanged({
+        conversationId: "c0",
+        placementId: (file as { placementId: string }).placementId,
+        to: "uploading",
+      }),
     )
     store.dispatch(
       uploadChanged({
-        fileId: (file as { id: string }).id,
+        conversationId: "c0",
+        placementId: (file as { placementId: string }).placementId,
         to: "failed",
         reason: "unavailable",
       }),
@@ -387,16 +390,13 @@ it("keeps a refusal that the conversation, not the panel, turned the send away f
     store.dispatch(
       attachFiles({
         files: [
-          {
-            type: "file",
-            id: "n",
+          AttachmentResource.create({
             name: "notes.pdf",
             mimeType: "application/pdf",
             size: 2,
             previewUrl: "blob:test",
-            upload: { status: "not-started" },
             path: null,
-          },
+          }),
         ],
         conversationId: "c0",
       }),

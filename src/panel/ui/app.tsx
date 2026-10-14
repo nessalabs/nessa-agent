@@ -209,7 +209,7 @@ export function App({
   const attachments = useFileAttachments(chat, attachmentResources)
   const uploads = useAttachmentUploads(chat, attachmentResources, digest)
   const folderDrop = useFolderDrop(
-    chat.active.id,
+    attachments.captureDestination,
     attachments.addFiles,
     attachments.refuse,
   )
@@ -280,12 +280,16 @@ export function App({
   // there is no host, the page keeps its own drops, and nothing below fires.
   // Neither is gated on the other: each is silent where the other is live.
   const hostDrop = useHostDrop({
-    addChosenFiles: (chosen, conversationId) => {
-      revealDraft(conversationId)
-      void attachments.addChosenFiles(chosen, conversationId)
+    captureDestination: attachments.captureDestination,
+    addChosenFiles: (chosen, destination) => {
+      if (attachments.isCurrent(destination)) revealDraft(destination.conversationId)
+      void attachments.addChosenFiles(chosen, destination)
     },
-    addImageUrl: intoDraft((url: string) => void attachments.addImageUrl(url)),
-    conversationOf: attachments.conversationOf,
+    addImageUrl: (url, destination) => {
+      if (attachments.isCurrent(destination)) revealDraft(destination.conversationId)
+      void attachments.addImageUrl(url, destination)
+    },
+    consumeDropDestination: attachments.consumeDropDestination,
     focusComposer: focusRevealed,
     pasteAttachment,
     refuse: attachments.refuse,
@@ -482,7 +486,7 @@ export function App({
             onChange={(event) => {
               const files = Array.from(event.currentTarget.files ?? [])
               event.currentTarget.value = ""
-              void attachments.addFiles(files)
+              attachments.completeBrowserPicker(files)
             }}
           />
           {/* Lights the stretch of border nearest the pointer. Inert on
@@ -593,14 +597,14 @@ export function App({
                 {attachments.viewed && (
                   <Sheet
                     className="nessa-detail-sheet"
-                    label={attachments.viewed.name}
+                    label={attachments.viewed.resource.name}
                     onClose={attachments.close}
                     onReturnFocus={focusComposer}
                   >
                     <SheetHandle />
                     <SheetHeader>
                       <SheetExpand />
-                      <SheetTitle>{attachments.viewed.name}</SheetTitle>
+                      <SheetTitle>{attachments.viewed.resource.name}</SheetTitle>
                       <SheetAction>Done</SheetAction>
                     </SheetHeader>
                     <SheetBody>
@@ -795,11 +799,11 @@ export function App({
                 ))}
                 {attachments.files.map((file) => (
                   <AttachmentTile
-                    key={file.id}
+                    key={file.placementId}
                     file={file}
                     onOpen={() => attachments.open(file)}
-                    onRemove={() => attachments.remove(file.id)}
-                    onRetry={() => uploads.retry(file.id)}
+                    onRemove={() => attachments.remove(file.placementId)}
+                    onRetry={() => uploads.retry(file.placementId)}
                   />
                 ))}
               </ChatComposerAttachments>
