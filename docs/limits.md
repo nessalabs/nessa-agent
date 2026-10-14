@@ -1,6 +1,6 @@
 # Operational limits
 
-Each row is a limit the gateway names when a refusal or a silent close hits it. The number is the owner's, read when this document is rendered; this file is compared to that rendering and is not edited by hand. The client's preparing retries are named here and counted only in `PREPARING_ATTEMPTS` (`crates/nessa-client-core/src/read_only_sync/application/watch.rs`); this document does not copy that count. A wire field carrying the limit id is a later schema change and is not these rows.
+Each row is a limit the gateway names when a refusal or a silent close hits it. The number is the owner's, read when this document is rendered; this file is compared to that rendering and is not edited by hand. The client's preparing retries are named here and counted only in `PREPARING_ATTEMPTS` (`crates/nessa-client-core/src/read_only_sync/application/watch.rs`); this document does not copy that count. The client's foreground phone sends are named here and counted only in `FOREGROUND_SENDS` (`crates/nessa-client-core/src/outbox/domain/decide.rs`); this document does not copy that count. A wire field carrying the limit id is a later schema change and is not these rows.
 
 | id | tier | effective | owner | what hitting it means |
 | --- | --- | --- | --- | --- |
@@ -84,3 +84,4 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 | mcp.built_in_line_bytes | fixed | 65536 | built-in MCP server MAX_BUILT_IN_LINE_BYTES | a message longer than this ends the stand-in's connection |
 
 | client.preparing_attempts | client | the client's own | `PREPARING_ATTEMPTS` in `crates/nessa-client-core/src/read_only_sync/application/watch.rs` | how many times a preparing read is asked again |
+| client.foreground_sends | client | the client's own | `FOREGROUND_SENDS` in `crates/nessa-client-core/src/outbox/domain/decide.rs` | how many times one foreground phone send is asked |

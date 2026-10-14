@@ -395,6 +395,22 @@ impl Events {
     }
 }
 
+/// One `conversation.send` or `conversation.receipt` exchange.
+/// A typed refusal leaves the connection up. Transport and protocol failures
+/// are [`Lost`](Self::Lost) and the connection is closed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CommandExchange {
+    /// The call did not finish, or the connection was closed.
+    Lost(GatewayError),
+    /// The gateway refused with this code. The connection stays up.
+    Refused(String),
+}
+enum CommandInner {
+    Transport(GatewayError),
+    Refused(String),
+    Protocol,
+}
+
 pub(crate) struct Session {
     socket: Option<Channel>,
     clock: Arc<dyn Clock>,
@@ -772,6 +788,56 @@ impl Session {
         self.events.subscription = None;
         self.events.opening_conversation = None;
         Ok(())
+    }
+    /// One `conversation.send` or `conversation.receipt` inside the current
+    /// operation. A typed refusal leaves the connection up. A transport or
+    /// protocol failure closes it, as other product calls do.
+    pub(crate) fn product_command<T: Serialize>(
+        &mut self,
+        method: &str,
+        params: &T,
+    ) -> Result<Value, CommandExchange> {
+        let active = match self.active.as_ref() {
+            Some(active) => active,
+            None => return Err(CommandExchange::Lost(GatewayError::Busy)),
+        };
+        if let Some(error) = active.failure {
+            return Err(CommandExchange::Lost(error));
+        }
+        match self.command_inner(method, params) {
+            Ok(value) => Ok(value),
+            Err(CommandInner::Transport(error)) => Err(CommandExchange::Lost(self.fail(error))),
+            Err(CommandInner::Refused(code)) => Err(CommandExchange::Refused(code)),
+            Err(CommandInner::Protocol) => {
+                Err(CommandExchange::Lost(self.fail(GatewayError::Protocol)))
+            }
+        }
+    }
+    fn command_inner<T: Serialize>(
+        &mut self,
+        method: &str,
+        params: &T,
+    ) -> Result<Value, CommandInner> {
+        let id = self.next_request.to_string();
+        self.next_request = self
+            .next_request
+            .checked_add(1)
+            .ok_or(CommandInner::Transport(GatewayError::Busy))?;
+        let socket = self
+            .socket
+            .as_mut()
+            .ok_or(CommandInner::Transport(GatewayError::Transport))?;
+        send_request(socket, &id, method, params).map_err(CommandInner::Transport)?;
+        let response =
+            read_response(socket, &id, &mut self.events).map_err(CommandInner::Transport)?;
+        if response.ok {
+            return response.payload.ok_or(CommandInner::Protocol);
+        }
+        let error = response.error.ok_or(CommandInner::Protocol)?;
+        if error.code.is_empty() {
+            return Err(CommandInner::Protocol);
+        }
+        Err(CommandInner::Refused(error.code))
     }
     fn rpc_inner<T: Serialize>(
         &mut self,
