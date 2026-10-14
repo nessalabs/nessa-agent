@@ -1383,6 +1383,17 @@ says why where the conversations would be.
   close. A truncated complete-empty view still preserves the reference. Both
   engines and all three widths assert the original local tab closes in every case.
 
+- [ ] **A question answer belongs to the conversation whose fields were shown.**
+  _Check:_ `committed-transcript.mjs --mode prod` renders the production
+  `ConversationQuestions`, store controls and client serializer in Chromium and
+  WebKit at 360/600/1440 pixels. Two conversations share turn/question IDs:
+  three offered fields remain operable, an equal-key simultaneous ask retains
+  its middle selection, switching transfers zero selections,
+  and exactly two serialized actions retain their original targets (valid
+  offered choice, then null decline). Source projection/recorder evidence;
+  gateway/SDK tests own current-state admission. The primitive and ordering
+  table are [question targets](../../docs/design/question-targets.md).
+
 ### Onboarding readiness recovery
 
 `node verification/desktop/scripts/onboarding-readiness.mjs` drives the real

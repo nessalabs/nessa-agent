@@ -656,6 +656,11 @@ enclosing read. The factory's tests sit beside it, and panel routing/interleavin
 tests live in `src/conversation/adapters/store/permission-targets.test.ts`.
 See [permission targets](design/permission-targets.md) for the ordering table and
 the distinction between captured intent and server-owned authorization.
+Question answers use the adjacent `application/question-target.ts`, including
+the immutable published ask rendered by `src/conversation/ui/conversation-questions.tsx`.
+Client regressions sit beside the factory and panel routing tests live in
+`src/conversation/adapters/store/question-targets.test.ts`; see
+[question targets](design/question-targets.md) for ownership and orderings.
 
 `crates/nessa-server/src/conversation/` groups durable conversation ownership and
 access (domain), shared Agent orchestration (application), and private
