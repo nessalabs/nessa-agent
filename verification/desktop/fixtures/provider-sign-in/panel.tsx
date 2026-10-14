@@ -9,7 +9,7 @@ import {
 import { emptyLocalTabs } from "../../../../src/conversation/application/local-tabs"
 import { conversation, textContent } from "../../../../src/conversation/model"
 import { applyView } from "../../../../src/conversation/application/usecases/apply-view"
-import { ClockProvider } from "../../../../src/conversation/ui/clock"
+import { ClockProvider } from "../../../../src/clock"
 import { Transcript } from "../../../../src/conversation/ui/transcript"
 import { view } from "../../../../src/desktop/workspace/adapters/gateway/fake-gateway"
 import "@fontsource-variable/geist"

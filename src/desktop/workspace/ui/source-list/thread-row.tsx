@@ -7,7 +7,7 @@ import {
   selectShownSessionIds,
 } from "../../adapters/store/selectors"
 import { paneItemKey, sessionItem } from "../../model/pane-item"
-import { useNow } from "../../adapters/dom/clock"
+import { useNow } from "../../../../clock"
 import { isMac } from "../../../adapters/platform"
 import { commandLabel } from "../../../model/keyboard"
 import { sessionTime } from "../../model/time-labels"

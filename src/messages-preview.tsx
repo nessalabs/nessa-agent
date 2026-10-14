@@ -26,9 +26,9 @@ import { makeStore, type StoreDependencies } from "./store"
 import { MESSAGES_TAB_ID as MESSAGES, stripOrder } from "./panel/application/messages-tab"
 import { useMessagesTab } from "./panel/ui/use-messages-tab"
 import { MessagesIcon } from "./panel/ui/messages-icon"
+import { ClockProvider } from "./clock"
 import {
   AGENT_HUES,
-  ClockProvider,
   commandErrorCleared,
   ConversationList,
   Transcript,

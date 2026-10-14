@@ -17,7 +17,7 @@ import {
   newSession,
   sendMessage,
 } from "../../adapters/store/commands"
-import { ClockProvider } from "../../adapters/dom/clock"
+import { ClockProvider } from "../../../../clock"
 import type { ModelRef } from "../../model/workspace-index"
 import {
   astra,

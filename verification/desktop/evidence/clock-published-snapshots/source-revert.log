@@ -1,0 +1,30 @@
+starting the dev server (pnpm desktop:dev)…
+warmed 1152 modules in 1307 ms
+FAIL  console [chromium columns]
+        - console.error: The result of getSnapshot should be cached to avoid an infinite loop (http://127.0.0.1:1438/node_modules/.vite/deps/react-dom_client.js?v=6731f9bd)
+page.waitForFunction: Timeout 5000ms exceeded.
+    at /private/tmp/clock-snapshot-revert/verification/desktop/scripts/clock-snapshots.mjs:33:20
+    at async attempt (/private/tmp/clock-snapshot-revert/verification/desktop/scripts/lib/cli.mjs:345:20)
+    at async file:///private/tmp/clock-snapshot-revert/verification/desktop/scripts/clock-snapshots.mjs:26:5
+    at async runAndClose (/private/tmp/clock-snapshot-revert/verification/desktop/scripts/lib/browser.mjs:475:12)
+    at async withEngines (/private/tmp/clock-snapshot-revert/verification/desktop/scripts/lib/browser.mjs:494:5)
+    at async file:///private/tmp/clock-snapshot-revert/verification/desktop/scripts/clock-snapshots.mjs:25:3
+    at async main (/private/tmp/clock-snapshot-revert/verification/desktop/scripts/lib/run.mjs:23:5)
+    at async file:///private/tmp/clock-snapshot-revert/verification/desktop/scripts/clock-snapshots.mjs:24:1
+ERROR published-tick-and-cleanup [chromium]
+        ! page.waitForFunction: Timeout 5000ms exceeded.
+FAIL  console [webkit columns]
+        - console.error: The result of getSnapshot should be cached to avoid an infinite loop (http://127.0.0.1:1438/node_modules/.vite/deps/react-dom_client.js?v=6731f9bd)
+page.waitForFunction: Timeout 5000ms exceeded.
+    at /private/tmp/clock-snapshot-revert/verification/desktop/scripts/clock-snapshots.mjs:33:20
+    at async attempt (/private/tmp/clock-snapshot-revert/verification/desktop/scripts/lib/cli.mjs:345:20)
+    at async file:///private/tmp/clock-snapshot-revert/verification/desktop/scripts/clock-snapshots.mjs:26:5
+    at async runAndClose (/private/tmp/clock-snapshot-revert/verification/desktop/scripts/lib/browser.mjs:475:12)
+    at async withEngines (/private/tmp/clock-snapshot-revert/verification/desktop/scripts/lib/browser.mjs:494:5)
+    at async file:///private/tmp/clock-snapshot-revert/verification/desktop/scripts/clock-snapshots.mjs:25:3
+    at async main (/private/tmp/clock-snapshot-revert/verification/desktop/scripts/lib/run.mjs:23:5)
+    at async file:///private/tmp/clock-snapshot-revert/verification/desktop/scripts/clock-snapshots.mjs:24:1
+ERROR published-tick-and-cleanup [webkit]
+        ! page.waitForFunction: Timeout 5000ms exceeded.
+wrote /tmp/clock-858-clock-snapshots-reverted.json
+clock-snapshots: 0/4 held

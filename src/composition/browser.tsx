@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from "react"
 import { NessaRpcError } from "@nessa/client"
 import { isAuthenticationFailure } from "../session/adapters/client/authentication-failure"
 import { Provider } from "react-redux"
+import { ClockProvider } from "../clock"
 import {
-  ClockProvider,
   conversationTabSnapshot,
   HeldFilesProvider,
   restoreConversations,

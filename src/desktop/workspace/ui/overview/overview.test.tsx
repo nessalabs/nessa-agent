@@ -13,7 +13,7 @@ import { flushSync } from "react-dom"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { ClockProvider } from "../../adapters/dom/clock"
+import { ClockProvider } from "../../../../clock"
 import { bidiControls } from "../transcript/bidi-controls.mjs"
 import { focusedPaneAttribute } from "../../adapters/dom/focus"
 import {

@@ -3,7 +3,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react"
-import { useNow } from "../../adapters/dom/clock"
+import { useNow } from "../../../../clock"
 import { isMac } from "../../../adapters/platform"
 import { matchesChord } from "../../../model/keyboard"
 import { shortcutOf } from "../../adapters/dom/shortcuts"

@@ -20,7 +20,7 @@ import {
   type WidgetPlugin,
   type WidgetRef,
 } from "../../../widgets"
-import { ClockProvider } from "../../adapters/dom/clock"
+import { ClockProvider } from "../../../../clock"
 import {
   closePane,
   focusPane,

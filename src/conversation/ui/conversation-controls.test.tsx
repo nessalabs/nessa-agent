@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { permissionTargetConversation } from "@nessa/client"
 
 import type { AgentFeatures, Conversation } from "../model"
-import { ClockProvider } from "./clock"
+import { ClockProvider } from "../../clock"
 
 const dispatch = vi.fn()
 vi.mock("../adapters/store/hooks", () => ({ useConversationDispatch: () => dispatch }))
