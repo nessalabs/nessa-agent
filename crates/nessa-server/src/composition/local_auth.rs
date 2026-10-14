@@ -19,12 +19,13 @@ use crate::{
     attachments::infrastructure::ModelImageNormalizer,
     conversation::{
         application::{
-            ConversationAgents, ConversationDependencies, ConversationLimits, Environments,
-            McpAppPorts,
+            ConversationAgents, ConversationDependencies, ConversationLimits, DriveTools,
+            Environments, McpAppPorts,
         },
         infrastructure::{
-            DurableConversationCreationAudit, DurableConversationDeletionAudit,
-            DurableConversationFileLinkAudit, DurableConversationModeAudit, DurableMcpAppAudit,
+            CedarToolPolicyEvaluator, DurableConversationCreationAudit,
+            DurableConversationDeletionAudit, DurableConversationFileLinkAudit,
+            DurableConversationModeAudit, DurableDriveToolAudit, DurableMcpAppAudit,
             LocalConversationStore,
         },
     },
@@ -38,10 +39,13 @@ use crate::{
     browser_session::adapters::PersistentSessions,
     conversation::{
         application::{
-            ConversationRepository, ConversationService, McpAppAudit, ReceiverAuthority,
-            ShareGrants, WatchCatalogue, WatchRecords,
+            ConversationAccessPolicyEvaluator, ConversationRepository, ConversationService,
+            McpAppAudit, ReceiverAuthority, ShareGrants, WatchCatalogue, WatchRecords,
         },
-        infrastructure::{LocalReceiverAuthority, NessaCatalogueReadSource, NessaRecordReadSource},
+        infrastructure::{
+            CedarConversationAccessPolicy, LocalReceiverAuthority, NessaCatalogueReadSource,
+            NessaRecordReadSource,
+        },
     },
     core::RunError,
     env::Environment,
@@ -267,6 +271,10 @@ pub(super) async fn product_state(
         gateway: Resource::new(organization.clone(), gateway.clone()),
         audience: audience.clone(),
     });
+    // Who may locate, act on, read and share a conversation, decided once
+    // for every command, passive read and share change (ADR 803 step 3).
+    let access_policy: Arc<dyn ConversationAccessPolicyEvaluator> =
+        Arc::new(CedarConversationAccessPolicy::new().map_err(RunError::Agent)?);
     let (conversations, agent_probe, warm_ups, mcp, environment_peers) =
         match (&settings.agents, receivers) {
             (Some(agents), Some(receivers)) => {
@@ -282,6 +290,7 @@ pub(super) async fn product_state(
                         ssh_hosts: settings.ssh_hosts()?,
                         command_policy: settings.command_policy()?,
                         serving,
+                        access_policy: access_policy.clone(),
                     },
                 )
                 .await?;
@@ -390,7 +399,7 @@ pub(super) async fn product_state(
         catalogue_reader = Some(catalogue.clone());
         product = product
             .with_conversations(Arc::new(service))
-            .with_passive_read(receivers, metadata, share_grants)
+            .with_passive_read(receivers, metadata, share_grants, access_policy)
             .with_change_watches(record_watches, catalogue_watches)
             .with_record_source(reader)
             .with_catalogue_source(catalogue)
@@ -525,6 +534,8 @@ struct ConversationSettings {
     /// What decides whether a paired environment may serve; `None` pairs
     /// no environments.
     serving: Option<ServingAuth>,
+    /// Who may locate, act on, read and share a conversation.
+    access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
 }
 
 /// The registry, policy and identity a paired environment's key is asked
@@ -571,6 +582,7 @@ pub(super) fn mcp_app_ports(
         audit,
         tickets: mcp.resource_tickets.clone(),
         dropped,
+        policy: mcp.app_policy.clone(),
     }
 }
 
@@ -856,6 +868,7 @@ async fn conversations(
         ssh_hosts,
         command_policy,
         serving,
+        access_policy,
     } = settings;
     let mut warm_ups = Vec::new();
     // The gateway holds the one connection to each MCP server (ADR 344), so
@@ -956,13 +969,15 @@ async fn conversations(
     // (docs/adr/done/196-conversation-metadata-database.md).
     let metadata_path = root.join("metadata.sqlite3");
     let metadata = Arc::new(
-        LocalConversationStore::open(&metadata_path).map_err(|cause| {
-            RunError::opening(
-                crate::core::Dataset::ConversationMetadata,
-                &metadata_path,
-                cause,
-            )
-        })?,
+        LocalConversationStore::open(&metadata_path)
+            .map_err(|cause| {
+                RunError::opening(
+                    crate::core::Dataset::ConversationMetadata,
+                    &metadata_path,
+                    cause,
+                )
+            })?
+            .with_access_policy(access_policy.clone()),
     );
     let receivers: Arc<dyn ReceiverAuthority> = receivers;
     let current_opencode_model = opencode
@@ -974,6 +989,7 @@ async fn conversations(
             .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
             .join("attachments"),
         metadata.clone(),
+        access_policy.clone(),
         // The image limits from the catalog, which is the one place they
         // are recorded, taken across every configured agent's model rather
         // than the selected one's: the store is shared by conversations
@@ -1074,6 +1090,7 @@ async fn conversations(
     );
     let catalogue_reader = Arc::new(NessaCatalogueReadSource::new(
         metadata.clone(),
+        access_policy.clone(),
         record_origin,
     ));
     let creation_audit = Arc::new(
@@ -1173,6 +1190,7 @@ async fn conversations(
         ),
         clock: clock.clone(),
         environment,
+        access_policy,
     };
     let workspace = Some(agents.workspace.to_string_lossy().into_owned());
     // With MCP servers, an app's calls go through the conversation's own
@@ -1207,6 +1225,18 @@ async fn conversations(
     // A note's author is checked against the same grant table the socket
     // admits it by (row J23).
     service.bind_note_authors(metadata.clone());
+    // A Drive grant's turn runs only where its tools are checked: against
+    // the grant journal's policy, by the Cedar evaluator (slice J4 of #707).
+    let evaluator = CedarToolPolicyEvaluator::new()
+        .map_err(|_| RunError::Agent("the tool policy bundle does not validate".into()))?;
+    let drive_audit =
+        DurableDriveToolAudit::new(root.join("audit").join("drive-tools"), clock.clone())
+            .map_err(|error| RunError::Agent(error.to_string()))?;
+    service.bind_drive_tools(DriveTools {
+        grants: metadata.clone(),
+        evaluator: Arc::new(evaluator),
+        audit: Arc::new(drive_audit),
+    });
     if let Some(tools) = &environment_tools {
         tools.attach(service.clone());
     }
@@ -1260,7 +1290,7 @@ fn environments(
             DurableEnvironmentAudit, HostInstaller, OpenSshConnector, PeerEnvironments,
             SshEnvironment, SshTimings,
         },
-        FilePlacements,
+        CedarCommandPolicyEvaluator, FilePlacements,
     };
     let placements = FilePlacements::new(root.join("placements"))
         .map_err(|error| RunError::Agent(error.to_string()))?;
@@ -1312,8 +1342,12 @@ fn environments(
     if let Some(peers) = &peers {
         environments = environments.with_peers(peers.clone());
     }
+    // Who may run which commands where is the command policy's, answered by
+    // Cedar over the configured hosts and programs (ADR 803 step 4).
     if let Some(policy) = commands {
-        environments = environments.with_commands(policy);
+        let evaluator = CedarCommandPolicyEvaluator::new(&policy)
+            .map_err(|_| RunError::Agent("the command policy bundle does not validate".into()))?;
+        environments = environments.with_commands(Arc::new(evaluator));
     }
     let paired = peers.map(|peers| {
         let connected = peers.clone();
@@ -1405,6 +1439,8 @@ fn agent_catalog(
     Ok(AgentsListResult {
         agents,
         environments: hosts.iter().map(|host| host.as_str().to_owned()).collect(),
+        // Read with the places each time the catalog is (`agents_catalog_now`).
+        command_hosts: Vec::new(),
         native_hooks: AgentsNativeHooks {
             claude: NativeHooksChoice::Off,
             codex: NativeHooksChoice::Off,

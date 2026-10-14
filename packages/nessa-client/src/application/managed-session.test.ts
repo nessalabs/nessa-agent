@@ -12,6 +12,7 @@ import type { SessionTransport } from "./session-port.js"
 import type { ProductSessionReady } from "../protocol/product-types.js"
 import { createConversationApi } from "../presentation/conversation-api.js"
 import { conversationDeleteTimeoutMs } from "./agent-budgets.js"
+import { WireSession } from "../transport/wire-session.js"
 
 class Transport implements SessionTransport {
   termination: NessaConnectionClosedError | undefined
@@ -524,6 +525,280 @@ describe("persistent session", () => {
           item.active().wire.listeners.size === 0 && item.active().wire.events.size === 0,
       ),
     ).toBe(true)
+  })
+})
+
+/** Rows: the client README, "Subscriptions across recovery". */
+describe("shared event registration across recovery", () => {
+  const sample = (payload: unknown, name = "sample") => ({
+    type: "event" as const,
+    event: name,
+    payload,
+    seq: 1,
+    stateVersion: 0,
+  })
+  const openWire = () =>
+    new WireSession({
+      readyState: 1,
+      send() {},
+      addEventListener() {},
+      close() {},
+    } as unknown as WebSocket)
+  const live = (wire: SessionTransport): ConnectedSession => ({
+    wire,
+    ready: { sessionId: "duplicate-recovery" } as unknown as ProductSessionReady,
+    profile: "product",
+    url: "ws://127.0.0.1:7421/session",
+  })
+
+  it.each(["first", "second"] as const)(
+    "removing the %s shared handle stays removed across recovery",
+    async (which) => {
+      const initial = openWire()
+      const replacement = openWire()
+      const client = new ManagedSession(
+        live(initial),
+        config,
+        async () => live(replacement),
+        timing(),
+      )
+      const deliveries: string[] = []
+      const callback = (payload: unknown) => {
+        deliveries.push(String(payload))
+      }
+      const firstOff = client.onEvent("sample", callback)
+      const secondOff = client.onEvent("sample", callback)
+      initial.dispatchFrame(sample("active"))
+      expect(deliveries).toEqual(["active"])
+      if (which === "first") firstOff()
+      else secondOff()
+      initial.dispatchFrame(sample("before-recovery"))
+      expect(deliveries).toEqual(["active"])
+      initial.dispatchClose(1006, "transient disconnection")
+      await flush()
+      expect(client.state.status).toBe("connected")
+      replacement.dispatchFrame(sample("after-recovery"))
+      expect(deliveries).toEqual(["active"])
+      if (which === "first") secondOff()
+      else firstOff()
+      replacement.dispatchFrame(sample("after-second-off"))
+      expect(deliveries).toEqual(["active"])
+      client.close()
+    },
+  )
+
+  it("keeps one delivery across repeated recovery while the registration is held", async () => {
+    const wires = [openWire(), openWire(), openWire(), openWire()]
+    let next = 1
+    const client = new ManagedSession(
+      live(wires[0]!),
+      config,
+      async () => live(wires[next++]!),
+      timing(),
+    )
+    const deliveries: string[] = []
+    const callback = (payload: unknown) => {
+      deliveries.push(String(payload))
+    }
+    const firstOff = client.onEvent("sample", callback)
+    client.onEvent("sample", callback)
+    wires[0]!.dispatchFrame(sample("active"))
+    expect(deliveries).toEqual(["active"])
+    wires[0]!.dispatchClose(1006, "transient disconnection")
+    await flush()
+    expect(client.state.status).toBe("connected")
+    wires[1]!.dispatchFrame(sample("recovered-0"))
+    wires[1]!.dispatchClose(1006, "transient disconnection")
+    await flush()
+    expect(client.state.status).toBe("connected")
+    wires[2]!.dispatchFrame(sample("recovered-1"))
+    expect(deliveries).toEqual(["active", "recovered-0", "recovered-1"])
+    firstOff()
+    wires[2]!.dispatchClose(1006, "transient disconnection")
+    await flush()
+    expect(client.state.status).toBe("connected")
+    wires[3]!.dispatchFrame(sample("after-removal"))
+    expect(deliveries).toEqual(["active", "recovered-0", "recovered-1"])
+    client.close()
+  })
+
+  it("an old handle does not remove a replacement of the same function", async () => {
+    const first = connected()
+    const next = connected()
+    const client = new ManagedSession(first, config, async () => next, timing())
+    const callback = vi.fn()
+    const firstOff = client.onEvent("sample", callback)
+    const secondOff = client.onEvent("sample", callback)
+    firstOff()
+    secondOff()
+    const renewed = client.onEvent("sample", callback)
+    firstOff()
+    secondOff()
+    expect(first.wire.events.get("sample")?.size).toBe(1)
+    first.wire.events.get("sample")?.forEach((handler) => handler("kept"))
+    expect(callback).toHaveBeenCalledTimes(1)
+    first.wire.drop()
+    await flush()
+    expect(next.wire.events.get("sample")?.size).toBe(1)
+    next.wire.events.get("sample")?.forEach((handler) => handler("recovered"))
+    expect(callback).toHaveBeenCalledTimes(2)
+    firstOff()
+    secondOff()
+    next.wire.events.get("sample")?.forEach((handler) => handler("still"))
+    expect(callback).toHaveBeenCalledTimes(3)
+    renewed()
+    expect(next.wire.events.get("sample")?.size ?? 0).toBe(0)
+    client.close()
+  })
+
+  it("a replacement made during delivery is what recovery keeps", async () => {
+    const initial = openWire()
+    const replacement = openWire()
+    const client = new ManagedSession(
+      live(initial),
+      config,
+      async () => live(replacement),
+      timing(),
+    )
+    const received: string[] = []
+    const callback = (payload: unknown) => {
+      received.push(String(payload))
+    }
+    let off = () => {}
+    let replace = true
+    client.onEvent("sample", () => {
+      if (!replace) return
+      replace = false
+      off()
+      off = client.onEvent("sample", callback)
+      initial.dispatchFrame(sample("nested"))
+    })
+    off = client.onEvent("sample", callback)
+    initial.dispatchFrame(sample("outer"))
+    expect(received).toEqual(["nested"])
+    initial.dispatchClose(1006, "transient disconnection")
+    await flush()
+    expect(client.state.status).toBe("connected")
+    replacement.dispatchFrame(sample("recovered"))
+    expect(received).toEqual(["nested", "recovered"])
+    off()
+    replacement.dispatchFrame(sample("after"))
+    expect(received).toEqual(["nested", "recovered"])
+    client.close()
+  })
+
+  it("removing a shared handle while reconnecting stays removed", async () => {
+    const initial = openWire()
+    const replacement = openWire()
+    const client = new ManagedSession(
+      live(initial),
+      config,
+      async () => live(replacement),
+      timing(),
+    )
+    const deliveries: string[] = []
+    const callback = (payload: unknown) => {
+      deliveries.push(String(payload))
+    }
+    const firstOff = client.onEvent("sample", callback)
+    const secondOff = client.onEvent("sample", callback)
+    initial.dispatchFrame(sample("active"))
+    initial.dispatchClose(1006, "transient disconnection")
+    expect(client.state.status).toBe("reconnecting")
+    secondOff()
+    const renewed = client.onEvent("sample", callback)
+    await flush()
+    expect(client.state.status).toBe("connected")
+    replacement.dispatchFrame(sample("renewed"))
+    expect(deliveries).toEqual(["active", "renewed"])
+    firstOff()
+    secondOff()
+    replacement.dispatchFrame(sample("kept"))
+    expect(deliveries).toEqual(["active", "renewed", "kept"])
+    renewed()
+    replacement.dispatchFrame(sample("gone"))
+    expect(deliveries).toEqual(["active", "renewed", "kept"])
+    client.close()
+  })
+
+  it("recovery delivers only the function still held while reconnecting", async () => {
+    const initial = openWire()
+    const replacement = openWire()
+    const client = new ManagedSession(
+      live(initial),
+      config,
+      async () => live(replacement),
+      timing(),
+    )
+    const kept: string[] = []
+    const dropped: string[] = []
+    const dropOff = client.onEvent("sample", (payload) => {
+      dropped.push(String(payload))
+    })
+    client.onEvent("sample", (payload) => {
+      kept.push(String(payload))
+    })
+    initial.dispatchClose(1006, "transient disconnection")
+    expect(client.state.status).toBe("reconnecting")
+    dropOff()
+    await flush()
+    expect(client.state.status).toBe("connected")
+    replacement.dispatchFrame(sample("after"))
+    expect(kept).toEqual(["after"])
+    expect(dropped).toEqual([])
+    client.close()
+  })
+
+  it("removing one event leaves the same function subscribed to another", async () => {
+    const initial = openWire()
+    const replacement = openWire()
+    const client = new ManagedSession(
+      live(initial),
+      config,
+      async () => live(replacement),
+      timing(),
+    )
+    const received: string[] = []
+    const callback = (payload: unknown) => {
+      received.push(String(payload))
+    }
+    const sampleOff = client.onEvent("sample", callback)
+    client.onEvent("other", callback)
+    sampleOff()
+    initial.dispatchFrame(sample("sample"))
+    initial.dispatchFrame(sample("other", "other"))
+    expect(received).toEqual(["other"])
+    initial.dispatchClose(1006, "transient disconnection")
+    await flush()
+    replacement.dispatchFrame(sample("sample-again"))
+    replacement.dispatchFrame(sample("other-again", "other"))
+    expect(received).toEqual(["other", "other-again"])
+    client.close()
+  })
+
+  it("a permanent close releases the shared registration and does not recover", async () => {
+    const initial = openWire()
+    const connect = vi.fn(async () => live(openWire()))
+    const client = new ManagedSession(live(initial), config, connect, timing())
+    const received: string[] = []
+    const callback = (payload: unknown) => {
+      received.push(String(payload))
+    }
+    const firstOff = client.onEvent("sample", callback)
+    const secondOff = client.onEvent("sample", callback)
+    client.close()
+    expect(client.state.status).toBe("closed")
+    firstOff()
+    secondOff()
+    initial.dispatchFrame(sample("after-close"))
+    expect(received).toEqual([])
+    const late = client.onEvent("sample", callback)
+    late()
+    initial.dispatchClose(1006, "transient disconnection")
+    await flush()
+    expect(connect).not.toHaveBeenCalled()
+    expect(client.state.status).toBe("closed")
+    expect(received).toEqual([])
   })
 })
 

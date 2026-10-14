@@ -10,6 +10,8 @@ import type {
   ConversationMutationResult,
   ConversationReorderResult,
   ConversationSetApprovalModeResult,
+  ConversationShareResult,
+  ConversationSharesResult,
   ApprovalMode,
   ImageAttachment,
   LinkedFile,
@@ -19,6 +21,8 @@ import {
   CompactionReportingSupport,
   ConversationPermissionAsk,
   ConversationPermissionOptionEffect,
+  ConversationShareRole,
+  ConversationToolPreset,
   ElicitationForwardingSupport,
   IncomingElicitationSupport,
   ModelSwitchReportingSupport,
@@ -195,6 +199,36 @@ export function conversationMutation(
   flag(item, "applied")
   return item as unknown as ConversationMutationResult
 }
+/** Confirm a share's answer belongs to its request and names the grant's revision. */
+export function conversationShareResult(
+  value: unknown,
+  requestId: string,
+): ConversationShareResult {
+  const item = record(value)
+  exact(item, ["requestId", "applied", "policyRevision"])
+  if (identity(item, "requestId") !== requestId)
+    throw new Error("Conversation receipt belongs to another action")
+  flag(item, "applied")
+  // A safe integer, so at most `maxPolicyRevision`; never below the first.
+  if (time(item, "policyRevision") < minPolicyRevision)
+    throw new Error("Invalid conversation policyRevision")
+  return item as unknown as ConversationShareResult
+}
+/**
+ * The largest policy revision the schema carries: `expectedPolicyRevision`
+ * on a share or revoke and `policyRevision` on a share's answer, a JSON safe
+ * integer (tied to the schema in `conversation-validate.test.ts`).
+ */
+export const maxPolicyRevision = Number.MAX_SAFE_INTEGER
+/** The least revision a change may name: 0, which names no grant held. */
+export const minExpectedPolicyRevision = 0
+/**
+ * The least policy revision a share answers or a grant is listed at: a
+ * revision is the gateway's journal sequence, which starts at 1, so 0 only
+ * ever names "no grant held" in what a change sends.
+ */
+export const minPolicyRevision = 1
+
 /** Confirm the reply belongs to the requested change and names the exact preset. */
 export function conversationApprovalMode(
   value: unknown,
@@ -1131,4 +1165,103 @@ export function conversationObserve(
       id,
     },
   }
+}
+
+/**
+ * A Drive grant's tool policy bounds, as the product schema publishes them:
+ * each of allow and deny holds at most `patterns` patterns of at most
+ * `patternBytes` UTF-8 bytes; `commandHosts` holds at most `hosts` hosts of
+ * at most `hostBytes` bytes; and patterns and hosts together are at most
+ * `entries`. The gateway refuses past them (`invalid_request`); a surface
+ * budgets its choices against these rather than numbers of its own.
+ */
+export const toolPolicyBounds = {
+  patterns: bounds.maxToolPolicyPatterns,
+  patternBytes: bounds.maxToolPatternBytes,
+  hosts: bounds.maxCommandHosts,
+  hostBytes: bounds.maxCommandHostBytes,
+  entries: bounds.maxToolPolicyEntries,
+} as const
+
+/** One list of a tool policy's names: at most `max`, each 1 to `bytes` UTF-8 bytes, each once. */
+function policyNames(
+  item: Record<string, unknown>,
+  key: string,
+  max: number,
+  bytes: number,
+) {
+  const value = item[key]
+  if (!Array.isArray(value) || value.length > max)
+    throw new Error(`Invalid conversation share ${key}`)
+  for (const name of value) {
+    if (typeof name !== "string" || !name || utf8.encode(name).byteLength > bytes)
+      throw new Error(`Invalid conversation share ${key}`)
+  }
+  return value as string[]
+}
+
+/** A Drive grant's tool policy as `conversation.shares` lists it, within the published bounds. */
+function toolPolicy(value: unknown) {
+  const policy = record(value)
+  exact(policy, ["preset", "allow", "deny", "commandHosts"])
+  let patterns = 0
+  if (policy.preset !== undefined) {
+    if (policy.allow !== undefined || policy.deny !== undefined)
+      throw new Error("Invalid conversation share policy")
+    oneOf(text(policy, "preset", 32), Object.values(ConversationToolPreset))
+  } else {
+    patterns =
+      policyNames(
+        policy,
+        "allow",
+        toolPolicyBounds.patterns,
+        toolPolicyBounds.patternBytes,
+      ).length +
+      policyNames(
+        policy,
+        "deny",
+        toolPolicyBounds.patterns,
+        toolPolicyBounds.patternBytes,
+      ).length
+    if (patterns === 0) throw new Error("Invalid conversation share policy")
+  }
+  if (policy.commandHosts !== undefined) {
+    const hosts = policyNames(
+      policy,
+      "commandHosts",
+      toolPolicyBounds.hosts,
+      toolPolicyBounds.hostBytes,
+    )
+    // Listed only when it names a host, each once, within the room the
+    // patterns leave.
+    if (
+      !hosts.length ||
+      new Set(hosts).size !== hosts.length ||
+      patterns + hosts.length > toolPolicyBounds.entries
+    )
+      throw new Error("Invalid conversation share commandHosts")
+  }
+}
+
+/** Validate `conversation.shares`: each grant once, a policy exactly on a Drive grant. */
+export function conversationShares(value: unknown): ConversationSharesResult {
+  const result = record(value)
+  exact(result, ["items"])
+  const seen = new Set<string>()
+  for (const item of items(result, "items", bounds.maxShareGrants)) {
+    exact(item, ["credentialId", "role", "policy", "policyRevision", "grantedAtMs"])
+    const credential = identity(item, "credentialId")
+    if (seen.has(credential)) throw new Error("Repeated conversation share")
+    seen.add(credential)
+    const role = text(item, "role", 16)
+    oneOf(role, Object.values(ConversationShareRole))
+    if ((role === ConversationShareRole.Drive) !== (item.policy !== undefined))
+      throw new Error("Invalid conversation share policy")
+    if (item.policy !== undefined) toolPolicy(item.policy)
+    // A listed grant holds a revision the journal gave, never 0 (no grant held).
+    if (time(item, "policyRevision") < minPolicyRevision)
+      throw new Error("Invalid conversation share policy revision")
+    time(item, "grantedAtMs")
+  }
+  return result as unknown as ConversationSharesResult
 }

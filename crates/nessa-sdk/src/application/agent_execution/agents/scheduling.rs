@@ -1416,7 +1416,9 @@ impl Agent {
     }
 
     /// Attempts native steering of the active execution using `input` and verified
-    /// `submitter`. Idle inputs run at the next invocation boundary. Unsupported native
+    /// `submitter`. Idle inputs run at the next invocation boundary, and so does
+    /// input whose submitter's initiator is not the one the active turn was saved
+    /// with: a turn is never steered by anyone but who started it. Unsupported native
     /// steering returns Unsupported; callers can explicitly choose enqueue_steering.
     ///
     /// A message the selected model cannot take is refused before anything is
@@ -1514,6 +1516,18 @@ impl Agent {
             .validate_enqueue(&input.execution_id)
             .map_err(AgentError::Scheduling)?;
         let target = self.inner.lifecycle.active();
+        // A turn's calls are judged under the initiation its record saved, so
+        // input from anyone else is never injected into it: it waits for a
+        // turn of its own. A target whose record cannot be read is not joined.
+        let joins_target = match &target {
+            Some(target) => self
+                .inner
+                .manager
+                .initiation_of(target)
+                .await
+                .is_some_and(|saved| saved.initiator() == submitter.initiation.initiator()),
+            None => true,
+        };
         let index = self
             .inner
             .manager
@@ -1539,7 +1553,7 @@ impl Agent {
             || close_notice.has_changed().unwrap_or(true)
         {
             Err(AgentError::Closed)
-        } else if self.inner.lifecycle.active().as_ref() != target.as_ref() {
+        } else if self.inner.lifecycle.active().as_ref() != target.as_ref() || !joins_target {
             Ok(SteeringOutcome::PromptRequired)
         } else {
             match &target {

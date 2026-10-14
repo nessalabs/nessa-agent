@@ -609,7 +609,7 @@ as before any other, and `run` is marked `destructiveHint`.
 | What runs | `argv` exactly, no shell; at most 256 arguments and 4 KiB together; in the host's workspace, or a directory beneath it (at most 1 KiB) | |
 | Its environment | The host's account, with its variables cleared to `PATH`, `HOME`, `USER`, `LOGNAME`, `TMPDIR`, `LANG` and `LC_ALL`; nothing encloses it (sandbox `none`). A host serves commands only when its own `config.json` says `envServe.commands: true` | a command does not inherit what the host's harnesses are started with; a host owner opts in |
 | Who it runs for | The person whose turn is running, with the tool call as the request (`ActionContext`); a call with no turn running is not decided and nothing is recorded | the audit names the caller as initiator |
-| Where | An SSH host the gateway names in `environmentTools.commandHosts`, each also in `sshHosts`. `here` runs no commands: the agent's own shell tool is its way to run one here | the gateway's tool policy is per host |
+| Where | An SSH host the gateway names in `environmentTools.commandHosts`, each also in `sshHosts`. A turn a Drive grant started uses only those its grant's policy names too (`commandHosts`), and none when it names none; `environments_list` shows that turn `here`, the conversation's current placement, and only the hosts its policy names. `here` runs no commands: the agent's own shell tool is its way to run one here | the gateway's tool policy is per host, and a grant's per grant; both are asked of the command policy in Cedar (`commands.cedar`, ADR 803 step 4) |
 | Tool policy | `allowPrograms` (when given) and `denyPrograms`, each a program's file name; a denial wins, and with `allowPrograms` only a bare name (found on the host's `PATH`) is allowed, so a file the agent wrote under an allowed name is not run. It is a policy, not a sandbox: an allowed program can run another | |
 | Stopping | The gateway ends the command lease; the host stops the command (2 s grace, then forced, then the last of its output), answers `Ran`, then `Ended`. The gateway waits at most the command's timeout, 10 s for its stop (`COMMAND_STOP_WAIT`), and an answer's 15 s, then calls it unanswered and asks the host what it recorded | |
 
@@ -1017,12 +1017,16 @@ initiator. Nothing is granted by conversation list, by folder or by
 default; a peer with no grant on an id cannot tell it exists.
 
 Where it stands: grants per conversation id are built (slice G,
-[read grants](read-grants.md)), and each grant now has its role and, for
-Drive, its tool policy and policy revision (slice J1 of #707). Those are
-stored, journaled and listed only: every role reads exactly as Read, and
-every command that changes a conversation is still refused to a paired
-party. Admitting Drive's commands, Comment's notes and enforcing the policy
-are the later slices of #707.
+[read grants](read-grants.md)), and each grant has its role and, for Drive,
+its tool policy and policy revision (#707). Each role allows everything the
+roles before it do: Read lists, reads and watches; Comment also leaves notes
+(`conversation.message`) and asks where its own note stands
+(`conversation.messageStatus`); Drive also starts, steers and stops turns,
+answers or cancels their permission requests and questions, and looks up
+those commands' receipts, with text only and every tool call checked against
+the grant's policy at the revision the turn was admitted under. A paired peer
+gateway neither comments nor drives, and every other command that changes a
+conversation is still refused to a paired party.
 
 - **Role** is Read, Comment or Drive, as in situation 7. Drive never
   includes delete, export, re-share or changing the model; those stay the

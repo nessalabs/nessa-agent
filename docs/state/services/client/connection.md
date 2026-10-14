@@ -32,6 +32,8 @@ stateDiagram-v2
         Requests fail immediately as session unavailable.
         Existing RPCs are not replayed.
         A closed replacement spends the same attempt budget.
+        Restored subscriptions are those still registered
+        (client README registration table).
     end note
 ```
 

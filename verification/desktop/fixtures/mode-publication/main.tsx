@@ -171,6 +171,7 @@ function Panel() {
             catalog: {
               agents: [],
               environments: [],
+              commandHosts: [],
               nativeHooks: { claude: "off", codex: "off" },
             },
           })

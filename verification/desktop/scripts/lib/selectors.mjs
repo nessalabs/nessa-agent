@@ -274,6 +274,19 @@ export const css = {
   signalOrb: '[data-slot="signal-orb"]',
   qrOrb: '[data-slot="qr-orb"]',
   fingerprint: '[data-slot="key-fingerprint"]',
+
+  // The owner's share dialog (src/desktop/workspace/ui/share/share-dialog.tsx)
+  shareDialog: "[data-share-dialog]", // its panel; data-share-state: unread | reading | read | held
+  shareNotice: "[data-share-notice]", // how the last change settled, in words; data-share-notice: its outcome
+  shareForm: "[data-share-form]", // the fieldset that holds the form while a change or a read is on its way
+  shareReadFailure: "[data-share-read-failure]", // data-share-read-failure: grants | choices
+  shareTargets: "[data-share-targets]", // the device cards
+  shareRole: "[data-share-role]", // the role's segmented control
+  sharePresets: "[data-share-presets]", // the Drive tool policy's cards
+  shareHosts: "[data-share-hosts]", // the Drive grant's host list
+  shareHostCount: '[data-share-hosts] [data-slot="checkbox-list-count"]',
+  shareNotes: "[data-share-notes]", // what a tool policy does not stop
+  shareReason: "[data-share-reason]", // why Share cannot send yet: this-session | another-session, or the draft's reason (changed, …)
   mcpServers: "[data-mcp-servers]", // the tab; its value: loading | listed | not-configured | failed | too-large | not-admin
   mcpRow: "[data-mcp-server]", // a server's row; its value is the server's name
   mcpStoredRow: "[data-mcp-server]:not([data-managed])",
@@ -339,6 +352,10 @@ export const selectorFor = {
   chartState: (state) => `body[data-chart-state="${state}"]`, // the chart app saying where it is
   reviewOutput: (name) => `#${name}`, // what the review app heard back: result, first, hidden-no-ui, hidden-with-ui, again
   linkedAction: (action) => `[data-linked-action="${action}"]`,
+  sessionListRowFor: (id) => `.workspace-list [data-session-row="${id}"]`, // one session's row in the session list
+  shareAction: (action) => `[data-share-action="${action}"]`, // submit | change | revoke | confirm-revoke | cancel-revoke | restart | retry | close
+  shareGrant: (credentialId) => `[data-share-grant="${credentialId}"]`,
+  sharePattern: (list) => `[data-share-pattern="${list}"]`, // allow | deny
   mcpServersIn: (phase) => `[data-mcp-servers="${phase}"]`,
   mcpRowNamed: (name) => `[data-mcp-server="${name}"]`,
   mcpGroupNamed: (name) => `[data-mcp-group="${name}"]`, // a name stored more than once: its read-only rows and one action (G3)
@@ -503,6 +520,8 @@ export const names = {
   connections: "Connections",
   integrations: "Integrations",
   linkedDevices: "Linked devices",
+  /** A session's menu item that opens the share dialog. */
+  share: "Share…",
   /** What Integrations says (`sentences` in src/desktop/settings/model/mcp-servers.ts). */
   mcp: {
     add: "Add server…",
@@ -862,4 +881,6 @@ export const transcriptNotes = {
   text: "[data-note-text]",
   /** What a turn says on each surface: the desktop's bubbles and replies, the panel's bubbles. */
   said: ".workspace-bubble, .workspace-message-body, [data-slot='chat-bubble']",
+  /** A bounded-view history notice in the desktop transcript. */
+  history: (kind) => `[data-history-extent="${kind}"]`,
 }

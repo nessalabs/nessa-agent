@@ -2,8 +2,8 @@
 
 use crate::conversation::{
     application::{
-        CatalogueReadError, CatalogueReadOperation, CatalogueReadValue, ConversationCaller,
-        ConversationCatalogue,
+        CatalogueEntryAccess, CatalogueReadError, CatalogueReadOperation, CatalogueReadValue,
+        ConversationCaller, ConversationCatalogue,
     },
     infrastructure::{CatalogueWorkerError, NessaCatalogueSource},
 };
@@ -48,8 +48,10 @@ pub(super) fn trusted_scope(
 
 /// Run outside a Tokio enter so dropping the synchronous source joins its
 /// internal worker before the outer executor releases the admitted work lease.
+/// `entries` admits each entry the source returns.
 pub(super) fn execute(
     catalogue: Arc<dyn ConversationCatalogue>,
+    entries: CatalogueEntryAccess,
     admitted: CatalogueReadScope,
     origin: Id,
     operation: CatalogueReadOperation,
@@ -58,7 +60,8 @@ pub(super) fn execute(
     let caller = caller(&admitted);
     let (mut source, captured_head) = match operation.scope() {
         Some(scope) => (
-            NessaCatalogueSource::new(catalogue, caller, scope.clone()).map_err(worker_error)?,
+            NessaCatalogueSource::new(catalogue, caller, entries, scope.clone())
+                .map_err(worker_error)?,
             None,
         ),
         None => {
@@ -66,7 +69,7 @@ pub(super) fn execute(
                 passive_read_selector(&admitted.receiver_id, admitted.access_epoch)
                     .map_err(CatalogueReadError::Admission)?;
             let (source, head) =
-                NessaCatalogueSource::discover(catalogue, caller, receiver, origin, epoch)
+                NessaCatalogueSource::discover(catalogue, caller, entries, receiver, origin, epoch)
                     .map_err(worker_error)?;
             (source, Some(head))
         }
@@ -177,6 +180,13 @@ mod tests {
     fn id(value: &str) -> Id {
         Id::new(value).unwrap()
     }
+    /// The owner's device, admitted by the checked-in policy.
+    fn entries() -> CatalogueEntryAccess {
+        CatalogueEntryAccess::new(
+            crate::conversation_test_support::access_policy(),
+            PrincipalId::new("owner").unwrap(),
+        )
+    }
     fn scope(parts: &[Id; 6]) -> Scope {
         Scope::new(
             parts[0].clone(),
@@ -221,7 +231,7 @@ mod tests {
                 _ => CatalogueReadError::IdentityChanged,
             };
             assert!(
-                matches!(execute(catalogue.clone(),admitted.clone(),origin.clone(),operation),Err(error) if error == expected_error)
+                matches!(execute(catalogue.clone(),entries(),admitted.clone(),origin.clone(),operation),Err(error) if error == expected_error)
             );
             assert_eq!(catalogue.0.load(Ordering::SeqCst), 0);
         }
@@ -236,7 +246,7 @@ mod tests {
             max_entries: 1,
         });
         assert!(matches!(
-            execute(catalogue.clone(), admitted, origin, valid),
+            execute(catalogue.clone(), entries(), admitted, origin, valid),
             Err(CatalogueReadError::SourceUnavailable)
         ));
         assert_eq!(catalogue.0.load(Ordering::SeqCst), 1);
@@ -248,6 +258,7 @@ mod tests {
         let admitted = admitted();
         let value = execute(
             catalogue.clone(),
+            entries(),
             admitted.clone(),
             id("gateway"),
             CatalogueReadOperation::Head,

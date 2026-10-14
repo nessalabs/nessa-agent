@@ -70,10 +70,13 @@ impl GrantInitiator {
 /// Whether a turn's tools were checked against a policy before they ran.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolChecking {
-    /// The turn's tools ran without a policy check. A later slice (J4 of #707)
-    /// adds the enforced case; until then every turn's tools run unchecked
-    /// (decided on #707, 2026-10-12).
+    /// The turn's tools ran without a policy check: the owner's turns.
     NotChecked,
+    /// The host checked every tool call the agent asked to make against the
+    /// grant's policy at the turn's revision, and admitted the turn only where
+    /// it could. What the agent does without asking is not a call it asked
+    /// about, and this does not cover it.
+    Checked,
 }
 
 /// Who started a turn and whether its tools were checked. Saved with the turn
@@ -97,6 +100,14 @@ impl Initiation {
         Self {
             initiator: Initiator::Grant(grant),
             tools: ToolChecking::NotChecked,
+        }
+    }
+    /// A turn started under `grant` whose tool calls the host checks against
+    /// the grant's policy. Only a grant's turn is checked; the owner's never is.
+    pub fn checked_grant(grant: GrantInitiator) -> Self {
+        Self {
+            initiator: Initiator::Grant(grant),
+            tools: ToolChecking::Checked,
         }
     }
     /// Who started the turn.

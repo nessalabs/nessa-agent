@@ -1,5 +1,6 @@
 use crate::agent_install::domain::AgentName;
 use crate::cli::entrypoint::{parse, Command, GrantedAgents, LocalProvisioning, Ungranted};
+use nessa_protocol::relay::RelayAddress;
 fn args(words: &[&str]) -> Vec<String> {
     words.iter().map(|s| (*s).into()).collect()
 }
@@ -212,6 +213,7 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
         parse(&args(&["env", "dial", "10.0.0.2:7443"])).unwrap(),
         Command::EnvDial {
             address: "10.0.0.2:7443".into(),
+            relay: None,
             drain_deadline_ms: None,
             enroll_code_file: None,
         }
@@ -227,6 +229,7 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
         .unwrap(),
         Command::EnvDial {
             address: "10.0.0.2:7443".into(),
+            relay: None,
             drain_deadline_ms: Some(20_000),
             enroll_code_file: None,
         }
@@ -244,8 +247,27 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
         .unwrap(),
         Command::EnvDial {
             address: "gw.example:7443".into(),
+            relay: None,
             drain_deadline_ms: Some(20_000),
             enroll_code_file: Some("/run/secrets/nessa_code".into()),
+        }
+    );
+    assert_eq!(
+        parse(&args(&[
+            "env",
+            "dial",
+            "10.0.0.2:7443",
+            "--drain-deadline",
+            "20s",
+            "--relay",
+            "relay.example:7444",
+        ]))
+        .unwrap(),
+        Command::EnvDial {
+            address: "10.0.0.2:7443".into(),
+            relay: Some(RelayAddress::try_from("relay.example:7444".to_owned()).unwrap()),
+            drain_deadline_ms: Some(20_000),
+            enroll_code_file: None,
         }
     );
     for refused in [
@@ -260,6 +282,10 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
         vec!["env", "dial", "gw:1", "--drain-deadline", "soon"],
         vec!["env", "dial", "--drain-deadline", "20s", "gw:1"],
         vec!["env", "dial", "gw:1", "--enroll-code-file"],
+        vec!["env", "dial", "gw:1", "--relay"],
+        vec!["env", "dial", "gw:1", "--relay", "no-port"],
+        vec!["env", "dial", "gw:1", "--relay", "--drain-deadline"],
+        vec!["env", "dial", "gw:1", "--relay", "r:1", "--relay", "r:2"],
         vec![
             "env",
             "dial",
@@ -289,7 +315,7 @@ fn env_enroll_names_a_gateway_and_a_code_and_env_dial_a_gateway() {
         assert!(parse(&args(&refused)).is_err(), "{refused:?}");
     }
     assert!(crate::cli::entrypoint::HELP.contains("nessa env enroll ADDRESS CODE"));
-    assert!(crate::cli::entrypoint::HELP.contains("nessa env dial ADDRESS"));
+    assert!(crate::cli::entrypoint::HELP.contains("nessa env dial ADDRESS [--relay HOST:PORT]"));
 }
 
 #[test]
