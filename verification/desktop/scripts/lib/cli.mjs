@@ -227,6 +227,14 @@ export class CannotRun extends Error {
   }
 }
 
+/** A failed recovery left the browser driver unsafe to reuse for later checks. */
+export class UnsafeToContinueError extends Error {
+  constructor(message, options) {
+    super(message, options)
+    this.name = "UnsafeToContinueError"
+  }
+}
+
 /** Arguments a check was not written for: it could not run, and says why. */
 export class UsageError extends CannotRun {
   constructor(message) {
@@ -348,20 +356,44 @@ export async function attempt(rep, base, body) {
     const result = await body()
     return rep.add({ ...base, ...result })
   } catch (error) {
+    if (error instanceof UnsafeToContinueError) throw error
     return rep.add(resultOfThrown(base, error))
+  }
+}
+
+const thrownDiagnostic = (error) => {
+  try {
+    const stack = error?.stack
+    return typeof stack === "string" ? stack : String(error?.message ?? error)
+  } catch {
+    return "unprintable error"
   }
 }
 
 /**
  * The result a step that threw earns (`attempt`). The result keeps only the
  * error's first line. A throw that is not a `CannotRun` is a fault, so its
- * stack goes to stderr here, and nowhere else (#419).
+ * stack goes to stderr here, and nowhere else (#419). Fatal recovery errors
+ * also retain their original cause in the result and stderr diagnostics, since
+ * the cause is otherwise absent from the stack.
  */
 export function resultOfThrown(base, error) {
   const cannotRun = error instanceof CannotRun
-  if (!cannotRun) log(error?.stack ?? String(error?.message ?? error))
+  const cause =
+    !cannotRun && error instanceof UnsafeToContinueError && error.cause !== undefined
+      ? thrownDiagnostic(error.cause).split("\n")[0]
+      : undefined
+  if (!cannotRun) {
+    log(thrownDiagnostic(error))
+    if (cause !== undefined) log("caused by:", thrownDiagnostic(error.cause))
+  }
   const message = String(error?.message ?? error).split("\n")[0]
-  return { ...base, cannotRun, error: `${cannotRun ? "could not run: " : ""}${message}` }
+  const description = cause === undefined ? message : `${message} (caused by: ${cause})`
+  return {
+    ...base,
+    cannotRun,
+    error: `${cannotRun ? "could not run: " : ""}${description}`,
+  }
 }
 
 /** Formats rows as an aligned text table for stderr. */

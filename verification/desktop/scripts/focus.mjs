@@ -22,8 +22,9 @@
  * band (focus-home-scene).
  */
 import { attempt, CannotRun } from "./lib/cli.mjs"
-import { need, openPage, withEngines } from "./lib/browser.mjs"
+import { need, openPage, withCleanup, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
+import { keysWhileRowsArrive } from "./lib/overview-keyboard.mjs"
 import { content, css, keys, names, preferenceEvents, storage } from "./lib/selectors.mjs"
 import {
   contentIs,
@@ -844,94 +845,6 @@ async function firstMessageHandoff(page, reduced = false) {
   return { counts, flights, motionCount, after: await state(page), failures }
 }
 
-/**
- * End, ↓ and Home while rows are still arriving one a frame. End lands on the
- * last row mounted so far, ↓ stays there, and Home returns to the first.
- * Aiming at a row not drawn yet leaves focus on the old one (`overview.tsx`).
- * The keys run in one turn, before another frame can mount the row they name.
- */
-async function keysWhileRowsArrive(page) {
-  await page.keyboard.press(keys.overview)
-  const open = await until(
-    page,
-    (sel) => {
-      const column = document.querySelector(sel.column)
-      if (!column || column.hasAttribute("data-overview-listed")) return false
-      const rows = [...column.querySelectorAll(sel.item)]
-      if (rows.length < 2) return false
-      const focused = document.activeElement?.closest(sel.item)
-      return focused != null && focused !== rows[rows.length - 1]
-    },
-    { column: css.overviewColumn, item: css.overviewItem },
-    2000,
-  )
-  if (!open)
-    throw new CannotRun(
-      "the overview finished its list before two rows were mounted with focus still above the last",
-    )
-  const read = await page.evaluate(
-    (sel) => {
-      const column = document.querySelector(sel.column)
-      const rows = [...(column?.querySelectorAll(sel.item) ?? [])]
-      const ids = rows.map((row) => row.getAttribute("data-overview-item"))
-      const focused = document.activeElement?.closest(sel.item)
-      if (
-        !column ||
-        column.hasAttribute("data-overview-listed") ||
-        ids.length < 2 ||
-        !focused ||
-        focused === rows[rows.length - 1]
-      )
-        return { missed: true }
-      const press = (code) => {
-        const target = document.activeElement
-        if (!(target instanceof HTMLElement)) return
-        target.dispatchEvent(
-          new KeyboardEvent("keydown", {
-            code,
-            key: code,
-            bubbles: true,
-            cancelable: true,
-          }),
-        )
-      }
-      const now = () => {
-        const row = document.activeElement?.closest(sel.item)
-        const tabbable = rows.find((item) => item.tabIndex === 0)
-        return {
-          focused: row?.getAttribute("data-overview-item") ?? null,
-          tabbable: tabbable?.getAttribute("data-overview-item") ?? null,
-        }
-      }
-      const first = ids[0]
-      const last = ids[ids.length - 1]
-      press("End")
-      const afterEnd = now()
-      press("ArrowDown")
-      const afterDown = now()
-      press("Home")
-      const afterHome = now()
-      return { missed: false, first, last, afterEnd, afterDown, afterHome }
-    },
-    { column: css.overviewColumn, item: css.overviewItem },
-  )
-  if (read.missed)
-    throw new CannotRun("the overview finished its list before End could be pressed")
-  const failures = []
-  const aligned = (label, step, want) => {
-    if (step.focused !== want)
-      failures.push(`${label} left focus on ${step.focused}, not the mounted row ${want}`)
-    else if (step.tabbable !== step.focused)
-      failures.push(
-        `${label} marked ${step.tabbable} current while focus stayed on ${step.focused}`,
-      )
-  }
-  aligned("End", read.afterEnd, read.last)
-  aligned("↓", read.afterDown, read.last)
-  aligned("Home", read.afterHome, read.first)
-  return { ...read, failures }
-}
-
 /** A retired workspace cannot start a new focus search from its held frame. */
 async function retiredLayout(page, layout) {
   await openPanes(page, 2)
@@ -1190,66 +1103,67 @@ await main(meta, async ({ options, rep, url }) => {
   await withEngines(options, rep, async (engine, browser) => {
     for (const layout of options.layouts) {
       const opened = await openPage(browser, { url, layout, width: 1440, height: 900 })
-      try {
-        await need(opened.page, css.composer, "a composer")
-        const page = opened.page
-        await hideColumns(page, layout)
-        await focusComposer(page)
-        for (const [group, steps] of [
-          ["panes", paneSteps()],
-          ["overview", overviewSteps()],
-        ])
-          await attempt(rep, { name: `focus-${group}`, engine, layout }, async () => {
-            const failures = []
-            const trail = []
-            for (const [label, act, check] of steps) {
-              await act(page)
-              await settled(page)
-              // The caret lands a frame or two after what moved it.
+      await withCleanup(
+        async () => {
+          await need(opened.page, css.composer, "a composer")
+          const page = opened.page
+          await hideColumns(page, layout)
+          await focusComposer(page)
+          for (const [group, steps] of [
+            ["panes", paneSteps()],
+            ["overview", overviewSteps()],
+          ])
+            await attempt(rep, { name: `focus-${group}`, engine, layout }, async () => {
+              const failures = []
+              const trail = []
+              for (const [label, act, check] of steps) {
+                await act(page)
+                await settled(page)
+                // The caret lands a frame or two after what moved it.
+                await frames(page, 3)
+                const s = await state(page)
+                const problem = check(s)
+                trail.push({ step: label, ...s, ok: !problem })
+                if (problem) failures.push(`${label}: ${problem}`)
+              }
+              return { trail, failures }
+            })
+
+          await attempt(rep, { name: "focus-overview-arriving", engine, layout }, () =>
+            keysWhileRowsArrive(page),
+          )
+
+          const mash = Number(options.mash)
+          if (mash > 0)
+            await attempt(rep, { name: "focus-mash", engine, layout }, async () => {
+              const chords = [
+                keys.newSession,
+                keys.closePane,
+                keys.focusPane(2),
+                keys.newSessionBeside,
+                keys.toggleSidebar,
+                keys.toggleSessionList,
+                keys.focusPane(1),
+                keys.closePane,
+                keys.switcher,
+                keys.escape,
+                keys.focusPrevious,
+                keys.moveRight,
+                keys.focusPane(3),
+              ]
+              for (let i = 0; i < mash; i++)
+                await page.keyboard.press(chords[(i * 7 + (i >> 2)) % chords.length])
+              await settled(page, 5000)
               await frames(page, 3)
               const s = await state(page)
-              const problem = check(s)
-              trail.push({ step: label, ...s, ok: !problem })
-              if (problem) failures.push(`${label}: ${problem}`)
-            }
-            return { trail, failures }
-          })
-
-        await attempt(rep, { name: "focus-overview-arriving", engine, layout }, () =>
-          keysWhileRowsArrive(page),
-        )
-
-        const mash = Number(options.mash)
-        if (mash > 0)
-          await attempt(rep, { name: "focus-mash", engine, layout }, async () => {
-            const chords = [
-              keys.newSession,
-              keys.closePane,
-              keys.focusPane(2),
-              keys.newSessionBeside,
-              keys.toggleSidebar,
-              keys.toggleSessionList,
-              keys.focusPane(1),
-              keys.closePane,
-              keys.switcher,
-              keys.escape,
-              keys.focusPrevious,
-              keys.moveRight,
-              keys.focusPane(3),
-            ]
-            for (let i = 0; i < mash; i++)
-              await page.keyboard.press(chords[(i * 7 + (i >> 2)) % chords.length])
-            await settled(page, 5000)
-            await frames(page, 3)
-            const s = await state(page)
-            const failures = []
-            if (!(await paneCount(page))) failures.push("no panes after the burst")
-            if (!s.focusedPane) failures.push("no focused pane after the burst")
-            return { after: s, failures }
-          })
-      } finally {
-        await opened.close()
-      }
+              const failures = []
+              if (!(await paneCount(page))) failures.push("no panes after the burst")
+              if (!s.focusedPane) failures.push("no focused pane after the burst")
+              return { after: s, failures }
+            })
+        },
+        () => opened.close(),
+      )
       await attempt(rep, { name: "focus-bound-keys", engine, layout }, async () => {
         const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
         try {
@@ -1331,6 +1245,10 @@ await main(meta, async ({ options, rep, url }) => {
               await need(fresh.page, css.composer, "a composer")
               await focusComposer(fresh.page)
               const result = await regroupKeepsKeyboard(fresh.page, from)
+              if (options.shots && from === "away")
+                await fresh.page.locator(css.overviewColumn).screenshot({
+                  path: `${options.shots}/focus-regroup-away-${engine}-${layout}.png`,
+                })
               return { ...result, failures: [...result.failures, ...fresh.errors] }
             } finally {
               await fresh.close()

@@ -310,6 +310,10 @@ _ADR 238 › Focus follows the focused pane_; keys in
   held callbacks after the old workspace unmounts; they enqueue zero new frame
   work, and the current layout still focuses its composer. _Check:_ `focus.mjs`
   (`focus-retired-layout`); [frame lifetime](../../docs/design/ui-workspace-load.md#focus-frame-lifetime-730), #730.
+- [ ] **Keys during incremental overview rendering use the mounted prefix.**
+  The probe is armed before opening and performs End/Down/Home in the same
+  callback that observes eligible rows, retaining its own measurements.
+  _Check:_ `focus.mjs` (`focus-overview-arriving`), `lib/overview-keyboard.test.mjs`.
 - [ ] **Bound workspace keys stay consumed while their actions are unavailable.**
   With the quick switcher open, ⌘N and ⌘W prevent the native default, leave the
   panes unchanged, and retain the switcher. An unbound key remains unconsumed;
