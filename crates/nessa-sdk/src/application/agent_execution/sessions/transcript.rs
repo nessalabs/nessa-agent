@@ -143,11 +143,11 @@ impl CommittedTranscript {
         position: u64,
         changes: &[SessionChange],
         state: &mut CommittedTransactionState,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), records::RefusedChange> {
         if position <= self.applied {
-            return Err(StorageError::Corrupt(
+            return Err(records::RefusedChange::batch(StorageError::Corrupt(
                 "semantic position does not advance".into(),
-            ));
+            )));
         }
         self.continuation.stage(changes, &mut state.undo)?;
         self.applied = position;

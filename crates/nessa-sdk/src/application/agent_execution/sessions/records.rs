@@ -86,6 +86,20 @@ fn corrupt(message: impl Display) -> StorageError {
     StorageError::Corrupt(message.to_string())
 }
 
+/// The change a staged batch refused.
+pub(crate) struct RefusedChange {
+    /// The change `stage_change` refused. Absent when every change staged
+    /// and a later check refused the batch.
+    pub(crate) index: Option<usize>,
+    pub(crate) error: StorageError,
+}
+
+impl RefusedChange {
+    pub(crate) fn batch(error: StorageError) -> Self {
+        Self { index: None, error }
+    }
+}
+
 fn invocation_at<'a>(
     snapshot: &'a mut SessionSnapshot,
     positions: &HashMap<ExecutionId, usize>,
@@ -213,7 +227,9 @@ pub(crate) fn fold_changes(
 ) -> Result<SessionSnapshot, StorageError> {
     let mut continuation = continuation::Continuation::restore(prior.cloned())?;
     let mut undo = Vec::new();
-    continuation.stage(changes, &mut undo)?;
+    continuation
+        .stage(changes, &mut undo)
+        .map_err(|refusal| refusal.error)?;
     continuation
         .snapshot
         .ok_or_else(|| corrupt("semantic batch has no session"))
@@ -274,8 +290,8 @@ impl continuation::Continuation {
         &mut self,
         changes: &[SessionChange],
         undo: &mut Vec<ChangeUndo>,
-    ) -> Result<(), StorageError> {
-        for change in changes {
+    ) -> Result<(), RefusedChange> {
+        for (index, change) in changes.iter().enumerate() {
             let before_snapshot =
                 super::retained::touched(self.snapshot.as_ref(), change, &self.positions, false);
             let id = affected_execution(change).cloned();
@@ -302,7 +318,12 @@ impl continuation::Continuation {
                 .derived_bytes
                 .saturating_sub(before_derived)
                 .saturating_add(after_derived);
-            result?;
+            if let Err(error) = result {
+                return Err(RefusedChange {
+                    index: Some(index),
+                    error,
+                });
+            }
         }
         let Self {
             snapshot: candidate,
@@ -314,20 +335,26 @@ impl continuation::Continuation {
 
         let snapshot = candidate
             .as_ref()
-            .ok_or_else(|| corrupt("semantic batch has no session"))?;
+            .ok_or_else(|| RefusedChange::batch(corrupt("semantic batch has no session")))?;
         for change in changes {
             if let Some(id) = affected_execution(change) {
                 if let Some(history) = histories.get(id) {
-                    history.validate_checkpoint().map_err(corrupt)?;
+                    history
+                        .validate_checkpoint()
+                        .map_err(|error| RefusedChange::batch(corrupt(error)))?;
                 }
             }
         }
         if snapshot.queue_history.len()
             > super::QueueHistoryRecord::maximum_entries(snapshot.invocations.len())
         {
-            return Err(corrupt("queue history exceeds its structural bound"));
+            return Err(RefusedChange::batch(corrupt(
+                "queue history exceeds its structural bound",
+            )));
         }
-        queue.validate_current_checkpoint(snapshot, positions)?;
+        queue
+            .validate_current_checkpoint(snapshot, positions)
+            .map_err(RefusedChange::batch)?;
         Ok(())
     }
 

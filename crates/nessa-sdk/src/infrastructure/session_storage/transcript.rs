@@ -556,18 +556,17 @@ impl TranscriptFold {
             return Err(TranscriptError::Scope);
         }
         let mark = semantic.undo_len();
-        if let Err(error) = self.committed.stage_apply(position, &applicable, semantic) {
+        if let Err(refusal) = self.committed.stage_apply(position, &applicable, semantic) {
             self.committed.abandon_staged(semantic, mark);
-            // A unit that is only a lease the fold refused. A turn in the same
-            // unit is hidden with the line; it does not retire a lease that
-            // was not the record that failed.
-            if applicable
-                .iter()
-                .all(|change| matches!(change, SessionChange::Lease(_)))
+            // The change the session fold refused. A note beside a refused
+            // lease does not keep the held lease. A refused note does not
+            // retire a lease that was not that change.
+            if refusal
+                .index
+                .is_some_and(|index| matches!(applicable.get(index), Some(SessionChange::Lease(_))))
             {
                 self.committed.lose_held_lease(semantic);
             }
-            let _ = error;
             self.note_unreadable(position);
             return Ok(());
         }
@@ -860,6 +859,11 @@ impl TranscriptFold {
             || (snapshot.is_some() && saved.facts == 0)
             || (!saved.loaded && saved.applied != 0)
             || !UnreadablePart::valid_list(&saved.unread)
+            || saved.unread.iter().any(|part| {
+                part.id()
+                    .parse::<u64>()
+                    .is_ok_and(|position| position > saved.applied)
+            })
         {
             return Err(TranscriptError::Checkpoint);
         }
@@ -3478,6 +3482,7 @@ mod tests {
         for unread in [
             serde_json::json!([{"id": "4"}, {"id": "2"}]),
             serde_json::json!([{"id": "18446744073709551616"}]),
+            serde_json::json!([{"id": "999"}]),
         ] {
             let mut changed = value.clone();
             changed["unread"] = unread;
@@ -3489,6 +3494,13 @@ mod tests {
                 Err(TranscriptError::Checkpoint)
             ));
         }
+        let mut at_cursor = value;
+        at_cursor["unread"] = serde_json::json!([{ "id": fold.applied().to_string() }]);
+        let at_cursor =
+            TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&at_cursor).unwrap()])
+                .unwrap();
+        let restored = TranscriptFold::restore(scope, fold.applied(), &at_cursor).unwrap();
+        assert_eq!(restored.unreadable()[0].id(), fold.applied().to_string());
     }
 
     #[test]
@@ -3555,6 +3567,76 @@ mod tests {
             .unwrap();
         assert_eq!(fold.snapshot().unwrap().invocations.len(), 0);
         assert_eq!(fold.unreadable().len(), 1);
+    }
+
+    #[test]
+    fn a_refused_lease_in_a_mixed_unit_becomes_unreadable() {
+        use crate::application::agent_execution::sessions::{
+            CurrentLeaseState, LeaseRecord, NoteDelivery, NoteId, NoteRecord, NoteText,
+        };
+        use crate::domain::agent_execution::{
+            executions::{GrantInitiator, Initiator},
+            leases::{
+                AgentWork, EnvironmentRef, LeaseDeadline, LeaseEndCause, LeaseGrants, LeaseId,
+                LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile,
+            },
+        };
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let held = LeaseId::new("lease-1").unwrap();
+        let issued = LeaseRecord::Issued {
+            lease: held,
+            revision: LeaseRevision::FIRST,
+            terms: LeaseTerms {
+                environment: EnvironmentRef::Here,
+                work: LeaseWork::Agent(AgentWork::new("claude", "sonnet").unwrap()),
+                sandbox: SandboxProfile::HarnessDefault,
+                grants: LeaseGrants::Opening,
+                deadline: LeaseDeadline::UntilEnded,
+            },
+            actor: ActionContext::new("person", "desktop", "send").unwrap(),
+        };
+        fold.apply(&one_unit(&fold, &[SessionChange::Lease(issued)], 1))
+            .unwrap();
+        assert!(matches!(
+            fold.snapshot().unwrap().lease.as_ref().unwrap().state(),
+            CurrentLeaseState::Held(_)
+        ));
+        // A later open the session refuses is not the lease. The held lease stays.
+        fold.apply(&one_unit(&fold, &[contradictory_open()], 2))
+            .unwrap();
+        assert!(matches!(
+            fold.snapshot().unwrap().lease.as_ref().unwrap().state(),
+            CurrentLeaseState::Held(_)
+        ));
+        let refused = LeaseRecord::Ending {
+            lease: LeaseId::new("other-lease").unwrap(),
+            cause: LeaseEndCause::Closed,
+            actor: None,
+        };
+        let note = NoteRecord {
+            id: NoteId::mint(),
+            text: NoteText::new("beside the lease").unwrap(),
+            delivery: NoteDelivery::RecordOnly,
+            actor: ActionContext::new("person", "phone", "note").unwrap(),
+            author: Initiator::Grant(GrantInitiator::new("receiver", 7).unwrap()),
+            accepted_at_ms: 1_700_000_000_000,
+            after_execution: None,
+            retired: None,
+        };
+        fold.apply(&one_unit(
+            &fold,
+            &[SessionChange::Lease(refused), SessionChange::Note(note)],
+            3,
+        ))
+        .unwrap();
+        assert!(fold.snapshot().unwrap().notes.is_empty());
+        assert!(matches!(
+            fold.snapshot().unwrap().lease.as_ref().unwrap().state(),
+            CurrentLeaseState::Unreadable { kind } if kind == "record"
+        ));
     }
 
     #[test]
