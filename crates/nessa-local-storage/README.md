@@ -28,6 +28,7 @@ owns the #324 ordering table and platform evidence boundaries.
 | `src/unix/retained_directory.rs` | Retained directory descriptors through private roots or safe absolute locator ancestry, independent `openat(".")` enumeration cursors, identity checks, exclusive publication, atomic replacement, cleanup, and directory sync. |
 | `src/windows/retained_directory.rs` | Top-down non-delete-sharing directory handles, transient identity probes, handle enumeration, `FileRenameInfo` exclusive publication/replacement, and handle disposition cleanup. |
 | `tests/retained_directory.rs` | Cross-platform authority, enumeration, publication, cleanup, replacement, and native Windows handle-lifetime coverage. |
+| `tests/windows_replacement.rs` | Native Windows path-based replacement with retained readers, denied delete sharing, and read-only destinations (#874). |
 
 `PrivateDirectory` is acquired once beneath a trusted absolute root. Every file
 operation accepts one native single-component name and stays on that authority.
