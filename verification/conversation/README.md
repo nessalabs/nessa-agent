@@ -4,6 +4,9 @@
 published lease, decoded by the actual client validator; `ssh-live`,
 `ssh-lost` and `ssh-refused` are leases on an SSH host, and `peer-live`,
 `peer-lost` and `peer-refused` on a paired machine.
+Its view and lease cases use the SDK's published types, and this folder is
+included in the normal TypeScript check; required fields and enum changes are
+checked before a browser run.
 `run-on-fixture.html?case=none|hosts|paired` mounts the production composer
 tray with no SSH host, two, or one and a connected paired machine. Run `node verification/desktop/scripts/lease-details.mjs`
 for both. These lease/composer fixtures are served by the development server only.
