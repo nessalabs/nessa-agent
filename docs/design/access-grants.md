@@ -23,7 +23,7 @@ One grant:
 | Field | What it is |
 | --- | --- |
 | Principal | Who. A paired device (its receiver), a gateway (`gateway:<key>`), a person, an agent, or an integration (a webhook). |
-| Resource | One conversation id, or one directory on the granting machine. |
+| Resource | One conversation id, or one directory in an environment the grantor enforces. That environment is this gateway's machine, a remote environment it already leases, or a cloud environment a later agent uses. |
 | Capabilities | A set drawn from `read`, `comment`, `drive`, `write`, `exec`. `comment` and `drive` belong to a conversation. `write` and `exec` belong to a directory. |
 | Constraints | The path boundary, the tool policy, and the command allow/deny rules that apply inside that resource. |
 | Epoch | The grant epoch: the counter that advances when capabilities or constraints change. A turn, a lease, and a webhook delivery keep the epoch they were admitted under. |
@@ -57,7 +57,7 @@ flowchart TD
   cedar --> chatRead[Read one conversation]
   cedar --> chatWrite[Comment or drive]
   cedar --> folder[Folder read, write, or exec]
-  cedar --> live[conversation.subscribe]
+  cedar --> live[Grant subscribe and conversation.subscribe]
   cedar --> http[Signed webhook POST]
   lan[LAN announcement of a paired gateway] -.-> gateway
 ```
@@ -214,17 +214,17 @@ policy engine, a new crate, or a grant-by-list.
 | Remembered permission rules | Stay the owner's. `rules.cedar` already refuses a grant. |
 | `#797` targets | Stay a caller contract. |
 | `#811` owner phone | Left to that issue. Pairing classes are unchanged here. |
-| `PeerPoller` record walk | The live-follow slice stops walking records for a conversation that is subscribed. Status and the catalogue head stay until the follower knows the grant set. |
+| `PeerPoller` timer for an Active peer | Deleted. Grant add, revoke, and epoch changes arrive on a grant subscription. Chat views arrive on `conversation.subscribe`. Both use the cursor and resume rules in [record subscriptions](record-subscriptions.md). |
 | `conversation.watchRecords` | Stays the retained phone path ([#851](https://github.com/nessalabs/nessa-agent/issues/851)). Peers use `conversation.subscribe`. |
 | Grant by channel, folder-of-chats, or default sync | Already refused. Stays refused. |
 | A webhook-only access list | Not added. The webhook's share grant is the list. |
 | Nessa copies of Claude or Codex hooks | Not added. |
 
-A cloud agent, when it exists, is an agent principal with a directory grant:
-`read`, `write`, and `exec` inside that directory, command rules in the
-constraints, admitted by the same Cedar policies. No slice below builds the
-agent. The directory resource is shaped so that slice does not need a new
-grant.
+A cloud agent, when it exists, is an agent principal with the same
+directory grant: `read`, `write`, and `exec` inside a directory in that
+cloud environment, command rules in the constraints, admitted by the same
+Cedar policies. No slice below builds the agent. The directory resource
+names its environment, so the cloud slice does not need a new grant.
 
 ## Native harnesses
 
@@ -246,15 +246,20 @@ hooks are not allowed to answer first.
 
 ## Directory resource and command rules
 
-The resource is one canonical absolute directory on the granting machine.
-`read` lists and reads files under it. `write` creates and edits files
-under it. `exec` runs commands whose working directory is inside it.
+The resource is one canonical directory in an environment the grantor
+enforces. The environment is this gateway's own machine, a remote
+environment it already leases over SSH or a paired connection, or a cloud
+environment a later agent slice will run. The grant names the environment
+and the directory. `read` lists and reads files under that directory.
+`write` creates and edits files under it. `exec` runs commands whose
+working directory is inside it.
 
-The path boundary is that directory. A path with `..`, or a symlink that
-resolves outside it, is outside the grant. The environment starts the
-lease with that directory as its workspace. On publish and on
-`GrantCommand` the environment sees the path and refuses one outside it.
-A file tool the harness runs without naming a path to Nessa is outside
+The path boundary is that directory in that environment. A path with `..`,
+or a symlink that resolves outside it, is outside the grant. The
+environment starts the lease with that directory as its workspace. On
+publish and on `GrantCommand` the environment sees the path and refuses
+one outside it. A file tool the harness runs without naming a path to
+Nessa is outside
 that check; the share says the account and the harness sandbox are what
 enclose it, as the runtime map's sandbox table already does.
 
@@ -285,13 +290,38 @@ A lagging subscriber resumes from `lastDelivered`
 admitted on `conversation.read` by `admit_paired_follow`, and the
 conversation is the share check.
 
-The live-follow slice uses that call for each shared chat the follower has
-opened. It opens a new pinned session after a disconnect and passes the
-cursor it last applied, the same way the sync engine resumes a pass. The
-poller keeps dialing status, and it keeps reading the catalogue head so a
-new grant can be learned. It stops paging records for a conversation that
-has a subscription. A subscribe refused as not found withdraws the local
-replica, which is what `wrong_owner` does on the poll path today.
+The live-follow slice opens two subscriptions on the grantor, both on the
+subscription machinery #851 already uses. Cursor `{incarnation, position}`,
+resume with `after`, replacement on a new incarnation, `cursor_ahead`
+refused, `lagging` resumed from `lastDelivered`.
+
+- **Grants.** A grant subscription for this receiver. Each frame is that
+  receiver's grant set: a grant added, a grant revoked, or a grant epoch
+  changed. It is not `catalogue.watch`. That watch fires on the owner's
+  whole catalogue, which is why a peer is refused it today. This stream
+  names only the receiver's own grants, so the timing of ungranted work
+  stays on the grantor.
+- **Chats.** `conversation.subscribe` for each shared chat the follower has
+  opened and chosen to follow. A refused chat subscribe withdraws that
+  local replica.
+
+The `PeerPoller` timer goes away for an Active peer. `peer.poll_interval`
+no longer wakes a `catalogueHead` or a record walk. After a disconnect the
+follower opens a new pinned session and resumes both subscriptions from
+the cursors it last applied, the same way the sync engine resumes a pass.
+
+Two waits are not that timer:
+
+- **Before the peer is Active.** An enrollment that is still pending has
+  no session and no grant stream. The status dial already used to finish
+  pairing runs until the enrollment is Active or ended. It stops once the
+  subscriptions can open.
+- **A connect that fails.** The follower waits on the existing connect
+  backoff, then resumes the subscriptions. The wait does not read the
+  catalogue or the records.
+
+The silence bound on an environment's serving connection stays. That
+connection carries leases. It is not the peer poller.
 
 ## Webhooks
 
@@ -313,18 +343,30 @@ timestamp, the delivery id, and the body. That is the mac
 already use; the webhook key is its own, stored with the registration, and
 is not written into the body. Delivery retries with bounded backoff and
 repeats the same delivery id. Revoke advances the grant epoch and stops
-delivery. Each attempt is audited with the target, the delivery id, the
-outcome before and after, the cause, and the owner as initiator.
+delivery. Each attempt records the target, the delivery id, the grant
+epoch, the outcome of that attempt (sent, retry scheduled, or not sent),
+and the cause. An attempt is one observation of a POST. Stopping delivery
+is the transition with a before and after: delivering, then stopped, with
+the revoke as cause and the owner as initiator.
 
 ## LAN announcement
 
-Off until the peer table has a paired gateway. The announcement is signed
-by the pairing key. It carries the key fingerprint, a dial address and
-port, and a counter. It omits the owner name, the organization, every
-conversation id, every directory, and every grant. A listener that has not
-paired cannot enroll from it. A paired peer verifies the signature against
-the pinned key and stores the address as a last-known address. The
-connection is still the pinned TLS session and the issued credential.
+Off until the peer table has a paired gateway. The announcement carries a
+dial address, a port, and one rotating token per paired peer. The token is
+HMAC-SHA256 of the current time window, keyed by the pairing secret both
+sides stored for that peer beside the pinned key. The pinned key, its
+fingerprint, and any other stable gateway id stay out of the announcement.
+The owner name, the organization, conversation ids, directories, and
+grants stay out too.
+
+A paired peer recomputes the HMAC for each pinned peer, for the current
+window and one window on either side, and matches. A match says which peer
+announced and which address to try. The number of tokens is the number of
+paired peers; the token values change when the window changes, so a
+listener cannot follow one gateway from window to window. The window
+length is a row the slice adds to [limits](../limits.md). An unpaired
+listener cannot enroll from an announcement. The connection is still the
+pinned TLS session and the issued credential.
 
 ## Order
 
@@ -339,7 +381,7 @@ phone are not in this list.
 | 3 | (b) Peer comment and drive | The refactor and (a) |
 | 4 | (c) One folder, path boundary, command rules | The refactor |
 | 5 | (d) Same-person link at pairing | The refactor |
-| 6 | (e) Live follow on `conversation.subscribe` | (a), and #851 as already merged |
+| 6 | (e) Grant and chat subscriptions; the peer poller timer goes away | (a), and #851 as already merged |
 | 7 | (f) Follow rules | (a) and (e) |
 | 8 | (h) Signed outbound webhooks | The refactor |
 | 9 | (g) LAN announcement | Paired gateways as already shipped (#705) |
@@ -395,6 +437,8 @@ work (#704, #720, #707, #787, #793, ADR 803).
 ### 2. Open a peer's shared chat as a local conversation
 
 ```markdown
+Part of docs/design/access-grants.md.
+
 ## Deliver
 
 On the follower, a conversation a peer has granted opens as a local
@@ -419,6 +463,8 @@ The access-grant refactor.
 ### 3. Let a peer comment and drive under its grant
 
 ```markdown
+Part of docs/design/access-grants.md.
+
 ## Deliver
 
 The owner can put `comment` or `drive` on a gateway principal's grant for
@@ -453,12 +499,18 @@ a chat to act in.
 ### 4. Share one folder with a path boundary and command rules
 
 ```markdown
+Part of docs/design/access-grants.md.
+
 ## Deliver
 
-A grant resource may be one directory on the granting machine, with
-capabilities `read`, `write`, and `exec`. The lease workspace is that
-directory. A named path outside it, including `..` and a symlink that
-resolves outside, is refused.
+A grant resource is one directory in an environment the grantor enforces:
+this gateway's machine, a remote environment it already leases, or a cloud
+environment a later agent uses. The grant names the environment and the
+directory. Capabilities are `read`, `write`, and `exec`. The lease
+workspace is that directory. A named path outside it, including `..` and a
+symlink that resolves outside, is refused. This slice enforces the
+boundary on a machine the grantor already runs. The cloud agent uses the
+same resource and is not built here.
 
 Command rules are an ordered allow/deny list on the grant. Cedar matches
 the program by file name, as `command.denied_program` does, and may match
@@ -471,8 +523,7 @@ outside Nessa's gate.
 
 `grants.json` on the sharing machine stays the authority for what it will
 run and can narrow the grant. Add the argv pattern bound to `docs/limits.md`
-with one owner. This slice does not add a cloud agent; an agent principal
-will use this directory resource later.
+with one owner.
 
 ## Gate
 
@@ -491,6 +542,8 @@ The access-grant refactor.
 ### 5. Declare two gateways the same person at pairing
 
 ```markdown
+Part of docs/design/access-grants.md.
+
 ## Deliver
 
 `pairing.create` for a gateway takes a same-person choice. When set, a
@@ -514,28 +567,43 @@ The access-grant refactor, so admission has one principal fact to attach
 the link to.
 ```
 
-### 6. Follow a shared chat on conversation.subscribe
+### 6. Follow a peer's grants and chats by subscription
 
 ```markdown
+Part of docs/design/access-grants.md.
+
 ## Deliver
 
-Move a linked gateway's live read of an opened shared chat from the peer
-poller's record walk onto the existing `conversation.subscribe` (#851).
-Resume with `after` set to the last `{incarnation, position}` the follower
-applied. A new incarnation replaces the view. `lagging` resumes from
-`lastDelivered`. A refused subscribe withdraws the local conversation.
+Delete the `PeerPoller` timer for an Active peer. `peer.poll_interval` no
+longer wakes a `catalogueHead` or a record walk.
 
-The poller still dials pinned status and still reads the catalogue head,
-so a new grant and a revocation are still learned. It does not page
-records for a subscribed conversation. No new watch method.
+Push grant changes on a grant subscription for this receiver, on the same
+subscription machinery as `conversation.subscribe` (#851). The cursor is
+`{incarnation, position}`. Resume with `after`. A new incarnation replaces
+the set. `cursor_ahead` is refused. `lagging` resumes from `lastDelivered`.
+Each frame is that receiver's grants: a grant added, a grant revoked, or a
+grant epoch changed. It is not `catalogue.watch`, which fires on the
+owner's whole catalogue. A chat the follower has opened follows on
+`conversation.subscribe` with the same cursor and resume rules. A refused
+chat subscribe withdraws that local conversation.
 `conversation.watchRecords` stays the retained phone path.
+
+Two waits stay, and neither reads the catalogue on a timer. Until the
+enrollment is Active there is no session, so the existing status dial runs
+until Active or ended, then stops. After the subscription connection
+drops, a failed connect waits on the existing connect backoff and then
+resumes both subscriptions from their cursors. The environment serving
+connection's silence bound stays; it carries leases and is not this poller.
 
 ## Gate
 
-A new message on the grantor shows on the follower without waiting for
-`peer.poll_interval`. Reconnect resumes from the cursor and does not move
-the view backwards in the same incarnation. Unshare ends the subscription
-and withdraws the chat. The follower does not call `conversation.watchRecords`.
+A new share, a revoke, and an epoch change each arrive on the grant
+subscription with no `catalogueHead` from `peer.poll_interval`. A new
+message on an opened chat arrives on `conversation.subscribe` the same
+way. Reconnect resumes both cursors and does not move either backwards in
+the same incarnation. An Active peer has no poller timer. A pending
+enrollment still completes through the status dial, and that dial stops
+at Active. The follower does not call `conversation.watchRecords`.
 
 ## Depends on
 
@@ -546,6 +614,8 @@ merged.
 ### 7. Choose which granted chats to follow
 
 ```markdown
+Part of docs/design/access-grants.md.
+
 ## Deliver
 
 The follower stores a follow rule per peer: which granted conversations to
@@ -569,6 +639,8 @@ The local shared conversation and the subscribe follow.
 ### 8. Deliver granted events to a signed webhook
 
 ```markdown
+Part of docs/design/access-grants.md.
+
 ## Deliver
 
 The owner issues an integration principal with `credential.issue`, holding
@@ -585,8 +657,11 @@ Sign with HMAC-SHA256 over the timestamp, the delivery id, and the body,
 the mac algorithm backup manifests use, with this registration's key. The
 key stays out of the body. Retry with bounded backoff and the same
 delivery id. Revoke advances the grant epoch and stops further delivery.
-Audit each attempt with the target, the delivery id, before and after, the
-cause, and the owner.
+Each delivery attempt records the target, the delivery id, the grant
+epoch, the outcome of that attempt (sent, retry scheduled, or not sent),
+and the cause. An attempt is one observation of a POST. Stopping delivery
+on revoke records the transition: delivering, then stopped, with the
+revoke as cause and the owner as initiator.
 
 ## Gate
 
@@ -603,24 +678,31 @@ The access-grant refactor.
 ### 9. Announce a paired gateway on the local network
 
 ```markdown
+Part of docs/design/access-grants.md.
+
 ## Deliver
 
 With at least one paired gateway in the peer table, this gateway may
-announce itself on the local network. The announcement is signed by the
-pairing key and carries the key fingerprint, a dial address and port, and
-a counter. It omits the owner name, the organization, conversation ids,
-directories, and grants. Pairing still requires the one-use code. A paired
-peer that verifies the signature stores the address as a last-known
-address and connects with the existing pinned credential. With no paired
-gateway, send nothing.
+announce itself on the local network. The announcement carries a dial
+address, a port, and one rotating token per paired peer. The token is
+HMAC-SHA256 of the current time window, keyed by the pairing secret both
+sides stored for that peer beside the pinned key. The pinned key, its
+fingerprint, and any other stable gateway id are not in the announcement.
+Neither are the owner name, the organization, conversation ids,
+directories, or grants. A paired peer recomputes the HMAC for each pinned
+peer, for the current window and one window on either side, and matches.
+The connection uses the existing pinned credential. Pairing still requires
+the one-use code. The window length is a row in `docs/limits.md`. With no
+paired gateway, send nothing.
 
 ## Gate
 
 An unpaired gateway sends no announcement. An announcement cannot enroll a
-listener. A paired peer reaches the announced address and is refused if
-the key or the credential is wrong. The announcement bytes contain the
-fingerprint, the address, and the counter, and contain nothing from a
-conversation or a grant.
+listener. The announcement bytes contain no key fingerprint and no stable
+gateway id. Two windows for the same peer produce two different tokens. A
+paired peer matches a token to its pinned peer and is refused if the
+credential is wrong. A listener without the pairing secret cannot match
+the token to a pinned key.
 
 ## Depends on
 
