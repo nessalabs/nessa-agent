@@ -1,5 +1,6 @@
-import type { Conversation, MessageContent, MessagePart, Receipt } from "../../model"
+import type { AttachmentResource, Conversation, MessageContent } from "../../model"
 import type { LocalTabs } from "../local-tabs"
+import { attachmentResourceUsage } from "../queries/attachment-resources"
 import { findConversation, replaceConversation, withDraft } from "../internal"
 
 /** A stored file as it was before it was uploaded: same bytes here, nothing on the gateway. */
@@ -30,50 +31,32 @@ export function forgetStoredUploads(tabs: LocalTabs, conversationId: string): Lo
   return replaceConversation(tabs, withDraft(current, draft))
 }
 
-// The gateway has the message, so this window will never need to put its files
-// back in a draft. A turn still sending, of unknown delivery, or refused may.
-const settled: readonly Receipt[] = ["accepted", "queued", "delivered"]
-
-function sentFile(part: MessagePart) {
-  return part.type === "file" && part.upload.status === "stored" ? part : undefined
-}
-
-/**
- * Keep at most `maxBytes` of already-sent originals for the transcript to paint,
- * oldest first to go.
- *
- * A sent turn shows its images from the original files this window still holds,
- * and an original can be a 60 MiB RAW. Left alone, a handful of sent messages
- * would hold the whole window's attachment budget while the draft sits empty.
- * So once the gateway has a message, its originals are only a preview: past the
- * budget the oldest become the same labelled reference tile a reloaded turn
- * gets, and their bytes are released. Tabs in order, turns in order — there is
- * no clock in here, and "oldest" needs none to be the same answer every time.
- */
+/** Evict whole preview-only resources; live drafts and unsettled turns retain their bytes. */
 export function boundSentPreviews(tabs: LocalTabs, maxBytes: number): LocalTabs {
-  let held = 0
-  for (const conversation of tabs.conversations)
-    for (const turn of conversation.turns)
-      if (turn.from === "user" && settled.includes(turn.receipt))
-        for (const part of turn.content) held += sentFile(part)?.size ?? 0
+  const usage = attachmentResourceUsage(tabs)
+  let held = [...usage.previews].reduce((sum, resource) => sum + resource.size, 0)
   if (held <= maxBytes) return tabs
-  const conversations = tabs.conversations.map((conversation): Conversation => {
-    if (held <= maxBytes) return conversation
-    return {
-      ...conversation,
-      turns: conversation.turns.map((turn) => {
-        if (turn.from !== "user" || !settled.includes(turn.receipt)) return turn
-        return {
-          ...turn,
-          content: turn.content.map((part) => {
-            const file = sentFile(part)
-            if (!file || file.upload.status !== "stored" || held <= maxBytes) return part
-            held -= file.size
-            return { type: "image-reference" as const, ...file.upload.image }
-          }),
-        }
-      }),
-    }
-  })
+  const evicted = new Set<AttachmentResource>()
+  for (const resource of usage.previews) {
+    if (held <= maxBytes) break
+    evicted.add(resource)
+    held -= resource.size
+  }
+  const conversations = tabs.conversations.map((conversation): Conversation => ({
+    ...conversation,
+    turns: conversation.turns.map((turn) => {
+      if (turn.from !== "user") return turn
+      return {
+        ...turn,
+        content: turn.content.map((part) =>
+          part.type === "file" &&
+          part.upload.status === "stored" &&
+          evicted.has(part.resource)
+            ? { type: "image-reference" as const, ...part.upload.image }
+            : part,
+        ),
+      }
+    }),
+  }))
   return { ...tabs, conversations }
 }

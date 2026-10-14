@@ -7,7 +7,29 @@ import { launch } from "./lib/browser.mjs"
 import { attachmentVerification as selectors } from "./lib/selectors.mjs"
 
 const root = resolve(fileURLToPath(import.meta.url), "../../../..")
-const url = "http://127.0.0.1:1448/attachment-verification"
+const url = "http://127.0.0.1:1486/attachment-verification"
+const scenarios = [
+  "control",
+  "native-read",
+  "second-url",
+  "upload-parent-success",
+  "upload-parent-failure",
+  "upload-placement-success",
+  "upload-placement-failure",
+  "shared-resource",
+  "owner-swap",
+  "detached-queue",
+  "native-svg",
+  "terminal-refusal-preserved",
+  "terminal-refusal-reupload",
+]
+const only = process.argv[2] === "--only" ? process.argv[3]?.split(",") : undefined
+if (process.argv.length > (only ? 4 : 2))
+  throw new Error("Usage: attachments-races.mjs [--only scenario[,scenario...]]")
+if (only?.some((scenario) => !scenarios.includes(scenario)))
+  throw new Error(
+    `Unknown attachment-races scenario: ${only?.find((scenario) => !scenarios.includes(scenario))}`,
+  )
 const server = spawn(
   resolve(root, "node_modules/.bin/vite"),
   ["--config", "verification/desktop/fixtures/attachments-races/vite.config.ts"],
@@ -51,13 +73,7 @@ try {
         : {}),
     })
     try {
-      for (const scenario of [
-        "control",
-        "native-read",
-        "second-url",
-        "upload-parent-success",
-        "upload-parent-failure",
-      ]) {
+      for (const scenario of only ?? scenarios) {
         const context = await browser.newContext({
           viewport: { width: 800, height: 900 },
           reducedMotion: "reduce",
@@ -74,18 +90,291 @@ try {
             () => typeof window.__attachmentProbe?.drop === "function",
           )
           const snapshot = () => page.evaluate(() => window.__attachmentProbe.snapshot())
-          if (scenario.startsWith("upload-parent-")) {
-            await page.evaluate(() => window.__attachmentProbe.startParentUpload())
+          if (scenario.startsWith("terminal-refusal-")) {
+            const reupload = scenario.endsWith("-reupload")
+            await page.evaluate(
+              (reupload) => window.__attachmentProbe.startTerminalRetention(reupload),
+              reupload,
+            )
+            const uploadCountAfterFirst = reupload ? 2 : 1
+            await page.waitForFunction(() => {
+              const state = window.__attachmentProbe.snapshot()
+              return (
+                state.terminalRetention.stageSizes.length >= 1 &&
+                state.draft.some(
+                  (part) => part.type === "file" && part.upload.status === "stored",
+                )
+              )
+            })
+            const firstBlobUrl = (await snapshot()).terminalRetention.previewUrls[0]
+            await page.locator(selectors.editor).press("Enter")
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().sends.length === 1,
+            )
+            const firstExecutionId = (await snapshot()).sends[0].executionId
+            await page.waitForFunction((executionId) => {
+              const state = window.__attachmentProbe.snapshot()
+              return state.terminalRetention.turns?.some(
+                (turn) => turn.executionId === executionId && turn.receipt === "failed",
+              )
+            }, firstExecutionId)
+            await page.waitForFunction((expectedStages) => {
+              const state = window.__attachmentProbe.snapshot()
+              return (
+                state.terminalRetention.stageSizes.length === expectedStages &&
+                state.draft.some(
+                  (part) => part.type === "file" && part.upload.status === "stored",
+                )
+              )
+            }, uploadCountAfterFirst)
+            await page.locator(selectors.editor).press("Enter")
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().sends.length === 2,
+            )
+            const retryExecutionId = (await snapshot()).sends[1].executionId
+            await page.waitForFunction((executionId) => {
+              const state = window.__attachmentProbe.snapshot()
+              return (
+                state.terminalRetention.acceptedSends === 1 &&
+                state.terminalRetention.turns?.some(
+                  (turn) =>
+                    turn.executionId === executionId &&
+                    ["accepted", "delivered"].includes(turn.receipt),
+                )
+              )
+            }, retryExecutionId)
+            await page.evaluate(() =>
+              window.__attachmentProbe.attachSecondTerminalRetention(),
+            )
+            const expectedStageCount = reupload ? 3 : 2
+            await page.waitForFunction((expectedStages) => {
+              const state = window.__attachmentProbe.snapshot()
+              return (
+                state.terminalRetention.stageSizes.length === expectedStages &&
+                state.draft.some(
+                  (part) => part.type === "file" && part.upload.status === "stored",
+                )
+              )
+            }, expectedStageCount)
+            await page.locator(selectors.editor).press("Enter")
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().sends.length === 3,
+            )
+            const secondExecutionId = (await snapshot()).sends[2].executionId
+            await page.waitForFunction((executionId) => {
+              const state = window.__attachmentProbe.snapshot()
+              return (
+                state.terminalRetention.acceptedSends === 2 &&
+                state.terminalRetention.retained.length === 2 &&
+                state.terminalRetention.turns?.some(
+                  (turn) =>
+                    turn.executionId === executionId &&
+                    ["accepted", "delivered"].includes(turn.receipt),
+                )
+              )
+            }, secondExecutionId)
+            const final = await snapshot()
+            assert.deepEqual(
+              final.terminalRetention.stageSizes,
+              Array(expectedStageCount).fill(40 * 1024 * 1024),
+            )
+            assert.deepEqual(
+              final.terminalRetention.imageSizes,
+              Array(expectedStageCount).fill(final.terminalRetention.processedSize),
+            )
+            assert.ok(final.terminalRetention.processedSize < 40 * 1024 * 1024)
+            assert.deepEqual(final.terminalRetention.retained, [false, true])
+            assert.equal(final.terminalRetention.acceptedSends, 2)
+            const failedTurn = final.terminalRetention.turns.find(
+              (turn) => turn.executionId === firstExecutionId,
+            )
+            const retriedTurn = final.terminalRetention.turns.find(
+              (turn) => turn.executionId === retryExecutionId,
+            )
+            const secondTurn = final.terminalRetention.turns.find(
+              (turn) => turn.executionId === secondExecutionId,
+            )
+            assert.equal(failedTurn?.receipt, "failed")
+            assert.deepEqual(failedTurn?.content, [
+              {
+                type: "image-reference",
+                digest: final.terminalRetention.imageDigests[0],
+              },
+            ])
+            assert.ok(["accepted", "delivered"].includes(retriedTurn?.receipt))
+            assert.equal(retriedTurn?.content[0]?.type, "image-reference")
+            assert.equal(
+              retriedTurn?.content[0]?.digest,
+              reupload
+                ? final.terminalRetention.imageDigests[1]
+                : final.terminalRetention.imageDigests[0],
+            )
+            assert.ok(["accepted", "delivered"].includes(secondTurn?.receipt))
+            assert.deepEqual(
+              secondTurn?.content.map((part) => part.type),
+              ["file"],
+            )
+            assert.equal(secondTurn?.content[0]?.name, "second-retained.png")
+            assert.equal(
+              await page
+                .locator("img")
+                .evaluateAll(
+                  (images, url) =>
+                    images.some((image) => image.getAttribute("src") === url),
+                  firstBlobUrl,
+                ),
+              false,
+              "the evicted original preview URL remains in the rendered transcript",
+            )
+            if (reupload) {
+              const unavailable = page.locator(
+                '[data-image-reference][data-held-file="failed"]',
+              )
+              await unavailable.waitFor()
+              assert.match(await unavailable.innerText(), /No longer kept/)
+            }
+            await page.screenshot({
+              path: `/tmp/816-al24-${scenario}-${engine}.png`,
+            })
+          } else if (scenario === "native-svg") {
+            await page.evaluate(() => window.__attachmentProbe.attachNativeSvg())
+            const image = page
+              .getByRole("button", { name: "Open native.svg", exact: true })
+              .locator("img")
+            await image.waitFor()
+            await page.waitForFunction(() => {
+              const image = document.querySelector("[data-upload] img")
+              return (
+                image instanceof HTMLImageElement &&
+                image.complete &&
+                image.naturalWidth > 0
+              )
+            })
+            assert.equal(await image.evaluate((image) => image.naturalWidth), 4)
+            await page.screenshot({ path: `/tmp/816-r3-native-svg-${engine}.png` })
+          } else if (scenario === "detached-queue") {
+            await page.evaluate(() => window.__attachmentProbe.startDetachedUploads())
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().detachedStageCount === 3,
+            )
+            await page.evaluate(() => window.__attachmentProbe.detachCoordinator())
+            await page.locator(selectors.editor).waitFor({ state: "detached" })
+            await page.evaluate(() => window.__attachmentProbe.finishDetachedUpload())
+            await page.waitForFunction(
+              () =>
+                window.__attachmentProbe
+                  .snapshot()
+                  .draft.find((part) => part.type === "file")?.upload.status === "stored",
+            )
+            assert.equal((await snapshot()).detachedStageCount, 3)
+            await page.evaluate(() => window.__attachmentProbe.remountCoordinator())
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().detachedStageCount === 4,
+            )
+            assert.equal(await page.locator(selectors.uploadTile).count(), 4)
+            await page.screenshot({ path: `/tmp/816-r2-remount-${engine}.png` })
+          } else if (scenario === "owner-swap") {
+            await page.evaluate(() => window.__attachmentProbe.startOwnerUpload())
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().sharedUploads.length === 1,
+            )
+            await page
+              .getByRole("button", { name: "Open original.png", exact: true })
+              .click()
+            await page
+              .getByRole("dialog", { name: "original.png", exact: true })
+              .waitFor()
+            await page.screenshot({ path: `/tmp/816-r2-preview-original-${engine}.png` })
+            await page.evaluate(() => window.__attachmentProbe.swapOwner())
+            await page
+              .getByRole("dialog", { name: "original.png", exact: true })
+              .waitFor({ state: "detached" })
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().sharedUploads.length === 2,
+            )
+            await page.screenshot({
+              path: `/tmp/816-r2-preview-replacement-${engine}.png`,
+            })
+            await page.evaluate(() => window.__attachmentProbe.finishOriginalOwner())
+            assert.equal(
+              (await snapshot()).draft.find((part) => part.type === "file").upload.status,
+              "uploading",
+            )
+            assert.equal(
+              await page.locator(selectors.uploadTile).getAttribute("data-upload"),
+              "uploading",
+            )
+            await page.evaluate(() => window.__attachmentProbe.finishSharedUpload())
+            await page.waitForFunction(
+              () =>
+                window.__attachmentProbe
+                  .snapshot()
+                  .draft.find((part) => part.type === "file")?.upload.status === "stored",
+            )
+            assert.equal(
+              await page.locator(selectors.uploadTile).getAttribute("data-upload"),
+              "stored",
+            )
+          } else if (scenario === "shared-resource") {
+            await page.evaluate(() => window.__attachmentProbe.startSharedUploads())
+            await page.waitForFunction(
+              () => window.__attachmentProbe.snapshot().sharedUploads.length === 2,
+            )
+            const shared = await snapshot()
+            assert.equal(
+              new Set(
+                shared.tabs.flatMap((tab) => tab.files.map((file) => file.placementId)),
+              ).size,
+              2,
+            )
+            assert.equal(
+              new Set(
+                shared.tabs.flatMap((tab) =>
+                  tab.files.map((file) => file.sharedResource),
+                ),
+              ).size,
+              1,
+            )
+            await page.evaluate(() => window.__attachmentProbe.removeSharedParent())
+            await page.waitForFunction(
+              () =>
+                window.__attachmentProbe
+                  .snapshot()
+                  .sharedUploads.filter((upload) => upload.aborted).length === 1,
+            )
+            assert.equal((await snapshot()).sharedBytesRetained, true)
+            await page.evaluate(() => window.__attachmentProbe.finishSharedUpload())
+            await page.waitForFunction(
+              () =>
+                window.__attachmentProbe.snapshot().draft[0]?.upload.status === "stored",
+            )
+            assert.equal(
+              await page.locator(selectors.uploadTile).getAttribute("data-upload"),
+              "stored",
+            )
+            await page.evaluate(() => window.__attachmentProbe.closeSharedParent())
+            assert.equal((await snapshot()).sharedBytesRetained, false)
+          } else if (
+            scenario.startsWith("upload-parent-") ||
+            scenario.startsWith("upload-placement-")
+          ) {
+            await page.evaluate(
+              (sameParent) => window.__attachmentProbe.startParentUpload(sameParent),
+              scenario.startsWith("upload-placement-"),
+            )
             const tile = page.locator(selectors.uploadTile)
             await tile.waitFor()
             assert.equal(await tile.count(), 1)
             assert.equal(await tile.getAttribute("data-upload"), "uploading")
             await page.evaluate(
               (failed) => window.__attachmentProbe.finishParentUpload(failed),
-              scenario === "upload-parent-failure",
+              scenario.endsWith("-failure"),
             )
             assert.equal(await tile.getAttribute("data-upload"), "uploading")
-            assert.equal((await snapshot()).draft[0].upload.status, "uploading")
+            assert.equal(
+              (await snapshot()).draft.find((part) => part.type === "file").upload.status,
+              "uploading",
+            )
           } else if (scenario === "control") {
             await page.locator(selectors.editor).press("Enter")
             await page.waitForFunction(
@@ -167,6 +456,13 @@ try {
               scenario,
               errors,
               body: (await page.locator("body").innerText()).slice(0, 1500),
+              ...(scenario.startsWith("terminal-refusal-")
+                ? {
+                    snapshot: await page.evaluate(() =>
+                      window.__attachmentProbe.snapshot(),
+                    ),
+                  }
+                : {}),
               serverLog: serverLog.slice(-2000),
             }) + "\n",
           )

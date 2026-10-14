@@ -1,3 +1,4 @@
+import type { AttachmentResource } from "../../conversation/resources"
 import type { UploadChange, UploadFailure } from "../../conversation"
 
 /**
@@ -11,7 +12,7 @@ export type UploadPorts = {
   /** `sha256:` and 64 lowercase hex digits, over exactly these bytes. */
   digest(bytes: Blob): Promise<string>
   /** The file's bytes, or nothing once its tile has been removed. */
-  bytes(fileId: string): Blob | undefined
+  bytes(resource: AttachmentResource): Blob | undefined
   /**
    * Ask the conversation for one step of this file's upload state, and hear
    * whether it was taken. A step is refused when the file is not where the step
@@ -25,7 +26,7 @@ export type UploadPorts = {
   stage(
     input: {
       conversationId: string
-      fileId: string
+      placementId: string
       file: { digest: string; mimeType: string; size: number }
       bytes: Blob
     },
@@ -53,24 +54,29 @@ export type UploadPorts = {
  * ending is an upload state on the file; this never rejects.
  */
 export async function uploadImage(
-  file: { conversationId: string; id: string; mimeType: string },
+  file: {
+    conversationId: string
+    placementId: string
+    resource: AttachmentResource
+  },
   ports: UploadPorts,
   signal: AbortSignal,
 ): Promise<void> {
-  const target = { conversationId: file.conversationId, fileId: file.id }
+  const resource = file.resource
+  const target = { conversationId: file.conversationId, placementId: file.placementId }
   if (!ports.change({ ...target, to: "uploading" })) return
   const fail = (reason: UploadFailure) => {
     ports.change({ ...target, to: "failed", reason })
   }
-  const bytes = ports.bytes(target.fileId)
+  const bytes = ports.bytes(resource)
   if (!bytes || bytes.size < 1) return fail("unreadable")
   try {
     const digest = await ports.digest(bytes)
-    if (signal.aborted || ports.bytes(target.fileId) === undefined) return
+    if (signal.aborted || ports.bytes(resource) === undefined) return
     await ports.stage(
       {
         ...target,
-        file: { digest, mimeType: file.mimeType, size: bytes.size },
+        file: { digest, mimeType: resource.mimeType, size: bytes.size },
         bytes,
       },
       signal,
@@ -96,11 +102,11 @@ export const MAX_UPLOADS_IN_FLIGHT = 3
  * and shown as waiting — and are chosen when a slot frees. Pure, so "the sixth
  * image waits and then goes" is an assertion rather than a timing.
  */
-export function nextUploads<T extends { id: string }>(
+export function nextUploads<T extends { placementId: string }>(
   waiting: readonly T[],
   inFlight: ReadonlySet<string>,
   limit = MAX_UPLOADS_IN_FLIGHT,
 ): T[] {
   const free = Math.max(0, limit - inFlight.size)
-  return waiting.filter((file) => !inFlight.has(file.id)).slice(0, free)
+  return waiting.filter((file) => !inFlight.has(file.placementId)).slice(0, free)
 }

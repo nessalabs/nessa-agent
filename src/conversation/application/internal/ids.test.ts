@@ -19,6 +19,7 @@ function tabsWith(ids: string[], nextConversationId: number): LocalTabs {
     activeId: ids[0] ?? "c0",
     nextConversationId,
     nextTurnId: 1,
+    nextPlacementId: 1,
   }
 }
 

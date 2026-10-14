@@ -1,3 +1,4 @@
+import { AttachmentResource } from "../../model"
 import { expect, it } from "vitest"
 import { conversation, textContent, type Turn, type UserTurn } from "../../model"
 import { emptyLocalTabs } from "../local-tabs"
@@ -486,16 +487,18 @@ it("shows a turn it never held the bytes for as text plus image references", () 
 it("keeps a sent turn's local previews when the gateway echoes it by reference", () => {
   const file = {
     type: "file" as const,
-    id: "f",
-    name: "finder.png",
-    mimeType: "image/png",
-    size: 2048,
-    previewUrl: "blob:finder",
+    placementId: "f",
     upload: {
       status: "stored" as const,
       image: { digest: DIGEST, mimeType: "image/png" as const, size: 2048 },
     },
-    path: null,
+    resource: AttachmentResource.create({
+      name: "finder.png",
+      mimeType: "image/png",
+      size: 2048,
+      previewUrl: "blob:finder",
+      path: null,
+    }),
   }
   const base = emptyLocalTabs()
   const tabs = {

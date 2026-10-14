@@ -593,14 +593,14 @@ export function App({
                 {attachments.viewed && (
                   <Sheet
                     className="nessa-detail-sheet"
-                    label={attachments.viewed.name}
+                    label={attachments.viewed.resource.name}
                     onClose={attachments.close}
                     onReturnFocus={focusComposer}
                   >
                     <SheetHandle />
                     <SheetHeader>
                       <SheetExpand />
-                      <SheetTitle>{attachments.viewed.name}</SheetTitle>
+                      <SheetTitle>{attachments.viewed.resource.name}</SheetTitle>
                       <SheetAction>Done</SheetAction>
                     </SheetHeader>
                     <SheetBody>
@@ -795,11 +795,11 @@ export function App({
                 ))}
                 {attachments.files.map((file) => (
                   <AttachmentTile
-                    key={file.id}
+                    key={file.placementId}
                     file={file}
                     onOpen={() => attachments.open(file)}
-                    onRemove={() => attachments.remove(file.id)}
-                    onRetry={() => uploads.retry(file.id)}
+                    onRemove={() => attachments.remove(file.placementId)}
+                    onRetry={() => uploads.retry(file.placementId)}
                   />
                 ))}
               </ChatComposerAttachments>

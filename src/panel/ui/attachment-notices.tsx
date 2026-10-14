@@ -94,10 +94,10 @@ export function AttachmentNotices({
   const notices = attachmentNotices({
     refusal,
     files: files.map((file) => ({
-      id: file.id,
-      name: file.name,
-      image: isImageFile(file.mimeType),
-      linked: linkedFile(file),
+      placementId: file.placementId,
+      name: file.resource.name,
+      image: isImageFile(file.resource.mimeType),
+      linked: linkedFile(file.resource),
       upload: file.upload,
     })),
     imageInput,
