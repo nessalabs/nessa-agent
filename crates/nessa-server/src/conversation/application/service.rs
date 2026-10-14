@@ -101,8 +101,8 @@ use std::{
 
 use tokio::{
     sync::{
-        oneshot, watch, Mutex, Notify, OnceCell, OwnedMutexGuard, OwnedSemaphorePermit, RwLock,
-        RwLockReadGuard, Semaphore,
+        oneshot, watch, Mutex, Notify, OnceCell, OwnedMutexGuard, OwnedRwLockWriteGuard,
+        OwnedSemaphorePermit, RwLock, RwLockReadGuard, Semaphore,
     },
     task::JoinHandle,
     time::Instant,
@@ -716,7 +716,7 @@ struct Inner {
     conversations: Mutex<HashMap<ConversationId, Arc<Slot>>>,
     creation: Mutex<()>,
     retirement: OnceLock<ActionContext>,
-    admission: RwLock<()>,
+    admission: Arc<RwLock<()>>,
     // Counts stop passes, bumped the moment one is decided and before it waits
     // for anything. An opening parked waiting for the runtime has to learn about
     // teardown from something other than the lock it is blocking, and a count
@@ -978,6 +978,27 @@ fn reviews_this_process_holds(
     holding
 }
 
+/// The export cut's hold on admission. Dropping it lets the next command in.
+pub(crate) struct ExportAdmission {
+    _guard: OwnedRwLockWriteGuard<()>,
+    retired: watch::Receiver<bool>,
+}
+
+impl ExportAdmission {
+    /// Whether [`ConversationService::retire`] signaled while this hold
+    /// still owns admission. Retirement is waiting on the same lock.
+    pub(crate) fn retirement_signaled(&self) -> bool {
+        *self.retired.borrow()
+    }
+}
+
+/// Why an export hold was not granted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExportHoldFailure {
+    /// The gateway is retiring.
+    Retired,
+}
+
 impl ConversationService {
     /// Own every configured agent, and the one a caller gets by default. No
     /// MCP call shows a UI: see [`Self::with_tool_uis`].
@@ -1070,7 +1091,7 @@ impl ConversationService {
                 conversations: Mutex::new(HashMap::new()),
                 creation: Mutex::new(()),
                 retirement: OnceLock::new(),
-                admission: RwLock::new(()),
+                admission: Arc::new(RwLock::new(())),
                 stops: watch::channel(0).0,
                 retired: watch::channel(false).0,
                 agents_asked: Arc::new(Semaphore::new(MAX_AGENTS_ASKED_AT_ONCE)),
@@ -4663,6 +4684,7 @@ impl ConversationService {
             .negotiated()
             .then_some(operation_capabilities.image_input())
     }
+
     /// Resolves once this service is retired, at once if it already is.
     async fn retired(&self) {
         let mut retired = self.inner.retired.subscribe();
@@ -4676,6 +4698,25 @@ impl ConversationService {
             return Err(Halt::Retired);
         }
         Ok(permit)
+    }
+
+    /// Join admitted commands and hold admission until the returned guard
+    /// drops. Retirement before the hold, or signaled while waiting for it,
+    /// aborts and releases. This is the export cut's lease: reversible,
+    /// unlike [`Self::retire`].
+    pub(crate) async fn hold_for_export(&self) -> Result<ExportAdmission, ExportHoldFailure> {
+        if self.inner.retirement.get().is_some() {
+            return Err(ExportHoldFailure::Retired);
+        }
+        let guard = self.inner.admission.clone().write_owned().await;
+        if self.inner.retirement.get().is_some() || *self.inner.retired.borrow() {
+            drop(guard);
+            return Err(ExportHoldFailure::Retired);
+        }
+        Ok(ExportAdmission {
+            _guard: guard,
+            retired: self.inner.retired.subscribe(),
+        })
     }
 
     /// Stop admission and join every initialized or initializing owner before process exit.

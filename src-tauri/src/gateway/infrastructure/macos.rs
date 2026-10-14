@@ -1,9 +1,10 @@
 //! launchd registration and loopback readiness. Service lifetime belongs to launchd.
 use crate::gateway::application::{
-    ClaudeDirectoryReplacement, GatewayError, GatewayHost, GatewayLifecycleRecovery,
-    GatewayPhysicalResult, GatewayReconciliationAttempt, GatewayReconciliationIntent,
-    GatewayReconciliationJournalSession, GatewayReconciliationProgress, GatewayStopSession,
-    ReconciledGateway, ReconciliationHistoryFact, StartupStep,
+    ClaudeDirectoryReplacement, DeferredStageLaunch, DeferredStageReporter, GatewayError,
+    GatewayHost, GatewayLifecycleRecovery, GatewayPhysicalResult, GatewayReconciliationAttempt,
+    GatewayReconciliationIntent, GatewayReconciliationJournalSession,
+    GatewayReconciliationProgress, GatewayStopSession, ReconciledGateway,
+    ReconciliationHistoryFact, StartupStep,
 };
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
@@ -15,7 +16,10 @@ use crate::gateway::domain::value_objects::{
 use nessa_local_storage::{OpenMode, PrivateDirectory};
 use serde::Deserialize;
 use serde_json::{Map, Value};
+#[cfg(test)]
+use std::sync::Condvar;
 use std::{
+    collections::HashSet,
     fmt::{self, Display, Formatter},
     fs::{self, OpenOptions},
     io::{ErrorKind, Read, Write},
@@ -41,7 +45,7 @@ use control::{
 };
 use generation::service_generation;
 use pruning::{prune_runtime, removable_runtime_names, retained_runtimes, RetainedRuntimes};
-use staging::{launch_settings, stage_runtime_cached, ValidatedRuntimes};
+use staging::{launch_settings, stage_runtime, stage_runtime_cached, ValidatedRuntimes};
 
 /// launchd and the loopback health endpoint: what the bootstrap step and
 /// recovery read, and the two commands the bootstrap step runs.
@@ -184,6 +188,9 @@ pub(super) struct Launchd {
     disabled_services: Arc<dyn DisabledServiceStatus>,
     configuration: Mutex<ServiceConfiguration>,
     home: PathBuf,
+    /// Fingerprints this process launched from the bundle. Publication must
+    /// not make a later registration in this process retarget that job.
+    bundle_launches: Mutex<HashSet<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -260,7 +267,22 @@ impl Launchd {
             disabled_services,
             configuration: Mutex::new(configuration),
             home,
+            bundle_launches: Mutex::new(HashSet::new()),
         }
+    }
+
+    fn bundle_launch_noted(&self, fingerprint: &str) -> bool {
+        self.bundle_launches
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains(fingerprint)
+    }
+
+    fn note_bundle_launch(&self, fingerprint: &str) {
+        self.bundle_launches
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(fingerprint.to_owned());
     }
 
     fn service_configuration(&self) -> ServiceConfiguration {
@@ -336,6 +358,17 @@ impl GatewayHost for Launchd {
             RegisterFailure::Physical(message) => GatewayError::Registration(message),
             RegisterFailure::Audit(error) => error,
         })
+    }
+
+    fn published_runtime_is_present(&self, fingerprint: &str) -> Result<bool, GatewayError> {
+        let configuration = self.service_configuration();
+        let label = service_label(configuration.stage(), configuration.instance());
+        let path = self
+            .home
+            .join("Library/Application Support/Nessa/gateway-runtimes")
+            .join(label)
+            .join(fingerprint);
+        artifact_presence(&path).map_err(GatewayError::Registration)
     }
 
     fn recover(
@@ -864,118 +897,6 @@ fn run_planned_effect_answering<T, E: Display>(
     Ok(result)
 }
 
-/// What a declared cleanup did: removed its artifact, or found it absent.
-#[derive(Debug, PartialEq, Eq)]
-enum CleanupRun {
-    Ran,
-    AlreadyAbsent,
-}
-
-fn run_planned_effect_with_cleanup<T>(
-    progress: &dyn GatewayReconciliationProgress,
-    plan_id: &str,
-    effect: LifecycleEffect,
-    cleanup_step: LifecyclePlanStep,
-    run: impl FnOnce() -> Result<T, String>,
-    cleanup: impl FnOnce() -> Result<CleanupRun, String>,
-    observe: impl Fn() -> Result<(Option<ReconciliationIncarnation>, bool), String>,
-) -> Result<T, RegisterFailure> {
-    let primary =
-        LifecyclePlanStep::new("primary".into(), effect, LifecycleEffectPredicate::Always)
-            .map_err(|error| RegisterFailure::Physical(error.to_string()))?;
-    progress
-        .effect_planned(plan_id, &primary, std::slice::from_ref(&cleanup_step))
-        .map_err(RegisterFailure::Audit)?;
-    let result = run();
-    let completion = match &result {
-        Ok(_) => LifecycleCommandResult::Accepted,
-        Err(error) => LifecycleCommandResult::Failed(error.clone()),
-    };
-    let completion_delivery = progress.effect_completed(plan_id, primary.id(), &completion);
-    let mut observed_primary = None;
-    let observation_delivery = match &completion_delivery {
-        Ok(_) => match observe() {
-            Ok((incarnation, target_artifact_present)) => {
-                observed_primary = incarnation.clone();
-                progress.physical_observed(
-                    &LifecycleObservationSource::Effect {
-                        plan_id: plan_id.into(),
-                        step_id: primary.id().into(),
-                    },
-                    incarnation,
-                    target_artifact_present,
-                )
-            }
-            .map(|_| ()),
-            Err(error) => Err(GatewayError::Registration(error)),
-        },
-        Err(error) => Err(error.clone()),
-    };
-    // The cleanup runs only once the journal holds the primary's result and
-    // observation and that result makes it owed. After a failed delivery it
-    // does not run: the journal could not record it, and the next successful
-    // registration prunes what is left.
-    let owed = completion_delivery.is_ok()
-        && observation_delivery.is_ok()
-        && cleanup_step
-            .predicate()
-            .is_due(Some(&completion), observed_primary.as_ref());
-    if !owed {
-        if let Err(audit) = completion_delivery.and(observation_delivery) {
-            return Err(audit_after_physical(audit, &result));
-        }
-    } else {
-        let cleanup_result = cleanup();
-        let cleanup_completion = match &cleanup_result {
-            Ok(CleanupRun::Ran) => LifecycleCommandResult::Accepted,
-            Ok(CleanupRun::AlreadyAbsent) => LifecycleCommandResult::Indeterminate(
-                "What the cleanup removes was already absent".into(),
-            ),
-            Err(error) => LifecycleCommandResult::Failed(error.clone()),
-        };
-        let cleanup_delivery = progress
-            .effect_completed(plan_id, cleanup_step.id(), &cleanup_completion)
-            .and_then(|_| {
-                let (incarnation, target_artifact_present) =
-                    observe().map_err(|error| GatewayError::Registration(error.to_string()))?;
-                progress
-                    .physical_observed(
-                        &LifecycleObservationSource::Effect {
-                            plan_id: plan_id.into(),
-                            step_id: cleanup_step.id().into(),
-                        },
-                        incarnation,
-                        target_artifact_present,
-                    )
-                    .map(|_| ())
-            });
-        if let Err(audit) = cleanup_delivery {
-            let cleanup_detail = match &cleanup_result {
-                Ok(CleanupRun::Ran) => "; the planned cleanup ran".to_owned(),
-                Ok(CleanupRun::AlreadyAbsent) => {
-                    "; the planned cleanup found nothing to remove".to_owned()
-                }
-                Err(error) => format!("; planned cleanup also failed: {error}"),
-            };
-            return Err(audit_after_physical(
-                GatewayError::Registration(format!("{audit}{cleanup_detail}")),
-                &result,
-            ));
-        }
-        if let Err(error) = cleanup_result {
-            return Err(RegisterFailure::Physical(format!(
-                "{}; planned cleanup also failed: {error}",
-                result
-                    .as_ref()
-                    .err()
-                    .cloned()
-                    .unwrap_or_else(|| "gateway audit delivery failed".into())
-            )));
-        }
-    }
-    result.map_err(RegisterFailure::Physical)
-}
-
 fn audit_after_physical<T, E: Display>(
     audit: GatewayError,
     physical: &Result<T, E>,
@@ -1169,19 +1090,6 @@ fn settle_without_replay(
     })
 }
 
-/// The prune a first staging declares for the runtime it publishes, owed
-/// only when staging did not succeed.
-fn staging_cleanup(fingerprint: &str) -> Result<LifecyclePlanStep, String> {
-    LifecyclePlanStep::new(
-        "remove-published-runtime".into(),
-        LifecycleEffect::PruneRuntime {
-            fingerprint: fingerprint.into(),
-        },
-        LifecycleEffectPredicate::PrimaryNotAccepted,
-    )
-    .map_err(|error| error.to_string())
-}
-
 /// The bootout a bootstrap declares, owed only when the bootstrap did not
 /// succeed: after a success nothing is left pending for the next step.
 fn bootstrap_cleanup(service: &str) -> Result<LifecyclePlanStep, String> {
@@ -1370,6 +1278,239 @@ fn launch_definition(
     })
 }
 
+/// Where this registration's launchd job runs.
+///
+/// A published generation is the immutable copy. Until that directory exists,
+/// the job runs the bundled tree of the same fingerprint so the gateway can
+/// bind. The publication starts only after the attempt accepts its plan.
+/// `keep_bundle` is that same choice for the rest of
+/// this process: publication must not replace a healthy bundle-backed job
+/// before the next launch. The server advertises that fingerprint only when
+/// the tree it is about to serve still digests to it, including after launchd
+/// restarts this job.
+fn registration_runtime<'a>(
+    published: bool,
+    keep_bundle: bool,
+    bundled: &'a Path,
+    planned: &'a Path,
+) -> &'a Path {
+    if published && !keep_bundle {
+        planned
+    } else {
+        bundled
+    }
+}
+
+/// The installed definition is the bundle path this process registered, for
+/// this fingerprint.
+fn definition_uses_bundle(definition: Option<&Value>, bundled: &Path, fingerprint: &str) -> bool {
+    let Some(definition) = definition else {
+        return false;
+    };
+    if definition.get("ProgramArguments") != Some(&launch_settings(bundled)) {
+        return false;
+    }
+    definition
+        .get("EnvironmentVariables")
+        .and_then(|environment| environment.get("NESSA_RUNTIME_FINGERPRINT"))
+        .and_then(Value::as_str)
+        == Some(fingerprint)
+}
+
+struct DeferredStage {
+    source: PathBuf,
+    installations: PathBuf,
+    fingerprint: String,
+    reporter: Option<DeferredStageReporter>,
+    #[cfg(test)]
+    pause: Option<Arc<StagePause>>,
+}
+
+/// The per-label lock, and a publication a test did not wait for.
+///
+/// Drop releases the lock. A test publication moves the lock to the thread
+/// that runs `stage_runtime`, which releases it only after that returns, so
+/// pruning — which runs only while the lock is held — cannot remove the
+/// attempt's temporary directory. Production moves the lock into
+/// [`DeferredStageLaunch`] instead, and that launch starts the thread only
+/// after the stage plan is accepted.
+struct HeldRegistration {
+    lock: Option<control::NamespaceLock>,
+    stage: Option<DeferredStage>,
+}
+
+impl HeldRegistration {
+    fn lock(directory: &Path) -> Result<Self, String> {
+        Ok(Self {
+            lock: Some(lock_namespace(directory)?),
+            stage: None,
+        })
+    }
+
+    #[cfg(test)]
+    fn defer_stage_until(
+        &mut self,
+        source: PathBuf,
+        installations: PathBuf,
+        fingerprint: String,
+        pause: Arc<StagePause>,
+    ) {
+        self.arm(DeferredStage {
+            source,
+            installations,
+            fingerprint,
+            reporter: None,
+            pause: Some(pause),
+        });
+    }
+
+    #[cfg(test)]
+    fn arm(&mut self, stage: DeferredStage) {
+        assert!(
+            self.stage.is_none(),
+            "one registration publishes one runtime"
+        );
+        self.stage = Some(stage);
+    }
+}
+
+impl Drop for HeldRegistration {
+    fn drop(&mut self) {
+        let Some(stage) = self.stage.take() else {
+            return;
+        };
+        spawn_deferred_publish(stage, self.lock.take());
+    }
+}
+
+fn spawn_deferred_publish(stage: DeferredStage, lock: Option<control::NamespaceLock>) {
+    let fingerprint = stage.fingerprint.clone();
+    // A failed spawn drops `stage`, and with it the reporter. The attempt
+    // records that missing result as a failed publication.
+    if let Err(error) = std::thread::Builder::new()
+        .name("nessa-stage-runtime".into())
+        .spawn(move || publish_deferred(stage, lock))
+    {
+        eprintln!("[nessa] Could not start publishing gateway runtime {fingerprint}: {error}");
+    }
+}
+
+fn publish_deferred(mut stage: DeferredStage, lock: Option<control::NamespaceLock>) {
+    #[cfg(test)]
+    let pause = stage.pause.clone();
+    #[cfg(test)]
+    if let Some(pause) = &pause {
+        pause.mark_started();
+        pause.wait_release();
+    }
+    let result = stage_runtime(&stage.source, &stage.installations, &stage.fingerprint);
+    match &result {
+        Ok(published) => {
+            eprintln!("[nessa] Published gateway runtime {}", published.display());
+        }
+        Err(error) => {
+            eprintln!(
+                "[nessa] Could not publish gateway runtime {}: {error}",
+                stage.fingerprint
+            );
+        }
+    }
+    let publication = result.as_ref().map(|_| ()).map_err(Clone::clone);
+    if let Some(reporter) = stage.reporter.take() {
+        reporter.finish(publication);
+    }
+    // Release the label lock before telling a test the publication finished,
+    // so "finished" means pruning is allowed to look at the directory.
+    drop(lock);
+    #[cfg(test)]
+    if let Some(pause) = pause {
+        pause.finish(result.map(|_| ()));
+    }
+}
+
+/// Test rendezvous for a deferred publication: the thread holds the label lock
+/// and has not entered `stage_runtime` until `release`.
+///
+/// The three flags share one mutex. A condition variable may be waited on
+/// with only that mutex; waiting on a second one aborts the staging thread.
+#[cfg(test)]
+struct StagePauseState {
+    started: bool,
+    release: bool,
+    finished: Option<Result<(), String>>,
+}
+
+#[cfg(test)]
+struct StagePause {
+    state: Mutex<StagePauseState>,
+    cv: Condvar,
+}
+
+#[cfg(test)]
+impl StagePause {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(StagePauseState {
+                started: false,
+                release: false,
+                finished: None,
+            }),
+            cv: Condvar::new(),
+        })
+    }
+
+    fn mark_started(&self) {
+        self.state.lock().expect("stage pause").started = true;
+        self.cv.notify_all();
+    }
+
+    fn wait_until_staging_holds_the_lock(&self) {
+        let guard = self.state.lock().expect("stage pause");
+        let (guard, result) = self
+            .cv
+            .wait_timeout_while(guard, Duration::from_secs(5), |state| !state.started)
+            .expect("stage pause");
+        assert!(
+            !result.timed_out() && guard.started,
+            "deferred staging did not take the label lock"
+        );
+    }
+
+    fn release(&self) {
+        self.state.lock().expect("stage pause").release = true;
+        self.cv.notify_all();
+    }
+
+    fn wait_release(&self) {
+        let guard = self.state.lock().expect("stage pause");
+        let (guard, result) = self
+            .cv
+            .wait_timeout_while(guard, Duration::from_secs(30), |state| !state.release)
+            .expect("stage pause");
+        assert!(
+            !result.timed_out() && guard.release,
+            "deferred staging was not released"
+        );
+    }
+
+    fn finish(&self, result: Result<(), String>) {
+        self.state.lock().expect("stage pause").finished = Some(result);
+        self.cv.notify_all();
+    }
+
+    fn wait_until_finished(&self) -> Result<(), String> {
+        let guard = self.state.lock().expect("stage pause");
+        let (guard, result) = self
+            .cv
+            .wait_timeout_while(guard, Duration::from_secs(30), |state| {
+                state.finished.is_none()
+            })
+            .expect("stage pause");
+        assert!(!result.timed_out(), "deferred staging did not finish");
+        guard.finished.clone().expect("deferred staging finished")
+    }
+}
+
 fn register(
     host: &Launchd,
     runtime: &Path,
@@ -1402,7 +1543,10 @@ fn register(
         .join("Library/Application Support/Nessa/gateway-locks")
         .join(&label);
     nessa_local_storage::create_directory(&lock_directory).map_err(|e| e.to_string())?;
-    let _lock = lock_namespace(&lock_directory)?;
+    // Held through registration. An unpublished generation moves the lock into
+    // the deferred launch, which keeps it until the accepted plan starts the
+    // copy or the launch is dropped.
+    let mut label_lock = HeldRegistration::lock(&lock_directory)?;
     let uid = unsafe { libc::getuid() };
     let domain = format!("gui/{uid}");
     let service = format!("{domain}/{label}");
@@ -1417,11 +1561,20 @@ fn register(
     let staged_effect = LifecycleEffect::StageRuntime {
         fingerprint: fingerprint.clone(),
     };
-    let runtime_for_definition = planned_runtime.as_path();
-    let arguments = launch_settings(runtime_for_definition);
-    let agents = home.join("Library/LaunchAgents");
     let path = artifacts.plist.clone();
     let installed = read_definition(&path).ok();
+    let published = fs::symlink_metadata(&planned_runtime).is_ok();
+    // A bundle-backed job this process registered keeps that path until the
+    // next launch, including after this process finishes publishing it.
+    let keep_bundle = host.bundle_launch_noted(&fingerprint)
+        && definition_uses_bundle(installed.as_ref(), runtime, &fingerprint);
+    let runtime_for_definition =
+        registration_runtime(published, keep_bundle, runtime, &planned_runtime);
+    if !published {
+        host.note_bundle_launch(&fingerprint);
+    }
+    let arguments = launch_settings(runtime_for_definition);
+    let agents = home.join("Library/LaunchAgents");
     let agent_path = registered_agent_path(agent_path, installed.as_ref(), runtime_for_definition);
     let environment = service_environment(configuration, home, &agent_path, &fingerprint);
     let mut definition = launch_definition(&label, &arguments, &data, &environment, &log);
@@ -1499,10 +1652,10 @@ fn register(
     progress
         .intent_admitted(intent)
         .map_err(RegisterFailure::Audit)?;
-    let staged_runtime_existed = fs::symlink_metadata(&planned_runtime).is_ok();
-    let _staged_runtime = if staged_runtime_existed {
+    if published {
         // The exact runtime is already published: this plan reuses it, and
-        // its name says so in the journal.
+        // its name says so in the journal. The full-tree check stays here, in
+        // front of any service change, so a corrupt generation is not launched.
         run_planned_effect(
             progress,
             "reuse-staged-runtime",
@@ -1525,45 +1678,39 @@ fn register(
                     artifacts.present(&staged_effect, status.loaded)?,
                 ))
             },
-        )?
+        )?;
     } else {
-        let cleanup_staged_runtime = staging_cleanup(&fingerprint)?;
-        run_planned_effect_with_cleanup(
-            progress,
-            "stage-runtime",
-            LifecycleEffect::StageRuntime {
-                fingerprint: fingerprint.clone(),
-            },
-            cleanup_staged_runtime,
-            || {
-                prepare_data_directory(base, stage, instance)?;
-                stage_runtime_cached(
-                    runtime,
-                    &installations,
-                    &fingerprint,
-                    &host.validated_runtimes,
-                )
-            },
-            || {
-                // Staging that failed before publishing left nothing to prune.
-                if artifacts.present(&staged_effect, false)? {
-                    prune_runtime(&installations, &fingerprint).map(|()| CleanupRun::Ran)
-                } else {
-                    Ok(CleanupRun::AlreadyAbsent)
-                }
-            },
-            || {
-                let status = launchctl.status(&service)?;
-                Ok((
-                    observed_incarnation(&service, port, &status, launchctl.health(port)),
-                    artifacts.present(&staged_effect, status.loaded)?,
-                ))
-            },
-        )?
-    };
+        // The copy stays off this attempt until `stage-runtime` is accepted.
+        // The data directory is prepared here. The plan has no cleanup. The
+        // launch holds the label lock and starts the copy only when the
+        // attempt calls it after that plan. `stage_runtime` still requires
+        // private modes, normalised extended attributes, a matching full-tree
+        // digest, and removal of only this attempt's temporary directory.
+        prepare_data_directory(base, stage, instance)?;
+        let source = runtime.to_path_buf();
+        let stage_installations = installations.clone();
+        let stage_fingerprint = fingerprint.clone();
+        let lock = label_lock.lock.take();
+        let launch = DeferredStageLaunch::new(move |reporter| {
+            spawn_deferred_publish(
+                DeferredStage {
+                    source,
+                    installations: stage_installations,
+                    fingerprint: stage_fingerprint,
+                    reporter: Some(reporter),
+                    #[cfg(test)]
+                    pause: None,
+                },
+                lock,
+            );
+        });
+        progress
+            .begin_deferred_stage(&fingerprint, launch)
+            .map_err(RegisterFailure::Audit)?;
+    }
     match state {
         ServiceState::ManagedCurrent(running) => {
-            // The loaded service already advertises the staged runtime, so the
+            // The loaded service already matches this registration, so the
             // versions nothing can be running are known here too. Collecting
             // only after a replacement would leave an ordinary launch holding
             // whatever the last update left behind until the next one.
@@ -2277,8 +2424,8 @@ mod tests {
         bootstrap_recovery_decision, bootstrap_succeeded, cleanup_bootstrap_with, control,
         disabled_service, finish_bootstrap, gave_up_retry, installed_generation,
         matches_reconciled_gateway, prepare_data_directory, publish_definition,
-        recovery_probe_port, registered_agent_path, run_bootstrap, run_planned_effect_with_cleanup,
-        runtime_fingerprint, service_environment, service_matches, startup, unavailable_service,
+        recovery_probe_port, registered_agent_path, run_bootstrap, runtime_fingerprint,
+        service_environment, service_matches, startup, unavailable_service,
         unload_plan_after_retirement, unreadable_process_identity, BootstrapCleanupDecision,
         BootstrapFailure, BootstrapRecoveryDecision, SearchPath,
     };
@@ -2288,8 +2435,8 @@ mod tests {
     };
     use crate::gateway::domain::value_objects::RetirementRefusal;
     use crate::gateway::domain::value_objects::{
-        AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
-        LifecycleObservation, LifecycleObservationSource, LifecyclePlanStep, LifecycleRecordKind,
+        AuditDeliveryReceipt, LifecycleCommandResult, LifecycleObservation,
+        LifecycleObservationSource, LifecyclePlanStep, LifecycleRecordKind,
         ReconciliationCorrelation, ReconciliationIncarnation, ReconciliationTarget,
         ServiceConfiguration,
     };
@@ -2553,150 +2700,47 @@ mod tests {
     }
 
     #[test]
-    fn staging_cleanup_runs_only_when_the_journal_records_it_owed() {
-        struct StagingProgress {
-            events: Mutex<Vec<String>>,
-            fail_primary_completion: bool,
-            fail_primary_observation: bool,
-        }
-
-        impl GatewayReconciliationProgress for StagingProgress {
-            fn readiness_invalidated(&self) {}
-
-            fn intent_admitted(&self, _: GatewayReconciliationIntent) -> Result<(), GatewayError> {
-                Ok(())
-            }
-
-            fn history_observed(&self, _: ReconciliationHistoryFact) {}
-
-            fn effect_planned(
-                &self,
-                plan_id: &str,
-                _: &LifecyclePlanStep,
-                cleanup: &[LifecyclePlanStep],
-            ) -> Result<AuditDeliveryReceipt, GatewayError> {
-                assert_eq!(plan_id, "stage-runtime");
-                assert_eq!(cleanup.len(), 1);
-                assert_eq!(cleanup[0].id(), "remove-published-runtime");
-                // Owed only if staging did not succeed, so a success leaves
-                // nothing pending for the next plan.
-                assert_eq!(
-                    cleanup[0].predicate(),
-                    &LifecycleEffectPredicate::PrimaryNotAccepted
-                );
-                self.events.lock().unwrap().push("plan".into());
-                Ok(test_receipt(1, LifecycleRecordKind::EffectPlan))
-            }
-
-            fn effect_completed(
-                &self,
-                _: &str,
-                step_id: &str,
-                _: &LifecycleCommandResult,
-            ) -> Result<AuditDeliveryReceipt, GatewayError> {
-                self.events
-                    .lock()
-                    .unwrap()
-                    .push(format!("complete:{step_id}"));
-                if step_id == "primary" && self.fail_primary_completion {
-                    Err(GatewayError::Registration(
-                        "completion delivery failed".into(),
-                    ))
-                } else {
-                    Ok(test_receipt(2, LifecycleRecordKind::EffectCompletion))
-                }
-            }
-
-            fn physical_observed(
-                &self,
-                source: &LifecycleObservationSource,
-                incarnation: Option<ReconciliationIncarnation>,
-                target_artifact_present: bool,
-            ) -> Result<LifecycleObservation, GatewayError> {
-                let LifecycleObservationSource::Effect { step_id, .. } = source else {
-                    panic!("staging observes its own steps");
-                };
-                self.events
-                    .lock()
-                    .unwrap()
-                    .push(format!("observe:{step_id}"));
-                if step_id == "primary" && self.fail_primary_observation {
-                    return Err(GatewayError::Registration(
-                        "observation delivery failed".into(),
-                    ));
-                }
-                Ok(LifecycleObservation::new(
-                    1,
-                    incarnation,
-                    target_artifact_present,
-                ))
-            }
-        }
-
-        let stage = |fail_primary_completion: bool,
-                     fail_primary_observation: bool,
-                     staged: Result<&'static str, String>| {
-            let progress = StagingProgress {
-                events: Mutex::new(Vec::new()),
-                fail_primary_completion,
-                fail_primary_observation,
-            };
-            let cleaned = AtomicBool::new(false);
-            let result = run_planned_effect_with_cleanup(
-                &progress,
-                "stage-runtime",
-                LifecycleEffect::StageRuntime {
-                    fingerprint: "a".repeat(64),
-                },
-                super::staging_cleanup(&"a".repeat(64)).unwrap(),
-                || staged,
-                || {
-                    cleaned.store(true, Ordering::SeqCst);
-                    Ok(super::CleanupRun::Ran)
-                },
-                || Ok((None, false)),
-            );
-            (
-                result,
-                cleaned.load(Ordering::SeqCst),
-                progress.events.into_inner().unwrap(),
-            )
-        };
-
-        // Staging succeeded but its result was not recorded: nothing is owed,
-        // nothing is undone, and the next registration prunes what is left.
-        let (result, cleaned, events) = stage(true, false, Ok("published"));
-        assert!(matches!(result, Err(super::RegisterFailure::Audit(_))));
-        assert!(!cleaned);
-        assert_eq!(events, ["plan", "complete:primary"]);
-
-        // Staging failed, but its observation was not recorded: the journal
-        // cannot yet accept the prune, so it does not run.
-        let (result, cleaned, events) = stage(false, true, Err("copy failed".into()));
-        assert!(matches!(result, Err(super::RegisterFailure::Audit(_))));
-        assert!(!cleaned);
-        assert_eq!(events, ["plan", "complete:primary", "observe:primary"]);
-
-        // Staging failed and that was recorded: the prune is owed and runs.
-        let (result, cleaned, events) = stage(false, false, Err("copy failed".into()));
-        assert!(matches!(result, Err(super::RegisterFailure::Physical(_))));
-        assert!(cleaned);
-        assert_eq!(
-            events,
-            [
-                "plan",
-                "complete:primary",
-                "observe:primary",
-                "complete:remove-published-runtime",
-                "observe:remove-published-runtime",
-            ]
+    fn an_unpublished_generation_is_launched_from_the_bundle() {
+        let bundled = Path::new("/Applications/Nessa.app/Contents/Resources/runtime");
+        let planned = Path::new(
+            "/Users/me/Library/Application Support/Nessa/gateway-runtimes/so.nessa.gateway.prod/ab",
         );
-
-        // Staging succeeded and was recorded: nothing is owed.
-        let (result, cleaned, events) = stage(false, false, Ok("published"));
-        assert!(result.is_ok());
-        assert!(!cleaned);
-        assert_eq!(events, ["plan", "complete:primary", "observe:primary"]);
+        assert_eq!(
+            super::registration_runtime(false, false, bundled, planned),
+            bundled
+        );
+        assert_eq!(
+            super::registration_runtime(true, false, bundled, planned),
+            planned
+        );
+        assert_eq!(
+            super::registration_runtime(true, true, bundled, planned),
+            bundled
+        );
+        let fingerprint = "ab";
+        let bundle_definition = json!({
+            "ProgramArguments": launch_settings(bundled),
+            "EnvironmentVariables": {"NESSA_RUNTIME_FINGERPRINT": fingerprint},
+        });
+        assert!(super::definition_uses_bundle(
+            Some(&bundle_definition),
+            bundled,
+            fingerprint
+        ));
+        let published_definition = json!({
+            "ProgramArguments": launch_settings(planned),
+            "EnvironmentVariables": {"NESSA_RUNTIME_FINGERPRINT": fingerprint},
+        });
+        assert!(!super::definition_uses_bundle(
+            Some(&published_definition),
+            bundled,
+            fingerprint
+        ));
+        assert!(!super::definition_uses_bundle(
+            Some(&bundle_definition),
+            bundled,
+            "cd"
+        ));
     }
 
     #[test]
