@@ -305,9 +305,15 @@ try {
     JSON.parse(permission.argumentsJson),
     providerPermissionRequest.rawInput,
   )
+  // The harness offered its own choices. An owner review of a named tool
+  // also offers the project rule. Answering once still sends the harness id.
   assert.deepEqual(
     permission.options.map((option) => option.id),
-    providerPermissionRequest.options.map((option) => option.optionId),
+    [
+      ...providerPermissionRequest.options.map((option) => option.optionId),
+      "nessa.remember.allow",
+      "nessa.remember.deny",
+    ],
   )
 
   const steered = await proxy.guard(

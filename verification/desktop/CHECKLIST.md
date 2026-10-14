@@ -871,6 +871,13 @@ phone's scanner is not this screen.
 - [ ] **Keyboard focus shows the window's focus ring** on Settings' tabs and
   controls (not a fill). _Check:_ `settings-page.mjs --only focus-ring`
   (WebKit walks with ⌥Tab, as Safari does).
+- [ ] **Review notifications ask from Allow.** Access shows the row and
+  does not prompt before that button is pressed. _Check:_
+  `settings-page.mjs --only review-notices`.
+- [ ] **Remembered rules rest without a gateway.** Access shows one
+  remembered-rules row, disabled, and says it is not available in this
+  window. _Check:_ `settings-page.mjs --only remembered-rules`; unit test
+  `permission-rule-rows.test.tsx`.
 - [ ] **Claude and Codex native hooks rest without a gateway.** Access shows
   both rows disabled, with no switch, and says hooks can approve, deny, or
   change a tool call and its result without Nessa asking, and can run

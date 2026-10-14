@@ -122,6 +122,8 @@ fn spawn_worker<P: AcpProfile>(
         0,
         crate::application::agent_execution::executions::NativeHooksLaunchCause::Open,
         None,
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     ));
     (
         RunningWorker {

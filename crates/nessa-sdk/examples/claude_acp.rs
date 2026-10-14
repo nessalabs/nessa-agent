@@ -242,6 +242,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
             images: None,
             clock: Arc::new(RuntimeClock::new()),
             workspace_paths: Arc::new(nessa_sdk::infrastructure::workspace_paths::FilesystemPaths),
+            permission_rules: std::sync::Arc::new(nessa_sdk::application::agent_execution::permissions::IdlePermissionRules),
+            review_notices: std::sync::Arc::new(nessa_sdk::application::agent_execution::permissions::IdleReviewNotices),
         },
         &model,
         limits,
