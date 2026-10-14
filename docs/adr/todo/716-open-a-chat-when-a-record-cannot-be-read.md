@@ -49,7 +49,7 @@ line is still shown.
 | Physical frame that is not a frame, including an unknown tag or a bad seal | One line for the run of bad frames. The next frame is read. | The next record is the boundary. A byte scan is not. |
 | Change whose turn was never accepted, once a gap exists or the chat was never opened | Not applied. No extra line. | It belongs to the record that was skipped. |
 | Observation of a turn that is present, when that observation itself cannot be applied | One line. The turn stays. | The turn was a different record and it could be read. |
-| Lease body that does not decode, or a lease change the current lease refuses | One line. A held lease becomes unreadable; its revision stays. | A lease is not the chat. Unknown kinds already keep the chat. A note in the same unit does not keep the held lease when the lease is the change the fold refused. |
+| Lease body that does not decode, or a lease change the current lease refuses | One line. A held lease becomes unreadable; its revision stays. | A lease is not the chat. Unknown kinds already keep the chat. A note in the same unit does not keep the held lease when the lease is the change the fold refused. A lease object the batch walk refuses is this row, including when the unit is refused as a whole. |
 | Lease of a kind this build does not know | Applied as unreadable, and one line. | Same lease rule. The person still sees that something was skipped. |
 | Decoded `Opened` that the session accepts, whose session id is not this stream | The page is `conversation_state_unreadable` (`TranscriptError::Scope`). | That open would name a different chat, so the page is not published. An open that does not decode is a skip: the stream already names this chat. A later open the session fold refuses is a skip too. This is the only saved record that refuses the page. |
 | Unit that stages a snapshot whose id is not this stream | One line. The staged unit is dropped. The page continues. | Invalid data that got as far as a snapshot. The wrong identity is not kept. The open above is refused before it is staged, so this row is the check after a stage that was not that open. |
@@ -74,7 +74,8 @@ kept. A later gap is still skipped, adds no line, and sets `unreadableTruncated`
 when the save that follows it completes. The id is the decimal physical position of the record. A checkpoint is reread
 from the records when its ids are not strictly increasing positions, when
 a gap's position is past the applied cursor, or when a gap names an accepted
-turn the restored snapshot does not hold. `afterExecutionId` is the last
+turn the restored snapshot does not hold, or when the list is marked cut
+without holding 32 gaps. `afterExecutionId` is the last
 accepted turn at that moment, and it is absent when there was none. A
 duplicate of an id already kept does not set the flag.
 

@@ -498,9 +498,17 @@ impl TranscriptFold {
         {
             self.semantic_decodes += 1;
         }
-        let snapshot::BatchRead::Changes(read) = snapshot::read_batch(payload, &context) else {
-            self.note_unreadable(position);
-            return Ok(());
+        let read = match snapshot::read_batch(payload, &context) {
+            snapshot::BatchRead::Changes(read) => read,
+            // A lease object that does not survive the batch walk. A note
+            // that fails the same walk leaves a held lease alone.
+            snapshot::BatchRead::Whole { lease } => {
+                if lease {
+                    self.committed.lose_held_lease(semantic);
+                }
+                self.note_unreadable(position);
+                return Ok(());
+            }
         };
         if read
             .iter()
@@ -865,6 +873,8 @@ impl TranscriptFold {
                     .is_ok_and(|position| position > saved.applied)
             })
             || gap_anchor_missing(snapshot.as_ref(), &saved.unread)
+            || (saved.unreadable_truncated
+                && saved.unread.len() != UnreadablePart::MAX_PER_CONVERSATION)
         {
             return Err(TranscriptError::Checkpoint);
         }
@@ -3520,6 +3530,28 @@ mod tests {
     }
 
     #[test]
+    fn a_checkpoint_refuses_a_truncated_flag_without_a_full_gap_list() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let checkpoint = fold.checkpoint().unwrap();
+        let value: Value = serde_json::from_reader(checkpoint.reader()).unwrap();
+        for unread in [serde_json::json!([]), serde_json::json!([{ "id": "1" }])] {
+            let mut changed = value.clone();
+            changed["unread"] = unread;
+            changed["unreadable_truncated"] = serde_json::json!(true);
+            let malformed =
+                TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&changed).unwrap()])
+                    .unwrap();
+            assert!(matches!(
+                TranscriptFold::restore(scope.clone(), fold.applied(), &malformed),
+                Err(TranscriptError::Checkpoint)
+            ));
+        }
+    }
+
+    #[test]
     fn a_checkpoint_refuses_a_gap_anchor_absent_from_the_snapshot() {
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
@@ -3764,6 +3796,97 @@ mod tests {
             fold.snapshot().unwrap().lease.as_ref().unwrap().state(),
             CurrentLeaseState::Unreadable { kind } if kind == "record"
         ));
+    }
+
+    #[test]
+    fn a_lease_the_preflight_refuses_retires_the_held_lease() {
+        use crate::application::agent_execution::sessions::{CurrentLeaseState, LeaseRecord};
+        use crate::domain::agent_execution::leases::{
+            AgentWork, EnvironmentRef, LeaseDeadline, LeaseGrants, LeaseId, LeaseRevision,
+            LeaseTerms, LeaseWork, SandboxProfile,
+        };
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let issued = LeaseRecord::Issued {
+            lease: LeaseId::new("lease-1").unwrap(),
+            revision: LeaseRevision::FIRST,
+            terms: LeaseTerms {
+                environment: EnvironmentRef::Here,
+                work: LeaseWork::Agent(AgentWork::new("claude", "sonnet").unwrap()),
+                sandbox: SandboxProfile::HarnessDefault,
+                grants: LeaseGrants::Opening,
+                deadline: LeaseDeadline::UntilEnded,
+            },
+            actor: ActionContext::new("person", "desktop", "send").unwrap(),
+        };
+        fold.apply(&one_unit(&fold, &[SessionChange::Lease(issued)], 1))
+            .unwrap();
+        assert!(matches!(
+            fold.snapshot().unwrap().lease.as_ref().unwrap().state(),
+            CurrentLeaseState::Held(_)
+        ));
+        let note = serde_json::json!({
+            "schemaVersion": StorageError::SCHEMA_VERSION,
+            "changes": [{ "Note": { "extra": true } }]
+        });
+        let frames = save_payload_frames(&serde_json::to_vec(&note).unwrap(), fold.applied(), 2);
+        fold.apply(&records(&scope, fold.downloaded() + 1, &frames))
+            .unwrap();
+        assert!(matches!(
+            fold.snapshot().unwrap().lease.as_ref().unwrap().state(),
+            CurrentLeaseState::Held(_)
+        ));
+        let oversized = "x".repeat(LeaseRecord::MAX_UNREADABLE_BODY_BYTES + 1);
+        let repeated = serde_json::to_string(&serde_json::json!({
+            "schemaVersion": StorageError::SCHEMA_VERSION,
+            "changes": [{ "Lease": { "kind": "issued", "body": "{}" } }]
+        }))
+        .unwrap()
+        .replacen("\"kind\":", "\"kind\":\"issued\",\"kind\":", 1);
+        let retiring = [
+            serde_json::json!({
+                "schemaVersion": StorageError::SCHEMA_VERSION,
+                "changes": [{ "Lease": { "kind": "issued", "body": "{}", "extra": true } }]
+            })
+            .to_string(),
+            serde_json::json!({
+                "schemaVersion": StorageError::SCHEMA_VERSION,
+                "changes": [{ "Lease": { "kind": "issued", "body": oversized } }]
+            })
+            .to_string(),
+            repeated,
+        ];
+        for (offset, payload) in retiring.into_iter().enumerate() {
+            let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+            fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+                .unwrap();
+            let issued = LeaseRecord::Issued {
+                lease: LeaseId::new("lease-1").unwrap(),
+                revision: LeaseRevision::FIRST,
+                terms: LeaseTerms {
+                    environment: EnvironmentRef::Here,
+                    work: LeaseWork::Agent(AgentWork::new("claude", "sonnet").unwrap()),
+                    sandbox: SandboxProfile::HarnessDefault,
+                    grants: LeaseGrants::Opening,
+                    deadline: LeaseDeadline::UntilEnded,
+                },
+                actor: ActionContext::new("person", "desktop", "send").unwrap(),
+            };
+            fold.apply(&one_unit(&fold, &[SessionChange::Lease(issued)], 1))
+                .unwrap();
+            let frames = save_payload_frames(payload.as_bytes(), fold.applied(), 2 + offset as u64);
+            fold.apply(&records(&scope, fold.downloaded() + 1, &frames))
+                .unwrap();
+            assert!(
+                matches!(
+                    fold.snapshot().unwrap().lease.as_ref().unwrap().state(),
+                    CurrentLeaseState::Unreadable { kind } if kind == "record"
+                ),
+                "{payload}"
+            );
+        }
     }
 
     #[test]

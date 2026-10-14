@@ -343,8 +343,9 @@ pub(crate) enum ReadChange {
 /// A save unit read one change at a time. [`BatchRead::Whole`] means the unit
 /// itself cannot be read, so none of its changes apply.
 pub(crate) enum BatchRead {
-    /// Preflight failed, or the body is not a batch of changes.
-    Whole,
+    /// Preflight failed, or the body is not a batch of changes. `lease` is
+    /// set when that failure is a lease object of a current record.
+    Whole { lease: bool },
     /// Preflight passed. A failed change hides the rest of the unit.
     Changes(Vec<ReadChange>),
 }
@@ -353,21 +354,26 @@ pub(crate) enum BatchRead {
 /// does not read is [`BatchRead::Whole`]. A single change that does not decode
 /// is [`ReadChange::Failed`] and the changes after it are not returned.
 pub(crate) fn read_batch(bytes: &[u8], context: &ProviderContext) -> BatchRead {
-    if super::decode::preflight_semantic_batch(bytes).is_err() {
-        return BatchRead::Whole;
+    let walk = super::decode::walk_semantic_batch(bytes);
+    if walk.result.is_err() {
+        return BatchRead::Whole {
+            lease: walk.lease_failed,
+        };
     }
     // Preflight permits a repeated field, and `serde_json::Value` then keeps
     // the last one. A visitor that refuses the repeated key runs before any
     // change is converted, so the unit is one gap and the last definition
-    // does not apply.
-    let Ok(value) = json_without_duplicate_keys(bytes) else {
-        return BatchRead::Whole;
+    // does not apply. A repeated key inside the lease object is still that
+    // lease failing to decode.
+    let value = match json_without_duplicate_keys(bytes) {
+        Ok(value) => value,
+        Err(lease) => return BatchRead::Whole { lease },
     };
     let Some(changes) = value.get("changes").and_then(|changes| changes.as_array()) else {
-        return BatchRead::Whole;
+        return BatchRead::Whole { lease: false };
     };
     if changes.is_empty() {
-        return BatchRead::Whole;
+        return BatchRead::Whole { lease: false };
     }
     let mut context = context.clone();
     let mut read = Vec::with_capacity(changes.len());
@@ -395,26 +401,42 @@ pub(crate) fn read_batch(bytes: &[u8], context: &ProviderContext) -> BatchRead {
 
 /// JSON objects keep every key. A repeated name, including one written with a
 /// different escape, is refused before a typed conversion can collapse it.
-fn json_without_duplicate_keys(bytes: &[u8]) -> Result<Value, serde_json::Error> {
+fn json_without_duplicate_keys(bytes: &[u8]) -> Result<Value, bool> {
+    let lease = std::cell::Cell::new(false);
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
-    let value = UniqueJson.deserialize(&mut deserializer)?;
-    deserializer.end()?;
-    Ok(value)
-}
-
-struct UniqueJson;
-
-impl<'de> DeserializeSeed<'de> for UniqueJson {
-    type Value = Value;
-
-    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Value, D::Error> {
-        deserializer.deserialize_any(UniqueJsonVisitor)
+    let value = UniqueJson {
+        in_lease: false,
+        lease: &lease,
+    }
+    .deserialize(&mut deserializer);
+    match value {
+        Ok(value) => deserializer.end().map(|()| value).map_err(|_| lease.get()),
+        Err(_) => Err(lease.get()),
     }
 }
 
-struct UniqueJsonVisitor;
+struct UniqueJson<'a> {
+    in_lease: bool,
+    lease: &'a std::cell::Cell<bool>,
+}
 
-impl<'de> Visitor<'de> for UniqueJsonVisitor {
+impl<'de> DeserializeSeed<'de> for UniqueJson<'_> {
+    type Value = Value;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Value, D::Error> {
+        deserializer.deserialize_any(UniqueJsonVisitor {
+            in_lease: self.in_lease,
+            lease: self.lease,
+        })
+    }
+}
+
+struct UniqueJsonVisitor<'a> {
+    in_lease: bool,
+    lease: &'a std::cell::Cell<bool>,
+}
+
+impl<'de> Visitor<'de> for UniqueJsonVisitor<'_> {
     type Value = Value;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -449,7 +471,10 @@ impl<'de> Visitor<'de> for UniqueJsonVisitor {
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> Result<Value, A::Error> {
         let mut values = Vec::new();
-        while let Some(value) = sequence.next_element_seed(UniqueJson)? {
+        while let Some(value) = sequence.next_element_seed(UniqueJson {
+            in_lease: self.in_lease,
+            lease: self.lease,
+        })? {
             values.push(value);
         }
         Ok(Value::Array(values))
@@ -459,9 +484,19 @@ impl<'de> Visitor<'de> for UniqueJsonVisitor {
         let mut values = Map::new();
         while let Some(key) = map.next_key::<String>()? {
             if values.contains_key(&key) {
+                if self.in_lease || key == "Lease" {
+                    self.lease.set(true);
+                }
                 return Err(A::Error::custom("duplicate JSON object key"));
             }
-            values.insert(key, map.next_value_seed(UniqueJson)?);
+            let in_lease = self.in_lease || key == "Lease";
+            values.insert(
+                key,
+                map.next_value_seed(UniqueJson {
+                    in_lease,
+                    lease: self.lease,
+                })?,
+            );
         }
         Ok(Value::Object(values))
     }
@@ -1257,7 +1292,7 @@ mod tests {
         );
         assert!(matches!(
             read_batch(&repeated_changes, &ProviderContext::Absent),
-            BatchRead::Whole
+            BatchRead::Whole { .. }
         ));
 
         let nested = String::from_utf8(kept.clone()).unwrap().replacen(
@@ -1269,7 +1304,7 @@ mod tests {
         assert_eq!(collapsed["changes"][0]["Opened"]["id"], "conversation");
         assert!(matches!(
             read_batch(nested.as_bytes(), &ProviderContext::Absent),
-            BatchRead::Whole
+            BatchRead::Whole { .. }
         ));
 
         let escaped = String::from_utf8(kept).unwrap().replacen(
@@ -1281,7 +1316,7 @@ mod tests {
         assert_eq!(collapsed["changes"][0]["Opened"]["id"], "conversation");
         assert!(matches!(
             read_batch(escaped.as_bytes(), &ProviderContext::Absent),
-            BatchRead::Whole
+            BatchRead::Whole { .. }
         ));
     }
 
