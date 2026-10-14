@@ -1122,13 +1122,13 @@ describe("originals kept to paint sent turns", () => {
     ])
   })
 
-  it("never takes the original from a message that may yet come back to the draft", () => {
+  it("keeps originals for sending and uncertain messages, and bounds settled previews", () => {
     const tabs = sentImages(["sending", "unknown", "failed", "accepted"], 40)
-    // Only the accepted one is a preview; the rest may need their bytes again.
+    // Refused-draft retention is exercised separately by AL24 in the resource query tests.
     expect(kinds(boundSentPreviews(tabs, 0))).toEqual([
       "file",
       "file",
-      "file",
+      "image-reference",
       "image-reference",
     ])
   })
