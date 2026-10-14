@@ -154,11 +154,20 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     // devices is refused before the grant table is written.
     case ConversationErrorCode.ShareTargetNotPaired:
       return true
+    // A share or revoke whose expected revision the grant no longer holds is
+    // refused inside the transaction that would write it, which then writes
+    // nothing.
+    case ConversationErrorCode.ShareGrantChanged:
+      return true
     // A note the conversation refused, because its request already left
     // another or its author or the conversation is at its bound, is refused
     // before anything is saved.
     case ConversationErrorCode.IdempotencyConflict:
     case ConversationErrorCode.MessageQuotaExceeded:
+      return true
+    // A Drive grant's message its tools could not all be checked for is
+    // refused before anything of it is saved or sent.
+    case ConversationErrorCode.DrivePolicyUnenforceable:
       return true
     // `temporarily_unavailable` is the one worth naming: a supervising task
     // also reports it when work it had already admitted was lost, so it is not

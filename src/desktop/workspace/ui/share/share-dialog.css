@@ -1,0 +1,92 @@
+/*
+ * The share dialog's layout. The kit draws the controls; this spaces them.
+ * The dialog is portalled out of the desktop surface, so it takes the kit's
+ * theme tokens and type steps (`nessa-text-2`), not the surface's own.
+ */
+
+.share-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 3);
+  padding-bottom: calc(var(--spacing) * 2);
+}
+
+/* Holds the form while a change is on its way; draws nothing of its own. */
+.share-fieldset {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.share-form,
+.share-drive,
+.share-patterns {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 2);
+}
+
+/* As the kit's group titles: small, quiet, over what they name. */
+.share-heading {
+  margin: calc(var(--spacing) * 2) 0 0;
+  padding-inline: calc(var(--spacing) * 3.5);
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+
+.share-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing);
+  color: var(--muted-foreground);
+}
+
+.share-quiet,
+.share-reason,
+.share-notes {
+  margin: 0;
+  color: var(--muted-foreground);
+}
+
+/* In the footer, it takes the row's start and pushes the buttons to the end. */
+.share-reason {
+  flex: 1 1 12rem;
+}
+
+.share-notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing);
+  padding-inline-start: calc(var(--spacing) * 4);
+}
+
+/* A live region, so it stays mounted; empty, it takes no room and no gap. */
+.share-notice {
+  margin: 0;
+}
+
+.share-notice:empty {
+  margin-block-start: calc(var(--spacing) * -3);
+}
+
+.share-alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--spacing) * 3);
+  color: var(--destructive);
+}
+
+.share-alert p {
+  margin: 0;
+}
+
+.share-actions {
+  display: inline-flex;
+  gap: var(--spacing);
+}
+
+.share-revoke {
+  color: var(--destructive);
+}

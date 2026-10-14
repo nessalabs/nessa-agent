@@ -41,7 +41,7 @@ use crate::application::agent_execution::sessions::{
     SessionManager, StorageError,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
-use crate::domain::agent_execution::executions::Initiation;
+use crate::domain::agent_execution::executions::{Initiation, Initiator, ToolChecking};
 use crate::domain::agent_execution::permissions::{
     CustomPermissionCancellationReason, PermissionAuthorityError, PermissionCancellationReason,
     PermissionEffect, PermissionId, PermissionOptionId, PermissionScope, RefusalOutcome,
@@ -285,6 +285,35 @@ fn hook_attribution(
     let explanation = refusal.reason().to_owned();
     let attribution = ApprovalAttribution::hook(id, refusal)?;
     Ok((id.clone(), attribution, explanation))
+}
+
+/// Why a turn started as `initiation` may not be sent to `attached`, if it
+/// may not. The owner's turns always may. A grant's turn must have been saved
+/// as [`ToolChecking::Checked`], since only then were its grant's tools
+/// checked at admission; one saved before that, and restored, is not sent.
+/// A checked turn needs a process that asks about every call, so in
+/// [`ApprovalMode::Ask`] with its own hooks not allowed to answer first.
+fn checked_tools_unsupported(
+    initiation: &Initiation,
+    approval_mode: Option<ApprovalMode>,
+    capabilities: OperationCapabilities,
+) -> Result<(), AgentError> {
+    let checked = initiation.tools() == ToolChecking::Checked;
+    if !checked && !matches!(initiation.initiator(), Initiator::Grant(_)) {
+        return Ok(());
+    }
+    if !checked {
+        return Err(AgentError::Unsupported(
+            "a grant's turn needs its tools checked, and this one was not admitted as checked"
+                .into(),
+        ));
+    }
+    if approval_mode != Some(ApprovalMode::Ask) || capabilities.native_hooks_allowed() {
+        return Err(AgentError::Unsupported(
+            "a checked turn needs a process that asks about every tool call".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn deny_option(event: &ExecutionEvent) -> Option<PermissionOptionId> {
@@ -1398,6 +1427,33 @@ impl Agent {
         }
     }
 
+    /// `input` as the provider is given it: with the notes its saved turn
+    /// took, when it took any.
+    async fn with_taken_notes(
+        &self,
+        index: usize,
+        input: &ExecutionRequest,
+    ) -> Result<ExecutionRequest, AgentError> {
+        let notes = self
+            .inner
+            .manager
+            .taken_notes(index)
+            .await
+            .map_err(AgentError::Storage)?;
+        if notes.is_empty() {
+            return Ok(input.clone());
+        }
+        let user_message = input
+            .user_message
+            .clone()
+            .with_notes(notes)
+            .map_err(|error| AgentError::Storage(StorageError::Corrupt(error.to_string())))?;
+        Ok(ExecutionRequest {
+            user_message,
+            ..input.clone()
+        })
+    }
+
     pub(super) async fn execute_invocation(
         &self,
         input: ExecutionRequest,
@@ -1502,29 +1558,54 @@ impl Agent {
             },
             Err(error) => Err(error),
         };
-        if let Err(mut error) = preparation {
-            if let Err(storage) = self
-                .record_undispatched_stop(index, saved_index, work)
-                .await
-            {
-                error = AgentError::StorageAfterExecution {
-                    error: storage,
-                    execution_result: Box::new(Err(error)),
+        // A turn saved as checked is sent only to a process that asks about
+        // every call it is to check: in Ask mode, its own hooks not allowed.
+        // Read here, after preparation, because a restart re-reads both.
+        let preparation = preparation.and_then(|()| {
+            checked_tools_unsupported(
+                &initiation,
+                self.approval_mode(),
+                attached.session.operation_capabilities(),
+            )
+        });
+        // The notes the saved turn took reach the provider with its message,
+        // read from the conversation's records: the saved request never holds
+        // them, so history and retries see the person's words alone.
+        // Checked again with them: what the provider is handed must fit it,
+        // or the turn fails here with nothing sent.
+        let dispatched = match preparation {
+            Ok(()) => match self.with_taken_notes(index, &input).await {
+                Ok(dispatched) => attached.session.validate(&dispatched).map(|()| dispatched),
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(error),
+        };
+        let dispatched = match dispatched {
+            Ok(dispatched) => dispatched,
+            Err(mut error) => {
+                if let Err(storage) = self
+                    .record_undispatched_stop(index, saved_index, work)
+                    .await
+                {
+                    error = AgentError::StorageAfterExecution {
+                        error: storage,
+                        execution_result: Box::new(Err(error)),
+                    }
+                    .bounded();
                 }
-                .bounded();
+                let result = Err(error);
+                let settled = match self.inner.manager.finish(index, result.clone()).await {
+                    Ok(()) => result,
+                    Err(error) => Err(AgentError::StorageAfterExecution {
+                        error,
+                        execution_result: Box::new(result),
+                    }),
+                };
+                return self
+                    .settle_after_hooks(&hooks, &session_id, &input, index, settled)
+                    .await;
             }
-            let result = Err(error);
-            let settled = match self.inner.manager.finish(index, result.clone()).await {
-                Ok(()) => result,
-                Err(error) => Err(AgentError::StorageAfterExecution {
-                    error,
-                    execution_result: Box::new(result),
-                }),
-            };
-            return self
-                .settle_after_hooks(&hooks, &session_id, &input, index, settled)
-                .await;
-        }
+        };
         let mut events = attached.events.lock().await;
         let mut execution = Box::pin(async {
             self.inner.manager.begin_dispatch(&input.execution_id);
@@ -1536,7 +1617,7 @@ impl Agent {
                     }
                 };
             work.mark_execution_started();
-            let outcome = attached.session.execute(input.clone()).await;
+            let outcome = attached.session.execute(dispatched).await;
             // Capture the existing stop authority with the reply. A later Stop
             // cannot retroactively authorize an earlier cancellation report.
             let cancellation_at_reply = work.cancellation();

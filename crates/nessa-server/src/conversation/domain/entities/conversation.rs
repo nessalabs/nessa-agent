@@ -12,6 +12,9 @@ pub enum ConversationRefusal {
     NotFound,
     /// This caller's, and somebody deleted it. Its identity is not reused.
     Deleted,
+    /// The access policy could not decide; it has logged why. Refused, as
+    /// storage that cannot be read is.
+    Unavailable,
 }
 
 /// Durable ownership of one conversation, shared by the owner's authenticated surfaces.
@@ -207,28 +210,11 @@ impl Conversation {
     }
     /// Both organization and principal must agree; knowing an ID grants no access.
     ///
-    /// Ownership alone, deleted or not. Whether a caller may act on the
-    /// conversation is [`Self::check_access`].
+    /// Ownership alone, deleted or not, as a record-integrity check: a stored
+    /// record against the row columns it was selected by. Whether a caller may
+    /// locate, act on or share the conversation is the access policy's
+    /// (`ConversationAccessPolicyEvaluator`).
     pub fn allows(&self, organization: &OrganizationId, principal: &PrincipalId) -> bool {
         self.organization == *organization && self.owner == *principal
-    }
-    /// Whether this caller may act on the conversation: it must be theirs, and
-    /// not deleted.
-    ///
-    /// Ownership is asked first, so only the owner learns that a conversation
-    /// was deleted; to anybody else a deleted conversation, like one that is not
-    /// theirs, is not found.
-    pub fn check_access(
-        &self,
-        organization: &OrganizationId,
-        principal: &PrincipalId,
-    ) -> Result<(), ConversationRefusal> {
-        if !self.allows(organization, principal) {
-            return Err(ConversationRefusal::NotFound);
-        }
-        if self.deletion.is_some() {
-            return Err(ConversationRefusal::Deleted);
-        }
-        Ok(())
     }
 }

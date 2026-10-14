@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import type { Message } from "../../model/transcript"
+import type { TurnMessage } from "../../model/transcript"
 import { emptyTranscript } from "../../model/transcript"
 import { astra, shownIn, summary, testIndex } from "../../testing"
 import {
@@ -31,7 +31,7 @@ const loaded = () =>
 
 const shown = (state: WorkspaceState) => shownIn(state.panes)
 
-const message = (id: string, text: string, at = 500): Message => ({
+const message = (id: string, text: string, at = 500): TurnMessage => ({
   id,
   role: "user",
   at,

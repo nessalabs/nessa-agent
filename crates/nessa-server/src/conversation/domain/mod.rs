@@ -2,27 +2,29 @@
 //! A conversation's summary — its title, last thing said, and when — is a
 //! separate value derived from what was said, never part of ownership.
 //! A deleted conversation keeps its ownership record and a tombstone, its
-//! `ConversationDeletion`, which `Conversation::check_access` refuses callers
-//! by from then on. The tombstone also carries how far the deletion got, and
+//! `ConversationDeletion`, by which the access policy refuses everyone but
+//! the owner from then on. The tombstone also carries how far the deletion got, and
 //! the domain decides which progress is possible and which request decided it.
 //! The conversation's identity, its summary and the catalogue stream identity
 //! are `nessa_protocol::conversation::domain`, read by gateway and device alike.
-//! Which commands its agent may run where is its [`CommandPolicy`]. What a
-//! share of it lets a paired party do is its [`ShareAccess`].
+//! The gateway's command configuration, the facts the command policy reads,
+//! is [`CommandPolicy`]. What a share of it lets a paired party do is its
+//! [`ShareAccess`], whose Drive policy names the hosts its turns may run
+//! commands on.
 mod command_policy;
 mod entities;
 mod receiver;
 mod value_objects;
-pub use command_policy::CommandPolicy;
+pub use command_policy::{program_name, CommandPolicy};
 pub use entities::{Conversation, ConversationRefusal};
 pub use receiver::{
     PairedReceiver, ReceiverBinding, ReceiverInitiator, ReceiverIntent, ReceiverTransition,
     ReceiverTransitionError,
 };
 pub use value_objects::{
-    ConversationDeletion, DeletionContradiction, ProviderSessionErasure, ProviderSessionLink,
-    ShareAccess, ShareAccessError, ShareRole, ToolCall, ToolPolicy, ToolPolicyError, ToolPreset,
-    ToolRules, ToolSource,
+    CommandHosts, ConversationDeletion, DeletionContradiction, ProviderSessionErasure,
+    ProviderSessionLink, ShareAccess, ShareAccessError, ShareRole, ToolCall, ToolChoice,
+    ToolPolicy, ToolPolicyError, ToolPreset, ToolRules, ToolSource,
 };
 
 #[cfg(test)]

@@ -42,6 +42,7 @@ use nessa_auth::domain::{AudienceId, OrganizationId, Resource, ResourceId};
 use nessa_client_core::pairing::NativeEnrollmentClient;
 use nessa_protocol::lease::{Cleanup, CommandEnd};
 use nessa_protocol::pairing::wire::NativePairingStatus;
+use nessa_protocol::relay::{RelayAddress, RelayRefusal};
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     providers::{
@@ -112,6 +113,15 @@ impl Gateway {
 
     /// As [`Self::start`], its paired environments kept with `timings`.
     async fn start_with(root: &Path, timings: SshTimings) -> Self {
+        Self::start_at(root, timings, None).await
+    }
+
+    /// As [`Self::start`], registered at `relay` as `native.relay` has it.
+    async fn start_relayed(root: &Path, relay: RelayAddress) -> Self {
+        Self::start_at(root, SshTimings::default(), Some(relay)).await
+    }
+
+    async fn start_at(root: &Path, timings: SshTimings, relay: Option<RelayAddress>) -> Self {
         let (gateway, organization) = (uuid(), uuid());
         let (auth, session, owner) = owned(root, &gateway, &organization).await;
         let receivers = Arc::new(
@@ -125,7 +135,7 @@ impl Gateway {
         let (prepared, commands, _) = prepare(
             &NativeConfig {
                 listen_address: "127.0.0.1:0".parse().unwrap(),
-                relay: None,
+                relay,
             },
             inputs(root, &auth, receivers, &gateway, &organization),
         )
@@ -439,9 +449,15 @@ async fn a_paired_environment_dials_in_serves_and_stops_at_revocation() {
         CommandRefusal::Environment(LeaseRefusal::EnvironmentUnreachable)
     );
 
-    let first = dial(a.native, e.identity.clone(), e.pin, clock())
-        .await
-        .unwrap();
+    let first = dial(
+        a.native.to_string(),
+        None,
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .unwrap();
     let first = serving(&directory.path().join("e"), e.pin, first);
     a.until_connected(e.peer, true).await;
     let ran = a.echo(e.peer, "hello").await.unwrap();
@@ -450,9 +466,15 @@ async fn a_paired_environment_dials_in_serves_and_stops_at_revocation() {
     assert_eq!(ran.cleanup, Some(LeaseCleanup::Confirmed { forced: false }));
 
     // A second connection replaces the first, whose serving ends.
-    let second = dial(a.native, e.identity.clone(), e.pin, clock())
-        .await
-        .unwrap();
+    let second = dial(
+        a.native.to_string(),
+        None,
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .unwrap();
     let second = serving(&directory.path().join("e2"), e.pin, second);
     tokio::time::timeout(WAIT, first)
         .await
@@ -478,10 +500,16 @@ async fn a_paired_environment_dials_in_serves_and_stops_at_revocation() {
         .expect("the revoked environment's serving ends")
         .unwrap();
     a.until_connected(e.peer, false).await;
-    let refused = dial(a.native, e.identity.clone(), e.pin, clock())
-        .await
-        .err()
-        .expect("a revoked environment is refused");
+    let refused = dial(
+        a.native.to_string(),
+        None,
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .err()
+    .expect("a revoked environment is refused");
     assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
 }
 
@@ -499,9 +527,15 @@ async fn a_dialed_gateway_runs_only_what_the_environment_granted_it() {
             ConsentClass::PeerEnvironment,
         )
         .await;
-    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
-        .await
-        .unwrap();
+    let stream = dial(
+        a.native.to_string(),
+        None,
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .unwrap();
     let host = Arc::new(Host::ungranted(&directory.path().join("e"), e.pin));
     let (from_gateway, to_gateway) = tokio::io::split(stream);
     let _serving = {
@@ -530,10 +564,16 @@ async fn a_key_paired_to_read_is_refused_at_open_environment() {
             ConsentClass::PeerRead,
         )
         .await;
-    let refused = dial(a.native, reader.identity.clone(), reader.pin, clock())
-        .await
-        .err()
-        .expect("a reading peer is refused");
+    let refused = dial(
+        a.native.to_string(),
+        None,
+        reader.identity.clone(),
+        reader.pin,
+        clock(),
+    )
+    .await
+    .err()
+    .expect("a reading peer is refused");
     assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
     assert!(a.peers.connected().is_empty());
 }
@@ -552,9 +592,15 @@ async fn a_lease_asked_across_a_reconnect_runs_on_the_new_connection() {
             ConsentClass::PeerEnvironment,
         )
         .await;
-    let first = dial(a.native, e.identity.clone(), e.pin, clock())
-        .await
-        .unwrap();
+    let first = dial(
+        a.native.to_string(),
+        None,
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .unwrap();
     let first = serving(&directory.path().join("e"), e.pin, first);
     a.until_connected(e.peer, true).await;
 
@@ -567,9 +613,15 @@ async fn a_lease_asked_across_a_reconnect_runs_on_the_new_connection() {
     tokio::time::timeout(WAIT, a.gate.entered.notified())
         .await
         .expect("the lease asks whether the key serves");
-    let second = dial(a.native, e.identity.clone(), e.pin, clock())
-        .await
-        .unwrap();
+    let second = dial(
+        a.native.to_string(),
+        None,
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .unwrap();
     let _second = serving(&directory.path().join("e2"), e.pin, second);
     tokio::time::timeout(WAIT, first)
         .await
@@ -650,7 +702,7 @@ async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
                         if n > 0 {
                             let _ = released.wait_for(|go| *go).await;
                         }
-                        dial(native, identity, pin, clock()).await
+                        dial(native.to_string(), None, identity, pin, clock()).await
                     }
                 },
                 move |stream, stopping| {
@@ -774,17 +826,201 @@ async fn a_pin_that_is_not_a_key_is_invalid_input_and_another_key_is_not() {
             ConsentClass::PeerEnvironment,
         )
         .await;
-    let not_a_key = dial(a.native, e.identity.clone(), [0; 44], clock())
-        .await
-        .err()
-        .expect("a pin that is not a key cannot dial");
+    let not_a_key = dial(
+        a.native.to_string(),
+        None,
+        e.identity.clone(),
+        [0; 44],
+        clock(),
+    )
+    .await
+    .err()
+    .expect("a pin that is not a key cannot dial");
     assert_eq!(not_a_key.kind(), ErrorKind::InvalidInput);
     let other = e.identity.public_spki();
-    let not_the_gateway = dial(a.native, e.identity.clone(), other, clock())
+    let not_the_gateway = dial(
+        a.native.to_string(),
+        None,
+        e.identity.clone(),
+        other,
+        clock(),
+    )
+    .await
+    .err()
+    .expect("another key's pin does not match the gateway");
+    assert_eq!(not_the_gateway.kind(), ErrorKind::ConnectionAborted);
+}
+
+/// A relay on this runtime, as `nessa relay serve` runs one; it ends with
+/// the test's runtime.
+async fn relay() -> RelayAddress {
+    use crate::relay::{
+        application::{Relay, RelayLimits},
+        infrastructure::{serve_tcp, Ed25519Proofs, OsRelayEntropy},
+    };
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = RelayAddress::try_from(socket.local_addr().unwrap().to_string()).unwrap();
+    let timer: Arc<dyn crate::timer::Timer> = Arc::new(TokioTimer::new());
+    let relay = Relay::new(
+        timer.clone(),
+        Arc::new(OsRelayEntropy),
+        Arc::new(Ed25519Proofs),
+        RelayLimits::default(),
+    );
+    tokio::spawn(serve_tcp(socket, relay, timer, std::future::pending()));
+    address
+}
+
+/// Port 0 is never a listener's: a direct dial to it fails at once, and no
+/// other test can take it in the meantime.
+fn nowhere() -> String {
+    "127.0.0.1:0".to_owned()
+}
+
+/// R4, row RL14 in `docs/design/auth/relay.md`: an environment that
+/// enrolled with the gateway, and then has only a relay path to it, waits
+/// for the owner's approval through the relay, as `env dial --relay` does,
+/// then dials through it and serves leases as over a direct connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_environment_with_only_a_relay_path_is_approved_and_serves_through_it() {
+    use crate::env_serve::application::approval;
+    use crate::env_serve::infrastructure::FilePairingEnvironment;
+
+    let directory = tempfile::tempdir().unwrap();
+    let relay = relay().await;
+    let a = Gateway::start_relayed(&directory.path().join("a"), relay.clone()).await;
+    let created = a
+        .commands
+        .create(&a.session, ConsentClass::PeerEnvironment)
+        .await
+        .unwrap();
+    let environment = directory.path().join("e-environment");
+    nessa_local_storage::create_directory(&environment).unwrap();
+    // Enrolling learns the gateway's key, so it needs the direct path.
+    let pairing =
+        FilePairingEnvironment::open(&environment, &a.native.to_string(), clock()).unwrap();
+    let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+    tokio::time::timeout(WAIT, crate::env_serve::application::enroll(&pairing, code))
+        .await
+        .unwrap()
+        .unwrap();
+    pairing.shutdown().await;
+    // Its directory's lock goes with it.
+    drop(pairing);
+
+    // From here the gateway's own address refuses: only the relay reaches it.
+    let unreachable = nowhere();
+    let id = created.record().id();
+    let claimed = a.commands.status(&a.session, id).await.unwrap();
+    let (_, key) = claimed.claim_binding().unwrap();
+    a.commands.approve(&a.session, id, key).await.unwrap();
+    let pairing = FilePairingEnvironment::open(&environment, &unreachable, clock())
+        .unwrap()
+        .through(Some(relay.clone()));
+    let (_running, running) = watch::channel(false);
+    let poll = Duration::from_millis(50);
+    // The gateway may not have registered yet: the relay's `Offline` is
+    // asked again, as any unanswered status is.
+    let (identity, pin) =
+        tokio::time::timeout(WAIT, approval(&pairing, poll, &TokioTimer::new(), running))
+            .await
+            .expect("approved through the relay")
+            .unwrap()
+            .expect("not stopped");
+    pairing.shutdown().await;
+    let peer = PeerEnvironment::new(*key.bytes());
+
+    // Without the relay the gateway is out of reach.
+    let direct = dial(unreachable.clone(), None, identity.clone(), pin, clock())
         .await
         .err()
-        .expect("another key's pin does not match the gateway");
-    assert_eq!(not_the_gateway.kind(), ErrorKind::ConnectionAborted);
+        .expect("nothing listens at the direct address");
+    // Refused on Linux, an unusable address on macOS: either way the
+    // direct dial's own error, not the relay's.
+    assert_ne!(direct.kind(), ErrorKind::InvalidInput);
+    assert_eq!(RelayRefusal::carried(&direct), None);
+    let stream = dial(unreachable, Some(relay), identity, pin, clock())
+        .await
+        .unwrap();
+    let _serving = serving(&directory.path().join("e"), pin, stream);
+    a.until_connected(peer, true).await;
+    let ran = a.echo(peer, "through the relay").await.unwrap();
+    assert_eq!(ran.stdout, b"through the relay");
+}
+
+/// R4: the relay's `Offline` reaches the dialer as the relay's own answer,
+/// told apart from the direct dial's refusal, so it is dialed again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_relay_without_the_gateway_answers_offline_to_an_environments_dial() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = Gateway::start(&directory.path().join("a")).await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let offline = dial(
+        nowhere(),
+        Some(relay().await),
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .err()
+    .expect("the gateway never registered at the relay");
+    assert_eq!(RelayRefusal::carried(&offline), Some(RelayRefusal::Offline));
+    assert_ne!(offline.kind(), ErrorKind::InvalidInput);
+}
+
+/// R4: a pending pairing whose saved pin is not a key cannot be asked for
+/// at the relay, and asking again does not change that: waiting for
+/// approval ends as unusable rather than asking forever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pending_pin_that_is_not_a_key_ends_waiting_through_a_relay() {
+    use crate::env_serve::application::{approval, NotApproved};
+    use crate::env_serve::infrastructure::FilePairingEnvironment;
+    use nessa_auth::domain::pairing::{AttemptId, ConsentIntentId, InvitationId, PublicIntent};
+
+    let directory = tempfile::tempdir().unwrap();
+    let environment = directory.path().join("e-environment");
+    nessa_local_storage::create_directory(&environment).unwrap();
+    let root = environment.canonicalize().unwrap();
+    nessa_local_storage::create_directory_beneath(&root, Path::new("pairing")).unwrap();
+    let intent = PublicIntent::new(
+        InvitationId::new([1; 16]),
+        AttemptId::new([2; 16]),
+        ConsentIntentId::new([3; 16]),
+        1,
+        1,
+        ConsentClass::PeerEnvironment,
+    )
+    .unwrap();
+    let identity = NativeIdentity::generate(&mut OsEntropy).unwrap();
+    // Saved and let go, so the environment's pairing can take the lock.
+    FilePairingState::open(&root, Path::new("pairing"))
+        .unwrap()
+        .save_pending(identity.key_material(), &[0; 44], intent, None)
+        .unwrap();
+
+    let pairing = FilePairingEnvironment::open(&environment, &nowhere(), clock())
+        .unwrap()
+        .through(Some(relay().await));
+    let (_running, running) = watch::channel(false);
+    let ended = tokio::time::timeout(
+        WAIT,
+        approval(
+            &pairing,
+            Duration::from_millis(20),
+            &TokioTimer::new(),
+            running,
+        ),
+    )
+    .await
+    .expect("told at once, not asked again");
+    assert!(matches!(ended, Err(NotApproved::Unusable(_))), "{ended:?}");
+    pairing.shutdown().await;
 }
 
 /// A binding that runs its harness on whichever host it is given, and
@@ -830,9 +1066,15 @@ async fn a_paired_environment_expires_a_lease_and_both_sides_record_it() {
             ConsentClass::PeerEnvironment,
         )
         .await;
-    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
-        .await
-        .unwrap();
+    let stream = dial(
+        a.native.to_string(),
+        None,
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .unwrap();
     // E runs `claude` as `cat`, which runs until it is stopped. Its serving
     // waits on a timer only this test moves, so the lease's deadline comes
     // when the test says, never before its harness has started.
@@ -969,9 +1211,15 @@ async fn k1_a_paired_environment_drains_and_both_sides_record_its_cleanup() {
             ConsentClass::PeerEnvironment,
         )
         .await;
-    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
-        .await
-        .unwrap();
+    let stream = dial(
+        a.native.to_string(),
+        None,
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .unwrap();
     // E runs `claude` as `cat`, which runs until it is stopped.
     let cat = LaunchSpec {
         executable: "/bin/cat".into(),
@@ -1159,9 +1407,15 @@ async fn an_idle_paired_environment_is_closed_once_revoked() {
             ConsentClass::PeerEnvironment,
         )
         .await;
-    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
-        .await
-        .unwrap();
+    let stream = dial(
+        a.native.to_string(),
+        None,
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .unwrap();
     let served = serving(&directory.path().join("e"), e.pin, stream);
     a.until_connected(e.peer, true).await;
     a.revoke(&e);
@@ -1172,10 +1426,16 @@ async fn an_idle_paired_environment_is_closed_once_revoked() {
     a.until_connected(e.peer, false).await;
     let records = Gateway::environment_records(&root, "revoked");
     assert_eq!(records.len(), 1, "{records:?}");
-    let refused = dial(a.native, e.identity.clone(), e.pin, clock())
-        .await
-        .err()
-        .expect("a revoked environment is refused");
+    let refused = dial(
+        a.native.to_string(),
+        None,
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .err()
+    .expect("a revoked environment is refused");
     assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
 }
 
@@ -1202,9 +1462,15 @@ async fn a_paired_environment_revoked_mid_lease_ends_it_on_both_sides_and_closes
             ConsentClass::PeerEnvironment,
         )
         .await;
-    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
-        .await
-        .unwrap();
+    let stream = dial(
+        a.native.to_string(),
+        None,
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .unwrap();
     // E runs `claude` as `cat`, which runs until it is stopped.
     let cat = LaunchSpec {
         executable: "/bin/cat".into(),
@@ -1325,10 +1591,16 @@ async fn a_paired_environment_revoked_mid_lease_ends_it_on_both_sides_and_closes
         revoked[0].to_string().contains(lease.as_str()),
         "{revoked:?}"
     );
-    let refused = dial(a.native, e.identity.clone(), e.pin, clock())
-        .await
-        .err()
-        .expect("a revoked environment is refused");
+    let refused = dial(
+        a.native.to_string(),
+        None,
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .err()
+    .expect("a revoked environment is refused");
     assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
 }
 
@@ -1374,9 +1646,15 @@ async fn a_paired_environment_publishes_a_file_and_the_gateway_reads_it_back() {
             ConsentClass::PeerEnvironment,
         )
         .await;
-    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
-        .await
-        .unwrap();
+    let stream = dial(
+        a.native.to_string(),
+        None,
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .unwrap();
     // E runs `claude` as a shell that notes its publish point where the
     // test can find it, then runs as `cat` until it is stopped.
     let harness = LaunchSpec {
@@ -1616,9 +1894,15 @@ async fn connection_changes_are_said_as_a_paired_environment_connects_ends_and_i
         assert_eq!(peers.connected().contains(&peer), connected, "{count}");
     }
 
-    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
-        .await
-        .unwrap();
+    let stream = dial(
+        a.native.to_string(),
+        None,
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .unwrap();
     let served = serving(&directory.path().join("e"), e.pin, stream);
     until(&a.peers, &mut changes, e.peer, start + 1, true).await;
 
@@ -1626,9 +1910,15 @@ async fn connection_changes_are_said_as_a_paired_environment_connects_ends_and_i
     served.abort();
     until(&a.peers, &mut changes, e.peer, start + 2, false).await;
 
-    let stream = dial(a.native, e.identity.clone(), e.pin, clock())
-        .await
-        .unwrap();
+    let stream = dial(
+        a.native.to_string(),
+        None,
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .unwrap();
     let served = serving(&directory.path().join("e2"), e.pin, stream);
     until(&a.peers, &mut changes, e.peer, start + 3, true).await;
 
@@ -1827,15 +2117,27 @@ async fn k3_two_organizations_share_no_lease_workspace_artifact_tool_or_audit() 
     // Leases: X's key is not paired with A. With A's pin it is refused at
     // A's door; with its own pin, the key it finds is not B's, and the dial
     // is cut there.
-    let refused = dial(a.native, x.identity.clone(), w.pin, clock())
-        .await
-        .err()
-        .expect("a key paired with B is refused by A");
+    let refused = dial(
+        a.native.to_string(),
+        None,
+        x.identity.clone(),
+        w.pin,
+        clock(),
+    )
+    .await
+    .err()
+    .expect("a key paired with B is refused by A");
     assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
-    let not_b = dial(a.native, x.identity.clone(), x.pin, clock())
-        .await
-        .err()
-        .expect("A is not the gateway X's pin names");
+    let not_b = dial(
+        a.native.to_string(),
+        None,
+        x.identity.clone(),
+        x.pin,
+        clock(),
+    )
+    .await
+    .err()
+    .expect("A is not the gateway X's pin names");
     assert_eq!(not_b.kind(), ErrorKind::ConnectionAborted);
 
     // Each worker runs `claude` as `cat`, which runs until it is stopped;
@@ -1867,7 +2169,8 @@ async fn k3_two_organizations_share_no_lease_workspace_artifact_tool_or_audit() 
     let mut serving = Vec::new();
     for (gateway, machine, host) in [(&a, &w, &w_host), (&b, &x, &x_host)] {
         let stream = dial(
-            gateway.native,
+            gateway.native.to_string(),
+            None,
             machine.identity.clone(),
             machine.pin,
             clock(),

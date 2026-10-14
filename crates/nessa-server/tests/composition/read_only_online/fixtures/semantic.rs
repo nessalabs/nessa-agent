@@ -70,6 +70,7 @@ pub(super) async fn serve(
     *provider.permission_gate.lock().unwrap() = Some(gate);
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: producer.clone(),
             metadata: metadata.clone(),

@@ -131,6 +131,21 @@
         "size": 2048
       }
     ],
+    "notes": [
+      {
+        "messageId": "2f1d1c1e-3b7a-4c7e-9a51-0c1e2d3f4a5b",
+        "text": "Use the May fares",
+        "acceptedAtMs": 1700000000000,
+        "delivery": "next_turn",
+        "deliveryState": "assigned",
+        "executionId": "run-1",
+        "afterExecutionId": "run-0",
+        "author": {
+          "kind": "grant",
+          "surface": "phone"
+        }
+      }
+    ],
     "title": "Flights to Lisbon",
     "questions": [
       {
@@ -292,6 +307,7 @@
   },
   "AgentsListResult": {
     "environments": ["devbox"],
+    "commandHosts": ["devbox"],
     "agents": [
       {
         "agent": "claude",

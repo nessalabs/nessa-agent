@@ -6,10 +6,9 @@
  * pairing refusal is mapped by a total table, so a code the protocol adds is
  * a type error here rather than a sentence nobody wrote.
  *
- * A linked device is a non-revoked credential that is not this session's and
- * whose only grant is `conversation.read`. The list carries no device
- * marker. If the session cannot be read, no device is listed: the session
- * credential must not be offered for revoke.
+ * Which credentials are linked devices is `../../adapters/linked-device.ts`,
+ * which the share dialog reads too. If the session cannot be read, no device
+ * is listed: the session credential must not be offered for revoke.
  */
 import {
   NessaMutationError,
@@ -22,6 +21,7 @@ import {
   type PairingApi,
   type PairingRefusalCode as PairingRefusal,
 } from "@nessa/client"
+import { linkedDeviceOf } from "../../adapters/linked-device"
 import {
   DEVICE_KEY_BYTES,
   INVITATION_BYTES,
@@ -36,7 +36,6 @@ import type {
   EnrollmentPhase,
   Failure,
   FailureKind,
-  LinkedDevice,
   Outcome,
   ReadValue,
   TerminalCause,
@@ -172,20 +171,6 @@ async function enrollmentOf(status: OwnerStatus): Promise<Enrollment> {
   }
 }
 
-/** A device credential, as far as the list can say. The session's own is never one. */
-function linkedDevice(
-  credential: CredentialMetadata,
-  sessionId: string,
-): LinkedDevice | undefined {
-  if (credential.revokedAt !== null || credential.id === sessionId) return undefined
-  if (
-    credential.grants.length !== 1 ||
-    credential.grants[0]?.action !== "conversation.read"
-  )
-    return undefined
-  return { credentialId: credential.id, issuedAt: credential.issuedAt }
-}
-
 async function outcomeOf<T>(run: () => Promise<T>): Promise<Outcome<T>> {
   try {
     return { ok: true, value: await run() }
@@ -223,7 +208,7 @@ async function readAll(client: LinkedDevicesClient): Promise<Outcome<ReadValue>>
   }
   const enrollments = await Promise.all(pending.items.map(enrollmentOf))
   const devices = credentials.flatMap((credential) => {
-    const device = linkedDevice(credential, sessionId)
+    const device = linkedDeviceOf(credential, sessionId)
     return device ? [device] : []
   })
   return { ok: true, value: { kind: "on", enrollments, devices } }

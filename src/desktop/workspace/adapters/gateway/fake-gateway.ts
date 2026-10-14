@@ -26,6 +26,17 @@ import {
   type ViewSubscriptionHandlers,
 } from "@nessa/client"
 import type { GatewayClient } from "./gateway-source"
+import type { SharingClient } from "./sharing-gateway"
+
+/**
+ * The fake's client: the source's, and sharing's conversation methods, which
+ * reject — no test of the source shares, and one that did would say so.
+ */
+export type FakeGatewayClient = GatewayClient & {
+  readonly conversation: GatewayClient["conversation"] & SharingClient["conversation"]
+}
+
+const notShared = () => Promise.reject(new Error("the fake gateway does not share"))
 
 type Method =
   | "subscribe"
@@ -73,6 +84,26 @@ export function row(
   }
 }
 
+/**
+ * A note somebody left in a conversation, as a view lists it: a note the
+ * owner left from the desktop, only to be read, unless changed. A view
+ * carries it in `notes` (`view(id, { notes: [note("n1")] })`).
+ */
+export function note(
+  messageId: string,
+  change: Partial<ConversationView["notes"][number]> = {},
+): ConversationView["notes"][number] {
+  return {
+    messageId,
+    text: `Note ${messageId}`,
+    acceptedAtMs: 1_500,
+    delivery: "record_only",
+    deliveryState: "recorded",
+    author: { kind: "owner", surface: "desktop" },
+    ...change,
+  }
+}
+
 /** The gateway's time each fake view is stamped with, unless changed. */
 export const GATEWAY_NOW_MS = 1_700_000_000_000
 
@@ -90,6 +121,7 @@ export function view(
     permissions: [],
     tools: [],
     artifacts: [],
+    notes: [],
     capabilities: {
       queue: true,
       steer: true,
@@ -123,7 +155,7 @@ export function view(
 }
 
 export interface FakeGateway {
-  readonly client: GatewayClient
+  readonly client: FakeGatewayClient
   /** Every call made, in order. */
   readonly calls: { readonly method: Method; readonly args: readonly unknown[] }[]
   readonly rows: Map<string, ConversationSummary>
@@ -318,8 +350,11 @@ export function fakeGateway(
         live.handlers.ended(end)
       }
   }
-  const client: GatewayClient = {
+  const client: FakeGatewayClient = {
     conversation: {
+      share: notShared,
+      unshare: notShared,
+      shares: notShared,
       observe: (options) =>
         answer("observe", [options], () => observePage(options)) as never,
       create: (options) =>

@@ -156,6 +156,7 @@ it("known-unsent follow-up does not settle the earlier running invocation before
         follow: followByReading(async () => ({
           conversationId: "server",
           artifacts: [],
+          notes: [],
           approvalMode: "ask",
           approvalModes: [
             {
