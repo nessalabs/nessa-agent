@@ -497,6 +497,9 @@ impl Reach {
         match error {
             ConversationError::Agent(AgentError::SubmissionUnresolved) => Self::Unknown,
             ConversationError::AdmissionEvidence { .. } => Self::Taken,
+            // Saved with the turn, then refused before injection. The contexts
+            // went with that turn and are lost with it (C13), not dropped unsent.
+            ConversationError::RevokedAfterSave => Self::Taken,
             _ => Self::NotTaken,
         }
     }
@@ -3084,6 +3087,8 @@ impl ConversationService {
             // dropped unsent (`c11_a_refused_submission_drops_what_it_took_on_record`).
             // Admitted, and saved before the agent answered: what it carried
             // went with it, and should the turn then fail, it is lost (C13).
+            // A steer refused after that save is the same: the contexts stay
+            // with the saved turn (`c13_a_saved_steer_refused_after_save_does_not_drop_the_contexts_it_carried`).
             // Unresolved: it follows the message, whose record covers it.
             let delivery = delivery.map_err(|error| match error {
                 AgentError::RefusedAfterSave => ConversationError::RevokedAfterSave,
