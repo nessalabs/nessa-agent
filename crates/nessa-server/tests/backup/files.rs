@@ -1,5 +1,5 @@
-//! Files the cut reads: a bad line is named, a secret is not copied, and a
-//! local outbox is not a store.
+//! Files the cut reads: a bad line is named, a secret is not copied, and
+//! both outboxes are part of the same cut.
 
 use std::fs;
 use std::path::Path;
@@ -7,9 +7,9 @@ use std::path::Path;
 use async_trait::async_trait;
 
 use crate::backup::application::{
-    ExportClock, ManifestPublisher, MutationAdmission, PublishedRecord,
+    ExportClock, ExportFailure, ManifestPublisher, MutationAdmission, PublishedRecord,
 };
-use crate::backup::domain::{Sensitivity, SkipReason, StoreKind};
+use crate::backup::domain::{outbox_watermark, Sensitivity, SkipReason, StoreKind};
 use crate::backup::infrastructure::{
     capture_namespace, jsonl_cut, path_sensitivity, DirectoryPublisher, FileDeletionLog,
 };
@@ -118,9 +118,16 @@ async fn a_secret_is_fingerprinted_and_left_out_of_the_bundle() {
         .any(|window| window == verifier.as_bytes()));
     assert!(!bundle_bytes.windows(key.len()).any(|window| window == key));
     let marker = b"OUTBOX-MARKER-NOT-A-BACKUP";
-    assert!(!bundle_bytes
+    assert!(bundle_bytes
         .windows(marker.len())
         .any(|window| window == marker));
+    assert!(text.contains("watermark device-outbox absent"));
+    assert!(text.contains(&format!(
+        "watermark environment-outbox {}",
+        outbox_watermark(&[("pending.txt", marker.len() as u64)])
+            .unwrap()
+            .as_str()
+    )));
     assert!(!text.contains("CONFIG-TOKEN"));
     assert!(text.contains("redacted environment-peer-pairings"));
     assert!(text.contains("skipped lease-records line-2 unreadable"));
@@ -141,6 +148,155 @@ async fn a_secret_is_fingerprinted_and_left_out_of_the_bundle() {
     assert!(!std::str::from_utf8(relay_body)
         .unwrap()
         .contains("CONFIG-TOKEN"));
+}
+
+#[tokio::test]
+async fn a_concurrent_outbox_append_is_outside_the_cut() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let device = root.join("device/outbox");
+    let environment = root.join("environment/outbox/aa");
+    fs::create_dir_all(&device).unwrap();
+    fs::create_dir_all(&environment).unwrap();
+    let device_body = b"{\"id\":1}\n";
+    let environment_body = b"staged-before";
+    let device_file = device.join("intent.json");
+    let environment_file = environment.join("0");
+    fs::write(&device_file, device_body).unwrap();
+    fs::write(&environment_file, environment_body).unwrap();
+    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let manifest = capture_namespace(
+        root,
+        &AppendOnRelease {
+            appends: vec![
+                (device_file.clone(), b"-APPENDED".to_vec()),
+                (environment_file.clone(), b"-APPENDED".to_vec()),
+            ],
+            creates: vec![(device.join("later.json"), b"CONCURRENT-ROW".to_vec())],
+        },
+        &inventory,
+        &DirectoryPublisher::new(bundle.path().join("cut")),
+        &Clock(8),
+        &inventory.key(),
+    )
+    .await
+    .unwrap();
+    let text = manifest.encoded();
+    let device_mark = outbox_watermark(&[("intent.json", device_body.len() as u64)]).unwrap();
+    let environment_mark = outbox_watermark(&[("aa/0", environment_body.len() as u64)]).unwrap();
+    let appended_device = outbox_watermark(&[(
+        "intent.json",
+        (device_body.len() + b"-APPENDED".len()) as u64,
+    )])
+    .unwrap();
+    let with_later_row = outbox_watermark(&[
+        ("intent.json", device_body.len() as u64),
+        ("later.json", b"CONCURRENT-ROW".len() as u64),
+    ])
+    .unwrap();
+    assert!(text.contains(&format!("watermark device-outbox {}", device_mark.as_str())));
+    assert!(text.contains(&format!(
+        "watermark environment-outbox {}",
+        environment_mark.as_str()
+    )));
+    assert!(!text.contains(appended_device.as_str()));
+    assert!(!text.contains(with_later_row.as_str()));
+    let published = fs::read(bundle.path().join("cut/records/device-outbox/intent.json")).unwrap();
+    assert_eq!(published, device_body);
+    let staged = fs::read(bundle.path().join("cut/records/environment-outbox/aa%2F0")).unwrap();
+    assert_eq!(staged, environment_body);
+    let bundle_bytes = read_tree(&bundle.path().join("cut"));
+    assert!(!holds(&bundle_bytes, b"-APPENDED"));
+    assert!(!holds(&bundle_bytes, b"CONCURRENT-ROW"));
+    assert_eq!(fs::read(&device_file).unwrap(), b"{\"id\":1}\n-APPENDED");
+    assert!(device.join("later.json").is_file());
+}
+
+#[tokio::test]
+async fn an_invalid_outbox_is_refused_and_nothing_is_committed() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let device = root.join("device/outbox");
+    fs::create_dir_all(&device).unwrap();
+    fs::write(device.join("intent.json"), b"{\"id\":1}\n").unwrap();
+    fs::create_dir_all(root.join("environment")).unwrap();
+    fs::write(root.join("environment/outbox"), b"not-a-directory").unwrap();
+    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    let log = root.join("backup/deletion-inventory.txt");
+    assert!(!log.exists());
+    let bundle = tempfile::tempdir().unwrap();
+    let outcome = capture_namespace(
+        root,
+        &OpenAdmission,
+        &inventory,
+        &DirectoryPublisher::new(bundle.path().join("cut")),
+        &Clock(8),
+        &inventory.key(),
+    )
+    .await;
+    assert_eq!(outcome, Err(ExportFailure::Outbox));
+    assert!(!bundle.path().join("cut").exists());
+    assert!(!log.exists());
+    let tree = read_tree(bundle.path());
+    assert!(!holds(&tree, b"{\"id\":1}"));
+
+    let linked = tempfile::tempdir().unwrap();
+    let link_root = linked.path();
+    fs::create_dir_all(link_root.join("environment")).unwrap();
+    std::os::unix::fs::symlink("missing-outbox", link_root.join("environment/outbox")).unwrap();
+    let linked_inventory = FileDeletionLog::open(link_root.join("backup")).unwrap();
+    let linked_bundle = tempfile::tempdir().unwrap();
+    let linked_outcome = capture_namespace(
+        link_root,
+        &OpenAdmission,
+        &linked_inventory,
+        &DirectoryPublisher::new(linked_bundle.path().join("cut")),
+        &Clock(8),
+        &linked_inventory.key(),
+    )
+    .await;
+    assert_eq!(linked_outcome, Err(ExportFailure::Outbox));
+    assert!(!linked_bundle.path().join("cut").exists());
+}
+
+#[tokio::test]
+async fn an_outbox_private_key_is_fingerprinted_and_the_cut_continues() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let outbox = root.join("device/outbox");
+    fs::create_dir_all(&outbox).unwrap();
+    let secret = b"-----BEGIN OPENSSH PRIVATE KEY-----\n";
+    fs::write(outbox.join("intent.json"), secret).unwrap();
+    fs::create_dir_all(root.join("environment/outbox")).unwrap();
+    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let manifest = capture_namespace(
+        root,
+        &OpenAdmission,
+        &inventory,
+        &DirectoryPublisher::new(bundle.path().join("cut")),
+        &Clock(8),
+        &inventory.key(),
+    )
+    .await
+    .unwrap();
+    let text = manifest.encoded();
+    assert!(text.contains("redacted device-outbox intent.json"));
+    assert!(!text.contains("skipped device-outbox"));
+    let bundle_bytes = read_tree(&bundle.path().join("cut"));
+    assert!(!holds(&bundle_bytes, secret));
+    assert!(text.contains(&format!(
+        "watermark device-outbox {}",
+        outbox_watermark(&[("intent.json", secret.len() as u64)])
+            .unwrap()
+            .as_str()
+    )));
+    assert!(text.contains(&format!(
+        "watermark environment-outbox {}",
+        outbox_watermark(&[]).unwrap().as_str()
+    )));
+    assert!(!text.contains("watermark environment-outbox absent"));
 }
 
 #[tokio::test]
@@ -1092,6 +1248,49 @@ async fn a_directory_rewrite_after_the_hold_is_not_the_cut() {
     assert_eq!(published, b"{\"cut\":\"before\"}\n");
     assert_eq!(fs::read(&path).unwrap(), b"{\"cut\":\"after\"}\n");
     assert!(manifest.encoded().contains("conversation-audit"));
+}
+
+struct AppendOnRelease {
+    appends: Vec<(std::path::PathBuf, Vec<u8>)>,
+    creates: Vec<(std::path::PathBuf, Vec<u8>)>,
+}
+
+#[async_trait]
+impl MutationAdmission for AppendOnRelease {
+    async fn hold(
+        &self,
+    ) -> Result<
+        Box<dyn crate::backup::application::AdmissionLease + Send + Sync>,
+        crate::backup::application::AdmissionFailure,
+    > {
+        Ok(Box::new(AppendHold {
+            appends: self.appends.clone(),
+            creates: self.creates.clone(),
+        }))
+    }
+}
+
+struct AppendHold {
+    appends: Vec<(std::path::PathBuf, Vec<u8>)>,
+    creates: Vec<(std::path::PathBuf, Vec<u8>)>,
+}
+
+impl Drop for AppendHold {
+    fn drop(&mut self) {
+        for (path, bytes) in &self.appends {
+            let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+            std::io::Write::write_all(&mut file, bytes).unwrap();
+        }
+        for (path, bytes) in &self.creates {
+            fs::write(path, bytes).unwrap();
+        }
+    }
+}
+
+impl crate::backup::application::AdmissionLease for AppendHold {
+    fn retirement_signaled(&self) -> bool {
+        false
+    }
 }
 
 struct RewriteOnRelease {

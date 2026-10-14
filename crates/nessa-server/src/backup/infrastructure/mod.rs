@@ -6,6 +6,7 @@ mod credentials;
 mod gateway;
 mod jsonl;
 mod log;
+mod outbox;
 mod sensitivity;
 pub(crate) mod snapshot;
 

@@ -4,7 +4,8 @@
 //! ```text
 //! capture ──▶ MutationAdmission.hold     (conversation admission, write)
 //!               │
-//!               ├── ExportSource.pin         watermark, sqlite snapshot, small files
+//!               ├── ExportSource.pin         watermark, sqlite snapshot, small files,
+//!               │                            and both outboxes' rows
 //!               └── DeletionLog.append       fences already committed
 //!             hold drops
 //!               ├── PinnedStore.read         records from those snapshots

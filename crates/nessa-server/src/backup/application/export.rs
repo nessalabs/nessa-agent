@@ -37,16 +37,19 @@ pub enum ExportFailure {
     Authenticator,
     /// The bundle could not be written. Nothing is claimed as published.
     Publish,
+    /// A device or environment outbox failed, or skipped a row. Nothing was published.
+    Outbox,
 }
 
 /// Pin every store, append fences, release admission, then read and publish.
 ///
 /// The write hold joins in-flight commands and covers only the pin: each
 /// store's watermark, an open SQLite read snapshot or a copy of a small
-/// file, and the deletion-inventory append. Records, the mac, and publish
-/// run after the hold is dropped, from those snapshots, so a later write is
-/// not in the cut and a command can proceed while they run. The hold is
-/// dropped before this returns, including on failure and panic.
+/// file, both outboxes' rows, and the deletion-inventory append. Other
+/// records, the mac, and publish run after the hold is dropped, from those
+/// snapshots, so a later write is not in the cut and a command can proceed
+/// while they run. An outbox that fails or skips a row aborts before publish.
+/// The hold is dropped before this returns, including on failure and panic.
 pub async fn capture_export(
     request: ExportRequest<'_>,
 ) -> Result<AuthenticatedManifest, ExportFailure> {
@@ -66,10 +69,7 @@ pub async fn capture_export(
     let mut cuts = BTreeMap::new();
     for (source, pinned) in request.sources.iter().zip(pinned.iter_mut()) {
         let kind = source.kind();
-        let cut = match pinned.read().await {
-            Ok(cut) if cut.store() == kind => cut,
-            Ok(_) | Err(()) => skipped_store(kind)?,
-        };
+        let cut = accept_cut(kind, pinned.read().await)?;
         cuts.insert(kind, cut);
     }
     if append_failed {
@@ -114,7 +114,15 @@ async fn pin_held(
             pinned.push(pin_or_skip_placeholder(source.kind())?);
             continue;
         }
-        pinned.push(pin_or_skip(*source).await?);
+        let mut snapshot = pin_or_skip(*source).await?;
+        // Outbox rows are read here, still inside the hold and before
+        // fences are appended, so a skipped row does not commit the other
+        // source's fences either.
+        if source.kind().requires_every_row() {
+            let cut = accept_cut(source.kind(), snapshot.read().await)?;
+            snapshot = Box::new(CopiedStore::new(cut));
+        }
+        pinned.push(snapshot);
     }
     // The append is inside the hold, after the snapshots it reads, so the
     // inventory pin below sees the log those fences produced.
@@ -131,7 +139,21 @@ async fn pin_held(
 async fn pin_or_skip(source: &dyn ExportSource) -> Result<Box<dyn PinnedStore>, ExportFailure> {
     match source.pin().await {
         Ok(pinned) => Ok(pinned),
+        Err(()) if source.kind().requires_every_row() => Err(ExportFailure::Outbox),
         Err(()) => Ok(Box::new(CopiedStore::new(skipped_store(source.kind())?))),
+    }
+}
+
+/// An outbox cut that names a skipped row is not a complete snapshot.
+fn outbox_kept(cut: &SourceCut) -> bool {
+    !cut.store().requires_every_row() || cut.skipped().is_empty()
+}
+
+fn accept_cut(kind: StoreKind, read: Result<SourceCut, ()>) -> Result<SourceCut, ExportFailure> {
+    match read {
+        Ok(cut) if cut.store() == kind && outbox_kept(&cut) => Ok(cut),
+        _ if kind.requires_every_row() => Err(ExportFailure::Outbox),
+        _ => Ok(skipped_store(kind)?),
     }
 }
 
