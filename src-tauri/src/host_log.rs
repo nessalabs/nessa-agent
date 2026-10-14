@@ -305,7 +305,7 @@ impl LogWriter {
             .rotation(tracing_appender::rolling::Rotation::NEVER)
             .filename_prefix(FILE_NAME)
             .build(directory)
-            .map_err(|error| io::Error::other(error))?;
+            .map_err(io::Error::other)?;
         set_private(&path)?;
 
         let mut state = lock(&self.state);
