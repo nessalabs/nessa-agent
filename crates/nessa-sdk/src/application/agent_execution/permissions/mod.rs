@@ -7,6 +7,8 @@
 //! host --> permission command --> adapter --> ExecutionController
 //!                                   |
 //!                                   +--> ExecutionAudit
+//! refusal evidence --> ExecutionController::decline_review --> ReviewDeclineRecord
+//!                  --> with_delivery (same identity, refusal and stopping rule)
 //! configured refusal --> admit_configured_outcome --> OperationCapabilities
 //! permission deadline --> ApprovalBasis::Deadline (actor permission-deadline)
 //! remembered rule --> PermissionRules::settle --> ApprovalBasis::Rule

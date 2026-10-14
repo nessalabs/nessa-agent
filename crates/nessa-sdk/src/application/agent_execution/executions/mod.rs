@@ -10,6 +10,7 @@
 //! adapter --> ExecutionController --> domain session
 //!                 |
 //!                 +--> AdmittedQuestion --> asked/closed events and answer audit
+//!                 +--> ReviewDeclineRecord --> selected and delivery audit
 //!                 +--> ExecutionEvent
 //! Agent / adapter --> ExecutionAudit --> host-owned durable sink
 //! ```

@@ -66,6 +66,26 @@ impl PermissionAnswerRecord {
 /// delivered exactly the way a selection is and a reader should not have to
 /// learn two vocabularies for one thing.
 ///
+/// Obtain selected evidence from [`crate::application::agent_execution::executions::ExecutionController::decline_review`].
+/// Its private constructor prevents adapters from supplying an unrelated session:
+/// ```compile_fail
+/// use nessa_sdk::application::agent_execution::permissions::ReviewDeclineRecord;
+/// let _ = ReviewDeclineRecord::new;
+/// ```
+/// Its fields prevent substituting an execution after selection:
+/// ```compile_fail
+/// use nessa_sdk::application::agent_execution::permissions::ReviewDeclineRecord;
+/// use nessa_sdk::domain::agent_execution::executions::ExecutionId;
+/// fn substitute(mut record: ReviewDeclineRecord, other: ExecutionId) {
+///     record.execution_id = other;
+/// }
+/// ```
+///
+/// Audit producers retain the selected record before attempting delivery, then
+/// derive write evidence with [`with_delivery`](Self::with_delivery). These
+/// values perform no I/O and do not claim provider acknowledgement or tool effects.
+/// The audit port owns durable publication; this record does not inspect history.
+///
 /// There is no permission identity here, and its absence is the point: the
 /// request never became one. Correlation is the execution the agent was working
 /// on when it asked.
@@ -79,29 +99,8 @@ pub struct ReviewDeclineRecord {
     rule: Option<ApprovalRuleReference>,
 }
 impl ReviewDeclineRecord {
-    /// Record that `decline` was decided for `execution_id` within `session_id`.
-    ///
-    /// The constructor consumes the provider `session_id`, owning `execution_id`,
-    /// execution-scoped decline `id`, immutable `decline`, and observed
-    /// `delivery` stage. It performs no I/O. A stopping outcome
-    /// ([`RefusalOutcome::EndTurn`] or [`RefusalOutcome::CloseSession`]) requires
-    /// a `rule`, and [`RefusalOutcome::Continue`] requires none. Either mismatch
-    /// returns [`ExecutionError::InvalidReviewDecline`].
-    ///
-    /// `delivery` describes this binding's own progress — [`Selected`] before a
-    /// response is written, then [`Written`] or [`Failed`] once the write has
-    /// been observed. It never claims the provider accepted the refusal or that
-    /// the tool did not run; an agent that is told no has still been told
-    /// something, and what it does next is its own.
-    ///
-    /// The audit producer must emit `Selected` first and reuse the same `id` and
-    /// `decline` for the later delivery record; this immutable record preserves
-    /// that correlation but does not read prior audit history itself.
-    ///
-    /// [`Selected`]: PermissionAnswerDelivery::Selected
-    /// [`Written`]: PermissionAnswerDelivery::Written
-    /// [`Failed`]: PermissionAnswerDelivery::Failed
-    pub fn new(
+    /// Construct selected evidence after the controller validates its execution.
+    pub(in crate::application::agent_execution) fn new(
         session_id: ExecutionSessionId,
         execution_id: ExecutionId,
         id: ReviewDeclineId,
@@ -121,6 +120,11 @@ impl ReviewDeclineRecord {
             delivery,
             rule,
         })
+    }
+    /// Retain the selected refusal and its ownership at a later delivery stage.
+    /// This performs no I/O and does not claim provider acknowledgement.
+    pub fn with_delivery(self, delivery: PermissionAnswerDelivery) -> Self {
+        Self { delivery, ..self }
     }
     /// Provider session whose agent was refused.
     pub fn session_id(&self) -> &ExecutionSessionId {
