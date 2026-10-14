@@ -141,11 +141,11 @@ function appElement(targetStore: AppStore, targetResources: typeof resources) {
 function replacementProvider() {
   const replacementResources = createAttachmentResources()
   const effects = scenarioEffects("echo")
-  const replacementSend = vi.fn(effects.send)
+  const replacementSend = vi.fn(effects.submit)
   const replacementStore = makeStore({
     attachments: replacementResources,
     canChoosePaths: true,
-    conversation: { ...effects, send: replacementSend },
+    conversation: { ...effects, submit: replacementSend },
   })
   replacementStore.dispatch(
     sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),
@@ -362,11 +362,11 @@ beforeEach(() => {
   cleanups = []
   resources = createAttachmentResources()
   const effects = scenarioEffects("echo")
-  send = vi.fn(effects.send)
+  send = vi.fn(effects.submit)
   store = makeStore({
     attachments: resources,
     canChoosePaths: true,
-    conversation: { ...effects, send },
+    conversation: { ...effects, submit: send },
   })
   store.dispatch(
     sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),

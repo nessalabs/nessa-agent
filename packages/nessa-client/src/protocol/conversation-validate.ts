@@ -166,12 +166,13 @@ export function conversationReceipt(
   value: unknown,
   executionId: string,
 ): ConversationReceipt {
-  const item = record(value)
+  const item = { ...record(value) }
   exact(item, ["executionId", "disposition"])
   if (identity(item, "executionId") !== executionId)
     throw new Error("Conversation receipt belongs to another execution")
-  oneOf(text(item, "disposition"), ["queued", "injected", "settled"])
-  return item as unknown as ConversationReceipt
+  const disposition = text(item, "disposition")
+  oneOf(disposition, ["queued", "injected", "settled"])
+  return { executionId, disposition } as ConversationReceipt
 }
 export function conversationCommandReceipt(
   value: unknown,

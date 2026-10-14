@@ -18,6 +18,7 @@ import { httpAgentReadiness } from "../onboarding/adapters/agents"
 import { loadChosenAgent } from "../host"
 import type { AgentReadinessSource } from "../onboarding/application/ports"
 import { hasNativeHost } from "../host"
+import { PreparedOperationTable } from "../conversation/adapters/store/prepared-operation-table"
 
 /** Construct once per application. Overrides are explicit, never a service locator. */
 export function createDependencies(
@@ -165,5 +166,10 @@ export function createDependencies(
             chosenAgent,
           )),
   }
+}
+
+/** Construct prepared-operation retention for one Redux store lifetime. */
+export function createPreparedOperationTable(): PreparedOperationTable {
+  return new PreparedOperationTable()
 }
 export type AppDependencies = ReturnType<typeof createDependencies>

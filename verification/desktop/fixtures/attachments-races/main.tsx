@@ -139,7 +139,7 @@ const store = makeStore({
           })
         : effects.stageAttachment(id, file, bytes, signal)
     },
-    send: async (input) => {
+    submit: async (input) => {
       sends.push(input)
       if (retainedScenario.active && retainedScenario.refuseNext) {
         retainedScenario.refuseNext = false
@@ -147,7 +147,7 @@ const store = makeStore({
           retainedScenario.reupload ? "attachment-unavailable" : "invalid-request",
         )
       }
-      const receipt = await effects.send(input)
+      const receipt = await effects.submit(input)
       if (retainedScenario.active) retainedScenario.acceptedSends++
       return receipt
     },
@@ -469,9 +469,9 @@ const probe = {
       canChoosePaths: true,
       conversation: {
         ...nextEffects,
-        send: async (input) => {
+        submit: async (input) => {
           sends.push(input)
-          return nextEffects.send(input)
+          return nextEffects.submit(input)
         },
       },
     })

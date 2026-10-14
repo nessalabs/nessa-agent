@@ -171,7 +171,7 @@ async function say(client, conversationId, text, agent, create) {
     ? 0
     : (await client.conversation.read(conversationId)).messages.length
   if (create) await client.conversation.create({ conversationId, agent })
-  await client.conversation.send(conversationId, text)
+  await client.conversation.submit(client.conversation.prepare(conversationId, text))
   const end = Date.now() + 90_000
   let last
   do {
