@@ -43,6 +43,7 @@ type Phase =
       readonly kind: "ready"
       readonly rules: readonly PermissionRule[]
       readonly revoking?: string
+      readonly failed?: boolean
     }
 
 export function PermissionRuleRows() {
@@ -82,18 +83,20 @@ export function PermissionRuleRows() {
     void gateway.revoke(ruleId, crypto.randomUUID()).then(async (outcome) => {
       const again = await gateway.read()
       if (generation !== latest.current) return
+      if (!outcome.ok) {
+        setPhase({
+          kind: "ready",
+          rules: again.ok ? again.rules : phase.rules,
+          failed: true,
+        })
+        return
+      }
       if (again.ok) setPhase({ kind: "ready", rules: again.rules })
       else
-        setPhase(
-          outcome.ok
-            ? {
-                kind: "ready",
-                rules: phase.rules.filter(
-                  (rule) => rule.id !== ruleId || !outcome.applied,
-                ),
-              }
-            : { kind: "unread" },
-        )
+        setPhase({
+          kind: "ready",
+          rules: phase.rules.filter((rule) => rule.id !== ruleId || !outcome.applied),
+        })
     })
   }
   const entry = setting("remembered-rules")
@@ -114,6 +117,9 @@ export function PermissionRuleRows() {
           detail={resting}
           unavailable
         />
+      ) : null}
+      {phase.kind === "ready" && phase.failed ? (
+        <ItemRow label="Could not revoke that rule." detail="It is still remembered." />
       ) : null}
       {phase.kind === "ready" && phase.rules.length === 0 ? (
         <ItemRow

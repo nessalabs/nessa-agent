@@ -350,8 +350,11 @@ const checks = {
     const failures = []
     await show(page, "Privacy & Permissions", "Access")
     const row = page.locator('[data-setting="review-notices"]')
+    if ((await row.count()) !== 1) {
+      failures.push("review-notices is missing")
+      return { text: "", failures }
+    }
     const text = (await row.textContent()) ?? ""
-    if ((await row.count()) !== 1) failures.push("review-notices is missing")
     if (!text.includes("Allow")) failures.push("the row does not offer Allow")
     if (!text.includes("while you are away"))
       failures.push("the row does not say what the notification is for")
@@ -366,9 +369,12 @@ const checks = {
     const failures = []
     await show(page, "Privacy & Permissions", "Access")
     const row = page.locator('[data-setting="remembered-rules"]')
+    if ((await row.count()) !== 1) {
+      failures.push("remembered-rules is missing")
+      return { text: "", failures }
+    }
     const text = (await row.textContent()) ?? ""
     const disabled = await row.getAttribute("data-disabled")
-    if ((await row.count()) !== 1) failures.push("remembered-rules is missing")
     if (disabled === null) failures.push("remembered rules are usable without a gateway")
     if (!text.includes("Remembered rules"))
       failures.push("the row does not name remembered rules")
