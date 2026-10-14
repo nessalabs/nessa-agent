@@ -3088,6 +3088,8 @@ impl<P: AcpProfile> Worker<P> {
                 .map_err(Into::into);
         };
         let decline_id = self.allocate_decline_id()?;
+        let selected =
+            execution.decline_review(&execution_id, decline_id.clone(), decline.clone(), None)?;
         let mut publication =
             self.begin_selected_notice(execution_id.clone(), decline_id.clone(), decline.clone());
         tracing::warn!(
@@ -3097,25 +3099,13 @@ impl<P: AcpProfile> Worker<P> {
             reason = ?decline.reason(),
             "tool review declined; the agent is told no and the execution continues"
         );
-        let record = |delivery| {
-            ReviewDeclineRecord::new(
-                session_id.clone(),
-                execution_id.clone(),
-                decline_id.clone(),
-                decline.clone(),
-                delivery,
-                None,
-            )
-            .map(ExecutionAuditRecord::ReviewDeclined)
-            .map_err(|error| AgentError::InvalidInput(error.to_string()))
-        };
         let correlation = self.next_correlation();
         // The decision is evidence before the wire sees it. An unrecordable
         // decision still has to reach the agent, so the refusal is sent either
         // way and the audit failure is reported after it.
         let decided = self
             .record_audit(
-                record(PermissionAnswerDelivery::Selected)?,
+                ExecutionAuditRecord::ReviewDeclined(selected.clone()),
                 AuditEffectPhase::PermissionSelection,
             )
             .await;
@@ -3158,7 +3148,7 @@ impl<P: AcpProfile> Worker<P> {
         // unconfirmed through the publication guard's drop fallback.
         let written = self
             .record_audit(
-                record(observed)?,
+                ExecutionAuditRecord::ReviewDeclined(selected.with_delivery(observed)),
                 AuditEffectPhase::PermissionDelivery(correlation),
             )
             .await;
@@ -3230,6 +3220,12 @@ impl<P: AcpProfile> Worker<P> {
         let execution_id = active.execution_id.clone();
         let prompt_id = active.id;
         let decline_id = self.allocate_decline_id()?;
+        let selected = execution.decline_review(
+            &execution_id,
+            decline_id.clone(),
+            decline.clone(),
+            Some(rule),
+        )?;
         let mut publication =
             self.begin_selected_notice(execution_id.clone(), decline_id.clone(), decline.clone());
         publication.keep_selected_notice();
@@ -3290,19 +3286,7 @@ impl<P: AcpProfile> Worker<P> {
             Ok(()) => PermissionAnswerDelivery::Written,
             Err(error) => PermissionAnswerDelivery::Failed(error.clone()),
         };
-        let record = |delivery| {
-            ReviewDeclineRecord::new(
-                session_id.clone(),
-                execution_id.clone(),
-                decline_id.clone(),
-                decline.clone(),
-                delivery,
-                Some(rule.clone()),
-            )
-            .map(ExecutionAuditRecord::ReviewDeclined)
-            .map_err(|error| AgentError::InvalidInput(error.to_string()))
-        };
-        let audited = self.record_decline_audits(&record, observed).await;
+        let audited = self.record_decline_audits(selected, observed).await;
         let lifecycle = self.record_lifecycle(records).await;
         let recorded = merge_failure(audited, lifecycle);
         let recorded = match emitted {
@@ -3345,19 +3329,19 @@ impl<P: AcpProfile> Worker<P> {
     /// Selection and delivery audits for one decline, both attempted.
     async fn record_decline_audits(
         &mut self,
-        record: &impl Fn(PermissionAnswerDelivery) -> Result<ExecutionAuditRecord, AgentError>,
+        selected: ReviewDeclineRecord,
         observed: PermissionAnswerDelivery,
     ) -> Result<(), WorkerFailure> {
         let decided = self
             .record_audit(
-                record(PermissionAnswerDelivery::Selected)?,
+                ExecutionAuditRecord::ReviewDeclined(selected.clone()),
                 AuditEffectPhase::PermissionSelection,
             )
             .await;
         let correlation = self.next_correlation();
         let written = self
             .record_audit(
-                record(observed)?,
+                ExecutionAuditRecord::ReviewDeclined(selected.with_delivery(observed)),
                 AuditEffectPhase::PermissionDelivery(correlation),
             )
             .await;

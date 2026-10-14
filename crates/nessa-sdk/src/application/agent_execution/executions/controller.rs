@@ -8,8 +8,9 @@ use super::{
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::permissions::{
-    validate_hook_withdrawal, ApprovalAttribution, ApprovalBasis, CancellationOrigin,
-    PermissionAnswer, PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
+    validate_hook_withdrawal, ApprovalAttribution, ApprovalBasis, ApprovalRuleReference,
+    CancellationOrigin, PermissionAnswer, PermissionAnswerDelivery, PermissionCancellation,
+    PermissionCancellationRequest, PermissionResolution, ReviewDeclineRecord,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::questions::{AgentQuestion, QuestionId};
@@ -217,6 +218,61 @@ impl ExecutionController {
         admitted.event().validate_payload_size()?;
         self.admitted_question_ids.insert(admitted.id().clone());
         Ok(admitted)
+    }
+    /// Capture a refusal for this controller's active execution before delivery
+    /// or settlement. This records no audit, changes no lifecycle state and does
+    /// not evaluate policy; the adapter supplies its already decided refusal.
+    ///
+    /// `execution` is the captured turn, `id` is the adapter-allocated decline
+    /// identity, `decline` retains the tool/reason/outcome, and `rule` names the
+    /// configured stopping rule. ID uniqueness remains the adapter's responsibility.
+    ///
+    /// # Errors
+    /// Returns Closed for a closed session, InvalidInput for a foreign/inactive
+    /// execution or a stopping outcome without its rule (or a continue outcome
+    /// with one). The adapter owns decline ID allocation and audit ordering.
+    /// Keep the returned record and use `with_delivery` for later write evidence,
+    /// including after this execution finishes or another one begins.
+    ///
+    /// ```
+    /// use nessa_sdk::application::agent_execution::executions::ExecutionController;
+    /// use nessa_sdk::application::agent_execution::permissions::PermissionAnswerDelivery;
+    /// use nessa_sdk::domain::agent_execution::{
+    ///     executions::ExecutionId, sessions::ExecutionSessionId,
+    ///     permissions::{ReviewDecline, ReviewDeclineId, ReviewDeclineReason, RefusalOutcome},
+    /// };
+    /// let mut controller = ExecutionController::new(ExecutionSessionId::new("session")?);
+    /// let turn = ExecutionId::new("turn")?;
+    /// controller.begin_execution(turn.clone())?;
+    /// let selected = controller.decline_review(
+    ///     &turn, ReviewDeclineId::new("1")?,
+    ///     ReviewDecline::new(Some("Bash"), ReviewDeclineReason::ToolNotReviewable,
+    ///         RefusalOutcome::Continue), None,
+    /// )?;
+    /// let written = selected.with_delivery(PermissionAnswerDelivery::Written);
+    /// assert_eq!(written.session_id(), controller.id());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn decline_review(
+        &self,
+        execution: &ExecutionId,
+        id: ReviewDeclineId,
+        decline: ReviewDecline,
+        rule: Option<ApprovalRuleReference>,
+    ) -> Result<ReviewDeclineRecord, AgentError> {
+        if self.session.is_closed() {
+            return Err(AgentError::Closed);
+        }
+        self.check_execution(execution)?;
+        ReviewDeclineRecord::new(
+            self.id().clone(),
+            execution.clone(),
+            id,
+            decline,
+            PermissionAnswerDelivery::Selected,
+            rule,
+        )
+        .map_err(|error| AgentError::InvalidInput(error.to_string()))
     }
     /// Admits review `id` for the observed `tool`, retaining its exact `input` and
     /// offered `options` until resolution. Produces the correlated review event.
