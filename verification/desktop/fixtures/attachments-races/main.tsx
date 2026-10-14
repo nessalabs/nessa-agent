@@ -409,9 +409,9 @@ const probe = {
       canChoosePaths: true,
       conversation: {
         ...nextEffects,
-        send: async (input) => {
+        submit: async (input) => {
           sends.push(input)
-          return nextEffects.send(input)
+          return nextEffects.submit(input)
         },
       },
     })
