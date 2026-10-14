@@ -261,8 +261,7 @@ pub(crate) use session_key::conversation_session;
 pub use share_grants::{
     binding_of, note_candidates, paired_facts, GrantedShare, HeldGrant, Reader, RevisionHold,
     ShareConversation, ShareGrant, ShareGrantChange, ShareGrantList, ShareGrantReceipt,
-    ShareGrantTransition,
-    ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_POLICY_REVISION,
+    ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_POLICY_REVISION,
     MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 pub use tool_policy::{ToolDecision, ToolInitiator, ToolPolicyEvaluator, ToolPolicyUnavailable};

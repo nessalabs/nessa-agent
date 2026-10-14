@@ -4355,7 +4355,11 @@ async fn a_cancelled_grant_change_keeps_its_permit_until_the_write_finishes() {
         "the hold kept a revision the cancelled write replaced"
     );
     assert!(
-        ShareGrants::grants(&*store, &id).await.unwrap().is_empty(),
+        ShareGrants::grants(&*store, &id)
+            .await
+            .unwrap()
+            .grants
+            .is_empty(),
         "the detached write did not revoke the grant"
     );
 }
