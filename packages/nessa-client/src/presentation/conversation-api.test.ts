@@ -1,3 +1,4 @@
+import { questionTargets } from "../application/question-target.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import { expect, it, vi } from "vitest"
 import { permissionTargets } from "../application/permission-target.js"
@@ -644,7 +645,15 @@ it("correlates a question answer acknowledgement with its action", async () => {
     .mockResolvedValue({ requestId: "question-action", applied: true })
   const api = createConversationApi({ request }, () => "question-action")
   await expect(
-    api.answerQuestion(conversationId, "execution", "ask", null),
+    api.answerQuestion(
+      questionTargets({
+        conversationId,
+        questions: [
+          { executionId: "execution", questionId: "ask", message: "Ask", questions: [] },
+        ],
+      })[0]!,
+      null,
+    ),
   ).resolves.toEqual({ requestId: "question-action", applied: true })
   expect(request).toHaveBeenCalledWith("conversation.answerQuestion", {
     conversationId,
@@ -706,9 +715,13 @@ it.each([false, true])(
     const api = createConversationApi({ request }, () => "generated")
     const choices = [{ key: "environment", values: ["staging"] }]
     const error = await api
-      .answerQuestion(conversationId, "execution", "ask", choices, {
-        requestId: "lost-answer",
-      })
+      .answerQuestion(
+        questionTargets({ conversationId, questions: [ask] })[0]!,
+        choices,
+        {
+          requestId: "lost-answer",
+        },
+      )
       .catch((error: unknown) => error)
     expect(error).toBeInstanceOf(NessaConversationControlError)
     expect(error).toMatchObject({
@@ -726,7 +739,7 @@ it.each([false, true])(
       // A fresh read may justify a new deliberate action, not replay of the
       // failed action. The provider remains the owner of ask consumption.
       await expect(
-        api.answerQuestion(conversationId, "execution", "ask", choices, {
+        api.answerQuestion(questionTargets(current)[0]!, choices, {
           requestId: "deliberate-answer",
         }),
       ).resolves.toEqual({ requestId: "deliberate-answer", applied: true })
@@ -743,13 +756,29 @@ it("keeps question refusal and mismatched acknowledgement in the shared control 
     .mockResolvedValueOnce({ requestId: "another-action", applied: true })
   const api = createConversationApi({ request }, () => "question-action")
   const refused = await api
-    .answerQuestion(conversationId, "execution", "ask", null)
+    .answerQuestion(
+      questionTargets({
+        conversationId,
+        questions: [
+          { executionId: "execution", questionId: "ask", message: "Ask", questions: [] },
+        ],
+      })[0]!,
+      null,
+    )
     .catch((error: unknown) => error)
   expect(refused).toBeInstanceOf(NessaConversationControlError)
   expect(refused).toMatchObject({ uncertain: false, requestId: "question-action" })
   expect(refused).not.toHaveProperty("retry")
   const mismatched = await api
-    .answerQuestion(conversationId, "execution", "ask", null)
+    .answerQuestion(
+      questionTargets({
+        conversationId,
+        questions: [
+          { executionId: "execution", questionId: "ask", message: "Ask", questions: [] },
+        ],
+      })[0]!,
+      null,
+    )
     .catch((error: unknown) => error)
   expect(mismatched).toBeInstanceOf(NessaConversationControlError)
   expect(mismatched).toMatchObject({ uncertain: true, requestId: "question-action" })
@@ -1834,36 +1863,72 @@ const grant = {
   grantedAtMs: 1_700_000_000_000,
 }
 
-it("lists a conversation's grants within the published bounds", async () => {
+const page = { pageSize: bounds.maxSharePage }
+
+it("lists one page of a conversation's grants within the published bounds", async () => {
   const request = vi.fn().mockResolvedValue({
+    changeRevision: 1,
     items: [
       grant,
       { credentialId: "phone", role: "read", policyRevision: 1, grantedAtMs: 1 },
     ],
   })
   const api = createConversationApi({ request }, () => "action")
-  expect((await api.shares(conversationId)).items).toHaveLength(2)
-  expect(request).toHaveBeenCalledWith("conversation.shares", { conversationId })
-  // The most hosts and patterns a policy may name together.
-  const patterns = bounds.maxToolPolicyEntries - bounds.maxCommandHosts
+  expect((await api.shares(conversationId, page)).items).toHaveLength(2)
+  expect(request).toHaveBeenCalledWith("conversation.shares", {
+    conversationId,
+    pageSize: bounds.maxSharePage,
+  })
+  // A full allow list, a full deny list, and every host, including one at the
+  // longest destination config.json accepts.
   request.mockResolvedValue({
+    changeRevision: 1,
     items: [
       {
         ...grant,
         policy: {
-          allow: Array.from({ length: patterns }, (_, n) => `t${n}`).slice(
-            0,
-            bounds.maxToolPolicyPatterns,
-          ),
-          deny: Array.from({ length: patterns }, (_, n) => `t${n}`).slice(
-            bounds.maxToolPolicyPatterns,
-          ),
-          commandHosts: Array.from({ length: bounds.maxCommandHosts }, (_, n) => `h${n}`),
+          allow: Array.from({ length: bounds.maxToolPolicyPatterns }, (_, n) => `a${n}`),
+          deny: Array.from({ length: bounds.maxToolPolicyPatterns }, (_, n) => `d${n}`),
+          commandHosts: [
+            ...Array.from({ length: bounds.maxCommandHosts - 1 }, (_, n) => `h${n}`),
+            "h".repeat(bounds.maxCommandHostBytes),
+          ],
         },
       },
     ],
   })
-  await expect(api.shares(conversationId)).resolves.toBeDefined()
+  await expect(api.shares(conversationId, page)).resolves.toBeDefined()
+  const cursor = { grantedAtMs: grant.grantedAtMs, credentialId: grant.credentialId }
+  request.mockResolvedValue({ changeRevision: 1, items: [grant], cursor })
+  await api.shares(conversationId, { pageSize: 1, cursor })
+  expect(request).toHaveBeenLastCalledWith("conversation.shares", {
+    conversationId,
+    pageSize: 1,
+    cursor,
+  })
+})
+
+it("refuses a shares answer larger than the page size it asked for", async () => {
+  const request = vi.fn().mockResolvedValue({
+    changeRevision: 1,
+    items: [
+      grant,
+      { credentialId: "phone", role: "read", policyRevision: 1, grantedAtMs: 1 },
+    ],
+  })
+  const api = createConversationApi({ request }, () => "action")
+  await expect(api.shares(conversationId, { pageSize: 1 })).rejects.toThrow(/page/i)
+  expect(request).toHaveBeenCalledOnce()
+})
+
+it("refuses a page size outside the published bound before sending", async () => {
+  const request = vi.fn()
+  const api = createConversationApi({ request }, () => "action")
+  await expect(api.shares(conversationId, { pageSize: 0 })).rejects.toThrow(TypeError)
+  await expect(
+    api.shares(conversationId, { pageSize: bounds.maxSharePage + 1 }),
+  ).rejects.toThrow(TypeError)
+  expect(request).not.toHaveBeenCalled()
 })
 
 it.each([
@@ -1903,41 +1968,41 @@ it.each([
       ],
     },
   ],
-  [
-    "hosts past the room the patterns leave",
-    {
-      items: [
-        {
-          ...grant,
-          policy: {
-            allow: Array.from(
-              { length: bounds.maxToolPolicyPatterns },
-              (_, n) => `a${n}`,
-            ),
-            deny: Array.from({ length: bounds.maxToolPolicyPatterns }, (_, n) => `d${n}`),
-            commandHosts: ["devbox"],
-          },
-        },
-      ],
-    },
-  ],
   ["an unknown field", { items: [{ ...grant, extra: true }] }],
   ["a negative revision", { items: [{ ...grant, policyRevision: -1 }] }],
   [
-    "more grants than a conversation holds",
+    "more grants than a page holds",
     {
-      items: Array.from({ length: bounds.maxShareGrants + 1 }, (_, n) => ({
+      items: Array.from({ length: bounds.maxSharePage + 1 }, (_, n) => ({
         credentialId: `c${n}`,
         role: "read",
         policyRevision: 1,
-        grantedAtMs: 0,
+        grantedAtMs: n,
       })),
     },
   ],
-])("rejects %s in a shares answer", async (_name, answer) => {
+  [
+    "a cursor when the page is empty",
+    { items: [], cursor: { grantedAtMs: 1, credentialId } },
+  ],
+  [
+    "a cursor that is not the page's last grant",
+    {
+      items: [grant],
+      cursor: { grantedAtMs: grant.grantedAtMs, credentialId: "other" },
+    },
+  ],
+  ["no catalogue revision", { items: [grant] }],
+  [
+    "a catalogue revision that is not a safe integer",
+    { items: [grant], changeRevision: 1.5 },
+  ],
+])("rejects %s in a shares answer", async (name, answer) => {
+  const payload =
+    name === "no catalogue revision" ? answer : { changeRevision: 1, ...answer }
   const api = createConversationApi(
-    { request: vi.fn().mockResolvedValue(answer) },
+    { request: vi.fn().mockResolvedValue(payload) },
     () => "action",
   )
-  await expect(api.shares(conversationId)).rejects.toThrow()
+  await expect(api.shares(conversationId, page)).rejects.toThrow()
 })

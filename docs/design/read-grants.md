@@ -45,7 +45,11 @@ The owner manages grants with three socket methods, each admitted by Cedar for
 - `conversation.unshare {requestId, conversationId, credentialId}` revokes. It
   needs only ownership, so access can be taken away from a deleted
   conversation or an unpaired device.
-- `conversation.shares {conversationId}` lists the grants on one conversation.
+- `conversation.shares {conversationId, pageSize, cursor?}` lists one page of
+  the grants on one conversation. `pageSize` is required. The first page names
+  no cursor; a later page echoes the cursor the previous page returned. The
+  answer names the catalogue revision those grants were read at, and a cursor
+  when further grants remain.
 
 Each grant, change of role or policy, and revoke is journaled
 (`share_grant_changes`) in the same transaction as the grant itself: the
@@ -176,11 +180,12 @@ tools](#checking-a-drive-turns-tools)).
   (`CommandHosts`). It is checked for shape and size only: at most 16
   patterns in each list, at least one pattern in one of them, each 1 to 48
   bytes, plain text; at most 16 hosts, each a name `run` could take, once,
-  and at most 96 bytes. Hosts take the room of patterns: a policy's patterns
-  and hosts together are at most 32, and a host is never longer as JSON than
-  the longest pattern. Whether `conversation.shares` still fits one frame
-  with hosts is measured, not argued: row J10's test builds the largest
-  answer, hosts and all, and checks it. What it allows is decided by Cedar
+  and at most 253 bytes, the longest SSH destination `config.json` accepts.
+  Hosts are apart from the patterns: a policy may name 16 hosts however full
+  its allow and deny lists are. Whether one page of `conversation.shares`
+  still fits one frame is measured, not argued: row J10's test builds a full
+  page at that largest policy, hosts and all, and checks it. What it allows
+  is decided by Cedar
   ([below](#what-a-tool-policy-allows)).
   `ShareAccess` holds the role and policy together, so a Drive grant always
   has a policy and a Read or Comment grant never has one (row J3). The store
@@ -220,12 +225,39 @@ tools](#checking-a-drive-turns-tools)).
   who may share, so it is not policy and does not go through Cedar; Cedar
   still decides the method.
 - **`conversation.shares`** reports each grant's role, its policy when it
-  drives, and its policy revision (row J7). `conversation.unshare` names no
-  role and ends a grant of any role (row J8).
+  drives, and its policy revision (row J7), one page at a time. The request
+  names a page size from 1 through the published page size. The first page
+  names no cursor. A later page echoes the cursor the previous page returned,
+  and is the grants strictly after that pair in oldest-first order
+  (`grantedAtMs`, then credential). The answer's cursor is present when
+  further grants remain, and names that page's last grant. A cursor that
+  matches no grant is still a position. Each page also names the
+  conversation's catalogue revision (`changeRevision`), read with that
+  page's grants. A grant or a revoke moves it; a change of role or policy
+  does not, and a later write still names the grant's own `policyRevision`.
+  The dialog keeps a page only while the next page names the same revision.
+  When it does not, the dialog drops what it has read and starts again from
+  the first page. After two such starts, a further move is unanswered
+  (row D12). `conversation.unshare` names no role and ends a grant of any
+  role (row J8).
 - **Bounds.** A conversation holds at most 64 grants and at most 8 Drive
-  grants (row J9). The Drive bound is what keeps a `conversation.shares`
-  answer inside one frame with every policy at its largest (row J10); both
-  are in [limits](../limits.md).
+  grants (row J9). One `conversation.shares` answer holds at most the page
+  size, and a page of that many grants at the largest policy fits one frame
+  (row J10). The caps and the page size are in [limits](../limits.md).
+
+```mermaid
+sequenceDiagram
+    participant Dialog
+    participant Gateway
+    Dialog->>Gateway: conversation.shares pageSize, no cursor
+    Gateway-->>Dialog: items, changeRevision R, cursor
+    Dialog->>Gateway: conversation.shares pageSize, cursor
+    Gateway-->>Dialog: changeRevision other than R
+    Note over Dialog: drop the grants and the cursor
+    Dialog->>Gateway: conversation.shares pageSize, no cursor
+    Gateway-->>Dialog: items, changeRevision S, no cursor
+    Note over Dialog: the list is that page
+```
 
 ```mermaid
 sequenceDiagram
@@ -302,6 +334,43 @@ policy (`conversation/application/drive_tools.rs`).
   checked (`ToolChecking::Checked`) and the policy is kept for the
   conversation, by grant and revision (row J26). A retry by the same
   driver is answered from what was saved and is not admitted again.
+- **The turn proceeds only while that revision still stands.** After
+  admission reads the policy, and before the agent is asked to take the
+  turn, the service holds that grant's revision
+  (`ShareGrants::hold_revision`). The permit is the one
+  `(conversation, receiver)` pair, and the map drops it when the last
+  permit drops, or when a wait cancelled before it acquired the lock was
+  the last clone of that gate. A turn or a change of another grant does not take it.
+  Note candidates are read before the permit, so a verdict does not hold
+  it. The save proceeds only while the live grant is still at that
+  revision. A revoke or a change of role or policy in between refuses the
+  turn `revoked`, and a queued turn saves nothing. A change of the same
+  grant takes the same permit, so it cannot land during that save. A
+  queued turn keeps the permit until enqueue returns, which is after the
+  save and after the runner is started, and drops it before the turn is
+  watched. A native steer moves the permit into the save check: the check
+  drops the first permit after the save, compares the live revision, and
+  keeps the second until the provider operation starts. It releases that
+  permit before waiting for the provider's response, before session
+  cleanup when the provider panics before starting the operation, and when
+  control stops before that operation is polled. When the revision
+  moved, the saved steer is refused `revoked_after_save` and nothing is
+  injected. That refusal settles the command receipt as refused after save,
+  so the same request is answered `revoked_after_save` again. When the
+  second hold cannot be read, the saved steer is `unavailable_after_save`
+  and nothing is injected. That outcome settles the command receipt as
+  unavailable after save, so the same request is answered
+  `unavailable_after_save` again. A queued turn
+  refused before the save is `revoked` and saves nothing. That refusal
+  settles the command receipt as no effect, so the same request is answered
+  `revoked` again. A change cancelled while its
+  write is still running keeps that grant's permit until the write finishes,
+  so a later hold cannot read the revision the write is about to replace.
+  A retry of a turn already saved is
+  answered from its receipt and is not checked again (row J31). The grant
+  table and the turn's records are different databases, so this is one
+  permit across both writes, not one SQL transaction. The owner's turns
+  are not held.
 - **Dispatch checks it again.** A checked turn can wait behind another, and a
   restarted agent process reads its approval mode and its own hooks switch
   afresh. So the SDK sends a turn saved as checked only to a process in Ask
@@ -360,7 +429,7 @@ policy (`conversation/application/drive_tools.rs`).
 sequenceDiagram
     participant Device as Paired device
     participant Service as ConversationService
-    participant Grants as share_grants journal
+    participant Grants as share_grants
     participant Agent
     participant Hook as DriveToolHook
     participant Cedar as ToolPolicyEvaluator
@@ -369,8 +438,16 @@ sequenceDiagram
     Service->>Service: Claude or Codex, Ask mode, attached, no native hooks
     Service->>Grants: policy_at(conversation, grant, revision)
     Grants-->>Service: the policy at that revision
-    Service->>Service: keep it, save the turn as checked
-    Service->>Agent: enqueue
+    Service->>Grants: hold_revision(conversation, grant, revision)
+    alt grant still at that revision
+        Grants-->>Service: permit for that grant until the save is decided
+        Service->>Service: keep the policy, save the turn as checked
+        Service->>Agent: enqueue, or steer
+        Note over Service,Grants: queued: the permit ends once enqueue returns
+        Note over Agent,Grants: native steer: drop the first permit, compare, keep the second until injection starts, release before the response wait
+    else revoked or the revision moved
+        Grants-->>Service: revoked, nothing saved
+    end
     Agent->>Hook: before_permission_review(call, initiation)
     Hook->>Cedar: evaluate(grant + policy, call)
     alt allowed
@@ -448,10 +525,13 @@ socket hands it to `submit_command`, and the turn is saved with it.
 
 - **The stamp is per turn, as admitted.** A policy changed after a command
   was admitted stamps the next command's turn and leaves this one as it was
-  admitted. A retry of the same request is answered from its saved receipt,
-  so a turn keeps the initiation it was first admitted with; the same turn
-  sent again as a new request under another revision is a conflict, as any
-  other message under that turn's id is.
+  admitted, when this one was saved. A Drive turn proceeds only while the
+  grant is still at the revision admission read; a revoke or a policy
+  change in between refuses it `revoked` and saves nothing (row J31). A
+  retry of the same request is answered from its saved receipt, so a turn
+  keeps the initiation it was first admitted with; the same turn sent again
+  as a new request under another revision is a conflict, as any other
+  message under that turn's id is.
 - **Admission audit names the actor, not the grant.** The SDK's admission
   evidence carries the action context (the device's surface and the request
   id); the grant is on the turn's record. A tool call the grant's policy
@@ -583,10 +663,14 @@ makes it `assigned` to that turn for good; one that can no longer go is
   be read, leaves its notes pending for a later turn. Each grant is read and
   asked once per turn. A change of the
   grant's policy revision retires nothing: the revision saved with the note
-  stays as its attribution. The verdict is the grant as it stood when the
-  turn was admitted, as for a Drive grant's own turn (row J15): a revoke
-  that lands while a turn is being admitted stops the next turn, not that
-  one.
+  stays as its attribution.   The verdict is the grant as it stood when the turn was admitted. For a
+  note taken by the owner's turn, a revoke that lands while that turn is
+  being admitted stops the next turn, not that one (row J23). A Drive
+  grant's own turn proceeds only while its grant is still at the admitted
+  revision. A revoke that commits before the revision hold is acquired
+  refuses the turn, and the note is not taken. A revoke requested during
+  the save waits until enqueue returns, and the saved turn keeps the notes
+  it took (row J31).
 - **Admission retires before it takes.** Under its lock, `notes::select`
   walks the pending notes in the order they were left: one past 24 hours
   is retired `expired`, one the host revoked `permission_lost`, and up to 8
@@ -668,10 +752,16 @@ Every rule stays with the gateway; the dialog only reads what it publishes:
   by the conversation service (`owner_command_hosts`), the same decision
   `environments.list` and the owner's own `run` use.
 - **How many.** The bounds come from the schema (`toolPolicyBounds` in the
-  client): at most 16 hosts of at most 96 bytes each, and hosts and patterns
-  together at most 32 (`x-maxEntries` on `ConversationToolPolicy`, tied to
-  `ToolPolicy::MAX_ENTRIES` by a test). The host list's `max` is the room
-  the patterns leave; a host whose name is too long is shown unavailable.
+  client): at most 16 hosts of at most 253 bytes each, the longest
+  destination `config.json` accepts, apart from the patterns. The host
+  list's `max` is that host bound. A host whose name is too long is shown
+  unavailable.   The dialog reads the grants a page at a time (`sharePage`)
+  on one connection until a page names no cursor (row D12). Each page names
+  the catalogue revision it was read at. A later page that names another
+  revision is not kept: the walk starts again from the first page, and after
+  two such starts the read is unanswered. A page that
+  repeats a credential, or a walk past the conversation's grant cap, is
+  unanswered.
 - **What a policy cannot stop** is said beside the Drive controls: calls the
   agent does not ask about (Claude reads, Codex in its read-only sandbox);
   commands only on hosts named and allowed, none meaning nowhere; and Drive
@@ -727,9 +817,10 @@ row's tests are named by the row: the transitions in
 | D6 | A change asked while another is on its way — from this opening or any other, for any session — or before the grants were read | Not begun; nothing is sent. The change on its way is the window's, not the dialog's; the dialog says why it waits: on this conversation's own change, or on another conversation's | `sharing.test.ts` (*D6*, three); `sharing-commands.test.ts` (*D6*, three); `share-dialog.test.tsx` (*says why it waits while another conversation's change…*, *says why it waits while its own conversation's earlier change…*); `share-dialog.mjs` (`held`) |
 | D7 | Closed, or opened for another session, while a read or a change is on its way | Closed at once; the change still settles at the gateway and is no longer on its way; nothing on screen changes and no read follows it | `sharing.test.ts` (*D3, D7*, *D7*); `sharing-commands.test.ts` (*D7*) |
 | D8 | Opened again, for the same session or another, while an earlier opening's answers are on their way | A new opening; the earlier answers are let go, and the form starts empty | `sharing.test.ts` (*D8*); `sharing-commands.test.ts` (*D8*); `share-dialog.test.tsx` (*starts a new draft for a new opening*) |
-| D9 | A Drive draft whose patterns leave less room than the hosts checked; a custom policy naming no pattern; a change to a grant holding a host the gateway does not offer now, or a pattern holding a comma; another device chosen after Change | Share disabled with why; the hosts' `max` is the room left; the held host is shown, checked and sent unless unchecked; the grant's patterns are sent exactly while their field is unchanged; a device without a grant starts from an empty form | `model/sharing.test.ts` (*D9*, *carries a preset and every host checked…*, *a grant's patterns*); `share-dialog.test.tsx` (*holds the host list…*, *keeps, and shows, a held host…*, *starts from nothing for a device without a grant…*) |
+| D9 | A Drive draft with both pattern lists full and hosts checked up to the hosts' own bound; a custom policy naming no pattern; more hosts than that bound; a change to a grant holding a host the gateway does not offer now, or a pattern holding a comma; another device chosen after Change | Share disabled with why when there is no pattern or more hosts than the host bound; a full pattern list still leaves every host that fits; a host whose name is too long is unavailable; the held host is shown, checked and sent unless unchecked; the grant's patterns are sent exactly while their field is unchanged; a device without a grant starts from an empty form | `model/sharing.test.ts` (*D9*, *carries a preset and every host checked…*, *a grant's patterns*); `share-dialog.test.tsx` (*keeps every fitting host…*, *keeps, and shows, a held host…*, *starts from nothing for a device without a grant…*) |
 | D10 | The list and the form while a change is on its way, while any read is, or while the grants listed predate this window's last settled change (made, refused or unanswered) because no read of them has answered since — the read after it on its way or failed | Held, by one rule (`formHeld`): no edit is taken, the fieldset, Share, Change, Revoke and its confirm are disabled, Start Again does nothing, and no reason is said, since the draft is not compared with a list that predates it; a failed read offers only Try Again. A change made to the draft's own device builds the draft on the revision the gateway answered, keeping what the form showed; a revoke leaves no basis; a refused or unanswered change, or one to another device, leaves the draft as it was. Once the grants are read after the change, a draft whose basis the listed grant no longer holds is held as changed, with Start Again, which starts it from what that read holds. Share sends the draft as the store holds it then, built by `requestFrom`, so what is sent and the basis the answer moves the draft onto are one; a change names its basis, 0 for a first grant; one sent on a basis another window moved is refused by the gateway (`share_grant_changed`), said in words naming no cause, and changes nothing | `sharing.test.ts` (*D10*, eight, among them *after %s, the list and the form are held…* and *a read that fails after any settled change…*); `model/sharing.test.ts` (*D9: is held when the device's grant changed…*, *D10: builds on the revision the gateway answered…*, *starts again…*); `sharing-commands.test.ts` (*D5, D10: a change to a grant another window moved…*, *D10: a first grant names revision 0…*, *D10: Share sends the draft as the store holds it…*); `share-dialog.test.tsx` (*holds the form while a change is on its way…*, *says a change refused because another window changed the grant…*, *holds the list and the form during the read after %s…*); `share-dialog.mjs` (`held`, `changed`, `stale`) |
 | D11 | Revoke asked to confirm; then the person confirms, cancels, begins any change (an Update to the same device among them), or a read answers | The ask is the dialog's state (`confirming`), holding the device and the revision listed when the person was asked, and begins only when a change could. Confirmed, the revoke names that revision, so a grant moved since is refused `changed`. Cancelled, or any change beginning, ends it; a read listing that device at another revision, or not at all, ends it, while one listing it as it was, or failing, keeps it | `sharing.test.ts` (*D11: a Revoke asked keeps the revision listed then…*); `sharing-commands.test.ts` (*D11: a Revoke names the revision listed when it was asked…*); `share-dialog.test.tsx` (*stops asking about a Revoke once a read lists the grant changed…*, *stops asking about a Revoke when this window's own change…*) |
+| D12 | The grants read as pages: the first page, then each page after the cursor the previous page returned, until a page names no cursor. A later page that names another catalogue revision drops the pages already read and the walk starts again, at most twice | The dialog lists every grant, in order, from one connection, all from one catalogue revision. A page that repeats a credential, a walk that passes the conversation's grant cap, or a catalogue that keeps moving, is unanswered | `sharing-gateway.test.ts` (*D12: reads every page…*, *D12: is unanswered when a later page…*, *D12: starts again when a later page…*, *D12: is unanswered when the catalogue revision keeps moving*) |
 
 ## What this slice does not do
 
@@ -839,7 +930,7 @@ otherwise.
 | G14 | A device unpaired (its binding inactive), whatever it was granted | Socket reads refused `unauthorized`; passive reads as before | `an_unpaired_device_reads_nothing_whatever_it_was_granted` |
 | G15 | A records watch installed while granted; the grant revoked; a record committed | No `conversation.changed` is delivered; the next notice is admitted again, refused, and the connection closes `authorization_lost` | `a_revoke_ends_an_installed_records_watch_at_its_next_notice` (`tests/product/socket/watches.rs`) |
 | G16 | A share or unshare retried with the same request id, after a later change | Answers what it answered the first time and changes nothing; the same request naming another device or the other change is refused `InvalidInput`. This holds for a request that changed nothing, which replays `applied: false`. A retried share is admitted like a new one first, so after a delete or an unpairing it is refused and changes nothing | `a_retried_share_replays_its_answer_and_never_undoes_a_later_unshare`, `a_retried_share_that_changed_nothing_never_undoes_a_later_unshare` |
-| G17 | A share past `MAX_SHARE_GRANTS_PER_CONVERSATION` (64) grants on one conversation | Refused `InvalidInput`, nothing written, so a `conversation.shares` answer fits one frame | `a_conversation_holds_a_bounded_number_of_grants` |
+| G17 | A share past `MAX_SHARE_GRANTS_PER_CONVERSATION` (64) grants on one conversation | Refused `InvalidInput`, nothing written. The conversation holds at most 64 grants; one page of `conversation.shares` is what fits one frame | `a_conversation_holds_a_bounded_number_of_grants` |
 | J1 | A device holding a Comment or a Drive grant reads: record head and page, a records watch, its catalogue, `conversation.read` and a view subscription | Exactly as a Read grant: admitted, the same rows and head; refused once revoked | `a_comment_or_drive_grant_reads_records_as_read_does`; `a_comment_or_drive_grant_watches_records_as_read_does` (`tests/product/socket/watches.rs`); `a_comment_or_drive_grant_pages_and_resolves_as_read_does`; `a_comment_or_drive_grant_reads_on_the_socket_as_read_does` |
 | J3 | Share Drive without a policy, Read or Comment with one, a policy past its bounds or of no known shape, or an unknown role | Refused `InvalidInput`; nothing written or journaled | `drive_needs_a_policy_and_read_and_comment_take_none`, `tool_rules_are_bounded_and_plain` (`tests/conversation/share_access.rs`); `a_share_whose_role_and_policy_do_not_fit_is_refused_and_writes_nothing` |
 | J4 | Share again with another role (Read to Drive, Drive to Read) or another policy | Applied; journaled with role and policy before and after; the policy revision moves to that journal row; the catalogue revision and the device's head do not move | `a_change_of_role_or_policy_is_applied_journaled_and_moves_the_policy_revision` |
@@ -848,7 +939,7 @@ otherwise.
 | J7 | `conversation.shares` | Each grant's role, its policy when Drive, and its policy revision, which moves only with its own role or policy | `shares_reports_each_grants_role_policy_and_policy_revision` |
 | J8 | Unshare a Comment or a Drive grant | Revoked like Read, journaled with the role and policy it took away | `a_revoke_ends_a_grant_of_any_role`; `share_refuses_what_the_owner_cannot_grant` (unshare names no role) |
 | J9 | A Drive grant past `MAX_DRIVE_GRANTS_PER_CONVERSATION` (8), new or a change from another role | Refused `InvalidInput`, nothing written; a driver's own policy can still change | `a_conversation_holds_a_bounded_number_of_drive_grants` |
-| J10 | The largest `conversation.shares` answer: 64 grants, 8 of them Drive with the largest policy, every text at its longest | Fits one frame (`MAX_PAYLOAD_BYTES`); the schema states the bounds the domain enforces | `the_largest_shares_answer_fits_one_frame`, `the_schema_states_the_share_bounds_the_domain_enforces` (`tests/product/read_access.rs`) |
+| J10 | One page of `conversation.shares`: the page size of grants, each a Drive grant with the largest policy (both pattern lists full, 16 hosts of 253 bytes), every text at its longest, a cursor, and the catalogue revision at the largest safe integer | Fits one frame (`MAX_PAYLOAD_BYTES`); the schema states the page size, the grant cap, the host bounds the domain enforces, and the revision bound. A later page resumes after the cursor and names the same revision | `a_full_page_of_largest_grants_fits_one_frame`, `a_shares_page_resumes_after_its_cursor`, `the_schema_states_the_share_bounds_the_domain_enforces` (`tests/product/read_access.rs`); `shares_returns_one_page_and_refuses_a_page_size_past_its_bound` |
 | J11 | A paired session with pairing's `conversation.read` and a Drive grant sends, steers, stops, answers, cancels, or asks a receipt, naming the granted conversation; then naming another of the owner's | Admitted, and its message starts a turn there; the other is `conversation_not_found` | `a_drive_grant_drives_only_the_conversation_it_names` |
 | J12 | A paired session, holding `conversation.write` and a Drive grant, calls any other method whose grant is `conversation.write`; or, holding a Read or Comment grant, a Drive command; or a party signed in as a principal other than its grantor, as a peer is, holding Drive, a Drive command | `forbidden` | `a_paired_session_writes_only_what_a_drive_grant_admits` |
 | J13 | A Drive grant lowered to Read, then revoked; the device unpaired; or a device without pairing's `conversation.read` | The next command `forbidden`, `conversation_not_found`, `unauthorized`, and `forbidden` before its grant is read | `a_drive_grant_lowered_revoked_or_unpaired_drives_no_more` |
@@ -868,3 +959,4 @@ otherwise.
 | J28 | A driver's turn calls the gateway's `run`, `artifacts_publish` or `artifacts_fetch` under `read_only_tools`; `run` under `all`; `run` under `all` with the Drive tool audit unavailable | Refused with why, each decision in the audit, no lease record, the host asked nothing; runs as the owner's would, after its decision and rule are in the audit, but only on a host both the gateway grants commands on and the grant's own `commandHosts` names (a grant naming none runs nowhere); refused, nothing run | `j28_the_gateways_own_tools_are_checked_against_a_drive_grants_policy`, `j28_a_drive_grant_allowed_run_runs_a_command_as_the_owner_would`, `a_drive_grants_run_goes_only_to_the_hosts_its_policy_names`, `j28_an_allowed_run_whose_decision_cannot_be_recorded_is_refused` (`tests/conversation/leases.rs`); `a_decision_is_written_once_and_acknowledged_again`, `a_contradicting_record_for_the_same_decision_is_refused` (`conversation/infrastructure/drive_tool_audit.rs`) |
 | J29 | A share made, one changing nothing, its retries after later changes, a revoke, and a grant after that revoke | Answers the revision the grant holds once made: the new one, or the one kept; a retry answers its first answer, not what is held now; a revoke answers no revision; the grant after it takes a revision past every one before | `a_share_answers_the_policy_revision_it_left_and_a_retry_answers_the_same` (`tests/conversation/store.rs`); `share_answers_its_revision_and_refuses_a_stale_expected_one` (`tests/product/socket/subscriptions.rs`) |
 | J30 | A share or unshare naming `expectedPolicyRevision`: the one held; another (the grant changed or revoked since); 0 with no grant held, and 0 once one is; a retry of the share or the revoke that moved it; past 2^53 − 1; none named | Made, and the share answers the new revision; refused `share_grant_changed` in the transaction, the grant, journal and catalogue unchanged; 0 is made as a first grant and refused once a grant is held; the retry answered from its journal row before the comparison; `invalid_request`; made whatever is held, as before | `a_change_naming_a_revision_the_grant_no_longer_holds_is_refused_and_writes_nothing`, `a_first_grant_naming_no_revision_is_refused_once_another_landed` (`tests/conversation/store.rs`); `share_answers_its_revision_and_refuses_a_stale_expected_one` (`tests/product/socket/subscriptions.rs`) |
+| J31 | A Drive grant revoked, or its policy changed, after `policy_at` read the admitted revision and before the turn is saved; the same revoke held off until that save commits; a stalled save on one conversation while another is revoked and sends; a retry of the saved turn after the revoke; a revision that is not the live grant's, a missing grant, or a revision cell that cannot be read | A queued turn is refused `revoked` with nothing saved. A native steer that was saved and then refused before injection is `revoked_after_save`: the attempt is settled as refused and nothing reached the agent. The command receipt is settled as `refused_after_save`, and the same request is answered `revoked_after_save` again. A native steer that was saved and then could not be checked because the grant record could not be read is `unavailable_after_save`: nothing reached the agent. The command receipt is settled as `unavailable_after_save`, and the same request is answered `unavailable_after_save` again. A change that waited on the save applies once a queued turn's save has committed, and for a native steer once the provider operation has started, before the response wait. A native steer that panics before the provider starts that operation, or whose control stops before that operation is polled, releases the permit then, so an unshare of that grant is not blocked for the cleanup or the remaining settlement. The other conversation's revoke and Drive turn finish during the stall. A retry of the saved turn is answered from its receipt. A revision that is not the live grant's is refused `revoked`. That refusal settles the command as `no_effect`, and the same request is answered `revoked` again. A change cancelled while its write runs keeps the grant's permit until the write finishes, so a hold cannot read the revision that write is about to replace | `a_grant_revoked_during_admission_starts_no_turn`, `a_grant_change_waits_until_the_turn_is_saved`, `a_stalled_save_on_one_conversation_does_not_block_another`, `a_saved_drive_turn_is_retried_after_its_grant_is_revoked`, `a_revoked_admission_settles_the_command_and_the_same_request_is_revoked_again` (`tests/conversation/leases.rs`); `a_turn_is_saved_only_while_its_grant_stays_at_the_admitted_revision`, `a_cancelled_grant_change_keeps_its_permit_until_the_write_finishes` (`tests/conversation/store.rs`); `a_saved_steer_revoked_after_save_settles_the_command_and_the_same_request_is_refused_again`, `a_saved_steer_unavailable_after_save_settles_the_command_and_the_same_request_is_unavailable_again` (`tests/conversation/leases.rs`); `c13_a_saved_steer_unavailable_after_save_does_not_drop_the_contexts_it_carried` (`tests/conversation/app_messages.rs`); `scheduling_a_saved_check_releases_when_the_provider_takes_the_steer`, `scheduling_a_panicked_native_steer_does_not_block_unshare` (`nessa-sdk` `scheduling.rs`); `scheduling_a_close_before_native_steer_is_polled_releases_the_save_check` (`nessa-sdk` `coordination.rs`) |

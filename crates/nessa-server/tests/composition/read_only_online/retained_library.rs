@@ -14,13 +14,13 @@ use nessa_auth::{
 use nessa_client_core::{
     pairing::NativeClientError,
     retained::{
-        ReadStop, ReaderAccess, ReaderRole, RetainedCache, RetainedEnrollmentClient,
-        RetainedTranscript,
+        FeedEvent, ReadFailure, ReadStop, ReaderAccess, ReaderRole, RetainedCache,
+        RetainedEnrollmentClient, RetainedTranscript,
     },
 };
 use nessa_protocol::{
     clock::Clock as MonotonicClock, conversation::domain::ConversationId,
-    pairing::wire::NativePairingStatus,
+    pairing::wire::NativePairingStatus, product::generated::ConversationViewCursor,
 };
 use serde_json::Value;
 use std::{
@@ -307,4 +307,227 @@ fn verify_paired_lifecycle(removal_mode: usize) {
         Some(&purge)
     );
     runtime.block_on(device.shutdown());
+}
+
+/// The subscription feed and the retained watch fold report the same activity
+/// for one granted conversation. The corpus is the semantic gateway's settled
+/// suffix: while a permission is still open, the live agent and the retained
+/// fold disagree on message status, which that fixture already records.
+/// Revision, gateway time, title, approval mode and capabilities stay out of
+/// the comparison.
+#[test]
+fn paired_owner_subscription_feed_matches_the_retained_watch_view() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("gateway");
+    let mut gateway = Gateway::start_semantic(&root);
+    gateway.act("settle");
+    let setup: Setup =
+        serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
+    let profile: Value =
+        serde_json::from_slice(&std::fs::read(root.join("profile.json")).unwrap()).unwrap();
+    let address: SocketAddr = profile["gatewayAddress"].as_str().unwrap().parse().unwrap();
+    let state = Arc::new(
+        FilePairingState::open(
+            Path::new(profile["stateRoot"].as_str().unwrap()),
+            Path::new(profile["stateDirectory"].as_str().unwrap()),
+        )
+        .unwrap(),
+    );
+    let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+    let cache_root = directory.path().join("cache");
+    nessa_local_storage::create_directory(&cache_root).unwrap();
+    let path = cache_root.join("owner.sqlite3");
+    let device = RetainedEnrollmentClient::new(
+        state.clone(),
+        path.clone(),
+        Arc::new(Wall),
+        Arc::new(Time(Instant::now())),
+    )
+    .unwrap();
+    let status = runtime
+        .block_on(device.status(TcpStream::connect(address).unwrap(), None))
+        .unwrap();
+    let NativePairingStatus::Active {
+        receiver,
+        access_epoch,
+        ..
+    } = status.enrollment().as_ref().unwrap()
+    else {
+        panic!("paired device must be active")
+    };
+    let saved = state.load_credential().unwrap().unwrap();
+    let credential = saved.credential().as_str().to_owned();
+    let (key, pin, _) = saved.into_enrollment().into_parts();
+    let identity = NativeIdentity::restore(key).unwrap();
+    let mut cache =
+        RetainedCache::open(&path, Arc::new(Wall), Arc::new(Time(Instant::now()))).unwrap();
+    let access = || ReaderAccess {
+        role: ReaderRole::DeviceOwner,
+        address,
+        relay: None,
+        identity: &identity,
+        pin,
+        credential: &credential,
+        receiver: receiver.as_str(),
+        access_epoch: *access_epoch,
+        client_id: "retained-library-test",
+    };
+    cache
+        .read(
+            access(),
+            &ReadStop::new(),
+            Duration::from_secs(5),
+            8,
+            &mut Vec::new(),
+        )
+        .unwrap();
+    let scope = cache
+        .saved_catalogue_scope(receiver.as_str())
+        .unwrap()
+        .unwrap();
+    let conversation = ConversationId::new(&setup.conversation).unwrap();
+    let RetainedTranscript::Retained(snapshot) = cache
+        .transcript_view(
+            receiver.as_str(),
+            scope.origin().as_str(),
+            &conversation,
+            Uuid::nil(),
+        )
+        .unwrap()
+    else {
+        panic!("actual owner transcript was not retained")
+    };
+    let retained = serde_json::to_value(snapshot.view()).unwrap();
+    let mut feed = cache
+        .subscribe(
+            access(),
+            &conversation,
+            None,
+            &ReadStop::new(),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    let mut live = None;
+    for _ in 0..8 {
+        match feed.next_event().unwrap() {
+            FeedEvent::View { cursor, view } => {
+                let value = serde_json::to_value(&view).unwrap();
+                let stale = value["transcriptState"] == "stale";
+                live = Some((cursor.incarnation, cursor.position, value));
+                if !stale {
+                    break;
+                }
+            }
+            FeedEvent::Ended { reason, code, .. } => {
+                panic!("subscription ended before a settled view: {reason} {code:?}")
+            }
+        }
+    }
+    let (incarnation, position, view) = live.expect("the feed delivered a view");
+    assert_eq!(activity(&view), activity(&retained));
+    feed.close().unwrap();
+    let mut resumed = cache
+        .subscribe(
+            access(),
+            &conversation,
+            Some(ConversationViewCursor {
+                incarnation: incarnation.clone(),
+                position: position.clone(),
+            }),
+            &ReadStop::new(),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    match resumed.next_event().unwrap() {
+        FeedEvent::View { cursor, .. } => {
+            assert_eq!(cursor.incarnation, incarnation);
+            let resumed_at: u64 = cursor.position.parse().unwrap();
+            let applied: u64 = position.parse().unwrap();
+            assert!(resumed_at >= applied);
+        }
+        FeedEvent::Ended { reason, code, .. } => {
+            panic!("resubscribe ended before a view: {reason} {code:?}")
+        }
+    }
+    resumed.close().unwrap();
+    let missing = ConversationId::new("00000000-0000-4000-8000-000000000099").unwrap();
+    let refused = match cache.subscribe(
+        access(),
+        &missing,
+        None,
+        &ReadStop::new(),
+        Duration::from_secs(5),
+    ) {
+        Err(error) => error,
+        Ok(feed) => {
+            drop(feed);
+            panic!("an ungranted conversation must be refused");
+        }
+    };
+    assert_eq!(refused.failure(), ReadFailure::Refused);
+    assert!(!refused.asks_status());
+    drop(cache);
+    drop(gateway);
+    runtime.block_on(device.shutdown());
+}
+
+/// Activity the watch fold and the subscription view both own. The live
+/// overlay (title, capabilities, approval mode, revision, gateway time) is
+/// not part of the retained records.
+fn activity(view: &Value) -> Value {
+    let field = |value: &Value, name: &str| value.get(name).cloned().unwrap_or(Value::Null);
+    let messages = view["messages"]
+        .as_array()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .map(|message| {
+            serde_json::json!({
+                "executionId": field(message, "executionId"),
+                "userText": field(message, "userText"),
+                "status": field(message, "status"),
+            })
+        })
+        .collect::<Vec<_>>();
+    let pending = view["pending"]
+        .as_array()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .map(|message| {
+            serde_json::json!({
+                "executionId": field(message, "executionId"),
+                "text": field(message, "text"),
+            })
+        })
+        .collect::<Vec<_>>();
+    let notes = view["notes"]
+        .as_array()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .map(|note| {
+            serde_json::json!({
+                "messageId": field(note, "messageId"),
+                "text": field(note, "text"),
+            })
+        })
+        .collect::<Vec<_>>();
+    let artifacts = view["artifacts"]
+        .as_array()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .map(|artifact| {
+            serde_json::json!({
+                "name": field(artifact, "name"),
+                "digest": field(artifact, "digest"),
+                "mimeType": field(artifact, "mimeType"),
+                "size": field(artifact, "size"),
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "messages": messages,
+        "pending": pending,
+        "notes": notes,
+        "artifacts": artifacts,
+        "transcriptState": field(view, "transcriptState"),
+    })
 }

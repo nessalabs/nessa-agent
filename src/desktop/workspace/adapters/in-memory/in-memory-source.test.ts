@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest"
 import type { WorkspaceUpdate } from "../../application/ports"
 import { WorkspaceSourceError } from "../../application/ports"
-import { messageText, type Transcript } from "../../model/transcript"
+import {
+  messageText,
+  type QuestionChoice,
+  type Transcript,
+  type TranscriptAsked,
+} from "../../model/transcript"
 import { inMemorySource, type Schedule } from "./in-memory-source"
 import { sampleWorkspace } from "./sample-workspace"
 import { scriptTiming } from "./scripted-replies"
@@ -36,6 +41,28 @@ function manualSchedule() {
   }
   return { schedule, advance, pending: () => timers.filter((t) => !t.cancelled).length }
 }
+
+function sourceWithQuestions(questions: NonNullable<Transcript["questions"]>) {
+  const clock = manualSchedule()
+  const seed = sampleWorkspace(clock.schedule.now())
+  const held = seed.transcripts.get("split-panes")
+  if (!held) throw new Error("split-panes has no transcript")
+  seed.transcripts.set("split-panes", { ...held, questions })
+  return inMemorySource(clock.schedule, seed)
+}
+
+const place = (change: Partial<TranscriptAsked> = {}): TranscriptAsked => ({
+  key: "where",
+  prompt: "Pick a place",
+  multiSelect: false,
+  freeText: false,
+  required: true,
+  options: [
+    { value: "here", label: "Here" },
+    { value: "there", label: "There" },
+  ],
+  ...change,
+})
 
 const flush = async () => {
   for (let i = 0; i < 5; i++) await Promise.resolve()
@@ -269,6 +296,204 @@ describe("the in-memory source", () => {
       ["retry-budget", "allow-once", "person", "taken"],
       ["notarize", "deny", "agent", "taken"],
     ])
+  })
+
+  it("records the held ask and the choices, including own words, and a refusal when it is not waiting", async () => {
+    const clock = manualSchedule()
+    const seed = sampleWorkspace(clock.schedule.now())
+    const held = seed.transcripts.get("split-panes")
+    if (!held) throw new Error("split-panes has no transcript")
+    seed.transcripts.set("split-panes", {
+      ...held,
+      questions: [
+        {
+          executionId: "e1",
+          questionId: "q1",
+          message: "Where should this land?",
+          questions: [
+            {
+              key: "where",
+              prompt: "Pick a place",
+              multiSelect: false,
+              freeText: true,
+              required: false,
+              options: [{ value: "here", label: "Here" }],
+            },
+          ],
+        },
+        {
+          executionId: "e1",
+          questionId: "q2",
+          message: "Keep the old name?",
+          questions: [
+            {
+              key: "keep",
+              prompt: "Keep it",
+              multiSelect: false,
+              freeText: false,
+              required: false,
+              options: [{ value: "yes", label: "Yes" }],
+            },
+          ],
+        },
+      ],
+    })
+    const source = inMemorySource(clock.schedule, seed)
+    const summaryBefore = seed.index.sessions.find(
+      (session) => session.id === "split-panes",
+    )
+    if (!summaryBefore) throw new Error("split-panes has no summary")
+    await source.answerQuestion(
+      "split-panes",
+      "e1",
+      "q1",
+      [{ key: "where", values: ["here"], ownWords: "secret words" }],
+      "person",
+    )
+    const answered = await source.transcript("split-panes")
+    expect(answered.questions?.map((question) => question.questionId)).toEqual(["q2"])
+    const taken = source.audit().at(-1)
+    expect(taken).toMatchObject({
+      action: "answer-question",
+      executionId: "e1",
+      questionId: "q1",
+      initiator: "person",
+      outcome: "taken",
+    })
+    expect(taken?.after).toBe(answered.revision)
+    expect(taken?.after).toBe(held.revision + 1)
+    expect(taken?.before?.revision).toBe(summaryBefore.revision)
+    expect(taken?.after).not.toBe(taken?.before?.revision)
+    expect(taken?.question).toMatchObject({
+      questionId: "q1",
+      message: "Where should this land?",
+      questions: [{ key: "where", options: [{ value: "here", label: "Here" }] }],
+    })
+    expect(taken?.choices).toEqual([
+      { key: "where", values: ["here"], ownWords: "secret words" },
+    ])
+    expect(JSON.stringify(taken?.question)).not.toContain("secret words")
+    expect(JSON.stringify(answered.messages)).not.toContain("secret words")
+    expect(JSON.stringify(summaryBefore)).not.toContain("secret words")
+    await source.answerQuestion("split-panes", "e1", "q2", null, "agent")
+    const declined = await source.transcript("split-panes")
+    expect(declined.questions).toEqual([])
+    const declinedAudit = source.audit().at(-1)
+    expect(declinedAudit).toMatchObject({
+      action: "decline-question",
+      executionId: "e1",
+      questionId: "q2",
+      initiator: "agent",
+      outcome: "taken",
+    })
+    expect(declinedAudit?.after).toBe(declined.revision)
+    expect(declinedAudit?.after).toBe(answered.revision + 1)
+    expect(declinedAudit?.before?.revision).toBe(summaryBefore.revision)
+    expect(declinedAudit?.question).toMatchObject({ questionId: "q2" })
+    expect(declinedAudit).not.toHaveProperty("choices")
+    await expect(
+      source.answerQuestion("split-panes", "e1", "q1", null, "person"),
+    ).rejects.toMatchObject({ reason: "not-waiting" })
+    expect(source.audit().at(-1)).toMatchObject({
+      action: "decline-question",
+      questionId: "q1",
+      outcome: { refused: "not-waiting" },
+    })
+  })
+
+  it("refuses a question answer the ask does not offer, before removing it", async () => {
+    const ask = [
+      {
+        executionId: "e1",
+        questionId: "q1",
+        message: "Where should this land?",
+        questions: [place()],
+      },
+    ]
+    const refused = async (choices: QuestionChoice[]) => {
+      const source = sourceWithQuestions(ask)
+      const before = await source.transcript("split-panes")
+      await expect(
+        source.answerQuestion("split-panes", "e1", "q1", choices, "person"),
+      ).rejects.toMatchObject({ reason: "not-supported" })
+      const still = await source.transcript("split-panes")
+      expect(still.revision).toBe(before.revision)
+      expect(still.questions).toEqual(before.questions)
+      expect(source.audit().at(-1)).toMatchObject({
+        action: "answer-question",
+        questionId: "q1",
+        outcome: { refused: "not-supported" },
+        question: { questionId: "q1", message: "Where should this land?" },
+        choices,
+      })
+      expect(source.audit().at(-1)).not.toHaveProperty("after")
+    }
+    await refused([{ key: "where", values: ["elsewhere"] }])
+    await refused([{ key: "where", values: ["here", "there"] }])
+    await refused([{ key: "where", values: ["here"], ownWords: "mine" }])
+    await refused([{ key: "other", values: ["here"] }])
+    await refused([{ key: "where", values: ["here", "here"] }])
+    await refused([])
+    const wordsOnly = sourceWithQuestions([
+      {
+        executionId: "e1",
+        questionId: "q1",
+        message: "Where should this land?",
+        questions: [place({ freeText: true })],
+      },
+    ])
+    const beforeWords = await wordsOnly.transcript("split-panes")
+    await expect(
+      wordsOnly.answerQuestion(
+        "split-panes",
+        "e1",
+        "q1",
+        [{ key: "where", values: [], ownWords: "mine" }],
+        "person",
+      ),
+    ).rejects.toMatchObject({ reason: "not-supported" })
+    expect((await wordsOnly.transcript("split-panes")).revision).toBe(
+      beforeWords.revision,
+    )
+    const taken = sourceWithQuestions(ask)
+    await taken.answerQuestion(
+      "split-panes",
+      "e1",
+      "q1",
+      [{ key: "where", values: ["there"] }],
+      "person",
+    )
+    expect((await taken.transcript("split-panes")).questions).toEqual([])
+    expect(taken.audit().at(-1)?.choices).toEqual([{ key: "where", values: ["there"] }])
+  })
+
+  it("keeps two question selections apart in the audit", async () => {
+    const ask = [
+      {
+        executionId: "e1",
+        questionId: "q1",
+        message: "Where should this land?",
+        questions: [place({ freeText: true, required: false })],
+      },
+    ]
+    const select = async (choices: QuestionChoice[]) => {
+      const source = sourceWithQuestions(ask)
+      await source.answerQuestion("split-panes", "e1", "q1", choices, "person")
+      const transcript = await source.transcript("split-panes")
+      return { audit: source.audit().at(-1), transcript }
+    }
+    const here = await select([
+      { key: "where", values: ["here"], ownWords: "secret words" },
+    ])
+    const there = await select([{ key: "where", values: ["there"] }])
+    expect(here.audit?.choices).toEqual([
+      { key: "where", values: ["here"], ownWords: "secret words" },
+    ])
+    expect(there.audit?.choices).toEqual([{ key: "where", values: ["there"] }])
+    expect(here.audit?.choices).not.toEqual(there.audit?.choices)
+    expect(here.audit?.question).toEqual(there.audit?.question)
+    expect(JSON.stringify(here.transcript.messages)).not.toContain("secret words")
+    expect(JSON.stringify(there.transcript.messages)).not.toContain("secret words")
   })
 
   it("refuses an answer to an approval that is not waiting, and records it all the same", async () => {

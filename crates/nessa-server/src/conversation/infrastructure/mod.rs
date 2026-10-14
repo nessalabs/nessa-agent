@@ -141,6 +141,7 @@ pub use tool_policy::{
 };
 
 mod permission_rules;
+pub(crate) use permission_rules::CedarPermissionRuleEvaluator;
 pub use permission_rules::{
     DurablePermissionRuleRevocationAudit, PermissionMemory, PublishedReview,
 };

@@ -1357,6 +1357,7 @@ async fn an_owner_turn_offers_remember_only_when_the_membership_may() {
     let rules = Arc::new(RecordingRules::default());
     service.bind_permission_rules(rules.clone());
     let target = id();
+    let conversation = target.to_string();
     opened(&service, &provider, &target).await;
     service
         .submit_command(
@@ -1371,7 +1372,7 @@ async fn an_owner_turn_offers_remember_only_when_the_membership_may() {
         )
         .await
         .unwrap();
-    assert!(!rules.offers_remember(&ExecutionId::new("hidden").unwrap()));
+    assert!(!rules.offers_remember(&conversation, &ExecutionId::new("hidden").unwrap()));
     service
         .submit_command(
             storage.clone(),
@@ -1385,32 +1386,35 @@ async fn an_owner_turn_offers_remember_only_when_the_membership_may() {
         )
         .await
         .unwrap();
-    assert!(rules.offers_remember(&ExecutionId::new("offered").unwrap()));
+    assert!(rules.offers_remember(&conversation, &ExecutionId::new("offered").unwrap()));
     retire(service, storage, metadata).await;
 }
 
 #[derive(Default)]
 struct RecordingRules {
-    armed: std::sync::Mutex<Vec<(String, bool)>>,
+    armed: std::sync::Mutex<Vec<(String, String, bool)>>,
 }
 
 impl PermissionRules for RecordingRules {
     fn settle(&self, _: &str, _: &str, _: &str) -> Option<SettledRule> {
         None
     }
-    fn offers_remember(&self, execution: &ExecutionId) -> bool {
+    fn offers_remember(&self, conversation_id: &str, execution: &ExecutionId) -> bool {
         self.armed
             .lock()
             .unwrap()
             .iter()
-            .find(|(id, _)| id == execution.as_str())
-            .is_some_and(|(_, offered)| *offered)
+            .find(|(conversation, id, _)| {
+                conversation == conversation_id && id == execution.as_str()
+            })
+            .is_some_and(|(_, _, offered)| *offered)
     }
-    fn arm(&self, execution: &ExecutionId, owner: bool) {
-        self.armed
-            .lock()
-            .unwrap()
-            .push((execution.as_str().to_owned(), owner));
+    fn arm(&self, conversation_id: &str, execution: &ExecutionId, owner: bool) {
+        self.armed.lock().unwrap().push((
+            conversation_id.to_owned(),
+            execution.as_str().to_owned(),
+            owner,
+        ));
     }
     fn remember(&self, _: RememberRequest<'_>) -> Result<SettledRule, RememberError> {
         Err(RememberError::Refused)

@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 /** Production conversation controls consume committed gateway view states. */
-import { attempt, CannotRun } from "./lib/cli.mjs"
+import { mkdirSync } from "node:fs"
+import { resolve } from "node:path"
+import { startPreview, target, repoRoot } from "./lib/server.mjs"
+import { attempt } from "./lib/cli.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { committedRoles, css } from "./lib/selectors.mjs"
@@ -11,13 +14,7 @@ await main(
     summary: "committed history notices and offered controls, including re-enable",
     defaults: { engine: "chromium,webkit" },
   },
-  async ({ options, rep, url, mode }) => {
-    // An explicit --url is the fixture server the caller named, even beside
-    // --mode prod. run-all does not spawn this check under prod.
-    if (mode === "prod" && !options.given("url"))
-      throw new CannotRun(
-        "the production-component fixture requires a Vite development server or an explicitly supplied fixture-serving URL",
-      )
+  async ({ options, rep, url }) => {
     await withEngines(options, rep, async (engine, browser) => {
       for (const width of options.quick ? [600] : [360, 600, 1440]) {
         const opened = await openPage(browser, {
@@ -125,6 +122,107 @@ await main(
               },
             )
           }
+          await attempt(
+            rep,
+            { engine, width, name: "question-target-identities" },
+            async () => {
+              const first = "00000000-0000-4000-8000-000000000001"
+              const second = "00000000-0000-4000-8000-000000000002"
+              const consumer = page.locator(css.questionTargetConsumer)
+              const active = consumer.locator(css.questionTargetActive)
+              const fields = page.locator(css.questionTargetInputs)
+              const answer = active.getByRole(...committedRoles.questionAnswer)
+              const skip = active.getByRole(...committedRoles.questionSkip)
+              await page.waitForFunction(
+                (selector) => document.querySelectorAll(selector).length === 3,
+                css.questionTargetInputs,
+              )
+              const fieldCount = await fields.count()
+              await fields.nth(1).check()
+              const firstSelected = await fields.evaluateAll(
+                (nodes) => nodes.filter((node) => node.checked).length,
+              )
+              const unrelatedSelected = await page
+                .locator(css.committedQuestionInputs)
+                .evaluateAll((nodes) => nodes.map((node) => node.checked))
+              await page.getByRole(...committedRoles.questionConversation(true)).click()
+              await page.waitForFunction(
+                ([selector, id]) =>
+                  document.querySelector(selector)?.dataset.questionTargetActive === id,
+                [css.questionTargetActive, second],
+              )
+              const inheritedSelected = await fields.evaluateAll(
+                (nodes) => nodes.filter((node) => node.checked).length,
+              )
+              const blockedEmpty = await answer.isDisabled()
+              await fields.nth(2).check()
+              await answer.click()
+              await page.waitForFunction(
+                (selector) =>
+                  JSON.parse(document.querySelector(selector)?.dataset.requests ?? "[]")
+                    .length === 1,
+                css.questionTargetConsumer,
+              )
+              await page.getByRole(...committedRoles.questionConversation(false)).click()
+              await page.waitForFunction(
+                ([selector, id]) =>
+                  document.querySelector(selector)?.dataset.questionTargetActive === id,
+                [css.questionTargetActive, first],
+              )
+              await skip.click()
+              await page.waitForFunction(
+                (selector) =>
+                  JSON.parse(document.querySelector(selector)?.dataset.requests ?? "[]")
+                    .length === 2,
+                css.questionTargetConsumer,
+              )
+              const requests = JSON.parse(await consumer.getAttribute("data-requests"))
+              if (options.shots && engine === "chromium" && width === 600) {
+                mkdirSync(options.shots, { recursive: true })
+                await consumer.screenshot({
+                  path: resolve(options.shots, "question-targets.png"),
+                  scale: "css",
+                })
+              }
+              return {
+                fieldCount,
+                firstSelected,
+                unrelatedSelected,
+                inheritedSelected,
+                blockedEmpty,
+                requests,
+                failures: [
+                  ...(fieldCount !== 3 ? ["published question fields changed"] : []),
+                  ...(firstSelected !== 1 ? ["original choice did not select"] : []),
+                  ...(JSON.stringify(unrelatedSelected) !== "[false,true,false]"
+                    ? ["equal field keys changed another ask’s retained middle selection"]
+                    : []),
+                  ...(inheritedSelected !== 0 || !blockedEmpty
+                    ? ["another conversation inherited the original answer draft"]
+                    : []),
+                  ...(requests.length !== 2
+                    ? ["answer/decline action count mismatch"]
+                    : []),
+                  ...(requests[0]?.conversationId !== second ||
+                  requests[1]?.conversationId !== first
+                    ? ["action conversation identities mixed"]
+                    : []),
+                  ...(requests.some(
+                    (request) =>
+                      request.executionId !== "exact-live-execution" ||
+                      request.questionId !== "retained-question",
+                  )
+                    ? ["action turn/question identities mixed"]
+                    : []),
+                  ...(JSON.stringify(requests[0]?.choices) !==
+                    JSON.stringify([{ key: "environment_2", values: ["staging"] }]) ||
+                  requests[1]?.choices !== null
+                    ? ["answer choice or null decline changed"]
+                    : []),
+                ],
+              }
+            },
+          )
           for (const [state, truncated] of [
             ["not_loaded", false],
             ["partial", false],
@@ -149,27 +247,36 @@ await main(
                 const saved = await page
                   .locator(css.historyTabConsumer)
                   .getAttribute("data-saved-count")
+                const empty = state === "complete_empty" && !truncated
                 await page.getByRole(...committedRoles.closeHistory).click()
                 await page.waitForFunction(
                   (selector) =>
                     document.querySelector(selector)?.dataset.originalTabPresent ===
                     "false",
                   css.historyTabConsumer,
+                  { timeout: 5_000 },
                 )
+                const tabPresent =
+                  (await page
+                    .locator(css.historyTabConsumer)
+                    .getAttribute("data-original-tab-present")) === "true"
                 const closes = await page
                   .locator(css.historyTabConsumer)
                   .getAttribute("data-close-calls")
-                const empty = state === "complete_empty" && !truncated
                 return {
                   saved: Number(saved),
                   closes: Number(closes),
-                  tabClosed: true,
+                  tabPresent,
+                  tabClosed: !tabPresent,
                   failures: [
                     ...(Number(saved) !== (empty ? 0 : 1)
                       ? ["unconfirmed history lost its saved reference"]
                       : []),
                     ...(Number(closes) !== (empty ? 1 : 0)
                       ? ["tab close dispatched an unconfirmed gateway close"]
+                      : []),
+                    ...(tabPresent
+                      ? ["closed history tab remained in the local conversations"]
                       : []),
                   ],
                 }
@@ -183,4 +290,12 @@ await main(
       }
     })
   },
+  (options) =>
+    options.mode === "prod" && !options.url
+      ? startPreview(
+          options,
+          {},
+          resolve(repoRoot, "verification/conversation/vite.config.ts"),
+        )
+      : target(options),
 )

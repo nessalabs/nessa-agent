@@ -110,6 +110,14 @@ export {
   permissionTargetConversation,
   type PermissionTarget,
 } from "./application/permission-target.js"
+
+export {
+  captureQuestionChoices,
+  questionTargets,
+  questionTargetConversation,
+  type QuestionTarget,
+  type QuestionChoice,
+} from "./application/question-target.js"
 export type { ClientEventMap } from "./protocol/types.js"
 export type { ResolvedConnectRetryOptions } from "./application/connect-retry.js"
 export type {
@@ -337,6 +345,7 @@ export type {
   PermissionReviewWaiting,
   ConversationShare,
   ConversationShareResult,
+  ConversationSharesCursor,
   ConversationSharesResult,
   ConversationToolPolicy,
 } from "./generated/product.js"
@@ -345,7 +354,7 @@ export {
   ConversationShareRole,
   ConversationToolPreset,
 } from "./generated/product.js"
-export { toolPolicyBounds } from "./protocol/conversation-validate.js"
+export { sharePage, toolPolicyBounds } from "./protocol/conversation-validate.js"
 export { conversationErrorCode } from "./application/conversation-error-code.js"
 export type { ConversationLease } from "./generated/product.js"
 export {

@@ -80,6 +80,7 @@ import {
   type SubagentSource,
 } from "./subagents"
 import {
+  createQuestionFlights,
   gatewaySource,
   inMemorySource,
   measureWorkspace,
@@ -211,6 +212,7 @@ export function createDesktopDependencies(
     measure: options.measure ?? (() => measureWorkspace(document)),
     // The webview's storage, where the overview's filter is kept between launches.
     overviewFilter: options.overviewFilter ?? rememberedFilter(),
+    questionFlights: createQuestionFlights(),
     widgets,
     subagents,
     heldFiles: source

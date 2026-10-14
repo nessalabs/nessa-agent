@@ -63,8 +63,9 @@ The atlas links to, rather than superseding, detailed ordering matrices in
 [app calls](../design/mcp-app-calls.md),
 [streaming commit](../design/streaming-message-commit.md),
 [transcript fold](../design/transcript-fold.md),
-[retained publication](../design/retained-directory-publication.md), and
-[credential audit](../design/auth/credential-transition-audit.md).
+[retained publication](../design/retained-directory-publication.md),
+[credential audit](../design/auth/credential-transition-audit.md), and
+[desktop question flights](../design/desktop-question-flights.md).
 ADRs still own decisions and preserve accepted/proposed/implemented distinctions.
 
 ## Verification boundaries

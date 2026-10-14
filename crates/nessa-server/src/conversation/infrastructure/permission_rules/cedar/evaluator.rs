@@ -65,6 +65,20 @@ static BUNDLE: LazyLock<Result<Bundle, PermissionRuleUnavailable>> = LazyLock::n
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CedarPermissionRuleEvaluator;
 
+impl CedarPermissionRuleEvaluator {
+    /// Load and strictly validate the checked-in schema and policies.
+    ///
+    /// Composition calls this when it builds the rules, so a broken bundle
+    /// refuses to start. A later `settle` or `may` still fails closed if this
+    /// was not called.
+    pub(crate) fn load() -> Result<Self, PermissionRuleUnavailable> {
+        match BUNDLE.as_ref() {
+            Ok(_) => Ok(Self),
+            Err(_) => Err(PermissionRuleUnavailable),
+        }
+    }
+}
+
 impl PermissionRulePolicyEvaluator for CedarPermissionRuleEvaluator {
     fn settle(
         &self,

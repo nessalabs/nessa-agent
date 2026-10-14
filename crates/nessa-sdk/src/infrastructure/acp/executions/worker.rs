@@ -2163,10 +2163,11 @@ impl<P: AcpProfile> Worker<P> {
             .ok_or_else(|| {
                 AgentError::InvalidInput("this harness does not remember permissions".into())
             })?;
+        let conversation = self.session_key.as_deref().unwrap_or("");
         if !self
             .config
             .permission_rules
-            .offers_remember(&answer.execution_id)
+            .offers_remember(conversation, &answer.execution_id)
         {
             return Err(AgentError::InvalidInput(
                 "only the owner can remember a permission".into(),
@@ -2194,6 +2195,7 @@ impl<P: AcpProfile> Worker<P> {
                 effect,
                 granted_by: answer.attribution.actor(),
                 caller,
+                conversation_id: conversation,
                 execution_id: &answer.execution_id,
             })
             .map_err(|error| match error {
@@ -2274,7 +2276,17 @@ impl<P: AcpProfile> Worker<P> {
             return Err(error);
         }
         if let Some(rule) = &provisional {
-            self.config.permission_rules.acknowledge(rule);
+            if self.config.permission_rules.acknowledge(rule).is_err() {
+                withdraw_unrecorded(self.config.permission_rules.as_ref(), Some(rule));
+                let error =
+                    AgentError::InvalidInput("the permission rule could not be stored".into());
+                let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
+                    error.clone(),
+                    ProviderSessionState::CleanupRequired,
+                    PermissionSelectionState::Consumed,
+                )));
+                return Err(WorkerFailure::from(error));
+            }
         }
         let wire_id = self
             .permissions
@@ -2794,7 +2806,10 @@ impl<P: AcpProfile> Worker<P> {
         let specific = self.profile.permission_names_a_tool(&params);
         let remember = source.is_some()
             && specific
-            && self.config.permission_rules.offers_remember(&execution_id);
+            && self
+                .config
+                .permission_rules
+                .offers_remember(self.session_key.as_deref().unwrap_or(""), &execution_id);
         let admitted = match permission_wire::admit(
             &params,
             &self.config.permissions,

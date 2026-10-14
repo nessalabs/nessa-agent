@@ -51,7 +51,13 @@ try {
         : {}),
     })
     try {
-      for (const scenario of ["control", "native-read", "second-url"]) {
+      for (const scenario of [
+        "control",
+        "native-read",
+        "second-url",
+        "upload-parent-success",
+        "upload-parent-failure",
+      ]) {
         const context = await browser.newContext({
           viewport: { width: 800, height: 900 },
           reducedMotion: "reduce",
@@ -68,7 +74,19 @@ try {
             () => typeof window.__attachmentProbe?.drop === "function",
           )
           const snapshot = () => page.evaluate(() => window.__attachmentProbe.snapshot())
-          if (scenario === "control") {
+          if (scenario.startsWith("upload-parent-")) {
+            await page.evaluate(() => window.__attachmentProbe.startParentUpload())
+            const tile = page.locator(selectors.uploadTile)
+            await tile.waitFor()
+            assert.equal(await tile.count(), 1)
+            assert.equal(await tile.getAttribute("data-upload"), "uploading")
+            await page.evaluate(
+              (failed) => window.__attachmentProbe.finishParentUpload(failed),
+              scenario === "upload-parent-failure",
+            )
+            assert.equal(await tile.getAttribute("data-upload"), "uploading")
+            assert.equal((await snapshot()).draft[0].upload.status, "uploading")
+          } else if (scenario === "control") {
             await page.locator(selectors.editor).press("Enter")
             await page.waitForFunction(
               () => window.__attachmentProbe.snapshot().sends.length === 1,

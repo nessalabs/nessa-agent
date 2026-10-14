@@ -125,6 +125,9 @@ pub enum ConversationErrorCode {
     IdempotencyConflict,
     MessageQuotaExceeded,
     DrivePolicyUnenforceable,
+    Revoked,
+    RevokedAfterSave,
+    UnavailableAfterSave,
 }
 impl ConversationErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -187,6 +190,9 @@ impl ConversationErrorCode {
             Self::IdempotencyConflict => "idempotency_conflict",
             Self::MessageQuotaExceeded => "message_quota_exceeded",
             Self::DrivePolicyUnenforceable => "drive_policy_unenforceable",
+            Self::Revoked => "revoked",
+            Self::RevokedAfterSave => "revoked_after_save",
+            Self::UnavailableAfterSave => "unavailable_after_save",
         }
     }
 }

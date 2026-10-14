@@ -576,6 +576,111 @@ describe("conversations", () => {
     expect(transcript.approval?.deadline?.dueAtMs).toBe(1_000_000 + 30_000)
   })
 
+  it("a summary says a session waits on the person when its conversation holds a question", async () => {
+    const { gateway, source, updates, follow } = started()
+    const question = {
+      executionId: "turn",
+      questionId: "q1",
+      message: "Where should this land?",
+      questions: [
+        {
+          key: "where",
+          prompt: "Pick a place",
+          multiSelect: false,
+          freeText: false,
+          required: true,
+          options: [{ value: "here", label: "Here" }],
+        },
+      ],
+    }
+    gateway.rows.set("a", row("a", { running: true }))
+    gateway.views.set("a", view("a", { messages: [running()], questions: [question] }))
+    await source.index()
+    follow()
+    await source.transcript("a")
+    expect(updates).toContainEqual({
+      kind: "session",
+      session: expect.objectContaining({ id: "a", status: "needs-you", revision: 2 }),
+    })
+    expect(transcriptsOf(updates, "a").at(-1)?.questions).toEqual([
+      expect.objectContaining({ questionId: "q1", message: "Where should this land?" }),
+    ])
+    await source.answerQuestion(
+      "a",
+      "turn",
+      "q1",
+      [{ key: "where", values: ["here"] }],
+      "person",
+    )
+    expect(gateway.calls.find((call) => call.method === "answerQuestion")?.args).toEqual([
+      expect.objectContaining({
+        conversationId: "a",
+        executionId: "turn",
+        questionId: "q1",
+      }),
+      [{ key: "where", values: ["here"], ownWords: null }],
+    ])
+    gateway.publish("a")
+    await flush()
+    expect(transcriptsOf(updates, "a").at(-1)?.questions).toEqual([])
+  })
+
+  it("declines a question with a null answer and refuses one the view does not list", async () => {
+    const { gateway, source } = started()
+    gateway.views.set(
+      "a",
+      view("a", {
+        messages: [running()],
+        questions: [
+          {
+            executionId: "turn",
+            questionId: "q1",
+            message: "Where should this land?",
+            questions: [
+              {
+                key: "where",
+                prompt: "Pick a place",
+                multiSelect: false,
+                freeText: false,
+                required: false,
+                options: [{ value: "here", label: "Here" }],
+              },
+            ],
+          },
+        ],
+      }),
+    )
+    await source.transcript("a")
+    await source.answerQuestion("a", "turn", "q1", null, "agent")
+    expect(gateway.calls.find((call) => call.method === "answerQuestion")?.args[1]).toBe(
+      null,
+    )
+    await expect(
+      source.answerQuestion("a", "turn", "gone", null, "person"),
+    ).rejects.toMatchObject({ reason: "not-waiting" })
+    expect(gateway.count("answerQuestion")).toBe(1)
+  })
+
+  it("shows a withheld-review notice without saying the session waits on the person", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.rows.set("a", row("a"))
+    gateway.views.set(
+      "a",
+      view("a", {
+        messages: [{ ...running(), status: "completed" }],
+        interactionViewError: "A review was left out of this view.",
+      }),
+    )
+    await source.index()
+    follow()
+    const transcript = await source.transcript("a")
+    expect(transcript.interactionNotice).toBe("A review was left out of this view.")
+    expect(updates).not.toContainEqual({
+      kind: "session",
+      session: expect.objectContaining({ id: "a", status: "needs-you" }),
+    })
+  })
+
   it("a summary says a session waits on the person when its conversation asks", async () => {
     const { gateway, source, updates, follow } = started()
     gateway.rows.set("a", row("a", { running: true }))
@@ -2766,7 +2871,7 @@ describe("an app's review is shown after its turn ended (#436)", () => {
       view("a", { revision: "2", messages: [ended], permissions: [appReview] }),
     )
     await flush()
-    gateway.once("answer", async (normal) => {
+    gateway.onceAnswer(async (normal) => {
       answer.resolve("allowed")
       return normal()
     })

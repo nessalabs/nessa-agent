@@ -1,6 +1,6 @@
 use super::*;
 use crate::conversation::application::{
-    ConversationError, ConversationFuture, HeldGrant, ShareGrant, ShareGrantChange,
+    ConversationError, ConversationFuture, HeldGrant, ShareGrantChange, ShareGrantList,
     ToolPolicyUnavailable,
 };
 use crate::conversation::domain::ToolPreset;
@@ -57,7 +57,7 @@ impl ShareGrants for NoJournal {
     ) -> ConversationFuture<'_, crate::conversation::application::ShareGrantReceipt> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
-    fn grants<'a>(&'a self, _: &'a ConversationId) -> ConversationFuture<'a, Vec<ShareGrant>> {
+    fn grants<'a>(&'a self, _: &'a ConversationId) -> ConversationFuture<'a, ShareGrantList> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
     fn policy_at<'a>(
@@ -66,6 +66,14 @@ impl ShareGrants for NoJournal {
         _: &'a str,
         _: u64,
     ) -> ConversationFuture<'a, Option<ToolPolicy>> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+    fn hold_revision<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> ConversationFuture<'a, crate::conversation::application::RevisionHold> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
 }

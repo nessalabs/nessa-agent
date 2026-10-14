@@ -86,6 +86,9 @@ pub struct RememberRequest<'a> {
     pub granted_by: &'a ActionContext,
     /// Who is asking to store the rule. The host verified this.
     pub caller: PermissionCaller,
+    /// The conversation this execution belongs to. The same execution id in
+    /// another conversation is a different turn.
+    pub conversation_id: &'a str,
     /// The execution whose review offered the choice.
     pub execution_id: &'a ExecutionId,
 }
@@ -109,14 +112,17 @@ pub trait PermissionRules: Send + Sync {
     /// A live rule for this tool in this workspace, if one should answer it.
     fn settle(&self, workspace: &str, source: &str, tool: &str) -> Option<SettledRule>;
 
-    /// Whether this execution may be offered Nessa's remember choices.
-    fn offers_remember(&self, execution: &ExecutionId) -> bool;
+    /// Whether this execution in `conversation_id` may be offered Nessa's
+    /// remember choices. The same execution id in another conversation is not.
+    fn offers_remember(&self, conversation_id: &str, execution: &ExecutionId) -> bool;
 
-    /// Record whether `execution` may be offered remember choices.
+    /// Record whether `execution` in `conversation_id` may be offered
+    /// remember choices.
     ///
     /// `owner` is that offer. An owner turn whose membership cannot use a
-    /// remember choice is recorded as not offered.
-    fn arm(&self, execution: &ExecutionId, owner: bool);
+    /// remember choice is recorded as not offered. A later arm of another
+    /// conversation does not replace this one.
+    fn arm(&self, conversation_id: &str, execution: &ExecutionId, owner: bool);
 
     /// Record that the answer identified by `execution` and `request_id` is
     /// `caller`. The host sets this before that answer is queued. A later note
@@ -148,8 +154,12 @@ pub trait PermissionRules: Send + Sync {
 
     /// The selection that stored `rule` was recorded. The revision may settle.
     /// Withdrawing it afterwards does not remove it or restore what it replaced.
-    fn acknowledge(&self, rule: &ApprovalRuleReference) {
+    ///
+    /// [`RememberError::Unavailable`] means the revision is still provisional
+    /// and must not be treated as a completed remember.
+    fn acknowledge(&self, rule: &ApprovalRuleReference) -> Result<(), RememberError> {
         let _ = (self, rule);
+        Ok(())
     }
 
     /// The selection that stored `rule` was not recorded. Remove that revision.
@@ -174,10 +184,10 @@ impl PermissionRules for IdlePermissionRules {
     fn settle(&self, _: &str, _: &str, _: &str) -> Option<SettledRule> {
         None
     }
-    fn offers_remember(&self, _: &ExecutionId) -> bool {
+    fn offers_remember(&self, _: &str, _: &ExecutionId) -> bool {
         false
     }
-    fn arm(&self, _: &ExecutionId, _: bool) {}
+    fn arm(&self, _: &str, _: &ExecutionId, _: bool) {}
     fn remember(&self, _: RememberRequest<'_>) -> Result<SettledRule, RememberError> {
         Err(RememberError::Refused)
     }

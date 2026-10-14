@@ -1613,13 +1613,20 @@ pub(super) async fn admit_grant(
 
 /// A request's admission outside `dispatch`: the session as it stands now,
 /// then [`admit_action`] for `method`. The session found current.
+///
+/// A paired device's `conversation.subscribe` and `conversation.unsubscribe`
+/// are the exception: pairing mints `conversation.read`, and the manifest
+/// asks `conversation.write`, which that credential does not hold. Which
+/// conversation it may follow is still [`read_access::admit_conversation`].
 pub(super) async fn admit_now(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     method: &str,
 ) -> Result<AuthenticatedSession, &'static str> {
     let current = current_session_now(state, session).await?;
-    admit_action(state, &current, method).await?;
+    if !super::read_access::admit_paired_follow(state, &current, method).await? {
+        admit_action(state, &current, method).await?;
+    }
     Ok(current)
 }
 
@@ -2340,8 +2347,8 @@ mod tests {
         CatalogueReadFuture, CatalogueReadOperation, CatalogueReadSource, ConversationError,
         ConversationFuture, ConversationRepository, HeldGrant, PermissionRuleCatalog,
         ReceiverAuthority, ReceiverBinding, RecordReadError, RecordReadFuture, RecordReadOperation,
-        RecordReadResponse, RecordReadSource, RulePrincipal, ShareGrant, ShareGrantChange,
-        ShareGrantReceipt, ShareGrants,
+        RecordReadResponse, RecordReadSource, RevisionHold, RulePrincipal, ShareGrantChange,
+        ShareGrantList, ShareGrantReceipt, ShareGrants,
     };
     use crate::conversation::domain::{Conversation, ShareRole, ToolPolicy};
     use crate::conversation::infrastructure::{LocalConversationStore, NessaRecordReadSource};
@@ -2451,7 +2458,7 @@ mod tests {
         fn change(&self, _: ShareGrantChange) -> ConversationFuture<'_, ShareGrantReceipt> {
             Box::pin(async { Err(ConversationError::Metadata) })
         }
-        fn grants<'a>(&'a self, _: &'a ConversationId) -> ConversationFuture<'a, Vec<ShareGrant>> {
+        fn grants<'a>(&'a self, _: &'a ConversationId) -> ConversationFuture<'a, ShareGrantList> {
             Box::pin(async { Err(ConversationError::Metadata) })
         }
         fn policy_at<'a>(
@@ -2460,6 +2467,14 @@ mod tests {
             _: &'a str,
             _: u64,
         ) -> ConversationFuture<'a, Option<ToolPolicy>> {
+            Box::pin(async { Err(ConversationError::Metadata) })
+        }
+        fn hold_revision<'a>(
+            &'a self,
+            _: &'a ConversationId,
+            _: &'a str,
+            _: u64,
+        ) -> ConversationFuture<'a, RevisionHold> {
             Box::pin(async { Err(ConversationError::Metadata) })
         }
     }
@@ -2699,7 +2714,7 @@ mod tests {
     async fn an_unpaired_member_cannot_list_or_revoke_remembered_rules() {
         let (_directory, board) = open_rules();
         let execution = ExecutionId::new("turn").unwrap();
-        board.arm(&execution, true);
+        board.arm("conversation", &execution, true);
         let stored = board
             .remember(RememberRequest {
                 workspace: "/work",
@@ -2708,10 +2723,11 @@ mod tests {
                 effect: PermissionEffect::Allow,
                 granted_by: &ActionContext::new("owner", "surface", "request").unwrap(),
                 caller: PermissionCaller::Owner,
+                conversation_id: "conversation",
                 execution_id: &execution,
             })
             .unwrap();
-        board.acknowledge(stored.reference());
+        board.acknowledge(stored.reference()).unwrap();
         let rule_id = stored.reference().rule_id().to_owned();
         let (state, authority) = fixture(MembershipRole::Member);
         *authority.snapshot.lock().unwrap() = snapshot_with(

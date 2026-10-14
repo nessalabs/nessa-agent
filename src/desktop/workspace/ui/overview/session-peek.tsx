@@ -34,6 +34,7 @@ import {
 import { Saying } from "../transcript/said"
 import { LiveRow } from "../transcript/live-row"
 import { Message } from "../transcript/message"
+import { QuestionCard } from "../transcript/question-card"
 import "../transcript/transcript.css"
 import { overviewKeys } from "./overview-keys"
 import { ReplyPill } from "./reply-pill"
@@ -191,6 +192,22 @@ export const SessionPeek = memo(function SessionPeek({
           </section>
         ) : null}
 
+        {transcript?.interactionNotice ? (
+          <p
+            className="workspace-transcript-notice"
+            role="status"
+            data-interaction-notice
+          >
+            {transcript.interactionNotice}
+          </p>
+        ) : null}
+        {(transcript?.questions ?? []).map((question) => (
+          <QuestionCard
+            key={JSON.stringify([question.executionId, question.questionId])}
+            sessionId={sessionId}
+            question={question}
+          />
+        ))}
         {approval ? (
           <section className="agents-peek-ask" aria-label="Request">
             <p className="agents-peek-reason">

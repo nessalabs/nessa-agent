@@ -1705,10 +1705,7 @@ async fn a_review_hook_sees_who_started_the_turn() {
             vec![Arc::new(InitiationHook { seen: seen.clone() })],
         )
         .await;
-        let submitter = Submitter {
-            context: close_action(),
-            initiation: initiation.clone(),
-        };
+        let submitter = Submitter::new(close_action(), initiation.clone());
         if queued {
             let admission = fixture.agent.enqueue(request(), submitter).await.unwrap();
             admission.wait().await.unwrap();
@@ -1729,10 +1726,10 @@ async fn a_grant_turn_not_saved_as_checked_is_not_sent() {
         vec![Arc::new(InitiationHook { seen: seen.clone() })],
     )
     .await;
-    let submitter = Submitter {
-        context: close_action(),
-        initiation: Initiation::grant(GrantInitiator::new("receiver", 7).unwrap()),
-    };
+    let submitter = Submitter::new(
+        close_action(),
+        Initiation::grant(GrantInitiator::new("receiver", 7).unwrap()),
+    );
     let result = fixture.agent.invoke(request(), submitter).await;
     assert!(
         matches!(&result, Err(AgentError::Unsupported(reason)) if reason.contains("checked")),

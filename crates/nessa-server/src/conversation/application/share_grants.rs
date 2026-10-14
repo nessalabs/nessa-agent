@@ -233,6 +233,16 @@ pub struct ShareGrant {
     pub granted_at_ms: u64,
 }
 
+/// The grants on one conversation, and the catalogue revision they were read
+/// with. A grant or a revoke moves `change_revision`; a change of role or
+/// policy does not. `conversation.shares` names it on every page, so a later
+/// page belongs to the same read only when it names the same revision.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShareGrantList {
+    pub grants: Vec<ShareGrant>,
+    pub change_revision: u64,
+}
+
 /// Grant with a role and policy, or revoke, as the owner decided it. A grant
 /// on a party that already holds one replaces its role and policy.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -257,16 +267,15 @@ impl ShareGrantTransition {
 /// refused `InvalidInput` (row J30).
 pub const MAX_POLICY_REVISION: u64 = 9_007_199_254_740_991;
 
-/// The most grants one conversation holds, so its `conversation.shares`
-/// answer always fits one socket frame. A grant past it is refused
-/// `InvalidInput` (`docs/limits.md`).
+/// The most grants one conversation holds. A grant past it is refused
+/// `InvalidInput`. `conversation.shares` returns them a page at a time, so
+/// one answer does not have to hold all of them (`docs/limits.md`).
 pub const MAX_SHARE_GRANTS_PER_CONVERSATION: i64 = 64;
 
-/// The most Drive grants one conversation holds. A Drive grant carries a tool
-/// policy, and this bound is what keeps a `conversation.shares` answer of
-/// [`MAX_SHARE_GRANTS_PER_CONVERSATION`] grants inside one frame with every
-/// policy at its largest (rows J9, J10). A grant or change past it is refused
-/// `InvalidInput` (`docs/limits.md`).
+/// The most Drive grants one conversation holds. A grant or change past it
+/// is refused `InvalidInput` (row J9, `docs/limits.md`). One
+/// `conversation.shares` page fits the frame because of its page size, not
+/// because of this bound (row J10).
 pub const MAX_DRIVE_GRANTS_PER_CONVERSATION: i64 = 8;
 
 /// One owner decision about one paired party and one conversation, with who
@@ -348,8 +357,9 @@ pub trait ShareGrants: Send + Sync {
     /// grant no longer holds is refused `ShareGrantChanged` and writes
     /// nothing (row J30).
     fn change(&self, change: ShareGrantChange) -> ConversationFuture<'_, ShareGrantReceipt>;
-    /// The grants on one conversation, oldest first.
-    fn grants<'a>(&'a self, id: &'a ConversationId) -> ConversationFuture<'a, Vec<ShareGrant>>;
+    /// The grants on one conversation, oldest first, with the catalogue
+    /// revision they were read at.
+    fn grants<'a>(&'a self, id: &'a ConversationId) -> ConversationFuture<'a, ShareGrantList>;
     /// The tool policy `receiver_id`'s grant on `id` held at
     /// `policy_revision`, as the journal entry of that revision says; `None`
     /// when that entry is no Drive grant of that party on that conversation.
@@ -361,6 +371,45 @@ pub trait ShareGrants: Send + Sync {
         receiver_id: &'a str,
         policy_revision: u64,
     ) -> ConversationFuture<'a, Option<ToolPolicy>>;
+    /// Keep `receiver_id`'s grant on `id` at `policy_revision` until the
+    /// returned hold is dropped. [`ConversationError::Revoked`] when that
+    /// grant is gone, stands at another revision, or its revision cannot be
+    /// read as one. A store that cannot be asked is [`ConversationError::Metadata`].
+    ///
+    /// A table that records no live grant returns [`RevisionHold::vacant`]:
+    /// there is nothing to revoke. The metadata store's hold is that one
+    /// grant, not every conversation, and a Drive turn proceeds only while
+    /// it still finds the admitted revision (row J31).
+    fn hold_revision<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        receiver_id: &'a str,
+        policy_revision: u64,
+    ) -> ConversationFuture<'a, RevisionHold>;
+}
+
+/// A grant revision kept still until this is dropped.
+///
+/// [`RevisionHold::vacant`] keeps nothing. The metadata store's hold keeps
+/// that one grant's admission permit, so a change of the same grant waits
+/// until the permit is dropped. Another conversation's grant is not waiting
+/// on it.
+#[must_use = "dropping the hold lets a grant change land before the turn is saved"]
+pub struct RevisionHold {
+    _keep: Option<Box<dyn Send>>,
+}
+
+impl RevisionHold {
+    /// A hold that keeps nothing.
+    pub fn vacant() -> Self {
+        Self { _keep: None }
+    }
+
+    pub(crate) fn held(guard: impl Send + 'static) -> Self {
+        Self {
+            _keep: Some(Box::new(guard)),
+        }
+    }
 }
 
 /// What `conversation.share` answers: whether it changed anything, and the
@@ -536,7 +585,7 @@ impl ShareConversation<'_> {
         &self,
         caller: &ConversationCaller,
         id: &ConversationId,
-    ) -> Result<Vec<ShareGrant>, ConversationError> {
+    ) -> Result<ShareGrantList, ConversationError> {
         self.owner_of(caller, id).await?;
         self.grants.grants(id).await
     }

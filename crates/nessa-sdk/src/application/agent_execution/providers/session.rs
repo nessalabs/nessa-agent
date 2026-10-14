@@ -162,16 +162,23 @@ impl ProviderSession {
     }
     /// Steer an identified active invocation after the usual input admission checks.
     /// Provider acknowledgements distinguish injection from unconsumed idle input.
-    pub(crate) fn steer(
-        &self,
+    /// `started` is the host's handoff, forwarded to the backend: see
+    /// [`ProviderSessionBackend::steer`](super::ports::ProviderSessionBackend::steer).
+    pub(crate) fn steer<'a>(
+        &'a self,
         target: ExecutionId,
         input: ExecutionRequest,
-    ) -> ProviderOperationFuture<'_, SteeringOutcome> {
+        started: &'a (dyn Fn() + Send + Sync),
+    ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {
-            self.validate(&input).map_err(|error| {
-                ProviderOperationFailure::new(error, ProviderSessionState::Usable)
-            })?;
-            self.backend.steer(target, input).await
+            if let Err(error) = self.validate(&input) {
+                started();
+                return Err(ProviderOperationFailure::new(
+                    error,
+                    ProviderSessionState::Usable,
+                ));
+            }
+            self.backend.steer(target, input, started).await
         })
     }
     /// Delegate the exact reviewed choice and actor to the backend's audit and

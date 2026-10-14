@@ -33,6 +33,7 @@ import {
   PolicyCloseSessionSupport,
   PolicyEndTurnSupport,
   PreToolPolicySupport,
+  transcriptStates,
 } from "../generated/product.js"
 import {
   imageAttachments,
@@ -47,6 +48,9 @@ import { boundedName } from "./mcp-app-validate.js"
 import { decimal } from "./passive-read-validate.js"
 
 const utf8 = new TextEncoder()
+const maxTranscriptStateBytes = Math.max(
+  ...transcriptStates.map((state) => utf8.encode(state).byteLength),
+)
 
 /** A canonical lowercase hyphenated UUID: the schema's pattern for a conversation identity. */
 export const conversationIdPattern = new RegExp(bounds.conversationIdPattern)
@@ -144,7 +148,7 @@ function messageAppKey(value: unknown, what: string): string {
 function filesKey(files: readonly LinkedFile[]) {
   return JSON.stringify(files.map((file) => file.path))
 }
-function oneOf(value: string, values: string[]) {
+function oneOf(value: string, values: readonly string[]) {
   if (!values.includes(value)) throw new Error("Invalid conversation state")
 }
 
@@ -184,6 +188,9 @@ export function conversationCommandReceipt(
       "withdrawn",
       "cancelled",
       "already_final",
+      "no_effect",
+      "refused_after_save",
+      "unavailable_after_save",
     ])
   return item as { requestId: string; stage: string; outcome?: string }
 }
@@ -281,14 +288,7 @@ export function conversationView(value: unknown, expected: string): Conversation
   optionalText(item, "title", bounds.maxConversationTitleBytes)
   flag(item, "truncated")
   flag(item, "queueComplete")
-  oneOf(text(item, "transcriptState", 14, false), [
-    "not_loaded",
-    "partial",
-    "complete_empty",
-    "complete",
-    "stale",
-    "unknown",
-  ])
+  oneOf(text(item, "transcriptState", maxTranscriptStateBytes, false), transcriptStates)
   const committedMode = text(item, "approvalMode", 4, false)
   const offeredModes = approvalModeChoices(item.approvalModes)
   if (!offeredModes.some((choice) => choice.id === committedMode))
@@ -324,6 +324,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       "error",
       "steeringTarget",
       "authenticationRequired",
+      "requiredWorkFailed",
       "parts",
       "steeringOffset",
     ])
@@ -337,6 +338,11 @@ export function conversationView(value: unknown, expected: string): Conversation
       throw new Error("Conversation response has invalid authenticationRequired")
     if (message.authenticationRequired === true && message.status !== "failed")
       throw new Error("Conversation authentication refusal requires a failed turn")
+    if (
+      message.requiredWorkFailed !== undefined &&
+      typeof message.requiredWorkFailed !== "boolean"
+    )
+      throw new Error("Conversation response has invalid requiredWorkFailed")
     if (message.steeringTarget !== undefined) {
       const target = identity(message, "steeringTarget")
       if (target === executionId)
@@ -407,6 +413,14 @@ export function conversationView(value: unknown, expected: string): Conversation
     )
       throw new Error("Injected conversation state is incomplete")
     if (message.error !== undefined) text(message, "error", 2048, false)
+    if (message.requiredWorkFailed === true) {
+      if (message.authenticationRequired !== true || status !== "failed")
+        throw new Error(
+          "Conversation required-work failure belongs on an authentication refusal",
+        )
+      if (message.error === undefined)
+        throw new Error("Conversation required-work failure has no diagnostic")
+    }
     messageIds.add(executionId)
     messageStatuses.set(executionId, status)
     messageTexts.set(executionId, userText)
@@ -1169,17 +1183,26 @@ export function conversationObserve(
 /**
  * A Drive grant's tool policy bounds, as the product schema publishes them:
  * each of allow and deny holds at most `patterns` patterns of at most
- * `patternBytes` UTF-8 bytes; `commandHosts` holds at most `hosts` hosts of
- * at most `hostBytes` bytes; and patterns and hosts together are at most
- * `entries`. The gateway refuses past them (`invalid_request`); a surface
- * budgets its choices against these rather than numbers of its own.
+ * `patternBytes` UTF-8 bytes, and `commandHosts` holds at most `hosts` hosts
+ * of at most `hostBytes` bytes, apart from the patterns. The gateway refuses
+ * past them (`invalid_request`); a surface budgets its choices against these
+ * rather than numbers of its own.
  */
 export const toolPolicyBounds = {
   patterns: bounds.maxToolPolicyPatterns,
   patternBytes: bounds.maxToolPatternBytes,
   hosts: bounds.maxCommandHosts,
   hostBytes: bounds.maxCommandHostBytes,
-  entries: bounds.maxToolPolicyEntries,
+} as const
+
+/**
+ * How `conversation.shares` is read: one answer holds at most `pageSize`
+ * grants, and a conversation holds at most `grants`. A later page echoes the
+ * cursor the previous page returned.
+ */
+export const sharePage = {
+  pageSize: bounds.maxSharePage,
+  grants: bounds.maxShareGrants,
 } as const
 
 /** One list of a tool policy's names: at most `max`, each 1 to `bytes` UTF-8 bytes, each once. */
@@ -1203,13 +1226,12 @@ function policyNames(
 function toolPolicy(value: unknown) {
   const policy = record(value)
   exact(policy, ["preset", "allow", "deny", "commandHosts"])
-  let patterns = 0
   if (policy.preset !== undefined) {
     if (policy.allow !== undefined || policy.deny !== undefined)
       throw new Error("Invalid conversation share policy")
     oneOf(text(policy, "preset", 32), Object.values(ConversationToolPreset))
   } else {
-    patterns =
+    const patterns =
       policyNames(
         policy,
         "allow",
@@ -1231,23 +1253,28 @@ function toolPolicy(value: unknown) {
       toolPolicyBounds.hosts,
       toolPolicyBounds.hostBytes,
     )
-    // Listed only when it names a host, each once, within the room the
-    // patterns leave.
-    if (
-      !hosts.length ||
-      new Set(hosts).size !== hosts.length ||
-      patterns + hosts.length > toolPolicyBounds.entries
-    )
+    // Listed only when it names a host, each once. Hosts are apart from the
+    // patterns: a full allow and deny list may still name every host.
+    if (!hosts.length || new Set(hosts).size !== hosts.length)
       throw new Error("Invalid conversation share commandHosts")
   }
 }
 
-/** Validate `conversation.shares`: each grant once, a policy exactly on a Drive grant. */
+/**
+ * Validate one page of `conversation.shares`: each grant once, a policy
+ * exactly on a Drive grant, the catalogue revision the page was read at, and
+ * a cursor only when it names this page's last grant. A page holds at most
+ * the published page size.
+ */
 export function conversationShares(value: unknown): ConversationSharesResult {
   const result = record(value)
-  exact(result, ["items"])
+  exact(result, ["items", "cursor", "changeRevision"])
+  // Read with the grants. A later page belongs to the same read only when it
+  // names the same revision.
+  time(result, "changeRevision")
   const seen = new Set<string>()
-  for (const item of items(result, "items", bounds.maxShareGrants)) {
+  let last: { credentialId: string; grantedAtMs: number } | undefined
+  for (const item of items(result, "items", sharePage.pageSize)) {
     exact(item, ["credentialId", "role", "policy", "policyRevision", "grantedAtMs"])
     const credential = identity(item, "credentialId")
     if (seen.has(credential)) throw new Error("Repeated conversation share")
@@ -1260,7 +1287,17 @@ export function conversationShares(value: unknown): ConversationSharesResult {
     // A listed grant holds a revision the journal gave, never 0 (no grant held).
     if (time(item, "policyRevision") < minPolicyRevision)
       throw new Error("Invalid conversation share policy revision")
-    time(item, "grantedAtMs")
+    last = { credentialId: credential, grantedAtMs: time(item, "grantedAtMs") }
+  }
+  if (Object.hasOwn(result, "cursor")) {
+    if (last === undefined) throw new Error("Invalid conversation shares cursor")
+    const cursor = record(result.cursor)
+    exact(cursor, ["grantedAtMs", "credentialId"])
+    if (
+      identity(cursor, "credentialId") !== last.credentialId ||
+      time(cursor, "grantedAtMs") !== last.grantedAtMs
+    )
+      throw new Error("Invalid conversation shares cursor")
   }
   return result as unknown as ConversationSharesResult
 }

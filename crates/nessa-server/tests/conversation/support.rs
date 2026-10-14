@@ -929,6 +929,8 @@ pub(crate) struct ProviderFactory {
     pub(crate) close_requests: Mutex<Vec<SessionCloseRequest>>,
     /// Whether the agent agreed to take images, and its model can see them.
     pub(crate) image_input: AtomicBool,
+    /// Whether the attached agent can inject a steer into the active turn.
+    pub(crate) native_steering: AtomicBool,
     /// Set while the agent's answer is not known, as during a restoration.
     pub(crate) answer_unknown: AtomicBool,
     /// Whether the selected model is offered images: it records image limits
@@ -1537,6 +1539,7 @@ impl ProviderSessionBackend for Backend {
             image_input: self.factory.image_input.load(Ordering::SeqCst),
             negotiated: !self.factory.answer_unknown.load(Ordering::SeqCst),
             native_hooks_allowed: self.factory.native_hooks.load(Ordering::SeqCst),
+            native_steering: self.factory.native_steering.load(Ordering::SeqCst),
             ..ProviderOperationCapabilities::default()
         }
     }
@@ -1895,7 +1898,7 @@ impl crate::conversation::application::ShareGrants for EveryConversationGranted 
     fn grants<'a>(
         &'a self,
         _: &'a ConversationId,
-    ) -> ConversationFuture<'a, Vec<crate::conversation::application::ShareGrant>> {
+    ) -> ConversationFuture<'a, crate::conversation::application::ShareGrantList> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
     fn policy_at<'a>(
@@ -1905,6 +1908,14 @@ impl crate::conversation::application::ShareGrants for EveryConversationGranted 
         _: u64,
     ) -> ConversationFuture<'a, Option<crate::conversation::domain::ToolPolicy>> {
         Box::pin(async { Ok(None) })
+    }
+    fn hold_revision<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> ConversationFuture<'a, crate::conversation::application::RevisionHold> {
+        Box::pin(async { Ok(crate::conversation::application::RevisionHold::vacant()) })
     }
 }
 

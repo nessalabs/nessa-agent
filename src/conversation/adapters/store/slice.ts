@@ -1,4 +1,10 @@
-import { permissionTargetConversation, type PermissionTarget } from "@nessa/client"
+import {
+  permissionTargetConversation,
+  questionTargetConversation,
+  captureQuestionChoices,
+  type PermissionTarget,
+  type QuestionTarget,
+} from "@nessa/client"
 import {
   type ApprovalMode,
   contentText,
@@ -244,18 +250,19 @@ export const stageAttachment = createAsyncThunk<
 >(
   "conversation/stageAttachment",
   async (input, { dispatch, getState, extra, signal }) => {
+    const target = { conversationId: input.id, fileId: input.fileId }
     const current = getState().conversation.conversations.find(
-      (item) => item.id === input.id,
+      (item) => item.id === target.conversationId,
     )
-    if (!current?.draft.some((part) => part.type === "file" && part.id === input.fileId))
+    if (!current?.draft.some((part) => part.type === "file" && part.id === target.fileId))
       return
     const serverId = current.serverConversationId ?? crypto.randomUUID()
-    dispatch(bindConversation({ id: input.id, serverId }))
+    dispatch(bindConversation({ id: target.conversationId, serverId }))
     try {
       const created = await extra.conversation.create(serverId, current.selection)
       if (created.conversationId !== serverId)
         throw new Error("Gateway returned a different conversation identity.")
-      dispatch(conversationReady(input.id))
+      dispatch(conversationReady(target.conversationId))
       // `signal` is this thunk's own: aborting the dispatched promise stops the
       // upload, which is how a removed tile gives its slot back.
       const image = await extra.conversation.stageAttachment(
@@ -264,7 +271,13 @@ export const stageAttachment = createAsyncThunk<
         input.bytes,
         signal,
       )
-      dispatch(uploadChanged({ fileId: input.fileId, to: "stored", image }))
+      dispatch(
+        uploadChanged({
+          ...target,
+          to: "stored",
+          image,
+        }),
+      )
     } catch (error) {
       // Only a staging refusal says the gateway looked at these bytes and said
       // no, and a conversation deleted, here or elsewhere, stays deleted.
@@ -277,7 +290,13 @@ export const stageAttachment = createAsyncThunk<
               error.reason === "conversation-deleted"
             ? "conversation-deleted"
             : "unavailable"
-      dispatch(uploadChanged({ fileId: input.fileId, to: "failed", reason }))
+      dispatch(
+        uploadChanged({
+          ...target,
+          to: "failed",
+          reason,
+        }),
+      )
     }
   },
 )
@@ -448,8 +467,7 @@ export type Control =
   | { kind: "answer"; target: PermissionTarget; optionId: string }
   | {
       kind: "answerQuestion"
-      executionId: string
-      questionId: string
+      target: QuestionTarget
       /** Null declines: the agent is told it was answered with nothing. */
       choices: { key: string; values: string[]; ownWords?: string }[] | null
     }
@@ -460,9 +478,18 @@ export const controlConversation = createAsyncThunk<
   void,
   { id: string; control: Control },
   ThunkConfig
->("conversation/control", async ({ id, control }, { dispatch, getState, extra }) => {
+>("conversation/control", async (request, { dispatch, getState, extra }) => {
+  const { id, control: requestedControl } = request
   const current = getState().conversation.conversations.find((item) => item.id === id)
   if (!current?.serverConversationId || current.controlPending) return
+  const control =
+    requestedControl.kind === "answerQuestion"
+      ? Object.freeze({
+          kind: "answerQuestion" as const,
+          target: requestedControl.target,
+          choices: captureQuestionChoices(requestedControl.choices),
+        })
+      : requestedControl
   const serverId = current.serverConversationId
   // A delayed action belongs to the conversation captured on the approval
   // card, even if its local tab has since been rebound. No create/control
@@ -470,6 +497,11 @@ export const controlConversation = createAsyncThunk<
   if (
     (control.kind === "answer" || control.kind === "cancel") &&
     permissionTargetConversation(control.target) !== serverId
+  )
+    return
+  if (
+    control.kind === "answerQuestion" &&
+    questionTargetConversation(control.target) !== serverId
   )
     return
   const requestedOrder = control.kind === "reorder" ? [...control.executionIds] : []
@@ -519,12 +551,7 @@ export const controlConversation = createAsyncThunk<
         await extra.conversation.answer(control.target, control.optionId)
         break
       case "answerQuestion":
-        await extra.conversation.answerQuestion(
-          serverId,
-          control.executionId,
-          control.questionId,
-          control.choices,
-        )
+        await extra.conversation.answerQuestion(control.target, control.choices)
         break
       case "cancel":
         await extra.conversation.cancel(control.target)
@@ -655,8 +682,8 @@ const conversationSlice = createSlice({
   name: "conversation",
   initialState: emptyLocalTabs(),
   reducers: {
-    restoreConversations(_state, action: PayloadAction<SavedConversationTabs>) {
-      return restoreConversationTabs(action.payload)
+    restoreConversations(state, action: PayloadAction<SavedConversationTabs>) {
+      return restoreConversationTabs(state, action.payload)
     },
     cancellationChanged(
       state,

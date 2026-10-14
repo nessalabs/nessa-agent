@@ -91,6 +91,9 @@ pub struct PermissionMemory {
     /// The next withdraw leaves the provisional row stored.
     #[cfg(test)]
     withdraw_fails: AtomicBool,
+    /// The next acknowledge leaves the revision provisional.
+    #[cfg(test)]
+    acknowledge_fails: AtomicBool,
 }
 
 impl PermissionMemory {
@@ -128,6 +131,8 @@ impl PermissionMemory {
             delete_fails: AtomicBool::new(false),
             #[cfg(test)]
             withdraw_fails: AtomicBool::new(false),
+            #[cfg(test)]
+            acknowledge_fails: AtomicBool::new(false),
         })
     }
 
@@ -141,6 +146,12 @@ impl PermissionMemory {
     #[cfg(test)]
     fn fail_next_withdraw(&self) {
         self.withdraw_fails.store(true, Ordering::SeqCst);
+    }
+
+    /// The next acknowledge leaves the revision provisional.
+    #[cfg(test)]
+    fn fail_next_acknowledge(&self) {
+        self.acknowledge_fails.store(true, Ordering::SeqCst);
     }
 
     /// Whether Cedar permits `principal` to make `change`.
@@ -202,17 +213,17 @@ impl PermissionRules for PermissionMemory {
         Some(SettledRule::new(reference, effect))
     }
 
-    fn offers_remember(&self, execution: &ExecutionId) -> bool {
+    fn offers_remember(&self, conversation_id: &str, execution: &ExecutionId) -> bool {
         lock(&self.arms)
             .owner
-            .get(execution.as_str())
+            .get(&arm_key(conversation_id, execution))
             .copied()
             .unwrap_or(false)
     }
 
-    fn arm(&self, execution: &ExecutionId, owner: bool) {
+    fn arm(&self, conversation_id: &str, execution: &ExecutionId, owner: bool) {
         let mut arms = lock(&self.arms);
-        let id = execution.as_str().to_owned();
+        let id = arm_key(conversation_id, execution);
         if arms.owner.insert(id.clone(), owner).is_none() {
             arms.order.push_back(id);
             while arms.order.len() > MAX_ARMS {
@@ -243,7 +254,7 @@ impl PermissionRules for PermissionMemory {
     }
 
     fn remember(&self, request: RememberRequest<'_>) -> Result<SettledRule, RememberError> {
-        if !self.offers_remember(request.execution_id)
+        if !self.offers_remember(request.conversation_id, request.execution_id)
             || request.workspace.is_empty()
             || request.tool.is_empty()
             || (request.source != "claude" && request.source != "codex")
@@ -265,6 +276,11 @@ impl PermissionRules for PermissionMemory {
                 && rule.tool == request.tool
         });
         if !replacing && rules.rows.len() >= MAX_RULES {
+            return Err(RememberError::Unavailable);
+        }
+        // Every entry is a live provisional revision. Evicting one would let
+        // a later failed selection leave that revision with nothing to undo.
+        if rules.undo_order.len() >= MAX_UNDO {
             return Err(RememberError::Unavailable);
         }
         let previous = rules
@@ -297,14 +313,21 @@ impl PermissionRules for PermissionMemory {
         Ok(SettledRule::new(reference, stored.effect))
     }
 
-    fn acknowledge(&self, rule: &ApprovalRuleReference) {
+    fn acknowledge(&self, rule: &ApprovalRuleReference) -> Result<(), RememberError> {
+        #[cfg(test)]
+        if self.acknowledge_fails.swap(false, Ordering::SeqCst) {
+            return Err(RememberError::Unavailable);
+        }
         let mut rules = lock(&self.rules);
         let acknowledged = rules
             .store
             .acknowledge(rule.rule_id(), rule.revision())
-            .unwrap_or(false);
+            .map_err(|_| RememberError::Unavailable)?;
+        // No provisional row matched. The revision is already live or gone.
+        // A database error is the branch above; this one must not withdraw a
+        // rule the store has already kept.
         if !acknowledged {
-            return;
+            return Ok(());
         }
         if let Some(row) = rules
             .rows
@@ -316,6 +339,7 @@ impl PermissionRules for PermissionMemory {
         let key = undo_key(rule.rule_id(), rule.revision());
         rules.undo.remove(&key);
         rules.undo_order.retain(|item| item != &key);
+        Ok(())
     }
 
     fn withdraw(&self, rule: &ApprovalRuleReference) -> Result<(), RememberError> {
@@ -482,6 +506,10 @@ impl PermissionMemory {
     }
 }
 
+fn arm_key(conversation_id: &str, execution: &ExecutionId) -> String {
+    format!("{conversation_id}\0{}", execution.as_str())
+}
+
 fn noted_key(execution: &ExecutionId, request_id: &str) -> String {
     format!("{}\0{request_id}", execution.as_str())
 }
@@ -490,7 +518,7 @@ fn undo_key(id: &str, revision: &str) -> String {
     format!("{id}\0{revision}")
 }
 
-const MAX_UNDO: usize = 64;
+const MAX_UNDO: usize = MAX_RULES;
 
 fn remember_undo(
     rules: &mut LiveRules,
@@ -500,11 +528,6 @@ fn remember_undo(
     let key = undo_key(&stored.id, &stored.revision);
     if rules.undo.insert(key.clone(), previous).is_none() {
         rules.undo_order.push_back(key);
-    }
-    while rules.undo_order.len() > MAX_UNDO {
-        if let Some(old) = rules.undo_order.pop_front() {
-            rules.undo.remove(&old);
-        }
     }
 }
 
@@ -656,7 +679,7 @@ mod tests {
         effect: PermissionEffect,
     ) -> Result<SettledRule, RememberError> {
         let execution = execution("turn");
-        memory.arm(&execution, true);
+        memory.arm("conversation", &execution, true);
         memory.remember(RememberRequest {
             workspace: "/work",
             source: "claude",
@@ -664,6 +687,7 @@ mod tests {
             effect,
             granted_by: &actor(),
             caller: PermissionCaller::Owner,
+            conversation_id: "conversation",
             execution_id: &execution,
         })
     }
@@ -714,7 +738,7 @@ mod tests {
         let first = remember(&memory, "Bash", PermissionEffect::Allow).unwrap();
         assert_eq!(first.reference().revision(), "1");
         assert!(memory.settle("/work", "claude", "Bash").is_none());
-        memory.acknowledge(first.reference());
+        memory.acknowledge(first.reference()).unwrap();
         let settled = memory.settle("/work", "claude", "Bash").unwrap();
         assert_eq!(settled.reference().rule_id(), first.reference().rule_id());
         assert_eq!(settled.effect(), PermissionEffect::Allow);
@@ -726,7 +750,7 @@ mod tests {
         // The replacement is provisional, so neither it nor the rule it
         // wrote over settles until the selection is recorded.
         assert!(memory.settle("/work", "claude", "Bash").is_none());
-        memory.acknowledge(replaced.reference());
+        memory.acknowledge(replaced.reference()).unwrap();
         assert_eq!(
             memory.settle("/work", "claude", "Bash").unwrap().effect(),
             PermissionEffect::Deny
@@ -754,7 +778,7 @@ mod tests {
             .iter()
             .any(|rule| rule.id == stored.reference().rule_id()));
         let other = execution("other");
-        memory.arm(&other, false);
+        memory.arm("conversation", &other, false);
         let refused = memory.remember(RememberRequest {
             workspace: "/work",
             source: "claude",
@@ -762,6 +786,7 @@ mod tests {
             effect: PermissionEffect::Allow,
             granted_by: &actor(),
             caller: PermissionCaller::Owner,
+            conversation_id: "conversation",
             execution_id: &other,
         });
         assert_eq!(refused.unwrap_err(), RememberError::Refused);
@@ -846,7 +871,7 @@ mod tests {
     fn reopening_keeps_the_rule() {
         let (directory, memory, _) = opened();
         let stored = remember(&memory, "Bash", PermissionEffect::Allow).unwrap();
-        memory.acknowledge(stored.reference());
+        memory.acknowledge(stored.reference()).unwrap();
         drop(memory);
         let path = directory
             .path()
@@ -867,7 +892,7 @@ mod tests {
     fn a_grant_caller_cannot_store_a_rule_on_an_owner_turn() {
         let (_directory, memory, _) = opened();
         let execution = execution("turn");
-        memory.arm(&execution, true);
+        memory.arm("conversation", &execution, true);
         let refused = memory.remember(RememberRequest {
             workspace: "/work",
             source: "claude",
@@ -875,6 +900,7 @@ mod tests {
             effect: PermissionEffect::Allow,
             granted_by: &actor(),
             caller: PermissionCaller::Grant,
+            conversation_id: "conversation",
             execution_id: &execution,
         });
         assert_eq!(refused.unwrap_err(), RememberError::Refused);
@@ -886,7 +912,7 @@ mod tests {
     fn a_failed_revocation_record_leaves_the_rule() {
         let (_directory, memory, revocations) = opened();
         let stored = remember(&memory, "Bash", PermissionEffect::Allow).unwrap();
-        memory.acknowledge(stored.reference());
+        memory.acknowledge(stored.reference()).unwrap();
         revocations.fail.store(true, Ordering::SeqCst);
         assert_eq!(
             memory
@@ -910,7 +936,7 @@ mod tests {
     fn a_failed_delete_does_not_record_the_rule_as_gone_and_a_retry_removes_it() {
         let (_directory, memory, revocations) = opened();
         let stored = remember(&memory, "Bash", PermissionEffect::Allow).unwrap();
-        memory.acknowledge(stored.reference());
+        memory.acknowledge(stored.reference()).unwrap();
         memory.fail_next_delete();
         assert_eq!(
             memory
@@ -972,7 +998,7 @@ mod tests {
         assert!(lock(&revocations.records).is_empty());
         assert!(lock(&revocations.requested).is_empty());
         let kept = remember(&memory, "Read", PermissionEffect::Allow).unwrap();
-        memory.acknowledge(kept.reference());
+        memory.acknowledge(kept.reference()).unwrap();
         memory.withdraw(kept.reference()).unwrap();
         assert_eq!(
             memory
@@ -988,7 +1014,7 @@ mod tests {
     fn withdrawing_a_replacement_restores_the_previous_rule() {
         let (_directory, memory, _) = opened();
         let stored = remember(&memory, "Bash", PermissionEffect::Allow).unwrap();
-        memory.acknowledge(stored.reference());
+        memory.acknowledge(stored.reference()).unwrap();
         let replaced = remember(&memory, "Bash", PermissionEffect::Deny).unwrap();
         assert_eq!(replaced.reference().revision(), "2");
         assert!(memory
@@ -999,6 +1025,7 @@ mod tests {
                 effect: PermissionEffect::Allow,
                 granted_by: &actor(),
                 caller: PermissionCaller::Owner,
+                conversation_id: "conversation",
                 execution_id: &execution("again"),
             })
             .is_err());
@@ -1053,6 +1080,7 @@ mod tests {
             effect: PermissionEffect::Allow,
             granted_by: &actor(),
             caller: PermissionCaller::Owner,
+            conversation_id: "conversation",
             execution_id: &execution,
         });
         assert_eq!(refused.unwrap_err(), RememberError::Unavailable);
@@ -1063,9 +1091,11 @@ mod tests {
             .into_iter()
             .find(|rule| rule.tool == "t000")
             .unwrap();
-        memory.acknowledge(
-            &ApprovalRuleReference::new(current.id, current.revision, actor()).unwrap(),
-        );
+        memory
+            .acknowledge(
+                &ApprovalRuleReference::new(current.id, current.revision, actor()).unwrap(),
+            )
+            .unwrap();
         let replaced = remember(&memory, "t000", PermissionEffect::Deny).unwrap();
         assert_eq!(replaced.reference().revision(), "2");
         assert_eq!(memory.list(RulePrincipal::Owner).unwrap().len(), 256);
@@ -1097,6 +1127,61 @@ mod tests {
         assert_eq!(reviews.len(), 64);
         assert_eq!(reviews[0].permission_id, "p6");
         assert_eq!(reviews.last().unwrap().permission_id, "p69");
+    }
+
+    #[test]
+    fn the_same_execution_in_another_conversation_is_not_offered() {
+        let (_directory, memory, _) = opened();
+        let execution = execution("turn");
+        memory.arm("one", &execution, true);
+        memory.arm("two", &execution, false);
+        assert!(memory.offers_remember("one", &execution));
+        assert!(!memory.offers_remember("two", &execution));
+        assert_eq!(
+            memory
+                .remember(RememberRequest {
+                    workspace: "/work",
+                    source: "claude",
+                    tool: "Bash",
+                    effect: PermissionEffect::Allow,
+                    granted_by: &actor(),
+                    caller: PermissionCaller::Owner,
+                    conversation_id: "two",
+                    execution_id: &execution,
+                })
+                .unwrap_err(),
+            RememberError::Refused
+        );
+    }
+
+    #[test]
+    fn a_failed_acknowledgement_leaves_the_rule_provisional() {
+        let (_directory, memory, _) = opened();
+        let stored = remember(&memory, "Bash", PermissionEffect::Allow).unwrap();
+        memory.fail_next_acknowledge();
+        assert_eq!(
+            memory.acknowledge(stored.reference()).unwrap_err(),
+            RememberError::Unavailable
+        );
+        assert!(memory.settle("/work", "claude", "Bash").is_none());
+        memory.withdraw(stored.reference()).unwrap();
+        assert!(memory.list(RulePrincipal::Owner).unwrap().is_empty());
+    }
+
+    #[test]
+    fn later_rules_do_not_drop_an_older_provisional_undo() {
+        let (_directory, memory, _) = opened();
+        let first = remember(&memory, "t000", PermissionEffect::Allow).unwrap();
+        for index in 1..70 {
+            remember(&memory, &format!("t{index:03}"), PermissionEffect::Allow).unwrap();
+        }
+        memory.withdraw(first.reference()).unwrap();
+        assert!(memory.settle("/work", "claude", "t000").is_none());
+        assert!(memory
+            .list(RulePrincipal::Owner)
+            .unwrap()
+            .iter()
+            .all(|rule| rule.tool != "t000"));
     }
 
     #[test]

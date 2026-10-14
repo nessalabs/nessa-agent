@@ -29,6 +29,7 @@ import {
   UsageError,
   verdictOf,
 } from "./cli.mjs"
+import { argsForCheck } from "./run-all-args.mjs"
 
 const require = createRequire(import.meta.url)
 
@@ -202,6 +203,26 @@ describe("resultOfThrown", () => {
 })
 
 describe("run-all's sum", () => {
+  it("passes an explicit production URL to committed-transcript", () => {
+    const url = "http://127.0.0.1:9000/desktop.html"
+    assert.deepEqual(
+      argsForCheck(
+        "committed-transcript",
+        { url, runs: undefined },
+        { base: [], out: "check.json", page: undefined, sharesPage: false },
+      ),
+      ["--out", "check.json", "--url", url, "--mode", "prod"],
+    )
+    assert.deepEqual(
+      argsForCheck(
+        "committed-transcript",
+        { url: undefined },
+        { base: [], out: "check.json", page: undefined, sharesPage: false },
+      ),
+      ["--out", "check.json", "--mode", "prod"],
+    )
+  })
+
   it("reads each check's exit code", () => {
     assert.equal(verdictOf(0), "held")
     assert.equal(verdictOf(1), "FAILED")
@@ -225,12 +246,13 @@ describe("run-all's sum", () => {
     assert.deepEqual(devServerOnlyChecks, [
       "panel-list-follow",
       "mode-publication",
-      "committed-transcript",
+      "local-tab-lifetimes",
       "lease-details",
       "app-review",
       "gateway-states",
       "published-files",
       "transcript-notes",
+      "turn-outcomes",
       "mcp-apps",
       "approval-deadline",
     ])
@@ -239,6 +261,10 @@ describe("run-all's sum", () => {
       leftOut: [...devServerOnlyChecks],
     })
     assert.deepEqual(checksUnder("dev", ["smoke", "app-review"]).leftOut, [])
+    assert.deepEqual(checksUnder("prod", ["committed-transcript"]), {
+      run: ["committed-transcript"],
+      leftOut: [],
+    })
   })
 
   it("records a dev-server step as left out only under prod", () => {

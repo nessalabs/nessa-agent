@@ -1,4 +1,7 @@
-use crate::product::generated::{RecordScope, MAX_RECORD_RESPONSE_BYTES};
+use crate::product::generated::{
+    ConversationViewCursor, RecordScope, MAX_RECORD_RESPONSE_BYTES,
+    MAX_VIEW_CURSOR_INCARNATION_CHARACTERS, MIN_VIEW_CURSOR_INCARNATION_CHARACTERS,
+};
 use crate::protocol::{RequestFrame, MAX_PAYLOAD_BYTES};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -19,6 +22,29 @@ pub enum ReadWireError {
     InvalidRequest,
     InvalidPage,
     ResponseTooLarge,
+}
+
+/// A view cursor a later follow can send. The incarnation is the published
+/// character bound. The position is [`decimal_u64`], which is what the
+/// gateway's `Cursor::decode` parses before it answers `invalid_request`.
+pub fn conforming_view_cursor(cursor: &ConversationViewCursor) -> bool {
+    let length = cursor.incarnation.chars().count();
+    (MIN_VIEW_CURSOR_INCARNATION_CHARACTERS..=MAX_VIEW_CURSOR_INCARNATION_CHARACTERS)
+        .contains(&length)
+        && decimal_u64(&cursor.position).is_ok()
+}
+
+/// Whether `cursor` is behind `floor` in the same incarnation. Another
+/// incarnation is a replacement, and an equal position is not behind. Positions
+/// compare as [`decimal_u64`], which is how the gateway decides row S5.
+pub fn view_cursor_behind(cursor: &ConversationViewCursor, floor: &ConversationViewCursor) -> bool {
+    if cursor.incarnation != floor.incarnation {
+        return false;
+    }
+    match (decimal_u64(&cursor.position), decimal_u64(&floor.position)) {
+        (Ok(position), Ok(floor)) => position < floor,
+        _ => false,
+    }
 }
 
 pub fn decimal_u64(value: &str) -> Result<u64, ReadWireError> {

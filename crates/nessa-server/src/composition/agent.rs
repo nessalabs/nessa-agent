@@ -668,6 +668,8 @@ pub(super) fn providers(
         )
         .map_err(|error| RunError::Agent(error.to_string()))?,
     );
+    crate::conversation::infrastructure::CedarPermissionRuleEvaluator::load()
+        .map_err(|_| RunError::Agent("permission rule policy did not validate".to_owned()))?;
     let permission_memory = Arc::new(
         crate::conversation::infrastructure::PermissionMemory::open(&rules_path, revocations)
             .map_err(|cause| {

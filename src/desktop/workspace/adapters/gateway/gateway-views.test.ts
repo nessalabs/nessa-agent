@@ -27,6 +27,19 @@ import { GATEWAY_NOW_MS, note, row, view } from "./fake-gateway"
 
 const at = () => 42
 
+/** A runtime whose agent is the only fact these recovery tests vary. */
+function signInRuntime(agent: string) {
+  return {
+    model: "x",
+    provider: "x",
+    workspace: "/",
+    agent,
+    modelName: "x",
+    contextWindowTokens: 1,
+    reasoning: false,
+  }
+}
+
 const turn = (change: Partial<ConversationMessage> = {}): ConversationMessage => ({
   executionId: "e1",
   userText: "Chart the sales",
@@ -875,6 +888,7 @@ describe("provider authentication recovery", () => {
 
 it("shows auth recovery without duplicating its diagnostic and preserves unrelated notices", () => {
   const source = view("auth", {
+    runtime: signInRuntime("claude"),
     messages: [
       turn({
         status: "failed",
@@ -896,6 +910,172 @@ it("shows auth recovery without duplicating its diagnostic and preserves unrelat
     { kind: "text", text: "Chart the sales" },
     { kind: "text", text: "Nessa declined a tool review." },
   ])
+  expect(transcript.messages[1]).toMatchObject({
+    role: "agent",
+    executionId: "e1",
+    terminal: { status: "failed", error: "Internal error: OAuth session expired" },
+  })
+  expect(transcript.messages[1]).not.toHaveProperty("requiredWorkFailed")
+})
+
+it("keeps an independent failure beside authentication recovery", () => {
+  const transcript = transcriptFrom(
+    view("auth", {
+      runtime: signInRuntime("claude"),
+      messages: [
+        turn({
+          status: "failed",
+          authenticationRequired: true,
+          requiredWorkFailed: true,
+          error: "The turn could not complete all required work.",
+        }),
+      ],
+    }),
+    1,
+    at,
+    GATEWAY_NOW_MS,
+  )
+  expect(recovery(transcript)).toBe(true)
+  expect(transcript.messages[0]).toMatchObject({
+    role: "user",
+    executionId: "e1",
+    requiredWorkFailed: true,
+    terminal: {
+      status: "failed",
+      error: "The turn could not complete all required work.",
+    },
+  })
+})
+
+it("does not treat the required-work sentence as the independent failure", () => {
+  const sentence = "The turn could not complete all required work."
+  const transcript = transcriptFrom(
+    view("auth", {
+      runtime: signInRuntime("codex"),
+      messages: [
+        turn({
+          status: "failed",
+          authenticationRequired: true,
+          error: sentence,
+        }),
+      ],
+    }),
+    1,
+    at,
+    GATEWAY_NOW_MS,
+  )
+  expect(recovery(transcript)).toBe(true)
+  expect(transcript.messages[0]).toMatchObject({
+    terminal: { status: "failed", error: sentence },
+  })
+  expect(transcript.messages[0]).not.toHaveProperty("requiredWorkFailed")
+  const flagged = transcriptFrom(
+    view("auth", {
+      runtime: signInRuntime("codex"),
+      messages: [
+        turn({
+          status: "failed",
+          authenticationRequired: true,
+          requiredWorkFailed: true,
+          error: "storage write failed",
+        }),
+      ],
+    }),
+    2,
+    at,
+    GATEWAY_NOW_MS,
+  )
+  expect(flagged.messages[0]).toMatchObject({
+    requiredWorkFailed: true,
+    terminal: { status: "failed", error: "storage write failed" },
+  })
+})
+
+it("keeps a Failed mark on an authentication refusal once another turn has followed", () => {
+  const refusal = turn({
+    status: "failed",
+    authenticationRequired: true,
+    error: "Internal error: OAuth session expired",
+  })
+  const followed = transcriptFrom(
+    view("auth", {
+      runtime: signInRuntime("claude"),
+      messages: [
+        refusal,
+        turn({
+          executionId: "later",
+          userText: "Try again",
+          status: "completed",
+          parts: [textPart("Ready", 0)],
+        }),
+      ],
+    }),
+    1,
+    at,
+    GATEWAY_NOW_MS,
+  )
+  expect(recovery(followed)).toBe(false)
+  expect(followed.messages[0]).toMatchObject({
+    role: "user",
+    terminal: { status: "failed", error: "Internal error: OAuth session expired" },
+  })
+  const waiting = view("auth", { runtime: signInRuntime("claude"), messages: [refusal] })
+  waiting.pending = [
+    {
+      executionId: "retry",
+      text: "Try again",
+      attachments: [],
+      files: [],
+      mode: "queued",
+    },
+  ]
+  const superseded = transcriptFrom(waiting, 2, at, GATEWAY_NOW_MS)
+  expect(recovery(superseded)).toBe(false)
+  expect(superseded.messages[0]).toMatchObject({
+    role: "user",
+    terminal: { status: "failed", error: "Internal error: OAuth session expired" },
+  })
+})
+
+it("keeps an authentication failure when sign-in cannot render", () => {
+  const refused = turn({
+    status: "failed",
+    authenticationRequired: true,
+    error: "OAuth session expired",
+  })
+  const bare = turn({ status: "failed", authenticationRequired: true })
+  const shown = (source: ReturnType<typeof view>) =>
+    transcriptFrom(source, 1, at, GATEWAY_NOW_MS)
+  for (const source of [
+    view("auth", { messages: [refused] }),
+    view("auth", { runtime: signInRuntime("opencode"), messages: [refused] }),
+    view("auth", { runtime: signInRuntime("other"), messages: [refused] }),
+    view("auth", { runtime: signInRuntime("Claude"), messages: [refused] }),
+    view("auth", { runtime: signInRuntime(""), messages: [bare] }),
+  ]) {
+    const transcript = shown(source)
+    expect(recovery(transcript)).toBe(true)
+    expect(transcript.messages[0]).toMatchObject({
+      role: "user",
+      terminal: source.messages[0]?.error
+        ? { status: "failed", error: "OAuth session expired" }
+        : { status: "failed" },
+    })
+    if (!source.messages[0]?.error) {
+      expect(transcript.messages[0]).not.toHaveProperty("terminal.error")
+    }
+  }
+  for (const agent of ["claude", "codex"] as const) {
+    const transcript = shown(
+      view("auth", { runtime: signInRuntime(agent), messages: [refused] }),
+    )
+    expect(recovery(transcript)).toBe(true)
+    expect(transcript.messages[0]).toMatchObject({
+      executionId: "e1",
+      terminal: { status: "failed", error: "OAuth session expired" },
+    })
+    expect(transcript.messages[0]).not.toHaveProperty("requiredWorkFailed")
+  }
 })
 
 it("recovery follows the latest mapped input across pending and dispatched turns", () => {
@@ -939,6 +1119,212 @@ function recovery(transcript: ReturnType<typeof transcriptFrom>) {
     [],
   )
 }
+
+describe("a turn the gateway says ended", () => {
+  it("keeps a failure with no reply on the input, status and diagnostic apart", () => {
+    const transcript = transcriptFrom(
+      view("c", {
+        messages: [turn({ status: "failed", error: "Provider connection lost" })],
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(transcript.messages).toHaveLength(1)
+    expect(transcript.messages[0]).toMatchObject({
+      role: "user",
+      terminal: { status: "failed", error: "Provider connection lost" },
+    })
+    expect(messageText(transcript.messages[0]!)).toBe("Chart the sales")
+  })
+
+  it("keeps a cancellation on the reply and leaves the partial text as it arrived", () => {
+    const transcript = transcriptFrom(
+      view("c", {
+        messages: [
+          turn({
+            status: "cancelled",
+            error: "Stopped",
+            parts: [textPart("Halfway", 0)],
+          }),
+        ],
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(transcript.messages[0]).toMatchObject({ role: "user" })
+    expect(transcript.messages[0]).not.toHaveProperty("terminal")
+    expect(transcript.messages[1]).toMatchObject({
+      role: "agent",
+      terminal: { status: "cancelled", error: "Stopped" },
+      parts: [{ kind: "text", text: "Halfway" }],
+    })
+  })
+
+  it("omits a blank diagnostic and leaves a finished or still-running turn unmarked", () => {
+    const unresolved = transcriptFrom(
+      view("c", { messages: [turn({ status: "unresolved", error: "   " })] }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(unresolved.messages[0]).toMatchObject({
+      terminal: { status: "unresolved" },
+    })
+    expect(unresolved.messages[0]).not.toHaveProperty("terminal.error")
+    for (const status of ["queued", "running", "completed", "injected"] as const) {
+      const transcript = transcriptFrom(
+        view("c", { messages: [turn({ status, error: "should not show" })] }),
+        1,
+        at,
+        GATEWAY_NOW_MS,
+      )
+      expect(
+        transcript.messages.every(
+          (message) => message.role === "note" || message.terminal === undefined,
+        ),
+      ).toBe(true)
+    }
+  })
+
+  it("shows an OpenCode failure the gateway already reported", () => {
+    const transcript = transcriptFrom(
+      view("c", {
+        runtime: {
+          model: "x",
+          provider: "x",
+          workspace: "/",
+          agent: "opencode",
+          modelName: "x",
+          contextWindowTokens: 1,
+          reasoning: false,
+        },
+        messages: [turn({ status: "failed", error: "Provider connection lost" })],
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(transcript.agent).toBe("opencode")
+    expect(transcript.messages[0]).toMatchObject({
+      terminal: { status: "failed", error: "Provider connection lost" },
+    })
+  })
+})
+
+describe("questions and a withheld interaction", () => {
+  const field = {
+    key: "where",
+    prompt: "Pick a place",
+    multiSelect: false,
+    freeText: false,
+    required: true,
+    options: [{ value: "here", label: "Here", description: "This machine" }],
+  }
+
+  it("keeps a question that names an ask, and the gateway's notice in its own words", () => {
+    const transcript = transcriptFrom(
+      view("c", {
+        messages: [turn({ status: "running" })],
+        questions: [
+          {
+            executionId: "e1",
+            questionId: "q1",
+            message: "Where should this land?",
+            questions: [field],
+          },
+        ],
+        interactionViewError: "A review was left out of this view.",
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(transcript.questions).toEqual([
+      {
+        executionId: "e1",
+        questionId: "q1",
+        message: "Where should this land?",
+        questions: [
+          {
+            key: "where",
+            prompt: "Pick a place",
+            multiSelect: false,
+            freeText: false,
+            required: true,
+            options: [{ value: "here", label: "Here", description: "This machine" }],
+          },
+        ],
+      },
+    ])
+    expect(transcript.interactionNotice).toBe("A review was left out of this view.")
+  })
+
+  it("skips a question, field, or option that names nothing, and a blank notice", () => {
+    const transcript = transcriptFrom(
+      view("c", {
+        messages: [turn({ status: "running" })],
+        questions: [
+          {
+            executionId: "",
+            questionId: "q0",
+            message: "Missing an execution",
+            questions: [field],
+          },
+          { executionId: "e1", questionId: "q1", message: "   ", questions: [field] },
+          {
+            executionId: "e1",
+            questionId: "q2",
+            message: "No usable field",
+            questions: [
+              { ...field, key: "" },
+              { ...field, prompt: "  " },
+              { ...field, options: [] },
+            ],
+          },
+          {
+            executionId: "e1",
+            questionId: "q3",
+            message: "Where should this land?",
+            questions: [
+              {
+                ...field,
+                options: [
+                  { value: "", label: "Nowhere" },
+                  { value: "here", label: "   " },
+                  { value: "there", label: "There" },
+                ],
+              },
+            ],
+          },
+        ],
+        interactionViewError: "  ",
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(transcript.questions).toEqual([
+      {
+        executionId: "e1",
+        questionId: "q3",
+        message: "Where should this land?",
+        questions: [
+          {
+            key: "where",
+            prompt: "Pick a place",
+            multiSelect: false,
+            freeText: false,
+            required: true,
+            options: [{ value: "there", label: "There" }],
+          },
+        ],
+      },
+    ])
+    expect(transcript.interactionNotice).toBeUndefined()
+  })
+})
 
 describe("a conversation view's lease", () => {
   it("is carried as where the agent runs, and is absent until one is recorded", () => {
