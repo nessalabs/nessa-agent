@@ -677,6 +677,12 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   and WebKit. The fixture is `fixtures/approval-deadline/`, dev server only.
   _Check:_ `approval-deadline.mjs`. The card's own widths stay
   `responsive.mjs --only approval-card` at 280 and 340 px.
+- [ ] **A clock snapshot is stable across React's consecutive reads even when
+  injected time crosses a label bucket**, then one published interval tick
+  updates the reader and unmount clears the last timer. The page uses only the
+  public `ClockProvider`/`useNow` API; any console or page error fails in both
+  Chromium and WebKit.
+  _Check:_ `clock-snapshots.mjs` (`fixtures/clock-snapshots/`, dev server).
 - [ ] **An app's review is drawn, and names the app, not the agent**, in the
   window over a fake gateway (`fixtures/app-review/`, dev server only): at
   rest, a conversation whose turn has ended is not read again; when its app
