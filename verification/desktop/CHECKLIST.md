@@ -1739,3 +1739,22 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
 - [ ] **The panel fits the window.** _Check:_ `fit-1200`, `fit-420`; with
   `--shots <dir>`, screenshots of the grants, Drive form, budget, refusal,
   changed refusal and the narrow panel.
+
+## A record the chat could not read
+
+`transcript-unreadable.mjs` loads `fixtures/transcript-unreadable/`, a
+dev-server page that mounts the production transcript in the desktop window
+over a fake gateway and in a 420 px panel. The view has one completed turn
+and two records the read could not apply: one before any turn, and one after
+that turn. The script runs in Chromium and WebKit and is dev-only in
+run-all. The line is `UnreadablePartLine` (`src/conversation`), which both
+surfaces use.
+
+- [ ] **A record that could not be read is one line, and the turn around it
+  stays.** _Check:_ `transcript-unreadable.mjs --only line --shots <dir>`.
+  On both surfaces the reading order is the line for record 3, "Plan the
+  release.", "Here is the plan.", and the line for record 9. Each line says
+  "Couldn't read this part of the conversation", has an empty
+  `data-unreadable-report`, and contains no button. The empty welcome, the
+  whole-chat unread sentence, and the omitted-history sentence are absent.
+  The screenshots show both transcripts.

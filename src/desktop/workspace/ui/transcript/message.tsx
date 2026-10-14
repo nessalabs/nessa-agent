@@ -1,5 +1,10 @@
 import { memo } from "react"
-import { PublishedFiles, TranscriptNote } from "../../../../conversation"
+import {
+  PublishedFiles,
+  TranscriptNote,
+  UnreadableOverflowLine,
+  UnreadablePartLine,
+} from "../../../../conversation"
 import { discardUnsent, resendMessage } from "../../adapters/store/commands"
 import { useWorkspaceDispatch } from "../../adapters/store/hooks"
 import { useInlineWidgetHost } from "../../adapters/store/widget-hosts"
@@ -33,7 +38,8 @@ export function messageAuthor(app: MessageApp): Said {
  * widgets, each a card its plugin draws (`InlineWidget`), and the files it
  * published, each a card the conversation vertical draws and reads back
  * (`PublishedFiles`). A note somebody left is a row of its own, neither
- * (`TranscriptNote`). Memoised on the
+ * (`TranscriptNote`). A record this read could not apply is one line
+ * (`UnreadablePartLine`). Memoised on the
  * message itself, so a reply streaming in renders only the message it grows.
  */
 export const Message = memo(function Message({
@@ -50,6 +56,26 @@ export const Message = memo(function Message({
     return (
       <div className="workspace-message" data-role="note" data-new={isNew || undefined}>
         <TranscriptNote note={message.note} />
+      </div>
+    )
+  if (message.role === "unreadable")
+    return (
+      <div
+        className="workspace-message"
+        data-role="unreadable"
+        data-new={isNew || undefined}
+      >
+        <UnreadablePartLine part={message.unreadable} />
+      </div>
+    )
+  if (message.role === "unreadable-overflow")
+    return (
+      <div
+        className="workspace-message"
+        data-role="unreadable-overflow"
+        data-new={isNew || undefined}
+      >
+        <UnreadableOverflowLine />
       </div>
     )
   if (message.role === "user") {

@@ -1591,6 +1591,16 @@
           "maxItems": 64,
           "description": "Notes left in the conversation (conversation.message), the newest 64 in the order they were left; empty before any was. An older one is left out of the list, not out of the conversation, and the list may give up its oldest entries to bound the response."
         },
+        "unreadable": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConversationUnreadable" },
+          "maxItems": 32,
+          "description": "Records this read could not apply, oldest first, at most 32. Empty when every record could be read. A chat with no turns may still list these. Each is one line in the transcript. The line is where a future report action attaches; this view carries no report control."
+        },
+        "unreadableTruncated": {
+          "type": "boolean",
+          "description": "True when more records could not be read than the 32 lines in unreadable. Those records were still skipped. The transcript ends with one line: More parts of this conversation couldn't be read."
+        },
         "title": {
           "type": ["string", "null"],
           "minLength": 1,
@@ -1636,6 +1646,8 @@
         "questions",
         "artifacts",
         "notes",
+        "unreadable",
+        "unreadableTruncated",
         "approvalMode",
         "approvalModes"
       ]
@@ -5747,6 +5759,28 @@
       "type": "string",
       "enum": ["expired", "permission_lost"],
       "description": "Why a next_turn note was retired. expired: it was still pending 24 hours after it was accepted. permission_lost: when a turn was admitted, its author's grant had been revoked or lowered below comment."
+    },
+    "ConversationUnreadable": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One saved record this read could not apply. The transcript draws one line for it, after the turn named by afterExecutionId, and that line is where a future report action attaches.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "description": "The record's physical position, as a decimal with no leading zero."
+        },
+        "afterExecutionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The last turn accepted when the record was skipped, so the line is shown after that turn; absent when none had been."
+        }
+      },
+      "required": ["id"]
     },
     "ConversationNote": {
       "type": "object",

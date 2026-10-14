@@ -269,6 +269,8 @@ export function conversationView(value: unknown, expected: string): Conversation
     "lease",
     "artifacts",
     "notes",
+    "unreadable",
+    "unreadableTruncated",
     "title",
     "approvalMode",
     "approvalModes",
@@ -687,6 +689,13 @@ export function conversationView(value: unknown, expected: string): Conversation
   if (item.lease !== undefined) lease(item.lease)
   for (const artifact of items(item, "artifacts", 64)) conversationArtifact(artifact)
   for (const note of items(item, "notes", 64)) conversationNote(note)
+  const unreadIds = new Set<string>()
+  for (const part of items(item, "unreadable", 32)) {
+    const id = conversationUnreadable(part)
+    if (unreadIds.has(id)) throw new Error("Repeated conversation unreadable id")
+    unreadIds.add(id)
+  }
+  flag(item, "unreadableTruncated")
   const capabilities = record(item.capabilities)
   const capabilityKeys = [
     "queue",
@@ -969,6 +978,15 @@ function noteAccepted(item: Record<string, unknown>) {
     acceptedAtMs < 0
   )
     throw new Error("Invalid conversation acceptedAtMs")
+}
+
+/** One record the view could not read: its position, and the turn it follows. */
+function conversationUnreadable(item: Record<string, unknown>): string {
+  exact(item, ["id", "afterExecutionId"])
+  const id = text(item, "id", 20, false)
+  if (!/^(0|[1-9][0-9]*)$/.test(id)) throw new Error("Invalid conversation unreadable id")
+  if (item.afterExecutionId !== undefined) identity(item, "afterExecutionId")
+  return id
 }
 
 /** One note the view lists: the published shape, closed. */

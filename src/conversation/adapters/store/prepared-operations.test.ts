@@ -71,6 +71,8 @@ function acceptedView(conversationId: string, executionId: string): Conversation
     conversationId,
     artifacts: [],
     notes: [],
+    unreadable: [],
+    unreadableTruncated: false,
     approvalMode: "ask",
     approvalModes: [
       { id: "ask", name: "Provider asks", description: "Provider asks where required." },

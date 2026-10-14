@@ -22,6 +22,8 @@ const view: ConversationView = {
   conversationId,
   artifacts: [],
   notes: [],
+  unreadable: [],
+  unreadableTruncated: false,
   approvalMode: "ask",
   approvalModes: [
     {

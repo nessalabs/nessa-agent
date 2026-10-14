@@ -59,6 +59,8 @@ it("draws an input waiting that the view lists apart from its turns after every 
     conversationId: "server",
     revision: "1",
     artifacts: [],
+    unreadable: [],
+    unreadableTruncated: false,
     notes: [
       {
         id: "after-p0",

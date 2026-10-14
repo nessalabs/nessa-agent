@@ -36,6 +36,8 @@ const QUIET: Duration = Duration::from_millis(750);
 struct Gate {
     shut: AtomicBool,
     waker: Mutex<Option<Waker>>,
+    /// Said once a flush has parked because the gate is shut.
+    held: tokio::sync::Notify,
 }
 
 impl Gate {
@@ -87,6 +89,7 @@ impl Sink<Message> for GatedSocket {
         if self.gate.shut.load(Ordering::SeqCst) {
             *self.gate.waker.lock().unwrap() = Some(cx.waker().clone());
             if self.gate.shut.load(Ordering::SeqCst) {
+                self.gate.held.notify_one();
                 return std::task::Poll::Pending;
             }
         }
@@ -554,12 +557,15 @@ impl SubscriptionFixture {
 
     /// Hold `client`'s writer: a health reply's flush does not finish until
     /// the gate opens, so nothing else is taken (rows S8, S10, S12).
+    /// Returns once that flush is parked, so later commits wait on the writer
+    /// instead of each leaving their own frame.
     async fn stall(&self, client: &mut Client) {
         client.gate.shut();
+        let held = client.gate.held.notified();
         client.send("stall", "server.health", json!({}));
-        // The writer is on the health reply once the request has been read;
-        // give the socket a moment to take it.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::timeout(EXPECTED, held)
+            .await
+            .expect("the writer is held on the stalled flush");
     }
 
     /// A conversation whose history the test writes straight to the store,
@@ -993,9 +999,17 @@ async fn commits_while_a_frame_waits_collapse_into_one_frame() {
     }
     client.gate.open();
     let mut frames = Vec::new();
-    while let Some(message) = client.within(QUIET).await {
-        if message["payload"]["subscriptionId"] == id.as_str() {
-            frames.push(message);
+    loop {
+        let Some(message) = client.within(EXPECTED).await else {
+            break;
+        };
+        if message["payload"]["subscriptionId"] != id.as_str() {
+            continue;
+        }
+        let done = settled(&message, 3);
+        frames.push(message);
+        if done {
+            break;
         }
     }
     // The frame offered at the first commit, then one with all of them.
@@ -1005,6 +1019,14 @@ async fn commits_while_a_frame_waits_collapse_into_one_frame() {
         frames.len()
     );
     assert!(settled(frames.last().unwrap(), 3));
+    assert!(
+        client
+            .within(QUIET)
+            .await
+            .filter(|message| message["payload"]["subscriptionId"] == id.as_str())
+            .is_none(),
+        "commits while the frame waited stay in those frames"
+    );
     client.close().await;
 }
 
