@@ -161,6 +161,20 @@ async function dropImage(url: string) {
   )
 }
 
+async function dropPathless(payload: { plain: string; uriList: string; html: string }) {
+  expect(hostBoundary.drop, "actual App host-drop subscription must exist").toBeTypeOf(
+    "function",
+  )
+  await act(async () =>
+    hostBoundary.drop!({
+      batch: "pathless-without-a-beginning",
+      files: [],
+      text: payload,
+      refused: null,
+    }),
+  )
+}
+
 async function pickImage(text = "include this image") {
   const nativeRead = deferred<ArrayBuffer>()
   cleanups.push(() => nativeRead.resolve(new ArrayBuffer(4)))
@@ -393,6 +407,62 @@ it("applies a host drop to A after the App switches to conversation B", async ()
       resource: expect.objectContaining({ path: "/Users/ada/original.pdf" }),
     }),
   )
+})
+
+it("pastes pathless host text into the actual focused composer", async () => {
+  await mount()
+  await dropPathless({ plain: "dropped prose", uriList: "", html: "" })
+
+  expect(active().draft).toContainEqual(
+    expect.objectContaining({ type: "pasted-text", text: "dropped prose" }),
+  )
+})
+
+it("captures pathless host image ownership before the fetch waits", async () => {
+  const response = deferred<Response>()
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => response.promise),
+  )
+  await mount()
+  const originalStore = store
+  const originalId = active().id
+  await dropPathless({
+    plain: "",
+    uriList: "https://example.test/pathless.png",
+    html: '<img src="https://example.test/pathless.png">',
+  })
+  expect(fetch).toHaveBeenCalledOnce()
+
+  await act(async () => store.dispatch(openConversation()))
+  const replacementId = active().id
+  await act(async () => {
+    response.resolve(
+      new Response(new Blob(["image"], { type: "image/png" }), {
+        headers: { "content-type": "image/png" },
+      }),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+
+  expect(
+    originalStore
+      .getState()
+      .conversation.conversations.find((conversation) => conversation.id === originalId)
+      ?.draft,
+  ).toContainEqual(
+    expect.objectContaining({
+      type: "file",
+      resource: expect.objectContaining({ name: "pathless.png", mimeType: "image/png" }),
+    }),
+  )
+  expect(
+    originalStore
+      .getState()
+      .conversation.conversations.find(
+        (conversation) => conversation.id === replacementId,
+      )?.draft,
+  ).toHaveLength(0)
 })
 
 it("keeps all 64 active drop owners, refuses the 65th, and consumes each result once", async () => {

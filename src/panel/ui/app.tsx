@@ -282,6 +282,7 @@ export function App({
   const hostDrop = useHostDrop({
     owner: attachments.captureDestination().store,
     resources: attachmentResources,
+    captureDestination: attachments.captureDestination,
     addChosenFiles: (chosen, destination) => {
       if (attachments.isCurrent(destination)) revealDraft(destination.conversationId)
       void attachments.addChosenFiles(chosen, destination)
@@ -487,7 +488,7 @@ export function App({
             onChange={(event) => {
               const files = Array.from(event.currentTarget.files ?? [])
               event.currentTarget.value = ""
-              void attachments.addFiles(files)
+              attachments.completeBrowserPicker(files)
             }}
           />
           {/* Lights the stretch of border nearest the pointer. Inert on

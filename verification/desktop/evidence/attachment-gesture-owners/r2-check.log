@@ -1,0 +1,12 @@
+R2 source base: 1d697c5e99026ed7b2347c1cdab9b5f2bed7fab3
+PASS pnpm exec tsc --noEmit --pretty false
+PASS pnpm test: 4,381 tests / 331 files
+PASS targeted ESLint on changed TypeScript and browser fixture/script
+PASS pnpm architecture
+PASS pnpm format:check
+PASS attachment fixture Vite production build
+PASS attachment browser matrix: 30 / 30 Chromium and WebKit
+PASS pathless-host-drop: 2 / 2 Chromium and WebKit
+PASS browser-picker-fallback: 2 / 2 Chromium and WebKit
+Revert: consume-before-classification made both pathless host-drop route tests fail (0 prose/image calls); actual App scenario also timed out before the pasted result.
+Revert: finishing the picker operation immediately on host null made browser change lose its owner; actual App scenario timed out waiting for fallback.png in A.

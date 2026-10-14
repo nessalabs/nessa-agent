@@ -223,6 +223,94 @@ it("falls back to the page's own file input when there is no host to ask", async
   expect(draftFiles()).toHaveLength(0)
 })
 
+it("keeps a browser picker's original store through a delayed change", async () => {
+  const storeA = store
+  const conversationId = chat.active.id
+  chooseAttachmentFiles.mockResolvedValue(null)
+  const input = document.createElement("input")
+  input.type = "file"
+  input.click = clickedInput
+  Object.defineProperty(hook.inputRef, "current", { value: input, writable: true })
+
+  await act(async () => hook.chooseFiles())
+  expect(clickedInput).toHaveBeenCalledOnce()
+  await act(async () => hook.chooseFiles())
+  expect(chooseAttachmentFiles).toHaveBeenCalledOnce()
+  expect(clickedInput).toHaveBeenCalledOnce()
+  expect(hook.refusal).toEqual({ reason: "picker-unavailable" })
+
+  const storeB = makeStore(
+    createDependencies({
+      conversation: scenarioEffects("echo") as unknown as ConversationEffects,
+    }),
+  )
+  await act(async () => storeB.dispatch(openConversation()))
+  expect(storeB.getState().conversation.activeId).toBe(conversationId)
+  store = storeB
+  selectedResources = { ...resources }
+  await act(async () => {
+    root.render(
+      React.createElement(
+        React.StrictMode,
+        null,
+        React.createElement(Provider, {
+          store: storeB,
+          children: React.createElement(Surface),
+        }),
+      ),
+    )
+  })
+
+  await act(async () => hook.completeBrowserPicker([new File(["report"], "report.pdf")]))
+  const draftIn = (target: typeof storeA) =>
+    target
+      .getState()
+      .conversation.conversations.find(
+        (conversation) => conversation.id === conversationId,
+      )
+      ?.draft.filter((part) => part.type === "file")
+  expect(draftIn(storeA)).toHaveLength(1)
+  expect(draftIn(storeA)?.[0]).toMatchObject({
+    type: "file",
+    resource: { name: "report.pdf" },
+  })
+  expect(draftIn(storeB)).toHaveLength(0)
+})
+
+it("releases a cancelled browser picker so the same input can be reopened", async () => {
+  chooseAttachmentFiles.mockResolvedValue(null)
+  const input = document.createElement("input")
+  input.type = "file"
+  input.click = clickedInput
+  Object.defineProperty(hook.inputRef, "current", { value: input, writable: true })
+
+  await act(async () => hook.chooseFiles())
+  await act(async () => hook.cancelBrowserPicker())
+  expect(clickedInput).toHaveBeenCalledOnce()
+
+  await act(async () => hook.chooseFiles())
+  expect(clickedInput).toHaveBeenCalledTimes(2)
+  await act(async () => hook.completeBrowserPicker([new File(["report"], "report.pdf")]))
+  expect(draftFiles()).toHaveLength(1)
+})
+
+it("ignores a browser picker change after teardown", async () => {
+  chooseAttachmentFiles.mockResolvedValue(null)
+  const input = document.createElement("input")
+  input.type = "file"
+  input.click = clickedInput
+  Object.defineProperty(hook.inputRef, "current", { value: input, writable: true })
+  const add = vi.spyOn(resources, "add")
+
+  await act(async () => hook.chooseFiles())
+  await act(async () => root.unmount())
+  await act(async () => hook.completeBrowserPicker([new File(["late"], "late.pdf")]))
+
+  expect(add).not.toHaveBeenCalled()
+  expect(clickedInput).toHaveBeenCalledOnce()
+  add.mockRestore()
+})
+
 it("says why the host would not hand a file over, rather than attaching fewer", async () => {
   chooseAttachmentFiles.mockRejectedValue({
     reason: "path-not-text",

@@ -1443,7 +1443,15 @@ zero times, preserves the draft and paints **Attachments still loading**; read
 completion allows one send containing the text and one image. A second URL drop
 while the first fetch is pending paints **Still reading files** and starts no
 second fetch. The JSON reports send, attachment, refusal and page-error counts
-for all twenty-four engine/scenario pairs. Overlapping picker requests are
+for all thirty engine/scenario pairs. The `drop-capacity` case begins 64
+batches in A/c0, switches to empty B/c0, and checks that the visible 65th-drop
+refusal belongs to B. The rejected overflow and unknown results do nothing;
+the oldest result attaches once to A, a duplicate does nothing, and B accepts a
+new drop after the terminal result frees capacity. Committed feature evidence
+for this flow records the source head, Chromium and WebKit screenshots, the
+concise matrix output and the source-revert result in
+[`attachment-drop-capacity`](evidence/attachment-drop-capacity/README.md).
+Overlapping picker requests are
 announced and resolved in reverse order across two providers with the same
 conversation ID; each readiness tile and returned file stays with the provider
 that started it. A late upload success or failure for a closed
@@ -1459,7 +1467,13 @@ the owner changes, despite matching local conversation/placement numbers. Unmoun
 with three active uploads leaves the fourth queued after a completion; remounting
 resumes that sibling. Native SVG bytes retain their MIME type and render a4px
 image from the object URL in both engines. This verifies browser interactions with the
-production panel; it does not exercise an operating-system file picker.
+production panel; it does not exercise an operating-system file picker. The
+`pathless-host-drop` case proves prose and image URLs delivered without a batch
+beginning still reach the composer and the destination captured before the image
+fetch waits. `browser-picker-fallback` cancels and reopens the native browser input,
+then resolves its delayed file change after the provider has changed; the original
+owner receives it. Cropped views of both results are retained in
+[`attachment-gesture-owners`](evidence/attachment-gesture-owners/README.md).
 
 
 ## Provider authentication recovery (#501)

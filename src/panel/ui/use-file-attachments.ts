@@ -95,6 +95,7 @@ export function useFileAttachments(
   const conversationsOf = (destination: AttachmentDestination) =>
     destination.store.getState().conversation.conversations
   const inputRef = React.useRef<HTMLInputElement>(null)
+  const browserPicker = React.useRef<AttachmentOperation | null>(null)
   const operationsRef = React.useRef(new Set<AttachmentOperation>())
   const [operations, setOperations] = React.useState<ReadonlySet<AttachmentOperation>>(
     new Set(),
@@ -187,6 +188,7 @@ export function useFileAttachments(
       mounted.current = false
       for (const operation of operations) operation.controller?.abort()
       operations.clear()
+      browserPicker.current = null
       drops.clear()
     }
   }, [])
@@ -450,6 +452,10 @@ export function useFileAttachments(
    */
   async function chooseFiles(destination = currentDestination()) {
     if (!mounted.current) return
+    if (browserPicker.current) {
+      refuse({ reason: "picker-unavailable" }, destination)
+      return
+    }
     // The request identity travels with the host's separate readiness events,
     // so a second picker can overlap without borrowing the first one's owner.
     const requestId: PickerRequestId = `p-${crypto.randomUUID()}`
@@ -469,30 +475,42 @@ export function useFileAttachments(
     operationsRef.current.add(pickerOperation)
     if (mounted.current) setOperations(new Set(operationsRef.current))
     let chosen
+    let retainForBrowser = false
     try {
       chosen = await chooseAttachmentFiles(requestId)
       if (!operationIsActive(pickerOperation)) return
+      if (chosen === null) {
+        const input = inputRef.current
+        if (!input || browserPicker.current) {
+          refuse({ reason: "picker-unavailable" }, destination)
+          return
+        }
+        browserPicker.current = pickerOperation
+        try {
+          input.click()
+          retainForBrowser = true
+        } catch (error) {
+          if (browserPicker.current === pickerOperation) browserPicker.current = null
+          refuse(pickerRefusal(error), destination)
+        }
+        return
+      }
     } catch (error) {
       if (operationIsActive(pickerOperation)) refuse(pickerRefusal(error), destination)
       return
     } finally {
-      finishOperation(pickerOperation)
-      if (mounted.current)
-        setReadying((current) => {
-          const next = new Map(current)
-          for (const id of next.keys()) {
-            if (id.startsWith(`${requestId}:`)) next.delete(id)
-          }
-          return next
-        })
-    }
-    // Teardown retires this operation owner. A late answer cannot open the
-    // browser picker or admit another operation after that point.
-    if (chosen === null) {
-      inputRef.current?.click()
-      return
+      if (!retainForBrowser) finishPickerOperation(pickerOperation)
     }
     await addChosenFiles(chosen, destination)
+  }
+
+  /** Settle the one browser input against the owner that opened its chooser. */
+  function completeBrowserPicker(files: readonly File[]) {
+    const operation = browserPicker.current
+    browserPicker.current = null
+    if (!operation || !operationIsActive(operation)) return
+    finishPickerOperation(operation)
+    if (files.length > 0) addFiles(files, operation.destination)
   }
 
   /** Whether a conversation is still open to attach to. */
@@ -533,6 +551,33 @@ export function useFileAttachments(
     if (!operationsRef.current.delete(operation)) return
     if (mounted.current) setOperations(new Set(operationsRef.current))
   }
+
+  const finishPickerOperation = React.useCallback((operation: AttachmentOperation) => {
+    if (operationsRef.current.delete(operation) && mounted.current)
+      setOperations(new Set(operationsRef.current))
+    const requestId = operation.pickerRequestId
+    if (!requestId || !mounted.current) return
+    setReadying((current) => {
+      const next = new Map(current)
+      for (const id of next.keys()) {
+        if (id.startsWith(`${requestId}:`)) next.delete(id)
+      }
+      return next
+    })
+  }, [])
+
+  const cancelBrowserPicker = React.useCallback(() => {
+    const operation = browserPicker.current
+    browserPicker.current = null
+    if (operation) finishPickerOperation(operation)
+  }, [finishPickerOperation])
+
+  React.useEffect(() => {
+    const input = inputRef.current
+    if (!input) return
+    input.addEventListener("cancel", cancelBrowserPicker)
+    return () => input.removeEventListener("cancel", cancelBrowserPicker)
+  }, [cancelBrowserPicker])
 
   const operationIsActive = (operation: AttachmentOperation) =>
     mounted.current && operationsRef.current.has(operation)
@@ -646,6 +691,8 @@ export function useFileAttachments(
   }
   return {
     inputRef,
+    completeBrowserPicker,
+    cancelBrowserPicker,
     /**
      * Whether this conversation is waiting on something that has to finish
      * before a draft can go — selected image bytes being read, an image being

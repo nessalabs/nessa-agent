@@ -22,7 +22,7 @@ These controlled host tests do not establish native platform support or server
 authorization; current-main assembly and CI remain separate gates.
 
 
-## Bounded review handoff
+## Historical review handoff
 
 Current product source: `a9ae357fbcd4372e2af264706bc2cf907dc92fa9`. The screenshots above remain captures of `7870e750`; they are not claimed to capture the later fixes.
 
@@ -30,4 +30,23 @@ The final source adds stable listener/cleanup ownership and preserves same-owner
 
 Fresh R5 found no remaining source correctness finding. A suggested comment finding was withdrawn after checking the actual historical wording and host event order. Browser gate 17 remains open: the combined matrix at `c82a58e7` timed out on WebKit's second Add attachment control after replacement-owner selection. The author also reported this full-matrix timeout on Chromium. Later passing 24-case runs and isolated passing scenarios do not explain the original failure. [The preserved combined failure](owner-swap-timeout.log) includes the UI text, no page errors, and the exact failing line.
 
-The proposed cause is not established. Next investigation should capture control names, the committed React owner, and the original/replacement stores at the failing interaction, then establish whether the UI or verification fixture violates its transition contract. Do not weaken the selector, add sleeps, or count a passing rerun as a fix. This stays a draft handoff under the repository's bounded review rule.
+The original combined failure is retained above as historical evidence. Follow-up investigation captured the actual control and provider state: the old transition entered the upload-owner fixture, which seeds `replacement.png`; that changes the control from “Add attachment” to “More options.” The helper also did not wait for the replacement provider to commit before the next interaction. The source-asserted reversion recorded in `/tmp/nessa-838-old-upload-fixture-probe.log` restored the seeded upload and failed the new empty-draft assertion, while the dedicated `swapPickerOwner` transition in `b49e780` uses a fresh empty store and waits for its committed owner marker. This closes the historical timeout as a verification-transition defect; it does not treat an isolated passing rerun or a longer wait as proof of a product fix. The current matrix keeps the owner transition explicit and asserts both providers' results.
+
+## R2 regression evidence
+
+The `pathless-host-drop` case delivers prose and an image URL without a batch
+beginning, then changes providers while the image fetch is held. The actual App
+pastes the prose and attaches the image to the provider captured when the result
+arrived. The `browser-picker-fallback` case cancels and reopens the browser input,
+changes providers before the delayed `change`, and verifies that the original
+provider receives the file. Screenshots show the result in the owning provider:
+
+![Pathless host image in Chromium](pathless-drop-chromium.png)
+![Pathless host image in WebKit](pathless-drop-webkit.png)
+![Browser picker result in Chromium](browser-picker-chromium.png)
+![Browser picker result in WebKit](browser-picker-webkit.png)
+
+The expanded attachment matrix passes 30/30 engine/scenario pairs. The focused
+test count, type, lint, architecture, format, fixture-build and source-revert
+results are in [r2-check.log](r2-check.log). The screenshots are supplemental;
+the browser assertions prove the owner routing and result delivery.
