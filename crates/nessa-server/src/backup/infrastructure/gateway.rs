@@ -8,6 +8,7 @@
 //! that pin. Secret paths are fingerprinted.
 //! The credential registry contributes public facts only.
 
+use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -68,6 +69,7 @@ pub async fn capture_namespace(
     let environment_grants = Arc::new(GrantFiles::new(namespace.join("environment")));
     let inventory_cut = InventoryCut { log: inventory };
     let fences = NamespaceFences {
+        namespace: namespace.to_path_buf(),
         facts: facts.clone(),
         credentials: credentials.clone(),
     };
@@ -1426,8 +1428,30 @@ impl InventoryCut<'_> {
 }
 
 struct NamespaceFences {
+    namespace: PathBuf,
     facts: Arc<FactsCache>,
     credentials: Arc<CredentialCache>,
+}
+
+/// Tombstones, revoked grants, and revoked credentials committed in
+/// `namespace`. Pins the metadata snapshot this read uses.
+pub(crate) async fn read_committed_fences(namespace: &Path) -> Result<Vec<DeletionFence>, ()> {
+    let facts = FactsCache::new(namespace.join("conversations").join("metadata.sqlite3"));
+    facts.pin().await?;
+    let credentials = CredentialCache::new(
+        namespace.join("auth").join("credentials.v1.json"),
+        namespace.join("receiver-access").join("publication.lock"),
+        namespace
+            .join("receiver-access")
+            .join("receiver-access.sqlite3"),
+    );
+    NamespaceFences {
+        namespace: namespace.to_path_buf(),
+        facts: Arc::new(facts),
+        credentials: Arc::new(credentials),
+    }
+    .fences()
+    .await
 }
 
 #[async_trait]
@@ -1435,6 +1459,13 @@ impl FenceSource for NamespaceFences {
     async fn fences(&self) -> Result<Vec<DeletionFence>, ()> {
         let mut fences = Vec::new();
         let mut failed = false;
+        let workers = match worker_credential_ids(&self.namespace) {
+            Ok(ids) => ids,
+            Err(()) => {
+                failed = true;
+                HashSet::new()
+            }
+        };
         match self.facts.fence_facts().await {
             Ok(Some(facts)) => {
                 fences.extend(fences_from_facts(&facts));
@@ -1454,11 +1485,10 @@ impl FenceSource for NamespaceFences {
                     .iter()
                     .filter(|credential| credential.revoked)
                 {
-                    if let Ok(fence) = DeletionFence::credential(
-                        credential.kind,
-                        &credential.id,
-                        credential.fingerprint,
-                    ) {
+                    let kind = enrolled_kind(credential.kind, &credential.id, &workers);
+                    if let Ok(fence) =
+                        DeletionFence::credential(kind, &credential.id, credential.fingerprint)
+                    {
                         fences.push(fence);
                     }
                 }
@@ -1470,6 +1500,72 @@ impl FenceSource for NamespaceFences {
             return Err(());
         }
         Ok(fences)
+    }
+}
+
+/// Credential ids named by a worker enrollment. An absent directory is
+/// empty. A path that is not a directory, a symlink, or a `*.json` record
+/// without a usable `credentialId` fails the fence source.
+fn worker_credential_ids(namespace: &Path) -> Result<HashSet<String>, ()> {
+    let mut ids = HashSet::new();
+    read_worker_tree(&namespace.join("workers"), &mut ids)?;
+    read_worker_tree(&namespace.join("environment").join("workers"), &mut ids)?;
+    Ok(ids)
+}
+
+fn read_worker_tree(root: &Path, ids: &mut HashSet<String>) -> Result<(), ()> {
+    let metadata = match fs::symlink_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(()),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(());
+    }
+    walk_worker_dir(root, ids)
+}
+
+fn walk_worker_dir(directory: &Path, ids: &mut HashSet<String>) -> Result<(), ()> {
+    for entry in fs::read_dir(directory).map_err(|_| ())? {
+        let path = entry.map_err(|_| ())?.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|_| ())?;
+        if metadata.file_type().is_symlink() {
+            return Err(());
+        }
+        if metadata.is_dir() {
+            walk_worker_dir(&path, ids)?;
+            continue;
+        }
+        if !metadata.is_file() {
+            return Err(());
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            return Err(());
+        };
+        if !name.ends_with(".json") {
+            continue;
+        }
+        let value: Value =
+            serde_json::from_slice(&fs::read(&path).map_err(|_| ())?).map_err(|_| ())?;
+        let Some(id) = value.get("credentialId").and_then(Value::as_str) else {
+            return Err(());
+        };
+        if id.is_empty() || id.len() > 512 || id.bytes().any(|byte| byte < 0x20) {
+            return Err(());
+        }
+        ids.insert(id.to_owned());
+    }
+    Ok(())
+}
+
+/// A hosted worker and an environment peer share one registry class.
+/// The enrollment file is what says this credential is a worker. A device
+/// or peer id named there stays what the registry said.
+fn enrolled_kind(kind: CredentialKind, id: &str, workers: &HashSet<String>) -> CredentialKind {
+    if kind == CredentialKind::EnvironmentPeer && workers.contains(id) {
+        CredentialKind::Worker
+    } else {
+        kind
     }
 }
 

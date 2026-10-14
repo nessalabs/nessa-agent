@@ -1130,8 +1130,8 @@ mod tests {
             records::{self, FactKey, FactKind},
             ChangeWatchError, ChangeWatchState, CommittedCompleteness, CommittedFreshness,
             CommittedViewState, InvocationRecord, ProviderContext, SessionChange,
-            SessionSaveBackend, SessionSaveGeneration, SessionSaveUnit, SessionSnapshot,
-            SessionStorage, SubmissionAcknowledgement,
+            SessionSaveGeneration, SessionSaveUnit, SessionSnapshot, SessionStorage,
+            SubmissionAcknowledgement,
         },
     };
     use crate::domain::agent_execution::{
@@ -1179,11 +1179,9 @@ mod tests {
         changes: &[SessionChange],
         padding: usize,
     ) -> Vec<NewEvent> {
-        let binding = SessionSaveGeneration::new(
-            SessionSaveBackend::Record {
-                stream: id(stream.id.as_str()),
-                incarnation: stream.incarnation.0,
-            },
+        let binding = SessionSaveGeneration::record(
+            id(stream.id.as_str()),
+            stream.incarnation.0,
             base,
             generation,
         );

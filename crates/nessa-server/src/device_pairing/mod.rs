@@ -14,6 +14,7 @@
 //! infrastructure (listener, connection, client) --> application --> Auth owners
 //! infrastructure (connection, client) --> nessa_protocol::pairing (channel, wire, socket)
 //! infrastructure::receivers --> conversation receiver authority
+//! infrastructure::runtime --> FenceCapture, after a pairing cancellation commits
 //! ```
 //! Arrows are compile-time dependencies. Auth is the only enrollment authority;
 //! the receiver authority owns receivers.

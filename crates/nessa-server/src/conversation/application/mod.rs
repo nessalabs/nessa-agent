@@ -51,7 +51,10 @@
 //! (`deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit_record`):
 //!
 //! ```text
-//!   delete ─▶ repository.record_deletion ─▶ stop_slot ─▶ SessionStorage::open_existing
+//!   delete ─▶ repository.record_deletion ─▶ FenceCapture::capture
+//!                                              │ the fence stays if this is refused
+//!                                              ▼
+//!                                          stop_slot ─▶ SessionStorage::open_existing
 //!                                                           │ (read provider session)
 //!                          ProviderSessionErasers ◀─────────┘
 //!                                   │ settled
@@ -145,6 +148,7 @@ mod drive_tools;
 mod environment;
 mod error;
 mod error_code;
+mod fence_capture;
 mod live_changes;
 mod locks;
 mod mcp_apps;
@@ -209,6 +213,7 @@ pub(crate) use environment::{
 };
 pub use error::{ConversationError, DeletionFailures, StopFailure};
 pub use error_code::error_code;
+pub use fence_capture::{FenceCapture, FenceCaptureError};
 pub use live_changes::{LiveChangePublisher, LiveChanges};
 pub use mcp_apps::{
     ContextDrop, DroppedContexts, HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase,

@@ -1,8 +1,7 @@
 use crate::application::agent_execution::sessions::{
     CommittedCompleteness, CommittedFreshness, CommittedSession, CommittedStatus, SessionLoad,
-    SessionLoadState, SessionSaveBackend, SessionSaveGeneration, SessionSaveReceipt,
-    SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
-    StorageFuture,
+    SessionLoadState, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit, SessionSnapshot,
+    SessionStorage, SessionStorageLease, StorageError, StorageFuture,
 };
 use crate::domain::agent_execution::sessions::SessionId;
 use sha2::{Digest, Sha256};
@@ -35,14 +34,8 @@ impl Default for Entry {
     }
 }
 impl Entry {
-    fn binding(&self) -> SessionSaveGeneration {
-        SessionSaveGeneration::new(
-            SessionSaveBackend::Snapshot {
-                incarnation: self.incarnation,
-            },
-            self.revision,
-            self.revision,
-        )
+    fn binding(&self, id: &SessionId) -> SessionSaveGeneration {
+        SessionSaveGeneration::snapshot(id.clone(), self.incarnation, self.revision)
     }
 }
 
@@ -139,7 +132,7 @@ impl SessionStorageLease for MemoryStore {
             let entry = entries.get(self.id.as_str()).expect("leased entry exists");
             Ok(SessionLoad::new(
                 entry.snapshot.clone(),
-                entry.binding(),
+                entry.binding(&self.id),
                 SessionLoadState::Published,
             ))
         })
@@ -162,7 +155,7 @@ impl SessionStorageLease for MemoryStore {
                 .receipt
                 .as_ref()
                 .is_some_and(|receipt| receipt.binding() == &binding);
-            if !retry && binding != entry.binding() {
+            if !retry && binding != entry.binding(&self.id) {
                 return Err(StorageError::IdentityMismatch);
             }
             if snapshot.id != self.id {
@@ -197,8 +190,12 @@ impl SessionStorageLease for MemoryStore {
             }
             entry.snapshot = Some(snapshot);
             entry.revision = revision;
-            let receipt =
-                SessionSaveReceipt::new(binding, entry.binding(), units.len() as u64, digest)?;
+            let receipt = SessionSaveReceipt::new(
+                binding,
+                entry.binding(&self.id),
+                units.len() as u64,
+                digest,
+            )?;
             entry.units = units;
             entry.receipt = Some(receipt.clone());
             Ok(receipt)

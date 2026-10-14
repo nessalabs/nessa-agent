@@ -25,6 +25,7 @@ use nessa_auth::{
 use nessa_client_core::pairing::NativeEnrollmentClient;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::pairing::wire::NativePairingStatus;
+use nessa_server::conversation::application::{FenceCapture, FenceCaptureError};
 use nessa_server::{
     agents::application::{AgentProbe, AgentProbeEvidence},
     app::dependencies::RuntimeDependencies,
@@ -35,7 +36,10 @@ use nessa_server::{
 use serde_json::{json, Value};
 use std::{
     net::{SocketAddr, TcpStream},
-    sync::{atomic::Ordering, Arc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 
 struct NoAgents;
@@ -594,5 +598,51 @@ async fn owner_route_reports_activation_stops_on_the_wire() {
         client.shutdown().await;
         stop.send(()).unwrap();
         listener.await.unwrap().unwrap();
+    }
+}
+
+/// A pairing cancellation commits a credential revocation inside Auth, which
+/// does not call the credential admin. The inventory is asked after that
+/// commit. A capture that fails leaves the cancellation. A denial does not
+/// ask.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pairing_cancel_records_the_inventory_and_a_failure_still_cancels() {
+    let fixture = Fixture::new().await;
+    let asked = Arc::new(AtomicBool::new(false));
+    fixture.gateway.bind_fence_capture(Arc::new(FlagCapture {
+        asked: asked.clone(),
+    }));
+    let address = serve(&fixture, true).await;
+    let token = fixture.owner_token.clone();
+    blocking(|| {
+        let mut owner = ProductClient::connect(address, &token);
+        let created = owner.ok("pairing.create", json!({}));
+        let id = invitation(&created["status"]);
+        let cancelled = owner.ok("pairing.cancel", json!({"invitationId": id}));
+        assert_eq!(cancelled["phase"], "terminal", "{cancelled}");
+        assert_eq!(cancelled["terminal"]["cause"], "cancelled", "{cancelled}");
+    });
+    assert!(asked.load(Ordering::SeqCst));
+    asked.store(false, Ordering::SeqCst);
+    blocking(|| {
+        let mut owner = ProductClient::connect(address, &token);
+        let created = owner.ok("pairing.create", json!({}));
+        let id = invitation(&created["status"]);
+        let denied = owner.ok("pairing.deny", json!({"invitationId": id}));
+        assert_eq!(denied["phase"], "terminal", "{denied}");
+        assert_eq!(denied["terminal"]["cause"], "denied", "{denied}");
+    });
+    assert!(!asked.load(Ordering::SeqCst));
+}
+
+struct FlagCapture {
+    asked: Arc<AtomicBool>,
+}
+
+#[async_trait::async_trait]
+impl FenceCapture for FlagCapture {
+    async fn capture(&self) -> Result<(), FenceCaptureError> {
+        self.asked.store(true, Ordering::SeqCst);
+        Err(FenceCaptureError::NotStored)
     }
 }

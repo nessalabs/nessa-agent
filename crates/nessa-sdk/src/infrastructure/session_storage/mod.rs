@@ -1,5 +1,6 @@
 //! Storage adapters retain session history behind exclusive writer leases.
-//! Memory storage keeps snapshots for its shared lifetime. Record storage
+//! Memory storage keeps snapshots for its shared lifetime. Its save binding names
+//! the leased session alongside the reset incarnation and revision. Record storage
 //! appends unpublished semantic units and save completions to one SQLite runtime.
 //! `save_group` owns their shared lineage/publication codec; replay retains the
 //! private continuation and exposes only completed saves. The

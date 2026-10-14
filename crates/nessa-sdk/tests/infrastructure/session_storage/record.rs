@@ -13,7 +13,8 @@ use nessa_sdk::{
         providers::ProviderIdentity,
         sessions::{
             ChangeWatchState, CommittedChangeWatch, SessionChange, SessionLoadState,
-            SessionSaveGeneration, SessionSaveUnit, SessionSnapshot, SessionStorage, StorageError,
+            SessionSaveBackend, SessionSaveGeneration, SessionSaveUnit, SessionSnapshot,
+            SessionStorage, StorageError,
         },
     },
     domain::agent_execution::sessions::{ExecutionSessionId, ProviderContext, SessionId},
@@ -153,7 +154,14 @@ async fn load_binds_fresh_reopened_and_reset_writers_to_actual_stream_progress()
     let (opened, initial) = opened(&id);
     let original = lease.load().await.unwrap().binding().clone();
     assert_eq!((original.base(), original.generation()), (0, 0));
-    let skipped = SessionSaveGeneration::new(original.backend().clone(), original.base(), 1);
+    let SessionSaveBackend::Record {
+        stream,
+        incarnation,
+    } = original.backend()
+    else {
+        panic!("record binding")
+    };
+    let skipped = SessionSaveGeneration::record(stream.clone(), *incarnation, original.base(), 1);
     assert!(matches!(
         lease
             .save_changes(
@@ -189,8 +197,16 @@ async fn load_binds_fresh_reopened_and_reset_writers_to_actual_stream_progress()
         provider_context: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
         ..initial.clone()
     };
-    let skipped = SessionSaveGeneration::new(
-        restored_binding.backend().clone(),
+    let SessionSaveBackend::Record {
+        stream,
+        incarnation,
+    } = restored_binding.backend()
+    else {
+        panic!("record binding")
+    };
+    let skipped = SessionSaveGeneration::record(
+        stream.clone(),
+        *incarnation,
         restored_binding.base(),
         restored_binding.generation() + 1,
     );

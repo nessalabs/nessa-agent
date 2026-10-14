@@ -154,7 +154,20 @@ new file when there was none, and then returns the error.
 the log they read. The one that lost reconciles again, so a conversation
 or credential fence the winner stored stays. `a_stale_log_is_reconciled_again`,
 `a_stale_writer_does_not_replace_the_log`, and
-`concurrent_stores_keep_one_complete_log`.
+`concurrent_stores_keep_one_complete_log`. Each attempt loads the log and
+then reads the fence sources again. A share-grant revoke stored before
+that load stays when the new read still names it.
+`a_concurrent_revoke_is_not_dropped_by_a_stale_fence_snapshot`.
+
+A command that has already committed a fence records it without taking
+admission and without publishing a bundle. That command is a deletion, an
+unshare, a credential revocation, or a pairing cancellation. The gateway
+asks Cedar and stores that decision, allow or deny, before it reads the
+log. An audit that cannot be stored does not read the log. A refusal or a
+failed append leaves the fence and the previous log, and the command's
+result is unchanged. A device, peer, environment peer, or worker is
+refused and the inventory log is not written. A person or the gateway's
+own surface may capture when they ask.
 
 Either fence source failing leaves the log
 unwritten, including when the other source already has rows. A metadata
@@ -179,4 +192,7 @@ sequences 1, 2, 3, … and are still matched by key.
 | Append fails | The fence is already committed | The failure is returned. The previous inventory and the fence stay. `a_failed_inventory_append_leaves_the_fence_and_the_log` |
 | Directory sync fails after rename | The new file is already at the inventory path | The previous bytes are restored, or the new file is removed when the path was absent, before the error is returned. `a_directory_sync_failure_restores_the_previous_log`, `a_directory_sync_failure_removes_a_log_that_was_absent` |
 | Two inventory writers | Each read the log, then both store | One store lands a complete log. The other is refused and reconciles again, so a conversation or credential fence already stored stays. `concurrent_stores_keep_one_complete_log`, `a_stale_writer_does_not_replace_the_log`, `a_stale_log_is_reconciled_again` |
+| Concurrent revoke | Another capture stored a share-grant revoke before this one loads | This attempt loads that log, then reads fences again, and keeps the revoke when the new read still names it. `a_concurrent_revoke_is_not_dropped_by_a_stale_fence_snapshot` |
 | Capture during export | During the brief hold, after the append | The manifest's deletion-inventory watermark is the log after that append. `the_cut_includes_the_deletion_inventory` |
+| Command, then inventory | After a deletion, unshare, credential revocation, or pairing cancellation commits | The gateway asks Cedar, stores that decision, then reconciles. It does not take admission and does not publish a bundle. A refusal or a failed append leaves the fence and the previous log. The command's result is unchanged. A capture failure after `pairing.cancel` leaves the cancellation. A worker enrollment names an `environment.serve` credential as `worker`; a device or peer id in that file stays what the registry said. A damaged enrollment commits nothing from that read. `a_failed_inventory_capture_leaves_the_deletion`, `a_revoked_worker_credential_is_inventoried`, `a_damaged_worker_enrollment_does_not_commit_fences`, `an_unshare_reconciles_the_revoked_grant`, `pairing_cancel_records_the_inventory_and_a_failure_still_cancels` |
+| Who may record | Before the log is read | Cedar permits the gateway to record a committed fence, and a person or the gateway's own surface to capture when they ask. A device, peer, environment peer, or worker is refused. The allow or the deny is stored first. A failed decision store does not read the log, and a refusal does not create it. `the_gateway_may_record_a_committed_fence`, `a_device_peer_environment_or_worker_may_not_capture`, `a_denied_capture_does_not_write`, `the_inventory_decision_is_stored_before_the_log`, `a_failed_decision_audit_does_not_write` |

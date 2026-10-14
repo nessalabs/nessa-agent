@@ -10,10 +10,19 @@
 //!             hold drops
 //!               ├── PinnedStore.read         records from those snapshots
 //!               └── ManifestPublisher.put    only after the mac succeeds
+//!
+//! committed fence ──▶ FenceCapture::capture
+//!                       ├── Cedar: who may write
+//!                       ├── decision audit
+//!                       └── DeletionLog.append    no admission, no bundle
 //! ```
 //!
-//! Arrows are calls one capture makes, in order. The domain decides what a
-//! cut may contain. The application runs that order. Infrastructure reads
+//! Arrows are calls, in order. The export path is one capture. The fence
+//! path is a deletion, unshare, credential revocation, or pairing
+//! cancellation that has already committed: it asks Cedar, stores that
+//! decision, then reconciles the log. It does not take admission and does
+//! not publish a bundle. The domain decides what a cut
+//! may contain. The application runs that order. Infrastructure reads
 //! stores and writes the bundle. Export takes admission and never a per-grant
 //! gate. Restore and quarantine are not here.
 //!
@@ -30,6 +39,10 @@ mod export_tests;
 #[cfg(test)]
 #[path = "../../tests/backup/deletion.rs"]
 mod deletion_tests;
+
+#[cfg(test)]
+#[path = "../../tests/backup/capture.rs"]
+mod capture_tests;
 
 #[cfg(test)]
 #[path = "../../tests/backup/files.rs"]

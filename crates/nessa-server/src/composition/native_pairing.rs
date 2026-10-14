@@ -22,6 +22,7 @@
 //! and S7, S8, D5, D6 ("Activation and credential delivery"), and PR1, PR13
 //! ("Protected reads over the native channel").
 use super::runtime_config::{NativeConfig, RelayAddress};
+use crate::conversation::application::FenceCapture;
 use crate::conversation::infrastructure::LocalReceiverAuthority;
 use crate::core::{NativeFailure, NativeShutdownFailure, RunError};
 use crate::device_pairing::infrastructure::{
@@ -111,6 +112,13 @@ pub(super) struct PreparedNative {
 }
 
 impl PreparedNative {
+    /// Record a pairing cancellation in the deletion inventory. The inventory
+    /// is opened before `prepare`, and a cancellation commits inside Auth,
+    /// which does not call the credential admin.
+    pub(super) fn bind_fence_capture(&self, capture: Arc<dyn FenceCapture>) {
+        self.gateway.bind_fence_capture(capture);
+    }
+
     /// Serve `openEnvironment` with `environments`.
     pub(super) fn with_environments(mut self, environments: Arc<dyn EnvironmentPeers>) -> Self {
         self.environments = Some(environments);

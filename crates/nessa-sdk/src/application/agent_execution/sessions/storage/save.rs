@@ -16,8 +16,16 @@ pub enum SessionSaveBackend {
         /// Actual event-store incarnation, invalidated by Reset.
         incarnation: [u8; 16],
     },
-    /// A snapshot adapter's own incarnation; positions are snapshot revisions.
+    /// A conversation and the snapshot adapter's reset incarnation; positions
+    /// are snapshot revisions. The session remains part of every save receipt.
+    /// Omitting it is a compile error:
+    /// ```compile_fail
+    /// use nessa_sdk::application::agent_execution::sessions::SessionSaveBackend;
+    /// let _ = SessionSaveBackend::Snapshot { incarnation: [0; 16] };
+    /// ```
     Snapshot {
+        /// Conversation whose snapshot and save attempts this binding names.
+        session: SessionId,
         /// Minted by the snapshot owner, replaced on erasure.
         incarnation: [u8; 16],
     },
@@ -34,34 +42,87 @@ mod tests;
 /// Retain the original value on cancellation or a lost reply; equal changes
 /// do not establish identity. Construction is for storage adapters, not callers
 /// guessing a first or next generation.
+/// Snapshot construction accepts one revision, never two counters:
+/// ```compile_fail
+/// use nessa_sdk::application::agent_execution::sessions::SessionSaveGeneration;
+/// use nessa_sdk::domain::agent_execution::sessions::SessionId;
+/// let _ = SessionSaveGeneration::snapshot(SessionId::new("chat").unwrap(), [0;16], 4, 3);
+/// ```
+/// The former generic constructor cannot bypass backend-specific construction:
+/// ```compile_fail
+/// use nessa_sdk::application::agent_execution::sessions::{SessionSaveBackend, SessionSaveGeneration};
+/// use nessa_sdk::domain::agent_execution::sessions::SessionId;
+/// let backend = SessionSaveBackend::Snapshot { session: SessionId::new("chat").unwrap(), incarnation: [0;16] };
+/// let _ = SessionSaveGeneration::new(backend, 4, 3);
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionSaveGeneration {
     backend: SessionSaveBackend,
-    base: u64,
-    generation: u64,
+    counters: SaveCounters,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SaveCounters {
+    Record { base: u64, generation: u64 },
+    Snapshot { revision: u64 },
 }
 impl SessionSaveGeneration {
-    /// Construct a binding from the adapter's actual current state.
-    /// `base` is its published record position or snapshot revision;
-    /// `generation` is its durable save ordinal (snapshot adapters use revisions).
-    pub fn new(backend: SessionSaveBackend, base: u64, generation: u64) -> Self {
+    /// Bind an actual record stream's published physical `base` and durable save
+    /// ordinal `generation`. These are distinct facts and need not be equal.
+    /// `stream` and `incarnation` identify the adapter's actual stream/reset.
+    /// This performs no I/O and does not confirm persistence or authorize work.
+    /// ```
+    /// use nessa_sdk::application::agent_execution::sessions::SessionSaveGeneration;
+    /// use nessa_sync::replication::domain::Id;
+    /// let binding = SessionSaveGeneration::record(Id::new("chat").unwrap(), [1;16], 8, 3);
+    /// assert_eq!((binding.base(), binding.generation()), (8, 3));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn record(stream: Id, incarnation: [u8; 16], base: u64, generation: u64) -> Self {
         Self {
-            backend,
-            base,
-            generation,
+            backend: SessionSaveBackend::Record {
+                stream,
+                incarnation,
+            },
+            counters: SaveCounters::Record { base, generation },
+        }
+    }
+    /// Bind `session` and the adapter's actual reset `incarnation` to its one
+    /// snapshot `revision`. Both base and generation derive from that value.
+    /// This performs no I/O; the lease still checks its current binding before
+    /// accepting work. Retaining or cloning this value reserves no resources.
+    /// ```
+    /// use nessa_sdk::application::agent_execution::sessions::SessionSaveGeneration;
+    /// use nessa_sdk::domain::agent_execution::sessions::SessionId;
+    /// let binding = SessionSaveGeneration::snapshot(SessionId::new("chat")?, [1;16], 4);
+    /// assert_eq!(binding.base(), binding.generation());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn snapshot(session: SessionId, incarnation: [u8; 16], revision: u64) -> Self {
+        Self {
+            backend: SessionSaveBackend::Snapshot {
+                session,
+                incarnation,
+            },
+            counters: SaveCounters::Snapshot { revision },
         }
     }
     /// Backend identity that must agree with the receiving lease.
     pub fn backend(&self) -> &SessionSaveBackend {
         &self.backend
     }
-    /// Published base at which this save began.
+    /// Published record position or the snapshot's single revision.
     pub fn base(&self) -> u64 {
-        self.base
+        match self.counters {
+            SaveCounters::Record { base, .. } => base,
+            SaveCounters::Snapshot { revision } => revision,
+        }
     }
-    /// Original save ordinal within the backend incarnation.
+    /// Durable record save ordinal or the snapshot's single revision.
     pub fn generation(&self) -> u64 {
-        self.generation
+        match self.counters {
+            SaveCounters::Record { generation, .. } => generation,
+            SaveCounters::Snapshot { revision } => revision,
+        }
     }
 }
 
@@ -204,8 +265,11 @@ impl SessionLoad {
         self,
         id: &SessionId,
     ) -> Result<(Option<SessionSnapshot>, SessionSaveGeneration), StorageError> {
-        if matches!(self.binding.backend(), SessionSaveBackend::Record { stream, .. } if stream.as_str() != id.as_str())
-        {
+        let matches_session = match self.binding.backend() {
+            SessionSaveBackend::Record { stream, .. } => stream.as_str() == id.as_str(),
+            SessionSaveBackend::Snapshot { session, .. } => session == id,
+        };
+        if !matches_session {
             if let Some(snapshot) = self.snapshot {
                 snapshot.discard_rejected_errors();
             }
@@ -262,9 +326,8 @@ impl SessionSaveReceipt {
             SessionSaveBackend::Record { .. } => {
                 binding.generation().checked_add(1) == Some(next.generation())
             }
-            SessionSaveBackend::Snapshot { .. } => {
-                binding.base() == binding.generation() && next.base() == next.generation()
-            }
+            // Snapshot counters derive from its single stored revision.
+            SessionSaveBackend::Snapshot { .. } => true,
         };
         if units == 0
             || binding.backend() != next.backend()

@@ -1377,7 +1377,7 @@ and which stores it names. `application/` holds the conversation service's
 admission lock only while it pins each store and appends fences already
 committed, then releases it and reads, macs, and publishes from those
 snapshots. `infrastructure/` reads the namespace, including `device/outbox/` and
-`environment/outbox/` under each directory's `outbox.lock`, within the files and bytes one lease may keep, and writes the bundle. The
+`environment/outbox/` under each directory's `outbox.lock`, within the files and bytes one lease may keep, and writes the bundle. After a deletion, unshare, credential revocation, or pairing cancellation commits, the gateway records that fence through `infrastructure/cedar` without taking admission and without publishing a bundle. The Cedar decision is appended to `backup/inventory-decisions.jsonl` before the log is written. The
 mac key stays beside the deletion inventory and is not part of the bundle.
 Restore and quarantine are not in this module.
 

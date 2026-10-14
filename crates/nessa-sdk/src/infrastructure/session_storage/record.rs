@@ -652,7 +652,6 @@ mod tests {
         stream_fact::{self, FramedFact},
     };
     use super::*;
-    use crate::application::agent_execution::sessions::ChangeWatchState;
     use crate::{
         application::agent_execution::{
             agents::AgentError,
@@ -661,8 +660,9 @@ mod tests {
             providers::{ExecutionReport, ProviderIdentity, ProviderSessionState},
             sessions::{
                 records::{self, FactKey, FactKind},
-                InvocationRecord, InvocationSchedulingEvent, ProviderContext, QueueHistoryRecord,
-                SessionChange, SessionLoadState, SubmissionAcknowledgement,
+                ChangeWatchState, InvocationRecord, InvocationSchedulingEvent, ProviderContext,
+                QueueHistoryRecord, SessionChange, SessionLoadState, SessionSaveBackend,
+                SubmissionAcknowledgement,
             },
             tools::ToolReviewInput,
         },
@@ -1233,8 +1233,16 @@ mod tests {
         assert_eq!(unfinished.snapshot(), Some(&prior));
         assert_eq!(unfinished.binding(), &original);
         assert_eq!(rows(&root), 3, "A is physically sealed but not published");
-        let skipped = SessionSaveGeneration::new(
-            original.backend().clone(),
+        let SessionSaveBackend::Record {
+            stream,
+            incarnation,
+        } = original.backend()
+        else {
+            panic!("record binding")
+        };
+        let skipped = SessionSaveGeneration::record(
+            stream.clone(),
+            *incarnation,
             original.base(),
             original.generation() + 1,
         );

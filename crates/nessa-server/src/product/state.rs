@@ -9,9 +9,9 @@ use crate::attachments::{
 };
 use crate::conversation::application::{
     CatalogueReadSource, ConversationAccessPolicyEvaluator, ConversationRepository,
-    ConversationService, McpAppAudit, OwnerPhonePolicyEvaluator, OwnerPhoneReceiverAuthority,
-    ReceiverAuthority, RecordReadSource, ShareGrants, WatchCatalogue, WatchNamespaces,
-    WatchRecords,
+    ConversationService, FenceCapture, McpAppAudit, OwnerPhonePolicyEvaluator,
+    OwnerPhoneReceiverAuthority, ReceiverAuthority, RecordReadSource, ShareGrants, WatchCatalogue,
+    WatchNamespaces, WatchRecords,
 };
 use crate::conversation::infrastructure::UuidWatchNamespaces;
 pub(crate) use crate::core::limit_log::note_limit;
@@ -152,6 +152,9 @@ pub struct ProductRouteState {
     /// composed, and then that route answers every ticket `404`.
     pub(crate) resource_tickets: Option<(Arc<ResourceTicketStore>, Arc<dyn McpAppAudit>)>,
     pub(crate) admin: Option<Arc<dyn CredentialAdmin>>,
+    /// Reconciles the deletion inventory after `conversation.unshare`.
+    /// Absent, the grant is still revoked.
+    pub(crate) fence_capture: Option<Arc<dyn FenceCapture>>,
     /// What `mcpServers.list`, `.save`, `.remove` and `.inspect` manage;
     /// `None` where this gateway holds no live MCP server set — not Unix, no
     /// agents configured, or MCP off this run because its relay socket could
@@ -300,6 +303,7 @@ impl ProductRouteState {
             owner_phone_policy: dependencies.owner_phone_policy,
             owner_phone_receivers: dependencies.owner_phone_receivers,
             admin: None,
+            fence_capture: None,
             mcp_server_settings: None,
             mcp_authorization: None,
             pairing: None,
@@ -353,6 +357,13 @@ impl ProductRouteState {
     /// Register credential lifecycle operations; missing administration fails closed.
     pub fn with_admin(mut self, admin: Arc<dyn CredentialAdmin>) -> Self {
         self.admin = Some(admin);
+        self
+    }
+
+    /// Record share revocations in the deletion inventory. Without it, an
+    /// unshare still revokes the grant.
+    pub fn with_fence_capture(mut self, capture: Arc<dyn FenceCapture>) -> Self {
+        self.fence_capture = Some(capture);
         self
     }
 

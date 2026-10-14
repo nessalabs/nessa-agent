@@ -670,6 +670,7 @@ async fn an_environment_is_paired_but_never_shared_with() {
         access: fixture.registry.as_ref(),
         gateway: &gateway(),
         policy: policy.as_ref(),
+        inventory: None,
     };
     let caller = ConversationCaller {
         organization_id: fixture.session.context().organization_id().clone(),
@@ -741,6 +742,7 @@ async fn k3_a_worker_reads_nothing_on_the_gateway_it_serves() {
         access: fixture.registry.as_ref(),
         gateway: &gateway(),
         policy: policy.as_ref(),
+        inventory: None,
     };
     let caller = ConversationCaller {
         organization_id: fixture.session.context().organization_id().clone(),
@@ -904,6 +906,7 @@ async fn a_peer_reads_only_what_it_was_granted() {
             access,
             gateway: &gateway(),
             policy: policy.as_ref(),
+            inventory: None,
         };
         assert!(matches!(
             shares
@@ -929,6 +932,7 @@ async fn a_peer_reads_only_what_it_was_granted() {
         access: fixture.registry.as_ref(),
         gateway: &gateway(),
         policy: policy.as_ref(),
+        inventory: None,
     };
     assert!(
         shares

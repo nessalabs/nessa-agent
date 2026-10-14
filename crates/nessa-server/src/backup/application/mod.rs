@@ -5,10 +5,12 @@ mod deletion_inventory;
 mod export;
 mod ports;
 
-pub use deletion_inventory::{capture_fences, InventoryFailure};
+pub use deletion_inventory::{capture_fences, capture_inventory, CaptureError, InventoryFailure};
 pub use export::{capture_export, ExportFailure, ExportRequest};
 pub use ports::{
-    AdmissionFailure, AdmissionLease, Authenticator, CopiedStore, DeletionLogStore, ExportClock,
-    ExportSource, FenceSource, LogStoreError, MacError, MacKey, ManifestPublisher,
+    AdmissionFailure, AdmissionLease, Authenticator, CopiedStore, DecisionAuditError,
+    DeletionLogStore, ExportClock, ExportSource, FenceSource, InventoryAction,
+    InventoryCapturePolicyEvaluator, InventoryCause, InventoryDecision, InventoryDecisionAudit,
+    InventoryDenial, InventoryFacts, LogStoreError, MacError, MacKey, ManifestPublisher,
     MutationAdmission, PinnedStore, PublishedRecord,
 };

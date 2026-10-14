@@ -62,14 +62,8 @@ impl Default for SnapshotSaveState {
     }
 }
 impl SnapshotSaveState {
-    fn binding(&self) -> SessionSaveGeneration {
-        SessionSaveGeneration::new(
-            SessionSaveBackend::Snapshot {
-                incarnation: self.incarnation,
-            },
-            self.revision,
-            self.revision,
-        )
+    fn binding(&self, id: &SessionId) -> SessionSaveGeneration {
+        SessionSaveGeneration::snapshot(id.clone(), self.incarnation, self.revision)
     }
 }
 impl SavedState {
@@ -92,13 +86,8 @@ impl SavedState {
             self.save.revision.checked_add(1).ok_or_else(|| {
                 StorageError::Corrupt("fixture snapshot revision exhausted".into())
             })?;
-        let next = SessionSaveGeneration::new(
-            SessionSaveBackend::Snapshot {
-                incarnation: self.save.incarnation,
-            },
-            revision,
-            revision,
-        );
+        let next =
+            SessionSaveGeneration::snapshot(snapshot.id.clone(), self.save.incarnation, revision);
         let count = u64::try_from(units.len())
             .map_err(|_| StorageError::Corrupt("fixture unit count exhausted".into()))?;
         let receipt = SessionSaveReceipt::new(binding, next, count, digest)?;
@@ -143,7 +132,7 @@ impl SessionStorageLease for MemoryStore {
             let state = self.0.lock().unwrap();
             Ok(SessionLoad::new(
                 state.snapshot.clone(),
-                state.save.binding(),
+                state.save.binding(&self.1),
                 SessionLoadState::Published,
             ))
         })
@@ -162,7 +151,7 @@ impl SessionStorageLease for MemoryStore {
                     .receipt
                     .as_ref()
                     .is_some_and(|receipt| receipt.binding() == &binding);
-                if snapshot.id != self.1 || (!retry && binding != state.save.binding()) {
+                if snapshot.id != self.1 || (!retry && binding != state.save.binding(&self.1)) {
                     return Err(StorageError::IdentityMismatch);
                 }
                 let base = if retry {

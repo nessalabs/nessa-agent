@@ -1073,8 +1073,8 @@ mod tests {
             sessions::{
                 records::FactKey, CommittedCompleteness, InvocationCancellationEvent,
                 InvocationRecord, InvocationSchedulingEvent, QueueHistoryRecord, SessionChange,
-                SessionSaveBackend, SessionSaveGeneration, StorageShutdownFailure,
-                SubmissionAcknowledgement, SNAPSHOT_ACCOUNTING_CALLS, VALIDATION_CALLS,
+                SessionSaveGeneration, StorageShutdownFailure, SubmissionAcknowledgement,
+                SNAPSHOT_ACCOUNTING_CALLS, VALIDATION_CALLS,
             },
             tools::ToolReviewInput,
         },
@@ -1189,13 +1189,11 @@ mod tests {
 
     fn framed_save(payload: &[u8], base: u64, generation: u64, start: u64) -> Vec<NewEvent> {
         let scope = scope();
-        let binding = SessionSaveGeneration::new(
-            SessionSaveBackend::Record {
-                stream: scope.stream().clone(),
-                incarnation: *Uuid::parse_str(scope.incarnation().as_str())
-                    .unwrap()
-                    .as_bytes(),
-            },
+        let binding = SessionSaveGeneration::record(
+            scope.stream().clone(),
+            *Uuid::parse_str(scope.incarnation().as_str())
+                .unwrap()
+                .as_bytes(),
             base,
             generation,
         );
@@ -2658,13 +2656,11 @@ mod tests {
         generation: u64,
         complete: bool,
     ) -> Vec<Record> {
-        let binding = SessionSaveGeneration::new(
-            SessionSaveBackend::Record {
-                stream: fold.scope.stream().clone(),
-                incarnation: *Uuid::parse_str(fold.scope.incarnation().as_str())
-                    .unwrap()
-                    .as_bytes(),
-            },
+        let binding = SessionSaveGeneration::record(
+            fold.scope.stream().clone(),
+            *Uuid::parse_str(fold.scope.incarnation().as_str())
+                .unwrap()
+                .as_bytes(),
             fold.applied(),
             generation,
         );
@@ -3350,13 +3346,11 @@ mod tests {
         hole: u64,
     ) -> (Vec<Record>, Vec<Record>) {
         let payload = snapshot::encode_semantic_batch(changes).unwrap();
-        let binding = SessionSaveGeneration::new(
-            SessionSaveBackend::Record {
-                stream: fold.scope.stream().clone(),
-                incarnation: *Uuid::parse_str(fold.scope.incarnation().as_str())
-                    .unwrap()
-                    .as_bytes(),
-            },
+        let binding = SessionSaveGeneration::record(
+            fold.scope.stream().clone(),
+            *Uuid::parse_str(fold.scope.incarnation().as_str())
+                .unwrap()
+                .as_bytes(),
             fold.applied(),
             generation,
         );

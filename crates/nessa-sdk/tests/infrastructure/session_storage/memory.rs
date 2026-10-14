@@ -4,8 +4,8 @@ use nessa_sdk::{
     application::agent_execution::{
         providers::ProviderIdentity,
         sessions::{
-            ProviderContext, SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
-            StorageError,
+            ProviderContext, SessionChange, SessionLoad, SessionLoadState, SessionSaveUnit,
+            SessionSnapshot, SessionStorage, StorageError,
         },
     },
     domain::agent_execution::sessions::{ExecutionSessionId, SessionId},
@@ -210,4 +210,44 @@ async fn actual_memory_plan_preflight_refuses_before_replacing_published_evidenc
         .await
         .unwrap();
     assert_eq!(lease.load().await.unwrap().snapshot(), Some(&extended));
+}
+
+#[tokio::test]
+async fn reloaded_snapshot_refuses_a_save_binding_from_another_conversation() {
+    for populated in [false, true] {
+        let storage = InMemoryStorage::new();
+        let a = SessionId::new("conversation-a").unwrap();
+        let b = SessionId::new("conversation-b").unwrap();
+        let lease_a = storage.open(a.clone()).await.unwrap();
+        let lease_b = storage.open(b.clone()).await.unwrap();
+        if populated {
+            for (id, lease) in [(&a, &lease_a), (&b, &lease_b)] {
+                let (unit, snapshot) = opening(id, "provider");
+                lease
+                    .save_changes(
+                        lease.load().await.unwrap().binding().clone(),
+                        snapshot,
+                        vec![unit],
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        let own = lease_a.load().await.unwrap();
+        let foreign = lease_b.load().await.unwrap();
+        let (saved, binding) = own.clone().into_published(&a).unwrap();
+        assert_eq!(saved.as_ref(), own.snapshot());
+        assert_eq!(&binding, own.binding());
+        let mixed = SessionLoad::new(
+            own.snapshot().cloned(),
+            foreign.binding().clone(),
+            SessionLoadState::Published,
+        );
+        assert!(matches!(
+            mixed.into_published(&a),
+            Err(StorageError::IdentityMismatch)
+        ));
+        assert_eq!(lease_a.load().await.unwrap().snapshot(), own.snapshot());
+        assert_eq!(lease_b.load().await.unwrap().snapshot(), foreign.snapshot());
+    }
 }
