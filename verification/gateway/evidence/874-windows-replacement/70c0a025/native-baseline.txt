@@ -1,0 +1,7 @@
+Native baseline 57463764bea48ba331e2028d4cc7b1b8b14dcc6d
+Windows run38613845622 job116023819318
+replacement_preserves_a_read_only_destination_and_succeeds_after_permission_restore ... ok
+replacement_refuses_a_reader_without_delete_sharing_then_succeeds_after_release ... ok
+replacement_keeps_a_delete_sharing_reader_on_the_previous_record ... FAILED
+replace while a private reader permits deletion: Os { code: 5, kind: PermissionDenied, message: "Access is denied." }
+2 passed; 1 failed
