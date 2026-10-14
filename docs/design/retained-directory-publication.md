@@ -11,8 +11,11 @@ acknowledgement. `PublishedPrivateFile` retains the exact destination, native
 identity and open payload handle after rename. Windows retains its private
 non-delete-sharing directory chain and renames through the original DELETE
 reservation handle using one `FILE_RENAME_INFO` encoder. `publish_new` selects
-exclusive publication; `replace` selects replacement. No path fallback or POSIX
-sharing override is used. Tests are in the storage owner and retained-directory
+exclusive publication; `replace` selects `FileRenameInfoEx` with POSIX semantics
+through the same encoder as path-based replacement (#874). Existing delete-sharing
+readers keep the old file while new opens observe the replacement. Mutation-capable
+handles that omit delete sharing still pin their names; no ignore-read-only flag
+or path fallback is used. Tests are in the storage owner and retained-directory
 integration suite, indexed by the crate README.
 
 The reservation carries two handles: original rename/cleanup authority and writable
@@ -51,6 +54,7 @@ owned by #264, outside this shared-storage slice.
 | W16 | replace receives that foreign payload while original destination exists | Same pre-effect refusal; original destination identity/bytes and foreign file remain unchanged; original reservation cleanup only | `replacement_refuses_foreign_writable_payload_before_effect` |
 | W17 | Ordinary writes or public slot replacement with try_clone of SAME original payload | Both operations remain accepted; payload/native authority/published destination all identify the same object | `same_original_writable_clone_remains_accepted_for_both_operations`; ordinary replacement/publication tests |
 | W18 | Original reservation name changed before publication, with foreign payload also substituted | Original name check keeps precedence: ValidateReservation; independently retained cleanup failure; foreign same-name witness/destination remain untouched | `changed_origin_keeps_precedence_with_substituted_payload` (Unix namespace mutation); Windows retains original name-pinning tests |
+| W19 | Destination has an ordinary delete-sharing reader during replacement (#874) | Publish reserved identity while that reader retains old bytes; new opens see complete replacement | `retained_replacement_keeps_a_reader_on_the_previous_record`; path-based `replacement_keeps_a_delete_sharing_reader_on_the_previous_record`; endpoint `publication_replaces_an_endpoint_while_a_discovery_reader_retains_the_old_record` |
 
 
 Windows directory and mutation-capable handles pin names while held. A locked

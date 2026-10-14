@@ -19,7 +19,12 @@ use windows_sys::Win32::{
     Foundation::*,
     Security::{Authorization::*, *},
     Storage::FileSystem::*,
-    System::Threading::*,
+    System::{
+        Threading::*,
+        WindowsProgramming::{
+            FILE_RENAME_FLAG_POSIX_SEMANTICS, FILE_RENAME_FLAG_REPLACE_IF_EXISTS,
+        },
+    },
 };
 mod retained_directory;
 pub(crate) use retained_directory::{
@@ -403,7 +408,8 @@ pub fn open_temporary_beneath(root: &Path, relative: &Path) -> io::Result<File> 
     open_temporary(&root.join(relative))
 }
 /// Windows does not expose Unix directory fsync semantics. Files are flushed
-/// before publication; replacement requests the platform's write-through move.
+/// by callers before path-based publication; retained publication also flushes
+/// its payload after handle rename.
 pub fn sync_directory(_: &Path) -> io::Result<()> {
     Ok(())
 }
@@ -478,7 +484,14 @@ fn rename_file(file: &File, to: &Path, replace: bool) -> io::Result<()> {
     let mut buffer = vec![0usize; words];
     let rename = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
     unsafe {
-        (*rename).Anonymous.ReplaceIfExists = replace;
+        // #874's delete-sharing reader regression reproduces OS 5 with legacy
+        // replacement. POSIX rename retains that reader's old object while the
+        // name changes; it does not request an override of read-only attributes.
+        (*rename).Anonymous.Flags = if replace {
+            FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS
+        } else {
+            0
+        };
         (*rename).RootDirectory = null_mut();
         (*rename).FileNameLength = name_bytes;
         std::ptr::copy_nonoverlapping(
@@ -488,7 +501,11 @@ fn rename_file(file: &File, to: &Path, replace: bool) -> io::Result<()> {
         );
         check(SetFileInformationByHandle(
             file.as_raw_handle(),
-            FileRenameInfo,
+            if replace {
+                FileRenameInfoEx
+            } else {
+                FileRenameInfo
+            },
             rename.cast(),
             buffer_bytes,
         ))
@@ -498,13 +515,8 @@ fn rename_file(file: &File, to: &Path, replace: bool) -> io::Result<()> {
 pub fn replace(from: &Path, to: &Path) -> io::Result<()> {
     check_parents(from)?;
     check_parents(to)?;
-    unsafe {
-        check(MoveFileExW(
-            wide(from)?.as_ptr(),
-            wide(to)?.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        ))
-    }
+    let source = open_with_additional_access(from, OpenMode::Read, DELETE)?;
+    rename_file(&source, to, true)
 }
 /// Publish `from` under the unused name `to`, never replacing an existing one.
 ///

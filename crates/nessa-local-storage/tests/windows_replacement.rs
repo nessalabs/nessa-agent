@@ -72,15 +72,14 @@ fn replacement_preserves_a_read_only_destination_and_succeeds_after_permission_r
     create_directory(&directory).unwrap();
     publish(&directory, b"previous").unwrap();
     let destination = directory.join("records/record.json");
-    let mut permissions = fs::metadata(&destination).unwrap().permissions();
+    let original_permissions = fs::metadata(&destination).unwrap().permissions();
+    let mut permissions = original_permissions.clone();
     permissions.set_readonly(true);
     fs::set_permissions(&destination, permissions).unwrap();
 
     let error = publish(&directory, b"refused").unwrap_err();
 
-    let mut permissions = fs::metadata(&destination).unwrap().permissions();
-    permissions.set_readonly(false);
-    fs::set_permissions(&destination, permissions).unwrap();
+    fs::set_permissions(&destination, original_permissions).unwrap();
     assert_eq!(error.raw_os_error(), Some(5), "{error:?}");
     assert_eq!(fs::read(&destination).unwrap(), b"previous");
     assert_eq!(fs::read_dir(directory.join("records")).unwrap().count(), 1);

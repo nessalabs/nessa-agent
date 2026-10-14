@@ -3,7 +3,7 @@
 //! Directory and mutation-capable file handles omit `FILE_SHARE_DELETE`,
 //! pinning their names. Read-only handles and transient identity probes share
 //! deletion so they can coexist with a publication handle; they acquire no
-//! naming authority. Publication uses `FileRenameInfo` on the reservation
+//! naming authority. Publication uses the shared Windows rename encoder on the reservation
 //! handle with a validated extended absolute destination. The retained chain
 //! pins that destination from the caller-trusted root down; authority above the
 //! root remains the caller's. Windows exposes no directory-fsync guarantee.

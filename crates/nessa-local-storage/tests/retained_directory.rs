@@ -156,6 +156,31 @@ fn retained_replacement_publishes_the_reserved_identity_atomically() {
 }
 
 #[test]
+fn retained_replacement_keeps_a_reader_on_the_previous_record() {
+    let (_temporary, root, directory) = fixture();
+    write_named(&directory, "definition", b"old");
+    let mut reader = directory
+        .open_file(OsStr::new("definition"), OpenMode::Read)
+        .unwrap();
+    let mut reservation = directory.reserve_temp().unwrap();
+    reservation.as_file_mut().write_all(b"new").unwrap();
+
+    let published = reservation.replace(OsStr::new("definition")).unwrap();
+
+    assert!(directory
+        .named_file_is(published.name(), published.as_file())
+        .unwrap());
+    assert_eq!(
+        std::fs::read(root.join("records/definition")).unwrap(),
+        b"new"
+    );
+    let mut previous = Vec::new();
+    reader.read_to_end(&mut previous).unwrap();
+    assert_eq!(previous, b"old");
+    assert_eq!(names(&directory).len(), 1);
+}
+
+#[test]
 fn dropping_a_published_handle_keeps_the_destination() {
     let (_temporary, _root, directory) = fixture();
     let mut reservation = directory.reserve_temp().unwrap();

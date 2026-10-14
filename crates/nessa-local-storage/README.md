@@ -9,9 +9,10 @@ Windows supplies a protected DACL at creation (current user SID + LocalSystem),
 then checks the DACL, owner, persistent-ACL volume support, link count and reparse
 attributes through the same file handle used for I/O. Windows paths must be local
 absolute drive paths; alternate streams and device namespaces are rejected.
-Temporary files are private before data is written. Path-based Windows replacements
-request write-through moves. Retained Windows replacement flushes the file before
-and after handle rename; Unix callers also sync the containing directory.
+Temporary files are private before data is written. Callers flush payloads before path-based replacement. Windows replacement uses
+`FileRenameInfoEx` with POSIX semantics so delete-sharing readers retain the old
+file while new opens observe the replacement. Retained Windows replacement also
+flushes the file before and after handle rename; Unix callers also sync the containing directory.
 
 [Retained-directory publication design](../../docs/design/retained-directory-publication.md)
 owns the #324 ordering table and platform evidence boundaries.
