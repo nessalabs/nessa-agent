@@ -27,6 +27,19 @@ import { GATEWAY_NOW_MS, note, row, view } from "./fake-gateway"
 
 const at = () => 42
 
+/** A runtime whose agent is the only fact these recovery tests vary. */
+function signInRuntime(agent: string) {
+  return {
+    model: "x",
+    provider: "x",
+    workspace: "/",
+    agent,
+    modelName: "x",
+    contextWindowTokens: 1,
+    reasoning: false,
+  }
+}
+
 const turn = (change: Partial<ConversationMessage> = {}): ConversationMessage => ({
   executionId: "e1",
   userText: "Chart the sales",
@@ -831,6 +844,7 @@ describe("provider authentication recovery", () => {
 
 it("shows auth recovery without duplicating its diagnostic and preserves unrelated notices", () => {
   const source = view("auth", {
+    runtime: signInRuntime("claude"),
     messages: [
       turn({
         status: "failed",
@@ -863,6 +877,7 @@ it("shows auth recovery without duplicating its diagnostic and preserves unrelat
 it("keeps an independent failure beside authentication recovery", () => {
   const transcript = transcriptFrom(
     view("auth", {
+      runtime: signInRuntime("claude"),
       messages: [
         turn({
           status: "failed",
@@ -890,6 +905,7 @@ it("does not treat the required-work sentence as the independent failure", () =>
   const sentence = "The turn could not complete all required work."
   const transcript = transcriptFrom(
     view("auth", {
+      runtime: signInRuntime("codex"),
       messages: [
         turn({
           status: "failed",
@@ -911,6 +927,7 @@ it("does not treat the required-work sentence as the independent failure", () =>
   expect(JSON.stringify(transcript)).not.toContain(sentence)
   const flagged = transcriptFrom(
     view("auth", {
+      runtime: signInRuntime("codex"),
       messages: [
         turn({
           status: "failed",
@@ -937,6 +954,7 @@ it("keeps a Failed mark on an authentication refusal once another turn has follo
   })
   const followed = transcriptFrom(
     view("auth", {
+      runtime: signInRuntime("claude"),
       messages: [
         refusal,
         turn({
@@ -956,7 +974,7 @@ it("keeps a Failed mark on an authentication refusal once another turn has follo
     role: "user",
     terminal: { status: "failed", error: "Internal error: OAuth session expired" },
   })
-  const waiting = view("auth", { messages: [refusal] })
+  const waiting = view("auth", { runtime: signInRuntime("claude"), messages: [refusal] })
   waiting.pending = [
     {
       executionId: "retry",
@@ -972,6 +990,44 @@ it("keeps a Failed mark on an authentication refusal once another turn has follo
     role: "user",
     terminal: { status: "failed", error: "Internal error: OAuth session expired" },
   })
+})
+
+it("keeps an authentication failure when sign-in cannot render", () => {
+  const refused = turn({
+    status: "failed",
+    authenticationRequired: true,
+    error: "OAuth session expired",
+  })
+  const bare = turn({ status: "failed", authenticationRequired: true })
+  const shown = (source: ReturnType<typeof view>) =>
+    transcriptFrom(source, 1, at, GATEWAY_NOW_MS)
+  for (const source of [
+    view("auth", { messages: [refused] }),
+    view("auth", { runtime: signInRuntime("opencode"), messages: [refused] }),
+    view("auth", { runtime: signInRuntime("other"), messages: [refused] }),
+    view("auth", { runtime: signInRuntime("Claude"), messages: [refused] }),
+    view("auth", { runtime: signInRuntime(""), messages: [bare] }),
+  ]) {
+    const transcript = shown(source)
+    expect(recovery(transcript)).toBe(true)
+    expect(transcript.messages[0]).toMatchObject({
+      role: "user",
+      terminal: source.messages[0]?.error
+        ? { status: "failed", error: "OAuth session expired" }
+        : { status: "failed" },
+    })
+    if (!source.messages[0]?.error) {
+      expect(transcript.messages[0]).not.toHaveProperty("terminal.error")
+    }
+  }
+  for (const agent of ["claude", "codex"] as const) {
+    const transcript = shown(
+      view("auth", { runtime: signInRuntime(agent), messages: [refused] }),
+    )
+    expect(recovery(transcript)).toBe(true)
+    expect(transcript.messages[0]).not.toHaveProperty("terminal")
+    expect(JSON.stringify(transcript)).not.toContain("OAuth session expired")
+  }
 })
 
 it("recovery follows the latest mapped input across pending and dispatched turns", () => {

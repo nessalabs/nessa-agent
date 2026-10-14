@@ -54,7 +54,8 @@ outside Nessa's launcher.
 
 | State | Event | Result | Evidence |
 | --- | --- | --- | --- |
-| Latest turn failed | Adapter-owned authentication-required report | Recovery card shown | SDK code test, projection restoration test, gateway mapping test |
+| Latest turn failed | Adapter-owned authentication-required report for Claude or Codex | Recovery card shown; pure refusal omits the terminal | SDK code test, projection restoration test, gateway mapping test |
+| Latest turn failed | Same report for OpenCode, an unknown agent, or no agent | No recovery card; the failure stays on the terminal | Desktop gateway mapping test |
 | Latest turn failed | Generic provider code, including `-32000` or auth diagnostic text | No recovery card | SDK code test, projection test, gateway mapping test |
 | Card unsupported | Capability absent, false, or unanswerable | Disabled action; no launch | Browser provider-sign-in script |
 | ACP prompt refused authentication | Execution reply owns the refusal; finalized secondary failures absent and cleanup succeeded | Reply carries refusal; observation stream ends without duplicating it as a fault | Real ACP/Agent/storage roundtrip |

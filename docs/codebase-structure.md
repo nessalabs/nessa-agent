@@ -259,8 +259,10 @@ against a private scripted gateway.
   with `testing.ts` the fake source, the store, and the animation frames its
   tests share. A failed, cancelled, or unresolved turn keeps the gateway's
   status and diagnostic on the message, including an earlier authentication
-  refusal. While recovery is showing, that refusal does not also carry the
-  authentication diagnostic. An independent required-work failure on that
+  refusal. While Claude or Codex recovery is showing, that refusal does not
+  also carry the authentication diagnostic. OpenCode, an unknown agent, and
+  no agent keep the failure, because they have no sign-in card. An independent
+  required-work failure on that
   refusal is the protocol's `requiredWorkFailed` flag; the terminal keeps the
   gateway's diagnostic. Questions the view lists, and the
   gateway's `interactionViewError`, are on the transcript; answering a

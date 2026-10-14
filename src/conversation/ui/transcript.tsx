@@ -1,4 +1,7 @@
-import { offersAuthenticationRecovery } from "../../provider-authentication/model/recovery"
+import {
+  offersAuthenticationRecovery,
+  signInProvider,
+} from "../../provider-authentication/model/recovery"
 import { agentTranscript } from "../adapters/agent-stream/transcript"
 import { agentTurnView } from "./agent-transcript-view"
 import { WorkActivity, WorkDetails } from "./work-activity"
@@ -105,7 +108,7 @@ export function Transcript({
       ? [{ observedInput: turn.observedInput }]
       : [],
   )
-  const provider = conversation.remote?.runtime?.agent
+  const provider = signInProvider(conversation.remote?.runtime?.agent)
   const sentTurns = conversation.turns.filter((turn) => turn.from === "user").length
   const published = publishedByRow(conversation, rows)
   const notes = notesByRow(conversation, rows, waitingUsers)
@@ -197,7 +200,7 @@ export function Transcript({
                     conversationId={conversation.serverConversationId}
                     files={published.byRow.get(row.key) ?? []}
                   />
-                  {(provider === "claude" || provider === "codex") &&
+                  {provider &&
                   offersAuthenticationRecovery(
                     conversation.turns.find(
                       (turn) =>
