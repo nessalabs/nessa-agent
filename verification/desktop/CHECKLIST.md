@@ -1439,7 +1439,7 @@ zero times, preserves the draft and paints **Attachments still loading**; read
 completion allows one send containing the text and one image. A second URL drop
 while the first fetch is pending paints **Still reading files** and starts no
 second fetch. The JSON reports send, attachment, refusal and page-error counts
-for all thirty-six engine/scenario pairs. The `drop-capacity` case begins 64
+for all forty engine/scenario pairs. The `drop-capacity` case begins 64
 batches in A/c0, switches to empty B/c0, and checks that the visible 65th-drop
 refusal belongs to B. The rejected overflow and unknown results do nothing;
 the oldest result attaches once to A, a duplicate does nothing, and B accepts a
@@ -1467,7 +1467,7 @@ production panel; it does not exercise an operating-system file picker. The
 `folder-owner-send` and `folder-owner-drop` keep a same-ID pending folder walk
 in A from blocking B's immediate send or next folder gesture; each settled walk
 still writes to its captured provider. The JSON reports send, attachment,
-refusal and page-error counts for all thirty-six engine/scenario pairs.
+refusal and page-error counts for all forty engine/scenario pairs.
 `pathless-host-drop` case proves prose and image URLs delivered without a batch
 beginning still reach the composer and the destination captured before the image
 fetch waits. `browser-picker-fallback` cancels and reopens the native browser input,
@@ -1480,6 +1480,16 @@ notice remains. The paired screenshots show each tab's own notice. A delayed
 host-batch registration test also replaces the provider before the subscription
 resolves and verifies the single mounted listener still captures the current
 destination; a retained callback after unmount has no effect.
+AL24 also covers a terminal refusal followed by a restored-draft retry. In each
+engine, the fixture stages a 40 MiB native PNG as a 68 B processed image, refuses
+the first send, retries it successfully, then accepts a second 40 MiB image. Both
+reupload modes are exercised: the refused bytes remain stored, or the refused
+image is staged again. The 80 MiB of originals crosses the 64 MiB sent-preview
+cap; checks tied to the send execution IDs confirm the old failed turn becomes a
+reference, the older Blob and object URL are released, and the second file remains
+available. When the refused reference is no longer held, the transcript shows the
+existing **No longer kept** placeholder. The bounded run is
+`node verification/desktop/scripts/attachments-races.mjs --only terminal-refusal-preserved,terminal-refusal-reupload`.
 
 
 ## Provider authentication recovery (#501)

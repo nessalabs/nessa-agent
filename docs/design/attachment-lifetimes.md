@@ -3,7 +3,7 @@
 The final resource design was agreed during the third implementation pass, after
 review demonstrated 128 MiB retained bytes could be described as two bytes by
 recombining a resource ID with different metadata. The immutable resource value
-below replaces that representation; this migration is implemented locally and awaits final independent review.
+below replaces that representation; this migration is implemented and undergoing current-main integration review.
 
 A retained resource identifies bytes and their preview. A placement identifies one
 admission into a local draft. The conversation application mints a fresh placement
@@ -30,9 +30,14 @@ contain remote references and titles, not drafts or retained resources.
 
 `attachmentResourceUsage` is the owner of resource retention classification. A
 resource referenced by any draft or unsettled local turn remains needed and counts
-once against the window byte budget. Otherwise accepted local references retain it
-only as a preview. Preview eviction converts all accepted references for a selected
-resource together. Needed resources remain held; absent resources are released.
+once against the window byte budget. A terminal failed turn with no stored image
+reference also retains its original. Stored references in settled turns, including
+failed submissions, retain it only as a preview. Preview eviction converts all stored
+references for a selected resource together. A stored reference records the gateway
+image returned at upload; it does not promise that image is still available. Evicted
+history uses the existing held-file unavailable placeholder if the gateway no longer
+holds it. A refusal that requires reupload resets the recovered draft, which keeps
+the shared resource needed until that draft is sent or removed. Needed resources remain held; absent resources are released.
 Within a draft, duplicate resource descriptors remain refused; separate drafts may
 share one resource with independent placements and upload outcomes.
 
@@ -65,6 +70,8 @@ Resource construction captures and validates scalar metadata once, normalizes it
 | AL21 | Resource value is dispatched alongside an unrelated class or Blob | Resource own scalar fields remain traversed; arbitrary nonserializable values still fail Redux diagnostics | Scoped isPlain-or-resource predicate tests |
 | AL22 | Constructor receives boxed/mutable scalar hooks or invalid sizes | Reject before issuing a value; getter fields captured once | Constructor negative/runtime/type tests |
 | AL23 | A File overrides size/type, or a caller tries to shadow retained Blob hooks after issuance | Manager preserves intrinsic Blob size/type/content in frozen snapshots, and exposes no mutable byte-wrapper metadata | Native Blob metadata provenance test |
+| AL24 | Stored input is refused, restored to its draft, then accepted by a new send, with or without reupload | Draft and pending send retain original bytes; terminal failed history no longer prevents shared preview eviction after acceptance | Refusal/resend resource-query regression and revert probe |
+| AL25 | Terminal failed content has no stored image fallback | Preserve its local resource rather than fabricate a gateway reference | Local-only failed-content query regression |
 
 ## Immutable resource agreement
 
