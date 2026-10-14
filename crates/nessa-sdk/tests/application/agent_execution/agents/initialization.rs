@@ -6,7 +6,9 @@ use nessa_sdk::application::agent_execution::{
         SessionLoad, SessionLoadState, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
     },
 };
-use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
+use nessa_sdk::infrastructure::session_storage::{
+    InMemoryStorage, RecordStorage, RuntimeMessageCommitClock,
+};
 use std::{
     future::Future,
     pin::Pin,
@@ -2227,3 +2229,86 @@ async fn queue_audit_panics_preserve_owned_receipt_and_prevent_dispatch() {
 
 #[path = "initialization/startup_control.rs"]
 mod startup_control;
+
+struct SwappedSnapshotLoadStorage {
+    backing: InMemoryStorage,
+    foreign: SessionSaveGeneration,
+    state: SessionLoadState,
+    saves: Arc<AtomicUsize>,
+}
+struct SwappedSnapshotLoadLease {
+    backing: Box<dyn SessionStorageLease>,
+    foreign: SessionSaveGeneration,
+    state: SessionLoadState,
+    saves: Arc<AtomicUsize>,
+}
+impl SessionStorage for SwappedSnapshotLoadStorage {
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        Box::pin(async move {
+            Ok(Box::new(SwappedSnapshotLoadLease {
+                backing: self.backing.open(id).await?,
+                foreign: self.foreign.clone(),
+                state: self.state,
+                saves: self.saves.clone(),
+            }) as Box<dyn SessionStorageLease>)
+        })
+    }
+}
+impl SessionStorageLease for SwappedSnapshotLoadLease {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
+        Box::pin(async move {
+            let actual = self.backing.load().await?;
+            Ok(SessionLoad::new(
+                actual.snapshot().cloned(),
+                self.foreign.clone(),
+                self.state,
+            ))
+        })
+    }
+    fn save_changes(
+        &self,
+        generation: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
+        self.saves.fetch_add(1, Ordering::SeqCst);
+        self.backing.save_changes(generation, snapshot, units)
+    }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.backing.erase()
+    }
+}
+
+#[tokio::test]
+async fn foreign_snapshot_load_refuses_before_initial_save_or_provider_open() {
+    for state in [SessionLoadState::Published, SessionLoadState::Unfinished] {
+        let backing = InMemoryStorage::new();
+        let other = backing
+            .open(SessionId::new("other-conversation").unwrap())
+            .await
+            .unwrap();
+        let foreign = other.load().await.unwrap().binding().clone();
+        let saves = Arc::new(AtomicUsize::new(0));
+        let storage = Arc::new(SwappedSnapshotLoadStorage {
+            backing,
+            foreign,
+            state,
+            saves: saves.clone(),
+        });
+        let manager = SessionManager::open(
+            Some(SessionId::new("requested-conversation").unwrap()),
+            storage,
+            Arc::new(RuntimeMessageCommitClock::new()),
+        )
+        .await
+        .unwrap();
+        let provider = TestProvider::new();
+        let result = Agent::prepare(provider.clone(), manager, Arc::new(AcceptingAudit)).await;
+        assert!(matches!(
+            result.as_ref().map_err(|failure| failure.cause()),
+            Err(AgentError::Storage(StorageError::IdentityMismatch))
+        ));
+        assert_eq!(saves.load(Ordering::SeqCst), 0);
+        assert!(provider.calls.opens.lock().unwrap().is_empty());
+    }
+}

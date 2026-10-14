@@ -16,8 +16,16 @@ pub enum SessionSaveBackend {
         /// Actual event-store incarnation, invalidated by Reset.
         incarnation: [u8; 16],
     },
-    /// A snapshot adapter's own incarnation; positions are snapshot revisions.
+    /// A conversation and the snapshot adapter's reset incarnation; positions
+    /// are snapshot revisions. The session remains part of every save receipt.
+    /// Omitting it is a compile error:
+    /// ```compile_fail
+    /// use nessa_sdk::application::agent_execution::sessions::SessionSaveBackend;
+    /// let _ = SessionSaveBackend::Snapshot { incarnation: [0; 16] };
+    /// ```
     Snapshot {
+        /// Conversation whose snapshot and save attempts this binding names.
+        session: SessionId,
         /// Minted by the snapshot owner, replaced on erasure.
         incarnation: [u8; 16],
     },
@@ -204,8 +212,11 @@ impl SessionLoad {
         self,
         id: &SessionId,
     ) -> Result<(Option<SessionSnapshot>, SessionSaveGeneration), StorageError> {
-        if matches!(self.binding.backend(), SessionSaveBackend::Record { stream, .. } if stream.as_str() != id.as_str())
-        {
+        let matches_session = match self.binding.backend() {
+            SessionSaveBackend::Record { stream, .. } => stream.as_str() == id.as_str(),
+            SessionSaveBackend::Snapshot { session, .. } => session == id,
+        };
+        if !matches_session {
             if let Some(snapshot) = self.snapshot {
                 snapshot.discard_rejected_errors();
             }
