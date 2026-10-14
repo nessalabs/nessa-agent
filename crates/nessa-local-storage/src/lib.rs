@@ -129,8 +129,9 @@ pub fn is_unsafe_file(error: &io::Error) -> bool {
 /// On Unix, its established parent is synced before descent and the final leaf
 /// is synced before success. Windows has no directory-fsync equivalent, so the
 /// same calls revalidate the private tree; a record publisher must separately
-/// flush its file and use the platform's write-through move. This function does
-/// not claim survival of arbitrary power loss.
+/// flush its file before atomic publication. Native rename and flush semantics
+/// are documented in this crate's README. This function does not claim survival
+/// of arbitrary power loss.
 pub fn create_private_directory_tree_beneath(root: &Path, directory: &Path) -> io::Result<()> {
     create_private_directory_tree_with(
         directory,

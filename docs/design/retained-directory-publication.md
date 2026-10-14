@@ -68,7 +68,8 @@ single-link and no-reparse checks on the same handles used for I/O.
 Retained publication flushes the writable payload before and after handle rename.
 Windows `PrivateDirectory::sync` revalidates identity; it has no directory-fsync
 guarantee. No retained write-through move or arbitrary power-loss survival is
-claimed. Path-based MoveFileExW semantics do not belong to this owner.
+claimed. Path-based publication does not acquire this owner's retained directory
+authority; the shared rename encoder preserves each entry point's own checks.
 
 Local macOS runtime tests and Windows target compilation are distinct evidence.
 Actual Windows runtime tests use the existing local-auth platform CI selection

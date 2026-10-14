@@ -72,8 +72,8 @@ so they can inspect a reservation or destination while its publication handle
 remains open. `PrivateDirectory::sync` syncs the retained directory on Unix. On
 Windows it only revalidates binding: Windows has no directory fsync equivalent,
 and success does not claim directory-entry durability or survival of arbitrary
-power loss. Retained Windows publication uses `FileRenameInfo` through the
-reservation handle with the fully validated extended destination path, and flushes
+power loss. Retained Windows publication uses the shared handle rename encoder
+through the reservation handle with the fully validated extended destination path, and flushes
 that file before and after rename. The retained root and intermediate handles pin
 that path from the caller-trusted root down. Ancestors above the root, an upstream
 reparse point, and mutable drive mappings remain part of the caller's root-trust

@@ -593,7 +593,9 @@ tree can be written to by anything else uses the second.
 `create_private_directory_tree_beneath` establishes a nested private tree one
 name at a time. Unix syncs each parent before descent and the final leaf before
 success. Windows revalidates the anchored tree because it has no directory-fsync
-equivalent; sinks flush record files and use write-through moves separately.
+equivalent; sinks flush record files before atomic publication. The
+[storage owner](../crates/nessa-local-storage/README.md) documents native
+publication and flush semantics.
 `PrivateDirectory` is the narrower retained-authority API for a store that scans,
 locks, opens, and publishes repeatedly in one directory. It preserves the original
 root, directory chain, and native identities; each enumeration owns an independent
