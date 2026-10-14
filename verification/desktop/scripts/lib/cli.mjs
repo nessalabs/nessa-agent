@@ -224,6 +224,14 @@ export class CannotRun extends Error {
   }
 }
 
+/** A failed recovery left the browser driver unsafe to reuse for later checks. */
+export class UnsafeToContinueError extends Error {
+  constructor(message, options) {
+    super(message, options)
+    this.name = "UnsafeToContinueError"
+  }
+}
+
 /** Arguments a check was not written for: it could not run, and says why. */
 export class UsageError extends CannotRun {
   constructor(message) {
@@ -345,6 +353,7 @@ export async function attempt(rep, base, body) {
     const result = await body()
     return rep.add({ ...base, ...result })
   } catch (error) {
+    if (error instanceof UnsafeToContinueError) throw error
     return rep.add(resultOfThrown(base, error))
   }
 }

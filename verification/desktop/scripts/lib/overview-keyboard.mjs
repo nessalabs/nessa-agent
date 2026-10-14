@@ -1,8 +1,15 @@
-import { CannotRun, log } from "./cli.mjs"
+import { CannotRun, log, UnsafeToContinueError } from "./cli.mjs"
 import { css, keys } from "./selectors.mjs"
 
 const observerAttribute = "data-overview-key-observer"
 let nextObserverId = 0
+const failureDescription = (error) => {
+  try {
+    return String(error?.message ?? error)
+  } catch {
+    return "unprintable cleanup failure"
+  }
+}
 
 /** Observe and act on the same mounted prefix, before a later render can finish it. */
 export function pressMountedOverviewKeys(sel) {
@@ -123,20 +130,41 @@ export async function keysWhileRowsArrive(page) {
   }
   observerClosed = true
   const cleanupFailures = []
-  for (const cleanup of [
-    () =>
-      page.evaluate((id) => {
-        const root = document.documentElement
-        if (root?.getAttribute("data-overview-key-observer") === id)
-          root.removeAttribute("data-overview-key-observer")
-      }, observerId),
-    disposeHandle,
-  ]) {
+  let disarmFailure
+  let retirement = { kind: "not-needed" }
+  try {
+    await page.evaluate((id) => {
+      const root = document.documentElement
+      if (root?.getAttribute("data-overview-key-observer") === id)
+        root.removeAttribute("data-overview-key-observer")
+    }, observerId)
+  } catch (error) {
+    disarmFailure = error
+    cleanupFailures.push(error)
     try {
-      await cleanup()
-    } catch (error) {
-      cleanupFailures.push(error)
+      await page.close()
+    } catch (closeError) {
+      let closed = false
+      try {
+        closed = page.isClosed?.() === true
+      } catch {
+        // A failed state query cannot establish that this page is safe to reuse.
+      }
+      if (closed) logCleanupFailure(closeError)
+      else retirement = { kind: "unsafe", error: closeError }
     }
+  }
+  try {
+    await disposeHandle()
+  } catch (error) {
+    cleanupFailures.push(error)
+  }
+  if (retirement.kind === "unsafe") {
+    const cause = outcome.kind === "failure" ? outcome.error : disarmFailure
+    throw new UnsafeToContinueError(
+      `overview observer disarm failed and page retirement also failed: ${failureDescription(retirement.error)}`,
+      { cause },
+    )
   }
   if (outcome.kind === "failure") {
     for (const error of cleanupFailures) logCleanupFailure(error)

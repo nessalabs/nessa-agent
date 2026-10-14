@@ -1,8 +1,10 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { runInNewContext } from "node:vm"
-import { CannotRun } from "./cli.mjs"
+import { attempt, CannotRun, UnsafeToContinueError } from "./cli.mjs"
 import { keysWhileRowsArrive, pressMountedOverviewKeys } from "./overview-keyboard.mjs"
+
+const noRetirementFailure = Symbol("no retirement failure")
 
 /**
  * Regression of c13a9ed66f (#606): observation and action were separate RPCs.
@@ -15,6 +17,8 @@ function pageWithFastCompletion({
   deliverBeforeOpeningFailure = false,
   openingFailure,
   disarmFailure,
+  retirementFailure = noRetirementFailure,
+  closeBeforeRetirementFailure = false,
   jsonValueFailure,
   disposeFailure,
 } = {}) {
@@ -89,6 +93,7 @@ function pageWithFastCompletion({
   let rejectPending
   let settled = false
   let disposed = false
+  let closed = false
   const page = {
     waitForFunction(predicate, selectors, options) {
       events.push("arm")
@@ -98,6 +103,7 @@ function pageWithFastCompletion({
         timeout = reject
         rejectPending = reject
         observe = () => {
+          if (closed) return
           const result = browser(predicate, selectors)
           if (!result) return
           settled = true
@@ -119,6 +125,14 @@ function pageWithFastCompletion({
       if (view.observerId === value && disarmFailure) throw disarmFailure
       return runInNewContext(`(${operation.toString()})(value)`, { document, value })
     },
+    close: async () => {
+      events.push("close")
+      if (closeBeforeRetirementFailure) closed = true
+      if (Object.hasOwn(retirementFailure ?? {}, "reject")) throw retirementFailure.reject
+      if (retirementFailure !== noRetirementFailure) throw retirementFailure
+      closed = true
+    },
+    isClosed: () => closed,
     keyboard: {
       press: async () => {
         events.push("open")
@@ -149,6 +163,9 @@ function pageWithFastCompletion({
     rejectPending: (error) => rejectPending?.(error),
     get disposed() {
       return disposed
+    },
+    get closed() {
+      return closed
     },
   }
 }
@@ -212,6 +229,124 @@ test("stops observing when an opening key is delivered but its RPC rejects", asy
   assert.deepEqual(scene.events, ["arm", "open", "delivered"])
   assert.deepEqual(scene.view.listedChecks, [])
   assert.equal(scene.view.observerId, undefined)
+})
+
+test("retires a live page when disarm fails after a delivered opening key", async () => {
+  const openingFailure = new Error("opening key acknowledgement failed")
+  const disarmFailure = new Error("observer disarm failed")
+  const scene = pageWithFastCompletion({
+    deliverBeforeOpeningFailure: true,
+    openingFailure,
+    disarmFailure,
+  })
+  await assert.rejects(
+    keysWhileRowsArrive(scene.page),
+    (error) => error === openingFailure,
+  )
+  scene.poll()
+  assert.deepEqual(scene.events, ["arm", "open", "delivered", "close"])
+  assert.equal(scene.closed, true)
+})
+
+test("does not continue the driver when observer disarm and page retirement both fail", async () => {
+  const openingFailure = new Error("opening key acknowledgement failed")
+  const disarmFailure = new Error("observer disarm failed")
+  const retirementFailure = new Error("page close failed")
+  const scene = pageWithFastCompletion({
+    deliverBeforeOpeningFailure: true,
+    openingFailure,
+    disarmFailure,
+    retirementFailure,
+  })
+  await assert.rejects(
+    attempt(
+      {
+        add: () =>
+          assert.fail("unsafe page result must not be recorded as a normal attempt"),
+      },
+      { name: "focus-overview-arriving" },
+      () => keysWhileRowsArrive(scene.page),
+    ),
+    (error) => {
+      assert.ok(error instanceof UnsafeToContinueError)
+      assert.equal(error.cause, openingFailure)
+      return true
+    },
+  )
+  assert.deepEqual(scene.events, ["arm", "open", "delivered", "close"])
+  assert.equal(scene.closed, false)
+})
+
+test("treats nullish and empty page-close rejections as unsafe while the page is live", async () => {
+  const openingFailure = new Error("opening key acknowledgement failed")
+  const disarmFailure = new Error("observer disarm failed")
+  for (const retirementFailure of [null, undefined, ""]) {
+    const scene = pageWithFastCompletion({
+      deliverBeforeOpeningFailure: true,
+      openingFailure,
+      disarmFailure,
+      retirementFailure: { reject: retirementFailure },
+    })
+    await assert.rejects(keysWhileRowsArrive(scene.page), (error) => {
+      assert.ok(error instanceof UnsafeToContinueError)
+      assert.equal(error.cause, openingFailure)
+      assert.match(error.message, /page retirement also failed/)
+      return true
+    })
+    assert.equal(scene.closed, false)
+  }
+})
+
+test("keeps fatal retirement diagnostics safe for errors with throwing coercion", async () => {
+  const openingFailure = new Error("opening key acknowledgement failed")
+  const disarmFailure = new Error("observer disarm failed")
+  const retirementFailure = Object.defineProperties(
+    {},
+    {
+      message: {
+        get() {
+          throw new Error("message getter failed")
+        },
+      },
+      [Symbol.toPrimitive]: {
+        value() {
+          throw new Error("coercion failed")
+        },
+      },
+    },
+  )
+  const scene = pageWithFastCompletion({
+    deliverBeforeOpeningFailure: true,
+    openingFailure,
+    disarmFailure,
+    retirementFailure,
+  })
+  await assert.rejects(keysWhileRowsArrive(scene.page), (error) => {
+    assert.ok(error instanceof UnsafeToContinueError)
+    assert.equal(error.cause, openingFailure)
+    assert.match(error.message, /unprintable cleanup failure/)
+    return true
+  })
+})
+
+test("preserves the opening error when retirement reports failure after closing the page", async () => {
+  const openingFailure = new Error("opening key acknowledgement failed")
+  const disarmFailure = new Error("observer disarm failed")
+  const retirementFailure = new Error("page close acknowledgement failed")
+  const scene = pageWithFastCompletion({
+    deliverBeforeOpeningFailure: true,
+    openingFailure,
+    disarmFailure,
+    retirementFailure,
+    closeBeforeRetirementFailure: true,
+  })
+  await assert.rejects(
+    keysWhileRowsArrive(scene.page),
+    (error) => error === openingFailure,
+  )
+  scene.poll()
+  assert.deepEqual(scene.events, ["arm", "open", "delivered", "close"])
+  assert.equal(scene.closed, true)
 })
 
 test("preserves an opening error when disarm fails and observes the later waiter error", async () => {
