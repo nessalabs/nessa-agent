@@ -26,22 +26,25 @@ function placed(tabs: ReturnType<typeof emptyLocalTabs>, id = "c0") {
   if (!part || part.type !== "file") throw new Error("Attachment was not admitted")
   return part
 }
-function accepted(
-  tabs: ReturnType<typeof emptyLocalTabs>,
-  executionId: string,
-): ReturnType<typeof emptyLocalTabs> {
+function stored(tabs: ReturnType<typeof emptyLocalTabs>) {
   const placement = placed(tabs)
   tabs = changeUpload(tabs, {
     conversationId: "c0",
     placementId: placement.placementId,
     to: "uploading",
   })
-  tabs = changeUpload(tabs, {
+  return changeUpload(tabs, {
     conversationId: "c0",
     placementId: placement.placementId,
     to: "stored",
     image,
   })
+}
+function accepted(
+  tabs: ReturnType<typeof emptyLocalTabs>,
+  executionId: string,
+): ReturnType<typeof emptyLocalTabs> {
+  tabs = stored(tabs)
   tabs = beginSend(tabs, {
     conversationId: "c0",
     executionId,
@@ -54,7 +57,9 @@ function accepted(
     conversations: tabs.conversations.map((tab) => ({
       ...tab,
       turns: tab.turns.map((turn) =>
-        turn.from === "user" ? { ...turn, receipt: "accepted" as const } : turn,
+        turn.from === "user" && turn.executionId === executionId
+          ? { ...turn, receipt: "accepted" as const }
+          : turn,
       ),
     })),
   }
@@ -159,6 +164,67 @@ it("AL8: preview accounting counts one resource and eviction removes every accep
     ),
   ).toEqual(["image-reference", "image-reference"])
   expect(attachmentResourceUsage(evicted).previews.size).toBe(0)
+})
+
+it.each([false, true])(
+  "AL24: a refused send followed by acceptance releases needed bytes (reupload=%s)",
+  (reupload) => {
+    let tabs = stored(attachFiles(emptyLocalTabs(), [input], "c0"))
+    tabs = beginSend(tabs, {
+      conversationId: "c0",
+      executionId: "original",
+      actionId: "original",
+      mode: "queued",
+      content: tabs.conversations[0]!.draft,
+    })
+    tabs = failSend(tabs, "c0", "original", "Refused", { kind: "refused", reupload })
+    expect(attachmentResourceUsage(tabs).needed.has(input)).toBe(true)
+    expect(boundSentPreviews(tabs, 0)).toBe(tabs)
+    tabs = accepted(tabs, "retry")
+    expect(
+      tabs.conversations[0]!.turns.map((turn) =>
+        turn.from === "user" ? turn.receipt : undefined,
+      ),
+    ).toEqual(["failed", "accepted"])
+    expect(attachmentResourceUsage(tabs).needed.size).toBe(0)
+    expect([...attachmentResourceUsage(tabs).previews]).toEqual([input])
+    const evicted = boundSentPreviews(tabs, 0)
+    expect(
+      evicted.conversations[0]!.turns.flatMap((turn) =>
+        turn.from === "user" ? turn.content.map((part) => part.type) : [],
+      ),
+    ).toEqual(["image-reference", "image-reference"])
+    expect(attachmentResourceUsage(evicted).previews.size).toBe(0)
+  },
+)
+
+it("AL25: refused local-only content keeps its resource without a stored fallback", () => {
+  const local = AttachmentResource.create({
+    name: "notes.txt",
+    mimeType: "text/plain",
+    size: 0,
+    previewUrl: "",
+    path: "/verification/notes.txt",
+  })
+  let tabs = attachFiles(emptyLocalTabs(), [local], "c0")
+  tabs = beginSend(tabs, {
+    conversationId: "c0",
+    executionId: "original",
+    actionId: "original",
+    mode: "queued",
+    content: tabs.conversations[0]!.draft,
+  })
+  tabs = failSend(tabs, "c0", "original", "Refused", {
+    kind: "refused",
+    reupload: false,
+  })
+  expect(tabs.conversations[0]!.turns[0]).toMatchObject({
+    from: "user",
+    receipt: "failed",
+  })
+  tabs = removeFile(tabs, placed(tabs).placementId)
+  expect([...attachmentResourceUsage(tabs).needed]).toEqual([local])
+  expect(boundSentPreviews(tabs, 0)).toBe(tabs)
 })
 
 it("AL9/AL10: placement numbering is store-local, survives restoration and rejected batches", () => {

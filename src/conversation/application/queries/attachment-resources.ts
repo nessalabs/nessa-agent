@@ -16,10 +16,11 @@ export function attachmentResourceUsage(tabs: LocalTabs): AttachmentResourceUsag
       if (part.type === "file") needed.add(part.resource)
     for (const turn of conversation.turns) {
       if (turn.from !== "user") continue
-      const accepted = ["accepted", "queued", "delivered"].includes(turn.receipt)
+      const settled = ["accepted", "queued", "delivered", "failed"].includes(turn.receipt)
       for (const part of turn.content) {
         if (part.type !== "file") continue
-        if (!accepted) needed.add(part.resource)
+        if (!settled || (turn.receipt === "failed" && part.upload.status !== "stored"))
+          needed.add(part.resource)
         else if (part.upload.status === "stored") previews.add(part.resource)
       }
     }
