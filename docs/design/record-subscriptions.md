@@ -63,7 +63,10 @@ Why views and not record batches: the desktop is TypeScript and must not keep
 a second fold (rule "one fold" in the transcript-fold design). Devices that do
 fold records themselves already have a replay-to-live path on records: verified
 `conversation.recordsHead`/`recordsPage` reads driven by
-`conversation.watchRecords` notices. That path is unchanged.
+`conversation.watchRecords` notices. That path is unchanged. The desktop shows
+the view's own `truncated` and `transcriptState` (`history` on its transcript).
+It does not page records to reconstruct older text, and a turn the view left
+out does not hide the turns the view did draw.
 
 ## How it works
 

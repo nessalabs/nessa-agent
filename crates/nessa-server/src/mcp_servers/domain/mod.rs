@@ -8,8 +8,8 @@ mod resource_ticket;
 mod session_token;
 mod stand_in;
 pub use app_call::{
-    admit_app, admit_tool_call, AppCallAdmission, AppFacts, AppRefusal, MAX_APP_ARGUMENTS_BYTES,
-    MAX_APP_RESULT_BYTES,
+    admit_listed_call, known_app, listed_tool, AppCallAdmission, AppFacts, AppRefusal,
+    MAX_APP_ARGUMENTS_BYTES, MAX_APP_RESULT_BYTES,
 };
 pub use configured_server::{
     ConfiguredMcpServer, EditRefusal, EnvironmentNameRepeated, RemoteConfigured, RemoteServerSave,

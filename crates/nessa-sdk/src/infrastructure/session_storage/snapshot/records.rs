@@ -12,7 +12,10 @@ use crate::application::agent_execution::{
         SubmissionMode,
     },
     providers::{ExecutionReport, ProviderIdentity},
-    sessions::storage::{InvocationRecord, StorageError, SubmissionAcknowledgement},
+    sessions::{
+        storage::{InvocationRecord, StorageError, SubmissionAcknowledgement},
+        NoteId,
+    },
 };
 use crate::domain::{
     agent_execution::{
@@ -187,6 +190,9 @@ pub(super) struct Metadata {
     pub(super) actor: Actor,
     /// Who started the turn and whether its tools were checked.
     pub(super) initiation: Initiation,
+    /// The notes the turn took, in the order it took them; absent when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) notes: Vec<String>,
     pub(super) acknowledgement: Acknowledgement,
     pub(super) provider_report: Option<Settlement>,
     pub(super) local_cancellation: Option<InvocationCancellation>,
@@ -400,6 +406,7 @@ impl From<&InvocationRecord> for Metadata {
             reserved_output_tokens: value.request.reserved_output_tokens,
             actor: (&value.actor).into(),
             initiation: (&value.initiation).into(),
+            notes: value.notes.iter().map(|id| id.as_str().into()).collect(),
             acknowledgement: (&value.acknowledgement).into(),
             provider_report: value.provider_report.clone().map(Into::into),
             local_cancellation: value.local_cancellation.as_ref().map(Into::into),
@@ -588,6 +595,11 @@ impl Metadata {
             },
             actor: self.actor.decode()?,
             initiation: self.initiation.decode()?,
+            notes: self
+                .notes
+                .into_iter()
+                .map(|id| NoteId::new(id).map_err(corrupt))
+                .collect::<Result<_, _>>()?,
             acknowledgement: self.acknowledgement.try_into()?,
             events: Vec::new(),
             scheduling: Vec::new(),

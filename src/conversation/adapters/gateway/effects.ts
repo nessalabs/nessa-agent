@@ -27,6 +27,7 @@ import {
 } from "../../application/ports"
 import type { CommandFailure, ConversationSelection, ReadFailure } from "../../model"
 import { heldFileReader } from "./held-files"
+import { shownNote } from "./notes"
 
 /**
  * The gateway's view as the panel's own, received at `receivedAtMs` on the
@@ -68,6 +69,7 @@ function conversationView(
         ? {}
         : { executionId: artifact.executionId }),
     })),
+    notes: value.notes.map(shownNote),
     capabilities: {
       queue: value.capabilities.queue,
       steer: value.capabilities.steer,
@@ -230,13 +232,18 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   conversation_state_unreadable: "conversation-state-unreadable",
   invalid_request: "invalid-request",
   conversation_deleted: "conversation-deleted",
-  // Answers only `conversation.share`, which the panel never sends; one that
-  // met a command would be a request this panel had no business making.
+  // Answer only `conversation.share` and `.unshare`, which the panel never
+  // sends; one that met a command would be a request this panel had no
+  // business making.
   share_target_not_paired: "invalid-request",
+  share_grant_changed: "invalid-request",
   // Answer only `conversation.message`, which the panel does not send yet;
   // either meeting another command is a request it had no business making.
   idempotency_conflict: "invalid-request",
   message_quota_exceeded: "invalid-request",
+  // Answers only a Drive grant's send or steer, which the panel, as the
+  // owner, never makes.
+  drive_policy_unenforceable: "invalid-request",
 }
 
 /**
@@ -319,9 +326,12 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   unknown_method: "unavailable",
   // A share is never a read; a read that met it would be no answer it knows.
   share_target_not_paired: "unavailable",
+  share_grant_changed: "unavailable",
   // A note's refusals; no read is ever answered with them.
   idempotency_conflict: "unavailable",
   message_quota_exceeded: "unavailable",
+  // A Drive turn's refusal; no read is ever answered with it.
+  drive_policy_unenforceable: "unavailable",
   model_unavailable: "unavailable",
   approval_mode_unavailable: "unavailable",
   approval_mode_not_applied: "unavailable",

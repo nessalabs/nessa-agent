@@ -26,15 +26,26 @@ export class NessaSessionUnavailableError extends Error {
   }
 }
 
+/**
+ * One still-held registration of a function for one event.
+ *
+ * A second `onEvent` of a function that is already registered shares this
+ * record: either unsubscribe removes it. `generation` is that registration,
+ * so a handle from an older one does not remove the function's later
+ * registration. Recovery reinstalls only records still here.
+ */
+type EventRegistration = {
+  event: string
+  handler: (payload: unknown) => void
+  generation: symbol
+  off?: () => void
+}
+
 /** Owns transport replacement and persistent subscriptions; dependencies are injected. */
 export class ManagedSession implements RpcRequester {
   private current: ConnectedSession | undefined
   private readonly lifetime = new AbortController()
-  private readonly events = new Set<{
-    event: string
-    handler: (payload: unknown) => void
-    off?: () => void
-  }>()
+  private readonly events = new Set<EventRegistration>()
   private readonly observers = new Set<(state: ConnectionState) => void>()
   private readonly closers = new Set<(error: Error) => void>()
   private value: ConnectionState = { status: "connected" }
@@ -75,13 +86,42 @@ export class ManagedSession implements RpcRequester {
 
   onEvent(event: string, handler: (payload: unknown) => void): () => void {
     if (this.value.status === "closed") return () => {}
-    const subscription = {
+    const existing = this.registration(event, handler)
+    if (existing) {
+      const generation = existing.generation
+      return () => this.forget(event, handler, generation)
+    }
+    const generation = Symbol()
+    this.events.add({
       event,
       handler,
+      generation,
       off: this.current?.wire.onEvent(event, handler),
-    }
-    this.events.add(subscription)
-    return () => {
+    })
+    return () => this.forget(event, handler, generation)
+  }
+
+  /** The still-held registration of `handler` for `event`, if it has one. */
+  private registration(event: string, handler: (payload: unknown) => void) {
+    for (const subscription of this.events)
+      if (subscription.event === event && subscription.handler === handler)
+        return subscription
+    return undefined
+  }
+
+  /**
+   * Drops the registration `generation` names. An older handle, or a second
+   * handle of a registration already removed, does nothing: recovery must
+   * not reinstall a subscription the caller has removed.
+   */
+  private forget(event: string, handler: (payload: unknown) => void, generation: symbol) {
+    for (const subscription of this.events) {
+      if (
+        subscription.event !== event ||
+        subscription.handler !== handler ||
+        subscription.generation !== generation
+      )
+        continue
       subscription.off?.()
       this.events.delete(subscription)
     }

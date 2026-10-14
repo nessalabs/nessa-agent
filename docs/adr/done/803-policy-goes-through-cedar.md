@@ -10,7 +10,8 @@ order the hand-written decisions move in. The rule itself is
 
 - **Date:** 2026-10-13
 - **Status:** accepted (Saurav, 2026-10-13: "everything should be cedar for
-  policies")
+  policies") and implemented: steps 1, 2 and 5 in #808 and #817, steps 3 and 4
+  in the pull request that moved this record to `done/`; step 6 dropped
 
 ## Context
 
@@ -111,14 +112,14 @@ table survives edits.
 | | `nessa-auth` `domain/models.rs` `PrincipalKind::may_hold`; `adapters/local/registry.rs` `validate_grants`, `validate_issue` | Which actions each principal kind may hold, checked only when a credential is issued; a manager may not mint an admin; a peer gateway is never issued a bearer credential. Step 2 moved these to Cedar `credential.hold` and `credential.issue` |
 | | `nessa-server` `product/socket.rs` `credential.issue`, `credential.revoke`, `credential.list` | An admin issues only active members in its own org, with grants limited to three actions; revoke and list are scoped to the caller's org and audience. Step 2 moved the role and grant checks; the socket keeps only frame-shape checks |
 | | `nessa-auth` `application/pairing/admission.rs`, `domain/pairing/value_objects/values.rs` `ConsentIntent::matches_owner` | The invitation's owner must be the session's principal (Cedar is asked the rest) |
-| **B. Conversation access** | `nessa-server` `conversation/domain/entities/conversation.rs` `allows`, `check_access` (about 30 callers) | A conversation is acted on only by its owner in its org; deleted ones are told only to the owner |
-| | `conversation/application/share_grants.rs` `admit_read`, `admit_drive`, `binding_of`; `domain/value_objects/share_access.rs` `ShareRole::at_least` | A paired reader reads with any grant and drives with Drive; role ordering |
-| | `product/read_access.rs` `admit_request`, `admit_list`, `admit_conversation`, `drives_only_text`, `dispatch_share` | Which methods a paired reader may call; a peer gateway never drives; Drive carries text only; paired readers may not list or share |
-| | `conversation/application/share_grants.rs` `ShareConversation::share`; `infrastructure/store/share_grants.rs` `change` | A share target must be the caller's receiver and hold `conversation.read` (grant list scanned by hand); grant and revoke need ownership, inside the transaction |
-| | `conversation/application/passive_read.rs` `binding`; `product/change_watch/registration.rs` `admit_current` | Owner and grant checks after Cedar; a catalogue watch is refused to a peer gateway |
-| | `attachments/application/held_reads.rs` `HeldReads::read` | Artifact bytes only for the conversation's owner |
-| **C. Agent tools** | `conversation/domain/command_policy.rs` `CommandPolicy::admit` | `run` only on configured hosts; programs by allow and deny sets; ignores who started the turn |
-| | `mcp_servers/domain/app_call.rs` `admit_app`, `admit_tool_call` | An MCP App calls only its own server, and only tools visible to it |
+| **B. Conversation access** | `nessa-server` `conversation/domain/entities/conversation.rs` `allows`, `check_access` (deleted in step 3) | A conversation is acted on only by its owner in its org; deleted ones are told only to the owner. Step 3 moved every owner command, `note_status`, the list filters, the delete fence and the store's share change to `ConversationAccessPolicyEvaluator`; `allows` stays as a record-integrity check |
+| | `conversation/application/share_grants.rs` `admit_read`, `admit_role`, `binding_of`; `domain/value_objects/share_access.rs` `ShareRole::at_least` | A paired reader reads with any grant, comments with Comment or Drive, drives with Drive; role ordering. Step 3 moved them to `conversation.read`, `.comment`, `.drive` and `note.deliver` behind `PairedAccess`, and deleted `at_least` and the role ordering; `binding_of` stays as identity and binding lifecycle |
+| | `product/read_access.rs` `admit_request`, `admit_list`, `admit_conversation`, `drives_only_text`, `dispatch_share` | Which methods a paired reader may call; a peer gateway never drives; Drive carries text only; paired readers may not list or share. Step 3 made the method sets one `paired_action` table and one evaluation, with the request's attachments, files and receipt operation as facts (`drive.text_only`), the peer rule `paired.peer_gateway`, every other owner command `conversation.write`, lists `conversation.list` and shares `conversation.share`, `.unshare`, `.shares`; which refusal is told is asked of the policy too |
+| | `conversation/application/share_grants.rs` `ShareConversation::share`; `infrastructure/store/share_grants.rs` `change` | A share target must be the caller's receiver and hold `conversation.read` (grant list scanned by hand); grant and revoke need ownership, inside the transaction. Step 3 moved the target predicate to `conversation.share` with the target's binding and grants as facts, and `owner_of` to `conversation.shares`; binding lifecycle and credential identity agreement stay in Rust, and the store still asks ownership inside the transaction |
+| | `conversation/application/passive_read.rs` `binding`; `product/change_watch/registration.rs` `admit_current` | Owner and grant checks after Cedar; a catalogue watch is refused to a peer gateway. Step 3 moved the read and the watch to the access policy; `binding` stays as identity and binding lifecycle |
+| | `attachments/application/held_reads.rs` `HeldReads::read` | Artifact bytes only for the conversation's owner. Step 3 moved it to the access policy (`artifact.read`) |
+| **C. Agent tools** | `conversation/domain/command_policy.rs` `CommandPolicy::admit`, `grants` | `run` only on configured hosts; programs by allow and deny sets; ignores who started the turn. Step 4 moved both into `commands.cedar` behind `CommandPolicyEvaluator`, keyed on who started the turn: `run` asks `admit_command` and `environments_list` the host question, and a Drive grant's turn uses only the hosts its policy names (`commandHosts`), none when it names none. `admit` and `grants` are deleted; `CommandPolicy` stays as the gateway's configuration, read as facts |
+| | `mcp_servers/domain/app_call.rs` `admit_app`, `admit_tool_call` | An MCP App calls only its own server, and only tools visible to it. Step 4 moved both into `apps.cedar` behind `AppCallPolicyEvaluator`; whether it is an app at all, whether the tool was listed, argument size and a destructive tool's review stay in Rust (lookups, capacity, a prompt) |
 | | `nessa-sdk` `infrastructure/mcp/stand_in.rs`, `infrastructure/mcp/wire.rs` `hidden_for_model` | The model may not call a tool hidden from it |
 | | `conversation/domain/value_objects/share_access.rs` `ToolRules`, `ToolPreset` | The Drive tool policy: stored, never evaluated. Slice J4 part 2 built its Cedar evaluator |
 | | `nessa-sdk` `infrastructure/claude_acp/tools/wire.rs` `DISALLOWED_TOOLS`; `infrastructure/opencode_acp/sessions/binding.rs` `SESSION_POLICY` | Fixed tool deny lists sent to the harness at launch |
@@ -163,14 +164,47 @@ request, `Part of #803`, because each pull request costs a full CI run (Saurav,
    Ownership checks inside the store's transaction ask the same port. Likely two
    pull requests: ownership first, then share grants. It touches files the
    slice J3 thread is editing, so it starts only when that is clear.
-4. **C: agent tools,** after slice J4 lands its tool-policy adapter.
-   `CommandPolicy`, MCP App call admission and model-hidden tools become
-   policies in that bundle, keyed on who started the turn. The turn's
-   initiation and its share grant are facts, so a grant can be limited to its
-   own command hosts: a Drive-started turn no longer inherits the gateway-wide
-   host list, and a grant with no host list gets no hosts unless its policy
-   says otherwise. The fixed harness deny lists are then generated from the
-   same policies rather than written twice.
+   Done in three parts: ownership (S1 to S3), passive reads and watches (S4),
+   and share grants and the socket's paired admission (S5). Rust now only reads
+   facts (binding, conversation, held role, request shape) and maps the
+   policy's answer to a wire code. Whether a paired party is told `forbidden`,
+   `conversation_not_found` or `conversation_deleted` is itself asked of the
+   policy (`conversation.read`, `catalogue.entry`, `conversation.locate`).
+   A peer gateway's refused drive or note is told what its read would be, so
+   a missing id and an ungranted one answer alike; any other owner command a
+   paired reader sends is `conversation.write` on its binding's catalogue,
+   refused `forbidden` before a conversation is read. A share asks ownership
+   before it reads the target credential. Known edges: a role below the
+   action's on a deleted conversation is told it was deleted; a peer gateway's
+   malformed drive command is told what a device's is, because the peer rule
+   needs the conversation to be asked about; and a share's target binding is
+   compared with the caller only by `conversation.share`, after the registry
+   read, so a registry outage shows for another owner's credential too.
+4. **C: agent tools. Done.** `CommandPolicy` and MCP App call admission are
+   policies beside slice J4's tool-policy bundle (`commands.cedar`,
+   `apps.cedar`), keyed on who started the turn. The turn's initiation and its
+   share grant's policy at the turn's revision are facts, so a grant is
+   limited to its own command hosts: a Drive grant's policy names them
+   (`commandHosts`, stored with its tools under one policy revision), a
+   Drive-started turn no longer inherits the gateway-wide host list, and a
+   grant with no host list, including every grant stored before the field
+   existed, gets no hosts. Composition builds the command evaluator once over
+   the configured `CommandPolicy`; `CommandPolicy::admit` and `grants` are
+   deleted. Whether a grant's turn may call `run` at all stays its tool
+   policy's, asked first.
+   Three items in row C are not policy and stay as they are:
+   - **`hidden_for_model`** is the audience an MCP server declares for its
+     tool under the MCP Apps protocol. It is the same for every turn and names
+     no principal.
+   - **Claude's `DISALLOWED_TOOLS`** lists tools whose effects the runtime
+     cannot supervise. It is a capability of the pinned harness, the same for
+     everyone.
+   - **OpenCode's `SESSION_POLICY`** is the harness's fixed approval mode, a
+     protocol setting. Drive-started turns on OpenCode are refused by the
+     tool policy already.
+
+   Generating Cedar rules from these constants would add a second copy
+   without a rule anyone could change.
 5. **D: environment host.** Agent and command admission is a Cedar bundle on
    the host (`env_serve/infrastructure/cedar/`), asked through
    `LeasePolicyEvaluator`. Cedar sees the grant the peer holds: its entry, or
@@ -208,7 +242,19 @@ request, `Part of #803`, because each pull request costs a full CI run (Saurav,
 - Policies are data a reviewer reads in one file per area, instead of logic
   spread over thirty functions.
 - Cost: each migration step rebuilds entity mapping and tests for its area, and
-  per-request evaluation costs more than an inline comparison. Not measured
-  yet; step 3 measures the catalogue page, where each item is re-admitted.
+  per-request evaluation costs more than an inline comparison. Measured for
+  step 3 (`examples/catalogue_admission_bench.rs`, release build, 4 vCPUs): one
+  evaluation takes about 34 µs at p50 and 93 µs at p99. Asked row by row, a
+  500-row list would add about 16 ms, several times its SQL. So a list or a
+  catalogue page asks once per kind of row (organization, owner, deleted, role
+  held), which costs well under a millisecond: a 256-entry page reads in 1.4 ms
+  against 1.1 ms with no check.
+- Known limit: moving a check into Cedar does not change when it runs. A
+  grant revoked after a note or a Drive turn was admitted, but before the turn
+  is saved, does not stop that turn: a revoke stops the next turn, not one
+  already being admitted (read-grants rows J15 and J23). Closing that window
+  means saving the turn only if the grant's revision is still the one Cedar
+  was asked about, inside the save's transaction. That is a change to how
+  turns are saved, not to the policy, so it is its own issue.
 - Watch for: a context value that is really a verdict, and a `cedar` directory
   used to hide hand-written matching. Both are review findings under gate 18.

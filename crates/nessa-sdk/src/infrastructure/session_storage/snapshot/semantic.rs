@@ -6,7 +6,7 @@ use super::{
     cancellation::Cancellation,
     errors::{Outcome, SavedError},
     leases::WireLease,
-    notes::WireNote,
+    notes::{WireNote, WireNoteRetired},
     queue_order::QueueEvent,
     records::{Acknowledgement, Event, Metadata, Provider},
     scheduling::SchedulingEvent,
@@ -70,6 +70,7 @@ enum WireChange<E = Event> {
     Lease(WireLease),
     Artifact(WireArtifact),
     Note(WireNote),
+    NoteRetired(WireNoteRetired),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -180,6 +181,7 @@ impl<'a> From<&'a SessionChange> for WireChange<Event<&'a str>> {
             SessionChange::Lease(record) => Self::Lease(record.into()),
             SessionChange::Artifact(record) => Self::Artifact(record.into()),
             SessionChange::Note(record) => Self::Note(record.into()),
+            SessionChange::NoteRetired(record) => Self::NoteRetired(record.into()),
         }
     }
 }
@@ -263,6 +265,7 @@ impl TryFrom<WireChange> for SessionChange {
             WireChange::Lease(record) => Self::Lease(record.decode()?),
             WireChange::Artifact(record) => Self::Artifact(record.decode()?),
             WireChange::Note(record) => Self::Note(record.decode()?),
+            WireChange::NoteRetired(record) => Self::NoteRetired(record.decode()?),
         })
     }
 }
@@ -378,6 +381,7 @@ mod tests {
             },
             actor: ActionContext::new("user", "phone", "send").unwrap(),
             initiation: Initiation::owner(),
+            notes: Vec::new(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -550,6 +554,7 @@ mod tests {
             },
             actor: ActionContext::new("user", "phone", "send").unwrap(),
             initiation: Initiation::owner(),
+            notes: Vec::new(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -603,6 +608,7 @@ mod tests {
             },
             actor: ActionContext::new("user", "phone", "send").unwrap(),
             initiation,
+            notes: Vec::new(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -636,6 +642,16 @@ mod tests {
                 "tools": "NotChecked"
             })
         );
+        let checked = saved(&record(Initiation::checked_grant(
+            GrantInitiator::new("grant-1", 4).unwrap(),
+        )));
+        assert_eq!(
+            checked["changes"][0]["InputAccepted"]["metadata"]["initiation"],
+            serde_json::json!({
+                "initiator": {"Grant": {"grant": "grant-1", "policy_revision": 4}},
+                "tools": "Checked"
+            })
+        );
         let grant = |grant: serde_json::Value| {
             serde_json::json!({
                 "initiator": {"Grant": {"grant": grant, "policy_revision": 4}},
@@ -650,7 +666,9 @@ mod tests {
                 "x".repeat(GrantInitiator::MAX_GRANT_BYTES + 1).into(),
             )),
             Some(serde_json::json!({"initiator": "Guest", "tools": "NotChecked"})),
+            // Only a grant's turn is checked.
             Some(serde_json::json!({"initiator": "Owner", "tools": "Checked"})),
+            Some(serde_json::json!({"initiator": "Owner", "tools": "Unchecked"})),
             Some(serde_json::json!({"initiator": "Owner"})),
             Some(serde_json::json!({"initiator": "Owner", "tools": "NotChecked", "by": 1})),
             // A grant's role is the host's record of the grant, never a copy
@@ -735,6 +753,7 @@ mod tests {
             },
             actor: ActionContext::new("user", "phone", "send").unwrap(),
             initiation: Initiation::owner(),
+            notes: Vec::new(),
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),

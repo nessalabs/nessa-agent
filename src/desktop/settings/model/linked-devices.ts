@@ -14,6 +14,7 @@
  * for a request since replaced changes nothing. A poll read does not clear
  * what an action just said.
  */
+import type { LinkedDevice as LinkedCredential } from "../../model/linked-device"
 
 /** Whether native linking is on, as `pairing.pending` last answered. */
 export type Linking = "unknown" | "off" | "on" | "refused"
@@ -49,9 +50,7 @@ export interface WaitingDevice {
  * the same. The fingerprint is joined from an enrollment that still names
  * the credential, which a finished one usually does not.
  */
-export interface LinkedDevice {
-  readonly credentialId: string
-  readonly issuedAt: number
+export interface LinkedDevice extends LinkedCredential {
   readonly fingerprint?: string
 }
 

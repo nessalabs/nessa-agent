@@ -1,7 +1,7 @@
 //! Numbers this context enforces and the published protocol schema states
 //! again. Each is valid on its own; these check that they describe the same
 //! gateway, so changing one without the other fails here.
-use crate::conversation::application::MAX_LISTED_CONVERSATIONS;
+use crate::conversation::application::{MAX_LISTED_CONVERSATIONS, MAX_POLICY_REVISION};
 use nessa_protocol::conversation::domain::{
     ConversationPreview, ConversationTitle, LATEST_TIME_MS,
 };
@@ -198,4 +198,34 @@ fn an_apps_message_and_context_schemas_state_the_bounds_the_gateway_keeps() {
     assert_eq!(bytes(&app["toolId"]), McpAppSource::MAX_TOOL_ID_BYTES);
     assert_eq!(bytes(&app["server"]), MAX_MCP_NAME_BYTES);
     assert_eq!(bytes(&app["tool"]), MAX_MCP_NAME_BYTES);
+}
+
+#[test]
+fn a_share_states_the_policy_revision_bound_the_gateway_keeps() {
+    let schema = schema();
+    let defs = &schema["$defs"];
+    // The revision a change names, refused past this bound at the socket, and
+    // the revision a share answers: one bound for both.
+    for params in ["ConversationShareParams", "ConversationUnshareParams"] {
+        assert_eq!(
+            defs[params]["properties"]["expectedPolicyRevision"]["maximum"].as_u64(),
+            Some(MAX_POLICY_REVISION),
+            "{params}"
+        );
+    }
+    assert_eq!(
+        defs["ConversationShareResult"]["properties"]["policyRevision"]["maximum"].as_u64(),
+        Some(MAX_POLICY_REVISION)
+    );
+    // A revision is a journal sequence, which starts at 1: a share never
+    // answers 0, which a change names only for "no grant held".
+    assert_eq!(
+        defs["ConversationShareResult"]["properties"]["policyRevision"]["minimum"].as_u64(),
+        Some(1)
+    );
+    // A listed grant holds a journal sequence too, never 0.
+    assert_eq!(
+        defs["ConversationShare"]["properties"]["policyRevision"]["minimum"].as_u64(),
+        Some(1)
+    );
 }

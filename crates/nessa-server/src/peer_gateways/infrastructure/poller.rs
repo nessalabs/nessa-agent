@@ -60,6 +60,7 @@ use nessa_client_core::retained::{
 };
 use nessa_protocol::pairing::socket::WAKE_TICK;
 use nessa_protocol::pairing::wire::NativePairingStatus;
+use nessa_protocol::relay::RelayRefusal;
 use std::{
     collections::HashMap,
     future::Future,
@@ -323,7 +324,7 @@ impl Poller {
             return self.stopped_short();
         };
         let pace = match status {
-            Err(error) => self.unread(key, &Unread::Status(error)),
+            Err(why) => self.unread(key, &why),
             Ok(Status::Ended) => {
                 self.commands.set_sync(key, None);
                 Pace::Gone
@@ -394,10 +395,11 @@ impl Poller {
         record: &PeerRecord,
         cycle: &Arc<CycleStop>,
         changes: &mut Vec<PollerRecord<'a>>,
-    ) -> Option<Result<Status, NativeClientError>> {
+    ) -> Option<Result<Status, Unread>> {
         let key = *record.key();
         let before = self.commands.holding(key).await;
         let asked = self.ask_status(record, cycle).await;
+        let away = asked.away;
         let after = self.commands.holding(key).await;
         let recorded = status_record(asked, &before, &after);
         if let Some(cause) = recorded.cause {
@@ -409,7 +411,15 @@ impl Poller {
             tracing::warn!(peer = %hex(&key), before = ?before, after = ?after,
                 "peer gateway holding read differently around a status that began no change");
         }
-        recorded.answer
+        recorded.answer.map(|answer| {
+            answer.map_err(|error| {
+                if away {
+                    Unread::Away
+                } else {
+                    Unread::Status(error)
+                }
+            })
+        })
     }
 
     /// The status, the transition its store began, if any, and whether that
@@ -600,6 +610,9 @@ enum Unread {
     /// The record could not be read.
     Storage,
     Status(NativeClientError),
+    /// The status dial did not connect, and the peer's relay said the peer
+    /// is not registered with it.
+    Away,
     Read(ReadFailure),
 }
 
@@ -611,6 +624,9 @@ struct AskedStatus {
     transition: Option<SlotTransition>,
     landed: Option<SlotOutcome>,
     stopped: bool,
+    /// The dial did not connect and the peer's relay said the peer is not
+    /// registered with it.
+    away: bool,
 }
 impl AskedStatus {
     /// The dial wait stopped before a status was asked.
@@ -620,12 +636,14 @@ impl AskedStatus {
             transition: None,
             landed: None,
             stopped: true,
+            away: false,
         }
     }
 
     /// The dial failed before a status was asked. No transition began.
     fn dial_failed(error: std::io::Error) -> Self {
         Self {
+            away: RelayRefusal::carried(&error) == Some(RelayRefusal::Offline),
             status: Some(Err(NativeClientError::Io(error.kind()))),
             transition: None,
             landed: None,
@@ -658,6 +676,7 @@ where
         transition,
         landed,
         stopped: stopped_early,
+        away: false,
     }
 }
 
@@ -819,6 +838,7 @@ fn sync_state(why: &Unread) -> SyncState {
     match why {
         Unread::Status(NativeClientError::Io(_) | NativeClientError::Handshake(_))
         | Unread::Read(ReadFailure::Unreachable) => SyncState::Unreachable,
+        Unread::Away | Unread::Read(ReadFailure::Away) => SyncState::Away,
         Unread::Read(ReadFailure::Quota) => SyncState::Quota,
         _ => SyncState::Failed,
     }

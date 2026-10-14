@@ -85,7 +85,9 @@ async fn record_use_case_admits_before_metadata_and_rechecks_each_request() {
     let directory = tempfile::tempdir().unwrap();
     let private = directory.path().join("conversations");
     nessa_local_storage::create_directory(&private).unwrap();
-    let conversations = LocalConversationStore::open(&private.join("metadata.sqlite3")).unwrap();
+    let conversations = LocalConversationStore::open(&private.join("metadata.sqlite3"))
+        .unwrap()
+        .with_access_policy(crate::conversation_test_support::access_policy());
     let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
     conversations
         .create(
@@ -126,6 +128,7 @@ async fn record_use_case_admits_before_metadata_and_rechecks_each_request() {
     let source = RecordSpy::default();
     let read = ReadRecords {
         admission: AdmitPassiveRead {
+            access_policy: crate::conversation_test_support::access_policy_ref(),
             authorization: AuthorizeAction {
                 access: &access,
                 clock: &clock,
@@ -313,7 +316,9 @@ async fn passive_admission_preserves_unverifiable_authority_failures() {
     let directory = tempfile::tempdir().unwrap();
     let private = directory.path().join("conversations");
     nessa_local_storage::create_directory(&private).unwrap();
-    let conversations = LocalConversationStore::open(&private.join("metadata.sqlite3")).unwrap();
+    let conversations = LocalConversationStore::open(&private.join("metadata.sqlite3"))
+        .unwrap()
+        .with_access_policy(crate::conversation_test_support::access_policy());
     let gateway = Resource::new(
         OrganizationId::new("org").unwrap(),
         ResourceId::new("gateway").unwrap(),
@@ -332,6 +337,7 @@ async fn passive_admission_preserves_unverifiable_authority_failures() {
     ] {
         let failing = FailingAccess(error);
         let admit = AdmitPassiveRead {
+            access_policy: crate::conversation_test_support::access_policy_ref(),
             authorization: AuthorizeAction {
                 access: &failing,
                 clock: &clock,
@@ -442,7 +448,9 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
     let private = directory.path().join("conversations");
     nessa_local_storage::create_directory(&private).unwrap();
     let path = private.join("metadata.sqlite3");
-    let conversations = LocalConversationStore::open(&path).unwrap();
+    let conversations = LocalConversationStore::open(&path)
+        .unwrap()
+        .with_access_policy(crate::conversation_test_support::access_policy());
     let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
     conversations
         .create(
@@ -481,6 +489,7 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
     .await
     .unwrap();
     let admit = AdmitPassiveRead {
+        access_policy: crate::conversation_test_support::access_policy_ref(),
         authorization: AuthorizeAction {
             access: &access,
             clock: &clock,
@@ -766,6 +775,7 @@ impl CatalogueReadSource for CatalogueSpy {
     fn read(
         &self,
         _: CatalogueReadScope,
+        _: PrincipalId,
         _: CatalogueReadOperation,
         lease: RecordReadLease,
     ) -> CatalogueReadFuture<'_> {
@@ -784,7 +794,9 @@ async fn catalogue_use_case_correlates_admitted_selector_and_operation_before_re
     let directory = tempfile::tempdir().unwrap();
     let private = directory.path().join("conversations");
     nessa_local_storage::create_directory(&private).unwrap();
-    let conversations = LocalConversationStore::open(&private.join("metadata.sqlite3")).unwrap();
+    let conversations = LocalConversationStore::open(&private.join("metadata.sqlite3"))
+        .unwrap()
+        .with_access_policy(crate::conversation_test_support::access_policy());
     let access = access();
     let clock = FixedClock;
     let policy = CedarPolicyEvaluator::new().unwrap();
@@ -810,6 +822,7 @@ async fn catalogue_use_case_correlates_admitted_selector_and_operation_before_re
     };
     let read = ReadCatalogue {
         admission: AdmitPassiveRead {
+            access_policy: crate::conversation_test_support::access_policy_ref(),
             authorization: AuthorizeAction {
                 access: &access,
                 clock: &clock,
@@ -1006,7 +1019,9 @@ async fn each_operation_asks_for_its_own_grant() {
     let directory = tempfile::tempdir().unwrap();
     let private = directory.path().join("conversations");
     nessa_local_storage::create_directory(&private).unwrap();
-    let conversations = LocalConversationStore::open(&private.join("metadata.sqlite3")).unwrap();
+    let conversations = LocalConversationStore::open(&private.join("metadata.sqlite3"))
+        .unwrap()
+        .with_access_policy(crate::conversation_test_support::access_policy());
     let access = access();
     let clock = FixedClock;
     let gateway = Resource::new(
@@ -1026,6 +1041,7 @@ async fn each_operation_asks_for_its_own_grant() {
     .await
     .unwrap();
     let admission = AdmitPassiveRead {
+        access_policy: crate::conversation_test_support::access_policy_ref(),
         authorization: AuthorizeAction {
             access: &access,
             clock: &clock,
@@ -1087,6 +1103,7 @@ async fn each_operation_asks_for_its_own_grant() {
         reply: Mutex::new(None),
     };
     let admission = AdmitPassiveRead {
+        access_policy: crate::conversation_test_support::access_policy_ref(),
         authorization: AuthorizeAction {
             access: &access,
             clock: &clock,
@@ -1205,7 +1222,9 @@ impl GrantFixture {
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().join("conversations");
         nessa_local_storage::create_directory(&private).unwrap();
-        let store = LocalConversationStore::open(&private.join("metadata.sqlite3")).unwrap();
+        let store = LocalConversationStore::open(&private.join("metadata.sqlite3"))
+            .unwrap()
+            .with_access_policy(crate::conversation_test_support::access_policy());
         let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
         store
             .create(
@@ -1232,23 +1251,26 @@ impl GrantFixture {
     }
     async fn change(&self, transition: crate::conversation::application::ShareGrantTransition) {
         use crate::conversation::application::ShareGrants;
-        assert!(self
-            .store
-            .change(crate::conversation::application::ShareGrantChange {
-                transition,
-                conversation_id: self.id.clone(),
-                receiver_id: Some("receiver".into()),
-                credential_id: CredentialId::new("credential").unwrap(),
-                initiator: crate::conversation::application::ConversationCaller {
-                    organization_id: OrganizationId::new("org").unwrap(),
-                    principal_id: PrincipalId::new("owner").unwrap(),
-                    surface_id: "desktop".into(),
-                    action_id: uuid::Uuid::new_v4().to_string(),
-                },
-                at_ms: 1,
-            })
-            .await
-            .unwrap());
+        assert!(
+            self.store
+                .change(crate::conversation::application::ShareGrantChange {
+                    transition,
+                    conversation_id: self.id.clone(),
+                    receiver_id: Some("receiver".into()),
+                    credential_id: CredentialId::new("credential").unwrap(),
+                    expected_policy_revision: None,
+                    initiator: crate::conversation::application::ConversationCaller {
+                        organization_id: OrganizationId::new("org").unwrap(),
+                        principal_id: PrincipalId::new("owner").unwrap(),
+                        surface_id: "desktop".into(),
+                        action_id: uuid::Uuid::new_v4().to_string(),
+                    },
+                    at_ms: 1,
+                })
+                .await
+                .unwrap()
+                .applied
+        );
     }
 }
 
@@ -1280,6 +1302,7 @@ async fn an_ungranted_conversation_is_refused_before_its_source() {
     );
     let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
     let admit = AdmitPassiveRead {
+        access_policy: crate::conversation_test_support::access_policy_ref(),
         authorization: AuthorizeAction {
             access: &access,
             clock: &FixedClock,
@@ -1336,6 +1359,7 @@ async fn a_comment_or_drive_grant_reads_records_as_read_does() {
         );
         let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
         let admit = AdmitPassiveRead {
+            access_policy: crate::conversation_test_support::access_policy_ref(),
             authorization: AuthorizeAction {
                 access: &access,
                 clock: &FixedClock,
@@ -1392,6 +1416,7 @@ async fn a_revoke_ends_the_next_read_and_lets_an_admitted_one_finish() {
     );
     let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
     let admit = AdmitPassiveRead {
+        access_policy: crate::conversation_test_support::access_policy_ref(),
         authorization: AuthorizeAction {
             access: &access,
             clock: &FixedClock,
@@ -1479,6 +1504,7 @@ async fn metadata_query_target_fences_passive_admission_and_shares() {
     );
     let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
     let admit = AdmitPassiveRead {
+        access_policy: crate::conversation_test_support::access_policy_ref(),
         authorization: AuthorizeAction {
             access: &access,
             clock: &FixedClock,
@@ -1513,6 +1539,7 @@ async fn metadata_query_target_fences_passive_admission_and_shares() {
         grants: &fixture.store,
         access: &access,
         gateway: &gateway,
+        policy: crate::conversation_test_support::access_policy_ref(),
     };
     let caller = ConversationCaller {
         organization_id: OrganizationId::new("org").unwrap(),
@@ -1526,4 +1553,90 @@ async fn metadata_query_target_fences_passive_admission_and_shares() {
         Err(ConversationError::Storage(StorageError::IdentityMismatch))
     ));
     assert_eq!(shares.shares(&caller, &fixture.id).await.unwrap().len(), 1);
+}
+
+/// A paired read the access policy cannot decide is unverifiable, never a
+/// conversation the reader may not see, and touches no source; one it
+/// refuses is the answer a missing conversation gets. A catalogue watch it
+/// cannot decide is unverifiable too, and one it refuses is forbidden.
+#[tokio::test]
+async fn a_paired_read_the_access_policy_cannot_decide_is_unverifiable() {
+    use crate::conversation::application::{
+        AccessAsk, AccessDecision, AccessDenial, ConversationAccessPolicyEvaluator,
+    };
+    struct Answers(AccessDenial);
+    impl ConversationAccessPolicyEvaluator for Answers {
+        fn evaluate(&self, _: &AccessAsk<'_>) -> AccessDecision {
+            AccessDecision::Deny(self.0.clone())
+        }
+    }
+    let fixture = GrantFixture::new().await;
+    fixture
+        .change(
+            crate::conversation::application::ShareGrantTransition::Grant(
+                crate::conversation::domain::ShareAccess::read(),
+            ),
+        )
+        .await;
+    let access = access();
+    let policy = CedarPolicyEvaluator::new().unwrap();
+    let gateway = Resource::new(
+        OrganizationId::new("org").unwrap(),
+        ResourceId::new("gateway").unwrap(),
+    );
+    let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
+    let session = device_session().await;
+    let scope = CatalogueReadScope {
+        receiver_id: "receiver".into(),
+        organization_id: OrganizationId::new("org").unwrap(),
+        owner_id: PrincipalId::new("owner").unwrap(),
+        access_epoch: 7,
+    };
+    for (denial, refusal, watch_refusal) in [
+        (
+            AccessDenial::Unavailable,
+            ReadRefusal::Unverifiable,
+            ReadRefusal::Unverifiable,
+        ),
+        (
+            AccessDenial::NotPermitted,
+            ReadRefusal::WrongOwner,
+            ReadRefusal::Forbidden,
+        ),
+    ] {
+        let answers = Answers(denial);
+        let admit = AdmitPassiveRead {
+            access_policy: &answers,
+            authorization: AuthorizeAction {
+                access: &access,
+                clock: &FixedClock,
+                policy: &policy,
+            },
+            gateway: &gateway,
+            receivers: &bindings,
+            conversations: &fixture.store,
+            grants: &CONVERSATION_READ_GRANT,
+            share_grants: &fixture.store,
+        };
+        let calls = AtomicUsize::new(0);
+        let source = |_: ReceiverReadScope| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            async { Ok::<(), ()>(()) }
+        };
+        assert_eq!(
+            admit
+                .read_with(
+                    &session,
+                    &fixture.id,
+                    "receiver",
+                    7,
+                    PassiveRead::RecordHead,
+                    source
+                )
+                .await,
+            Err(refusal)
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "no source was touched");
+        assert_eq!(admit.catalogue_watch(&session, &scope), Err(watch_refusal));
+    }
 }

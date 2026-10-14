@@ -64,6 +64,7 @@ impl Fixture {
         let storage = Arc::new(InMemoryStorage::new());
         let service = ConversationService::new(
             ConversationDependencies {
+                access_policy: crate::conversation_test_support::access_policy(),
                 // Each approval mode resolves, so a conversation can be in
                 // one other than Ask.
                 agents: mode_agents(

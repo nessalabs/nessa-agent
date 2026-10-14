@@ -112,6 +112,7 @@ fn a_publish_answer_mirrors_the_hosts_and_is_an_error_unless_held() {
         ),
         (PublishCallRefusal::NoTurn, "no_turn"),
         (PublishCallRefusal::DuplicateRequest, "duplicate_request"),
+        (PublishCallRefusal::NotAllowed, "not_allowed"),
         (
             PublishCallRefusal::PublishUnavailable,
             "publish_unavailable",
@@ -221,6 +222,7 @@ fn a_fetch_answer_says_where_the_file_is_and_is_an_error_unless_placed_and_recor
             "environment_not_leased",
         ),
         (FetchCallRefusal::DuplicateRequest, "duplicate_request"),
+        (FetchCallRefusal::NotAllowed, "not_allowed"),
         (FetchCallRefusal::FetchUnavailable, "fetch_unavailable"),
         (FetchCallRefusal::Invalid, "invalid"),
         (FetchCallRefusal::NotHeld, "not_held"),

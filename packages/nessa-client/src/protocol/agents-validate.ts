@@ -55,7 +55,7 @@ function hooksChoice(value: unknown): "off" | "on" {
 /** Validate one authenticated gateway catalog before it reaches a picker. */
 export function agentsList(value: unknown): AgentsListResult {
   const result = object(value)
-  exact(result, ["agents", "environments", "nativeHooks"])
+  exact(result, ["agents", "environments", "commandHosts", "nativeHooks"])
   const hooks = object(result.nativeHooks)
   exact(hooks, ["claude", "codex"])
   hooksChoice(hooks.claude)
@@ -70,6 +70,17 @@ export function agentsList(value: unknown): AgentsListResult {
       throw new Error("Invalid agent catalog environment")
     if (environments.has(host)) throw new Error("Repeated agent catalog environment")
     environments.add(host)
+  }
+  // Of those places, the ones the owner's turns may run commands on: each one
+  // of them, named once, in their order.
+  if (!Array.isArray(result.commandHosts))
+    throw new Error("Invalid agent catalog command hosts")
+  const order = [...environments]
+  let last = -1
+  for (const host of result.commandHosts as unknown[]) {
+    const at = typeof host === "string" ? order.indexOf(host) : -1
+    if (at <= last) throw new Error("Invalid agent catalog command host")
+    last = at
   }
   if (!Array.isArray(result.agents) || result.agents.length > bounds.maxConfiguredAgents)
     throw new Error("Invalid configured agents")

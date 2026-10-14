@@ -81,9 +81,14 @@ fn fixture_with_agents(
 ) {
     nessa_local_storage::create_directory(root).unwrap();
     let storage = Arc::new(RecordStorage::new(root.join("records")).unwrap());
-    let metadata = Arc::new(LocalConversationStore::open(&root.join("metadata.sqlite3")).unwrap());
+    let metadata = Arc::new(
+        LocalConversationStore::open(&root.join("metadata.sqlite3"))
+            .unwrap()
+            .with_access_policy(crate::conversation_test_support::access_policy()),
+    );
     let service = ConversationService::new(
         ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
             agents,
             storage: storage.clone(),
             metadata: metadata.clone(),

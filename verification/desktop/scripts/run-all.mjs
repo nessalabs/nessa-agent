@@ -47,6 +47,7 @@ const functional = [
   "mode-publication",
   "panel-list-follow",
   "linked-devices",
+  "share-dialog",
   "settings-page",
   "widgets",
   "subagents",
@@ -56,6 +57,7 @@ const functional = [
   "message-sync",
   "command-order",
   "published-files",
+  "transcript-notes",
 ]
 
 const options = cli({

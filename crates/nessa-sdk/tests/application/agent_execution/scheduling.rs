@@ -40,6 +40,12 @@ impl ExecutionEventStream for Events {
 }
 struct GatedFactory(Arc<GatedProvider>);
 impl AgentProvider for GatedFactory {
+    /// Ask, so a grant's checked turn may be sent here.
+    fn approval_mode(
+        &self,
+    ) -> Option<nessa_sdk::application::agent_execution::providers::ApprovalMode> {
+        Some(nessa_sdk::application::agent_execution::providers::ApprovalMode::Ask)
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("gated", "fixture", "tests").unwrap()
     }

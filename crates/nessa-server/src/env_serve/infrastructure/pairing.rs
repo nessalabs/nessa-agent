@@ -7,6 +7,8 @@
 //! FilePairingEnvironment ──▶ FilePairingState (environment/pairing, locked)
 //!                       ──▶ environment/paired-with (the address enrolled with)
 //!                       ──▶ NativeEnrollmentClient ──▶ TCP to the gateway
+//!                           (a status request, with a relay: direct, then
+//!                           through the relay for the pending pin)
 //! ```
 //!
 //! Arrows are what it holds and reaches. It speaks the application's
@@ -22,6 +24,8 @@ use nessa_auth::{
     domain::pairing::ConsentClass,
 };
 use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
+use nessa_client_core::retained::dial_gateway;
+use nessa_protocol::relay::RelayAddress;
 use nessa_protocol::{clock::Clock, pairing::wire::NativePairingStatus};
 use std::{
     io::{self, Read, Write},
@@ -54,6 +58,9 @@ pub(crate) struct FilePairingEnvironment {
     root: PathBuf,
     directory: PathBuf,
     address: String,
+    /// Where the gateway is asked for when a status request's direct dial
+    /// does not connect; `None` for direct only.
+    relay: Option<RelayAddress>,
 }
 
 impl FilePairingEnvironment {
@@ -91,7 +98,16 @@ impl FilePairingEnvironment {
             directory: root.join(PAIRING),
             root,
             address: address.to_owned(),
+            relay: None,
         })
+    }
+
+    /// Ask the pairing's status through `relay` too, when the direct dial
+    /// does not connect. Enrolling stays direct: the gateway's key, which
+    /// the relay is asked for, is learned by enrolling.
+    pub(crate) fn through(mut self, relay: Option<RelayAddress>) -> Self {
+        self.relay = relay;
+        self
     }
 
     /// The pin of the gateway this machine is paired with, once its owner
@@ -133,6 +149,26 @@ impl FilePairingEnvironment {
     /// Let go of the pairing client's worker.
     pub(crate) async fn shutdown(&self) {
         self.client.shutdown().await;
+    }
+
+    /// A blocking stream to the gateway for a status request: direct, then,
+    /// with a relay, through it for the key the pending pairing pinned. With
+    /// nothing pending, there is no key to ask for: direct only.
+    async fn connect_or_relay(&self) -> io::Result<TcpStream> {
+        let (store, address, relay) =
+            (self.store.clone(), self.address.clone(), self.relay.clone());
+        let dialing = tokio::task::spawn_blocking(move || {
+            let pin = relay.as_ref().and_then(|_| {
+                store
+                    .load_pending()
+                    .ok()
+                    .flatten()
+                    .map(|pending| *pending.gateway_pin())
+            });
+            let route = relay.as_ref().zip(pin.as_ref());
+            dial_gateway(&address, route, CONNECT)
+        });
+        bounded(dialing).await
     }
 
     fn enroll_failure(&self, error: NativeClientError) -> String {
@@ -185,8 +221,15 @@ impl EnvironmentPairing for FilePairingEnvironment {
     }
 
     async fn ask(&self) -> Answer {
-        let stream = match connect(&self.address).await {
+        let connected = self.connect_or_relay().await;
+        let stream = match connected {
             Ok(stream) => stream,
+            // A saved pin that is not a key is not changed by asking again.
+            Err(error) if error.kind() == io::ErrorKind::InvalidInput => {
+                return Answer::Unusable(format!(
+                    "the pairing waiting for approval cannot be used: {error}"
+                ))
+            }
             Err(error) => {
                 return Answer::Unanswered(format!(
                     "{} could not be reached: {error}",
@@ -244,9 +287,13 @@ impl EnrollingPairing for FilePairingEnvironment {
     }
 
     async fn send_code(&self, code: ManualCode) -> Result<(), String> {
-        let stream = connect(&self.address)
-            .await
-            .map_err(|error| format!("{}: {error}", self.address))?;
+        // Direct only: the relay is asked for a key this learns by enrolling.
+        let address = self.address.clone();
+        let stream = bounded(tokio::task::spawn_blocking(move || {
+            dial_gateway(&address, None, CONNECT)
+        }))
+        .await
+        .map_err(|error| format!("{}: {error}", self.address))?;
         self.client
             .enroll(stream, code, OsEntropy)
             .await
@@ -296,15 +343,14 @@ pub(crate) fn answer_to_failure(error: NativeClientError, directory: &Path) -> A
     }
 }
 
-/// A blocking stream to the gateway for the pairing client, connected
-/// without blocking the runtime; each address the name resolves to is tried.
-async fn connect(address: &str) -> io::Result<TcpStream> {
-    let stream = tokio::time::timeout(CONNECT, tokio::net::TcpStream::connect(address))
+/// A connect on a blocking worker, waited for at most [`CONNECT`]: the
+/// name lookup inside it waits as long as the system resolver does, and a
+/// lookup that hangs is left to end on its own.
+async fn bounded(dialing: tokio::task::JoinHandle<io::Result<TcpStream>>) -> io::Result<TcpStream> {
+    tokio::time::timeout(CONNECT, dialing)
         .await
-        .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??
-        .into_std()?;
-    stream.set_nonblocking(false)?;
-    Ok(stream)
+        .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))?
+        .map_err(|_| io::Error::other("the dialing worker failed"))?
 }
 
 #[cfg(test)]

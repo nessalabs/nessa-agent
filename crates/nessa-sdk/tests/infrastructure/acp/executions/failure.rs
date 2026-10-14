@@ -331,6 +331,7 @@ async fn finalized_provider_and_local_recipes_survive_storage_reload_exactly() {
                 },
                 actor: actor.clone(),
                 initiation: Initiation::owner(),
+                notes: Vec::new(),
                 acknowledgement: SubmissionAcknowledgement::Acknowledged,
                 events: Vec::new(),
                 scheduling: Vec::new(),
