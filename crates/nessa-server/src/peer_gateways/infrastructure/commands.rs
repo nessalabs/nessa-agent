@@ -144,6 +144,10 @@ pub enum SyncState {
     Syncing,
     /// The peer could not be reached; reads back off.
     Unreachable,
+    /// The peer's address did not answer and its relay said the peer is not
+    /// registered with it; the cache is kept, and reads back off as for
+    /// `Unreachable`.
+    Away,
     /// The peer answered, but the read failed; reads back off.
     Failed,
     /// This gateway's cache of the peer is full; reads back off until the

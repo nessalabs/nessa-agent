@@ -35,8 +35,12 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
         ConversationError::NotFound => ConversationErrorCode::ConversationNotFound,
         ConversationError::Deleted => ConversationErrorCode::ConversationDeleted,
         ConversationError::ShareTargetNotPaired => ConversationErrorCode::ShareTargetNotPaired,
+        ConversationError::ShareGrantChanged => ConversationErrorCode::ShareGrantChanged,
         ConversationError::IdempotencyConflict => ConversationErrorCode::IdempotencyConflict,
         ConversationError::MessageQuotaExceeded => ConversationErrorCode::MessageQuotaExceeded,
+        ConversationError::DrivePolicyUnenforceable => {
+            ConversationErrorCode::DrivePolicyUnenforceable
+        }
         ConversationError::DeletionIncomplete(failures) => deletion_incomplete(failures),
         ConversationError::AgentNotConfigured => ConversationErrorCode::AgentNotConfigured,
         ConversationError::AgentUnsupported => ConversationErrorCode::AgentUnsupported,

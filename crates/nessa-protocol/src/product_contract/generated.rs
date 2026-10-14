@@ -121,8 +121,10 @@ pub enum ConversationErrorCode {
     McpUnreachable,
     McpInsufficientScope,
     ShareTargetNotPaired,
+    ShareGrantChanged,
     IdempotencyConflict,
     MessageQuotaExceeded,
+    DrivePolicyUnenforceable,
 }
 impl ConversationErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -181,8 +183,10 @@ impl ConversationErrorCode {
             Self::McpUnreachable => "mcp_unreachable",
             Self::McpInsufficientScope => "mcp_insufficient_scope",
             Self::ShareTargetNotPaired => "share_target_not_paired",
+            Self::ShareGrantChanged => "share_grant_changed",
             Self::IdempotencyConflict => "idempotency_conflict",
             Self::MessageQuotaExceeded => "message_quota_exceeded",
+            Self::DrivePolicyUnenforceable => "drive_policy_unenforceable",
         }
     }
 }

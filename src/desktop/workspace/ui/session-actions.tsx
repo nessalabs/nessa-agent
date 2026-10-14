@@ -11,10 +11,16 @@ import {
   closePane,
   openBeside,
   openSession,
+  openShare,
   pinSession,
 } from "../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../adapters/store/hooks"
-import { selectPaneCount, selectPanes, selectSession } from "../adapters/store/selectors"
+import {
+  selectPaneCount,
+  selectPanes,
+  selectSession,
+  selectShareable,
+} from "../adapters/store/selectors"
 import { useBesidePreference } from "../../adapters/window-preferences"
 import { MenuItem, MenuSeparator, MenuShortcut } from "../../ui/menu"
 import { isMac } from "../../adapters/platform"
@@ -69,6 +75,7 @@ export function SessionMenuItems({ sessionId }: { sessionId: string }) {
       pane: panes ? paneShowingSession(panes, sessionId)?.key : undefined,
     }
   }, shallowEqual)
+  const shareable = useWorkspaceSelector(selectShareable)
   const shown = pane !== undefined
   return (
     <>
@@ -102,6 +109,19 @@ export function SessionMenuItems({ sessionId }: { sessionId: string }) {
       >
         Archive
       </MenuItem>
+      {/* Sharing is the gateway's: a window without one offers none, and a
+          session it has not spoken of has no conversation to share yet. */}
+      {shareable ? (
+        <>
+          <MenuSeparator />
+          <MenuItem
+            disabled={!begun}
+            onSelect={() => void dispatch(openShare({ sessionId }))}
+          >
+            Share…
+          </MenuItem>
+        </>
+      ) : null}
     </>
   )
 }

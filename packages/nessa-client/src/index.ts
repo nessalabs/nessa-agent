@@ -181,6 +181,7 @@ export type {
   ConversationCreateOptions,
   ConversationListOptions,
   ConversationSendOptions,
+  ConversationShareOptions,
   ConversationSubmission,
 } from "./presentation/conversation-api.js"
 export type {
@@ -336,8 +337,17 @@ export type {
   ConversationCreateResult,
   ConversationReceipt,
   ConversationPermissionSelectionState,
+  ConversationShare,
+  ConversationShareResult,
+  ConversationSharesResult,
+  ConversationToolPolicy,
 } from "./generated/product.js"
-export { ConversationErrorCode } from "./generated/product.js"
+export {
+  ConversationErrorCode,
+  ConversationShareRole,
+  ConversationToolPreset,
+} from "./generated/product.js"
+export { toolPolicyBounds } from "./protocol/conversation-validate.js"
 export { conversationErrorCode } from "./application/conversation-error-code.js"
 export type { ConversationLease } from "./generated/product.js"
 export {

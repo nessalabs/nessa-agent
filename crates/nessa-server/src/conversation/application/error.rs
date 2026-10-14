@@ -37,6 +37,10 @@ pub enum ConversationError {
     /// A share named a credential that is not an active paired device of
     /// the conversation's owner.
     ShareTargetNotPaired,
+    /// A share or revoke named the policy revision it was built on, and the
+    /// party's grant no longer holds it: changed or revoked since. Nothing
+    /// was changed.
+    ShareGrantChanged,
     /// A note's request already left another note in the conversation:
     /// another text, delivery, surface or authority under the same request.
     /// Nothing was saved; the first note stands.
@@ -44,6 +48,11 @@ pub enum ConversationError {
     /// The conversation keeps its most notes, or the note's author left its
     /// most for now. Nothing was saved.
     MessageQuotaExceeded,
+    /// A Drive grant's turn sent where its tools cannot all be checked
+    /// against the grant's policy: an agent that runs tools without asking
+    /// (OpenCode), an approval mode other than Ask, native hooks allowed, or
+    /// the policy unreadable. Nothing was saved or sent.
+    DrivePolicyUnenforceable,
     /// A delete that happened — the conversation is tombstoned, left out of
     /// every list, and refused — and did not finish. Repeating the delete
     /// finishes it.
@@ -132,6 +141,7 @@ impl From<ConversationRefusal> for ConversationError {
         match refusal {
             ConversationRefusal::NotFound => Self::NotFound,
             ConversationRefusal::Deleted => Self::Deleted,
+            ConversationRefusal::Unavailable => Self::Metadata,
         }
     }
 }

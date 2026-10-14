@@ -154,6 +154,20 @@ close observers.
 | A callback replaces a registration, then dispatches another event reentrantly | The replacement receives the nested event, but not the interrupted outer event. |
 | A callback closes the session | Remaining callbacks and later events are skipped. |
 
+Recovery keeps that same registration. `managed-session.test.ts` checks these
+orderings:
+
+| Subscriptions across recovery | Result |
+| --- | --- |
+| The same function twice; either handle removed; then recovery | Stays removed. Recovery does not deliver it. |
+| The same function twice; one handle removed while reconnecting, and the function subscribed again before the replacement is adopted | The removed registration stays removed. The new one is delivered after recovery, and the old handles do not remove it. |
+| Both handles kept; recovery twice | One delivery after each recovery. |
+| Removed, then the same function subscribed again | The old handles do not remove the replacement, before or after recovery. |
+| Removed and replaced during delivery | The replacement receives the nested event; recovery keeps that replacement. |
+| One of two different functions removed while reconnecting | Recovery delivers only the one still held. |
+| The same function on two events; one event removed | The other event is still delivered, including after recovery. |
+| The client closes permanently | Later handles and events deliver nothing, and recovery does not run. |
+
 Network interruption, restart, overload, handshake timeout, and temporary gateway
 dependency failures are retryable. Revoked or expired credentials, lost
 authorization, authentication rejection, incompatible protocols, normal shutdown,
@@ -163,7 +177,10 @@ numeric `code`, typed `closeReason`, `retryable`, and optional `retryAfterMs`.
 prevent the server's reason from arriving; the next authentication then checks
 current authorization.
 
-API objects and event subscriptions survive recovery. Session getters are only
+API objects and event subscriptions that are still registered survive recovery.
+A second subscription of the same function shares that registration: either
+unsubscribe removes it, and recovery does not restore a registration that was
+removed. Session getters are only
 available while connected. Pending RPCs reject on closure; calls during recovery
 reject with `NessaSessionUnavailableError`. **No RPC is automatically replayed.**
 A lost response does not prove the operation failed. For credential mutations,

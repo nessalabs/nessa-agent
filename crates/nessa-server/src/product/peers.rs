@@ -132,6 +132,7 @@ fn wire(entry: &PeerEntry, sync: Option<&PeerSync>) -> PeerGateway {
                 SyncState::Synced => PeerSyncState::Synced,
                 SyncState::Syncing => PeerSyncState::Syncing,
                 SyncState::Unreachable => PeerSyncState::Unreachable,
+                SyncState::Away => PeerSyncState::Away,
                 SyncState::Failed => PeerSyncState::Failed,
                 SyncState::Quota => PeerSyncState::Quota,
             },

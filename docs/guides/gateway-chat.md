@@ -506,8 +506,10 @@ reconnecting never resubmits prompts to reconstruct a transcript.
 
 The desktop workspace reads nothing on a timer either. It follows the same
 bounded views through `conversation.subscribe` and the list through
-`conversation.subscribeList` ([record subscriptions](../design/record-subscriptions.md)):
-the gateway sends a view again whenever its committed records or its live facts
+`conversation.subscribeList` ([record subscriptions](../design/record-subscriptions.md)).
+A view that left history out, or has not confirmed it, says so above the
+messages; the workspace does not fold records to fill that in.
+The gateway sends a view again whenever its committed records or its live facts
 change, and each frame carries a cursor (the history's incarnation and committed
 position). After a lost connection, or a subscription ended as `lagging`
 because the window did not take a frame in time, the panel and the workspace

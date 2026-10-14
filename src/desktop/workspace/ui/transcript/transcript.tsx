@@ -1,3 +1,4 @@
+import { historyNotices } from "../../../../conversation"
 import { offersAuthenticationRecovery } from "../../../../provider-authentication/model/recovery"
 import { memo, useLayoutEffect, useMemo, useRef, type RefObject } from "react"
 import { retryTranscript } from "../../adapters/store/commands"
@@ -12,7 +13,7 @@ import { ProviderSignIn } from "./provider-sign-in"
 import { ApprovalCard } from "./approval-card"
 import { LiveRow } from "./live-row"
 import { Message } from "./message"
-import type { Message as MessageValue } from "../../model/transcript"
+import { type Message as MessageValue } from "../../model/transcript"
 import { TranscriptHeading } from "./transcript-heading"
 import "./transcript.css"
 import { readFailureCopy } from "../failure-copy"
@@ -143,6 +144,16 @@ export const Transcript = memo(function Transcript({
             </button>
           </div>
         ) : null}
+        {historyNotices(transcript?.history).map((notice) => (
+          <div
+            key={notice.kind}
+            className="workspace-transcript-note"
+            role="status"
+            data-history-extent={notice.kind}
+          >
+            <p>{notice.text}</p>
+          </div>
+        ))}
         {messages.map((message) => (
           <Message
             key={message.id}
