@@ -37,6 +37,8 @@ when {
      "conversation.reorder", "conversation.subscribe", "conversation.subscribeList",
      "conversation.unsubscribe", "attachment.begin"].contains(context.method)
 };
+// A live conversation is conversation.subscribe. The chat list is
+// conversation.subscribeList. The payloadless watch methods are not this purpose.
 
 @id("owner-phone.native-read-methods")
 permit (principal is NessaPhone::Phone, action == NessaPhone::Action::"product.request", resource is NessaPhone::Scope)
@@ -56,13 +58,6 @@ permit (principal is NessaPhone::Phone, action == NessaPhone::Action::"product.r
 when {
     context has method && context has publishedAction && context.publishedAction == "server.read" &&
     ["server.health", "agents.list", "agents.subscribe", "agents.unsubscribe"].contains(context.method)
-};
-
-@id("owner-phone.read-watches")
-permit (principal is NessaPhone::Phone, action == NessaPhone::Action::"product.request", resource is NessaPhone::Scope)
-when {
-    context has method && !(context has publishedAction) &&
-    ["conversation.watchRecords", "conversation.watchCatalogue", "conversation.unwatch"].contains(context.method)
 };
 
 // The service owns the default fact; Cedar owns which creation selections this purpose permits.

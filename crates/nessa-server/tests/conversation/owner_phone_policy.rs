@@ -277,12 +277,12 @@ async fn owner_phone_cedar_admits_published_chat_methods_and_default_denies_admi
         "conversation.send",
         "conversation.delete",
         "conversation.subscribe",
+        "conversation.subscribeList",
         "attachment.begin",
         "artifact.read",
         "agents.list",
         "server.health",
         "auth.session",
-        "conversation.watchRecords",
     ] {
         let action = nessa_protocol::product::generated::action_for_method(method);
         allow(decide(
@@ -310,6 +310,21 @@ async fn owner_phone_cedar_admits_published_chat_methods_and_default_denies_admi
             OwnerPhoneOperation::ProductMethod {
                 method,
                 published_action: Some("conversation.write"),
+            },
+            &f.receiver,
+        ));
+    }
+    for method in [
+        "conversation.watchRecords",
+        "conversation.watchCatalogue",
+        "conversation.unwatch",
+    ] {
+        deny(decide(
+            &e,
+            &f,
+            OwnerPhoneOperation::ProductMethod {
+                method,
+                published_action: nessa_protocol::product::generated::action_for_method(method),
             },
             &f.receiver,
         ));
