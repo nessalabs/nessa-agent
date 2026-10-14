@@ -1,4 +1,4 @@
-//! The stores one gateway cut must name. A local outbox is not among them.
+//! The stores one gateway cut must name, including both local outboxes.
 
 /// One durable store the cut joins and reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -22,6 +22,8 @@ pub enum StoreKind {
     EnvironmentPeerCredentials,
     WorkerCredentials,
     ReceiverAccess,
+    DeviceOutbox,
+    EnvironmentOutbox,
     DeletionInventory,
 }
 
@@ -48,8 +50,18 @@ impl StoreKind {
             Self::EnvironmentPeerCredentials => "environment-peer-credentials",
             Self::WorkerCredentials => "worker-credentials",
             Self::ReceiverAccess => "receiver-access",
+            Self::DeviceOutbox => "device-outbox",
+            Self::EnvironmentOutbox => "environment-outbox",
             Self::DeletionInventory => "deletion-inventory",
         }
+    }
+
+    /// The device outbox and the environment outbox. A failure or a skipped
+    /// row aborts the cut instead of publishing the other stores without it.
+    /// `a_failed_outbox_source_aborts_the_cut` and
+    /// `a_skipped_outbox_row_aborts_the_cut`.
+    pub const fn requires_every_row(self) -> bool {
+        matches!(self, Self::DeviceOutbox | Self::EnvironmentOutbox)
     }
 
     /// The store a manifest token names, if it is one this cut keeps.
@@ -61,10 +73,10 @@ impl StoreKind {
     }
 }
 
-/// Every store a cut joins, in the order their leases are read.
+/// Every store a cut joins, in the order their snapshots are taken.
 ///
-/// A local outbox is absent on purpose: the device outbox lives on the
-/// device, and the environment outbox is emptied when serving starts.
+/// The device outbox and the environment outbox are pinned with the other
+/// stores, before deletion fences are appended.
 pub const WRITER_INVENTORY: &[StoreKind] = &[
     StoreKind::CanonicalRecords,
     StoreKind::ConversationMetadata,
@@ -85,6 +97,8 @@ pub const WRITER_INVENTORY: &[StoreKind] = &[
     StoreKind::EnvironmentPeerCredentials,
     StoreKind::WorkerCredentials,
     StoreKind::ReceiverAccess,
+    StoreKind::DeviceOutbox,
+    StoreKind::EnvironmentOutbox,
     StoreKind::DeletionInventory,
 ];
 
@@ -93,13 +107,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_writer_inventory_omits_local_outboxes() {
-        assert!(StoreKind::parse("local-outbox").is_none());
-        assert!(StoreKind::parse("local-outboxes").is_none());
+    fn the_writer_inventory_names_both_outboxes() {
+        assert_eq!(
+            StoreKind::parse("device-outbox"),
+            Some(StoreKind::DeviceOutbox)
+        );
+        assert_eq!(
+            StoreKind::parse("environment-outbox"),
+            Some(StoreKind::EnvironmentOutbox)
+        );
+        assert!(StoreKind::DeviceOutbox.requires_every_row());
+        assert!(StoreKind::EnvironmentOutbox.requires_every_row());
         assert!(WRITER_INVENTORY
             .iter()
+            .filter(|kind| !kind.requires_every_row())
             .all(|kind| !kind.as_str().contains("outbox")));
-        assert_eq!(WRITER_INVENTORY.len(), 20);
+        assert_eq!(WRITER_INVENTORY.len(), 22);
         let mut ordered = WRITER_INVENTORY.to_vec();
         ordered.sort();
         ordered.dedup();
@@ -126,6 +149,8 @@ mod tests {
                 | StoreKind::EnvironmentPeerCredentials
                 | StoreKind::WorkerCredentials
                 | StoreKind::ReceiverAccess
+                | StoreKind::DeviceOutbox
+                | StoreKind::EnvironmentOutbox
                 | StoreKind::DeletionInventory => {}
             }
         }

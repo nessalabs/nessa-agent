@@ -12,6 +12,6 @@ pub use deletion::{
 pub use inventory::{StoreKind, WRITER_INVENTORY};
 pub use manifest::{AuthenticatedManifest, Manifest};
 pub use record::{
-    CapturedRecord, DeferredEntry, Fingerprint, RecordBody, RecordError, Sensitivity, SkipReason,
-    SkippedRecord, SourceCut, Watermark,
+    outbox_watermark, CapturedRecord, DeferredEntry, Fingerprint, RecordBody, RecordError,
+    Sensitivity, SkipReason, SkippedRecord, SourceCut, Watermark,
 };

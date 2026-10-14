@@ -41,6 +41,56 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 #[test]
+fn a_stage_and_a_close_wait_for_the_outbox_lock() {
+    use std::time::Duration;
+
+    let fixture = fixture();
+    let file = fixture.workspace.join("whole.txt");
+    fs::write(&file, b"COMPLETE-STAGED").unwrap();
+    let asked = request(&file);
+    let lock = nessa_local_storage::open(
+        &fixture._root.path().join("outbox.lock"),
+        nessa_local_storage::OpenMode::OpenOrCreate,
+    )
+    .unwrap();
+    lock.lock_shared().unwrap();
+    let staged = std::thread::scope(|scope| {
+        let handle = scope.spawn(|| fixture.outbox.stage("lease", 1, &asked));
+        std::thread::sleep(Duration::from_secs(2));
+        assert!(
+            !handle.is_finished(),
+            "stage must wait while outbox.lock is held"
+        );
+        drop(lock);
+        handle.join().unwrap().unwrap()
+    });
+    assert_eq!(fs::read(&staged.path).unwrap(), b"COMPLETE-STAGED");
+
+    let lock = nessa_local_storage::open(
+        &fixture._root.path().join("outbox.lock"),
+        nessa_local_storage::OpenMode::OpenOrCreate,
+    )
+    .unwrap();
+    lock.lock_shared().unwrap();
+    let path = staged.path.clone();
+    std::thread::scope(|scope| {
+        let handle = scope.spawn(|| fixture.outbox.close("lease"));
+        std::thread::sleep(Duration::from_secs(2));
+        assert!(
+            Path::new(&path).is_file(),
+            "close must wait while outbox.lock is held"
+        );
+        assert!(
+            !handle.is_finished(),
+            "close returned while the lock was held"
+        );
+        drop(lock);
+        handle.join().unwrap();
+    });
+    assert!(!Path::new(&staged.path).exists());
+}
+
+#[test]
 fn a_file_in_the_workspace_is_staged_as_copied_and_hashed() {
     let fixture = fixture();
     let file = fixture.workspace.join("Nessa.dmg");

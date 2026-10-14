@@ -4,7 +4,8 @@
 //! for a database, a copy of a small file, or an open descriptor and its
 //! length for a directory, JSONL, or relay file. Bodies of those descriptors
 //! are read after admission is released, and only up to the length recorded
-//! at the pin. A local outbox is not read. Secret paths are fingerprinted.
+//! at the pin. The device outbox and the environment outbox are read during
+//! that pin. Secret paths are fingerprinted.
 //! The credential registry contributes public facts only.
 
 use std::fs::{self, File};
@@ -228,6 +229,18 @@ pub async fn capture_namespace(
             wanted: None,
         }),
         Box::new(Receivers::new(credentials.clone())),
+        // Both pins take `outbox.lock` shared for the whole read. The
+        // environment writer holds that file exclusively across stage,
+        // discard, close, and the sweep when serving starts. Each
+        // directory stops at the files and bytes one lease may keep.
+        Box::new(super::outbox::OutboxDirectory::new(
+            StoreKind::DeviceOutbox,
+            namespace.join("device").join("outbox"),
+        )),
+        Box::new(super::outbox::OutboxDirectory::new(
+            StoreKind::EnvironmentOutbox,
+            namespace.join("environment").join("outbox"),
+        )),
         Box::new(inventory_cut),
     ];
     let source_refs: Vec<&dyn ExportSource> =
@@ -1888,7 +1901,7 @@ const PRIVATE_KEY_LABEL: &[u8] = b"PRIVATE KEY";
 /// page from being treated as a line that runs to the end of the file.
 const PEM_HEADER_LIMIT: usize = 256;
 
-fn content_is_secret(bytes: &[u8]) -> bool {
+pub(crate) fn content_is_secret(bytes: &[u8]) -> bool {
     bytes_hold_secret(bytes) || json_has_secret(bytes)
 }
 
@@ -2022,7 +2035,7 @@ fn finish_deferred(kind: StoreKind, streams: &[DeferredStream]) -> Result<Source
 }
 
 fn absent(kind: StoreKind) -> Result<SourceCut, ()> {
-    finish(kind, "absent", vec![], vec![])
+    SourceCut::absent(kind).map_err(|_| ())
 }
 
 fn finish(

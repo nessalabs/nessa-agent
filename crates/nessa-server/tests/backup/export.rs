@@ -344,6 +344,67 @@ async fn an_unreadable_record_is_skipped_and_named() {
 }
 
 #[tokio::test]
+async fn a_failed_outbox_source_aborts_the_cut() {
+    let released = Arc::new(AtomicBool::new(false));
+    let admission = LockAdmission {
+        lock: Arc::new(RwLock::new(())),
+        retired: Arc::new(AtomicBool::new(false)),
+        holds: Arc::new(AtomicU64::new(0)),
+        released: released.clone(),
+    };
+    let publisher = MemoryPublisher::default();
+    let stored = Arc::new(AtomicBool::new(false));
+    let sources = sources_with_error(StoreKind::DeviceOutbox);
+    let outcome = run_with_log(sources, admission, publisher.clone(), stored.clone()).await;
+    assert_eq!(outcome, Err(ExportFailure::Outbox));
+    assert!(released.load(Ordering::SeqCst));
+    assert!(!stored.load(Ordering::SeqCst));
+    assert!(publisher.manifest.lock().unwrap().is_empty());
+    assert!(publisher.records.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_skipped_outbox_row_aborts_the_cut() {
+    let released = Arc::new(AtomicBool::new(false));
+    let admission = LockAdmission {
+        lock: Arc::new(RwLock::new(())),
+        retired: Arc::new(AtomicBool::new(false)),
+        holds: Arc::new(AtomicU64::new(0)),
+        released: released.clone(),
+    };
+    let publisher = MemoryPublisher::default();
+    let sources = sources_with(StoreKind::EnvironmentOutbox, || {
+        let skipped = SkippedRecord::new(
+            StoreKind::EnvironmentOutbox,
+            "row-2",
+            SkipReason::Unreadable,
+        )
+        .unwrap();
+        let kept = CapturedRecord::new(
+            StoreKind::EnvironmentOutbox,
+            "row-1",
+            Sensitivity::Public,
+            b"kept".to_vec(),
+        )
+        .unwrap();
+        SourceCut::new(
+            StoreKind::EnvironmentOutbox,
+            Watermark::new("2").unwrap(),
+            vec![kept],
+            vec![skipped],
+        )
+        .unwrap()
+    });
+    let stored = Arc::new(AtomicBool::new(false));
+    let outcome = run_with_log(sources, admission, publisher.clone(), stored.clone()).await;
+    assert_eq!(outcome, Err(ExportFailure::Outbox));
+    assert!(released.load(Ordering::SeqCst));
+    assert!(!stored.load(Ordering::SeqCst));
+    assert!(publisher.manifest.lock().unwrap().is_empty());
+    assert!(publisher.records.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn an_unavailable_store_is_skipped_and_the_cut_continues() {
     let publisher = MemoryPublisher::default();
     let manifest = run(
@@ -500,6 +561,27 @@ async fn an_authenticator_failure_publishes_nothing() {
     assert_eq!(outcome, Err(ExportFailure::Authenticator));
     assert!(released.load(Ordering::SeqCst));
     assert!(publisher.manifest.lock().unwrap().is_empty());
+}
+
+async fn run_with_log(
+    sources: Vec<Box<dyn ExportSource>>,
+    admission: impl MutationAdmission,
+    publisher: MemoryPublisher,
+    stored: Arc<AtomicBool>,
+) -> Result<AuthenticatedManifest, ExportFailure> {
+    let refs: Vec<&dyn ExportSource> = sources.iter().map(|source| source.as_ref()).collect();
+    let clock = Clock(4);
+    let mac = crate::backup::application::MacKey([3; 32]);
+    capture_export(ExportRequest {
+        admission: &admission,
+        sources: &refs,
+        fences: &[],
+        inventory: &WatchLog(stored),
+        publisher: &publisher,
+        clock: &clock,
+        authenticator: &mac,
+    })
+    .await
 }
 
 async fn run(
@@ -812,6 +894,20 @@ impl ExportSource for Fixed {
             self.cut.lock().unwrap().take().ok_or(())?
         };
         Ok(Box::new(crate::backup::application::CopiedStore::new(cut)))
+    }
+}
+
+struct WatchLog(Arc<AtomicBool>);
+
+#[async_trait]
+impl DeletionLogStore for WatchLog {
+    async fn load(&self) -> Result<DeletionLog, ()> {
+        Ok(DeletionLog::default())
+    }
+
+    async fn store(&self, _base: &DeletionLog, _next: &DeletionLog) -> Result<(), LogStoreError> {
+        self.0.store(true, Ordering::SeqCst);
+        Ok(())
     }
 }
 

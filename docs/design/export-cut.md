@@ -12,6 +12,8 @@ caller ── hold ──▶ conversation admission (write)
                       ├── pin each writer below: watermark, sqlite read
                       │   snapshot, a copy of a small file, or an open
                       │   descriptor and its length
+                      ├── read both outboxes; a failure or a skipped row
+                      │   aborts here, before fences are appended
                       └── deletion inventory append (fences already committed)
                    release (drop), including failure and retirement
                       │
@@ -29,7 +31,13 @@ store's records have been copied, so a writer of that same file waits for
 the copy and not for the mac or the publish. A directory, JSONL, or relay
 file is opened during the pin and its length is recorded; the bytes are
 read after the hold, from that descriptor, and stop at that length. The
-hold does not grow with the size of those files.
+hold does not grow with the size of those files. An outbox is the
+exception: its rows are read during the pin, each file only up to the
+artifact bound, and only as many files and bytes as one lease may keep,
+so a bad row aborts before the fence append. That read
+holds `outbox.lock` shared for the whole directory, and the writer holds
+it exclusively, so the pin does not copy a file that is still being staged
+or removed.
 
 ## Lock order
 
@@ -46,11 +54,20 @@ credential publish. During the pin, after admission, the cut holds that
 same lock while it reads the credential registry and opens the receiver
 snapshot. Pairing does not take admission while it holds the lock.
 
+The environment outbox writer does not take conversation admission. It
+holds `environment/outbox.lock` exclusively across a stage, a discard, a
+lease close, and the sweep when serving starts. During the pin, after
+admission, the cut holds that same file shared for the whole outbox read.
+The device outbox uses `device/outbox.lock` the same way. The writer does
+not take admission while it holds the lock.
+
 ## Writer inventory
 
 The cut names every store below. A store that is absent is an empty
-watermark. A local outbox is not a store: the device outbox (#269) and the
-environment's ephemeral outbox are not backup state.
+watermark. The device outbox (`device/outbox/`) and the environment outbox
+(`environment/outbox/`) are stores. Each row is one regular file. The
+watermark is the hex SHA-256 of the pinned `(identity, byte length)` pairs
+sorted by identity. A missing directory's watermark is `absent`.
 
 | Store | What the cut keeps |
 | --- | --- |
@@ -73,6 +90,8 @@ environment's ephemeral outbox are not backup state.
 | Environment-peer credentials | The same, for `environment.serve` |
 | Worker credentials | The same, when a fence names a worker |
 | Receiver access | Receiver id, epoch, active flag |
+| Device outbox | Each regular file under `device/outbox/`, read during the pin. The manifest watermark is that snapshot's exact cursor. A symlink, a file that is not a directory at the outbox path, a short read, a name this cut cannot keep, a file larger than the artifact bound, or more files or bytes than one lease may keep fails the source. Key material in a row is fingerprinted and the bytes are not published; that row is not a skip. `an_outbox_private_key_is_fingerprinted_and_the_cut_continues` |
+| Environment outbox | The same, for `environment/outbox/`, in the same pin and the same hold. The read holds `environment/outbox.lock` shared, which the writer holds exclusively around stage, discard, close, and the sweep |
 | Deletion inventory | The inventory as of this cut |
 
 `ConsentClass::PeerEnvironment` is the one stored credential for an
@@ -112,7 +131,11 @@ nothing and releases the hold too. A later attempt starts from Idle.
 | Retirement before the hold | The service is already retired | Explicit abort, no manifest. `retirement_before_the_hold_aborts` |
 | Retirement during the hold | The fence is set, cleanup is waiting on the same lock | Explicit abort, no manifest, then the hold drops so retirement can finish. `retirement_during_the_hold_aborts_and_releases` |
 | Missing store in the inventory | Before the hold | The attempt is refused and admission is not taken. `a_cut_refuses_to_start_without_every_store` |
-| Local outbox | Any cut | The inventory has no outbox store. `the_writer_inventory_omits_local_outboxes` |
+| Outbox append after the pin | The append runs as admission is released | The manifest watermark is the pinned lengths. The appended bytes and a file created then are not in the bundle. `a_concurrent_outbox_append_is_outside_the_cut` |
+| Outbox writer during the pin | `outbox.lock` is held exclusively by a stage, discard, close, or sweep | The pin waits, then reads the tree that lock released. A prefix of a copy still in progress is not the published row, and a removal does not abort a read that has not started. `an_environment_outbox_cut_waits_for_the_writer_lock`, `a_stage_and_a_close_wait_for_the_outbox_lock` |
+| Outbox source fails | During the pin, before fences | The cut aborts. Admission is released. The deletion log is not written and nothing is published, including the other outbox. `a_failed_outbox_source_aborts_the_cut`, `an_invalid_outbox_is_refused_and_nothing_is_committed` |
+| Outbox snapshot bound | During the pin, before any outbox body past the budget is read | One outbox's files or bytes are past what one lease may keep (`ArtifactBudget::LEASE` in `crates/nessa-server/src/conversation/application/artifacts.rs`, rows `artifact.environment_files` and `artifact.environment_bytes`). The cut aborts the same way. The other outbox is not published. `an_outbox_past_the_lease_budget_aborts_the_cut` |
+| Outbox row skipped | During the pin, before fences | The cut aborts the same way. A kept row from that outbox is not published on its own. `a_skipped_outbox_row_aborts_the_cut` |
 
 ## Deletion inventory
 

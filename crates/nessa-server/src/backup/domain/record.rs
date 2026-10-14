@@ -25,6 +25,31 @@ impl Watermark {
     }
 }
 
+/// Exact cursor of one outbox snapshot.
+///
+/// `rows` are the identities and byte lengths observed together. The token
+/// is the hex SHA-256 of those pairs sorted by identity, one
+/// `identity SP length LF` line each. An empty snapshot still has a token:
+/// the hash of no lines. Two snapshots that differ by an appended byte or
+/// a new row therefore differ here. `an_outbox_watermark_names_the_pinned_rows`
+/// and `a_concurrent_outbox_append_is_outside_the_cut`.
+pub fn outbox_watermark(rows: &[(&str, u64)]) -> Result<Watermark, RecordError> {
+    let mut ordered = rows.to_vec();
+    ordered.sort_by(|left, right| left.0.cmp(right.0));
+    let mut text = String::new();
+    for (identity, length) in ordered {
+        if identity.is_empty() || identity.len() > 512 || identity.bytes().any(|byte| byte <= 0x20)
+        {
+            return Err(RecordError::Identity);
+        }
+        text.push_str(identity);
+        text.push(' ');
+        text.push_str(&length.to_string());
+        text.push('\n');
+    }
+    Watermark::new(Fingerprint::of(text.as_bytes()).hex())
+}
+
 /// SHA-256 of bytes the bundle must not contain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Fingerprint([u8; 32]);
@@ -303,6 +328,11 @@ impl SourceCut {
     pub fn deferred(&self) -> &[DeferredEntry] {
         &self.deferred
     }
+
+    /// The store was not on disk. No rows, and no skip.
+    pub fn absent(store: StoreKind) -> Result<Self, RecordError> {
+        Self::new(store, Watermark::new("absent")?, Vec::new(), Vec::new())
+    }
 }
 
 /// Why a record was refused before it could enter a cut.
@@ -321,4 +351,25 @@ fn checked_identity(identity: String) -> Result<String, RecordError> {
         return Err(RecordError::Identity);
     }
     Ok(identity)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_outbox_watermark_names_the_pinned_rows() {
+        let first = outbox_watermark(&[("b", 2), ("a", 1)]).unwrap();
+        let same = outbox_watermark(&[("a", 1), ("b", 2)]).unwrap();
+        let longer = outbox_watermark(&[("a", 1), ("b", 3)]).unwrap();
+        let extra = outbox_watermark(&[("a", 1), ("b", 2), ("c", 1)]).unwrap();
+        let empty = outbox_watermark(&[]).unwrap();
+        assert_eq!(first, same);
+        assert_ne!(first, longer);
+        assert_ne!(first, extra);
+        assert_ne!(first, empty);
+        assert_eq!(first.as_str().len(), 64);
+        assert!(outbox_watermark(&[("has space", 1)]).is_err());
+        assert!(outbox_watermark(&[("", 1)]).is_err());
+    }
 }
