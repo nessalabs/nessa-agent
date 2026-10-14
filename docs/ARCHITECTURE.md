@@ -574,7 +574,10 @@ private version directory outside the app. When that generation is already
 published, launchd arguments name only that directory, and this process validates
 it before the service changes. When it is not published yet, this registration
 prepares the data directory and launches the bundled tree by absolute path so
-the gateway can bind. The service-label lock stays with a launch that the
+the gateway can bind. The server advertises that fingerprint only when it is
+also the packaging digest of the tree it is about to serve, so a bundle
+changed after the host read the manifest cannot confirm the old identity,
+including when launchd restarts the job. The service-label lock stays with a launch that the
 attempt calls only after it has accepted the empty-cleanup `stage-runtime`
 plan; a slow or rejected plan never starts the copy. That publication flushes
 files on a bounded pool while it hashes the tree, and it still requires a

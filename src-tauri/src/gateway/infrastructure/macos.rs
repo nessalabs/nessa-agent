@@ -1285,7 +1285,9 @@ fn launch_definition(
 /// bind. The publication starts only after the attempt accepts its plan.
 /// `keep_bundle` is that same choice for the rest of
 /// this process: publication must not replace a healthy bundle-backed job
-/// before the next launch.
+/// before the next launch. The server advertises that fingerprint only when
+/// the tree it is about to serve still digests to it, including after launchd
+/// restarts this job.
 fn registration_runtime<'a>(
     published: bool,
     keep_bundle: bool,
