@@ -14,9 +14,8 @@
 //! fences are appended and before anything is published. Bytes appended
 //! after this pin are not part of the watermark or the rows.
 
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Component, Path, PathBuf};
 
 use async_trait::async_trait;
@@ -111,15 +110,41 @@ fn collect(root: &Path, directory: &Path, rows: &mut Vec<Row>) -> Result<(), ()>
     Ok(())
 }
 
+/// Open `path` without following a final link.
+///
+/// Unix uses `O_NOFOLLOW`. Windows opens the reparse point, so a symlink is
+/// not a regular file and [`read_row`] refuses it.
+fn open_nofollow(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_FLAG_OPEN_REPARSE_POINT. The open names the link, not its target.
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "an outbox file is opened without following a link",
+        ));
+    }
+    options.open(path)
+}
+
 /// Open `path` without following a final link and read exactly the length
 /// of that open file.
 fn read_row(root: &Path, path: &Path) -> Result<Row, ()> {
     let identity = relative_identity(root, path)?;
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-        .map_err(|_| ())?;
+    let file = open_nofollow(path).map_err(|_| ())?;
     let opened = file.metadata().map_err(|_| ())?;
     if !opened.is_file() {
         return Err(());

@@ -241,10 +241,25 @@ async fn an_invalid_outbox_is_refused_and_nothing_is_committed() {
     let tree = read_tree(bundle.path());
     assert!(!holds(&tree, b"{\"id\":1}"));
 
+    refuse_a_dangling_outbox_link().await;
+}
+
+#[cfg(unix)]
+fn link_missing_outbox(link: &std::path::Path) {
+    std::os::unix::fs::symlink("missing-outbox", link).unwrap();
+}
+
+#[cfg(windows)]
+fn link_missing_outbox(link: &std::path::Path) {
+    std::os::windows::fs::symlink_file("missing-outbox", link).unwrap();
+}
+
+#[cfg(any(unix, windows))]
+async fn refuse_a_dangling_outbox_link() {
     let linked = tempfile::tempdir().unwrap();
     let link_root = linked.path();
     fs::create_dir_all(link_root.join("environment")).unwrap();
-    std::os::unix::fs::symlink("missing-outbox", link_root.join("environment/outbox")).unwrap();
+    link_missing_outbox(&link_root.join("environment/outbox"));
     let linked_inventory = FileDeletionLog::open(link_root.join("backup")).unwrap();
     let linked_bundle = tempfile::tempdir().unwrap();
     let linked_outcome = capture_namespace(
@@ -259,6 +274,9 @@ async fn an_invalid_outbox_is_refused_and_nothing_is_committed() {
     assert_eq!(linked_outcome, Err(ExportFailure::Outbox));
     assert!(!linked_bundle.path().join("cut").exists());
 }
+
+#[cfg(not(any(unix, windows)))]
+async fn refuse_a_dangling_outbox_link() {}
 
 #[tokio::test]
 async fn an_outbox_private_key_is_fingerprinted_and_the_cut_continues() {
