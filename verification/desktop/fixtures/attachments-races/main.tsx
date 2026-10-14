@@ -312,6 +312,21 @@ const probe = {
     displayStore = nextStore
     showScope(nextStore, nextResources)
   },
+  swapPickerOwner: () => {
+    const nextResources = createAttachmentResources()
+    const nextStore = makeStore({
+      attachments: nextResources,
+      canChoosePaths: true,
+      conversation: scenarioEffects("echo"),
+    })
+    nextStore.dispatch(
+      sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),
+    )
+    replacementStore = nextStore
+    replacementResources = nextResources
+    displayStore = nextStore
+    showScope(nextStore, nextResources)
+  },
   showOriginalOwner: () => {
     displayStore = store
     showScope(store, resources)
@@ -378,6 +393,10 @@ function showScope(
             })
             return () => undefined
           }}
+        />
+        <span
+          hidden
+          data-attachment-owner={scopeStore === store ? "original" : "replacement"}
         />
       </ClockProvider>
     </Provider>,
