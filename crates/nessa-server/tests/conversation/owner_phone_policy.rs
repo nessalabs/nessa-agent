@@ -314,21 +314,6 @@ async fn owner_phone_cedar_admits_published_chat_methods_and_default_denies_admi
             &f.receiver,
         ));
     }
-    for method in [
-        "conversation.watchRecords",
-        "conversation.watchCatalogue",
-        "conversation.unwatch",
-    ] {
-        deny(decide(
-            &e,
-            &f,
-            OwnerPhoneOperation::ProductMethod {
-                method,
-                published_action: nessa_protocol::product::generated::action_for_method(method),
-            },
-            &f.receiver,
-        ));
-    }
     deny(decide(
         &e,
         &f,

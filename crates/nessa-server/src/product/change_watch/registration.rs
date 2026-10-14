@@ -220,25 +220,19 @@ impl WatchSelector {
             }
             Self::Catalogue { receiver, epoch } => {
                 let admitted = admission
-                    .catalogue_admission(session, receiver, *epoch, PassiveRead::CatalogueHead)
+                    .catalogue(session, receiver, *epoch, PassiveRead::CatalogueHead)
                     .await
                     .map_err(WatchRefusal::Read)?;
                 // A catalogue watch fires on every change to the owner's
                 // catalogue, granted or not; the policy decides who may
                 // follow that (`catalogue.watch`). A peer gateway polls its
                 // head instead (`docs/design/auth/peer-gateways.md`).
-                // First-party admission already asked canonical List on this
-                // exact catalogue; fresh method policy admitted this watch.
-                // Ordinary paired readers retain the incoming watch question.
-                if !matches!(
-                    admitted.reader,
-                    crate::conversation::application::Reader::OwnerPhone(_)
-                ) {
-                    admission
-                        .catalogue_watch(session, &admitted.scope)
-                        .map_err(WatchRefusal::Read)?;
-                }
-                Admitted::Catalogue(admitted.scope)
+                // Owner-phone sessions never reach this question: method
+                // admission above refuses the payloadless watch methods.
+                admission
+                    .catalogue_watch(session, &admitted)
+                    .map_err(WatchRefusal::Read)?;
+                Admitted::Catalogue(admitted)
             }
         };
         Ok(admitted)
