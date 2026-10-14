@@ -1877,6 +1877,18 @@ it("lists one page of a conversation's grants within the published bounds", asyn
   })
 })
 
+it("refuses a shares answer larger than the page size it asked for", async () => {
+  const request = vi.fn().mockResolvedValue({
+    items: [
+      grant,
+      { credentialId: "phone", role: "read", policyRevision: 1, grantedAtMs: 1 },
+    ],
+  })
+  const api = createConversationApi({ request }, () => "action")
+  await expect(api.shares(conversationId, { pageSize: 1 })).rejects.toThrow(/page/i)
+  expect(request).toHaveBeenCalledOnce()
+})
+
 it("refuses a page size outside the published bound before sending", async () => {
   const request = vi.fn()
   const api = createConversationApi({ request }, () => "action")

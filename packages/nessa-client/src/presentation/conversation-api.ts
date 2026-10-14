@@ -337,7 +337,9 @@ export type ConversationApi = {
    * cursor. A later page echoes the cursor the previous page returned, and is
    * the grants after that one. The answer's cursor is present when further
    * grants remain, and names that page's last grant. A conversation holds at
-   * most `sharePage.grants`.
+   * most `sharePage.grants`. An answer with more grants than the page size
+   * this call sent is refused, the same as any other answer the client will
+   * not read.
    * @throws TypeError before anything is sent for a malformed conversation ID,
    * a page size outside that range, or a cursor whose credential or time is
    * not one the schema takes.
@@ -733,13 +735,20 @@ export function createConversationApi(
         (value) => conversationMutation(value, requestId),
       )
     },
-    shares: async (id, options) =>
-      conversationShares(
+    shares: async (id, options) => {
+      const pageSize = sharePageSize(options.pageSize)
+      const page = conversationShares(
         await session.request(ProductMethod.ConversationShares, {
           conversationId: validConversationId(id),
-          pageSize: sharePageSize(options.pageSize),
+          pageSize,
           ...shareCursor(options.cursor),
         }),
-      ),
+      )
+      // The schema allows up to the published page size. This call asked for
+      // `pageSize`, and an answer past that is not the page it asked for.
+      if (page.items.length > pageSize)
+        throw new Error("Invalid conversation shares page")
+      return page
+    },
   }
 }
