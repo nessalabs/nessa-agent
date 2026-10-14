@@ -37,6 +37,10 @@ pub enum ConversationError {
     /// A share named a credential that is not an active paired device of
     /// the conversation's owner.
     ShareTargetNotPaired,
+    /// A share or revoke named the policy revision it was built on, and the
+    /// party's grant no longer holds it: changed or revoked since. Nothing
+    /// was changed.
+    ShareGrantChanged,
     /// A note's request already left another note in the conversation:
     /// another text, delivery, surface or authority under the same request.
     /// Nothing was saved; the first note stands.
@@ -52,12 +56,12 @@ pub enum ConversationError {
     /// A Drive grant's turn whose grant was revoked, or whose revision moved,
     /// before the turn was saved. A queued turn saves nothing. A steer that
     /// is queued rather than injected saves nothing. The same command is
-    /// admitted again only under the grant as it stands now (row J29).
+    /// admitted again only under the grant as it stands now (row J31).
     Revoked,
     /// A native steer that was saved, then refused because the grant moved
     /// before injection. The saved attempt is settled as refused and nothing
     /// reached the agent. A retry of that same execution is answered the
-    /// same way and is not admitted again (row J29).
+    /// same way and is not admitted again (row J31).
     RevokedAfterSave,
     /// A delete that happened — the conversation is tombstoned, left out of
     /// every list, and refused — and did not finish. Repeating the delete

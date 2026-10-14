@@ -7,7 +7,7 @@
 //! ([`ShareGrants::policy_at`]). Admission reads it once and keeps it for the
 //! conversation in [`AdmittedPolicies`]. The turn proceeds only while
 //! [`ShareGrants::hold_revision`] still finds that grant at that revision
-//! (row J29), and it is saved as checked. The hold is that grant, not every
+//! (row J31), and it is saved as checked. The hold is that grant, not every
 //! conversation. A native steer drops it after the save and compares the
 //! revision again before the provider is asked. Every tool call of that turn is
 //! then asked of [`ToolPolicyEvaluator`]:

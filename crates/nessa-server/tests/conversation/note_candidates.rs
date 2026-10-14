@@ -37,7 +37,10 @@ impl ShareGrants for Scripted {
         };
         Box::pin(async move { answer })
     }
-    fn change(&self, _: ShareGrantChange) -> ConversationFuture<'_, bool> {
+    fn change(
+        &self,
+        _: ShareGrantChange,
+    ) -> ConversationFuture<'_, crate::conversation::application::ShareGrantReceipt> {
         unreachable!("a verdict changes no grant")
     }
     fn grants<'a>(&'a self, _: &'a ConversationId) -> ConversationFuture<'a, Vec<ShareGrant>> {

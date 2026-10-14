@@ -17,7 +17,7 @@ use super::{
 };
 use crate::conversation::application::{
     AccessAction, ConversationError, ConversationFuture, HeldGrant, OwnerAccess, RevisionHold,
-    ShareGrant, ShareGrantChange, ShareGrantTransition, ShareGrants,
+    ShareGrant, ShareGrantChange, ShareGrantReceipt, ShareGrantTransition, ShareGrants,
     MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 use crate::conversation::domain::{
@@ -175,7 +175,7 @@ fn remove_if_last(gates: &GrantGates, key: &GrantKey, gate: &GrantGate) {
 
 /// What one attempt to write a grant change did.
 enum ChangeAttempt {
-    Applied(bool),
+    Applied(ShareGrantReceipt),
     /// The receiver this attempt locked is not the row it would write.
     Retry,
 }
@@ -338,6 +338,31 @@ fn wanted(transition: &ShareGrantTransition) -> Held {
     }
 }
 
+/// The policy revision `receiver`'s grant on conversation `id` held once
+/// journal row `at` was written: the latest row at or before it that changed
+/// the grant's role or policy, which is the row that stamped the grant then.
+/// Read for a retried share, which answers what its first answer did; only
+/// asked of a row that left the party a grant, so one such row exists.
+fn revision_after(
+    transaction: &Transaction<'_>,
+    id: &str,
+    receiver: &str,
+    at: i64,
+) -> Result<u64, ConversationError> {
+    let stamped: Option<i64> = transaction
+        .query_row(
+            "SELECT MAX(sequence) FROM share_grant_changes
+             WHERE conversation_id = ?1 AND receiver_id = ?2 AND sequence <= ?3
+               AND NOT (before = after AND policy_before IS policy_after)",
+            params![id, receiver, at],
+            |row| row.get(0),
+        )
+        .map_err(failed)?;
+    stamped
+        .and_then(sequence)
+        .ok_or_else(|| unreadable("share_grant_changes", id))
+}
+
 fn count(transaction: &Transaction<'_>, sql: &str, id: &str) -> Result<i64, ConversationError> {
     transaction
         .query_row(sql, params![id], |row| row.get(0))
@@ -376,7 +401,7 @@ impl ShareGrants for LocalConversationStore {
         })
     }
 
-    fn change(&self, change: ShareGrantChange) -> ConversationFuture<'_, bool> {
+    fn change(&self, change: ShareGrantChange) -> ConversationFuture<'_, ShareGrantReceipt> {
         Box::pin(async move {
             // The receiver a hold locks is the live row's, which a revoke
             // names only by credential. Look it up, lock that grant, and
@@ -393,7 +418,7 @@ impl ShareGrants for LocalConversationStore {
                     None => None,
                 };
                 match self.apply_change(change.clone(), key).await? {
-                    ChangeAttempt::Applied(applied) => return Ok(applied),
+                    ChangeAttempt::Applied(receipt) => return Ok(receipt),
                     ChangeAttempt::Retry => continue,
                 }
             }
@@ -572,10 +597,13 @@ impl LocalConversationStore {
             // unshare, grant again (row G16). That holds for a request that
             // changed nothing too: it is journaled with before equal to after.
             // The same request naming another device, another role or policy,
-            // or the other change is refused (row J6).
-            let replayed: Option<(String, Held, Held)> = transaction
+            // or the other change is refused (row J6). A retry is answered
+            // before the expected revision is compared: its first answer may
+            // be what moved the grant past it (row J29).
+            let replayed: Option<(String, Held, Held, String, i64)> = transaction
                 .query_row(
-                    "SELECT credential_id, before, policy_before, after, policy_after
+                    "SELECT credential_id, before, policy_before, after, policy_after,
+                            receiver_id, sequence
                      FROM share_grant_changes
                      WHERE conversation_id = ?1 AND initiator = ?2 AND surface = ?3
                        AND request = ?4",
@@ -590,34 +618,49 @@ impl LocalConversationStore {
                             row.get(0)?,
                             (row.get(1)?, row.get(2)?),
                             (row.get(3)?, row.get(4)?),
+                            row.get(5)?,
+                            row.get(6)?,
                         ))
                     },
                 )
                 .optional()
                 .map_err(failed)?;
-            if let Some((credential, journaled_before, journaled_after)) = replayed {
-                return if credential == change.credential_id.as_str() && journaled_after == after {
-                    Ok(ChangeAttempt::Applied(journaled_before != journaled_after))
+            if let Some((credential, journaled_before, journaled_after, receiver, at)) = replayed {
+                if credential != change.credential_id.as_str() || journaled_after != after {
+                    return Err(ConversationError::InvalidInput);
+                }
+                let policy_revision = if journaled_after.0 == NONE {
+                    None
                 } else {
-                    Err(ConversationError::InvalidInput)
+                    Some(revision_after(&transaction, &id, &receiver, at)?)
                 };
+                return Ok(ChangeAttempt::Applied(ShareGrantReceipt {
+                    applied: journaled_before != journaled_after,
+                    policy_revision,
+                }));
             }
-            let existing: Option<(String, Held)> = transaction
+            let existing: Option<(String, Held, i64)> = transaction
                 .query_row(
-                    "SELECT receiver_id, role, policy FROM share_grants
+                    "SELECT receiver_id, role, policy, policy_revision FROM share_grants
                      WHERE conversation_id = ?1 AND (receiver_id = ?2 OR credential_id = ?3)",
                     params![
                         id,
                         change.receiver_id.as_deref(),
                         change.credential_id.as_str()
                     ],
-                    |row| Ok((row.get(0)?, (row.get(1)?, row.get(2)?))),
+                    |row| Ok((row.get(0)?, (row.get(1)?, row.get(2)?), row.get(3)?)),
                 )
                 .optional()
                 .map_err(failed)?;
             let row_present = existing.is_some();
+            let held_revision = existing
+                .as_ref()
+                .map(|(_, _, stored)| {
+                    sequence(*stored).ok_or_else(|| unreadable("share_grants", &id))
+                })
+                .transpose()?;
             let (receiver, before) = match existing {
-                Some((receiver, held)) => (receiver, held),
+                Some((receiver, held, _)) => (receiver, held),
                 None => match &change.transition {
                     ShareGrantTransition::Grant(_) => (
                         change
@@ -642,6 +685,19 @@ impl LocalConversationStore {
             };
             if !covered {
                 return Ok(ChangeAttempt::Retry);
+            }
+            // Compared in the transaction that writes the change, and only
+            // once this attempt holds that receiver's permit, so no other
+            // change of this grant can land between the comparison and the
+            // write (row J30). Not a policy: whether the caller may share was
+            // asked above and before; this keeps the caller from overwriting a
+            // grant it has not seen. A revision is a journal sequence, which
+            // starts at 1, so 0 names no grant held: a first grant built on
+            // a list without one is refused once another grant lands.
+            if let Some(expected_revision) = change.expected_policy_revision {
+                if held_revision.unwrap_or(0) != expected_revision {
+                    return Err(ConversationError::ShareGrantChanged);
+                }
             }
             let applied = before != after;
             // The bounds a new grant, and a change to Drive, must fit (rows
@@ -723,6 +779,14 @@ impl LocalConversationStore {
             // row that set them, so a later change moves its policy revision
             // and a request that changed nothing leaves it (rows J4, J5).
             let sequence = transaction.last_insert_rowid();
+            let policy_revision = match (after.0.as_str(), applied) {
+                (NONE, _) => None,
+                (_, true) => Some(
+                    self::sequence(sequence)
+                        .ok_or_else(|| unreadable("share_grant_changes", &id))?,
+                ),
+                (_, false) => held_revision,
+            };
             if applied {
                 match (before.0.as_str(), after.0.as_str()) {
                     (_, NONE) => transaction.execute(
@@ -753,8 +817,12 @@ impl LocalConversationStore {
                 .map_err(failed)?;
             }
             transaction.commit().map_err(failed)?;
+            let receipt = ShareGrantReceipt {
+                applied,
+                policy_revision,
+            };
             if !applied {
-                return Ok(ChangeAttempt::Applied(false));
+                return Ok(ChangeAttempt::Applied(receipt));
             }
             tracing::info!(
                 conversation_id = %change.conversation_id,
@@ -773,7 +841,7 @@ impl LocalConversationStore {
                     conversation.owner().clone(),
                 ));
             }
-            Ok(ChangeAttempt::Applied(true))
+            Ok(ChangeAttempt::Applied(receipt))
         })
     }
 }

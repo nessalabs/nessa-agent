@@ -22,6 +22,7 @@ import { QrOrb } from "@nessa-ui/react/qr-orb"
 import { SettingsGroup, SettingsRow } from "@nessa-ui/react/settings-group"
 import { SignalOrb } from "@nessa-ui/react/signal-orb"
 import { Switch } from "@nessa-ui/react/switch"
+import { linkedOn } from "../../model/linked-device"
 import type { LinkedDevicesGateway } from "../adapters/linked-devices-gateway"
 import {
   approvable,
@@ -487,7 +488,7 @@ function DeviceRow({
 }) {
   const confirming = state.confirmRevoke === device.credentialId
   const ready = canAct(state)
-  const issued = new Date(device.issuedAt * 1000).toISOString().slice(0, 10)
+  const issued = linkedOn(device.issuedAt)
   return (
     <SettingsRow
       label="Linked device"

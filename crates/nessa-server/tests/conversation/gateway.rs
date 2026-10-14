@@ -128,6 +128,7 @@ mod gateway {
         state.with_agents_catalog(
             serde_json::from_value(serde_json::json!({
                 "environments": [],
+                "commandHosts": [],
                 "agents": [{
                     "agent": "claude",
                     "defaultModel": "test",
@@ -283,6 +284,33 @@ mod gateway {
             places(chat_request(&state, &session, "agents.list", json!({})).await),
             before
         );
+    }
+    /// nessa_ui#129: `agents.list` names, beside its places, the ones the
+    /// owner's turns may run commands on, read from the conversation service
+    /// as the catalog is read; and none where the gateway runs no
+    /// conversations, so a share dialog offers a Drive grant no host.
+    #[tokio::test]
+    async fn the_agent_catalog_names_the_places_that_take_the_owners_commands() {
+        let state = chat_state();
+        let session = chat_session(&state, "owner-phone").await;
+        let hosts =
+            |response: ResponseFrame| response.payload.unwrap()["commandHosts"].clone();
+        assert_eq!(
+            hosts(chat_request(&state, &session, "agents.list", json!({})).await),
+            json!([])
+        );
+        let mut catalog = serde_json::to_value(state.agents_catalog.as_deref().unwrap()).unwrap();
+        catalog["environments"] = json!(["agentbox", "build.example", "devbox"]);
+        let root = tempfile::tempdir().unwrap();
+        let service =
+            crate::conversation::application::lease_tests::service_with_command_hosts(root.path());
+        let state = state
+            .with_agents_catalog(serde_json::from_value(catalog).unwrap())
+            .with_conversations(Arc::new(service));
+        let response = chat_request(&state, &session, "agents.list", json!({})).await;
+        let payload = response.payload.unwrap();
+        assert_eq!(payload["environments"], json!(["agentbox", "build.example", "devbox"]));
+        assert_eq!(payload["commandHosts"], json!(["devbox"]));
     }
     pub(super) fn send_command(peer: &TestPeer, id: &str, method: &str, params: serde_json::Value) {
         peer.input

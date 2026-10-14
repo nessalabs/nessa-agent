@@ -110,6 +110,11 @@ fn the_schema_states_the_share_bounds_the_domain_enforces() {
     let host_bytes = CommandHosts::MAX_HOST_BYTES as u64;
     assert_eq!(hosts["items"]["maxLength"].as_u64(), Some(host_bytes));
     assert_eq!(hosts["items"]["x-utf8MaxBytes"].as_u64(), Some(host_bytes));
+    // Hosts and patterns together: published as data for a client's budget.
+    assert_eq!(
+        definitions["ConversationToolPolicy"]["x-maxEntries"].as_u64(),
+        Some(ToolPolicy::MAX_ENTRIES as u64)
+    );
     assert_eq!(
         definitions["ConversationSharesResult"]["properties"]["items"]["maxItems"].as_i64(),
         Some(MAX_SHARE_GRANTS_PER_CONVERSATION)

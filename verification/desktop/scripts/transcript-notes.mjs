@@ -44,7 +44,10 @@ Checks, per engine and layout (--only <names> to pick):
   wrap       every note's row lies inside its transcript's column (within
              0.5 px) and is no wider than its own box (scrollWidth ≤
              clientWidth + 1); the long note's text runs over more than two
-             lines; neither column nor the page scrolls sideways`,
+             lines; neither column nor the page scrolls sideways
+  history    the desktop transcript says "Some conversation content is not
+             shown." once, above the first message, and does not say the
+             history is unconfirmed; "Here is the plan." appears once`,
 }
 
 const shownWithinMs = 15_000
@@ -263,6 +266,86 @@ const checks = {
       await opened.settleRequests()
       failures.push(...opened.errors)
       return { ...measured, failures }
+    } finally {
+      await opened.close()
+    }
+  },
+
+  async history({ browser, url, layout, engine, options }) {
+    const opened = await open(browser, url, layout)
+    const failures = []
+    const omitted = "Some conversation content is not shown."
+    const unconfirmed =
+      "Conversation history is not confirmed. Recent activity may be missing."
+    try {
+      const { page } = opened
+      const read = await page.evaluate(
+        ({ desktop, transcript, history, said }) => {
+          const column = document.querySelector(`${desktop} ${transcript}`)
+          const notices = column
+            ? [...column.querySelectorAll("[data-history-extent]")].map((notice) => ({
+                kind: notice.getAttribute("data-history-extent"),
+                text: notice.textContent,
+              }))
+            : []
+          const firstMessage = column?.querySelector(said)
+          const omittedNotice = column?.querySelector(history)
+          const plan = column
+            ? [...column.querySelectorAll(said)].filter((node) =>
+                node.textContent?.includes("Here is the plan."),
+              ).length
+            : 0
+          return {
+            notices,
+            plan,
+            noticeBeforeMessage: Boolean(
+              omittedNotice &&
+              firstMessage &&
+              (omittedNotice.compareDocumentPosition(firstMessage) &
+                Node.DOCUMENT_POSITION_FOLLOWING) ===
+                Node.DOCUMENT_POSITION_FOLLOWING,
+            ),
+          }
+        },
+        {
+          desktop: ui.desktop,
+          transcript: css.transcript,
+          history: ui.history("omitted"),
+          said: ui.said,
+        },
+      )
+      const omittedNotices = read.notices.filter((notice) => notice.kind === "omitted")
+      if (omittedNotices.length !== 1 || omittedNotices[0]?.text !== omitted)
+        failures.push(
+          `omitted history says ${JSON.stringify(omittedNotices)}, not once "${omitted}"`,
+        )
+      if (read.notices.some((notice) => notice.text === unconfirmed))
+        failures.push("a complete transcript says its history is unconfirmed")
+      if (!read.noticeBeforeMessage)
+        failures.push("the omitted-history notice is not above the first message")
+      if (read.plan !== 1)
+        failures.push(`"Here is the plan." appears ${read.plan} times, not once`)
+      if (options.shots && failures.length === 0) {
+        mkdirSync(options.shots, { recursive: true })
+        const notice = await page
+          .locator(`${ui.desktop} ${ui.history("omitted")}`)
+          .boundingBox()
+        const first = await page.locator(`${ui.desktop} ${ui.said}`).first().boundingBox()
+        if (notice && first) {
+          await page.screenshot({
+            path: join(options.shots, `history-omitted-${engine}-${layout}.png`),
+            clip: {
+              x: Math.max(0, notice.x - 12),
+              y: Math.max(0, notice.y - 12),
+              width: Math.ceil(Math.max(notice.width, first.width) + 24),
+              height: Math.ceil(first.y + first.height - notice.y + 24),
+            },
+          })
+        }
+      }
+      await opened.settleRequests()
+      failures.push(...opened.errors)
+      return { ...read, failures }
     } finally {
       await opened.close()
     }

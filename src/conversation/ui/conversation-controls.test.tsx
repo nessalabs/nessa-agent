@@ -111,6 +111,33 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
+it("says when the published view left history out or has not confirmed it", async () => {
+  const base = waiting(time + 30_000)
+  const conversation: Conversation = {
+    ...base,
+    remote: base.remote && {
+      ...base.remote,
+      permissions: [],
+      truncated: true,
+      transcriptState: "stale",
+    },
+  }
+  await act(async () => {
+    root.render(
+      <ClockProvider now={() => time}>
+        <ConversationControls conversation={conversation} gatewayAvailable />
+      </ClockProvider>,
+    )
+  })
+  const said = [...host.querySelectorAll("[role=status]")].map(
+    (notice) => notice.textContent,
+  )
+  expect(said).toEqual([
+    "Some conversation content is not shown.",
+    "Conversation history is not confirmed. Recent activity may be missing.",
+  ])
+})
+
 describe("the floating card countdown", () => {
   it("reads the injected clock again each second", async () => {
     const dueAtMs = time + 30_000

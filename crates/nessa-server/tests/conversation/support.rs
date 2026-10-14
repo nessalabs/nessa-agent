@@ -970,8 +970,9 @@ pub(crate) struct MemoryAttachments {
     pub(crate) ranges: Mutex<Vec<(String, u64)>>,
     /// When set, every file is let go once this many ranges were read.
     pub(crate) let_go_after: Mutex<Option<usize>>,
-    /// When set, every range takes this long to read.
-    pub(crate) range_delay: Mutex<Option<std::time::Duration>>,
+    /// Full fetch ranges wait for true (or sender drop). One-byte service probes
+    /// proceed; the host fixture's start gate lets all probes finish first.
+    pub(crate) hold_ranges: Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
     /// Ranges being read now, and the most ever read at once.
     pub(crate) reading: AtomicUsize,
     pub(crate) most_reading: AtomicUsize,
@@ -1035,9 +1036,13 @@ impl ConversationAttachments for MemoryAttachments {
         Box::pin(async move {
             let now = self.reading.fetch_add(1, Ordering::SeqCst) + 1;
             self.most_reading.fetch_max(now, Ordering::SeqCst);
-            let delay = *self.range_delay.lock().unwrap();
-            if let Some(delay) = delay {
-                tokio::time::sleep(delay).await;
+            let hold = if range.max_bytes > 1 {
+                self.hold_ranges.lock().unwrap().clone()
+            } else {
+                None
+            };
+            if let Some(mut hold) = hold {
+                let _ = hold.wait_for(|released| *released).await;
             }
             let read = self.read_range(range);
             self.reading.fetch_sub(1, Ordering::SeqCst);
@@ -1884,7 +1889,7 @@ impl crate::conversation::application::ShareGrants for EveryConversationGranted 
     fn change(
         &self,
         _: crate::conversation::application::ShareGrantChange,
-    ) -> ConversationFuture<'_, bool> {
+    ) -> ConversationFuture<'_, crate::conversation::application::ShareGrantReceipt> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
     fn grants<'a>(
@@ -1940,7 +1945,7 @@ pub(crate) async fn grant_as(
         .await
         .unwrap()
         .expect("a conversation to share");
-    crate::conversation::application::ShareGrants::change(
+    let receipt = crate::conversation::application::ShareGrants::change(
         store,
         crate::conversation::application::ShareGrantChange {
             transition: crate::conversation::application::ShareGrantTransition::Grant(access),
@@ -1948,6 +1953,7 @@ pub(crate) async fn grant_as(
             receiver_id: Some(receiver.to_owned()),
             credential_id: nessa_auth::domain::CredentialId::new(format!("{receiver}-credential"))
                 .unwrap(),
+            expected_policy_revision: None,
             initiator: crate::conversation::application::ConversationCaller {
                 organization_id: conversation.organization().clone(),
                 principal_id: conversation.owner().clone(),
@@ -1959,6 +1965,7 @@ pub(crate) async fn grant_as(
     )
     .await
     .unwrap();
+    assert!(receipt.applied);
 }
 
 /// A Comment grant and a Drive grant under a preset policy: every role

@@ -38,6 +38,7 @@ function retries() {
 const catalog = (...environments: string[]): AgentsListResult => ({
   agents: [],
   environments,
+  commandHosts: [],
   nativeHooks: { claude: "off", codex: "off" },
 })
 

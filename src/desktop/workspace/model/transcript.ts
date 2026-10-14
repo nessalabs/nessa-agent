@@ -8,7 +8,7 @@
 import { appWidget } from "../../widgets/app/model/app-ref"
 import type { WorkspaceFailureReason } from "./failure"
 import type { WidgetRef } from "../../widgets/model/widget-ref"
-import type { Note } from "../../../conversation"
+import type { HistoryExtent, Note } from "../../../conversation"
 
 export type StepKind = "read" | "edit" | "run" | "search"
 
@@ -227,6 +227,11 @@ export interface Transcript {
   readonly messages: readonly Message[]
   readonly activity: Activity | null
   readonly approval: Approval | null
+  /**
+   * What the bounded view left out (`historyExtent`). Absent when the source
+   * did not say, or said this is the whole confirmed history.
+   */
+  readonly history?: HistoryExtent
   /** A provider's typed authentication refusal on the latest turn. */
   readonly authenticationRefusal?: string
   /** Raw execution identity of the latest published input, including pending. */

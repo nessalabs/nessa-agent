@@ -1230,7 +1230,7 @@ async fn conversations(
     // The same table's revision hold is that one grant. It refuses the turn
     // when that grant is revoked or changed before the turn is saved, and a
     // native steer compares the revision again after the save, before the
-    // provider is asked (row J29).
+    // provider is asked (row J31).
     let evaluator = CedarToolPolicyEvaluator::new()
         .map_err(|_| RunError::Agent("the tool policy bundle does not validate".into()))?;
     let drive_audit =
@@ -1443,6 +1443,8 @@ fn agent_catalog(
     Ok(AgentsListResult {
         agents,
         environments: hosts.iter().map(|host| host.as_str().to_owned()).collect(),
+        // Read with the places each time the catalog is (`agents_catalog_now`).
+        command_hosts: Vec::new(),
         native_hooks: AgentsNativeHooks {
             claude: NativeHooksChoice::Off,
             codex: NativeHooksChoice::Off,

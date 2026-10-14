@@ -47,6 +47,7 @@ const functional = [
   "mode-publication",
   "panel-list-follow",
   "linked-devices",
+  "share-dialog",
   "settings-page",
   "widgets",
   "subagents",

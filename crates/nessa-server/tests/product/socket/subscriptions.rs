@@ -367,6 +367,7 @@ fn grants(authority: &Authority, actions: &[&str]) {
 fn composed_catalog() -> AgentsListResult {
     serde_json::from_value(json!({
         "environments": ["build.example"],
+        "commandHosts": [],
         "agents": [{
             "agent": "claude",
             "defaultModel": "test",
@@ -2022,11 +2023,13 @@ impl SubscriptionFixture {
                 conversation_id: self.id.clone(),
                 receiver_id: Some("receiver".into()),
                 credential_id: CredentialId::new("credential").unwrap(),
+                expected_policy_revision: None,
                 initiator: caller(&self.session, uuid::Uuid::new_v4().to_string()),
                 at_ms: 1,
             })
             .await
-            .unwrap());
+            .unwrap()
+            .applied);
     }
 
     async fn listed(&self) -> Vec<Value> {
@@ -2463,6 +2466,97 @@ async fn share_refuses_what_the_owner_cannot_grant() {
     });
     let answer = fixture.call("conversation.unshare", unshare).await;
     assert_eq!(answer["payload"]["applied"], true, "{answer}");
+}
+
+/// Rows J29 and J30 on the wire: `conversation.share` answers the grant's
+/// `policyRevision`, the one `conversation.shares` lists; a share or unshare
+/// naming an `expectedPolicyRevision` the grant no longer holds is refused
+/// `share_grant_changed` and changes nothing; one past the schema's bound is
+/// refused `invalid_request`; one naming what it holds is made.
+#[tokio::test]
+async fn share_answers_its_revision_and_refuses_a_stale_expected_one() {
+    let fixture = SubscriptionFixture::new()
+        .await
+        .with_devices(Devices::new(&[("phone", "phone", "principal", true)]));
+    *fixture.authority.snapshot.lock().unwrap() =
+        snapshot(MembershipRole::Admin, MembershipStatus::Active);
+    grants(
+        &fixture.authority,
+        &[
+            "conversation.write",
+            "conversation.read",
+            "server.read",
+            "credential.manage",
+        ],
+    );
+    let id = fixture.id.to_string();
+    let listed = || async {
+        fixture
+            .call("conversation.shares", json!({"conversationId": id}))
+            .await["payload"]["items"]
+            .clone()
+    };
+    let share = |request: &str, role: &str, expected: Option<u64>| {
+        let mut params = json!({
+            "conversationId": id,
+            "requestId": request,
+            "credentialId": "phone",
+            "role": role,
+        });
+        if let Some(expected) = expected {
+            params["expectedPolicyRevision"] = json!(expected);
+        }
+        params
+    };
+    let first = fixture
+        .call("conversation.share", share("share-1", "read", None))
+        .await;
+    assert_eq!(first["payload"]["applied"], true, "{first}");
+    let revision = first["payload"]["policyRevision"].as_u64().unwrap();
+    assert_eq!(listed().await[0]["policyRevision"], revision);
+    let changed = fixture
+        .call(
+            "conversation.share",
+            share("share-2", "comment", Some(revision)),
+        )
+        .await;
+    let moved = changed["payload"]["policyRevision"].as_u64().unwrap();
+    assert!(moved > revision, "{changed}");
+    let before = listed().await;
+    assert_eq!(before[0]["policyRevision"], moved);
+    let stale = fixture
+        .call("conversation.share", share("share-3", "read", Some(revision)))
+        .await;
+    assert_eq!(stale["error"]["code"], "share_grant_changed", "{stale}");
+    let stale = fixture
+        .call(
+            "conversation.unshare",
+            json!({"conversationId": id, "requestId": "unshare-1", "credentialId": "phone", "expectedPolicyRevision": revision}),
+        )
+        .await;
+    assert_eq!(stale["error"]["code"], "share_grant_changed", "{stale}");
+    assert_eq!(listed().await, before);
+    // Past the schema's bound, a JSON safe integer: refused as malformed.
+    let past = 9_007_199_254_740_992_u64;
+    for (method, params) in [
+        ("conversation.share", share("share-big", "read", Some(past))),
+        (
+            "conversation.unshare",
+            json!({"conversationId": id, "requestId": "unshare-big", "credentialId": "phone", "expectedPolicyRevision": past}),
+        ),
+    ] {
+        let big = fixture.call(method, params).await;
+        assert_eq!(big["error"]["code"], "invalid_request", "{method}: {big}");
+    }
+    assert_eq!(listed().await, before);
+    let revoked = fixture
+        .call(
+            "conversation.unshare",
+            json!({"conversationId": id, "requestId": "unshare-2", "credentialId": "phone", "expectedPolicyRevision": moved}),
+        )
+        .await;
+    assert_eq!(revoked["payload"]["applied"], true, "{revoked}");
+    assert_eq!(listed().await, json!([]));
 }
 
 // Roles and tool policies on the socket (issue 707): rows J1, J3, J7 and

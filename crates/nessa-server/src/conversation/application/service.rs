@@ -2974,7 +2974,7 @@ impl ConversationService {
             // read. The note verdict is taken before that grant is held, so
             // a slow verdict does not block a revoke. A retry of a turn
             // already saved is answered from that save and is not checked
-            // again (row J29).
+            // again (row J31).
             let fresh_grant = if fresh {
                 match initiation.initiator() {
                     Initiator::Grant(grant) => {
@@ -3000,7 +3000,7 @@ impl ConversationService {
             // keeps it until enqueue returns. A native steer moves it into
             // the save check, which drops the first permit after the save,
             // compares the live revision, and keeps that second permit until
-            // the provider operation starts (row J29).
+            // the provider operation starts (row J31).
             let mut revision_hold = None;
             let mut saved_grant = None;
             if let Some((receiver, revision)) = fresh_grant {

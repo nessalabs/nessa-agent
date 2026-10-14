@@ -65,6 +65,7 @@ use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
 use std::{
     collections::{BTreeMap, HashMap},
+    future::poll_fn,
     path::Path,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -1518,6 +1519,12 @@ struct Fetching {
     script: Mutex<FetchScript>,
     /// The bytes each fetch read, by request.
     read: Mutex<HashMap<String, Vec<u8>>>,
+    /// When set, actual host arrivals wait here before polling full-range reads,
+    /// leaving permits free for every service one-byte probe.
+    start_reads: Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
+    /// First full-range source futures polled, including semaphore waiters.
+    source_polled: AtomicUsize,
+    source_noted: tokio::sync::Notify,
     /// Said once a fetch is asked.
     noted: tokio::sync::Notify,
     /// Set, and said, once a lease's end is asked here.
@@ -1711,11 +1718,35 @@ impl LeaseHold for HostHold {
                 }
                 FetchScript::Place => {}
             }
+            let start = fetching.start_reads.lock().unwrap().clone();
+            if let Some(mut start) = start {
+                let _ = start.wait_for(|started| *started).await;
+            }
             let size = ask.file.size();
             let mut bytes = Vec::new();
             while (bytes.len() as u64) < size {
                 let max = (size - bytes.len() as u64).min(32 * 1024) as usize;
-                match ask.source.read(bytes.len() as u64, max).await {
+                let first_range = bytes.is_empty();
+                let mut source = ask.source.read(bytes.len() as u64, max);
+                let mut polled = false;
+                let read = poll_fn(|cx| {
+                    let read = source.as_mut().poll(cx);
+                    if first_range && !polled {
+                        // Observe after the real future reaches either the held
+                        // attachment read or the production semaphore wait.
+                        fetching.source_polled.fetch_add(1, Ordering::SeqCst);
+                        fetching.source_noted.notify_one();
+                        let start = fetching.start_reads.lock().unwrap().clone();
+                        if let Some(start) = start {
+                            assert!(*start.borrow(), "full reads start after all probes");
+                            assert!(read.is_pending(), "the first source poll stays held");
+                        }
+                    }
+                    polled = true;
+                    read
+                })
+                .await;
+                match read {
                     Ok(range) => bytes.extend(range),
                     Err(HeldSourceFailure::NotHeld) => return Err(FetchFailure::NotHeld),
                     Err(HeldSourceFailure::Unavailable) => {
@@ -3093,6 +3124,51 @@ async fn environments_list_says_where_the_agent_runs_and_where_it_may_run_comman
         ]
     );
     go.send(()).unwrap();
+}
+
+/// A conversation service on a gateway with two hosts the policy grants
+/// commands on: `devbox`, which takes commands, and `agentbox`, which runs
+/// agents only. What `agents.list`'s `commandHosts` is read from, for the
+/// product socket's test of it.
+pub(crate) fn service_with_command_hosts(root: &Path) -> ConversationService {
+    let mut hosts: BTreeMap<String, Arc<dyn Environment>> = BTreeMap::new();
+    hosts.insert("devbox".into(), CommandHost::new());
+    hosts.insert("agentbox".into(), in_process_environment());
+    let placements =
+        Arc::new(FilePlacements::new(root.join("conversations").join("placements")).unwrap());
+    let provider = Arc::new(ProviderFactory::default());
+    let binding = Arc::new(Provider::new(provider.clone()));
+    let policy = CommandPolicy::new(["devbox".to_owned(), "agentbox".to_owned()], None, vec![]);
+    let environments = Environments::new(in_process_environment(), hosts, placements)
+        .with_commands(commands(&policy));
+    harness_in(root, environments, DELETION_BUDGETS.stop, provider, binding).service
+}
+
+/// `agents.list`'s `commandHosts`: of the places named, those the owner's
+/// turns may run commands on — a host the command policy lets the owner use
+/// that takes commands. Never `here`, never a name the gateway has no host
+/// for, never one the policy does not grant, and none at all without a
+/// command policy.
+#[test]
+fn the_owner_is_offered_only_the_hosts_its_turns_may_run_commands_on() {
+    let root = tempfile::tempdir().unwrap();
+    let service = service_with_command_hosts(root.path());
+    assert_eq!(
+        service.owner_command_hosts(["here", "agentbox", "elsewhere", "devbox"]),
+        ["devbox"]
+    );
+    // The policy decides: one that grants another host leaves devbox out.
+    let root = tempfile::tempdir().unwrap();
+    let harness = with_command_host(
+        root.path(),
+        CommandHost::new(),
+        Some(CommandPolicy::new(["elsewhere".to_owned()], None, vec![])),
+    );
+    assert!(harness.service.owner_command_hosts(["devbox"]).is_empty());
+    // No command policy: no host takes commands.
+    let root = tempfile::tempdir().unwrap();
+    let harness = with_command_host(root.path(), CommandHost::new(), None);
+    assert!(harness.service.owner_command_hosts(["devbox"]).is_empty());
 }
 
 #[tokio::test]
@@ -4618,11 +4694,12 @@ async fn a_fetch_stopped_before_delivery_gives_its_size_back_and_one_after_does_
 async fn concurrent_fetches_never_read_more_than_the_gateways_bound_at_once() {
     let root = tempfile::tempdir().unwrap();
     let bytes: Vec<u8> = (0..100_000u32).map(|i| (i % 17) as u8).collect();
-    let (harness, _host, attachments, go) =
+    let (harness, host, attachments, go) =
         fetching_turn(root.path(), &bytes, FETCH_CALL_WAIT).await;
-    // Long enough that each fetch is still reading when the next one, its
-    // asking saved after the one before's, starts to read.
-    *attachments.range_delay.lock().unwrap() = Some(Duration::from_millis(50));
+    let (start, waiting) = tokio::sync::watch::channel(false);
+    *host.fetching.start_reads.lock().unwrap() = Some(waiting);
+    let (release, held) = tokio::sync::watch::channel(false);
+    *attachments.hold_ranges.lock().unwrap() = Some(held);
     // As many as one lease may have under way, more than read at once.
     let fetches: Vec<_> = (0..CurrentLease::MAX_ASKED_FETCHES)
         .map(|n| {
@@ -4635,6 +4712,40 @@ async fn concurrent_fetches_never_read_more_than_the_gateways_bound_at_once() {
             })
         })
         .collect();
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let noted = host.fetching.noted.notified();
+            if host.fetching.asks.lock().unwrap().len() == fetches.len() {
+                break;
+            }
+            noted.await;
+        }
+        // Every service probe completed before any full range acquires a permit.
+        assert_eq!(host.fetching.source_polled.load(Ordering::SeqCst), 0);
+        assert_eq!(attachments.reading.load(Ordering::SeqCst), 0);
+        start.send(true).unwrap();
+        loop {
+            let noted = host.fetching.source_noted.notified();
+            if host.fetching.source_polled.load(Ordering::SeqCst) == fetches.len() {
+                break;
+            }
+            noted.await;
+        }
+    })
+    .await
+    .expect("every actual fetch reached its first range poll");
+    assert!(fetches.len() > crate::conversation::application::FETCH_READS);
+    assert_eq!(
+        attachments.reading.load(Ordering::SeqCst),
+        crate::conversation::application::FETCH_READS,
+        "the production permits are saturated while full reads are held"
+    );
+    assert_eq!(
+        attachments.most_reading.load(Ordering::SeqCst),
+        crate::conversation::application::FETCH_READS,
+        "the held reads reached the bound without exceeding it"
+    );
+    release.send(true).unwrap();
     for fetch in fetches {
         assert!(matches!(
             tokio::time::timeout(Duration::from_secs(20), fetch)
@@ -5308,7 +5419,10 @@ impl super::ShareGrants for EveryRevisionHeld {
     ) -> super::ConversationFuture<'a, Option<super::HeldGrant>> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
-    fn change(&self, _: super::ShareGrantChange) -> super::ConversationFuture<'_, bool> {
+    fn change(
+        &self,
+        _: super::ShareGrantChange,
+    ) -> super::ConversationFuture<'_, crate::conversation::application::ShareGrantReceipt> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
     fn grants<'a>(
@@ -5824,7 +5938,10 @@ impl super::ShareGrants for NoEntry {
     ) -> super::ConversationFuture<'a, Option<super::HeldGrant>> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
-    fn change(&self, _: super::ShareGrantChange) -> super::ConversationFuture<'_, bool> {
+    fn change(
+        &self,
+        _: super::ShareGrantChange,
+    ) -> super::ConversationFuture<'_, crate::conversation::application::ShareGrantReceipt> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
     fn grants<'a>(
@@ -5887,7 +6004,10 @@ impl super::ShareGrants for PausingGrants {
     ) -> super::ConversationFuture<'a, Option<super::HeldGrant>> {
         self.inner.held_grant(id, receiver_id)
     }
-    fn change(&self, change: super::ShareGrantChange) -> super::ConversationFuture<'_, bool> {
+    fn change(
+        &self,
+        change: super::ShareGrantChange,
+    ) -> super::ConversationFuture<'_, crate::conversation::application::ShareGrantReceipt> {
         self.inner.change(change)
     }
     fn grants<'a>(
@@ -5966,6 +6086,7 @@ async fn revoke_drive(store: &LocalConversationStore, id: &ConversationId, recei
             receiver_id: None,
             credential_id: nessa_auth::domain::CredentialId::new(format!("{receiver}-credential"))
                 .unwrap(),
+            expected_policy_revision: None,
             initiator: ConversationCaller {
                 organization_id: conversation.organization().clone(),
                 principal_id: conversation.owner().clone(),
@@ -5977,6 +6098,7 @@ async fn revoke_drive(store: &LocalConversationStore, id: &ConversationId, recei
     )
     .await
     .unwrap()
+    .applied
 }
 
 fn drive_message() -> SubmittedMessage {
@@ -6008,7 +6130,7 @@ async fn submit_drive(
         .await
 }
 
-/// Row J29: a grant revoked, or its policy replaced, after `policy_at` and
+/// Row J31: a grant revoked, or its policy replaced, after `policy_at` and
 /// before the turn is saved does not start that turn.
 async fn moved_during_admission(revoke: bool) {
     use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy, ToolPreset};
@@ -6099,7 +6221,7 @@ async fn a_grant_whose_policy_changes_during_admission_starts_no_turn() {
     moved_during_admission(false).await;
 }
 
-/// Row J29: the revision hold spans the save, so a revoke cannot commit
+/// Row J31: the revision hold spans the save, so a revoke cannot commit
 /// until the turn's record is written.
 #[tokio::test]
 async fn a_grant_change_waits_until_the_turn_is_saved() {
@@ -6185,7 +6307,7 @@ async fn a_grant_change_waits_until_the_turn_is_saved() {
         .is_empty());
 }
 
-/// Row J29: a stalled save on one conversation does not block another
+/// Row J31: a stalled save on one conversation does not block another
 /// conversation's revoke or its Drive turn. The permit is the grant's, not
 /// the process's.
 #[tokio::test]
@@ -6312,7 +6434,7 @@ async fn submit_drive_on(
         .await
 }
 
-/// Row J29: a retry of a turn already saved is answered from that save
+/// Row J31: a retry of a turn already saved is answered from that save
 /// after the grant is revoked, and is not admitted again.
 #[tokio::test]
 async fn a_saved_drive_turn_is_retried_after_its_grant_is_revoked() {
