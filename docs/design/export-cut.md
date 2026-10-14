@@ -10,7 +10,8 @@ quarantine, and upload are not this cut: they wait on the cut landing.
 caller ── hold ──▶ conversation admission (write)
                       │
                       ├── pin each writer below: watermark, sqlite read
-                      │   snapshot or a copy of a small file
+                      │   snapshot, a copy of a small file, or an open
+                      │   descriptor and its length
                       └── deletion inventory append (fences already committed)
                    release (drop), including failure and retirement
                       │
@@ -25,7 +26,10 @@ records, taking the mac, and publishing happen after it is released, from
 the snapshots, so a later write is not in the cut. A command takes its
 read permit then. The snapshot keeps SQLite's shared lock until that
 store's records have been copied, so a writer of that same file waits for
-the copy and not for the mac or the publish.
+the copy and not for the mac or the publish. A directory, JSONL, or relay
+file is opened during the pin and its length is recorded; the bytes are
+read after the hold, from that descriptor, and stop at that length. The
+hold does not grow with the size of those files.
 
 ## Lock order
 
@@ -98,6 +102,7 @@ nothing and releases the hold too. A later attempt starts from Idle.
 | Two publishes, one absent root | Concurrent | Each attempt stages in its own directory. One publish lands, and its manifest matches its files. The other attempt's staging directory is removed. An existing root is not replaced. `concurrent_publishes_of_one_root_do_not_mix`, `each_publish_attempt_has_its_own_staging_directory` |
 | Raw session fallback | `records.sqlite3` exists and is not a database | A file within 64 MiB is copied. A larger file is named `skipped ... unreadable` and is not read. `an_oversized_non_database_session_is_not_read` |
 | Public file bound | A public file is above 8 MiB | The file is named `skipped ... bounded` and is not read during the admission hold. `a_public_file_over_the_bound_is_named_and_not_read` |
+| Directory body | An audit, JSONL, or relay file is inside the pin | The pin opens it and records its length. The body is read after admission is released, and a rewrite that replaces the file is not what the cut publishes. `a_directory_pin_does_not_read_the_body` |
 | Environment grant writer | A grant command holds `grants.lock`, not conversation admission | The cut copies `grants.json` and `grants-audit.jsonl` together under that lock, and parses them after admission is released. `an_environment_grant_cut_waits_for_the_writer_lock` |
 | Audit identity | Creation and deletion audits share a file name | The identity includes the source directory, so both records are in the bundle. `creation_and_deletion_audits_keep_separate_identities` |
 | Malformed peer relay | A peer gateway file is readable and not JSON | The peer is named `skipped ... unreadable`. A readable peer relay is still cut. `a_malformed_peer_relay_is_named_skipped` |

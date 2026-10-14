@@ -16,3 +16,6 @@ pub use gateway::capture_namespace;
 pub use jsonl::jsonl_cut;
 pub use log::FileDeletionLog;
 pub use sensitivity::path_sensitivity;
+
+#[cfg(test)]
+pub(crate) use gateway::open_at_cut;

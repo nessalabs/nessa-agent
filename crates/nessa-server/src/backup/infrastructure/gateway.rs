@@ -1,10 +1,11 @@
 //! Read one namespace into the writer inventory.
 //!
 //! Admission is held only while each store is pinned: a SQLite read snapshot
-//! for a database, a copy for a small file. Records are read from those
-//! snapshots after admission is released. A local outbox is not read. Secret
-//! paths are fingerprinted. The credential registry contributes public facts
-//! only.
+//! for a database, a copy of a small file, or an open descriptor and its
+//! length for a directory, JSONL, or relay file. Bodies of those descriptors
+//! are read after admission is released, and only up to the length recorded
+//! at the pin. A local outbox is not read. Secret paths are fingerprinted.
+//! The credential registry contributes public facts only.
 
 use std::fs::{self, File};
 use std::io::Read;
@@ -770,6 +771,7 @@ impl PinnedStore for GrantPin {
     }
 }
 
+#[derive(Clone)]
 struct LabeledRoot {
     path: PathBuf,
     /// Prefixed onto each identity so two roots cannot share one name.
@@ -800,89 +802,73 @@ impl ExportSource for DirectoryStore {
     }
 
     async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
+        // `grants-audit.jsonl` is a small file copied under its writer lock.
+        // The other files are opened here and read after the hold.
         if let Some(grants) = &self.grants {
             grants.pin().await?;
-            return Ok(Box::new(GrantAuditPin {
-                kind: self.kind,
-                walked: self.cut()?,
-                grants: grants.clone(),
-            }));
         }
-        copied(self.cut())
+        let roots = self.roots.clone();
+        let extra_files = self.extra_files.clone();
+        let frozen = tokio::task::spawn_blocking(move || freeze_directory(&roots, &extra_files))
+            .await
+            .map_err(|_| ())?;
+        Ok(Box::new(DirectoryPin {
+            kind: self.kind,
+            present: frozen.present,
+            files: frozen.files,
+            grants: self.grants.clone(),
+        }))
     }
 }
 
-impl DirectoryStore {
-    fn cut(&self) -> Result<SourceCut, ()> {
-        let mut records = Vec::new();
-        let mut skipped = Vec::new();
-        let mut present = false;
-        for root in &self.roots {
-            if !root.path.exists() {
-                continue;
-            }
-            present = true;
-            walk(
-                self.kind,
-                &root.path,
-                &root.path,
-                root.label,
-                &mut records,
-                &mut skipped,
-            );
-        }
-        for path in &self.extra_files {
-            if !path.exists() {
-                continue;
-            }
-            present = true;
-            let identity = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("file");
-            push_store_file(self.kind, identity, path, &mut records, &mut skipped);
-        }
-        if !present {
-            return absent(self.kind);
-        }
-        finish(
-            self.kind,
-            &records.len().saturating_add(skipped.len()).to_string(),
-            records,
-            skipped,
-        )
-    }
-}
-
-struct GrantAuditPin {
+struct DirectoryPin {
     kind: StoreKind,
-    walked: SourceCut,
-    grants: Arc<GrantFiles>,
+    present: bool,
+    files: Vec<FrozenFile>,
+    grants: Option<Arc<GrantFiles>>,
 }
 
 #[async_trait]
-impl PinnedStore for GrantAuditPin {
+impl PinnedStore for DirectoryPin {
     async fn read(&mut self) -> Result<SourceCut, ()> {
-        let snapshot = self.grants.view()?;
-        let mut records = self.walked.records().to_vec();
-        let mut skipped = self.walked.skipped().to_vec();
+        let kind = self.kind;
+        let present = self.present;
+        let files = std::mem::take(&mut self.files);
+        let grants = self.grants.clone();
+        tokio::task::spawn_blocking(move || assemble_directory(kind, present, files, grants))
+            .await
+            .map_err(|_| ())?
+    }
+}
+
+fn assemble_directory(
+    kind: StoreKind,
+    present: bool,
+    files: Vec<FrozenFile>,
+    grants: Option<Arc<GrantFiles>>,
+) -> Result<SourceCut, ()> {
+    let mut records = Vec::new();
+    let mut skipped = Vec::new();
+    materialize(kind, files, &mut records, &mut skipped);
+    if let Some(grants) = grants {
+        let snapshot = grants.view()?;
         push_capped_jsonl(
-            self.kind,
+            kind,
             "grants-audit.jsonl",
             snapshot.audit,
             &mut records,
             &mut skipped,
         )?;
-        if records.is_empty() && skipped.is_empty() {
-            return absent(self.kind);
-        }
-        finish(
-            self.kind,
-            &records.len().saturating_add(skipped.len()).to_string(),
-            records,
-            skipped,
-        )
     }
+    if !present && records.is_empty() && skipped.is_empty() {
+        return absent(kind);
+    }
+    finish(
+        kind,
+        &records.len().saturating_add(skipped.len()).to_string(),
+        records,
+        skipped,
+    )
 }
 
 /// `grants.json` and `grants-audit.jsonl`, copied together under `grants.lock`.
@@ -1006,37 +992,69 @@ impl ExportSource for JsonlFile {
     }
 
     async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
-        copied(self.cut())
+        let kind = self.kind;
+        let path = self.path.clone();
+        let pinned = tokio::task::spawn_blocking(move || pin_jsonl(kind, &path))
+            .await
+            .map_err(|_| ())?;
+        Ok(Box::new(JsonlPin { pinned }))
     }
 }
 
-impl JsonlFile {
-    fn cut(&self) -> Result<SourceCut, ()> {
-        if !self.path.exists() {
-            return absent(self.kind);
-        }
-        match read_public_text(&self.path) {
-            TextRead::Missing => Err(()),
-            TextRead::Secret(bytes) => {
-                let identity = file_name(&self.path);
-                let mut records = Vec::new();
-                let mut skipped = Vec::new();
-                withhold(self.kind, &identity, bytes, &mut records, &mut skipped);
-                finish(self.kind, "secret", records, skipped)
+enum PinnedJsonl {
+    Absent(StoreKind),
+    File(StoreKind, FrozenFile),
+}
+
+struct JsonlPin {
+    pinned: PinnedJsonl,
+}
+
+#[async_trait]
+impl PinnedStore for JsonlPin {
+    async fn read(&mut self) -> Result<SourceCut, ()> {
+        let pinned = std::mem::replace(
+            &mut self.pinned,
+            PinnedJsonl::Absent(StoreKind::LeaseRecords),
+        );
+        tokio::task::spawn_blocking(move || read_jsonl(pinned))
+            .await
+            .map_err(|_| ())?
+    }
+}
+
+fn pin_jsonl(kind: StoreKind, path: &Path) -> PinnedJsonl {
+    if !path.exists() {
+        return PinnedJsonl::Absent(kind);
+    }
+    PinnedJsonl::File(kind, freeze_one(file_name(path), path, true))
+}
+
+fn read_jsonl(pinned: PinnedJsonl) -> Result<SourceCut, ()> {
+    let (kind, file) = match pinned {
+        PinnedJsonl::Absent(kind) => return absent(kind),
+        PinnedJsonl::File(kind, file) => (kind, file),
+    };
+    let mut records = Vec::new();
+    let mut skipped = Vec::new();
+    match read_frozen(&file)? {
+        FrozenRead::Unreadable => Err(()),
+        FrozenRead::Bounded => finish(
+            kind,
+            "bounded",
+            vec![],
+            vec![SkippedRecord::new(kind, &file.identity, SkipReason::Bounded).map_err(|_| ())?],
+        ),
+        FrozenRead::Bytes(bytes) => {
+            if content_is_secret(&bytes) {
+                withhold(kind, &file.identity, bytes, &mut records, &mut skipped);
+                finish(kind, "secret", records, skipped)
+            } else {
+                let Ok(text) = String::from_utf8(bytes) else {
+                    return Err(());
+                };
+                jsonl_cut(kind, &text).map_err(|_| ())
             }
-            TextRead::Bounded => {
-                let identity = file_name(&self.path);
-                finish(
-                    self.kind,
-                    "bounded",
-                    vec![],
-                    vec![
-                        SkippedRecord::new(self.kind, &identity, SkipReason::Bounded)
-                            .map_err(|_| ())?,
-                    ],
-                )
-            }
-            TextRead::Text(text) => jsonl_cut(self.kind, &text).map_err(|_| ()),
         }
     }
 }
@@ -1052,101 +1070,157 @@ impl ExportSource for RelayStore {
     }
 
     async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
-        copied(self.cut())
+        let namespace = self.namespace.clone();
+        let pinned = tokio::task::spawn_blocking(move || pin_relay(&namespace))
+            .await
+            .map_err(|_| ())?;
+        Ok(Box::new(RelayPin { pinned }))
     }
 }
 
-impl RelayStore {
-    fn cut(&self) -> Result<SourceCut, ()> {
-        let mut records = Vec::new();
-        let mut skipped = Vec::new();
-        let config = self.namespace.join("config.json");
-        if config.exists() {
-            match read_capped(&config, PUBLIC_FILE_LIMIT) {
-                CappedFile::Bytes(bytes) => match serde_json::from_slice::<Value>(&bytes) {
-                    Ok(value) => {
-                        if let Some(relay) =
-                            value.get("native").and_then(|native| native.get("relay"))
-                        {
-                            if !relay.is_null() {
-                                let encoded = serde_json::to_vec(relay).map_err(|_| ())?;
-                                records.push(public(
-                                    StoreKind::RelayConfiguration,
-                                    "gateway",
-                                    encoded,
-                                )?);
-                            }
-                        }
+struct RelayPin {
+    pinned: PinnedRelay,
+}
+
+struct PinnedRelay {
+    config: Option<FrozenFile>,
+    peers: Vec<FrozenFile>,
+    config_exists: bool,
+    peers_exist: bool,
+    peers_unreadable: bool,
+}
+
+#[async_trait]
+impl PinnedStore for RelayPin {
+    async fn read(&mut self) -> Result<SourceCut, ()> {
+        let pinned = std::mem::replace(
+            &mut self.pinned,
+            PinnedRelay {
+                config: None,
+                peers: Vec::new(),
+                config_exists: false,
+                peers_exist: false,
+                peers_unreadable: false,
+            },
+        );
+        tokio::task::spawn_blocking(move || read_relay(pinned))
+            .await
+            .map_err(|_| ())?
+    }
+}
+
+fn pin_relay(namespace: &Path) -> PinnedRelay {
+    let config_path = namespace.join("config.json");
+    let config_exists = config_path.exists();
+    let config = config_exists.then(|| freeze_one("config.json".to_owned(), &config_path, false));
+    let peers_path = namespace.join("peer-gateways");
+    let peers_exist = peers_path.is_dir();
+    let mut peers = Vec::new();
+    let mut peers_unreadable = false;
+    if peers_exist {
+        match fs::read_dir(&peers_path) {
+            Ok(entries) => {
+                for entry in entries {
+                    let Ok(entry) = entry else {
+                        peers_unreadable = true;
+                        continue;
+                    };
+                    let path = entry.path();
+                    if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                        continue;
                     }
-                    Err(_) => skipped.push(skip(StoreKind::RelayConfiguration, "config.json")?),
-                },
-                CappedFile::Bounded => skipped.push(
-                    SkippedRecord::new(
-                        StoreKind::RelayConfiguration,
-                        "config.json",
-                        SkipReason::Bounded,
-                    )
-                    .map_err(|_| ())?,
-                ),
-                CappedFile::Missing | CappedFile::Unreadable => {
-                    skipped.push(skip(StoreKind::RelayConfiguration, "config.json")?)
+                    let identity = file_identity(&peers_path, &path);
+                    peers.push(freeze_one(identity, &path, false));
                 }
             }
+            Err(_) => peers_unreadable = true,
         }
-        let peers = self.namespace.join("peer-gateways");
-        if peers.is_dir() {
-            let entries = fs::read_dir(&peers).map_err(|_| ())?;
-            for entry in entries {
-                let entry = entry.map_err(|_| ())?;
-                let path = entry.path();
-                if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                    continue;
-                }
-                let bytes = match read_capped(&path, PUBLIC_FILE_LIMIT) {
-                    CappedFile::Bytes(bytes) => bytes,
-                    CappedFile::Bounded => {
-                        skipped.push(
-                            SkippedRecord::new(
+    }
+    PinnedRelay {
+        config,
+        peers,
+        config_exists,
+        peers_exist,
+        peers_unreadable,
+    }
+}
+
+fn read_relay(pinned: PinnedRelay) -> Result<SourceCut, ()> {
+    if pinned.peers_unreadable {
+        return Err(());
+    }
+    let mut records = Vec::new();
+    let mut skipped = Vec::new();
+    if let Some(config) = pinned.config {
+        match read_frozen(&config)? {
+            FrozenRead::Unreadable => {
+                skipped.push(skip(StoreKind::RelayConfiguration, "config.json")?);
+            }
+            FrozenRead::Bounded => skipped.push(
+                SkippedRecord::new(
+                    StoreKind::RelayConfiguration,
+                    "config.json",
+                    SkipReason::Bounded,
+                )
+                .map_err(|_| ())?,
+            ),
+            FrozenRead::Bytes(bytes) => match serde_json::from_slice::<Value>(&bytes) {
+                Ok(value) => {
+                    if let Some(relay) = value.get("native").and_then(|native| native.get("relay"))
+                    {
+                        if !relay.is_null() {
+                            let encoded = serde_json::to_vec(relay).map_err(|_| ())?;
+                            records.push(public(
                                 StoreKind::RelayConfiguration,
-                                file_identity(&peers, &path),
-                                SkipReason::Bounded,
-                            )
-                            .map_err(|_| ())?,
-                        );
-                        continue;
+                                "gateway",
+                                encoded,
+                            )?);
+                        }
                     }
-                    CappedFile::Missing | CappedFile::Unreadable => {
-                        skipped.push(skip(
-                            StoreKind::RelayConfiguration,
-                            &file_identity(&peers, &path),
-                        )?);
-                        continue;
-                    }
-                };
+                }
+                Err(_) => skipped.push(skip(StoreKind::RelayConfiguration, "config.json")?),
+            },
+        }
+    }
+    for peer in pinned.peers {
+        let identity = peer.identity.clone();
+        match read_frozen(&peer)? {
+            FrozenRead::Unreadable => {
+                skipped.push(skip(StoreKind::RelayConfiguration, &identity)?);
+            }
+            FrozenRead::Bounded => skipped.push(
+                SkippedRecord::new(
+                    StoreKind::RelayConfiguration,
+                    &identity,
+                    SkipReason::Bounded,
+                )
+                .map_err(|_| ())?,
+            ),
+            FrozenRead::Bytes(bytes) => {
                 let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
-                    skipped.push(skip(
-                        StoreKind::RelayConfiguration,
-                        &file_identity(&peers, &path),
-                    )?);
+                    skipped.push(skip(StoreKind::RelayConfiguration, &identity)?);
                     continue;
                 };
                 if let Some(relay) = value.get("relay").filter(|relay| !relay.is_null()) {
                     let encoded = serde_json::to_vec(relay).map_err(|_| ())?;
-                    let identity = format!("peer-{}", file_identity(&peers, &path));
-                    records.push(public(StoreKind::RelayConfiguration, &identity, encoded)?);
+                    records.push(public(
+                        StoreKind::RelayConfiguration,
+                        &format!("peer-{identity}"),
+                        encoded,
+                    )?);
                 }
             }
         }
-        if records.is_empty() && skipped.is_empty() && !config.exists() && !peers.exists() {
-            return absent(StoreKind::RelayConfiguration);
-        }
-        finish(
-            StoreKind::RelayConfiguration,
-            &records.len().saturating_add(skipped.len()).to_string(),
-            records,
-            skipped,
-        )
     }
+    if records.is_empty() && skipped.is_empty() && !pinned.config_exists && !pinned.peers_exist {
+        return absent(StoreKind::RelayConfiguration);
+    }
+    finish(
+        StoreKind::RelayConfiguration,
+        &records.len().saturating_add(skipped.len()).to_string(),
+        records,
+        skipped,
+    )
 }
 
 struct CredentialStore {
@@ -1436,18 +1510,62 @@ fn named<'a>(
     finish(kind, watermark, captured, skips)
 }
 
-fn walk(
-    kind: StoreKind,
-    root: &Path,
-    directory: &Path,
-    label: &str,
-    records: &mut Vec<CapturedRecord>,
-    skipped: &mut Vec<SkippedRecord>,
-) {
-    let Ok(entries) = fs::read_dir(directory) else {
-        if let Ok(record) = skip(kind, &named_identity(label, root, directory)) {
-            skipped.push(record);
+/// A file opened at the pin. Its body is not read until admission is released,
+/// and then only through [`read_frozen`], which stops at `len`.
+struct FrozenFile {
+    identity: String,
+    body: FrozenBody,
+}
+
+enum FrozenBody {
+    /// `len` is the size at the pin. A later append is past it.
+    Ready {
+        file: File,
+        len: u64,
+        secret_path: bool,
+        jsonl: bool,
+    },
+    Bounded,
+    Unreadable,
+}
+
+struct FrozenTree {
+    present: bool,
+    files: Vec<FrozenFile>,
+}
+
+enum FrozenRead {
+    Bytes(Vec<u8>),
+    Bounded,
+    Unreadable,
+}
+
+fn freeze_directory(roots: &[LabeledRoot], extra_files: &[PathBuf]) -> FrozenTree {
+    let mut files = Vec::new();
+    let mut present = false;
+    for root in roots {
+        if !root.path.exists() {
+            continue;
         }
+        present = true;
+        freeze_tree(&root.path, &root.path, root.label, &mut files);
+    }
+    for path in extra_files {
+        if !path.exists() {
+            continue;
+        }
+        present = true;
+        files.push(freeze_one(file_name(path), path, true));
+    }
+    FrozenTree { present, files }
+}
+
+fn freeze_tree(root: &Path, directory: &Path, label: &str, files: &mut Vec<FrozenFile>) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        files.push(FrozenFile {
+            identity: named_identity(label, root, directory),
+            body: FrozenBody::Unreadable,
+        });
         return;
     };
     let mut index = 0u64;
@@ -1456,9 +1574,10 @@ fn walk(
             Ok(entry) => entry,
             Err(_) => {
                 index += 1;
-                if let Ok(record) = skip(kind, &format!("entry-{index}")) {
-                    skipped.push(record);
-                }
+                files.push(FrozenFile {
+                    identity: format!("entry-{index}"),
+                    body: FrozenBody::Unreadable,
+                });
                 continue;
             }
         };
@@ -1470,28 +1589,130 @@ fn walk(
             continue;
         }
         let Ok(metadata) = fs::symlink_metadata(&path) else {
-            if let Ok(record) = skip(kind, &named_identity(label, root, &path)) {
-                skipped.push(record);
-            }
+            files.push(FrozenFile {
+                identity: named_identity(label, root, &path),
+                body: FrozenBody::Unreadable,
+            });
             continue;
         };
         if metadata.file_type().is_symlink() {
-            if let Ok(record) = skip(kind, &named_identity(label, root, &path)) {
-                skipped.push(record);
-            }
+            files.push(FrozenFile {
+                identity: named_identity(label, root, &path),
+                body: FrozenBody::Unreadable,
+            });
             continue;
         }
         if metadata.is_dir() {
-            walk(kind, root, &path, label, records, skipped);
+            freeze_tree(root, &path, label, files);
             continue;
         }
-        push_path(
-            kind,
-            &named_identity(label, root, &path),
-            &path,
-            records,
-            skipped,
+        files.push(freeze_one(named_identity(label, root, &path), &path, true));
+    }
+}
+
+/// Open `path` and record its length. The descriptor stays at offset 0.
+fn freeze_one(identity: String, path: &Path, allow_jsonl: bool) -> FrozenFile {
+    let secret_path = path_sensitivity(path) == Sensitivity::Secret;
+    let jsonl = allow_jsonl
+        && !secret_path
+        && path.extension().and_then(|ext| ext.to_str()) == Some("jsonl");
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(_) => {
+            return FrozenFile {
+                identity,
+                body: FrozenBody::Unreadable,
+            };
+        }
+    };
+    let len = file
+        .metadata()
+        .map(|metadata| metadata.len())
+        .unwrap_or(u64::MAX);
+    if len > PUBLIC_FILE_LIMIT {
+        return FrozenFile {
+            identity,
+            body: FrozenBody::Bounded,
+        };
+    }
+    FrozenFile {
+        identity,
+        body: FrozenBody::Ready {
+            file,
+            len,
+            secret_path,
+            jsonl,
+        },
+    }
+}
+
+fn read_frozen(frozen: &FrozenFile) -> Result<FrozenRead, ()> {
+    match &frozen.body {
+        FrozenBody::Bounded => Ok(FrozenRead::Bounded),
+        FrozenBody::Unreadable => Ok(FrozenRead::Unreadable),
+        FrozenBody::Ready { file, len, .. } => {
+            let mut bytes = Vec::new();
+            // `try_clone` keeps the pin's descriptor. `take` stops at the
+            // length recorded while admission was held.
+            file.try_clone()
+                .map_err(|_| ())?
+                .take(*len)
+                .read_to_end(&mut bytes)
+                .map_err(|_| ())?;
+            if bytes.len() as u64 != *len {
+                return Ok(FrozenRead::Unreadable);
+            }
+            Ok(FrozenRead::Bytes(bytes))
+        }
+    }
+}
+
+fn materialize(
+    kind: StoreKind,
+    files: Vec<FrozenFile>,
+    records: &mut Vec<CapturedRecord>,
+    skipped: &mut Vec<SkippedRecord>,
+) {
+    for file in files {
+        let identity = file.identity.clone();
+        let secret_path = matches!(
+            file.body,
+            FrozenBody::Ready {
+                secret_path: true,
+                ..
+            }
         );
+        let jsonl = matches!(file.body, FrozenBody::Ready { jsonl: true, .. });
+        match read_frozen(&file) {
+            Ok(FrozenRead::Bytes(bytes)) if jsonl => {
+                push_jsonl_bytes(kind, &identity, bytes, records, skipped)
+            }
+            Ok(FrozenRead::Bytes(bytes)) => {
+                push_bytes(kind, &identity, bytes, secret_path, records, skipped);
+            }
+            Ok(FrozenRead::Bounded) => {
+                if let Ok(record) = SkippedRecord::new(kind, &identity, SkipReason::Bounded) {
+                    skipped.push(record);
+                }
+            }
+            Ok(FrozenRead::Unreadable) | Err(()) => {
+                if let Ok(record) = skip(kind, &identity) {
+                    skipped.push(record);
+                }
+            }
+        }
+    }
+}
+
+/// Open a regular file for a cut without reading it. Tests use this to show
+/// the pin's descriptor is still at offset 0.
+#[cfg(test)]
+pub(crate) fn open_at_cut(path: &Path) -> std::io::Result<File> {
+    let frozen = freeze_one("file".to_owned(), path, false);
+    match frozen.body {
+        FrozenBody::Ready { file, .. } => Ok(file),
+        FrozenBody::Bounded => Err(std::io::Error::other("bounded")),
+        FrozenBody::Unreadable => Err(std::io::Error::other("unreadable")),
     }
 }
 
@@ -1504,46 +1725,22 @@ fn named_identity(label: &str, root: &Path, path: &Path) -> String {
     }
 }
 
-fn push_store_file(
+fn push_jsonl_bytes(
     kind: StoreKind,
     identity: &str,
-    path: &Path,
+    bytes: Vec<u8>,
     records: &mut Vec<CapturedRecord>,
     skipped: &mut Vec<SkippedRecord>,
 ) {
-    if path_sensitivity(path) == Sensitivity::Secret
-        || path.extension().and_then(|ext| ext.to_str()) != Some("jsonl")
-    {
-        push_path(kind, identity, path, records, skipped);
-    } else {
-        push_jsonl(kind, path, records, skipped);
+    if content_is_secret(&bytes) {
+        withhold(kind, identity, bytes, records, skipped);
+        return;
     }
-}
-
-fn push_jsonl(
-    kind: StoreKind,
-    path: &Path,
-    records: &mut Vec<CapturedRecord>,
-    skipped: &mut Vec<SkippedRecord>,
-) {
-    let text = match read_public_text(path) {
-        TextRead::Missing => {
-            if let Ok(record) = skip(kind, "jsonl") {
-                skipped.push(record);
-            }
-            return;
+    let Ok(text) = String::from_utf8(bytes) else {
+        if let Ok(record) = skip(kind, identity) {
+            skipped.push(record);
         }
-        TextRead::Secret(bytes) => {
-            withhold(kind, &file_name(path), bytes, records, skipped);
-            return;
-        }
-        TextRead::Bounded => {
-            if let Ok(record) = SkippedRecord::new(kind, file_name(path), SkipReason::Bounded) {
-                skipped.push(record);
-            }
-            return;
-        }
-        TextRead::Text(text) => text,
+        return;
     };
     match jsonl_cut(kind, &text) {
         Ok(cut) => {
@@ -1551,18 +1748,11 @@ fn push_jsonl(
             skipped.extend(cut.skipped().iter().cloned());
         }
         Err(_) => {
-            if let Ok(record) = skip(kind, "jsonl") {
+            if let Ok(record) = skip(kind, identity) {
                 skipped.push(record);
             }
         }
     }
-}
-
-enum TextRead {
-    Missing,
-    Secret(Vec<u8>),
-    Text(String),
-    Bounded,
 }
 
 #[derive(Clone)]
@@ -1592,21 +1782,6 @@ fn read_capped(path: &Path, limit: u64) -> CappedFile {
         return CappedFile::Bounded;
     }
     CappedFile::Bytes(bytes)
-}
-
-fn read_public_text(path: &Path) -> TextRead {
-    let bytes = match read_capped(path, PUBLIC_FILE_LIMIT) {
-        CappedFile::Bytes(bytes) => bytes,
-        CappedFile::Bounded => return TextRead::Bounded,
-        CappedFile::Missing | CappedFile::Unreadable => return TextRead::Missing,
-    };
-    if content_is_secret(&bytes) {
-        return TextRead::Secret(bytes);
-    }
-    match String::from_utf8(bytes) {
-        Ok(text) => TextRead::Text(text),
-        Err(_) => TextRead::Missing,
-    }
 }
 
 fn push_capped_record(
@@ -1669,31 +1844,6 @@ fn push_capped_jsonl(
                     skipped.push(skip(kind, identity)?);
                     Ok(())
                 }
-            }
-        }
-    }
-}
-
-fn push_path(
-    kind: StoreKind,
-    identity: &str,
-    path: &Path,
-    records: &mut Vec<CapturedRecord>,
-    skipped: &mut Vec<SkippedRecord>,
-) {
-    let secret_path = path_sensitivity(path) == Sensitivity::Secret;
-    match read_capped(path, PUBLIC_FILE_LIMIT) {
-        CappedFile::Bytes(bytes) => {
-            push_bytes(kind, identity, bytes, secret_path, records, skipped)
-        }
-        CappedFile::Bounded => {
-            if let Ok(record) = SkippedRecord::new(kind, identity, SkipReason::Bounded) {
-                skipped.push(record);
-            }
-        }
-        CappedFile::Missing | CappedFile::Unreadable => {
-            if let Ok(record) = skip(kind, identity) {
-                skipped.push(record);
             }
         }
     }

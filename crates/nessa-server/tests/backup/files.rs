@@ -1023,6 +1023,116 @@ fn holds(bytes: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty() && bytes.windows(needle.len()).any(|window| window == needle)
 }
 
+#[test]
+fn a_directory_pin_does_not_read_the_body() {
+    use std::io::Seek;
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("audit.json");
+    let body = vec![b'a'; 256 * 1024];
+    fs::write(&path, &body).unwrap();
+    #[cfg(target_os = "linux")]
+    let before = thread_bytes_read();
+    let mut file = crate::backup::infrastructure::open_at_cut(&path).unwrap();
+    #[cfg(target_os = "linux")]
+    {
+        let read = thread_bytes_read().saturating_sub(before);
+        assert!(
+            read < (body.len() as u64) / 2,
+            "the pin read {read} bytes of a {}-byte file",
+            body.len()
+        );
+    }
+    assert_eq!(file.stream_position().unwrap(), 0);
+    assert_eq!(file.metadata().unwrap().len(), body.len() as u64);
+}
+
+#[cfg(target_os = "linux")]
+fn thread_bytes_read() -> u64 {
+    let text = fs::read_to_string("/proc/thread-self/io").unwrap();
+    text.lines()
+        .find_map(|line| line.strip_prefix("rchar: "))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_directory_rewrite_after_the_hold_is_not_the_cut() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let audit = root.join("conversations/audit/creation");
+    fs::create_dir_all(&audit).unwrap();
+    let name = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json";
+    let path = audit.join(name);
+    fs::write(&path, b"{\"cut\":\"before\"}\n").unwrap();
+    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let manifest = capture_namespace(
+        root,
+        &RewriteOnRelease {
+            path: path.clone(),
+            bytes: b"{\"cut\":\"after\"}\n".to_vec(),
+        },
+        &inventory,
+        &DirectoryPublisher::new(bundle.path().join("cut")),
+        &Clock(8),
+        &inventory.key(),
+    )
+    .await
+    .unwrap();
+    let published = fs::read(
+        bundle
+            .path()
+            .join("cut/records/conversation-audit")
+            .join(format!("creation%2F{name}")),
+    )
+    .unwrap();
+    assert_eq!(published, b"{\"cut\":\"before\"}\n");
+    assert_eq!(fs::read(&path).unwrap(), b"{\"cut\":\"after\"}\n");
+    assert!(manifest.encoded().contains("conversation-audit"));
+}
+
+struct RewriteOnRelease {
+    path: std::path::PathBuf,
+    bytes: Vec<u8>,
+}
+
+#[async_trait]
+impl MutationAdmission for RewriteOnRelease {
+    async fn hold(
+        &self,
+    ) -> Result<
+        Box<dyn crate::backup::application::AdmissionLease + Send + Sync>,
+        crate::backup::application::AdmissionFailure,
+    > {
+        Ok(Box::new(RewriteHold {
+            path: self.path.clone(),
+            bytes: self.bytes.clone(),
+        }))
+    }
+}
+
+struct RewriteHold {
+    path: std::path::PathBuf,
+    bytes: Vec<u8>,
+}
+
+impl Drop for RewriteHold {
+    fn drop(&mut self) {
+        let next = self.path.with_extension("json.next");
+        fs::write(&next, &self.bytes).unwrap();
+        fs::rename(&next, &self.path).unwrap();
+    }
+}
+
+impl crate::backup::application::AdmissionLease for RewriteHold {
+    fn retirement_signaled(&self) -> bool {
+        false
+    }
+}
+
 struct OpenAdmission;
 
 #[async_trait]
