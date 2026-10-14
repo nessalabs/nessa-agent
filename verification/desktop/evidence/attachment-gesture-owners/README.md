@@ -50,3 +50,36 @@ The expanded attachment matrix passes 30/30 engine/scenario pairs. The focused
 test count, type, lint, architecture, format, fixture-build and source-revert
 results are in [r2-check.log](r2-check.log). The screenshots are supplemental;
 the browser assertions prove the owner routing and result delivery.
+
+## R3 per-conversation refusal evidence
+
+R3 product source is frozen at
+`172804abf08aeec8534563b95e528438cf9df798`.
+
+R3 adds one read-only refusal map per mounted hook, keyed by local conversation
+ID and carrying the actual store/resource owner. Its update and cleanup paths
+keep open tabs independent, answer only the addressed tab, and prune entries
+when a tab closes or the provider scope retires. The picker hook regression
+checks delayed A refusal while B is active, both notices across tab switches,
+answering A without clearing B, same-ID provider replacement, and close cleanup.
+The actual App browser case repeats the visible two-tab flow in Chromium and
+WebKit; these four screenshots show the two conversations' separate notices.
+
+![Conversation A refusal, Chromium](refusal-a-chromium.png)
+![Conversation B refusal, Chromium](refusal-b-chromium.png)
+![Conversation A refusal, WebKit](refusal-a-webkit.png)
+![Conversation B refusal, WebKit](refusal-b-webkit.png)
+
+The host batch, drag and drop listeners now live for the mounted component.
+Their callbacks read layout-updated current refs. Hook regressions hold listener
+registration pending through provider replacement, prove the batch beginning
+still binds to the replacement owner without registering twice, and prove a
+retained terminal callback is ignored after unmount.
+
+[r3-check.log](r3-check.log) records direct-Node type, lint, formatting,
+architecture, full test, browser matrix and source-revert results. It supersedes
+the historic R2 verification counts above. The R2 log is retained as written;
+its recorded `pnpm exec` command has no preserved raw shell output, so execution
+provenance is unverified. The R3 results use direct Node binaries and resolve
+their TypeScript, Vitest, Prettier, ESLint, Vite, `@nessa-ui/react`, Geist and
+Geist Mono dependencies inside this checkout.
