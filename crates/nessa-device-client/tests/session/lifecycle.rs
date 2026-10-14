@@ -76,6 +76,25 @@ fn compose(root: &Path, connector: Arc<dyn EnrollmentConnector>) -> NativeSessio
     .unwrap()
 }
 #[test]
+fn a_kept_view_still_asks_status_after_an_authority_refusal() {
+    let view = FollowedConversation {
+        incarnation: "incarnation".to_owned(),
+        position: "4".to_owned(),
+        view_json: "{}".to_owned(),
+    };
+    let (followed, authority) =
+        super::settled_or_error(Some(view.clone()), ReadFailure::Refused, true);
+    assert_eq!(followed.as_ref().unwrap().view_json(), view.view_json());
+    assert!(authority);
+    let (missing, authority) = super::settled_or_error(None, ReadFailure::Refused, true);
+    assert_eq!(missing, Err(ReadFailure::Refused));
+    assert!(authority);
+    let (ahead, authority) = super::settled_or_error(None, ReadFailure::CursorAhead, false);
+    assert_eq!(ahead, Err(ReadFailure::CursorAhead));
+    assert!(!authority);
+}
+
+#[test]
 fn stopped_before_dispatch_opens_no_connection_or_cache() {
     let root = root();
     let connector = Arc::new(Refusing {

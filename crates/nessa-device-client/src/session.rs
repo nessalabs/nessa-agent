@@ -206,7 +206,9 @@ impl SessionFollow {
     pub fn followed(&self) -> Option<&Result<FollowedConversation, ReadFailure>> {
         self.followed.as_ref()
     }
-    /// Fresh refusal recheck. A conversation this device was not granted does not ask.
+    /// Fresh refusal recheck. A conversation this device was not granted does
+    /// not ask. A view already delivered does not hide a grant revoked before
+    /// the feed's next batch.
     pub fn recheck(&self) -> Option<&Result<RetainedEnrollmentStatus, NativeClientError>> {
         self.recheck.as_ref()
     }
@@ -486,8 +488,9 @@ impl Driver {
 }
 /// Views the server still marks `stale` are one replay, sent immediately.
 /// Keep the newest and stop when one is settled, the cursor stops advancing,
-/// or the feed ends. A view already applied wins over a later transport error
-/// so the caller can resume from its cursor.
+/// or the feed ends. A view already applied wins over a later failure so the
+/// caller can resume from its cursor. An authority refusal that ends the
+/// feed still asks status again, including when that view is kept.
 fn take_settled(
     feed: &mut nessa_client_core::retained::ConversationFeed,
 ) -> (Result<FollowedConversation, ReadFailure>, bool) {
@@ -498,18 +501,12 @@ fn take_settled(
             Ok(event) => event,
             Err(error) => {
                 let _ = feed.close();
-                return match latest {
-                    Some(view) => (Ok(view), false),
-                    None => (Err(error.failure()), error.asks_status()),
-                };
+                return settled_or_error(latest, error.failure(), error.asks_status());
             }
         };
         if let Some(error) = event.terminal_failure() {
             let _ = feed.close();
-            return match latest {
-                Some(view) => (Ok(view), false),
-                None => (Err(error.failure()), error.asks_status()),
-            };
+            return settled_or_error(latest, error.failure(), error.asks_status());
         }
         let FeedEvent::View { cursor, view } = event else {
             continue;
@@ -541,6 +538,20 @@ fn take_settled(
     match latest {
         Some(view) => (Ok(view), false),
         None => (Err(ReadFailure::Protocol), false),
+    }
+}
+
+/// A view already applied is the result. `authority` is whether the failure
+/// that stopped the feed refused this credential, so a kept view does not
+/// hide a grant revocation.
+fn settled_or_error(
+    latest: Option<FollowedConversation>,
+    failure: ReadFailure,
+    authority: bool,
+) -> (Result<FollowedConversation, ReadFailure>, bool) {
+    match latest {
+        Some(view) => (Ok(view), authority),
+        None => (Err(failure), authority),
     }
 }
 impl Drop for Driver {

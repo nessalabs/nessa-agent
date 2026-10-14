@@ -12,7 +12,7 @@
 //! short, the caller subscribes again with the last cursor it applied.
 use super::{failure, ReadFailure, ReadStop, ReaderAccess, RetainedCache, Stopping};
 use crate::read_only_sync::application::device::asks_status;
-use crate::read_only_sync::application::{GatewayError, SubscriptionRefusal};
+use crate::read_only_sync::application::{GatewayError, SubscriptionCode, SubscriptionRefusal};
 use crate::read_only_sync::infrastructure::gateway::Session;
 use crate::read_only_sync::infrastructure::gateway::{subscription_refusal, SubscriptionDelivery};
 use nessa_protocol::conversation::domain::ConversationId;
@@ -100,8 +100,10 @@ impl ConversationFeed {
     /// the socket ended the wait, so the caller subscribes again from the
     /// last cursor it applied. `Refused` when the gateway refuses the
     /// subscribe; [`SubscribeError::asks_status`] is set only for this
-    /// credential's authority. `Protocol` when a frame is outside the
-    /// session, including a `next` after the feed has ended or been closed.
+    /// credential's authority. `CursorAhead` when `after` is past the
+    /// gateway head: follow again with no cursor, and do not ask status.
+    /// `Protocol` when a frame is outside the session, including a `next`
+    /// after the feed has ended or been closed.
     pub fn next_event(&mut self) -> Result<FeedEvent, SubscribeError> {
         if self.closed || self.terminal {
             return Err(self.protocol());
@@ -300,6 +302,9 @@ fn subscribe_failure(error: GatewayError) -> ReadFailure {
             SubscriptionRefusal::Forbidden | SubscriptionRefusal::Unauthorized => {
                 ReadFailure::Refused
             }
+            SubscriptionRefusal::Subscription(SubscriptionCode::CursorAhead) => {
+                ReadFailure::CursorAhead
+            }
             SubscriptionRefusal::Subscription(_) => ReadFailure::Refused,
             SubscriptionRefusal::Conversation(
                 ConversationErrorCode::ConversationNotFound
@@ -360,15 +365,17 @@ mod tests {
             SubscriptionRefusal::Unauthorized
         )));
         assert!(!asks_status(GatewayError::Subscription(
-            SubscriptionRefusal::Subscription(
-                crate::read_only_sync::application::SubscriptionCode::CursorAhead,
-            )
+            SubscriptionRefusal::Subscription(SubscriptionCode::CursorAhead)
         )));
         assert_eq!(
             subscribe_failure(GatewayError::Subscription(
-                SubscriptionRefusal::Subscription(
-                    crate::read_only_sync::application::SubscriptionCode::Duplicate,
-                )
+                SubscriptionRefusal::Subscription(SubscriptionCode::CursorAhead)
+            )),
+            ReadFailure::CursorAhead
+        );
+        assert_eq!(
+            subscribe_failure(GatewayError::Subscription(
+                SubscriptionRefusal::Subscription(SubscriptionCode::Duplicate)
             )),
             ReadFailure::Refused
         );
@@ -381,6 +388,9 @@ mod tests {
         assert!(!ended.asks_status());
         let revoked = ended_failure("refused", Some("forbidden"));
         assert!(revoked.asks_status());
+        let ahead = ended_failure("refused", Some("cursor_ahead"));
+        assert_eq!(ahead.failure(), ReadFailure::CursorAhead);
+        assert!(!ahead.asks_status());
         assert_eq!(
             ended_failure("lagging", None).failure(),
             ReadFailure::Unreachable

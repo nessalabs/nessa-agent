@@ -72,6 +72,18 @@ fn session_failure_keeps_its_exact_original_payload() {
 }
 
 #[test]
+fn cursor_ahead_stays_distinct_from_an_ungranted_conversation() {
+    assert_eq!(
+        NativeReadFailure::from(ReadFailure::CursorAhead),
+        NativeReadFailure::CursorAhead
+    );
+    assert_ne!(
+        NativeReadFailure::from(ReadFailure::CursorAhead),
+        NativeReadFailure::Refused
+    );
+}
+
+#[test]
 fn uncertain_cache_commit_survives_foreign_failure_translation() {
     let failure = NativeSessionFailure {
         value: SessionFailure::Cache(ReadFailure::CacheUncertain),

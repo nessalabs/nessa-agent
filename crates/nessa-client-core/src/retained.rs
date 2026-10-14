@@ -201,6 +201,10 @@ pub enum ReadFailure {
     Quota,
     /// `ReadStop::stop` was called.
     Stopped,
+    /// A `conversation.subscribe` `after` cursor is ahead of the gateway's
+    /// head. Follow again with no cursor. A checkpoint read does not produce
+    /// this, and it does not ask pinned status again.
+    CursorAhead,
 }
 
 /// Stops a read in progress: the flag every physical read and write asks,

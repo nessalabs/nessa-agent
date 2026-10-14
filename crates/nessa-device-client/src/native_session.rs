@@ -525,6 +525,8 @@ impl NativeFollow {
             .map(|value| value.position().to_owned())
     }
     /// Why no view was delivered, when a reader was selected.
+    /// [`NativeReadFailure::CursorAhead`] means `after` is past the gateway
+    /// head: follow again with no cursor. It is not an ungranted conversation.
     pub fn failure(&self) -> Option<NativeReadFailure> {
         self.value
             .followed()
