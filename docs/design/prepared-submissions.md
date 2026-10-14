@@ -26,6 +26,22 @@ promise retains its own operation across tab removal. A stop request lives on th
 operation, replacing the global execution-ID set. Reorder is a separate queue
 intent and remains outside this slice.
 
+Retry-table retention depends on the turn receipt and whether its send/retry
+promise is still in flight. The in-flight case keeps the exact target available
+to Stop; retry itself still requires an `unknown` receipt.
+
+| Turn receipt | Promise in flight | Table decision | Purpose |
+| --- | --- | --- | --- |
+| `unknown` | no | retain | Preserve the original explicit retry intent. |
+| `unknown` | yes | retain | Keep the operation reachable while its retry is pending. |
+| `accepted` | yes | retain | Stop can still find the original target until that promise settles. |
+| `accepted` | no | prune | Admission is known and there is no pending operation to stop. |
+
+The four combinations are exercised by the retention matrix in
+`src/conversation/adapters/store/prepared-operations.test.ts`. PS12 also covers
+Stop while a retry is in flight after its receipt has become accepted: it uses
+the retained target immediately and again after admission.
+
 ## API and owners
 
 `presentation/conversation-api.ts::prepareSubmission` owns validation and copied
@@ -42,9 +58,11 @@ the client package. The factory accepts a validated gateway view or trusted loca
 projection; it does not authenticate a fabricated view. The SDK and gateway still
 own scheduling, authorization, current state, audit and physical cancellation.
 
-`src/conversation/adapters/store/slice.ts` retains process-local prepared
-operations under the actual Redux `getState` lifetime. Tables distinguish local
-tab and execution identity; two stores may share effects without sharing intent.
+`src/conversation/adapters/store/prepared-operation-table.ts` owns the
+process-local prepared-operation table and its receipt/in-flight pruning rule.
+`src/conversation/adapters/store/slice.ts` scopes one table to each actual Redux
+`getState` lifetime. Tables distinguish local tab and execution identity; two
+stores may share effects without sharing intent.
 The send use-case registers its operation before a single reducer publication
 binds the server identity and makes the turn visible. That publication derives
 server/execution/action/mode from the issued prepared value; it replaces send's
