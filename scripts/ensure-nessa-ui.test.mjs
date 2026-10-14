@@ -63,6 +63,97 @@ test("clean vendor preparation installs and builds every linked source package",
   ])
 })
 
+test("workspace preparation detaches borrowed node_modules roots without changing their targets", (context) => {
+  const parent = mkdtempSync(join(tmpdir(), "nessa-borrowed-dependencies-"))
+  context.after(() => rmSync(parent, { recursive: true, force: true }))
+  const root = join(parent, "workspace")
+  const borrowed = join(parent, "borrowed")
+  mkdirSync(root)
+  mkdirSync(borrowed)
+  const roots = [
+    "node_modules",
+    ...linkedWorkspacePackages.map((pkg) => `${pkg}/node_modules`),
+  ]
+  for (const [index, relativeRoot] of roots.entries()) {
+    const target = join(borrowed, String(index))
+    mkdirSync(target, { recursive: true })
+    writeFileSync(join(target, "marker"), `borrowed ${index}`)
+    const nodeModules = join(root, relativeRoot)
+    mkdirSync(join(nodeModules, ".."), { recursive: true })
+    symlinkSync(target, nodeModules, "junction")
+  }
+  for (const directory of linkedWorkspacePackages) {
+    mkdirSync(join(root, directory), { recursive: true })
+    writeFileSync(
+      join(root, directory, "package.json"),
+      JSON.stringify({ name: directory, scripts: { build: "fake-build" } }),
+    )
+  }
+
+  const calls = []
+  ensureWorkspace(root, (command, args, cwd) => {
+    calls.push({ command, cwd })
+    assert.equal(cwd, root, "install and build run in the owned workspace")
+    for (const relativeRoot of roots)
+      assert.equal(
+        lstatSync(join(root, relativeRoot), { throwIfNoEntry: false })?.isSymbolicLink(),
+        undefined,
+        `${relativeRoot} is detached before ${command} ${args.join(" ")}`,
+      )
+  })
+
+  assert.deepEqual(
+    calls.map(({ command }) => command),
+    ["pnpm", "pnpm", "pnpm"],
+  )
+  for (const [index] of roots.entries())
+    assert.equal(
+      readFileSync(join(borrowed, String(index), "marker"), "utf8"),
+      `borrowed ${index}`,
+    )
+})
+
+test("workspace preparation preserves package links inside owned node_modules directories", (context) => {
+  const root = mkdtempSync(join(tmpdir(), "nessa-owned-dependencies-"))
+  context.after(() => rmSync(root, { recursive: true, force: true }))
+  for (const directory of linkedWorkspacePackages) {
+    mkdirSync(join(root, directory), { recursive: true })
+    writeFileSync(
+      join(root, directory, "package.json"),
+      JSON.stringify({ name: directory }),
+    )
+  }
+  const roots = [
+    "node_modules",
+    ...linkedWorkspacePackages.map((pkg) => `${pkg}/node_modules`),
+  ]
+  for (const [index, relativeRoot] of roots.entries()) {
+    const packageTarget = join(root, relativeRoot, ".pnpm", `package-${index}`)
+    mkdirSync(packageTarget, { recursive: true })
+    writeFileSync(join(packageTarget, "owned"), "local package")
+    symlinkSync(
+      join(root, relativeRoot, ".pnpm", `package-${index}`),
+      join(root, relativeRoot, `package-${index}`),
+      "junction",
+    )
+  }
+
+  ensureWorkspace(root, () => {})
+
+  for (const [index, relativeRoot] of roots.entries()) {
+    assert.equal(lstatSync(join(root, relativeRoot)).isSymbolicLink(), false)
+    assert.equal(
+      lstatSync(join(root, relativeRoot, `package-${index}`)).isSymbolicLink(),
+      true,
+      `${relativeRoot} keeps its package link`,
+    )
+    assert.equal(
+      readFileSync(join(root, relativeRoot, `package-${index}`, "owned"), "utf8"),
+      "local package",
+    )
+  }
+})
+
 const PIN = "a".repeat(40)
 const OTHER = "b".repeat(40)
 

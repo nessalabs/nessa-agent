@@ -39,6 +39,14 @@ export function ensureWorkspace(repoRoot, run = command) {
       throw new Error(`Missing linked workspace package ${directory}`)
     return JSON.parse(readFileSync(manifest, "utf8"))
   })
+  // Workspace installs and builds write beneath these roots. A root-level
+  // node_modules symlink can borrow another checkout's dependencies, so unlink
+  // only those roots; package links inside an owned node_modules stay intact.
+  for (const directory of [".", ...linkedWorkspacePackages]) {
+    const nodeModules = resolve(repoRoot, directory, "node_modules")
+    if (lstatSync(nodeModules, { throwIfNoEntry: false })?.isSymbolicLink())
+      rmSync(nodeModules)
+  }
   const install = ["install", "--frozen-lockfile"]
   for (const pkg of packages) install.push("--filter", `${pkg.name}...`)
   run("pnpm", install, repoRoot)
