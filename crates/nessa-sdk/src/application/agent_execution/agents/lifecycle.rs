@@ -166,6 +166,10 @@ pub(super) struct SessionLifecycle {
     finalization_pause: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
     #[cfg(test)]
     attachment_audit_pause: Mutex<Option<AttachmentAuditPause>>,
+    /// Armed once, taken after a native steer's provider future exists and
+    /// before [`Agent::run_control`](super::Agent::run_control) polls it.
+    #[cfg(test)]
+    before_native_steer_poll: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
     state: Mutex<State>,
     resource_transition: AsyncMutex<()>,
     close: watch::Sender<Option<ActionContext>>,
@@ -291,6 +295,8 @@ impl SessionLifecycle {
             finalization_pause: Mutex::new(None),
             #[cfg(test)]
             attachment_audit_pause: Mutex::new(None),
+            #[cfg(test)]
+            before_native_steer_poll: Mutex::new(None),
             resource_transition: AsyncMutex::new(()),
             state: Mutex::new(State {
                 work_generation: WorkGeneration(0),
@@ -1081,6 +1087,20 @@ impl SessionLifecycle {
         release: oneshot::Receiver<()>,
     ) {
         *self.finalization_pause.lock().unwrap() = Some((entered, release));
+    }
+    #[cfg(test)]
+    pub(super) fn pause_before_native_steer_poll(
+        &self,
+        entered: oneshot::Sender<()>,
+        release: oneshot::Receiver<()>,
+    ) {
+        *self.before_native_steer_poll.lock().unwrap() = Some((entered, release));
+    }
+    #[cfg(test)]
+    pub(super) fn take_before_native_steer_poll(
+        &self,
+    ) -> Option<(oneshot::Sender<()>, oneshot::Receiver<()>)> {
+        self.before_native_steer_poll.lock().unwrap().take()
     }
     #[cfg(test)]
     pub(super) fn pause_next_attachment_audit(

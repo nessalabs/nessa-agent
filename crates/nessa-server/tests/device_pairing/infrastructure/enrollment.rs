@@ -2281,9 +2281,11 @@ fn native_gateway_runs_on_a_one_thread_blocking_pool() {
     // The sample is one stretch on this thread, before the pool exists, so a
     // loaded runner's allowance grows with the stretch. Twenty times that
     // sample covers both stretches, TLS, and the owner commands, with margin
-    // if the machine slows after the sample. The five-second floor covers a
-    // fast machine whose stretch is a small part of the exchange. The timeout
-    // is what fails a job that waits on a second blocking thread.
+    // if the machine slows after the sample. A fast sample stays under that
+    // product. The floor is `WAIT`, the socket budget the device thread
+    // already uses. Five seconds was that floor, and on a loaded Windows
+    // runner the exchange was still going when it expired. The timeout is
+    // what fails a job that waits on a second blocking thread.
     let sample = std::time::Instant::now();
     let mut entropy = OsEntropy;
     let code = ManualCode::generate(&mut entropy);
@@ -2294,10 +2296,7 @@ fn native_gateway_runs_on_a_one_thread_blocking_pool() {
         [9; 44],
     )
     .expect("one Argon2id stretch");
-    let budget = sample
-        .elapsed()
-        .saturating_mul(20)
-        .max(std::time::Duration::from_secs(5));
+    let budget = sample.elapsed().saturating_mul(20).max(WAIT);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .max_blocking_threads(1)
