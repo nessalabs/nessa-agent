@@ -23,7 +23,10 @@ use crate::{
         sessions::{ExecutionSessionId, SessionId},
     },
 };
+use serde::de::{DeserializeSeed, Deserializer, Error, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Number, Value};
+use std::fmt;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -353,7 +356,11 @@ pub(crate) fn read_batch(bytes: &[u8], context: &ProviderContext) -> BatchRead {
     if super::decode::preflight_semantic_batch(bytes).is_err() {
         return BatchRead::Whole;
     }
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+    // Preflight permits a repeated field, and `serde_json::Value` then keeps
+    // the last one. A visitor that refuses the repeated key runs before any
+    // change is converted, so the unit is one gap and the last definition
+    // does not apply.
+    let Ok(value) = json_without_duplicate_keys(bytes) else {
         return BatchRead::Whole;
     };
     let Some(changes) = value.get("changes").and_then(|changes| changes.as_array()) else {
@@ -384,6 +391,80 @@ pub(crate) fn read_batch(bytes: &[u8], context: &ProviderContext) -> BatchRead {
         }
     }
     BatchRead::Changes(read)
+}
+
+/// JSON objects keep every key. A repeated name, including one written with a
+/// different escape, is refused before a typed conversion can collapse it.
+fn json_without_duplicate_keys(bytes: &[u8]) -> Result<Value, serde_json::Error> {
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let value = UniqueJson.deserialize(&mut deserializer)?;
+    deserializer.end()?;
+    Ok(value)
+}
+
+struct UniqueJson;
+
+impl<'de> DeserializeSeed<'de> for UniqueJson {
+    type Value = Value;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Value, D::Error> {
+        deserializer.deserialize_any(UniqueJsonVisitor)
+    }
+}
+
+struct UniqueJsonVisitor;
+
+impl<'de> Visitor<'de> for UniqueJsonVisitor {
+    type Value = Value;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("JSON with unique object keys")
+    }
+
+    fn visit_bool<E: Error>(self, value: bool) -> Result<Value, E> {
+        Ok(Value::Bool(value))
+    }
+
+    fn visit_i64<E: Error>(self, value: i64) -> Result<Value, E> {
+        Ok(Value::Number(value.into()))
+    }
+
+    fn visit_u64<E: Error>(self, value: u64) -> Result<Value, E> {
+        Ok(Value::Number(value.into()))
+    }
+
+    fn visit_f64<E: Error>(self, value: f64) -> Result<Value, E> {
+        Number::from_f64(value)
+            .map(Value::Number)
+            .ok_or_else(|| E::custom("invalid JSON number"))
+    }
+
+    fn visit_str<E: Error>(self, value: &str) -> Result<Value, E> {
+        Ok(Value::String(value.into()))
+    }
+
+    fn visit_unit<E: Error>(self) -> Result<Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> Result<Value, A::Error> {
+        let mut values = Vec::new();
+        while let Some(value) = sequence.next_element_seed(UniqueJson)? {
+            values.push(value);
+        }
+        Ok(Value::Array(values))
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
+        let mut values = Map::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if values.contains_key(&key) {
+                return Err(A::Error::custom("duplicate JSON object key"));
+            }
+            values.insert(key, map.next_value_seed(UniqueJson)?);
+        }
+        Ok(Value::Object(values))
+    }
 }
 
 #[cfg(test)]
@@ -1148,6 +1229,60 @@ mod tests {
             decode_batch(stopped.as_bytes(), &ProviderContext::Absent),
             Err(StorageError::AnotherVersion { found: Some(later) })
         );
+    }
+
+    #[test]
+    fn a_duplicate_json_field_is_not_read_as_its_last_value() {
+        let kept = encode_batch(&[opened_change()]).unwrap();
+        let other = SessionChange::Opened {
+            id: SessionId::new("other-conversation").unwrap(),
+            provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
+            context: ProviderContext::Absent,
+        };
+        let last = encode_batch(&[other]).unwrap();
+        let last_text = String::from_utf8(last).unwrap();
+        let changes_at = last_text.find("\"changes\":").unwrap();
+        let repeated_changes = {
+            let mut text = String::from_utf8(kept.clone()).unwrap();
+            text.pop();
+            text.push(',');
+            text.push_str(&last_text[changes_at..last_text.len() - 1]);
+            text.push('}');
+            text.into_bytes()
+        };
+        let collapsed: serde_json::Value = serde_json::from_slice(&repeated_changes).unwrap();
+        assert_eq!(
+            collapsed["changes"][0]["Opened"]["id"],
+            "other-conversation"
+        );
+        assert!(matches!(
+            read_batch(&repeated_changes, &ProviderContext::Absent),
+            BatchRead::Whole
+        ));
+
+        let nested = String::from_utf8(kept.clone()).unwrap().replacen(
+            "\"id\":",
+            "\"id\":\"conversation\",\"id\":",
+            1,
+        );
+        let collapsed: serde_json::Value = serde_json::from_slice(nested.as_bytes()).unwrap();
+        assert_eq!(collapsed["changes"][0]["Opened"]["id"], "conversation");
+        assert!(matches!(
+            read_batch(nested.as_bytes(), &ProviderContext::Absent),
+            BatchRead::Whole
+        ));
+
+        let escaped = String::from_utf8(kept).unwrap().replacen(
+            "\"id\":\"conversation\"",
+            "\"id\":\"first\",\"\\u0069d\":\"conversation\"",
+            1,
+        );
+        let collapsed: serde_json::Value = serde_json::from_slice(escaped.as_bytes()).unwrap();
+        assert_eq!(collapsed["changes"][0]["Opened"]["id"], "conversation");
+        assert!(matches!(
+            read_batch(escaped.as_bytes(), &ProviderContext::Absent),
+            BatchRead::Whole
+        ));
     }
 
     #[test]

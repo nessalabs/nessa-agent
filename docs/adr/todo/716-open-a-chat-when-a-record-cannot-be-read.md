@@ -43,7 +43,7 @@ line is still shown.
 
 | Record | Result | Why |
 | --- | --- | --- |
-| Save unit whose body is corrupt, another version, or not a JSON object | One line. Nothing in that unit is applied. | The unit is one record. Its turns and tool calls belong to it. |
+| Save unit whose body is corrupt, another version, or not a JSON object | One line. Nothing in that unit is applied. | The unit is one record. Its turns and tool calls belong to it. A repeated JSON field is this case: the last copy is not applied. |
 | Save unit whose header is sound and names this chat, but whose chain, generation, or base does not follow | The header is adopted so a later unit can apply. The body is read as above. | Append after a gap. The chat is still this stream. |
 | Save header that does not name this chat, or whose digest does not match | One line. The header is not adopted. | It is not a later unit of this chat. |
 | Physical frame that is not a frame, including an unknown tag or a bad seal | One line for the run of bad frames. The next frame is read. | The next record is the boundary. A byte scan is not. |
@@ -72,8 +72,9 @@ save, oldest first, and the cut flag as of that save. A gap noted after that
 save is left out; replaying the suffix notes it again. At most 32 lines are
 kept. A later gap is still skipped, adds no line, and sets `unreadableTruncated`
 when the save that follows it completes. The id is the decimal physical position of the record. A checkpoint is reread
-from the records when its ids are not strictly increasing positions, or when
-a gap's position is past the applied cursor. `afterExecutionId` is the last
+from the records when its ids are not strictly increasing positions, when
+a gap's position is past the applied cursor, or when a gap names an accepted
+turn the restored snapshot does not hold. `afterExecutionId` is the last
 accepted turn at that moment, and it is absent when there was none. A
 duplicate of an id already kept does not set the flag.
 

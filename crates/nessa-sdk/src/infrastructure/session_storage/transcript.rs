@@ -864,6 +864,7 @@ impl TranscriptFold {
                     .parse::<u64>()
                     .is_ok_and(|position| position > saved.applied)
             })
+            || gap_anchor_missing(snapshot.as_ref(), &saved.unread)
         {
             return Err(TranscriptError::Checkpoint);
         }
@@ -891,6 +892,21 @@ impl TranscriptFold {
         fold.mark_stale();
         Ok(fold)
     }
+}
+
+/// A saved gap names a turn the restored snapshot did not accept. The
+/// transcript would draw that line before the first turn.
+fn gap_anchor_missing(snapshot: Option<&SessionSnapshot>, unread: &[UnreadablePart]) -> bool {
+    unread.iter().any(|part| {
+        part.after_execution_id().is_some_and(|anchor| {
+            !snapshot.is_some_and(|state| {
+                state
+                    .invocations
+                    .iter()
+                    .any(|record| record.request.execution_id.as_str() == anchor)
+            })
+        })
+    })
 }
 
 struct ReceiverBackup {
@@ -3504,6 +3520,72 @@ mod tests {
     }
 
     #[test]
+    fn a_checkpoint_refuses_a_gap_anchor_absent_from_the_snapshot() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        fold.apply(&records(
+            &scope,
+            fold.downloaded() + 1,
+            &save_frames(accepted_input("driven"), fold.applied(), 1),
+        ))
+        .unwrap();
+        let checkpoint = fold.checkpoint().unwrap();
+        let value: Value = serde_json::from_reader(checkpoint.reader()).unwrap();
+        let applied = fold.applied().to_string();
+        let accepted = fold.snapshot().unwrap().invocations[0]
+            .request
+            .execution_id
+            .as_str()
+            .to_owned();
+        for unread in [
+            serde_json::json!([{ "id": applied, "after_execution_id": "missing" }]),
+            serde_json::json!([{ "id": applied, "after_execution_id": "drive" }]),
+            serde_json::json!([
+                { "id": "1", "after_execution_id": accepted },
+                { "id": applied, "after_execution_id": "missing" }
+            ]),
+        ] {
+            let mut changed = value.clone();
+            changed["unread"] = unread;
+            let malformed =
+                TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&changed).unwrap()])
+                    .unwrap();
+            assert!(matches!(
+                TranscriptFold::restore(scope.clone(), fold.applied(), &malformed),
+                Err(TranscriptError::Checkpoint)
+            ));
+        }
+        let mut held = value.clone();
+        held["unread"] = serde_json::json!([{ "id": applied, "after_execution_id": accepted }]);
+        let held =
+            TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&held).unwrap()]).unwrap();
+        let restored = TranscriptFold::restore(scope.clone(), fold.applied(), &held).unwrap();
+        assert_eq!(
+            restored.unreadable()[0].after_execution_id(),
+            Some(accepted.as_str())
+        );
+        let mut open_only = TranscriptFold::new(scope.clone()).unwrap();
+        open_only
+            .apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let open_checkpoint = open_only.checkpoint().unwrap();
+        let mut open_value: Value = serde_json::from_reader(open_checkpoint.reader()).unwrap();
+        open_value["unread"] = serde_json::json!([{
+            "id": open_only.applied().to_string(),
+            "after_execution_id": "missing"
+        }]);
+        let open_malformed =
+            TranscriptCheckpoint::from_chunks(vec![serde_json::to_vec(&open_value).unwrap()])
+                .unwrap();
+        assert!(matches!(
+            TranscriptFold::restore(scope, open_only.applied(), &open_malformed),
+            Err(TranscriptError::Checkpoint)
+        ));
+    }
+
+    #[test]
     fn a_later_save_applies_when_its_chain_does_not_follow() {
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
@@ -3567,6 +3649,51 @@ mod tests {
             .unwrap();
         assert_eq!(fold.snapshot().unwrap().invocations.len(), 0);
         assert_eq!(fold.unreadable().len(), 1);
+    }
+
+    #[test]
+    fn a_save_unit_with_a_repeated_json_field_is_one_gap() {
+        use crate::application::agent_execution::sessions::{
+            NoteDelivery, NoteId, NoteRecord, NoteText,
+        };
+        use crate::domain::agent_execution::executions::{GrantInitiator, Initiator};
+        let note = |text: &str| {
+            SessionChange::Note(NoteRecord {
+                id: NoteId::mint(),
+                text: NoteText::new(text).unwrap(),
+                delivery: NoteDelivery::RecordOnly,
+                actor: ActionContext::new("person", "phone", "note").unwrap(),
+                author: Initiator::Grant(GrantInitiator::new("receiver", 7).unwrap()),
+                accepted_at_ms: 1_700_000_000_000,
+                after_execution: None,
+                retired: None,
+            })
+        };
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &save_frames(opened(), 0, 0)))
+            .unwrap();
+        let first = snapshot::encode_semantic_batch(&[note("first")]).unwrap();
+        let last = snapshot::encode_semantic_batch(&[note("last definition")]).unwrap();
+        let last_text = String::from_utf8(last).unwrap();
+        let changes_at = last_text.find("\"changes\":").unwrap();
+        let mut repeated = String::from_utf8(first.clone()).unwrap();
+        repeated.pop();
+        repeated.push(',');
+        repeated.push_str(&last_text[changes_at..last_text.len() - 1]);
+        repeated.push('}');
+        let nested = String::from_utf8(first).unwrap().replacen(
+            "\"text\":\"first\"",
+            "\"text\":\"first\",\"\\u0074ext\":\"last definition\"",
+            1,
+        );
+        for (generation, payload) in [(1, repeated.into_bytes()), (2, nested.into_bytes())] {
+            let start = fold.downloaded() + 1;
+            let frames = framed_save(&payload, fold.applied(), generation, start);
+            fold.apply(&records(&scope, start, &frames)).unwrap();
+        }
+        assert!(fold.snapshot().unwrap().notes.is_empty());
+        assert_eq!(fold.unreadable().len(), 2);
     }
 
     #[test]
