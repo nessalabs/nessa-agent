@@ -93,6 +93,7 @@
  */
 import {
   permissionTargets,
+  questionTargets,
   ConversationErrorCode,
   conversationErrorCode,
   isRetryableConnectionError,
@@ -1261,18 +1262,17 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     answerQuestion: (sessionId, executionId, questionId, choices, _initiator) =>
       within(async (live) => {
         await transcriptOf(sessionId, "person")
-        const asked = reads
-          .get(sessionId)
-          ?.view.questions.find(
-            (question) =>
-              question.executionId === executionId && question.questionId === questionId,
+        const view = reads.get(sessionId)?.view
+        const target =
+          view &&
+          questionTargets(view).find(
+            (asked) =>
+              asked.executionId === executionId && asked.questionId === questionId,
           )
-        if (!asked) throw new WorkspaceSourceError("not-waiting")
+        if (!target) throw new WorkspaceSourceError("not-waiting")
         await dispatch(live, (connected) =>
           connected.conversation.answerQuestion(
-            sessionId,
-            executionId,
-            questionId,
+            target,
             choices === null
               ? null
               : choices.map((choice) => ({

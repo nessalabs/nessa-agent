@@ -193,6 +193,10 @@ export interface UnreadableMessage {
   readonly observedInput?: never
   readonly delivery?: never
   readonly app?: never
+  /** A gap is not a turn, so it has no ending the gateway reported. */
+  readonly terminal?: never
+  readonly executionId?: never
+  readonly requiredWorkFailed?: never
 }
 
 /**
@@ -209,6 +213,10 @@ export interface UnreadableOverflowMessage {
   readonly observedInput?: never
   readonly delivery?: never
   readonly app?: never
+  /** The overflow line is not a turn, so it has no ending the gateway reported. */
+  readonly terminal?: never
+  readonly executionId?: never
+  readonly requiredWorkFailed?: never
 }
 
 /** An MCP App, as a message it wrote names it: its server, and the tool whose UI it is. */
