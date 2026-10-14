@@ -129,8 +129,11 @@ pub struct PollPolicy {
     pub backoff_cap: Duration,
     /// The longest one read runs, by the injected clock.
     pub read_budget: Duration,
-    /// How many reads run at once. Zero is read as one
-    /// (`a_schedule_of_no_places_still_reads_one`).
+    /// How many reads run at once. Zero is read as one, and more than
+    /// [`READS_AT_ONCE`] is read as that many: the audit queue holds that
+    /// many cycles
+    /// (`a_schedule_of_no_places_still_reads_one`,
+    /// `a_schedule_past_the_audit_bound_reads_only_that_many`).
     pub reads_at_once: usize,
 }
 impl Default for PollPolicy {
@@ -1154,9 +1157,12 @@ fn list_peers(changed: bool, since_list_ms: u64, interval_ms: u64) -> bool {
 
 /// How many reads `asked` runs at once. Zero is one: a schedule of no
 /// places would leave every due peer waiting for a slot that cannot exist
-/// (`a_schedule_of_no_places_still_reads_one`).
+/// (`a_schedule_of_no_places_still_reads_one`). More than [`READS_AT_ONCE`]
+/// is that many: the audit queue holds that many cycles, and one more does
+/// not fit beside the owner headroom
+/// (`a_schedule_past_the_audit_bound_reads_only_that_many`).
 fn read_places(asked: usize) -> usize {
-    asked.max(1)
+    asked.clamp(1, READS_AT_ONCE)
 }
 
 /// When the poller next wakes, on the injected clock: the soonest peer due,

@@ -169,6 +169,19 @@ fn a_schedule_of_no_places_still_reads_one() {
     assert_eq!(read_places(READS_AT_ONCE), READS_AT_ONCE);
 }
 
+/// One more cycle than the queue was sized for does not fit beside the
+/// owner headroom. A schedule that asks for it runs [`READS_AT_ONCE`].
+#[test]
+fn a_schedule_past_the_audit_bound_reads_only_that_many() {
+    let asked = READS_AT_ONCE + 1;
+    assert!(
+        asked * RECORDS_PER_CYCLE + AUDIT_HEADROOM > AUDIT_QUEUE,
+        "one more cycle no longer overflows the audit queue"
+    );
+    assert_eq!(read_places(asked), READS_AT_ONCE);
+    assert!(read_places(asked) * RECORDS_PER_CYCLE + AUDIT_HEADROOM <= AUDIT_QUEUE);
+}
+
 #[test]
 fn a_running_read_lists_when_the_records_change_or_the_interval_passes() {
     let interval = POLICY.interval.as_millis() as u64;
