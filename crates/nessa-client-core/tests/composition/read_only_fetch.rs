@@ -92,7 +92,9 @@ fn run(
         &mut output,
     );
     drop(connection);
-    peer.join().unwrap();
+    if peer.join().is_err() {
+        panic!("peer script failed; fetch result was {result:?}");
+    }
     (result, line(&output), asked.get())
 }
 fn entries(directory: &Path) -> usize {

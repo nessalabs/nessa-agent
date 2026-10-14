@@ -1,5 +1,7 @@
 use super::*;
 use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
+#[cfg(unix)]
+use std::os::unix::fs::{symlink, PermissionsExt};
 
 fn opencode_runtime(model: &str) -> AgentRuntime {
     AgentRuntime {
@@ -227,24 +229,31 @@ fn default_workspace_rejects_a_symlinked_ancestor() {
     assert!(!redirected.join("default").exists());
 }
 
+fn fingerprinted_bundle(root: &std::path::Path) -> String {
+    std::fs::write(root.join("nessa"), b"gateway").unwrap();
+    let fingerprint = super::installed_tree_fingerprint(root).unwrap();
+    std::fs::write(
+        root.join("manifest.json"),
+        serde_json::json!({"fingerprint": fingerprint}).to_string(),
+    )
+    .unwrap();
+    fingerprint
+}
+
 #[test]
 fn desktop_identity_rejects_configuration_that_names_another_installed_runtime() {
     let root = tempfile::tempdir().unwrap();
-    std::fs::write(
-        root.path().join("manifest.json"),
-        serde_json::json!({"fingerprint":"a".repeat(64)}).to_string(),
-    )
-    .unwrap();
+    let fingerprint = fingerprinted_bundle(root.path());
     let instance = "b4a38c5b-cf70-4d90-9059-7d9a3a51c658";
     let identity = super::runtime_identity(
         root.path(),
-        "a".repeat(64),
+        fingerprint.clone(),
         "c".repeat(64),
         instance.into(),
         123,
     )
     .unwrap();
-    assert_eq!(identity.fingerprint().as_str(), "a".repeat(64));
+    assert_eq!(identity.fingerprint().as_str(), fingerprint);
     assert!(super::runtime_identity(
         root.path(),
         "b".repeat(64),
@@ -255,12 +264,71 @@ fn desktop_identity_rejects_configuration_that_names_another_installed_runtime()
     .is_err());
     assert!(super::runtime_identity(
         root.path(),
-        "a".repeat(64),
+        fingerprint,
         "invalid".into(),
         instance.into(),
         123
     )
     .is_err());
+}
+
+#[test]
+fn desktop_identity_rejects_a_tree_that_is_not_the_recorded_fingerprint() {
+    let root = tempfile::tempdir().unwrap();
+    let fingerprint = fingerprinted_bundle(root.path());
+    let instance = "b4a38c5b-cf70-4d90-9059-7d9a3a51c658";
+    std::fs::write(root.path().join("nessa"), b"replaced bundle").unwrap();
+    let error = super::runtime_identity(
+        root.path(),
+        fingerprint,
+        "c".repeat(64),
+        instance.into(),
+        123,
+    )
+    .expect_err("changed bytes must not keep the recorded fingerprint");
+    assert!(
+        error.to_string().contains("installed runtime tree"),
+        "{error}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn installed_tree_fingerprint_matches_the_packaging_digest() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path();
+    std::fs::write(source.join("nessa"), b"gateway\0bytes").unwrap();
+    std::fs::set_permissions(source.join("nessa"), std::fs::Permissions::from_mode(0o751)).unwrap();
+    symlink("quote\"\\\n\u{2028}.txt", source.join("link")).unwrap();
+    for name in ["quote\"\\\n\u{2028}.txt", "\u{e000}", "\u{10000}", "é", "𝄞"] {
+        std::fs::write(source.join(name), name.as_bytes()).unwrap();
+    }
+    std::fs::create_dir(source.join("nested")).unwrap();
+    std::fs::write(source.join("nested/manifest.json"), b"included").unwrap();
+    std::fs::write(
+        source.join("manifest.json"),
+        b"{\"fingerprint\":\"ignored\"}",
+    )
+    .unwrap();
+    let fingerprint = super::installed_tree_fingerprint(source).unwrap();
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/desktop/runtime-fingerprint.mjs");
+    let result = std::process::Command::new("node")
+        .args([
+            "--input-type=module",
+            "-e",
+            "const {runtimeFingerprint}=await import(process.argv[1]); process.stdout.write(runtimeFingerprint(process.argv[2]));",
+        ])
+        .arg(&script)
+        .arg(source)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(String::from_utf8(result.stdout).unwrap(), fingerprint);
 }
 
 #[test]

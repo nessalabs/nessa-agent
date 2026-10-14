@@ -6,7 +6,15 @@ publish = false
 
 [dependencies]
 nessa-local-storage = { path = "../nessa-local-storage" }
-rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
+# `backup` and `serialize` copy an export read snapshot into memory after
+# admission has been released. The copy is not a file in the temp directory.
+rusqlite = { version = "0.40", default-features = false, features = [
+    "bundled",
+    "backup",
+    "serialize",
+    # Hash a deferred session payload in chunks. The value is not one buffer.
+    "blob",
+] }
 
 [dev-dependencies]
 tempfile = "3"
