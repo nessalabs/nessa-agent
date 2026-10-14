@@ -51,22 +51,26 @@ impl PermissionRuleRevocationAudit for DurablePermissionRuleRevocationAudit {
     }
 
     fn finish(&self, id: &str, actor: &ActionContext) -> Result<bool, RuleCatalogError> {
-        let Some(value) = find_requested(&self.directory, id)? else {
-            return Ok(false);
-        };
-        let principal = value["initiator"]["principalId"].as_str().unwrap_or("");
-        if principal != actor.principal_id() {
-            return Err(RuleCatalogError::Unavailable);
+        // Every request for this id, not the first file the directory
+        // returns. A later revision of the same rule does not hide an
+        // earlier one whose absent record was never written.
+        let mut wrote = false;
+        for value in pending_requests(&self.directory, id)? {
+            let principal = value["initiator"]["principalId"].as_str().unwrap_or("");
+            if principal != actor.principal_id() {
+                return Err(RuleCatalogError::Unavailable);
+            }
+            let revocation = revocation_from(&value)?;
+            let removed = removed_name(&revocation.id, &revocation.revision);
+            let destination = self.directory.join(format!("{removed}.json"));
+            let evidence = self.evidence(&removed, &revocation, true);
+            if revocation_agrees(&destination, &evidence)? {
+                continue;
+            }
+            self.record(&revocation)?;
+            wrote = true;
         }
-        let revocation = revocation_from(&value)?;
-        let removed = removed_name(&revocation.id, &revocation.revision);
-        let destination = self.directory.join(format!("{removed}.json"));
-        let evidence = self.evidence(&removed, &revocation, true);
-        if revocation_agrees(&destination, &evidence)? {
-            return Ok(false);
-        }
-        self.record(&revocation)?;
-        Ok(true)
+        Ok(wrote)
     }
 }
 
@@ -169,14 +173,15 @@ fn revocation_agrees(
     Ok(true)
 }
 
-fn find_requested(
+fn pending_requests(
     directory: &std::path::Path,
     id: &str,
-) -> Result<Option<serde_json::Value>, RuleCatalogError> {
+) -> Result<Vec<serde_json::Value>, RuleCatalogError> {
     let entries = match std::fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(_) => return Err(RuleCatalogError::Unavailable),
     };
+    let mut found = Vec::new();
     for entry in entries {
         let path = entry.map_err(|_| RuleCatalogError::Unavailable)?.path();
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
@@ -189,10 +194,10 @@ fn find_requested(
         let value: serde_json::Value =
             serde_json::from_str(&text).map_err(|_| RuleCatalogError::Unavailable)?;
         if value["target"]["ruleId"] == id {
-            return Ok(Some(value));
+            found.push(value);
         }
     }
-    Ok(None)
+    Ok(found)
 }
 
 fn revocation_from(
@@ -333,5 +338,38 @@ mod tests {
             })
             .count();
         assert_eq!(removed, 1);
+    }
+
+    #[test]
+    fn a_retry_finishes_every_revision_still_missing_its_absent_record() {
+        let root = tempfile::tempdir().unwrap();
+        let audit = DurablePermissionRuleRevocationAudit::new(
+            root.path().join("revocations"),
+            Arc::new(TestClock(AtomicU64::new(10))),
+        )
+        .unwrap();
+        let mut first = revocation("owner");
+        first.revision = "1".into();
+        let mut second = revocation("owner");
+        second.revision = "2".into();
+        audit.requested(&first).unwrap();
+        audit.requested(&second).unwrap();
+        assert!(audit.finish("pr_rule", &first.actor).unwrap());
+        let removed = absent_files(root.path());
+        assert_eq!(removed, 2, "both revisions still lacked an absent record");
+        assert!(!audit.finish("pr_rule", &first.actor).unwrap());
+        assert_eq!(absent_files(root.path()), 2);
+    }
+
+    fn absent_files(root: &std::path::Path) -> usize {
+        std::fs::read_dir(root.join("revocations"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry.file_name().to_str().is_some_and(|name| {
+                    name.starts_with("permission-rule-revoke-") && !name.contains("requested")
+                })
+            })
+            .count()
     }
 }
