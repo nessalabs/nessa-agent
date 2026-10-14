@@ -5574,7 +5574,8 @@ fn a_rejected_stage_plan_does_not_start_the_copy_or_publish_ready() {
     );
     assert!(tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)).is_err());
     assert!(!started.load(Ordering::SeqCst));
-    let observed = events.observations.lock().expect("startup events");
+    // settle wakes this waiter before the owner publishes Failed.
+    let observed = events.wait_for(1);
     assert!(
         observed
             .iter()
