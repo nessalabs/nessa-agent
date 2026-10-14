@@ -15,8 +15,10 @@ import { view } from "../../../../src/desktop/workspace/adapters/gateway/fake-ga
 import "@fontsource-variable/geist"
 import "../../../../src/styles.css"
 
-const provider =
-  new URLSearchParams(location.search).get("provider") === "codex" ? "codex" : "claude"
+const params = new URLSearchParams(location.search)
+const provider = params.get("provider") === "codex" ? "codex" : "claude"
+const diagnostic = params.get("diagnostic")
+const requiredWorkFailed = params.get("requiredWork") === "failed"
 // The panel keeps its own shape of a note; this transcript has none.
 const wire = {
   ...view("panel-auth", {
@@ -28,6 +30,8 @@ const wire = {
         files: [],
         status: "failed",
         authenticationRequired: true,
+        ...(diagnostic === null ? {} : { error: diagnostic }),
+        ...(requiredWorkFailed ? { requiredWorkFailed: true } : {}),
         parts: [
           {
             kind: "local_notice",

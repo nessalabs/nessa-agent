@@ -14,7 +14,6 @@ fn names(names: &[&str]) -> Vec<String> {
 fn on(hosts: &[&str]) -> ToolPolicy {
     ToolPolicy::preset(ToolPreset::All)
         .with_command_hosts(CommandHosts::new(names(hosts)).expect("valid hosts"))
-        .expect("within the policy's entries")
 }
 
 fn evaluator(policy: &CommandPolicy) -> CedarCommandPolicyEvaluator {

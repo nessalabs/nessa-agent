@@ -1898,7 +1898,7 @@ impl crate::conversation::application::ShareGrants for EveryConversationGranted 
     fn grants<'a>(
         &'a self,
         _: &'a ConversationId,
-    ) -> ConversationFuture<'a, Vec<crate::conversation::application::ShareGrant>> {
+    ) -> ConversationFuture<'a, crate::conversation::application::ShareGrantList> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
     fn policy_at<'a>(

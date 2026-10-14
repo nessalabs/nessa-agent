@@ -1389,6 +1389,17 @@ says why where the conversations would be.
   close. A truncated complete-empty view still preserves the reference. Both
   engines and all three widths assert the original local tab closes in every case.
 
+- [ ] **A question answer belongs to the conversation whose fields were shown.**
+  _Check:_ `committed-transcript.mjs --mode prod` renders the production
+  `ConversationQuestions`, store controls and client serializer in Chromium and
+  WebKit at 360/600/1440 pixels. Two conversations share turn/question IDs:
+  three offered fields remain operable, an equal-key simultaneous ask retains
+  its middle selection, switching transfers zero selections,
+  and exactly two serialized actions retain their original targets (valid
+  offered choice, then null decline). Source projection/recorder evidence;
+  gateway/SDK tests own current-state admission. The primitive and ordering
+  table are [question targets](../../docs/design/question-targets.md).
+
 ### Onboarding readiness recovery
 
 `node verification/desktop/scripts/onboarding-readiness.mjs` drives the real
@@ -1451,7 +1462,11 @@ within the card, keyboard activation opens the selected provider once, an
 acknowledged launch keeps the card, a failed launch says so, and a newer
 transcript removes the card. Both browser engines report geometry, launch counts,
 and zero page errors. The raw authentication diagnostic is absent and unrelated
-local notices remain.
+local notices remain. On the panel, an authentication diagnostic folded into
+the turn's status stays off the card unless `requiredWorkFailed` is set, in
+which case the required-work sentence is shown once beside it. On the desktop,
+a local retry that hides the card shows the authentication terminal once, and
+a failed retry still shows it.
 
 The same script drives an older failed local submission through a later wire
 refusal, a newer local submission after seeing that refusal, repeated replacement
@@ -1565,6 +1580,31 @@ WebKit and is dev-only in run-all.
 - [ ] **A conversation with no turn, only a file published while none ran,
   shows that file and not the empty welcome.** _Check:_ `--only empty`.
 
+## Turn outcomes
+
+`turn-outcomes.mjs` loads `fixtures/turn-outcomes/`, a dev-server page that
+mounts the desktop window over a fake gateway and the panel's transcript of
+the same view. One turn failed before it replied, one was cancelled after a
+partial reply, one was left unresolved with no diagnostic, and one is still
+running and asking three questions. The view also carries the gateway's
+notice that a review was left out. The script runs in Chromium and WebKit
+and is dev-only in run-all.
+
+- [ ] **A failed, cancelled, or unresolved turn stays visible, with the
+  gateway's status and diagnostic apart from a message that was not sent.**
+  _Check:_ `turn-outcomes.mjs --only terminals`. The desktop shows Failed
+  with "Provider connection lost", Cancelled with "Stopped", and Unresolved
+  with no diagnostic. "Check the deploy.", "Halfway", and "Wait." stay.
+  Nothing says "Not sent" for those turns.
+- [ ] **The gateway's withheld-review notice is shown in its own words, and
+  the questions it listed are on both surfaces.** _Check:_ `--only asked`.
+  The notice is "A review was left out of this view." Both surfaces show
+  "Where should this land?", "When should it ship?", and "Who should hear?".
+- [ ] **Answering or skipping a question, or a later frame that no longer
+  lists one, drops it on both surfaces.** _Check:_ `--only cleared`. Choosing
+  Staging and Answer drops the first question. Skip drops the second. A frame
+  that no longer lists the third drops it on the desktop and the panel.
+
 ## Transcript notes
 
 `transcript-notes.mjs` loads `fixtures/transcript-notes/`, a dev-server page
@@ -1609,8 +1649,8 @@ use.
 
 `share-dialog.mjs` opens the dev server's page with `?gateway` against a
 scripted product session that lists one conversation already shared Drive
-with one linked device, and answers `conversation.shares`, `.share`,
-`.unshare`, `credential.list` and `agents.list` (four command hosts). It runs
+with one linked device, and answers `conversation.shares` a page at a time,
+`.share`, `.unshare`, `credential.list` and `agents.list` (four command hosts). It runs
 in Chromium and WebKit. The rules are the gateway's; the dialog's order is
 the table in `docs/design/read-grants.md` › "Dialog state and order".
 
@@ -1625,10 +1665,10 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
   "2 of 16"; the notice says "Shared."; the
   notes say what a policy does not stop (unasked calls, hosts named and
   allowed or nowhere, Ask mode / hooks off / not OpenCode).
-- [ ] **The hosts are held to the room the tool patterns leave.** _Check:_
-  `budget`. 29 patterns: "3 of 3", the 4th host unavailable; a 30th pattern:
-  the count reads "3 selected, room for 2" and Share is held with "Too many
-  hosts…"; nothing sent.
+- [ ] **The hosts keep their own bound however full the tool patterns are.**
+  _Check:_ `budget`. Both pattern lists full (16 and 16): "4 of 16", Share
+  able to send; nothing sent. A host past the byte bound stays unavailable
+  in `share-dialog.test.tsx`.
 - [ ] **A refusal is said in words, never a wire code.** _Check:_ `refusal`,
   and every step's scan for codes.
 - [ ] **While a change is on its way, and the read after it, the form,

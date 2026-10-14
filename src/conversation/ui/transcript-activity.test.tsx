@@ -747,6 +747,7 @@ it("keeps an independent error beside authentication recovery", async () => {
             ...turn,
             status: "The turn could not complete all required work.",
             authenticationRequired: true,
+            requiredWorkFailed: true,
           }
         : turn,
     ),
@@ -755,6 +756,40 @@ it("keeps an independent error beside authentication recovery", async () => {
   expect(container.textContent).toContain(
     "The turn could not complete all required work.",
   )
+})
+
+it("hides an authentication diagnostic beside sign-in unless required work failed", async () => {
+  const value = settled(workingConversation("auth-diagnostic"))
+  await render({
+    ...value,
+    remote: value.remote
+      ? {
+          ...value.remote,
+          latestInputId: "run",
+          runtime: {
+            agent: "claude",
+            provider: "anthropic",
+            model: "claude-opus-5",
+            modelName: "Claude",
+            workspace: "/tmp",
+            contextWindowTokens: 200000,
+            reasoning: true,
+          },
+        }
+      : undefined,
+    turns: value.turns.map((turn) =>
+      turn.from === "assistant"
+        ? {
+            ...turn,
+            status: "Internal error: OAuth session expired",
+            authenticationRequired: true,
+          }
+        : turn,
+    ),
+  })
+  expect(container.querySelector(".provider-sign-in")).not.toBeNull()
+  expect(container.textContent).not.toContain("Internal error: OAuth session expired")
+  expect(container.querySelector("[data-slot=transcript-divider]")).toBeNull()
 })
 
 it("counts a permission's deadline down by the clock composition supplies", async () => {

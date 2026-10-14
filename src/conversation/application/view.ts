@@ -55,6 +55,11 @@ export type ConversationView = {
     /** Files this turn pointed the agent at, by path. */
     files: LinkedFile[]
     authenticationRequired?: boolean
+    /**
+     * Independent required work failed on this authentication refusal.
+     * The person-facing diagnostic stays in `error`.
+     */
+    requiredWorkFailed?: boolean
     error?: string
     status: string
   }[]

@@ -26,7 +26,8 @@ verification/
   conversation/
     README.md               committed transcript fixture and publication ownership
     fixture.html            real ConversationControls and applyView browser fixture
-    fixture.tsx             typed current gateway view cases
+    fixture.tsx             typed current gateway view cases and question-target controls
+    vite.config.ts           verification-only production build of those components
     lifetime-fixture.html   restored tab over a gated original close
     lifetime-fixture.tsx    production follow/control consumers
     lease-fixture.html      the production details sheet over one published lease per page
@@ -48,7 +49,7 @@ verification/
       attachments-races.mjs pending image admission and concurrent URL-drop refusals
       onboarding-readiness.mjs readiness deadline and retry in both browser engines
       run-all.mjs           every check, summarised
-      committed-transcript.mjs history notices, permission controls, re-enable
+      committed-transcript.mjs history notices, permissions, re-enable and question-target identities
       local-tab-lifetimes.mjs restored local identities, follow and completion ownership
       lease-details.mjs     the details sheet's Where it runs, for every published lease state
       smoke.mjs             loads, sends, splits, Settings, overview; console errors
@@ -71,6 +72,7 @@ verification/
       widgets.mjs           widget hosts: a card, its pane, the window, Escape's order, focus, drag over the window
       message-sync.mjs      active DOM delivery, stalled list/read independence and idle cost
       app-review.mjs        an MCP App's review: read while the app's call waits, drawn and answered, the card and the overview row naming the app (dev server)
+      lib/mode-content.mjs  compares semantic view content independently of approval mode, revision and observation clock; bare-Node tests preserve all remaining fields (#827)
       approval-deadline.mjs an armed review's countdown on the approval card, then the automatic notice at expiry (dev server)
       clock-snapshots.mjs   a public clock hook across a published tick and last-subscriber cleanup (dev server)
       mcp-apps.mjs          MCP Apps: each place, tools/call allowed and refused, CSP, isolation, escapes, forgery, departures and departures-back, the test server's chart app going live (dev server: the sandbox proxy starts in configureServer, so a preview cannot mount the fixture and run-all --mode prod leaves the check out; departures, departures-back and chart import the host's own builder), teardown
