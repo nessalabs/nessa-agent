@@ -8,6 +8,9 @@ import { bounds, ProductMethod } from "../generated/product.js"
 import type {
   ConversationCreateResult,
   ConversationListResult,
+  ConversationMessageDelivery,
+  ConversationMessageReceipt,
+  ConversationMessageStatusResult,
   ConversationObserveCursor,
   ConversationObserveResult,
   ConversationView,
@@ -16,6 +19,10 @@ import type {
   ConversationQuestionChoice,
   ConversationReorderResult,
   ConversationSetApprovalModeResult,
+  ConversationShareResult,
+  ConversationShareRole,
+  ConversationSharesResult,
+  ConversationToolPolicy,
   ApprovalMode,
   ImageAttachment,
   LinkedFile,
@@ -28,6 +35,8 @@ import {
   conversationId,
   conversationIdPattern,
   conversationList,
+  conversationMessageReceipt,
+  conversationMessageStatus,
   conversationObserve,
   conversationView,
   conversationReceipt,
@@ -35,6 +44,10 @@ import {
   conversationMutation,
   conversationReorder,
   conversationApprovalMode,
+  conversationShareResult,
+  conversationShares,
+  maxPolicyRevision,
+  minExpectedPolicyRevision,
 } from "../protocol/conversation-validate.js"
 import { decimal } from "../protocol/passive-read-validate.js"
 import {
@@ -60,6 +73,19 @@ export type ConversationObserveOptions = {
 export type ConversationActionOptions = {
   /** Stable action attribution. Creation, message admission and the idempotent `releaseApp` control support same-ID retries; other controls require a fresh read and a new deliberate action. */
   requestId?: string
+}
+/** A share or revoke, built on the grant as it was read. */
+export type ConversationShareOptions = ConversationActionOptions & {
+  /**
+   * The `policyRevision` of the device's grant this change was built on, as
+   * `shares()` listed it or an earlier `share()` answered it. The gateway
+   * makes the change only while the grant is still at that revision, and
+   * otherwise refuses it `share_grant_changed`, changing nothing. 0 names no
+   * grant held (a revision starts at 1), so a first grant built on a list
+   * without one is refused once another lands. Omitted, the change is made
+   * whatever the device holds.
+   */
+  expectedPolicyRevision?: number
 }
 /** Optional identities for optimistic display or explicit serializable retry state. */
 export type ConversationSendOptions = ConversationActionOptions & {
@@ -152,6 +178,33 @@ export type ConversationApi = {
     files?: readonly LinkedFile[],
     options?: ConversationSendOptions,
   ) => Promise<ConversationSubmission>
+  /**
+   * Leave a note in this conversation: saved with who left it, it starts and
+   * steers no turn. A `record_only` note is only kept; a `next_turn` note
+   * waits for the next turn a person starts while the agent is idle, which
+   * hands it to the model labelled with its author. The same `requestId`
+   * with the same text and delivery answers the first note again, so a
+   * failure's `retry()` saves it at most once.
+   * @param text - 1 to 8 KiB UTF-8, not all blank, kept exactly.
+   * @param delivery - `record_only` or `next_turn`.
+   * @throws TypeError before anything is sent when the text breaks these bounds.
+   */
+  message: (
+    conversationId: string,
+    text: string,
+    delivery: ConversationMessageDelivery,
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationMessageReceipt>
+  /**
+   * Where the caller's own note left under `requestId` stands now: pending,
+   * taken by a turn (`executionId`), or retired (`retiredReason`). `found` is
+   * false while no note is saved under it; send the same request again to
+   * save it at most once. This writes nothing.
+   */
+  messageStatus: (
+    conversationId: string,
+    requestId: string,
+  ) => Promise<ConversationMessageStatusResult>
   /** Remove the identified waiting input before provider dispatch. */
   remove: (
     conversationId: string,
@@ -234,9 +287,69 @@ export type ConversationApi = {
     conversationId: string,
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
+  /**
+   * Grant one paired device or peer gateway `role` on one of the caller's
+   * conversations, or change the role and policy it holds there
+   * (`conversation.share`, `credential.manage`). `credentialId` is one
+   * `client.credentials.list()` names. A Drive grant needs `policy`; read and
+   * comment take none, and the gateway refuses either mistake
+   * `invalid_request`, as it does a policy past the schema's bounds (published
+   * in `bounds`: `maxToolPolicyPatterns`, `maxToolPatternBytes`,
+   * `maxCommandHosts`, `maxCommandHostBytes`, `maxToolPolicyEntries`). A grant
+   * that names no `commandHosts` runs commands nowhere. The answer names the
+   * grant's `policyRevision` once the share is made; `applied` is false when
+   * the grant already held that role and policy, and its revision was kept.
+   * With `expectedPolicyRevision`, a grant no longer at that revision is
+   * refused `share_grant_changed`. The same `requestId` answers what it
+   * answered first, its revision included, so a failure's `retry()` grants at
+   * most once.
+   * @throws TypeError before anything is sent for a malformed conversation ID,
+   * a blank or over-long credential or request ID, or an expected revision
+   * that is not a whole number from 0 to 2^53 - 1.
+   */
+  share: (
+    conversationId: string,
+    credentialId: string,
+    role: ConversationShareRole,
+    policy?: ConversationToolPolicy,
+    options?: ConversationShareOptions,
+  ) => Promise<ConversationShareResult>
+  /**
+   * Revoke one paired party's grant on one of the caller's conversations,
+   * whatever its role (`conversation.unshare`). It needs only ownership, so it
+   * works on a deleted conversation and for a party since unpaired. `applied`
+   * is false when no grant was held; either way none is held afterwards. With
+   * `expectedPolicyRevision`, a grant no longer at that revision is refused
+   * `share_grant_changed`. Retried under the same `requestId`, it answers
+   * what it answered first.
+   * @throws TypeError as `share` does.
+   */
+  unshare: (
+    conversationId: string,
+    credentialId: string,
+    options?: ConversationShareOptions,
+  ) => Promise<ConversationMutationResult>
+  /** The grants on one of the caller's conversations, oldest first (`conversation.shares`). */
+  shares: (conversationId: string) => Promise<ConversationSharesResult>
 }
 
 const utf8 = new TextEncoder()
+/** The expected revision a share or revoke sends, when it names one: a whole number the schema takes. */
+function expectedRevision(options: ConversationShareOptions): {
+  expectedPolicyRevision?: number
+} {
+  const expected = options.expectedPolicyRevision
+  if (expected === undefined) return {}
+  if (
+    !Number.isInteger(expected) ||
+    expected < minExpectedPolicyRevision ||
+    expected > maxPolicyRevision
+  )
+    throw new TypeError(
+      "Expected policy revision must be a whole number from 0 to 2^53 - 1",
+    )
+  return { expectedPolicyRevision: expected }
+}
 function boundedText(value: string, name: string, maxBytes: number): string {
   if (!value.trim() || utf8.encode(value).byteLength > maxBytes)
     throw new TypeError(`${name} must contain 1-${maxBytes} UTF-8 bytes`)
@@ -265,6 +378,8 @@ export function createConversationApi(
       | readonly ImageAttachment[]
       | readonly LinkedFile[]
       | readonly ConversationQuestionChoice[]
+      | ConversationToolPolicy
+      | number
       | null
       | undefined
     >,
@@ -447,6 +562,26 @@ export function createConversationApi(
       submit(ProductMethod.ConversationSend, id, text, attachments, files, options),
     steer: (id, text, attachments, files, options) =>
       submit(ProductMethod.ConversationSteer, id, text, attachments, files, options),
+    message: (id, text, delivery, options = {}) => {
+      validConversationId(id)
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      boundedText(text, "Note", 8192)
+      if (delivery !== "record_only" && delivery !== "next_turn")
+        throw new TypeError("Note delivery must be record_only or next_turn")
+      return mutate(
+        ProductMethod.ConversationMessage,
+        { conversationId: id, requestId, text, delivery },
+        (value) => conversationMessageReceipt(value, requestId),
+      )
+    },
+    messageStatus: async (id, requestId) =>
+      conversationMessageStatus(
+        await session.request(ProductMethod.ConversationMessageStatus, {
+          conversationId: validConversationId(id),
+          requestId: boundedText(requestId, "Request ID", 256),
+        }),
+        requestId,
+      ),
     remove: (id, executionId, options) =>
       action(ProductMethod.ConversationRemove, id, { executionId }, options),
     reorder: async (id, executionIds, options = {}) => {
@@ -528,5 +663,44 @@ export function createConversationApi(
       action(ProductMethod.ConversationDelete, id, {}, options, false, {
         atLeastMs: conversationDeleteTimeoutMs,
       }),
+    share: (id, credentialId, role, policy, options = {}) => {
+      validConversationId(id)
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      boundedText(credentialId, "Credential ID", 256)
+      // Copied, so a caller changing its policy between a failure and its
+      // retry cannot send another grant under the same request ID.
+      const frozen =
+        policy === undefined
+          ? undefined
+          : (JSON.parse(JSON.stringify(policy)) as ConversationToolPolicy)
+      return mutate(
+        ProductMethod.ConversationShare,
+        {
+          conversationId: id,
+          requestId,
+          credentialId,
+          role,
+          ...(frozen === undefined ? {} : { policy: frozen }),
+          ...expectedRevision(options),
+        },
+        (value) => conversationShareResult(value, requestId),
+      )
+    },
+    unshare: (id, credentialId, options = {}) => {
+      validConversationId(id)
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      boundedText(credentialId, "Credential ID", 256)
+      return mutate(
+        ProductMethod.ConversationUnshare,
+        { conversationId: id, requestId, credentialId, ...expectedRevision(options) },
+        (value) => conversationMutation(value, requestId),
+      )
+    },
+    shares: async (id) =>
+      conversationShares(
+        await session.request(ProductMethod.ConversationShares, {
+          conversationId: validConversationId(id),
+        }),
+      ),
   }
 }

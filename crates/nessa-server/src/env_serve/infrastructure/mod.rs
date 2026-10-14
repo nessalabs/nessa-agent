@@ -10,9 +10,13 @@
 //! and `pairing.rs` is that machine's pairing (`environment/pairing`),
 //! enrolled and asked whether the owner approved it. `grants.rs` is what
 //! this host's owner grants each gateway (`environment/grants.json`), and
-//! `grant_audit.rs` the journal of every change made to it. The runtime's
+//! `grant_audit.rs` the journal of every change made to it; `cedar/` is
+//! the lease policy deciding, over a peer's entry there, whether it may
+//! lease an agent or run a command (the only place this crate's environment
+//! role names Cedar). The runtime's
 //! clock every wait in the application is measured on is
 //! `crate::timer::TokioTimer`, shared with the relay.
+mod cedar;
 mod commands;
 mod dial;
 mod grant_audit;
@@ -23,6 +27,7 @@ mod ledger;
 mod lock;
 mod outbox;
 mod pairing;
+pub(crate) use cedar::CedarLeasePolicy;
 pub(crate) use commands::{ShepherdCommands, COMMAND_VARIABLES};
 pub(crate) use dial::dial;
 pub(crate) use grant_audit::FileGrantAudit;

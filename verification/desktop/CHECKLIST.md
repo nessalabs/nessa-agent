@@ -1549,3 +1549,97 @@ WebKit and is dev-only in run-all.
     asserted on real files by `cargo test -p nessa-app -- saving`.
 - [ ] **A conversation with no turn, only a file published while none ran,
   shows that file and not the empty welcome.** _Check:_ `--only empty`.
+
+## Transcript notes
+
+`transcript-notes.mjs` loads `fixtures/transcript-notes/`, a dev-server page
+that mounts the production transcript in the desktop window over a fake
+gateway and in a 420 px panel; the panel applies the same view as its follow
+does. The view has the gateway's shape: two turns, and two inputs still
+waiting, each listed both as a queued turn and as pending. It has seven
+notes: one in each state, from the owner and from someone the conversation
+is shared with, one left before any turn, one after a turn the bounded view
+left out (older than every turn it keeps), one left between the two waiting
+inputs, and one whose text is a single word of over 300 characters. The script runs
+in Chromium and WebKit and is dev-only in run-all. The rule it holds is
+`placeNotes` and `TranscriptNote` (`src/conversation`), which both surfaces
+use.
+
+- [ ] **A note is a row of its own, right after the turn it followed.**
+  _Check:_ `transcript-notes.mjs --only placement`. On both surfaces, notes
+  and what the turns say read, top to bottom: the note left before any turn
+  and the note after the dropped turn, the first turn, its two notes in the
+  order left, the second turn, its two notes, the first waiting input, the
+  note left after it, and the second waiting input. No note is inside a chat
+  bubble or a turn's reply.
+- [ ] **Each note says who left it, from where, and where it stands, in the
+  same words on both surfaces.** _Check:_ `--only labels`. "Note left by the
+  owner, from desktop" or "Note left by someone it is shared with, from
+  phone"; no state for a recorded note, then "Waiting for the next turn",
+  "Given to a turn", "Not delivered: expired" and "Not delivered:
+  sharing changed".
+- [ ] **A long note wraps inside its row and nothing scrolls sideways.**
+  _Check:_ `--only wrap --shots <dir>`. Every note's left and right edges are
+  within 0.5 px of its column, and its `scrollWidth` is at most its
+  `clientWidth` + 1. The long note's text runs over more than two lines. The
+  columns and the page have no horizontal overflow. The screenshots show both
+  transcripts.
+- [ ] **A bounded view that left older history out says so above the messages.**
+  The fixture's view is truncated and complete. The desktop transcript says
+  "Some conversation content is not shown." once, before the first message,
+  and does not say the history is unconfirmed. "Here is the plan." appears
+  once. _Check:_ `transcript-notes.mjs --only history`.
+
+## Sharing a session (nessa_ui#128, #129)
+
+`share-dialog.mjs` opens the dev server's page with `?gateway` against a
+scripted product session that lists one conversation already shared Drive
+with one linked device, and answers `conversation.shares`, `.share`,
+`.unshare`, `credential.list` and `agents.list` (four command hosts). It runs
+in Chromium and WebKit. The rules are the gateway's; the dialog's order is
+the table in `docs/design/read-grants.md` › "Dialog state and order".
+
+- [ ] **Share… on a session's menu opens one dialog for it, focus inside,
+  each grant said in words.** _Check:_ `share-dialog.mjs` (`open`). The title
+  names the session; the existing grant reads "Drive · Read-only tools,
+  commands on devbox".
+- [ ] **A Drive grant is sent as the wire takes it, and listed as the
+  gateway reads it back.** _Check:_ `drive`. One `conversation.share` with
+  `{ preset: "no_shell", commandHosts: ["devbox", "ci-runner"] }` and a
+  request id and `expectedPolicyRevision` 0 (a first grant); the count reads
+  "2 of 16"; the notice says "Shared."; the
+  notes say what a policy does not stop (unasked calls, hosts named and
+  allowed or nowhere, Ask mode / hooks off / not OpenCode).
+- [ ] **The hosts are held to the room the tool patterns leave.** _Check:_
+  `budget`. 29 patterns: "3 of 3", the 4th host unavailable; a 30th pattern:
+  the count reads "3 selected, room for 2" and Share is held with "Too many
+  hosts…"; nothing sent.
+- [ ] **A refusal is said in words, never a wire code.** _Check:_ `refusal`,
+  and every step's scan for codes.
+- [ ] **While a change is on its way, and the read after it, the form,
+  Share and Revoke are held, and take input again once that read answers.**
+  _Check:_ `held` (row D10), which holds the gateway's share answer and then
+  its read; the footer says it waits on this conversation's own change
+  (`this-session`), and says no reason while the read after it is on its
+  way, since the list then predates the share (row D10).
+- [ ] **After this window's own change, a failed read leaves the list held,
+  not stale and actionable.** _Check:_ `stale` (row D10). The read after an
+  Update is refused: the dialog reads as `held`, the form, Share, Change and
+  Revoke are disabled, no reason is said and Start Again is not offered; Try
+  Again reads the list, which shows Comment, with no reason.
+- [ ] **Revoke asks first, then sends one unshare naming the revision it
+  read, and the row goes when the list is read again.** _Check:_ `revoke`
+  (`expectedPolicyRevision` 2).
+- [ ] **A change built on a grant another window changed since is refused
+  in words, nothing changes, and Start Again builds on what it holds now.**
+  _Check:_ `changed` (rows D5, D10). The phone's grant is changed to Comment
+  elsewhere (revision 3) after this window read revision 2; the share naming
+  2 is refused `share_grant_changed`, the notice says it "changed since this
+  list was read" (no cause named: it may be this window's own change), Share
+  is held with the reason `changed`; Start Again shows Comment, and a share
+  naming 3 answers "Shared.".
+- [ ] **Tab stays in the dialog; Escape closes it and focus is back on the
+  session's row.** _Check:_ `focus` (waits for that end state, 3 s).
+- [ ] **The panel fits the window.** _Check:_ `fit-1200`, `fit-420`; with
+  `--shots <dir>`, screenshots of the grants, Drive form, budget, refusal,
+  changed refusal and the narrow panel.

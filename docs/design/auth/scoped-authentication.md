@@ -249,13 +249,17 @@ After token validity checks, authorization must require all of:
 - Current organization policy permits the action for that membership.
 - The credential's exact action/resource grant permits this request.
 
-Model these permission conditions in Cedar, including a mandatory restriction
-against exceeding the credential grant. The adapter supplies the current
-membership entity and a server-computed `credentialAllows` context value from
-exact grant matching. No RPC may supply that value, entity attributes, or policy
-text. Admin permissions cannot override this restriction. Token expiry, revocation,
-and audience validation remain authentication checks outside Cedar; do not copy
-role authorization into handlers or create a parallel Rust permission engine.
+Model these permission conditions in Cedar, including the requirement that a
+request never exceeds the credential's grants. The adapter supplies the actor
+entity from current state: its membership role and activity, its organization,
+and the grants its credential holds as an attribute. Each permit requires the
+exact grant it needs among them, so Cedar draws the conclusion from facts and
+Rust never computes "the credential allows this" for it. No RPC may supply
+entity attributes or policy text. Admin permissions cannot override this
+requirement. Token expiry, revocation, audience validation, and the check that
+the session and the stored state name the same identity remain authentication
+checks made in Rust before Cedar; do not copy role authorization into handlers
+or create a parallel Rust permission engine.
 
 The first policies enumerate `server.read` for active members and
 `credential.manage` for active admins, limited by the credential grant. Avoid a

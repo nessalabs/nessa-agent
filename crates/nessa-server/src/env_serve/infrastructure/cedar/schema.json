@@ -1,0 +1,80 @@
+{
+  "NessaEnv": {
+    "entityTypes": {
+      "Peer": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "kind": {
+              "type": "String",
+              "required": true
+            },
+            "hasEntry": {
+              "type": "Boolean",
+              "required": true
+            },
+            "allAgents": {
+              "type": "Boolean",
+              "required": true
+            },
+            "agents": {
+              "type": "Set",
+              "element": {
+                "type": "String"
+              },
+              "required": true
+            },
+            "commands": {
+              "type": "Boolean",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "Agent": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "name": {
+              "type": "String",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "Command": {
+        "shape": {
+          "type": "Record",
+          "attributes": {},
+          "additionalAttributes": false
+        }
+      }
+    },
+    "actions": {
+      "agent.lease": {
+        "appliesTo": {
+          "principalTypes": ["Peer"],
+          "resourceTypes": ["Agent"],
+          "context": {
+            "type": "Record",
+            "attributes": {},
+            "additionalAttributes": false
+          }
+        }
+      },
+      "command.run": {
+        "appliesTo": {
+          "principalTypes": ["Peer"],
+          "resourceTypes": ["Command"],
+          "context": {
+            "type": "Record",
+            "attributes": {},
+            "additionalAttributes": false
+          }
+        }
+      }
+    }
+  }
+}

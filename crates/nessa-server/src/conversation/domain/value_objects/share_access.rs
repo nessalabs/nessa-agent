@@ -1,20 +1,23 @@
 //! What a share grant lets its holder do (issue 707): a role, and for Drive
 //! the tool policy that holder's turns will run under.
 //!
-//! This value checks shape and size only. Nothing evaluates a policy yet: a
-//! Comment or Drive grant reads exactly as a Read grant, and every write is
-//! still refused to a paired session. Later slices admit Drive's commands and
-//! enforce its policy; they read the role and policy from here.
+//! This value checks shape and size only. What a policy allows is decided
+//! by the application's `ToolPolicyEvaluator`, which Cedar answers; this
+//! value never matches a pattern itself.
 //!
 //! ```text
-//! ShareAccess ──role──▶ ShareRole (Read < Comment < Drive)
-//!      └──────policy──▶ ToolPolicy (Drive only) ──▶ ToolPreset | ToolRules
+//! ShareAccess ──role──▶ ShareRole (Read, Comment or Drive)
+//!      └──────policy──▶ ToolPolicy (Drive only) ──tools──▶ ToolPreset | ToolRules
+//!                                  └──command_hosts──▶ CommandHosts
 //! ```
 
-/// How much a share lets its holder do. Each role allows everything the
-/// roles before it do, so the declaration order is the order `at_least`
-/// compares by.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+use nessa_sdk::domain::agent_execution::leases::EnvironmentRef;
+use std::collections::BTreeSet;
+
+/// How much a share lets its holder do. What each role allows is the
+/// conversation access policy's, which Cedar answers; this value only names
+/// the role.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShareRole {
     /// Fold the records and watch them live.
     Read,
@@ -22,13 +25,6 @@ pub enum ShareRole {
     Comment,
     /// Comment, and start, steer and stop turns under a tool policy.
     Drive,
-}
-
-impl ShareRole {
-    /// Whether this role allows everything `role` allows.
-    pub fn at_least(self, role: ShareRole) -> bool {
-        self >= role
-    }
 }
 
 /// A named tool policy a Drive grant may use instead of its own rules.
@@ -93,14 +89,139 @@ impl ToolRules {
     }
 }
 
-/// The tool policy a Drive grant's turns run under: a preset, or rules.
+/// Which tools a Drive grant's turns may call: a preset, or rules.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ToolPolicy {
+pub enum ToolChoice {
     Preset(ToolPreset),
     Rules(ToolRules),
 }
 
-/// Why a set of tool rules was refused.
+/// The hosts a Drive grant's turns may run commands on with `run`, by the
+/// name `run` takes: an SSH destination or a paired environment's `peer:`
+/// name. A grant that names none may use none, whatever the gateway is
+/// configured with; whether a named host takes commands at all is still the
+/// gateway's. Whether a host is used is the command policy's, which Cedar
+/// answers; this value only checks the names' shape, length and number.
+///
+/// A host is bounded like a pattern: each is at most
+/// [`Self::MAX_HOST_BYTES`], which JSON writes in no more bytes than the
+/// longest pattern, and a policy's hosts and patterns together are at most
+/// [`ToolPolicy::MAX_ENTRIES`], so a host takes a pattern's room. Whether
+/// every grant of a conversation still fits one `conversation.shares` frame
+/// is measured, not argued: row J10's test builds the largest answer, hosts
+/// and all, and checks it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CommandHosts(BTreeSet<String>);
+
+impl CommandHosts {
+    /// The most hosts one grant names.
+    pub const MAX_HOSTS: usize = 16;
+    /// The longest host a grant names, in bytes: twice the longest pattern,
+    /// since a host has nothing JSON escapes and a pattern may be all
+    /// quotes. Room for a `peer:` name and most SSH destinations, though a
+    /// configured destination may be longer.
+    pub const MAX_HOST_BYTES: usize = 2 * ToolRules::MAX_RULE_BYTES;
+
+    /// No hosts: a grant's turns run no commands.
+    pub const fn none() -> Self {
+        Self(BTreeSet::new())
+    }
+
+    /// `hosts`, refused when there are more than [`Self::MAX_HOSTS`], when
+    /// one is longer than [`Self::MAX_HOST_BYTES`] or named twice, or when
+    /// one is not a host `run` could name: an SSH destination or `peer:`
+    /// name as `EnvironmentRef::named` reads it, never `here`, whose
+    /// commands are the agent's own shell's.
+    pub fn new(hosts: Vec<String>) -> Result<Self, ToolPolicyError> {
+        if hosts.len() > Self::MAX_HOSTS {
+            return Err(ToolPolicyError::TooManyHosts);
+        }
+        let mut named = BTreeSet::new();
+        for host in hosts {
+            if host.len() > Self::MAX_HOST_BYTES {
+                return Err(ToolPolicyError::MalformedHost);
+            }
+            match EnvironmentRef::named(&host) {
+                Ok(EnvironmentRef::Ssh(_) | EnvironmentRef::Peer(_)) => {}
+                _ => return Err(ToolPolicyError::MalformedHost),
+            }
+            if !named.insert(host) {
+                return Err(ToolPolicyError::MalformedHost);
+            }
+        }
+        Ok(Self(named))
+    }
+
+    /// The hosts, in order.
+    pub fn names(&self) -> &BTreeSet<String> {
+        &self.0
+    }
+
+    /// Whether it names no host.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// The policy a Drive grant's turns run under: which tools they may call,
+/// and the hosts they may run commands on. Both are one fact of the grant,
+/// changed together under one policy revision.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolPolicy {
+    tools: ToolChoice,
+    command_hosts: CommandHosts,
+}
+
+impl ToolPolicy {
+    /// The most patterns and hosts one policy holds together: as many as its
+    /// two pattern lists hold when full.
+    pub const MAX_ENTRIES: usize = 2 * ToolRules::MAX_RULES;
+
+    /// `preset`, on no command hosts.
+    pub const fn preset(preset: ToolPreset) -> Self {
+        Self {
+            tools: ToolChoice::Preset(preset),
+            command_hosts: CommandHosts::none(),
+        }
+    }
+
+    /// `rules`, on no command hosts.
+    pub fn rules(rules: ToolRules) -> Self {
+        Self {
+            tools: ToolChoice::Rules(rules),
+            command_hosts: CommandHosts::none(),
+        }
+    }
+
+    /// This policy, with its turns' commands run on `hosts` only; refused
+    /// [`ToolPolicyError::TooManyHosts`] when its patterns and `hosts`
+    /// together are more than [`Self::MAX_ENTRIES`].
+    pub fn with_command_hosts(self, hosts: CommandHosts) -> Result<Self, ToolPolicyError> {
+        let patterns = match &self.tools {
+            ToolChoice::Preset(_) => 0,
+            ToolChoice::Rules(rules) => rules.allow.len() + rules.deny.len(),
+        };
+        if patterns + hosts.names().len() > Self::MAX_ENTRIES {
+            return Err(ToolPolicyError::TooManyHosts);
+        }
+        Ok(Self {
+            command_hosts: hosts,
+            ..self
+        })
+    }
+
+    /// Which tools its turns may call.
+    pub fn tools(&self) -> &ToolChoice {
+        &self.tools
+    }
+
+    /// The hosts its turns may run commands on.
+    pub fn command_hosts(&self) -> &CommandHosts {
+        &self.command_hosts
+    }
+}
+
+/// Why a tool policy was refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolPolicyError {
     /// Neither an allow nor a deny pattern.
@@ -112,6 +233,12 @@ pub enum ToolPolicyError {
     /// An empty pattern, one with surrounding whitespace, or one holding a
     /// control character.
     MalformedRule,
+    /// More than [`CommandHosts::MAX_HOSTS`] command hosts, or more hosts
+    /// and patterns together than [`ToolPolicy::MAX_ENTRIES`].
+    TooManyHosts,
+    /// A command host that is no SSH destination or `peer:` name, `here`,
+    /// one longer than [`CommandHosts::MAX_HOST_BYTES`], or one named twice.
+    MalformedHost,
 }
 
 /// A role with the policy it needs: a Drive grant always has a tool policy,

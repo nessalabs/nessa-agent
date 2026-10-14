@@ -16,9 +16,10 @@ use nessa_auth::{
 };
 use nessa_protocol::product::generated::{
     PeerEnrollParams, PeerErrorCode, PeerForgetParams, PeerGateway, PeerListResult,
-    PeerPhase as WirePhase, PeerSync as WireSync, PeerSyncState,
+    PeerPhase as WirePhase, PeerRelayParams, PeerSync as WireSync, PeerSyncState,
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
+use nessa_protocol::relay::RelayAddress;
 use serde_json::json;
 use std::net::SocketAddr;
 
@@ -43,7 +44,10 @@ pub(super) async fn dispatch(
             let Ok(code) = ManualCode::parse(params.code.as_bytes()) else {
                 return failure(&id, "invalid_request");
             };
-            peers.enroll(address, code, initiator).await
+            let Ok(relay) = params.relay.map(RelayAddress::try_from).transpose() else {
+                return failure(&id, "invalid_request");
+            };
+            peers.enroll(address, relay, code, initiator).await
         }
         "peer.list" => {
             if frame.params != json!({}) {
@@ -61,6 +65,17 @@ pub(super) async fn dispatch(
                 ),
                 Err(error) => failure(&id, error.code()),
             };
+        }
+        "peer.relay" => {
+            let Ok(params) = serde_json::from_value::<PeerRelayParams>(frame.params) else {
+                return failure(&id, "invalid_request");
+            };
+            let Ok(relay) = params.relay.map(RelayAddress::try_from).transpose() else {
+                return failure(&id, "invalid_request");
+            };
+            peers
+                .relay(DeviceKey::new(params.peer_key), relay, initiator)
+                .await
         }
         "peer.forget" => {
             let Ok(params) = serde_json::from_value::<PeerForgetParams>(frame.params) else {
@@ -86,6 +101,7 @@ fn wire(entry: &PeerEntry, sync: Option<&PeerSync>) -> PeerGateway {
             peer_key: *entry.key().bytes(),
             phase: WirePhase::Unreadable,
             address: None,
+            relay: None,
             credential_id: None,
             receiver_id: None,
             sync: None,
@@ -107,6 +123,7 @@ fn wire(entry: &PeerEntry, sync: Option<&PeerSync>) -> PeerGateway {
         peer_key: *record.key().bytes(),
         phase,
         address: Some(record.address().to_string()),
+        relay: record.relay().map(|relay| relay.as_str().to_owned()),
         credential_id,
         receiver_id,
         sync: sync.map(|sync| WireSync {
@@ -115,6 +132,7 @@ fn wire(entry: &PeerEntry, sync: Option<&PeerSync>) -> PeerGateway {
                 SyncState::Synced => PeerSyncState::Synced,
                 SyncState::Syncing => PeerSyncState::Syncing,
                 SyncState::Unreachable => PeerSyncState::Unreachable,
+                SyncState::Away => PeerSyncState::Away,
                 SyncState::Failed => PeerSyncState::Failed,
                 SyncState::Quota => PeerSyncState::Quota,
             },

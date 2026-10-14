@@ -20,6 +20,14 @@ agent.add_hook(BeforePermissionReview::new(), |call: &ProposedToolCall<'_>, obse
 });
 ```
 
+`call.initiation()` says who started the turn the call belongs to: the owner,
+or the share grant and policy revision the turn was submitted under. It is read
+from the turn's saved record when the invocation begins, so a queued or resumed
+turn is judged as the turn it was saved as. Input steered into a running turn
+does not change it: every call in the turn is judged under that one initiation,
+so a host that judges calls per initiator must not let one initiator steer
+another's turn. A hook that applies a policy per initiator reads it there.
+
 `ObservationKind::of` tells thinking, model text, a tool call, and a tool result
 apart on each event the window yields. Thinking is visible and spends the same
 budget as any other event. A thought does not join neighboring model text.

@@ -2,6 +2,7 @@
 //! and how it ends: a full cache still withdraws what the gateway no longer
 //! grants, and a read its budget cut short counts only if it saved something.
 use super::*;
+use nessa_protocol::relay::RelayFrame;
 
 /// A walk over conversations whose answers the test sets, keeping what the
 /// walk asked of each.
@@ -410,9 +411,10 @@ fn a_relayed_connect_ends_when_the_injected_budget_is_spent() {
     let connector = StoppableConnector {
         ending,
         relay: Some(RelayRoute {
-            address: silent.local_addr().unwrap().to_string(),
+            address: RelayAddress::try_from(silent.local_addr().unwrap().to_string()).unwrap(),
             key: [3; 32],
         }),
+        offline: Arc::default(),
     };
     let started = std::time::Instant::now();
     let ended = std::thread::scope(|scope| {
@@ -432,4 +434,128 @@ fn a_relayed_connect_ends_when_the_injected_budget_is_spent() {
     };
     assert_eq!(error.kind(), std::io::ErrorKind::ConnectionAborted);
     assert!(started.elapsed() < Duration::from_secs(15));
+}
+
+/// Issue #266, R3: a read that never reached its gateway is `Away` only when
+/// its relay said the gateway is not registered with it; every other end,
+/// a busy gateway's `NoAnswer` included, is reported as before.
+#[test]
+fn a_read_is_away_only_when_its_relay_said_the_gateway_is_offline() {
+    let unreachable = ReadEnd::Failed(ReadFailure::Unreachable);
+    assert_eq!(
+        away(unreachable.clone(), true),
+        ReadEnd::Failed(ReadFailure::Away)
+    );
+    assert_eq!(away(unreachable.clone(), false), unreachable);
+    for end in [
+        ReadEnd::Read(report(true)),
+        ReadEnd::Incomplete,
+        ReadEnd::Failed(ReadFailure::Refused),
+        ReadEnd::Failed(ReadFailure::Stopped),
+    ] {
+        assert_eq!(away(end.clone(), true), end);
+    }
+}
+
+/// A monotonic clock that never moves, so no budget runs out.
+struct Still;
+impl MonotonicClock for Still {
+    fn elapsed_ms(&self) -> u64 {
+        0
+    }
+}
+
+/// A relay that takes one `Connect` and answers `answer`.
+fn answering_relay(answer: RelayFrame) -> (RelayAddress, std::thread::JoinHandle<()>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = RelayAddress::try_from(listener.local_addr().unwrap().to_string()).unwrap();
+    let serving = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        nessa_protocol::relay::read_frame(&mut stream).unwrap();
+        stream.write_all(&answer.encode()).unwrap();
+    });
+    (address, serving)
+}
+
+/// The connector notes the relay's `Offline` whichever way the race ends,
+/// does not take a busy gateway's `NoAnswer` for it, and clears it once a
+/// connect succeeds.
+#[test]
+fn the_connector_notes_a_relay_offline_and_a_connect_clears_it() {
+    let refused = SocketAddr::from(([127, 0, 0, 1], 0));
+    let connector = |address: RelayAddress, offline: &Arc<AtomicBool>| StoppableConnector {
+        ending: Arc::new(Stopping {
+            stop: ReadStop::new(),
+            clock: Arc::new(Still),
+            until: u64::MAX,
+        }),
+        relay: Some(RelayRoute {
+            address,
+            key: [9; 32],
+        }),
+        offline: offline.clone(),
+    };
+    for (answer, noted) in [(RelayFrame::Offline, true), (RelayFrame::NoAnswer, false)] {
+        let offline = Arc::new(AtomicBool::new(false));
+        let (address, serving) = answering_relay(answer);
+        assert!(connector(address, &offline)
+            .connect(refused, Duration::from_secs(5))
+            .is_err());
+        serving.join().unwrap();
+        assert_eq!(offline.load(Ordering::SeqCst), noted, "{answer:?}");
+    }
+
+    let offline = Arc::new(AtomicBool::new(true));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let unused = RelayAddress::try_from("127.0.0.1:9".to_owned()).unwrap();
+    connector(unused, &offline)
+        .connect(listener.local_addr().unwrap(), Duration::from_secs(5))
+        .unwrap();
+    assert!(!offline.load(Ordering::SeqCst));
+}
+
+/// `dial_gateway`: an address that is not `host:port`, or a pin beside a
+/// relay that is not a key, is said as such before any route is tried, rather than hidden behind the relay's answer;
+/// a refused direct dial goes on to the relay, whose `Offline` it carries;
+/// and without a relay it is the direct dial alone.
+#[test]
+fn dial_gateway_says_a_bad_address_and_carries_the_relays_answer() {
+    let pin = NativeIdentity::generate(&mut nessa_auth::adapters::pairing::OsEntropy)
+        .unwrap()
+        .public_spki();
+    let unused = RelayAddress::try_from("127.0.0.1:9".to_owned()).unwrap();
+    for address in ["no-port", ":7443", "gw:port", "::1"] {
+        let refused = dial_gateway(address, Some((&unused, &pin)), Duration::from_secs(5))
+            .expect_err("not an address");
+        assert_eq!(
+            refused.kind(),
+            std::io::ErrorKind::InvalidInput,
+            "{address}"
+        );
+    }
+
+    let not_a_key = dial_gateway(
+        "127.0.0.1:0",
+        Some((&unused, &[0; 44])),
+        Duration::from_secs(5),
+    )
+    .expect_err("a pin that is not a key");
+    assert_eq!(not_a_key.kind(), std::io::ErrorKind::InvalidInput);
+
+    let (relay, serving) = answering_relay(RelayFrame::Offline);
+    let offline = dial_gateway("127.0.0.1:0", Some((&relay, &pin)), Duration::from_secs(5))
+        .expect_err("nothing listens at the gateway's address");
+    serving.join().unwrap();
+    assert_eq!(RelayRefusal::carried(&offline), Some(RelayRefusal::Offline));
+
+    let direct = dial_gateway("127.0.0.1:0", None, Duration::from_secs(5))
+        .expect_err("nothing listens at the gateway's address");
+    // Refused on Unix, an unusable address on Windows: either way not this
+    // side's own setup, so a caller dials again.
+    assert_ne!(direct.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(RelayRefusal::carried(&direct), None);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let connected = dial_gateway(&address.to_string(), None, Duration::from_secs(5)).unwrap();
+    assert_eq!(connected.peer_addr().unwrap(), address);
 }

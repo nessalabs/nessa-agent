@@ -275,7 +275,12 @@ async fn native_create_observer_loss_keeps_original_owner_until_drain() {
     drop(owner);
     let reopened = FilePairingState::open(&private, Path::new("state")).unwrap();
     drop(reopened);
-    let registry = LocalCredentialStore::open(parent.join("registry"), "credentials.json").unwrap();
+    let registry = LocalCredentialStore::open(
+        parent.join("registry"),
+        "credentials.json",
+        std::sync::Arc::new(nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap()),
+    )
+    .unwrap();
     assert!(registry.pending_pairings().unwrap().is_empty());
     drop(registry);
     let accepted = Fixture::new().await;

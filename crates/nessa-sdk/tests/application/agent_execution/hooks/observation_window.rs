@@ -5,6 +5,7 @@ use nessa_sdk::application::agent_execution::hooks::{
     HookRegistration, InvocationContext, InvocationHook, InvocationObservationWindow,
     ObservationKind, PhrasePresence, ProposedToolCall, ToolVerdict,
 };
+use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
 use nessa_sdk::domain::agent_execution::permissions::RefusalOutcome;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -340,6 +341,12 @@ struct ScriptedProvider {
 }
 
 impl AgentProvider for ScriptedProvider {
+    /// Ask, so a grant's checked turn may be sent here.
+    fn approval_mode(
+        &self,
+    ) -> Option<nessa_sdk::application::agent_execution::providers::ApprovalMode> {
+        Some(nessa_sdk::application::agent_execution::providers::ApprovalMode::Ask)
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("hook-window", "fixture", "test").unwrap()
     }
@@ -456,6 +463,8 @@ struct Fixture {
     release: Arc<tokio::sync::Notify>,
     failure_state: Arc<Mutex<ProviderSessionState>>,
     handshake: Arc<Handshake>,
+    /// Set once the provider is asked to execute a turn.
+    started: Arc<Started>,
 }
 
 struct FixtureKnobs {
@@ -503,10 +512,11 @@ async fn open_on_clock(
     let release = Arc::new(tokio::sync::Notify::new());
     let failure_state = Arc::new(Mutex::new(ProviderSessionState::Usable));
     let handshake = Arc::new(Handshake::default());
+    let started = Arc::new(Started::default());
     let agent = attached_agent(
         Arc::new(ScriptedProvider {
             events: Mutex::new(Some(events)),
-            started: Arc::new(Started::default()),
+            started: started.clone(),
             failure_state: failure_state.clone(),
             handshake: handshake.clone(),
             answered: answered.clone(),
@@ -545,6 +555,7 @@ async fn open_on_clock(
         release,
         failure_state,
         handshake,
+        started,
     }
 }
 
@@ -1660,6 +1671,75 @@ async fn a_hook_refusal_leaves_evidence_of_who_refused_and_why() {
         answers[0].attribution.actor().principal_id(),
         close_action().principal_id()
     );
+}
+
+/// Records who started the turn each reviewed call belongs to.
+struct InitiationHook {
+    seen: Arc<Mutex<Vec<Initiation>>>,
+}
+
+impl InvocationHook for InitiationHook {
+    fn before_permission_review(
+        &self,
+        call: &ProposedToolCall<'_>,
+        _observations: &InvocationObservationWindow<'_>,
+    ) -> Result<ToolVerdict, HookError> {
+        self.seen.lock().unwrap().push(call.initiation().clone());
+        Ok(ToolVerdict::Allow)
+    }
+}
+
+/// The review hook is told who started the turn, from the turn's saved record,
+/// whether the turn ran at once or waited in the queue.
+#[tokio::test]
+async fn a_review_hook_sees_who_started_the_turn() {
+    let grant = Initiation::checked_grant(GrantInitiator::new("receiver", 7).unwrap());
+    for (queued, initiation) in [
+        (false, Initiation::owner()),
+        (false, grant.clone()),
+        (true, grant.clone()),
+    ] {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let fixture = agent_with(
+            script(),
+            vec![Arc::new(InitiationHook { seen: seen.clone() })],
+        )
+        .await;
+        let submitter = Submitter {
+            context: close_action(),
+            initiation: initiation.clone(),
+        };
+        if queued {
+            let admission = fixture.agent.enqueue(request(), submitter).await.unwrap();
+            admission.wait().await.unwrap();
+        } else {
+            fixture.agent.invoke(request(), submitter).await.unwrap();
+        }
+        assert_eq!(*seen.lock().unwrap(), [initiation], "queued: {queued}");
+    }
+}
+
+/// A grant's turn saved before its tools were checked, as one restored from
+/// an older save is, is never sent: nothing would check its calls.
+#[tokio::test]
+async fn a_grant_turn_not_saved_as_checked_is_not_sent() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let fixture = agent_with(
+        script(),
+        vec![Arc::new(InitiationHook { seen: seen.clone() })],
+    )
+    .await;
+    let submitter = Submitter {
+        context: close_action(),
+        initiation: Initiation::grant(GrantInitiator::new("receiver", 7).unwrap()),
+    };
+    let result = fixture.agent.invoke(request(), submitter).await;
+    assert!(
+        matches!(&result, Err(AgentError::Unsupported(reason)) if reason.contains("checked")),
+        "{result:?}"
+    );
+    assert!(!fixture.started.flag.load(Ordering::SeqCst));
+    assert!(seen.lock().unwrap().is_empty());
 }
 
 fn named_review(id: &str, tool: &str) -> ExecutionEvent {

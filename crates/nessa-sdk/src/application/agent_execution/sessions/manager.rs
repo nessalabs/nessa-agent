@@ -2,11 +2,11 @@ use super::{
     app_sources,
     artifacts::ArtifactRefusal,
     attachment::AttachmentLease,
-    notes::{NoteAdmission, NoteRefusal},
+    notes::{NoteAdmission, NoteRefusal, NoteSelection},
     steering_position::SteeringPosition,
     ArtifactRecord, CurrentLease, InvocationCancellationEvent, InvocationRecord,
-    InvocationSchedulingEvent, LeaseRecord, MessageCommitClock, MessageCommitSleep, NoteRecord,
-    NoteRequest, ProviderContext, QueueHistoryRecord, SessionChange, SessionLoadState,
+    InvocationSchedulingEvent, LeaseRecord, MessageCommitClock, MessageCommitSleep, NoteCandidates,
+    NoteRecord, NoteRequest, ProviderContext, QueueHistoryRecord, SessionChange, SessionLoadState,
     SessionSaveGeneration, SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease,
     StorageError, StorageFuture, SubmissionAcknowledgement,
 };
@@ -27,10 +27,11 @@ use crate::application::agent_execution::{
 };
 use crate::domain::agent_execution::{
     executions::{
-        ExecutionId, ExecutionOutcome, InvocationHistory, InvocationKind, InvocationObservation,
-        QueueMutation, QueueOrderChange, SchedulingCause,
+        ExecutionId, ExecutionOutcome, Initiation, InvocationHistory, InvocationKind,
+        InvocationObservation, QueueMutation, QueueOrderChange, SchedulingCause,
     },
     permissions::PermissionRequest,
+    prompts::NoteContext,
     sessions::SessionId,
 };
 use std::{
@@ -181,6 +182,16 @@ impl fmt::Display for NoteRecordError {
     }
 }
 impl std::error::Error for NoteRecordError {}
+
+/// What a turn's admission is told about the conversation's pending notes:
+/// the host's verdict on each author it could check, and whether the turn
+/// may take any. A turn that may not still retires what the verdict or the
+/// clock ends.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct NoteIntake {
+    pub(crate) candidates: NoteCandidates,
+    pub(crate) takes_notes: bool,
+}
 
 /// Owns the local conversation key, its exclusive storage lease, and saved evidence.
 /// Provider-private model/tool state is restored by the selected provider.
@@ -732,8 +743,14 @@ impl SessionManager {
         request: ExecutionRequest,
         submitter: Submitter,
     ) -> Result<usize, AgentError> {
-        self.begin_record(request, submitter, SubmissionMode::Immediate, Vec::new())
-            .await
+        self.begin_record(
+            request,
+            submitter,
+            SubmissionMode::Immediate,
+            Vec::new(),
+            NoteIntake::default(),
+        )
+        .await
     }
     /// Saves input and its first scheduling event atomically before admission.
     /// A failed write is reconciled by reading storage. Uncertain persisted input
@@ -744,8 +761,9 @@ impl SessionManager {
         submitter: Submitter,
         event: InvocationSchedulingEvent,
         submission: SubmissionMode,
+        notes: NoteIntake,
     ) -> Result<usize, AgentError> {
-        self.begin_record(request, submitter, submission, vec![event])
+        self.begin_record(request, submitter, submission, vec![event], notes)
             .await
     }
     async fn begin_record(
@@ -754,11 +772,19 @@ impl SessionManager {
         submitter: Submitter,
         submission: SubmissionMode,
         scheduling: Vec<InvocationSchedulingEvent>,
+        notes: NoteIntake,
     ) -> Result<usize, AgentError> {
         let Submitter {
             context: actor,
             initiation,
         } = submitter;
+        // Notes reach the model only from the conversation's own records,
+        // joined at dispatch: a caller cannot hand a turn notes of its own.
+        if !request.user_message.notes().is_empty() {
+            return Err(AgentError::InvalidInput(
+                "a submitted message carries no notes".into(),
+            ));
+        }
         request.validate_message_size()?;
         InvocationSchedulingEvent::validate_history(&scheduling)
             .map_err(|error| AgentError::Storage(StorageError::Corrupt(error.to_string())))?;
@@ -767,6 +793,9 @@ impl SessionManager {
         // Reserve this write before the caller can release its invocation guard.
         // Close can then join all supervised writes through the evidence mutex.
         let mut evidence = self.evidence.clone().lock_owned().await;
+        // Read under the lock, as a note's acceptance is: a turn that waited
+        // for it retires and takes notes as of its own admission.
+        let now_ms = self.message_commit_clock.unix_milliseconds();
         tokio::spawn(async move {
             let snapshot = evidence
                 .observed
@@ -816,12 +845,20 @@ impl SessionManager {
                         })
                 })
                 .transpose()?;
+            let NoteSelection { retired, taken } =
+                super::notes::select(snapshot, &notes.candidates, notes.takes_notes, now_ms);
+            for record in &retired {
+                if let Some(note) = next.notes.iter_mut().find(|note| note.id == record.id) {
+                    note.retired = Some(record.retirement);
+                }
+            }
             next.invocations.push(InvocationRecord {
                 target_event_offset,
                 submission,
                 request,
                 actor,
                 initiation,
+                notes: taken,
                 acknowledgement: SubmissionAcknowledgement::Pending,
                 events: Vec::new(),
                 scheduling,
@@ -836,6 +873,9 @@ impl SessionManager {
             let index = next.invocations.len() - 1;
             let generation = evidence.generation().map_err(AgentError::Storage)?;
             let pending_before = evidence.pending.len();
+            for record in retired {
+                evidence.push_change(SessionChange::NoteRetired(record));
+            }
             evidence.push_change(SessionChange::InputAccepted(Box::new(
                 next.invocations[index].clone(),
             )));
@@ -1507,6 +1547,17 @@ impl SessionManager {
         index: usize,
         body: impl FnOnce(&[ExecutionEvent]) -> R + Send,
     ) -> Result<R, StorageError> {
+        self.with_invocation(index, |record| body(&record.events))
+            .await
+    }
+
+    /// Borrow one saved invocation record while `body` runs, under the same
+    /// lock and rules as [`Self::with_invocation_events`].
+    pub(crate) async fn with_invocation<R>(
+        &self,
+        index: usize,
+        body: impl FnOnce(&InvocationRecord) -> R + Send,
+    ) -> Result<R, StorageError> {
         let evidence = self.evidence.lock().await;
         let record = evidence
             .observed
@@ -1517,7 +1568,33 @@ impl SessionManager {
             .ok_or_else(|| {
                 StorageError::Corrupt("invocation observations have no submitted invocation".into())
             })?;
-        Ok(body(&record.events))
+        Ok(body(record))
+    }
+    /// The notes the saved turn at `index` took, as the model is given them,
+    /// in the order it took them. A taken note the conversation does not hold
+    /// is a corrupt record: the turn fails rather than run without it.
+    pub(crate) async fn taken_notes(&self, index: usize) -> Result<Vec<NoteContext>, StorageError> {
+        let evidence = self.evidence.lock().await;
+        let snapshot = evidence
+            .observed
+            .as_ref()
+            .ok_or_else(|| StorageError::Corrupt("a turn's notes have no session".into()))?;
+        let record = snapshot
+            .invocations
+            .get(index)
+            .ok_or_else(|| StorageError::Corrupt("a turn's notes have no saved turn".into()))?;
+        record
+            .notes
+            .iter()
+            .map(|id| {
+                snapshot
+                    .notes
+                    .iter()
+                    .find(|note| &note.id == id)
+                    .ok_or_else(|| StorageError::Corrupt("a turn takes a note not saved".into()))?
+                    .context()
+            })
+            .collect()
     }
     pub(crate) fn retire_observations(&self, id: &ExecutionId) {
         if let Some(authority) = self
@@ -1822,6 +1899,19 @@ impl SessionManager {
             .scheduling
             .last()
             .cloned()
+    }
+
+    /// Who started the saved turn `id`, as its record says; `None` when no
+    /// turn of this session is `id`.
+    pub(crate) async fn initiation_of(&self, id: &ExecutionId) -> Option<Initiation> {
+        let evidence = self.evidence.lock().await;
+        evidence
+            .observed
+            .as_ref()?
+            .invocations
+            .iter()
+            .find(|record| &record.request.execution_id == id)
+            .map(|record| record.initiation.clone())
     }
 
     /// Narrow observed scheduling lookup for supervisor recovery.

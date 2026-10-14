@@ -1,5 +1,7 @@
 import type {
   ConversationListResult,
+  ConversationMessageReceipt,
+  ConversationMessageStatusResult,
   ConversationObserveResult,
   ConversationSummary,
   ConversationView,
@@ -8,6 +10,8 @@ import type {
   ConversationMutationResult,
   ConversationReorderResult,
   ConversationSetApprovalModeResult,
+  ConversationShareResult,
+  ConversationSharesResult,
   ApprovalMode,
   ImageAttachment,
   LinkedFile,
@@ -17,6 +21,8 @@ import {
   CompactionReportingSupport,
   ConversationPermissionAsk,
   ConversationPermissionOptionEffect,
+  ConversationShareRole,
+  ConversationToolPreset,
   ElicitationForwardingSupport,
   IncomingElicitationSupport,
   ModelSwitchReportingSupport,
@@ -192,6 +198,36 @@ export function conversationMutation(
   flag(item, "applied")
   return item as unknown as ConversationMutationResult
 }
+/** Confirm a share's answer belongs to its request and names the grant's revision. */
+export function conversationShareResult(
+  value: unknown,
+  requestId: string,
+): ConversationShareResult {
+  const item = record(value)
+  exact(item, ["requestId", "applied", "policyRevision"])
+  if (identity(item, "requestId") !== requestId)
+    throw new Error("Conversation receipt belongs to another action")
+  flag(item, "applied")
+  // A safe integer, so at most `maxPolicyRevision`; never below the first.
+  if (time(item, "policyRevision") < minPolicyRevision)
+    throw new Error("Invalid conversation policyRevision")
+  return item as unknown as ConversationShareResult
+}
+/**
+ * The largest policy revision the schema carries: `expectedPolicyRevision`
+ * on a share or revoke and `policyRevision` on a share's answer, a JSON safe
+ * integer (tied to the schema in `conversation-validate.test.ts`).
+ */
+export const maxPolicyRevision = Number.MAX_SAFE_INTEGER
+/** The least revision a change may name: 0, which names no grant held. */
+export const minExpectedPolicyRevision = 0
+/**
+ * The least policy revision a share answers or a grant is listed at: a
+ * revision is the gateway's journal sequence, which starts at 1, so 0 only
+ * ever names "no grant held" in what a change sends.
+ */
+export const minPolicyRevision = 1
+
 /** Confirm the reply belongs to the requested change and names the exact preset. */
 export function conversationApprovalMode(
   value: unknown,
@@ -224,6 +260,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     "runtime",
     "lease",
     "artifacts",
+    "notes",
     "title",
     "approvalMode",
     "approvalModes",
@@ -634,6 +671,7 @@ export function conversationView(value: unknown, expected: string): Conversation
   }
   if (item.lease !== undefined) lease(item.lease)
   for (const artifact of items(item, "artifacts", 64)) conversationArtifact(artifact)
+  for (const note of items(item, "notes", 64)) conversationNote(note)
   const capabilities = record(item.capabilities)
   const capabilityKeys = [
     "queue",
@@ -893,6 +931,107 @@ function conversationArtifact(item: Record<string, unknown>) {
     throw new Error("Invalid conversation artifact size")
 }
 
+/** Where a note stands, with the turn that took it and why it was retired
+ * present exactly when its state says so. */
+function noteState(item: Record<string, unknown>) {
+  const state = text(item, "deliveryState")
+  oneOf(state, ["recorded", "pending", "assigned", "retired"])
+  if ((state === "assigned") !== (item.executionId !== undefined))
+    throw new Error("Invalid conversation note executionId")
+  if (item.executionId !== undefined) identity(item, "executionId")
+  if ((state === "retired") !== (item.retiredReason !== undefined))
+    throw new Error("Invalid conversation note retiredReason")
+  if (item.retiredReason !== undefined)
+    oneOf(text(item, "retiredReason"), ["expired", "permission_lost"])
+}
+/** A note's text and its acceptance time, as its receipt and the view state them. */
+function noteAccepted(item: Record<string, unknown>) {
+  text(item, "messageId", 64, false)
+  const acceptedAtMs = item.acceptedAtMs
+  if (
+    typeof acceptedAtMs !== "number" ||
+    !Number.isSafeInteger(acceptedAtMs) ||
+    acceptedAtMs < 0
+  )
+    throw new Error("Invalid conversation acceptedAtMs")
+}
+
+/** One note the view lists: the published shape, closed. */
+function conversationNote(item: Record<string, unknown>) {
+  exact(item, [
+    "messageId",
+    "text",
+    "acceptedAtMs",
+    "delivery",
+    "deliveryState",
+    "executionId",
+    "retiredReason",
+    "afterExecutionId",
+    "author",
+  ])
+  noteAccepted(item)
+  text(item, "text", 8192, false)
+  oneOf(text(item, "delivery"), ["record_only", "next_turn"])
+  noteState(item)
+  if (item.afterExecutionId !== undefined) identity(item, "afterExecutionId")
+  const author = record(item.author)
+  exact(author, ["kind", "surface"])
+  oneOf(text(author, "kind"), ["owner", "grant"])
+  text(author, "surface", 256, false)
+}
+
+/** Confirm a note's receipt answers the request that left it. */
+export function conversationMessageReceipt(
+  value: unknown,
+  requestId: string,
+): ConversationMessageReceipt {
+  const item = record(value)
+  exact(item, [
+    "requestId",
+    "messageId",
+    "acceptedAtMs",
+    "deliveryState",
+    "executionId",
+    "retiredReason",
+  ])
+  if (identity(item, "requestId") !== requestId)
+    throw new Error("Conversation receipt belongs to another action")
+  noteAccepted(item)
+  noteState(item)
+  return item as unknown as ConversationMessageReceipt
+}
+
+/** Confirm a note's status answers the request looked up: a found note
+ * carries its name, time and state; one not found carries none of them. */
+export function conversationMessageStatus(
+  value: unknown,
+  requestId: string,
+): ConversationMessageStatusResult {
+  const item = record(value)
+  exact(item, [
+    "found",
+    "requestId",
+    "messageId",
+    "acceptedAtMs",
+    "deliveryState",
+    "executionId",
+    "retiredReason",
+  ])
+  if (identity(item, "requestId") !== requestId)
+    throw new Error("Conversation status belongs to another action")
+  flag(item, "found")
+  if (item.found) {
+    noteAccepted(item)
+    noteState(item)
+  } else if (
+    ["messageId", "acceptedAtMs", "deliveryState", "executionId", "retiredReason"].some(
+      (key) => item[key] !== undefined,
+    )
+  )
+    throw new Error("Conversation status describes a note it did not find")
+  return item as unknown as ConversationMessageStatusResult
+}
+
 export function conversationReorder(
   value: unknown,
   requestId: string,
@@ -1025,4 +1164,103 @@ export function conversationObserve(
       id,
     },
   }
+}
+
+/**
+ * A Drive grant's tool policy bounds, as the product schema publishes them:
+ * each of allow and deny holds at most `patterns` patterns of at most
+ * `patternBytes` UTF-8 bytes; `commandHosts` holds at most `hosts` hosts of
+ * at most `hostBytes` bytes; and patterns and hosts together are at most
+ * `entries`. The gateway refuses past them (`invalid_request`); a surface
+ * budgets its choices against these rather than numbers of its own.
+ */
+export const toolPolicyBounds = {
+  patterns: bounds.maxToolPolicyPatterns,
+  patternBytes: bounds.maxToolPatternBytes,
+  hosts: bounds.maxCommandHosts,
+  hostBytes: bounds.maxCommandHostBytes,
+  entries: bounds.maxToolPolicyEntries,
+} as const
+
+/** One list of a tool policy's names: at most `max`, each 1 to `bytes` UTF-8 bytes, each once. */
+function policyNames(
+  item: Record<string, unknown>,
+  key: string,
+  max: number,
+  bytes: number,
+) {
+  const value = item[key]
+  if (!Array.isArray(value) || value.length > max)
+    throw new Error(`Invalid conversation share ${key}`)
+  for (const name of value) {
+    if (typeof name !== "string" || !name || utf8.encode(name).byteLength > bytes)
+      throw new Error(`Invalid conversation share ${key}`)
+  }
+  return value as string[]
+}
+
+/** A Drive grant's tool policy as `conversation.shares` lists it, within the published bounds. */
+function toolPolicy(value: unknown) {
+  const policy = record(value)
+  exact(policy, ["preset", "allow", "deny", "commandHosts"])
+  let patterns = 0
+  if (policy.preset !== undefined) {
+    if (policy.allow !== undefined || policy.deny !== undefined)
+      throw new Error("Invalid conversation share policy")
+    oneOf(text(policy, "preset", 32), Object.values(ConversationToolPreset))
+  } else {
+    patterns =
+      policyNames(
+        policy,
+        "allow",
+        toolPolicyBounds.patterns,
+        toolPolicyBounds.patternBytes,
+      ).length +
+      policyNames(
+        policy,
+        "deny",
+        toolPolicyBounds.patterns,
+        toolPolicyBounds.patternBytes,
+      ).length
+    if (patterns === 0) throw new Error("Invalid conversation share policy")
+  }
+  if (policy.commandHosts !== undefined) {
+    const hosts = policyNames(
+      policy,
+      "commandHosts",
+      toolPolicyBounds.hosts,
+      toolPolicyBounds.hostBytes,
+    )
+    // Listed only when it names a host, each once, within the room the
+    // patterns leave.
+    if (
+      !hosts.length ||
+      new Set(hosts).size !== hosts.length ||
+      patterns + hosts.length > toolPolicyBounds.entries
+    )
+      throw new Error("Invalid conversation share commandHosts")
+  }
+}
+
+/** Validate `conversation.shares`: each grant once, a policy exactly on a Drive grant. */
+export function conversationShares(value: unknown): ConversationSharesResult {
+  const result = record(value)
+  exact(result, ["items"])
+  const seen = new Set<string>()
+  for (const item of items(result, "items", bounds.maxShareGrants)) {
+    exact(item, ["credentialId", "role", "policy", "policyRevision", "grantedAtMs"])
+    const credential = identity(item, "credentialId")
+    if (seen.has(credential)) throw new Error("Repeated conversation share")
+    seen.add(credential)
+    const role = text(item, "role", 16)
+    oneOf(role, Object.values(ConversationShareRole))
+    if ((role === ConversationShareRole.Drive) !== (item.policy !== undefined))
+      throw new Error("Invalid conversation share policy")
+    if (item.policy !== undefined) toolPolicy(item.policy)
+    // A listed grant holds a revision the journal gave, never 0 (no grant held).
+    if (time(item, "policyRevision") < minPolicyRevision)
+      throw new Error("Invalid conversation share policy revision")
+    time(item, "grantedAtMs")
+  }
+  return result as unknown as ConversationSharesResult
 }

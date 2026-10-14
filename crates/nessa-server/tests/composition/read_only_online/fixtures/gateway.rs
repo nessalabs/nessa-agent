@@ -201,7 +201,14 @@ async fn gateway_child() {
     };
     let root = Path::new(&root);
     nessa_local_storage::create_directory(root).unwrap();
-    let auth = Arc::new(LocalCredentialStore::open(root, "credentials.json").unwrap());
+    let auth = Arc::new(
+        LocalCredentialStore::open(
+            root,
+            "credentials.json",
+            std::sync::Arc::new(nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap()),
+        )
+        .unwrap(),
+    );
     // "regrant": the receiver policy revision changes, which moves every
     // active receiver to a new access epoch; the device's next status reports
     // it, and the saved cache scope no longer matches.
@@ -269,11 +276,14 @@ async fn gateway_child() {
         Ok(address) => address.parse().unwrap(),
         Err(_) => "127.0.0.1:0".parse().unwrap(),
     };
-    // "relay": a real relay in this process, and the gateway registered at
-    // it, so a reader whose direct dial fails reads through it.
-    let relay = match std::env::var("NESSA_ONLINE_GATE").as_deref() {
-        Ok("relay") => Some(serve_relay(root).await),
-        _ => None,
+    // `NESSA_ONLINE_RELAY`: the gateway registered at a real relay, so a
+    // reader whose direct dial fails reads through it, whatever the mode.
+    // `here` serves that relay in this process; anything else is the
+    // address of one the test serves, which outlives this gateway.
+    let relay = match std::env::var("NESSA_ONLINE_RELAY").as_deref() {
+        Ok("here") => Some(serve_relay(root).await),
+        Ok(address) => Some(note_relay(root, address.to_owned())),
+        Err(_) => None,
     };
     let (prepared, commands, _peers) = prepare(
         &NativeConfig {
@@ -296,7 +306,11 @@ async fn gateway_child() {
     )
     .await
     .unwrap();
-    let metadata = Arc::new(LocalConversationStore::open(&root.join("metadata.sqlite3")).unwrap());
+    let metadata = Arc::new(
+        LocalConversationStore::open(&root.join("metadata.sqlite3"))
+            .unwrap()
+            .with_access_policy(crate::conversation_test_support::access_policy()),
+    );
     let storage = Arc::new(RecordStorage::new(root.join("source")).unwrap());
     storage.initialize().await.unwrap();
     let record = Arc::new(NessaRecordReadSource::new(
@@ -321,7 +335,12 @@ async fn gateway_child() {
             agent_probe: Arc::new(NoAgents),
         },
     )
-    .with_passive_read(receivers.clone(), metadata.clone(), metadata.clone())
+    .with_passive_read(
+        receivers.clone(),
+        metadata.clone(),
+        metadata.clone(),
+        crate::conversation_test_support::access_policy(),
+    )
     // The same producers `composition::local_auth` composes, over the same
     // storage and metadata owners the reads use.
     .with_change_watches(
@@ -340,6 +359,7 @@ async fn gateway_child() {
     }))
     .with_catalogue_source(Arc::new(NessaCatalogueReadSource::new(
         metadata.clone(),
+        crate::conversation_test_support::access_policy(),
         Id::new(&gateway).unwrap(),
     )));
     let bound = bind(prepared, RuntimeDependencies::default().clock, state)
@@ -598,7 +618,7 @@ async fn live_control(
 }
 
 /// Serve a relay on a fresh local port for the rest of this process, and
-/// note its address in `relay-address` for the reading test.
+/// note its address.
 async fn serve_relay(root: &Path) -> RelayAddress {
     use crate::relay::{
         application::{Relay, RelayLimits},
@@ -607,6 +627,7 @@ async fn serve_relay(root: &Path) -> RelayAddress {
     use crate::timer::{Timer, TokioTimer};
     let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = socket.local_addr().unwrap().to_string();
+    let noted = note_relay(root, address);
     let timer: Arc<dyn Timer> = Arc::new(TokioTimer::new());
     let relay = Relay::new(
         timer.clone(),
@@ -620,7 +641,18 @@ async fn serve_relay(root: &Path) -> RelayAddress {
         timer,
         std::future::pending::<()>(),
     ));
-    private_write(&root.join("relay-address"), address.as_bytes());
+    noted
+}
+
+/// Note `address` in `relay-address` for the reading test, in place of
+/// whatever relay the last process noted.
+fn note_relay(root: &Path, address: String) -> RelayAddress {
+    let noted = root.join("relay-address");
+    match std::fs::remove_file(&noted) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => panic!("{error}"),
+        _ => {}
+    }
+    private_write(&noted, address.as_bytes());
     RelayAddress::try_from(address).unwrap()
 }
 
@@ -692,7 +724,7 @@ pub(super) async fn share_with_devices(
             .zip(setup.second_credential.clone()),
     ];
     for (receiver, credential) in devices.into_iter().flatten() {
-        crate::conversation::application::ShareGrants::change(
+        let receipt = crate::conversation::application::ShareGrants::change(
             metadata,
             crate::conversation::application::ShareGrantChange {
                 transition: crate::conversation::application::ShareGrantTransition::Grant(
@@ -701,6 +733,7 @@ pub(super) async fn share_with_devices(
                 conversation_id: id.clone(),
                 receiver_id: Some(receiver),
                 credential_id: nessa_auth::domain::CredentialId::new(credential).unwrap(),
+                expected_policy_revision: None,
                 initiator: crate::conversation::application::ConversationCaller {
                     organization_id: OrganizationId::new(setup.organization.clone()).unwrap(),
                     principal_id: PrincipalId::new(setup.owner.clone()).unwrap(),
@@ -712,5 +745,6 @@ pub(super) async fn share_with_devices(
         )
         .await
         .unwrap();
+        assert!(receipt.applied);
     }
 }

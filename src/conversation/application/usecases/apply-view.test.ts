@@ -9,6 +9,7 @@ import { beginSend, failSend } from "./send-draft"
 const view: ConversationView = {
   conversationId: "server",
   artifacts: [],
+  notes: [],
   approvalMode: "ask",
   approvalModes: [
     { id: "ask", name: "Provider asks", description: "Provider asks where required." },
@@ -598,4 +599,22 @@ it("carries the files its agent published as the view lists them, and replaces t
   expect(first.remote?.artifacts).toEqual([published])
   // The list is the view's whole account: an older entry it gave up is gone here too.
   expect(applyView(first, { ...view, artifacts: [] }).remote?.artifacts).toEqual([])
+})
+
+it("carries the notes left in the conversation as the view lists them, and replaces them with the next", () => {
+  const left = {
+    id: "n1",
+    text: "Mind the deploy window",
+    author: { kind: "owner" as const, surface: "desktop" },
+    deliveryState: "pending" as const,
+    afterExecutionId: "run",
+  }
+  const first = applyView(conversation("tab"), { ...view, notes: [left] })
+  expect(first.remote?.notes).toEqual([left])
+  // A note is not a turn: none is made of it.
+  expect(first.turns).toEqual(applyView(conversation("tab"), view).turns)
+  // The list is the view's whole account, the note's new state included.
+  const taken = { ...left, deliveryState: "assigned" as const }
+  expect(applyView(first, { ...view, notes: [taken] }).remote?.notes).toEqual([taken])
+  expect(applyView(first, { ...view, notes: [] }).remote?.notes).toEqual([])
 })

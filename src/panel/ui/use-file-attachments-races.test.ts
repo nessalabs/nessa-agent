@@ -89,6 +89,7 @@ async function mount(text = "") {
                   catalog: {
                     agents: [],
                     environments: [],
+                    commandHosts: [],
                     nativeHooks: { claude: "off", codex: "off" },
                   },
                   chosenAgent: undefined,

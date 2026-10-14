@@ -5,24 +5,33 @@
 
 use super::operation;
 use crate::conversation::application::{
-    CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadResponse,
-    CatalogueReadSource, ConversationCatalogue, RecordReadLease,
+    CatalogueEntryAccess, CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation,
+    CatalogueReadResponse, CatalogueReadSource, ConversationAccessPolicyEvaluator,
+    ConversationCatalogue, RecordReadLease,
 };
 use crate::core::read_workers::{ReadWorkerError, ReadWorkers};
+use nessa_auth::domain::PrincipalId;
 use nessa_protocol::conversation::read_scope::CatalogueReadScope;
 use nessa_sync::replication::domain::Id;
 use std::sync::Arc;
 
 pub struct NessaCatalogueReadSource {
     catalogue: Arc<dyn ConversationCatalogue>,
+    /// Admits each entry a read returns (`catalogue.entry`).
+    access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     origin: Id,
     workers: Arc<ReadWorkers>,
 }
 
 impl NessaCatalogueReadSource {
-    pub fn new(catalogue: Arc<dyn ConversationCatalogue>, origin: Id) -> Self {
+    pub fn new(
+        catalogue: Arc<dyn ConversationCatalogue>,
+        access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
+        origin: Id,
+    ) -> Self {
         Self {
             catalogue,
+            access_policy,
             origin,
             workers: ReadWorkers::new(),
         }
@@ -36,17 +45,19 @@ impl CatalogueReadSource for NessaCatalogueReadSource {
     fn read(
         &self,
         admitted: CatalogueReadScope,
+        signed_in_as: PrincipalId,
         operation: CatalogueReadOperation,
         lease: RecordReadLease,
     ) -> CatalogueReadFuture<'_> {
         Box::pin(async move {
             operation::trusted_scope(&admitted, &self.origin, &operation)?;
             let catalogue = self.catalogue.clone();
+            let entries = CatalogueEntryAccess::new(self.access_policy.clone(), signed_in_as);
             let origin = self.origin.clone();
             let workers = self.workers.clone();
             self.workers
                 .run("nessa-catalogue-read", move || {
-                    let value = operation::execute(catalogue, admitted, origin, operation)
+                    let value = operation::execute(catalogue, entries, admitted, origin, operation)
                         .map_err(|error| {
                             if matches!(
                                 error,
