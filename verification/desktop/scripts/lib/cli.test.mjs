@@ -26,6 +26,7 @@ import {
   report,
   resultOfThrown,
   statusOf,
+  UnsafeToContinueError,
   UsageError,
   verdictOf,
 } from "./cli.mjs"
@@ -163,6 +164,18 @@ describe("attempt", () => {
     assert.equal(statusOf(rep.results), 2)
   })
 
+  it("stops the check when recovery leaves its browser page unsafe to reuse", async () => {
+    const rep = collect()
+    const fatal = new UnsafeToContinueError("page retirement failed")
+    await assert.rejects(
+      attempt(rep, { name: "step" }, async () => {
+        throw fatal
+      }),
+      (error) => error === fatal,
+    )
+    assert.deepEqual(rep.results, [])
+  })
+
   it("adds what the step returned", async () => {
     const rep = collect()
     await attempt(rep, { name: "step", engine: "webkit" }, async () => ({
@@ -187,6 +200,34 @@ describe("resultOfThrown", () => {
     assert.equal(result.error, "broke")
   })
 
+  it("includes the original operation error in fatal recovery diagnostics", async () => {
+    const operationFailure = new Error("opening key acknowledgement failed")
+    const fatal = new UnsafeToContinueError("page retirement failed", {
+      cause: operationFailure,
+    })
+    let result
+    const written = await stderrOf(() => (result = resultOfThrown({ name: "s" }, fatal)))
+    assert.match(written, /UnsafeToContinueError: page retirement failed/)
+    assert.match(written, /caused by: Error: opening key acknowledgement failed/)
+    assert.equal(
+      result.error,
+      "page retirement failed (caused by: Error: opening key acknowledgement failed)",
+    )
+  })
+
+  it("retains a non-Error operation cause in the fatal result", async () => {
+    const fatal = new UnsafeToContinueError("page retirement failed", {
+      cause: "opening key acknowledgement failed",
+    })
+    let result
+    const written = await stderrOf(() => (result = resultOfThrown({ name: "s" }, fatal)))
+    assert.match(written, /caused by: opening key acknowledgement failed/)
+    assert.equal(
+      result.error,
+      "page retirement failed (caused by: opening key acknowledgement failed)",
+    )
+  })
+
   it("writes nothing for could-not-run, which is not a fault", async () => {
     const written = await stderrOf(() =>
       resultOfThrown({ name: "s" }, new CannotRun("no server")),
@@ -203,6 +244,21 @@ describe("resultOfThrown", () => {
 })
 
 describe("run-all's sum", () => {
+  it("recognizes the clock check by --only name and leaves it out of production previews", () => {
+    const source = readFileSync(new URL("../run-all.mjs", import.meta.url), "utf8")
+    const match = source.match(/const functional = \[([\s\S]*?)\n\]/)
+    assert.ok(match, "run-all declares its functional check registry")
+    const functional = Array.from(match[1].matchAll(/"([^"]+)"/g), ([, name]) => name)
+    assert.deepEqual(
+      chosen("clock-snapshots", functional, (value) => value.split(",").filter(Boolean)),
+      ["clock-snapshots"],
+    )
+
+    const scheduled = checksUnder("prod", functional)
+    assert.ok(scheduled.leftOut.includes("clock-snapshots"))
+    assert.ok(!scheduled.run.includes("clock-snapshots"))
+  })
+
   it("passes an explicit production URL to committed-transcript", () => {
     const url = "http://127.0.0.1:9000/desktop.html"
     assert.deepEqual(
@@ -254,6 +310,7 @@ describe("run-all's sum", () => {
       "transcript-notes",
       "transcript-unreadable",
       "turn-outcomes",
+      "clock-snapshots",
       "mcp-apps",
       "approval-deadline",
     ])

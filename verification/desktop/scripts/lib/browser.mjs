@@ -9,7 +9,7 @@
  */
 import { chromium, webkit } from "playwright"
 
-import { CannotRun } from "./cli.mjs"
+import { CannotRun, log } from "./cli.mjs"
 import { attachLines, reportDetached, reporterBound, watchLines } from "./page-lines.mjs"
 import { harmlessConsole, css, storage } from "./selectors.mjs"
 
@@ -140,10 +140,12 @@ export async function openPage(browser, o) {
     page = await context.newPage()
     if (o.preparePage) await o.preparePage(page, context)
   } catch (error) {
-    // The setup's error is the one reported: a close that fails too is
-    // swallowed, so it cannot take its place.
-    await context.close().catch(() => {})
-    throw error
+    await withCleanup(
+      async () => {
+        throw error
+      },
+      () => context.close(),
+    )
   }
   const lines = watchLines()
   page.on("pageerror", (error) => {
@@ -186,16 +188,20 @@ export async function openPage(browser, o) {
     // A size report can still move a full-body abort before the lines are
     // reported. Closing first would drop that report.
     await settleSizeReports(sizeReports)
-    await context.close().catch(() => {})
-    if (reporterBound()) {
-      reportDetached(lineBase, lines.errors, lines.harmless)
-      throw new CannotRun(message)
-    }
-    const extra =
-      includeErrors && lines.errors.length
-        ? `\n  page errors: ${lines.errors.join("; ")}`
-        : ""
-    throw new CannotRun(message + extra)
+    await withCleanup(
+      async () => {
+        if (reporterBound()) {
+          reportDetached(lineBase, lines.errors, lines.harmless)
+          throw new CannotRun(message)
+        }
+        const extra =
+          includeErrors && lines.errors.length
+            ? `\n  page errors: ${lines.errors.join("; ")}`
+            : ""
+        throw new CannotRun(message + extra)
+      },
+      () => context.close(),
+    )
   }
   try {
     await page.goto(o.url, { waitUntil: "domcontentloaded" })
@@ -462,20 +468,55 @@ export async function need(page, selector, what, timeout = 5000) {
   }
 }
 
-/**
- * Runs `body`, then closes `browser`. The body's error is the one reported:
- * a close that fails is discarded, as `openPage` does when a context fails
- * to close (#475).
- *
- * @param {{ close: () => Promise<unknown> }} browser
- * @param {() => Promise<unknown>} body
- */
-export async function runAndClose(browser, body) {
+const failureDescription = (error) => {
   try {
-    return await body()
-  } finally {
-    await browser.close().catch(() => {})
+    return String(error?.message ?? error)
+  } catch {
+    return "unprintable cleanup failure"
   }
+}
+
+const logSecondaryCleanupFailure = (error) => {
+  try {
+    log("secondary cleanup fault:", failureDescription(error))
+  } catch {
+    // Diagnostics must not replace the operation's primary outcome.
+  }
+}
+
+/**
+ * Runs `body`, then always runs `close`. A body failure stays primary and a
+ * close failure is logged; if the body succeeds, a close failure is thrown.
+ * The caught flag preserves even non-Error and `undefined` rejections.
+ *
+ * @param {() => Promise<unknown>} body
+ * @param {() => Promise<unknown>} close
+ * @returns {Promise<unknown>}
+ */
+export async function withCleanup(body, close) {
+  let bodyFailed = false
+  let bodyOutcome
+  try {
+    bodyOutcome = await body()
+  } catch (error) {
+    bodyFailed = true
+    bodyOutcome = error
+  }
+
+  try {
+    await close()
+  } catch (error) {
+    if (!bodyFailed) throw error
+    logSecondaryCleanupFailure(error)
+  }
+
+  if (bodyFailed) throw bodyOutcome
+  return bodyOutcome
+}
+
+/** Runs `body`, then closes `browser` without hiding cleanup failures. */
+export async function runAndClose(browser, body) {
+  return withCleanup(body, () => browser.close())
 }
 
 /**

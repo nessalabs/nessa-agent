@@ -14,6 +14,7 @@ import {
   recordFailedRequest,
   runAndClose,
   settleSizeReports,
+  withCleanup,
 } from "./browser.mjs"
 
 const PAGE = "http://127.0.0.1:1438/desktop.html?gateway"
@@ -351,30 +352,93 @@ describe("settleSizeReports", () => {
 describe("runAndClose", () => {
   it("keeps the body's error when close also rejects", async () => {
     let closed = false
+    const primary = new Error("step failed")
     const browser = {
       close: async () => {
         closed = true
         throw new Error("close failed")
+      },
+    }
+    const diagnostics = []
+    const write = process.stderr.write
+    process.stderr.write = (chunk) => (diagnostics.push(String(chunk)), true)
+    try {
+      await assert.rejects(
+        runAndClose(browser, async () => {
+          throw primary
+        }),
+        (error) => error === primary,
+      )
+    } finally {
+      process.stderr.write = write
+    }
+    assert.equal(closed, true)
+    assert.match(diagnostics.join(""), /secondary cleanup fault: close failed/)
+  })
+
+  it("reports a browser close failure when the body succeeded", async () => {
+    let closed = false
+    const closeFailure = new Error("close failed")
+    const browser = {
+      close: async () => {
+        closed = true
+        throw closeFailure
       },
     }
     await assert.rejects(
-      runAndClose(browser, async () => {
-        throw new Error("step failed")
-      }),
-      { message: "step failed" },
+      runAndClose(browser, async () => "done"),
+      (error) => error === closeFailure,
     )
     assert.equal(closed, true)
   })
+})
 
-  it("resolves the body's value when close rejects", async () => {
-    let closed = false
-    const browser = {
-      close: async () => {
-        closed = true
-        throw new Error("close failed")
-      },
+describe("withCleanup", () => {
+  it("preserves Error, non-Error, and undefined rejections while logging close failure", async () => {
+    const closeFailure = new Error("close failed")
+    const primaryOutcomes = [new Error("primary error"), "primary string", undefined]
+    const diagnostics = []
+    const write = process.stderr.write
+    process.stderr.write = (chunk) => (diagnostics.push(String(chunk)), true)
+    try {
+      for (const primary of primaryOutcomes) {
+        let rejected = false
+        let caught
+        try {
+          await withCleanup(
+            async () => {
+              throw primary
+            },
+            async () => {
+              throw closeFailure
+            },
+          )
+        } catch (error) {
+          rejected = true
+          caught = error
+        }
+        assert.equal(rejected, true)
+        assert.equal(caught, primary)
+      }
+    } finally {
+      process.stderr.write = write
     }
-    assert.equal(await runAndClose(browser, async () => "done"), "done")
-    assert.equal(closed, true)
+    assert.equal(
+      (diagnostics.join("").match(/secondary cleanup fault: close failed/g) ?? []).length,
+      3,
+    )
+  })
+
+  it("reports close failure when a successful body returns undefined", async () => {
+    const closeFailure = new Error("close failed")
+    await assert.rejects(
+      withCleanup(
+        async () => undefined,
+        async () => {
+          throw closeFailure
+        },
+      ),
+      (error) => error === closeFailure,
+    )
   })
 })

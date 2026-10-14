@@ -9,7 +9,7 @@ import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import { App } from "../../../../src/panel/ui/app"
 import { HeldFilesProvider } from "../../../../src/conversation/ui/held-files"
-import { ClockProvider } from "../../../../src/conversation/ui/clock"
+import { ClockProvider } from "../../../../src/clock"
 import { createAttachmentResources } from "../../../../src/panel/adapters/attachment-resources"
 import { makeStore } from "../../../../src/store"
 import {

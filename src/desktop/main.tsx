@@ -10,6 +10,7 @@ import {
   saveFile,
 } from "../host"
 import { HeldFilesProvider } from "../conversation"
+import { ClockProvider } from "../clock"
 import { environmentFromVite } from "../env/vite"
 import { connectBrowserSession, createBrowserAuth } from "../session"
 import { StartupMounted } from "../startup/ui/mounted-signal"
@@ -27,7 +28,7 @@ import { DesktopIconFamilyProvider } from "./ui/icons"
 import { DesktopWindow } from "./ui/desktop-window"
 import { platformFor, sandboxFor, WidgetRegistryProvider } from "./widgets"
 import { SubagentsProvider } from "./subagents"
-import { ClockProvider, followWorkspace, loadWorkspace } from "./workspace"
+import { followWorkspace, loadWorkspace } from "./workspace"
 
 import "@fontsource-variable/geist"
 import "@fontsource-variable/geist-mono"

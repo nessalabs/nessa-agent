@@ -4,8 +4,8 @@ import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import { createDesktopDependencies } from "../../../../src/desktop/dependencies"
 import { makeDesktopStore } from "../../../../src/desktop/store"
+import { ClockProvider } from "../../../../src/clock"
 import {
-  ClockProvider,
   followWorkspace,
   loadWorkspace,
   openSession,

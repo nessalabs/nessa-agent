@@ -8,7 +8,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { applyView } from "../../application/usecases/apply-view"
 import type { ConversationView } from "../../application/view"
 import { conversation } from "../../model"
-import { ClockProvider } from "../../ui/clock"
+import { ClockProvider } from "../../../clock"
 import { Transcript } from "../../ui/transcript"
 
 class TestResizeObserver {

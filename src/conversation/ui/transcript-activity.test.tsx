@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { textContent, type AgentFeatures, type Conversation } from "../model"
-import { ClockProvider } from "./clock"
+import { ClockProvider } from "../../clock"
 import { Transcript } from "./transcript"
 
 class TestResizeObserver {

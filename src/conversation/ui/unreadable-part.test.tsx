@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { textContent, type Conversation, type Turn } from "../model"
-import { ClockProvider } from "./clock"
+import { ClockProvider } from "../../clock"
 import { Transcript } from "./transcript"
 import { UNREADABLE_MORE_SENTENCE, UNREADABLE_SENTENCE } from "./unreadable-part"
 

@@ -12,7 +12,7 @@ import {
 } from "../../src/conversation/adapters/store/slice"
 import { useConversation } from "../../src/conversation/ui/use-conversation"
 import { ConversationControls } from "../../src/conversation/ui/conversation-controls"
-import { ClockProvider } from "../../src/conversation/ui/clock"
+import { ClockProvider } from "../../src/clock"
 
 const A = "00000000-0000-4000-8000-000000000001"
 const B = "00000000-0000-4000-8000-000000000002"

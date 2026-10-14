@@ -36,7 +36,7 @@
  * through the source and changes it only through the commands here.
  * `adapters/dom/` holds what belongs to the page rather than the product —
  * what the workspace adds to a drag (`split-panes-drag.ts`), focus, the
- * panes' room, keys, the clock's ticks — as hooks and adapters beside the
+ * panes' room and keys — as hooks and adapters beside the
  * tree, never as state; `adapters/storage/` keeps the overview's filter
  * between launches. Widgets (ADR 326) are drawn by `../widgets`' hosts —
  * a card in a message, a widget's pane (`ui/panes/widget-pane.tsx`), the
@@ -58,7 +58,6 @@
 export { SessionsInSidebar } from "./ui/layouts/sessions-in-sidebar"
 export { ThreeColumns } from "./ui/layouts/three-columns"
 export { shortcutNames, workspaceShortcuts } from "./ui/layouts/shortcuts"
-export { ClockProvider } from "./adapters/dom/clock"
 export { focusInFront } from "./adapters/dom/focus"
 export { measureWorkspace } from "./adapters/dom/measure"
 export {

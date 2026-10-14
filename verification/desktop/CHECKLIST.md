@@ -310,6 +310,10 @@ _ADR 238 › Focus follows the focused pane_; keys in
   held callbacks after the old workspace unmounts; they enqueue zero new frame
   work, and the current layout still focuses its composer. _Check:_ `focus.mjs`
   (`focus-retired-layout`); [frame lifetime](../../docs/design/ui-workspace-load.md#focus-frame-lifetime-730), #730.
+- [ ] **Keys during incremental overview rendering use the mounted prefix.**
+  The probe is armed before opening and performs End/Down/Home in the same
+  callback that observes eligible rows, retaining its own measurements.
+  _Check:_ `focus.mjs` (`focus-overview-arriving`), `lib/overview-keyboard.test.mjs`.
 - [ ] **Bound workspace keys stay consumed while their actions are unavailable.**
   With the quick switcher open, ⌘N and ⌘W prevent the native default, leave the
   panes unchanged, and retain the switcher. An unbound key remains unconsumed;
@@ -682,6 +686,18 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   and WebKit. The fixture is `fixtures/approval-deadline/`, dev server only.
   _Check:_ `approval-deadline.mjs`. The card's own widths stay
   `responsive.mjs --only approval-card` at 280 and 340 px.
+- [ ] **A clock snapshot is stable across React's consecutive reads even when
+  injected time crosses a label bucket**, then one published interval tick
+  updates the reader and unmount clears the last timer. The page uses only the
+  public `ClockProvider`/`useNow` API; any console or page error fails in both
+  Chromium and WebKit.
+  _Check:_ `clock-snapshots.mjs` (`fixtures/clock-snapshots/`, dev server).
+
+  | Case | Setup and action | Required browser evidence | Enforcement evidence |
+  | --- | --- | --- | --- |
+  | CL1 — consecutive reads | Inject `now()` as 999 for its first read, then 1000; render the actual hook in StrictMode. | The published-snapshot hook stays error-free while the old time-derived getter emits React's uncached-snapshot warning in both engines. | Replace the cached getter with `Math.floor(clock.now() / interval)`; the case fails on the warning. |
+  | CL2 — published tick | Hold the active 1000 ms timer callback, record committed `999` and its render count, advance to 1000, then invoke that callback. | One tick commits `1000` and increases the DOM render count beyond the recorded baseline. | Remove the listener notification from the callback; the case fails before any new render commits. |
+  | CL3 — last reader cleanup | Unmount the last reader after CL2's tick. | Every StrictMode interval start is matched by a stop; the stopped timer cannot publish again. | CL2 asserts the last-reader timer cleanup counts. |
 - [ ] **An app's review is drawn, and names the app, not the agent**, in the
   window over a fake gateway (`fixtures/app-review/`, dev server only): at
   rest, a conversation whose turn has ended is not read again; when its app

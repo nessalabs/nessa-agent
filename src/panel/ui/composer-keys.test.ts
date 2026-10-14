@@ -29,7 +29,7 @@ import { sessionReady } from "../../session/adapters/store/slice"
 import { setSelection } from "../../conversation/adapters/store/slice"
 import { createAttachmentResources } from "../adapters/attachment-resources"
 import { App } from "./app"
-import { ClockProvider } from "../../conversation"
+import { ClockProvider } from "../../clock"
 import type { ConversationChoices } from "../adapters/agent-choices"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
