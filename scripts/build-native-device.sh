@@ -29,7 +29,7 @@ mkdir -p "$destination/Sources" "$destination/Headers"
   --out-dir "$destination/Sources"
 mv "$destination/Sources/nessa_device_clientFFI.h" "$destination/Headers/"
 mv "$destination/Sources/nessa_device_clientFFI.modulemap" "$destination/Headers/module.modulemap"
-cp crates/nessa-device-client/swift/NativeSessionWorker.swift "$destination/Sources/"
+cp crates/nessa-device-client/swift/*.swift "$destination/Sources/"
 xcodebuild -create-xcframework \
   -library "$build/aarch64-apple-ios/release/libnessa_device_client.a" -headers "$destination/Headers" \
   -library "$build/aarch64-apple-ios-sim/release/libnessa_device_client.a" -headers "$destination/Headers" \

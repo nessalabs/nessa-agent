@@ -13,8 +13,12 @@ public final class NativeSessionWorker: @unchecked Sendable {
     private enum State {
         case idle
         case working
-        case closing(Task<Void, Error>)
-        case closed(Result<Void, Error>)
+        case closing(Task<CloseResult, Never>)
+        case closed(CloseResult)
+    }
+    private struct CloseResult: Sendable {
+        let observation: NativeCloseObservation
+        let signalFailure: (any Error)?
     }
     private let lock = NSLock()
     private var state = State.idle
@@ -186,34 +190,81 @@ public final class NativeSessionWorker: @unchecked Sendable {
         }
     }
 
-    /// Fence dispatch synchronously, signal the native owner, then share one
-    /// physical drain task. Awaiting close is cancellation-independent; replacing
-    /// the private scope requires a successful result, not merely starting close.
-    public func close() async throws {
-        try await beginClose().value
+    public func prepareOwnerOriginal<Value: Sendable>(
+        requestId: Data, discoveryJson: String,
+        capture: @escaping @Sendable (NativeOwnerPhonePreparation) throws -> Value
+    ) async throws -> Value {
+        try await perform { session, _ in
+            try capture(try session.prepareOwnerOriginal(requestId: requestId, discoveryJson: discoveryJson))
+        }
+    }
+    public func restoreOwnerOriginal<Value: Sendable>(
+        requestId: Data, discoveryJson: String,
+        capture: @escaping @Sendable (NativeOwnerPhonePreparation) throws -> Value
+    ) async throws -> Value {
+        try await perform { session, _ in
+            try capture(try session.restoreOwnerOriginal(requestId: requestId, discoveryJson: discoveryJson))
+        }
+    }
+    public func recoverOwnerOriginal<Value: Sendable>(
+        expected: NativeOwnerPhonePreparation,
+        capture: @escaping @Sendable (NativeOwnerStatus) throws -> Value
+    ) async throws -> Value {
+        try await perform { session, _ in
+            try capture(try session.recoverOwnerOriginal(expected: expected))
+        }
+    }
+    public func openProduct(instance: String) async throws -> NativeProductWorker {
+        try await perform { session, _ in
+            NativeProductWorker(session: try session.openProduct(instance: instance))
+        }
     }
 
+    /// Fence dispatch synchronously and wake native I/O before the serial drain.
+    /// Repeated observations share the actual owner result, including a historical
+    /// failure alongside confirmed private-scope release.
+    public func closeObserved<Value: Sendable>(
+        capture: @escaping @Sendable (NativeCloseObservation, (any Error)?) throws -> Value
+    ) async throws -> Value {
+        let result = await beginObservedClose().value
+        return try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                continuation.resume(with: Result { try capture(result.observation, result.signalFailure) })
+            }
+        }
+    }
+    public func close() async throws { try await beginClose().value }
+    public func requestClose() { _ = beginObservedClose() }
+
     func beginClose() -> Task<Void, Error> {
+        let observed = beginObservedClose()
+        return Task.detached {
+            let result = await observed.value
+            if let error = result.signalFailure { throw error }
+            if let failure = result.observation.failure() { throw NativeCallError.Session(failure: failure) }
+            guard result.observation.released() else { throw NativeWorkerError.closed }
+        }
+    }
+    private func beginObservedClose() -> Task<CloseResult, Never> {
         lock.lock()
         defer { lock.unlock() }
         switch state {
         case .closing(let task): return task
-        case .closed(let result): return Task { try result.get() }
+        case .closed(let result): return Task { result }
         case .idle, .working:
-            let signal = Result { try session.requestClose() }
+            let signalFailure: (any Error)?
+            do { try session.requestClose(); signalFailure = nil }
+            catch { signalFailure = error }
             let task = Task.detached { [self] in
-                let result: Result<Void, Error> = await withCheckedContinuation { continuation in
+                await withCheckedContinuation { continuation in
                     queue.async { [self] in
-                        let drain = Result { try session.close() }
-                        // Preserve an earlier signal failure even if drain worked.
-                        let result = signal.flatMap { drain }
+                        let result = CloseResult(observation: session.closeObserved(), signalFailure: signalFailure)
                         lock.lock()
                         state = .closed(result)
                         lock.unlock()
                         continuation.resume(returning: result)
                     }
                 }
-                try result.get()
             }
             state = .closing(task)
             return task
