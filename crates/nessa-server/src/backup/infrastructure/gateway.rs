@@ -6,9 +6,12 @@
 //! paths are fingerprinted. The credential registry contributes public facts
 //! only.
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+
+use nessa_local_storage::{open, OpenMode};
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -16,7 +19,9 @@ use serde_json::Value;
 use super::credentials::{read_credentials, CredentialRead, CredentialReadError};
 use super::jsonl::jsonl_cut;
 use super::sensitivity::path_sensitivity;
-use super::snapshot::{DeferredStream, SnapshotCopy, SqliteSnapshot};
+use super::snapshot::{
+    DeferredStream, SnapshotCopy, SqliteSnapshot, PUBLIC_FILE_LIMIT, SESSION_EXPORT_LIMIT,
+};
 use crate::backup::application::{
     capture_export, Authenticator, CopiedStore, DeletionLogStore, ExportClock, ExportFailure,
     ExportRequest, ExportSource, FenceSource, ManifestPublisher, MutationAdmission, PinnedStore,
@@ -54,6 +59,7 @@ pub async fn capture_namespace(
     let credentials = Arc::new(CredentialCache::new(
         namespace.join("auth").join("credentials.v1.json"),
     ));
+    let environment_grants = Arc::new(GrantFiles::new(namespace.join("environment")));
     let inventory_cut = InventoryCut { log: inventory };
     let fences = NamespaceFences {
         facts: facts.clone(),
@@ -74,80 +80,114 @@ pub async fn capture_namespace(
         }),
         Box::new(DirectoryStore {
             kind: StoreKind::DriveToolAudit,
-            roots: vec![namespace
-                .join("conversations")
-                .join("audit")
-                .join("drive-tools")],
+            roots: vec![plain_root(
+                namespace
+                    .join("conversations")
+                    .join("audit")
+                    .join("drive-tools"),
+            )],
             extra_files: vec![],
+            grants: None,
         }),
         Box::new(DirectoryStore {
             kind: StoreKind::EnvironmentAudit,
             roots: vec![
-                namespace
-                    .join("conversations")
-                    .join("audit")
-                    .join("warm-up"),
-                namespace
-                    .join("conversations")
-                    .join("audit")
-                    .join("environments"),
+                labeled_root(
+                    namespace
+                        .join("conversations")
+                        .join("audit")
+                        .join("warm-up"),
+                    "warm-up",
+                ),
+                labeled_root(
+                    namespace
+                        .join("conversations")
+                        .join("audit")
+                        .join("environments"),
+                    "environments",
+                ),
             ],
-            extra_files: vec![namespace.join("environment").join("grants-audit.jsonl")],
+            extra_files: vec![],
+            grants: Some(environment_grants.clone()),
         }),
         Box::new(DirectoryStore {
             kind: StoreKind::ConversationAudit,
             roots: vec![
-                namespace
-                    .join("conversations")
-                    .join("audit")
-                    .join("creation"),
-                namespace
-                    .join("conversations")
-                    .join("audit")
-                    .join("deletion"),
-                namespace
-                    .join("conversations")
-                    .join("audit")
-                    .join("approval-mode"),
-                namespace
-                    .join("conversations")
-                    .join("audit")
-                    .join("file-links"),
-                namespace
-                    .join("conversations")
-                    .join("audit")
-                    .join("mcp-apps"),
-                namespace
-                    .join("conversations")
-                    .join("audit")
-                    .join("execution"),
+                labeled_root(
+                    namespace
+                        .join("conversations")
+                        .join("audit")
+                        .join("creation"),
+                    "creation",
+                ),
+                labeled_root(
+                    namespace
+                        .join("conversations")
+                        .join("audit")
+                        .join("deletion"),
+                    "deletion",
+                ),
+                labeled_root(
+                    namespace
+                        .join("conversations")
+                        .join("audit")
+                        .join("approval-mode"),
+                    "approval-mode",
+                ),
+                labeled_root(
+                    namespace
+                        .join("conversations")
+                        .join("audit")
+                        .join("file-links"),
+                    "file-links",
+                ),
+                labeled_root(
+                    namespace
+                        .join("conversations")
+                        .join("audit")
+                        .join("mcp-apps"),
+                    "mcp-apps",
+                ),
+                labeled_root(
+                    namespace
+                        .join("conversations")
+                        .join("audit")
+                        .join("execution"),
+                    "execution",
+                ),
             ],
             extra_files: vec![],
+            grants: None,
         }),
         Box::new(DirectoryStore {
             kind: StoreKind::PeerPairings,
             roots: vec![
-                namespace.join("peer-gateways"),
-                namespace.join("peer-gateways-audit"),
+                labeled_root(namespace.join("peer-gateways"), "peer-gateways"),
+                labeled_root(namespace.join("peer-gateways-audit"), "peer-gateways-audit"),
             ],
             extra_files: vec![],
+            grants: None,
         }),
         Box::new(DirectoryStore {
             kind: StoreKind::EnvironmentPeerPairings,
-            roots: vec![namespace.join("environment").join("pairing")],
+            roots: vec![plain_root(namespace.join("environment").join("pairing"))],
             extra_files: vec![namespace.join("environment").join("paired-with")],
+            grants: None,
         }),
         Box::new(DirectoryStore {
             kind: StoreKind::WorkerEnrollments,
             roots: vec![
-                namespace.join("workers"),
-                namespace.join("environment").join("workers"),
+                labeled_root(namespace.join("workers"), "workers"),
+                labeled_root(
+                    namespace.join("environment").join("workers"),
+                    "environment-workers",
+                ),
             ],
             extra_files: vec![],
+            grants: None,
         }),
-        Box::new(JsonFile {
-            kind: StoreKind::EnvironmentGrants,
-            path: namespace.join("environment").join("grants.json"),
+        Box::new(EnvironmentGrantFile {
+            grants: environment_grants,
         }),
         Box::new(RelayStore {
             namespace: namespace.to_path_buf(),
@@ -158,8 +198,9 @@ pub async fn capture_namespace(
         }),
         Box::new(DirectoryStore {
             kind: StoreKind::ArtifactHolds,
-            roots: vec![namespace.join("attachments").join("holds")],
+            roots: vec![plain_root(namespace.join("attachments").join("holds"))],
             extra_files: vec![],
+            grants: None,
         }),
         Box::new(CredentialStore {
             kind: StoreKind::DeviceCredentials,
@@ -378,9 +419,11 @@ impl SessionFiles {
         let path = self.path.clone();
         let opened = tokio::task::spawn_blocking(move || match SqliteSnapshot::open(&path) {
             Ok(snapshot) => SessionState::Open(snapshot),
-            Err(()) => match fs::read(&path) {
-                Ok(bytes) => SessionState::Bytes(Arc::new(bytes)),
-                Err(_) => SessionState::Unreadable,
+            Err(()) => match read_capped(&path, SESSION_EXPORT_LIMIT) {
+                CappedFile::Bytes(bytes) => SessionState::Bytes(Arc::new(bytes)),
+                CappedFile::Missing | CappedFile::Unreadable | CappedFile::Bounded => {
+                    SessionState::Unreadable
+                }
             },
         })
         .await
@@ -668,10 +711,27 @@ impl PinnedStore for GrantPin {
     }
 }
 
+struct LabeledRoot {
+    path: PathBuf,
+    /// Prefixed onto each identity so two roots cannot share one name.
+    label: &'static str,
+}
+
+fn plain_root(path: PathBuf) -> LabeledRoot {
+    LabeledRoot { path, label: "" }
+}
+
+fn labeled_root(path: PathBuf, label: &'static str) -> LabeledRoot {
+    LabeledRoot { path, label }
+}
+
 struct DirectoryStore {
     kind: StoreKind,
-    roots: Vec<PathBuf>,
+    roots: Vec<LabeledRoot>,
     extra_files: Vec<PathBuf>,
+    /// Set for the environment audit, which also keeps `grants-audit.jsonl`.
+    /// That journal is snapshotted with `grants.json` under `grants.lock`.
+    grants: Option<Arc<GrantFiles>>,
 }
 
 #[async_trait]
@@ -681,6 +741,14 @@ impl ExportSource for DirectoryStore {
     }
 
     async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
+        if let Some(grants) = &self.grants {
+            grants.pin().await?;
+            return Ok(Box::new(GrantAuditPin {
+                kind: self.kind,
+                walked: self.cut()?,
+                grants: grants.clone(),
+            }));
+        }
         copied(self.cut())
     }
 }
@@ -691,11 +759,18 @@ impl DirectoryStore {
         let mut skipped = Vec::new();
         let mut present = false;
         for root in &self.roots {
-            if !root.exists() {
+            if !root.path.exists() {
                 continue;
             }
             present = true;
-            walk(self.kind, root, root, &mut records, &mut skipped);
+            walk(
+                self.kind,
+                &root.path,
+                &root.path,
+                root.label,
+                &mut records,
+                &mut skipped,
+            );
         }
         for path in &self.extra_files {
             if !path.exists() {
@@ -720,37 +795,143 @@ impl DirectoryStore {
     }
 }
 
-struct JsonFile {
+struct GrantAuditPin {
     kind: StoreKind,
-    path: PathBuf,
+    walked: SourceCut,
+    grants: Arc<GrantFiles>,
 }
 
 #[async_trait]
-impl ExportSource for JsonFile {
-    fn kind(&self) -> StoreKind {
-        self.kind
-    }
-
-    async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
-        copied(self.cut())
+impl PinnedStore for GrantAuditPin {
+    async fn read(&mut self) -> Result<SourceCut, ()> {
+        let snapshot = self.grants.view()?;
+        let mut records = self.walked.records().to_vec();
+        let mut skipped = self.walked.skipped().to_vec();
+        push_capped_jsonl(
+            self.kind,
+            "grants-audit.jsonl",
+            snapshot.audit,
+            &mut records,
+            &mut skipped,
+        )?;
+        if records.is_empty() && skipped.is_empty() {
+            return absent(self.kind);
+        }
+        finish(
+            self.kind,
+            &records.len().saturating_add(skipped.len()).to_string(),
+            records,
+            skipped,
+        )
     }
 }
 
-impl JsonFile {
-    fn cut(&self) -> Result<SourceCut, ()> {
-        if !self.path.exists() {
-            return absent(self.kind);
+/// `grants.json` and `grants-audit.jsonl`, copied together under `grants.lock`.
+struct GrantFiles {
+    directory: PathBuf,
+    state: Mutex<Option<GrantSnapshot>>,
+}
+
+#[derive(Clone)]
+struct GrantSnapshot {
+    grants: CappedFile,
+    audit: CappedFile,
+}
+
+impl GrantFiles {
+    fn new(directory: PathBuf) -> Self {
+        Self {
+            directory,
+            state: Mutex::new(None),
+        }
+    }
+
+    /// Copy both files while holding the environment grant lock. A second pin
+    /// returns the same copy, so the audit store and the grant store publish
+    /// one cut.
+    async fn pin(&self) -> Result<(), ()> {
+        if self.state.lock().map_err(|_| ())?.is_some() {
+            return Ok(());
+        }
+        let directory = self.directory.clone();
+        let snapshot = tokio::task::spawn_blocking(move || snapshot_grants(&directory))
+            .await
+            .map_err(|_| ())?;
+        let mut guard = self.state.lock().map_err(|_| ())?;
+        if guard.is_none() {
+            *guard = Some(snapshot);
+        }
+        Ok(())
+    }
+
+    fn view(&self) -> Result<GrantSnapshot, ()> {
+        self.state.lock().map_err(|_| ())?.clone().ok_or(())
+    }
+}
+
+fn snapshot_grants(directory: &Path) -> GrantSnapshot {
+    if !directory.is_dir() {
+        return GrantSnapshot {
+            grants: CappedFile::Missing,
+            audit: CappedFile::Missing,
+        };
+    }
+    let locked = (|| {
+        let file = open(&directory.join("grants.lock"), OpenMode::OpenOrCreate)?;
+        file.lock()?;
+        Ok::<_, std::io::Error>(file)
+    })();
+    let Ok(lock) = locked else {
+        return GrantSnapshot {
+            grants: CappedFile::Unreadable,
+            audit: CappedFile::Unreadable,
+        };
+    };
+    let grants = read_capped(&directory.join("grants.json"), PUBLIC_FILE_LIMIT);
+    let audit = read_capped(&directory.join("grants-audit.jsonl"), PUBLIC_FILE_LIMIT);
+    drop(lock);
+    GrantSnapshot { grants, audit }
+}
+
+struct EnvironmentGrantFile {
+    grants: Arc<GrantFiles>,
+}
+
+#[async_trait]
+impl ExportSource for EnvironmentGrantFile {
+    fn kind(&self) -> StoreKind {
+        StoreKind::EnvironmentGrants
+    }
+
+    async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
+        self.grants.pin().await?;
+        Ok(Box::new(EnvironmentGrantPin {
+            grants: self.grants.clone(),
+        }))
+    }
+}
+
+struct EnvironmentGrantPin {
+    grants: Arc<GrantFiles>,
+}
+
+#[async_trait]
+impl PinnedStore for EnvironmentGrantPin {
+    async fn read(&mut self) -> Result<SourceCut, ()> {
+        let snapshot = self.grants.view()?;
+        if matches!(snapshot.grants, CappedFile::Missing) {
+            return absent(StoreKind::EnvironmentGrants);
         }
         let mut records = Vec::new();
         let mut skipped = Vec::new();
-        push_path(
-            self.kind,
+        push_capped_record(
+            StoreKind::EnvironmentGrants,
             "grants.json",
-            &self.path,
+            snapshot.grants,
             &mut records,
             &mut skipped,
-        );
-        finish(self.kind, "file", records, skipped)
+        )?;
+        finish(StoreKind::EnvironmentGrants, "file", records, skipped)
     }
 }
 
@@ -784,6 +965,18 @@ impl JsonlFile {
                 withhold(self.kind, &identity, bytes, &mut records, &mut skipped);
                 finish(self.kind, "secret", records, skipped)
             }
+            TextRead::Bounded => {
+                let identity = file_name(&self.path);
+                finish(
+                    self.kind,
+                    "bounded",
+                    vec![],
+                    vec![
+                        SkippedRecord::new(self.kind, &identity, SkipReason::Bounded)
+                            .map_err(|_| ())?,
+                    ],
+                )
+            }
             TextRead::Text(text) => jsonl_cut(self.kind, &text).map_err(|_| ()),
         }
     }
@@ -810,8 +1003,8 @@ impl RelayStore {
         let mut skipped = Vec::new();
         let config = self.namespace.join("config.json");
         if config.exists() {
-            match fs::read(&config) {
-                Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
+            match read_capped(&config, PUBLIC_FILE_LIMIT) {
+                CappedFile::Bytes(bytes) => match serde_json::from_slice::<Value>(&bytes) {
                     Ok(value) => {
                         if let Some(relay) =
                             value.get("native").and_then(|native| native.get("relay"))
@@ -828,7 +1021,17 @@ impl RelayStore {
                     }
                     Err(_) => skipped.push(skip(StoreKind::RelayConfiguration, "config.json")?),
                 },
-                Err(_) => skipped.push(skip(StoreKind::RelayConfiguration, "config.json")?),
+                CappedFile::Bounded => skipped.push(
+                    SkippedRecord::new(
+                        StoreKind::RelayConfiguration,
+                        "config.json",
+                        SkipReason::Bounded,
+                    )
+                    .map_err(|_| ())?,
+                ),
+                CappedFile::Missing | CappedFile::Unreadable => {
+                    skipped.push(skip(StoreKind::RelayConfiguration, "config.json")?)
+                }
             }
         }
         let peers = self.namespace.join("peer-gateways");
@@ -840,14 +1043,32 @@ impl RelayStore {
                 if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                     continue;
                 }
-                let Ok(bytes) = fs::read(&path) else {
+                let bytes = match read_capped(&path, PUBLIC_FILE_LIMIT) {
+                    CappedFile::Bytes(bytes) => bytes,
+                    CappedFile::Bounded => {
+                        skipped.push(
+                            SkippedRecord::new(
+                                StoreKind::RelayConfiguration,
+                                file_identity(&peers, &path),
+                                SkipReason::Bounded,
+                            )
+                            .map_err(|_| ())?,
+                        );
+                        continue;
+                    }
+                    CappedFile::Missing | CappedFile::Unreadable => {
+                        skipped.push(skip(
+                            StoreKind::RelayConfiguration,
+                            &file_identity(&peers, &path),
+                        )?);
+                        continue;
+                    }
+                };
+                let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
                     skipped.push(skip(
                         StoreKind::RelayConfiguration,
                         &file_identity(&peers, &path),
                     )?);
-                    continue;
-                };
-                let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
                     continue;
                 };
                 if let Some(relay) = value.get("relay").filter(|relay| !relay.is_null()) {
@@ -1098,7 +1319,7 @@ impl FenceSource for NamespaceFences {
             CredState::Absent => {}
             CredState::Unreadable => failed = true,
         }
-        if failed && fences.is_empty() {
+        if failed {
             return Err(());
         }
         Ok(fences)
@@ -1159,11 +1380,12 @@ fn walk(
     kind: StoreKind,
     root: &Path,
     directory: &Path,
+    label: &str,
     records: &mut Vec<CapturedRecord>,
     skipped: &mut Vec<SkippedRecord>,
 ) {
     let Ok(entries) = fs::read_dir(directory) else {
-        if let Ok(record) = skip(kind, &file_identity(root, directory)) {
+        if let Ok(record) = skip(kind, &named_identity(label, root, directory)) {
             skipped.push(record);
         }
         return;
@@ -1188,22 +1410,37 @@ fn walk(
             continue;
         }
         let Ok(metadata) = fs::symlink_metadata(&path) else {
-            if let Ok(record) = skip(kind, &file_identity(root, &path)) {
+            if let Ok(record) = skip(kind, &named_identity(label, root, &path)) {
                 skipped.push(record);
             }
             continue;
         };
         if metadata.file_type().is_symlink() {
-            if let Ok(record) = skip(kind, &file_identity(root, &path)) {
+            if let Ok(record) = skip(kind, &named_identity(label, root, &path)) {
                 skipped.push(record);
             }
             continue;
         }
         if metadata.is_dir() {
-            walk(kind, root, &path, records, skipped);
+            walk(kind, root, &path, label, records, skipped);
             continue;
         }
-        push_path(kind, &file_identity(root, &path), &path, records, skipped);
+        push_path(
+            kind,
+            &named_identity(label, root, &path),
+            &path,
+            records,
+            skipped,
+        );
+    }
+}
+
+fn named_identity(label: &str, root: &Path, path: &Path) -> String {
+    let relative = file_identity(root, path);
+    if label.is_empty() {
+        relative
+    } else {
+        format!("{label}/{relative}")
     }
 }
 
@@ -1240,6 +1477,12 @@ fn push_jsonl(
             withhold(kind, &file_name(path), bytes, records, skipped);
             return;
         }
+        TextRead::Bounded => {
+            if let Ok(record) = SkippedRecord::new(kind, file_name(path), SkipReason::Bounded) {
+                skipped.push(record);
+            }
+            return;
+        }
         TextRead::Text(text) => text,
     };
     match jsonl_cut(kind, &text) {
@@ -1259,11 +1502,43 @@ enum TextRead {
     Missing,
     Secret(Vec<u8>),
     Text(String),
+    Bounded,
+}
+
+#[derive(Clone)]
+enum CappedFile {
+    Missing,
+    Unreadable,
+    Bounded,
+    Bytes(Vec<u8>),
+}
+
+fn read_capped(path: &Path, limit: u64) -> CappedFile {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return CappedFile::Missing,
+        Err(_) => return CappedFile::Unreadable,
+    };
+    let length = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+    if length > limit {
+        return CappedFile::Bounded;
+    }
+    let mut bytes = Vec::new();
+    let mut limited = file.take(limit.saturating_add(1));
+    if limited.read_to_end(&mut bytes).is_err() {
+        return CappedFile::Unreadable;
+    }
+    if bytes.len() as u64 > limit {
+        return CappedFile::Bounded;
+    }
+    CappedFile::Bytes(bytes)
 }
 
 fn read_public_text(path: &Path) -> TextRead {
-    let Ok(bytes) = fs::read(path) else {
-        return TextRead::Missing;
+    let bytes = match read_capped(path, PUBLIC_FILE_LIMIT) {
+        CappedFile::Bytes(bytes) => bytes,
+        CappedFile::Bounded => return TextRead::Bounded,
+        CappedFile::Missing | CappedFile::Unreadable => return TextRead::Missing,
     };
     if content_is_secret(&bytes) {
         return TextRead::Secret(bytes);
@@ -1274,6 +1549,71 @@ fn read_public_text(path: &Path) -> TextRead {
     }
 }
 
+fn push_capped_record(
+    kind: StoreKind,
+    identity: &str,
+    file: CappedFile,
+    records: &mut Vec<CapturedRecord>,
+    skipped: &mut Vec<SkippedRecord>,
+) -> Result<(), ()> {
+    match file {
+        CappedFile::Missing => Ok(()),
+        CappedFile::Unreadable => {
+            skipped.push(skip(kind, identity)?);
+            Ok(())
+        }
+        CappedFile::Bounded => {
+            skipped.push(SkippedRecord::new(kind, identity, SkipReason::Bounded).map_err(|_| ())?);
+            Ok(())
+        }
+        CappedFile::Bytes(bytes) => {
+            push_bytes(kind, identity, bytes, false, records, skipped);
+            Ok(())
+        }
+    }
+}
+
+fn push_capped_jsonl(
+    kind: StoreKind,
+    identity: &str,
+    file: CappedFile,
+    records: &mut Vec<CapturedRecord>,
+    skipped: &mut Vec<SkippedRecord>,
+) -> Result<(), ()> {
+    match file {
+        CappedFile::Missing => Ok(()),
+        CappedFile::Unreadable => {
+            skipped.push(skip(kind, identity)?);
+            Ok(())
+        }
+        CappedFile::Bounded => {
+            skipped.push(SkippedRecord::new(kind, identity, SkipReason::Bounded).map_err(|_| ())?);
+            Ok(())
+        }
+        CappedFile::Bytes(bytes) => {
+            if content_is_secret(&bytes) {
+                withhold(kind, identity, bytes, records, skipped);
+                return Ok(());
+            }
+            let Ok(text) = String::from_utf8(bytes) else {
+                skipped.push(skip(kind, identity)?);
+                return Ok(());
+            };
+            match jsonl_cut(kind, &text) {
+                Ok(cut) => {
+                    records.extend(cut.records().iter().cloned());
+                    skipped.extend(cut.skipped().iter().cloned());
+                    Ok(())
+                }
+                Err(_) => {
+                    skipped.push(skip(kind, identity)?);
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
 fn push_path(
     kind: StoreKind,
     identity: &str,
@@ -1281,17 +1621,34 @@ fn push_path(
     records: &mut Vec<CapturedRecord>,
     skipped: &mut Vec<SkippedRecord>,
 ) {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(_) => {
+    let secret_path = path_sensitivity(path) == Sensitivity::Secret;
+    match read_capped(path, PUBLIC_FILE_LIMIT) {
+        CappedFile::Bytes(bytes) => {
+            push_bytes(kind, identity, bytes, secret_path, records, skipped)
+        }
+        CappedFile::Bounded => {
+            if let Ok(record) = SkippedRecord::new(kind, identity, SkipReason::Bounded) {
+                skipped.push(record);
+            }
+        }
+        CappedFile::Missing | CappedFile::Unreadable => {
             if let Ok(record) = skip(kind, identity) {
                 skipped.push(record);
             }
-            return;
         }
-    };
+    }
+}
+
+fn push_bytes(
+    kind: StoreKind,
+    identity: &str,
+    bytes: Vec<u8>,
+    secret_path: bool,
+    records: &mut Vec<CapturedRecord>,
+    skipped: &mut Vec<SkippedRecord>,
+) {
     let content_secret = content_is_secret(&bytes);
-    let secret = path_sensitivity(path) == Sensitivity::Secret || content_secret;
+    let secret = secret_path || content_secret;
     if secret && content_secret {
         withhold(kind, identity, bytes, records, skipped);
         return;

@@ -13,6 +13,9 @@ use sha2::{Digest, Sha256};
 /// number of bytes a backup would copy, including free pages.
 pub const SESSION_EXPORT_LIMIT: u64 = 64 * 1024 * 1024;
 
+/// Most bytes a public file is read for during the admission hold.
+pub const PUBLIC_FILE_LIMIT: u64 = 8 * 1024 * 1024;
+
 /// One conversation named from an oversized session file, without its bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeferredStream {

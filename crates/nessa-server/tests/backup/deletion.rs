@@ -6,9 +6,12 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 
-use crate::backup::application::{capture_fences, DeletionLogStore, FenceSource, InventoryFailure};
+use crate::backup::application::{
+    capture_fences, DeletionLogStore, ExportClock, FenceSource, InventoryFailure, MutationAdmission,
+};
 use crate::backup::domain::{CredentialKind, DeletionFence, DeletionLog, Fingerprint, GrantRole};
 use crate::backup::infrastructure::read_credentials;
+use crate::backup::infrastructure::{capture_namespace, DirectoryPublisher, FileDeletionLog};
 use crate::conversation::application::{
     ConversationRepository, ShareGrantChange, ShareGrantTransition, ShareGrants,
 };
@@ -159,6 +162,108 @@ fn revoked_credentials_are_inventoried_without_secrets() {
         CredentialKind::EnvironmentPeer,
         "one registry row is an environment peer, not also a worker"
     );
+}
+
+#[tokio::test]
+async fn a_regrant_drops_the_revoke_fence_and_keeps_other_fences() {
+    let opened = opened();
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    grant(&opened.store, &id, "party", ShareAccess::read()).await;
+    revoke(&opened.store, &id, "party").await;
+    let revoked = GrantFences {
+        facts: opened.store.export_facts().await.unwrap(),
+    };
+    let credential = DeletionFence::credential(
+        CredentialKind::Device,
+        "device-kept",
+        Fingerprint::of(b"device-kept"),
+    )
+    .unwrap();
+    let log = MemLog::default();
+    let recorded = capture_fences(&[&revoked, &OneFence(credential.clone())], &log)
+        .await
+        .unwrap();
+    assert_eq!(recorded.entries().len(), 2);
+    grant(&opened.store, &id, "party", ShareAccess::read()).await;
+    let current = GrantFences {
+        facts: opened.store.export_facts().await.unwrap(),
+    };
+    assert!(current.facts.revocations.is_empty());
+    let again = capture_fences(&[&current], &log).await.unwrap();
+    assert_eq!(again.entries().len(), 1);
+    assert_eq!(again.entries()[0].fence().key(), credential.key());
+    assert!(!again.canonical().contains(" grant "));
+}
+
+#[tokio::test]
+async fn a_failed_fence_source_does_not_commit_the_other_source() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let private = root.join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let store = LocalConversationStore::open(&private.join("metadata.sqlite3"))
+        .unwrap()
+        .with_access_policy(crate::conversation_test_support::access_policy());
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    grant(&store, &id, "party", ShareAccess::read()).await;
+    revoke(&store, &id, "party").await;
+    fs_create(root.join("auth").as_path());
+    std::fs::write(root.join("auth/credentials.v1.json"), b"not-a-registry").unwrap();
+    let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let manifest = capture_namespace(
+        root,
+        &FenceAdmission,
+        &inventory,
+        &DirectoryPublisher::new(bundle.path().join("cut")),
+        &FenceClock,
+        &inventory.key(),
+    )
+    .await
+    .unwrap();
+    let text = manifest.encoded();
+    assert!(text.contains("skipped deletion-inventory append unavailable"));
+    assert!(!text.contains("party"));
+    let log =
+        std::fs::read_to_string(root.join("backup/deletion-inventory.txt")).unwrap_or_default();
+    assert!(!log.contains("party"));
+    assert!(!log.contains("grant "));
+}
+
+fn fs_create(path: &std::path::Path) {
+    std::fs::create_dir_all(path).unwrap();
+}
+
+struct FenceAdmission;
+
+#[async_trait]
+impl MutationAdmission for FenceAdmission {
+    async fn hold(
+        &self,
+    ) -> Result<
+        Box<dyn crate::backup::application::AdmissionLease + Send + Sync>,
+        crate::backup::application::AdmissionFailure,
+    > {
+        Ok(Box::new(FenceHold))
+    }
+}
+
+struct FenceHold;
+
+impl crate::backup::application::AdmissionLease for FenceHold {
+    fn retirement_signaled(&self) -> bool {
+        false
+    }
+}
+
+struct FenceClock;
+
+impl ExportClock for FenceClock {
+    fn unix_ms(&self) -> u64 {
+        1
+    }
 }
 
 #[tokio::test]

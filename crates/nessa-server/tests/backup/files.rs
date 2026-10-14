@@ -289,12 +289,161 @@ async fn a_plaintext_public_file_holding_a_private_key_is_not_copied() {
     let published = publish_cut(root).await;
     assert!(!holds(&published.bytes, b"EC-KEY-BODY-MUST-NOT-PUBLISH"));
     assert!(!holds(&published.bytes, b"-----BEGIN EC PRIVATE KEY-----"));
+    assert!(published.text.contains(
+        "redacted conversation-audit creation%2Faaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json"
+    ));
+    assert!(published.text.contains(
+        "skipped conversation-audit creation%2Faaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json secret"
+    ));
+}
+
+#[tokio::test]
+async fn creation_and_deletion_audits_keep_separate_identities() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let creation = root.join("conversations/audit/creation");
+    let deletion = root.join("conversations/audit/deletion");
+    fs::create_dir_all(&creation).unwrap();
+    fs::create_dir_all(&deletion).unwrap();
+    let name = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json";
+    fs::write(creation.join(name), b"CREATION-AUDIT-BODY").unwrap();
+    fs::write(deletion.join(name), b"DELETION-AUDIT-BODY").unwrap();
+    let published = publish_cut(root).await;
+    assert_eq!(
+        fs::read(
+            published
+                .root
+                .join("records/conversation-audit")
+                .join(format!("creation%2F{name}"))
+        )
+        .unwrap(),
+        b"CREATION-AUDIT-BODY"
+    );
+    assert_eq!(
+        fs::read(
+            published
+                .root
+                .join("records/conversation-audit")
+                .join(format!("deletion%2F{name}"))
+        )
+        .unwrap(),
+        b"DELETION-AUDIT-BODY"
+    );
+}
+
+#[tokio::test]
+async fn an_environment_grant_cut_waits_for_the_writer_lock() {
+    use std::time::Duration;
+
+    let namespace = tempfile::tempdir().unwrap();
+    let environment = namespace.path().join("environment");
+    fs::create_dir_all(&environment).unwrap();
+    fs::write(environment.join("grants.json"), b"{\"cut\":\"before\"}\n").unwrap();
+    fs::write(
+        environment.join("grants-audit.jsonl"),
+        b"{\"cut\":\"before\"}\n",
+    )
+    .unwrap();
+    let lock = nessa_local_storage::open(
+        &environment.join("grants.lock"),
+        nessa_local_storage::OpenMode::OpenOrCreate,
+    )
+    .unwrap();
+    lock.lock().unwrap();
+    let root = namespace.path().to_path_buf();
+    let task = tokio::spawn(async move { publish_cut(&root).await });
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(
+        !task.is_finished(),
+        "the cut must wait while grants.lock is held"
+    );
+    fs::write(environment.join("grants.json"), b"{\"cut\":\"after\"}\n").unwrap();
+    fs::write(
+        environment.join("grants-audit.jsonl"),
+        b"{\"cut\":\"after\"}\n",
+    )
+    .unwrap();
+    drop(lock);
+    let published = task.await.unwrap();
+    assert!(holds(&published.bytes, b"\"cut\":\"after\""));
+    assert!(!holds(&published.bytes, b"\"cut\":\"before\""));
+}
+
+#[tokio::test]
+async fn a_public_file_over_the_bound_is_named_and_not_read() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let environment = root.join("environment");
+    fs::create_dir_all(&environment).unwrap();
+    let audit = environment.join("grants-audit.jsonl");
+    let file = fs::File::create(&audit).unwrap();
+    file.set_len(crate::backup::infrastructure::snapshot::PUBLIC_FILE_LIMIT + 1)
+        .unwrap();
+    drop(file);
+    fs::write(
+        environment.join("leases.jsonl"),
+        b"{\"lease\":\"still-cut\"}\n",
+    )
+    .unwrap();
+    let published = publish_cut(root).await;
     assert!(published
         .text
-        .contains("redacted conversation-audit aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json"));
+        .contains("skipped environment-audit grants-audit.jsonl bounded"));
+    assert!(holds(&published.bytes, b"still-cut"));
+    assert!(!published
+        .root
+        .join("records/environment-audit/grants-audit.jsonl")
+        .exists());
+}
+
+#[tokio::test]
+async fn an_oversized_non_database_session_is_not_read() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let sessions = root.join("conversations/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let path = sessions.join("records.sqlite3");
+    fs::write(&path, b"RAW-SESSION-MUST-NOT-PUBLISH").unwrap();
+    let file = fs::File::options().write(true).open(&path).unwrap();
+    file.set_len(crate::backup::infrastructure::snapshot::SESSION_EXPORT_LIMIT + 1)
+        .unwrap();
+    drop(file);
+    let published = publish_cut(root).await;
     assert!(published
         .text
-        .contains("skipped conversation-audit aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json secret"));
+        .contains("skipped canonical-records records.sqlite3 unreadable"));
+    assert!(!holds(&published.bytes, b"RAW-SESSION-MUST-NOT-PUBLISH"));
+    assert!(!published
+        .root
+        .join("records/canonical-records/records.sqlite3")
+        .exists());
+
+    let small = tempfile::tempdir().unwrap();
+    let small_root = small.path();
+    let small_sessions = small_root.join("conversations/sessions");
+    fs::create_dir_all(&small_sessions).unwrap();
+    fs::write(
+        small_sessions.join("records.sqlite3"),
+        b"tiny-not-sqlite-kept",
+    )
+    .unwrap();
+    let copied = publish_cut(small_root).await;
+    assert!(holds(&copied.bytes, b"tiny-not-sqlite-kept"));
+}
+
+#[tokio::test]
+async fn a_malformed_peer_relay_is_named_skipped() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let peers = root.join("peer-gateways");
+    fs::create_dir_all(&peers).unwrap();
+    fs::write(peers.join("bad.json"), b"{").unwrap();
+    fs::write(peers.join("good.json"), br#"{"relay":"kept-relay"}"#).unwrap();
+    let published = publish_cut(root).await;
+    assert!(published
+        .text
+        .contains("skipped relay-configuration bad.json unreadable"));
+    assert!(holds(&published.bytes, b"kept-relay"));
 }
 
 #[tokio::test]

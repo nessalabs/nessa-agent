@@ -1,9 +1,12 @@
 //! The deletion inventory on disk. The mac key sits beside it and is not
 //! part of an export bundle.
 
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+
+use nessa_local_storage::sync_directory;
 
 use async_trait::async_trait;
 
@@ -70,12 +73,36 @@ impl DeletionLogStore for FileDeletionLog {
         let key = self.key;
         let text = sealed(next, key);
         let gate = self.gate.lock().map_err(|_| ())?;
-        let temporary = path.with_extension("txt.partial");
-        fs::write(&temporary, &text).map_err(|_| ())?;
-        fs::rename(&temporary, &path).map_err(|_| ())?;
+        let stored = persist(&self.directory, &path, &text);
         drop(gate);
-        Ok(())
+        stored.map_err(|_| ())
     }
+}
+
+/// Write `text` to a temporary file, sync that file, rename it over `path`,
+/// then sync `directory`. Success means the rename is durable. A failure
+/// before the rename removes the temporary file and leaves `path` as it was.
+fn persist(directory: &Path, path: &Path, text: &str) -> std::io::Result<()> {
+    let temporary = path.with_extension("txt.partial");
+    let written = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&temporary)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    if let Err(error) = written {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    if let Err(error) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    sync_directory(directory)
 }
 
 fn sealed(log: &DeletionLog, key: MacKey) -> String {

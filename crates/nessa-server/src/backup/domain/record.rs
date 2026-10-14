@@ -146,6 +146,8 @@ pub enum SkipReason {
     Unavailable,
     /// The record's identity or watermark was not one this cut can name.
     Unnameable,
+    /// The file is larger than the public-file bound, so it was not read.
+    Bounded,
     /// The bytes hold key material. A fingerprint may still name them.
     Secret,
 }
@@ -156,6 +158,7 @@ impl SkipReason {
             Self::Unreadable => "unreadable",
             Self::Unavailable => "unavailable",
             Self::Unnameable => "unnameable",
+            Self::Bounded => "bounded",
             Self::Secret => "secret",
         }
     }

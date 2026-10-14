@@ -1,7 +1,10 @@
-//! Append fences that have already committed. A failed append does not
-//! roll the fence back and does not rewrite a partial log.
+//! Append fences that have already committed, and drop a share-grant fence
+//! whose latest journal row is a grant again. A failed append does not roll
+//! the fence back and does not rewrite a partial log.
 
-use super::super::domain::{DeletionFence, DeletionLog};
+use std::collections::HashSet;
+
+use super::super::domain::{DeletionFence, DeletionLog, FenceKind};
 use super::ports::{DeletionLogStore, FenceSource};
 
 /// Why the log was not updated. The fences themselves are unchanged.
@@ -14,6 +17,13 @@ pub enum InventoryFailure {
 }
 
 /// Read `fences` and append any that are not already in the log.
+///
+/// Every source has to succeed. A failure leaves the stored log untouched.
+/// The fences from a successful read are the current share-grant revocations:
+/// a grant fence already in the log is removed when this read does not name
+/// it, which is a revoke whose latest journal row is a grant again. Conversation
+/// and credential fences stay. Survivors are written back at sequences 1, 2, 3,
+/// … and a fence that remains is still found by its key.
 ///
 /// Returns the log after the attempt. On [`InventoryFailure`] the previous
 /// log is still what `store` holds.
@@ -32,8 +42,8 @@ pub async fn capture_fences(
         .load()
         .await
         .map_err(|()| InventoryFailure::Unreadable)?;
-    let next = append_all(&loaded, pending);
-    if next.entries().len() == loaded.entries().len() {
+    let next = reconcile(&loaded, pending);
+    if next.canonical() == loaded.canonical() {
         return Ok(loaded);
     }
     store
@@ -43,11 +53,29 @@ pub async fn capture_fences(
     Ok(next)
 }
 
-fn append_all(loaded: &DeletionLog, fences: Vec<DeletionFence>) -> DeletionLog {
-    let mut log = loaded.clone();
-    for fence in fences {
+/// Keep every non-grant fence, keep a grant fence only when `fences` still
+/// names it, then append `fences`.
+fn reconcile(loaded: &DeletionLog, fences: Vec<DeletionFence>) -> DeletionLog {
+    let live_grants: HashSet<&str> = fences
+        .iter()
+        .filter(|fence| is_share_grant(fence))
+        .map(|fence| fence.key())
+        .collect();
+    let mut kept = Vec::new();
+    for entry in loaded.entries() {
+        if is_share_grant(entry.fence()) && !live_grants.contains(entry.fence().key()) {
+            continue;
+        }
+        kept.push(entry.fence().clone());
+    }
+    let mut log = DeletionLog::default();
+    for fence in kept.into_iter().chain(fences) {
         let (next, _append) = log.append(fence);
         log = next;
     }
     log
+}
+
+fn is_share_grant(fence: &DeletionFence) -> bool {
+    matches!(fence.kind(), FenceKind::ShareGrant { .. })
 }
