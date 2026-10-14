@@ -6,7 +6,15 @@ import { App } from "../../../../src/panel/ui/app"
 import { ClockProvider } from "../../../../src/clock"
 import { createAttachmentResources } from "../../../../src/panel/adapters/attachment-resources"
 import { makeStore } from "../../../../src/store"
-import { scenarioEffects, setDraft } from "../../../../src/conversation/testing"
+import {
+  attachFiles,
+  bindConversation,
+  closeConversation,
+  scenarioEffects,
+  setDraft,
+  stageAttachment,
+  uploadChanged,
+} from "../../../../src/conversation/testing"
 import { sessionReady } from "../../../../src/session/testing"
 import "../../../../src/styles.css"
 
@@ -20,6 +28,14 @@ let releaseRead: (value: ArrayBuffer) => void
 const nativeRead = new Promise<ArrayBuffer>((resolve) => {
   releaseRead = resolve
 })
+let uploadReply:
+  | {
+      resolve: (value: { digest: string; mimeType: "image/png"; size: number }) => void
+      reject: (cause: Error) => void
+    }
+  | undefined
+let uploadReached: (() => void) | undefined
+let uploadResult: Promise<unknown> | undefined
 const sends: unknown[] = []
 let fetchCalls = 0
 const resources = createAttachmentResources()
@@ -29,6 +45,13 @@ const store = makeStore({
   canChoosePaths: true,
   conversation: {
     ...effects,
+    stageAttachment: (id, file, bytes, signal) =>
+      uploadReply
+        ? new Promise((resolve, reject) => {
+            uploadReply = { resolve, reject }
+            uploadReached?.()
+          })
+        : effects.stageAttachment(id, file, bytes, signal),
     send: async (input) => {
       sends.push(input)
       return effects.send(input)
@@ -70,6 +93,58 @@ const probe = {
     return nativeRead
   },
   completeRead: () => releaseRead(png.buffer),
+  startParentUpload: async () => {
+    const reached = new Promise<void>((resolve) => {
+      uploadReached = resolve
+    })
+    uploadReply = { resolve: () => {}, reject: () => {} }
+    const file = {
+      type: "file" as const,
+      id: "same-file",
+      name: "race.png",
+      mimeType: "image/png",
+      size: png.length,
+      previewUrl: "",
+      path: null,
+      upload: { status: "not-started" as const },
+    }
+    store.dispatch(
+      bindConversation({ id: "c0", serverId: "00000000-0000-4000-8000-000000000001" }),
+    )
+    store.dispatch(attachFiles({ conversationId: "c0", files: [file] }))
+    store.dispatch(
+      uploadChanged({ conversationId: "c0", fileId: file.id, to: "uploading" }),
+    )
+    uploadResult = store.dispatch(
+      stageAttachment({
+        id: "c0",
+        fileId: file.id,
+        file: {
+          digest: `sha256:${"ab".repeat(32)}`,
+          mimeType: file.mimeType,
+          size: file.size,
+        },
+        bytes: new Blob([png]),
+      }),
+    )
+    await reached
+    store.dispatch(closeConversation("c0"))
+    const id = store.getState().conversation.activeId
+    store.dispatch(attachFiles({ conversationId: id, files: [file] }))
+    store.dispatch(
+      uploadChanged({ conversationId: id, fileId: file.id, to: "uploading" }),
+    )
+  },
+  finishParentUpload: async (failed: boolean) => {
+    if (failed) uploadReply!.reject(new Error("Old upload failed"))
+    else
+      uploadReply!.resolve({
+        digest: `sha256:${"ef".repeat(32)}`,
+        mimeType: "image/png",
+        size: png.length,
+      })
+    await uploadResult
+  },
   snapshot: () => ({
     sends,
     fetchCalls,

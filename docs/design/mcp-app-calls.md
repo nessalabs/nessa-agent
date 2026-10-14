@@ -517,7 +517,9 @@ wire contract is [protocol/README.md](../../protocol/README.md#an-mcp-apps-calls
   mid-ask — drops nothing, its `MessageUnresolved` covering them (C11b).
   Only the agent's own refusal re-arms it (`Taken::refused`, read by the one
   `Reach::of_asked` that `SubmitFailure::reach` reads too), and it reports
-  as it goes. Nothing hands them back to a caller to record. A mount's newer update given meanwhile is held as any update is.
+  as it goes. A native steer refused `revoked_after_save`, or left
+  `unavailable_after_save` because the grant record could not be read, does
+  not: the turn was saved with those contexts, and they are lost with it (C13). Nothing hands them back to a caller to record. A mount's newer update given meanwhile is held as any update is.
   A release, an opening's end, a new opening and a delete drop only what is
   still held, unsent: by the releaser, the person who closed or deleted, or
   the system on a stop or a gateway stop. A delete's drops are its
@@ -740,7 +742,7 @@ Each row has at least one test, named after it.
   - C10 `c10_a_message_queued_behind_a_turn_carries_no_context_and_leaves_it_held`, `c10_a_message_steered_into_a_turn_carries_no_context`
   - C11 `c11_a_refused_submission_drops_what_it_took_on_record`; a refusal before the read takes nothing: M11's `turn_running`, `m10_a_release_while_the_message_waits_for_the_lock_stops_it`
   - C12 `c12_a_retry_of_a_message_the_agent_has_carries_what_its_record_holds`
-  - C13 `c13_a_context_carried_by_a_turn_that_then_fails_is_lost`
+  - C13 `c13_a_context_carried_by_a_turn_that_then_fails_is_lost`, `c13_a_saved_steer_refused_after_save_does_not_drop_the_contexts_it_carried`, `c13_a_saved_steer_unavailable_after_save_does_not_drop_the_contexts_it_carried`
   - C14 `c14_a_mounts_release_drops_its_context_unsent`, `c14_a_release_whose_drop_cannot_be_recorded_completes`
   - C15 `c15_the_openings_end_drops_every_context_unsent` (close, stop, gateway stop, delete), a stop during an admission drops none of what it took: `c15_a_stop_during_an_admission_drops_nothing_the_message_took`; the deleter on the delete's own drops: `c15_a_delete_drops_what_is_still_held_as_the_deleters`; a delete cut short by retirement mid-close (G3-1): `c15_a_delete_cut_short_by_retirement_records_each_drop_once`; the deleter read from the tombstone, not the caller (G3-5): `c15_a_delete_finished_by_a_repeat_drops_as_the_first_deleter`, `c15_a_delete_finished_at_a_gateway_start_drops_as_its_deleter`; a close whose stop runs past its budget, where nothing else would end the apps, drops once as the closer's (G4-1, cited by `stop_slot`): `c15_a_close_whose_stop_runs_past_its_budget_drops_once_as_the_closers`
   - C15b `c15b_a_close_or_delete_whose_drops_cannot_be_recorded_answers_its_own_result`, and the recorder's log (below)

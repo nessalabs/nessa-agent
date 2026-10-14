@@ -244,18 +244,19 @@ export const stageAttachment = createAsyncThunk<
 >(
   "conversation/stageAttachment",
   async (input, { dispatch, getState, extra, signal }) => {
+    const target = { conversationId: input.id, fileId: input.fileId }
     const current = getState().conversation.conversations.find(
-      (item) => item.id === input.id,
+      (item) => item.id === target.conversationId,
     )
-    if (!current?.draft.some((part) => part.type === "file" && part.id === input.fileId))
+    if (!current?.draft.some((part) => part.type === "file" && part.id === target.fileId))
       return
     const serverId = current.serverConversationId ?? crypto.randomUUID()
-    dispatch(bindConversation({ id: input.id, serverId }))
+    dispatch(bindConversation({ id: target.conversationId, serverId }))
     try {
       const created = await extra.conversation.create(serverId, current.selection)
       if (created.conversationId !== serverId)
         throw new Error("Gateway returned a different conversation identity.")
-      dispatch(conversationReady(input.id))
+      dispatch(conversationReady(target.conversationId))
       // `signal` is this thunk's own: aborting the dispatched promise stops the
       // upload, which is how a removed tile gives its slot back.
       const image = await extra.conversation.stageAttachment(
@@ -264,7 +265,13 @@ export const stageAttachment = createAsyncThunk<
         input.bytes,
         signal,
       )
-      dispatch(uploadChanged({ fileId: input.fileId, to: "stored", image }))
+      dispatch(
+        uploadChanged({
+          ...target,
+          to: "stored",
+          image,
+        }),
+      )
     } catch (error) {
       // Only a staging refusal says the gateway looked at these bytes and said
       // no, and a conversation deleted, here or elsewhere, stays deleted.
@@ -277,7 +284,13 @@ export const stageAttachment = createAsyncThunk<
               error.reason === "conversation-deleted"
             ? "conversation-deleted"
             : "unavailable"
-      dispatch(uploadChanged({ fileId: input.fileId, to: "failed", reason }))
+      dispatch(
+        uploadChanged({
+          ...target,
+          to: "failed",
+          reason,
+        }),
+      )
     }
   },
 )
@@ -655,8 +668,8 @@ const conversationSlice = createSlice({
   name: "conversation",
   initialState: emptyLocalTabs(),
   reducers: {
-    restoreConversations(_state, action: PayloadAction<SavedConversationTabs>) {
-      return restoreConversationTabs(action.payload)
+    restoreConversations(state, action: PayloadAction<SavedConversationTabs>) {
+      return restoreConversationTabs(state, action.payload)
     },
     cancellationChanged(
       state,

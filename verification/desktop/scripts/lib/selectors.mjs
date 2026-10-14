@@ -17,6 +17,7 @@ const committedQuestions = "[data-committed-questions]"
 
 /** CSS selectors, grouped by the part of the window they belong to. */
 export const css = {
+  localLifetimes: "[data-local-lifetimes]",
   // Committed conversation production-component fixture
   historyTabConsumer: "[data-history-tab-consumer]",
   committedFixture: "[data-committed-fixture]",
@@ -326,6 +327,12 @@ export const css = {
 
   // Picture band atop conversation panes (decorative, aria-hidden)
   pictureBand: "[data-sliver]",
+}
+
+export const localLifetimeRoles = {
+  start: ["button", { name: "Start original close", exact: true }],
+  restore: ["button", { name: "Restore replacement", exact: true }],
+  finish: ["button", { name: "Finish original close", exact: true }],
 }
 
 /** Parameterized selectors, built before passing their strings to the page. */
@@ -685,6 +692,7 @@ export const harmlessConsole = [
 
 /** Actual-panel attachment race verification gestures and refusal notices. */
 export const attachmentVerification = {
+  uploadTile: "[data-upload]",
   editor: '[contenteditable="true"]',
   addAttachment: ["button", { name: "Add attachment", exact: true }],
   addFiles: ["button", { name: "Add files", exact: true }],

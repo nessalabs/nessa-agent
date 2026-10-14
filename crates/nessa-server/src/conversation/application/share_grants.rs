@@ -361,6 +361,45 @@ pub trait ShareGrants: Send + Sync {
         receiver_id: &'a str,
         policy_revision: u64,
     ) -> ConversationFuture<'a, Option<ToolPolicy>>;
+    /// Keep `receiver_id`'s grant on `id` at `policy_revision` until the
+    /// returned hold is dropped. [`ConversationError::Revoked`] when that
+    /// grant is gone, stands at another revision, or its revision cannot be
+    /// read as one. A store that cannot be asked is [`ConversationError::Metadata`].
+    ///
+    /// A table that records no live grant returns [`RevisionHold::vacant`]:
+    /// there is nothing to revoke. The metadata store's hold is that one
+    /// grant, not every conversation, and a Drive turn proceeds only while
+    /// it still finds the admitted revision (row J31).
+    fn hold_revision<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        receiver_id: &'a str,
+        policy_revision: u64,
+    ) -> ConversationFuture<'a, RevisionHold>;
+}
+
+/// A grant revision kept still until this is dropped.
+///
+/// [`RevisionHold::vacant`] keeps nothing. The metadata store's hold keeps
+/// that one grant's admission permit, so a change of the same grant waits
+/// until the permit is dropped. Another conversation's grant is not waiting
+/// on it.
+#[must_use = "dropping the hold lets a grant change land before the turn is saved"]
+pub struct RevisionHold {
+    _keep: Option<Box<dyn Send>>,
+}
+
+impl RevisionHold {
+    /// A hold that keeps nothing.
+    pub fn vacant() -> Self {
+        Self { _keep: None }
+    }
+
+    pub(crate) fn held(guard: impl Send + 'static) -> Self {
+        Self {
+            _keep: Some(Box::new(guard)),
+        }
+    }
 }
 
 /// What `conversation.share` answers: whether it changed anything, and the

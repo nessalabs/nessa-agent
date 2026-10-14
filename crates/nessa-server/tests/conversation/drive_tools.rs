@@ -68,6 +68,14 @@ impl ShareGrants for NoJournal {
     ) -> ConversationFuture<'a, Option<ToolPolicy>> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
+    fn hold_revision<'a>(
+        &'a self,
+        _: &'a ConversationId,
+        _: &'a str,
+        _: u64,
+    ) -> ConversationFuture<'a, crate::conversation::application::RevisionHold> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
 }
 
 /// The review hook records nothing here: its refusals are saved with the

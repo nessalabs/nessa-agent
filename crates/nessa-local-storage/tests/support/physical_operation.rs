@@ -96,9 +96,17 @@ pub(super) fn hold(
         limit: Some(Duration::from_secs(5)),
     });
     let watchdog = std::thread::spawn(move || {
-        // The worker signals as it enters. Five seconds is the hang detector
-        // for a worker that has not entered. The hold lasts the sleep below.
-        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        // This clock starts before the caller spawns work. A `before` gate is
+        // entered at the start of the call. An input-drop gate is entered from
+        // capture drop, after the physical operation returns, so the wait
+        // includes that operation. Five seconds ran out during the ownership
+        // SQLite write on a loaded Windows runner: the worker entered after
+        // this receiver had been dropped (`worker_input_drop_keeps_slot`).
+        // Thirty seconds is the hang detector for that operation. The
+        // observation window is the sleep below.
+        entered_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("physical worker entered the gate");
         std::thread::sleep(Duration::from_millis(200));
         probe
             .inputs_at_release

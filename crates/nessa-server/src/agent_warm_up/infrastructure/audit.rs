@@ -132,7 +132,9 @@ fn error(failure: &AgentError) -> Value {
         | AgentError::AuditAndCleanupFailure
         | AgentError::PermissionAnswerDeliveryAndAuditFailure { .. }
         | AgentError::BeforeInvocationHook(_)
-        | AgentError::AfterInvocationHooks { .. }) => {
+        | AgentError::AfterInvocationHooks { .. }
+        | AgentError::RefusedAfterSave
+        | AgentError::AfterSaveUnavailable) => {
             json!({"kind": "other", "diagnostic": other.to_string()})
         }
     }

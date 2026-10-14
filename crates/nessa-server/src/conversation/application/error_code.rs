@@ -41,6 +41,9 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
         ConversationError::DrivePolicyUnenforceable => {
             ConversationErrorCode::DrivePolicyUnenforceable
         }
+        ConversationError::Revoked => ConversationErrorCode::Revoked,
+        ConversationError::RevokedAfterSave => ConversationErrorCode::RevokedAfterSave,
+        ConversationError::UnavailableAfterSave => ConversationErrorCode::UnavailableAfterSave,
         ConversationError::DeletionIncomplete(failures) => deletion_incomplete(failures),
         ConversationError::AgentNotConfigured => ConversationErrorCode::AgentNotConfigured,
         ConversationError::AgentUnsupported => ConversationErrorCode::AgentUnsupported,

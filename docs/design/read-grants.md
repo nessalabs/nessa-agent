@@ -302,6 +302,43 @@ policy (`conversation/application/drive_tools.rs`).
   checked (`ToolChecking::Checked`) and the policy is kept for the
   conversation, by grant and revision (row J26). A retry by the same
   driver is answered from what was saved and is not admitted again.
+- **The turn proceeds only while that revision still stands.** After
+  admission reads the policy, and before the agent is asked to take the
+  turn, the service holds that grant's revision
+  (`ShareGrants::hold_revision`). The permit is the one
+  `(conversation, receiver)` pair, and the map drops it when the last
+  permit drops, or when a wait cancelled before it acquired the lock was
+  the last clone of that gate. A turn or a change of another grant does not take it.
+  Note candidates are read before the permit, so a verdict does not hold
+  it. The save proceeds only while the live grant is still at that
+  revision. A revoke or a change of role or policy in between refuses the
+  turn `revoked`, and a queued turn saves nothing. A change of the same
+  grant takes the same permit, so it cannot land during that save. A
+  queued turn keeps the permit until enqueue returns, which is after the
+  save and after the runner is started, and drops it before the turn is
+  watched. A native steer moves the permit into the save check: the check
+  drops the first permit after the save, compares the live revision, and
+  keeps the second until the provider operation starts. It releases that
+  permit before waiting for the provider's response, before session
+  cleanup when the provider panics before starting the operation, and when
+  control stops before that operation is polled. When the revision
+  moved, the saved steer is refused `revoked_after_save` and nothing is
+  injected. That refusal settles the command receipt as refused after save,
+  so the same request is answered `revoked_after_save` again. When the
+  second hold cannot be read, the saved steer is `unavailable_after_save`
+  and nothing is injected. That outcome settles the command receipt as
+  unavailable after save, so the same request is answered
+  `unavailable_after_save` again. A queued turn
+  refused before the save is `revoked` and saves nothing. That refusal
+  settles the command receipt as no effect, so the same request is answered
+  `revoked` again. A change cancelled while its
+  write is still running keeps that grant's permit until the write finishes,
+  so a later hold cannot read the revision the write is about to replace.
+  A retry of a turn already saved is
+  answered from its receipt and is not checked again (row J31). The grant
+  table and the turn's records are different databases, so this is one
+  permit across both writes, not one SQL transaction. The owner's turns
+  are not held.
 - **Dispatch checks it again.** A checked turn can wait behind another, and a
   restarted agent process reads its approval mode and its own hooks switch
   afresh. So the SDK sends a turn saved as checked only to a process in Ask
@@ -360,7 +397,7 @@ policy (`conversation/application/drive_tools.rs`).
 sequenceDiagram
     participant Device as Paired device
     participant Service as ConversationService
-    participant Grants as share_grants journal
+    participant Grants as share_grants
     participant Agent
     participant Hook as DriveToolHook
     participant Cedar as ToolPolicyEvaluator
@@ -369,8 +406,16 @@ sequenceDiagram
     Service->>Service: Claude or Codex, Ask mode, attached, no native hooks
     Service->>Grants: policy_at(conversation, grant, revision)
     Grants-->>Service: the policy at that revision
-    Service->>Service: keep it, save the turn as checked
-    Service->>Agent: enqueue
+    Service->>Grants: hold_revision(conversation, grant, revision)
+    alt grant still at that revision
+        Grants-->>Service: permit for that grant until the save is decided
+        Service->>Service: keep the policy, save the turn as checked
+        Service->>Agent: enqueue, or steer
+        Note over Service,Grants: queued: the permit ends once enqueue returns
+        Note over Agent,Grants: native steer: drop the first permit, compare, keep the second until injection starts, release before the response wait
+    else revoked or the revision moved
+        Grants-->>Service: revoked, nothing saved
+    end
     Agent->>Hook: before_permission_review(call, initiation)
     Hook->>Cedar: evaluate(grant + policy, call)
     alt allowed
@@ -448,10 +493,13 @@ socket hands it to `submit_command`, and the turn is saved with it.
 
 - **The stamp is per turn, as admitted.** A policy changed after a command
   was admitted stamps the next command's turn and leaves this one as it was
-  admitted. A retry of the same request is answered from its saved receipt,
-  so a turn keeps the initiation it was first admitted with; the same turn
-  sent again as a new request under another revision is a conflict, as any
-  other message under that turn's id is.
+  admitted, when this one was saved. A Drive turn proceeds only while the
+  grant is still at the revision admission read; a revoke or a policy
+  change in between refuses it `revoked` and saves nothing (row J31). A
+  retry of the same request is answered from its saved receipt, so a turn
+  keeps the initiation it was first admitted with; the same turn sent again
+  as a new request under another revision is a conflict, as any other
+  message under that turn's id is.
 - **Admission audit names the actor, not the grant.** The SDK's admission
   evidence carries the action context (the device's surface and the request
   id); the grant is on the turn's record. A tool call the grant's policy
@@ -583,10 +631,14 @@ makes it `assigned` to that turn for good; one that can no longer go is
   be read, leaves its notes pending for a later turn. Each grant is read and
   asked once per turn. A change of the
   grant's policy revision retires nothing: the revision saved with the note
-  stays as its attribution. The verdict is the grant as it stood when the
-  turn was admitted, as for a Drive grant's own turn (row J15): a revoke
-  that lands while a turn is being admitted stops the next turn, not that
-  one.
+  stays as its attribution.   The verdict is the grant as it stood when the turn was admitted. For a
+  note taken by the owner's turn, a revoke that lands while that turn is
+  being admitted stops the next turn, not that one (row J23). A Drive
+  grant's own turn proceeds only while its grant is still at the admitted
+  revision. A revoke that commits before the revision hold is acquired
+  refuses the turn, and the note is not taken. A revoke requested during
+  the save waits until enqueue returns, and the saved turn keeps the notes
+  it took (row J31).
 - **Admission retires before it takes.** Under its lock, `notes::select`
   walks the pending notes in the order they were left: one past 24 hours
   is retired `expired`, one the host revoked `permission_lost`, and up to 8
@@ -868,3 +920,4 @@ otherwise.
 | J28 | A driver's turn calls the gateway's `run`, `artifacts_publish` or `artifacts_fetch` under `read_only_tools`; `run` under `all`; `run` under `all` with the Drive tool audit unavailable | Refused with why, each decision in the audit, no lease record, the host asked nothing; runs as the owner's would, after its decision and rule are in the audit, but only on a host both the gateway grants commands on and the grant's own `commandHosts` names (a grant naming none runs nowhere); refused, nothing run | `j28_the_gateways_own_tools_are_checked_against_a_drive_grants_policy`, `j28_a_drive_grant_allowed_run_runs_a_command_as_the_owner_would`, `a_drive_grants_run_goes_only_to_the_hosts_its_policy_names`, `j28_an_allowed_run_whose_decision_cannot_be_recorded_is_refused` (`tests/conversation/leases.rs`); `a_decision_is_written_once_and_acknowledged_again`, `a_contradicting_record_for_the_same_decision_is_refused` (`conversation/infrastructure/drive_tool_audit.rs`) |
 | J29 | A share made, one changing nothing, its retries after later changes, a revoke, and a grant after that revoke | Answers the revision the grant holds once made: the new one, or the one kept; a retry answers its first answer, not what is held now; a revoke answers no revision; the grant after it takes a revision past every one before | `a_share_answers_the_policy_revision_it_left_and_a_retry_answers_the_same` (`tests/conversation/store.rs`); `share_answers_its_revision_and_refuses_a_stale_expected_one` (`tests/product/socket/subscriptions.rs`) |
 | J30 | A share or unshare naming `expectedPolicyRevision`: the one held; another (the grant changed or revoked since); 0 with no grant held, and 0 once one is; a retry of the share or the revoke that moved it; past 2^53 − 1; none named | Made, and the share answers the new revision; refused `share_grant_changed` in the transaction, the grant, journal and catalogue unchanged; 0 is made as a first grant and refused once a grant is held; the retry answered from its journal row before the comparison; `invalid_request`; made whatever is held, as before | `a_change_naming_a_revision_the_grant_no_longer_holds_is_refused_and_writes_nothing`, `a_first_grant_naming_no_revision_is_refused_once_another_landed` (`tests/conversation/store.rs`); `share_answers_its_revision_and_refuses_a_stale_expected_one` (`tests/product/socket/subscriptions.rs`) |
+| J31 | A Drive grant revoked, or its policy changed, after `policy_at` read the admitted revision and before the turn is saved; the same revoke held off until that save commits; a stalled save on one conversation while another is revoked and sends; a retry of the saved turn after the revoke; a revision that is not the live grant's, a missing grant, or a revision cell that cannot be read | A queued turn is refused `revoked` with nothing saved. A native steer that was saved and then refused before injection is `revoked_after_save`: the attempt is settled as refused and nothing reached the agent. The command receipt is settled as `refused_after_save`, and the same request is answered `revoked_after_save` again. A native steer that was saved and then could not be checked because the grant record could not be read is `unavailable_after_save`: nothing reached the agent. The command receipt is settled as `unavailable_after_save`, and the same request is answered `unavailable_after_save` again. A change that waited on the save applies once a queued turn's save has committed, and for a native steer once the provider operation has started, before the response wait. A native steer that panics before the provider starts that operation, or whose control stops before that operation is polled, releases the permit then, so an unshare of that grant is not blocked for the cleanup or the remaining settlement. The other conversation's revoke and Drive turn finish during the stall. A retry of the saved turn is answered from its receipt. A revision that is not the live grant's is refused `revoked`. That refusal settles the command as `no_effect`, and the same request is answered `revoked` again. A change cancelled while its write runs keeps the grant's permit until the write finishes, so a hold cannot read the revision that write is about to replace | `a_grant_revoked_during_admission_starts_no_turn`, `a_grant_change_waits_until_the_turn_is_saved`, `a_stalled_save_on_one_conversation_does_not_block_another`, `a_saved_drive_turn_is_retried_after_its_grant_is_revoked`, `a_revoked_admission_settles_the_command_and_the_same_request_is_revoked_again` (`tests/conversation/leases.rs`); `a_turn_is_saved_only_while_its_grant_stays_at_the_admitted_revision`, `a_cancelled_grant_change_keeps_its_permit_until_the_write_finishes` (`tests/conversation/store.rs`); `a_saved_steer_revoked_after_save_settles_the_command_and_the_same_request_is_refused_again`, `a_saved_steer_unavailable_after_save_settles_the_command_and_the_same_request_is_unavailable_again` (`tests/conversation/leases.rs`); `c13_a_saved_steer_unavailable_after_save_does_not_drop_the_contexts_it_carried` (`tests/conversation/app_messages.rs`); `scheduling_a_saved_check_releases_when_the_provider_takes_the_steer`, `scheduling_a_panicked_native_steer_does_not_block_unshare` (`nessa-sdk` `scheduling.rs`); `scheduling_a_close_before_native_steer_is_polled_releases_the_save_check` (`nessa-sdk` `coordination.rs`) |

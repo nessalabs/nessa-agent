@@ -1,0 +1,9 @@
+Source: useKeyBindings consumes matched events before handler availability or errors.
+Mounted hook/shortcut tests: 7 passed.
+Full frontend tests: 320 files, 4143 tests passed,2workers.
+Browser regression: Chromium/WebKit columns/sidebar; matched Cmd+N/Cmd+W consumed while switcher stays open; unbound Cmd+X not consumed; normal split still works.
+Source-asserted revert: old handler-first/false-release contract rejected by mounted tests.
+Browser revert: KeyN/KeyW defaultPrevented:false; unavailable bound command released native default.
+Restored browser: KeyN/KeyW defaultPrevented:true; KeyX:false; original1 retained1 ordinary2; failures:[]
+Full focus matrix awaits #820 deterministic incremental-overview verification; no full green matrix claim here.
+Reported Fastify popup remains unattributed.
