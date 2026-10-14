@@ -19,7 +19,9 @@ import {
   type Message,
   type MessageApp,
   type Part,
+  type QuestionChoice,
   type Transcript,
+  type TranscriptQuestion,
 } from "../../model/transcript"
 import {
   failureReason,
@@ -31,6 +33,7 @@ import {
   type WorkspaceUpdate,
 } from "../../application/ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
+import { acceptedQuestionChoices } from "./question-answer"
 import { sampleWorkspace } from "./sample-workspace"
 import {
   approvedReply,
@@ -60,7 +63,10 @@ export interface AuditedState {
  * stood (`before`), what became of it and when, and, taken, the revision it
  * produced (`after`: the new summary's, the removal's, or, for a question
  * answered or declined, the transcript revision that dropped it — the
- * summary does not move). Calls asked in one
+ * summary does not move). An answer keeps the ask as it was held and the
+ * structured choices, including the answerer's own words. Those words stay
+ * on this record: they are not copied onto the session, the transcript, or
+ * a log. Calls asked in one
  * tick are carried out in the order they were asked, so a message and the
  * answer it overtakes stay in that order. This source refuses only by type;
  * it has no faults of its own to tell apart. Kept in memory only, for as long
@@ -84,6 +90,13 @@ export interface AuditEntry {
   /** The question answered or declined, and the execution it belongs to. */
   readonly questionId?: string
   readonly executionId?: string
+  /** The ask as held when it was answered, declined, or the answer was refused. */
+  readonly question?: TranscriptQuestion
+  /**
+   * Structured choices for an answer, including own words. Absent when the
+   * ask was declined. Own words are this controlled record's only copy.
+   */
+  readonly choices?: readonly QuestionChoice[]
   /** The message that let an approval go, for a `let-go`. */
   readonly messageId?: string
   readonly initiator: Initiator
@@ -159,7 +172,7 @@ export function inMemorySource(
       AuditEntry,
       "sessionId" | "action" | "approvalId" | "questionId" | "executionId" | "initiator"
     >,
-    work: () => number,
+    work: (record: (change: Partial<AuditEntry>) => void) => number,
   ): Promise<void> => {
     let entry: AuditEntry | undefined
     const replace = (change: Partial<AuditEntry>) => {
@@ -178,7 +191,7 @@ export function inMemorySource(
       entries = Object.freeze([...entries, opened])
       guard()
       replace({ before: stateOf(asked.sessionId) })
-      return work()
+      return work(replace)
     }).then(
       (after) => replace({ outcome: "taken", after, settledAt: schedule.now() }),
       (error: unknown) => {
@@ -536,8 +549,36 @@ export function inMemorySource(
           questionId,
           initiator,
         },
-        () => {
+        (record) => {
           const transcript = waitingQuestion(sessionId, executionId, questionId)
+          const held = transcript.questions?.find(
+            (question) =>
+              question.executionId === executionId && question.questionId === questionId,
+          )
+          if (!held) throw new WorkspaceSourceError("not-waiting")
+          record({ question: Object.freeze(structuredClone(held)) })
+          if (choices !== null) {
+            let accepted: readonly QuestionChoice[]
+            try {
+              accepted = acceptedQuestionChoices(held, choices)
+            } catch (error) {
+              record({
+                choices: Object.freeze(
+                  choices.map((choice) =>
+                    Object.freeze({
+                      key: choice.key,
+                      values: Object.freeze([...choice.values]),
+                      ...(choice.ownWords === undefined
+                        ? {}
+                        : { ownWords: choice.ownWords }),
+                    }),
+                  ),
+                ),
+              })
+              throw error
+            }
+            record({ choices: accepted })
+          }
           return putTranscript({
             ...transcript,
             questions: (transcript.questions ?? []).filter(
