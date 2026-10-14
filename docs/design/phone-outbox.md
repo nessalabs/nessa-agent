@@ -41,10 +41,11 @@ Cedar admits the session. This outbox does not decide who may send.
 | L8 | Lookup returns `submission_conflict` | Failed with that code. `found` is not treated as a receipt | `a_conflicting_lookup_is_failed` |
 | R1 | Restart after departure, lookup finds nothing | Unknown. `conversation.send` is not asked | `recovery_does_not_send_when_the_receipt_is_absent` |
 | R2 | Restart after departure, lookup finds settled `dispatched` | Done. `conversation.send` is not asked | `recovery_adopts_a_dispatched_receipt_without_sending` |
-| R3 | Explicit retry after a lookup that found nothing | The lookup is recorded as unknown, not admitted, then one new foreground budget of the same bytes | `an_explicit_retry_looks_up_before_it_sends` |
+| R3 | Explicit retry after a lookup that found nothing | The lookup is recorded as unknown, not admitted, then one new foreground budget of the same bytes. The writer lease is held across that send | `an_explicit_retry_looks_up_before_it_sends` |
+| R5 | Two retries of one departed command share the file | One send. The waiter reads the committed outcome | `a_concurrent_retry_sends_the_departure_once` |
 | R4 | Explicit retry of unresolved, attempted, failed, or done | No send | `an_explicit_retry_does_not_send_an_uncertain_or_finished_command` |
 | C1 | Stored canonical bytes do not decode | Corrupt. The row is not rewritten | `corrupt_canonical_bytes_are_left_in_place` |
-| C2 | Each transition | The event records the command, the outcome, the cause, and the initiator | `a_transition_keeps_its_cause_and_initiator` |
+| C2 | Each transition | The event records the command, the outcome, the cause, and the initiator. `hold`, `send`, and `retry` record the person. `recover` records recovery | `a_transition_keeps_its_cause_and_initiator`, `recovery_adopts_a_dispatched_receipt_without_sending` |
 
 `FOREGROUND_SENDS` in `crates/nessa-client-core/src/outbox/domain/decide.rs`
 is the foreground budget, the first send included. The limits catalogue names
@@ -66,7 +67,8 @@ fixed here so a review can see them without editing the contract:
 - A typed lookup refusal, including a deleted conversation, is `failed`.
   `unknown` is a lost send whose lookup found nothing, a lookup that did not
   finish, an `attempted` stage, an unreadable answer, or
-  `submission_unresolved`.
+  `submission_unresolved`. A settled submit receipt with no effect, or with
+  `withdrawn`, `cancelled`, or `already_final`, is a protocol failure.
 - Every other conversation code, including `temporarily_unavailable`, stays
   `failed` and is not retried under the same id.
 - `conversation.send` and `conversation.receipt` are product calls on the

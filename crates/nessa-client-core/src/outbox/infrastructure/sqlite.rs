@@ -10,21 +10,30 @@ use crate::outbox::domain::{
 };
 use nessa_auth::application::ports::Clock;
 use nessa_local_database::{
-    rusqlite::{params, Connection, OptionalExtension, Row, Transaction, TransactionBehavior},
+    rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior},
     OpenError, Schema,
 };
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
+
+/// How long a waiting retry holds for the writer lease.
+const LEASE_WAIT: Duration = Duration::from_secs(30);
 
 /// The device's phone commands.
 pub struct SqliteIntents {
     connection: Connection,
+    leased: bool,
 }
 impl SqliteIntents {
     pub(crate) fn open(path: &Path) -> Result<Self, StoreError> {
         let schema = Schema::new(include_str!("schema.sql")).map_err(open_error)?;
         let connection = nessa_local_database::open(path, &schema).map_err(open_error)?;
-        Ok(Self { connection })
+        connection.busy_timeout(LEASE_WAIT).map_err(unavailable)?;
+        Ok(Self {
+            connection,
+            leased: false,
+        })
     }
 
     /// Audit rows for `command`, oldest first.
@@ -126,13 +135,57 @@ impl IntentStore for SqliteIntents {
             .into_iter()
             .collect()
     }
+
+    fn begin_exclusive(&mut self) -> Result<(), StoreError> {
+        if self.leased {
+            return Err(StoreError::Unavailable);
+        }
+        self.connection
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(unavailable)?;
+        self.leased = true;
+        Ok(())
+    }
+
+    fn end_exclusive(&mut self) -> Result<(), StoreError> {
+        if !self.leased {
+            return Err(StoreError::Unavailable);
+        }
+        match self.connection.execute_batch("COMMIT") {
+            Ok(()) => {
+                self.leased = false;
+                Ok(())
+            }
+            Err(_) => {
+                let _ = self.connection.execute_batch("ROLLBACK");
+                self.leased = false;
+                Err(StoreError::Uncertain)
+            }
+        }
+    }
+
+    fn abort_exclusive(&mut self) {
+        if !self.leased {
+            return;
+        }
+        let _ = self.connection.execute_batch("ROLLBACK");
+        self.leased = false;
+    }
+}
+impl Drop for SqliteIntents {
+    fn drop(&mut self) {
+        self.abort_exclusive();
+    }
 }
 
 impl SqliteIntents {
     fn transaction<T>(
         &mut self,
-        body: impl FnOnce(&Transaction<'_>) -> Result<T, StoreError>,
+        body: impl FnOnce(&Connection) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
+        if self.leased {
+            return body(&self.connection);
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -143,7 +196,7 @@ impl SqliteIntents {
     }
 }
 
-fn insert_record(tx: &Transaction<'_>, record: &PhoneRecord) -> Result<(), StoreError> {
+fn insert_record(tx: &Connection, record: &PhoneRecord) -> Result<(), StoreError> {
     let (outcome, failure, unknown) = outcome_columns(record.outcome());
     tx.execute(
         "INSERT INTO phone_intent
@@ -165,7 +218,7 @@ fn insert_record(tx: &Transaction<'_>, record: &PhoneRecord) -> Result<(), Store
 }
 
 fn update_record(
-    tx: &Transaction<'_>,
+    tx: &Connection,
     previous: &PhoneRecord,
     next: &PhoneRecord,
 ) -> Result<(), StoreError> {
@@ -205,11 +258,7 @@ fn update_record(
     Ok(())
 }
 
-fn append_event(
-    tx: &Transaction<'_>,
-    command: &str,
-    event: &IntentEvent,
-) -> Result<(), StoreError> {
+fn append_event(tx: &Connection, command: &str, event: &IntentEvent) -> Result<(), StoreError> {
     let ordinal: i64 = tx
         .query_row(
             "SELECT COALESCE(MAX(ordinal), -1) + 1 FROM phone_intent_event WHERE request_id = ?1",

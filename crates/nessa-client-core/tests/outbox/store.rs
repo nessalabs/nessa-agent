@@ -14,7 +14,9 @@ use nessa_sdk::domain::agent_execution::executions::ExecutionId;
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Barrier, Mutex};
+use std::thread;
 
 const CONVERSATION: &str = "01234567-89ab-4cde-8f01-23456789abcd";
 
@@ -129,6 +131,13 @@ impl IntentStore for Memory {
     fn list(&mut self) -> Result<Vec<PhoneRecord>, StoreError> {
         Ok(self.rows.values().cloned().collect())
     }
+    fn begin_exclusive(&mut self) -> Result<(), StoreError> {
+        Ok(())
+    }
+    fn end_exclusive(&mut self) -> Result<(), StoreError> {
+        Ok(())
+    }
+    fn abort_exclusive(&mut self) {}
 }
 
 fn command(value: &str) -> PhoneCommandId {
@@ -179,7 +188,7 @@ where
     G: PhoneGateway,
     I: CommandIds,
 {
-    outbox.hold(intent, Initiator::Person).unwrap()
+    outbox.hold(intent).unwrap()
 }
 
 fn depart(path: &Path, intent: PhoneIntent) {
@@ -249,7 +258,7 @@ fn a_changed_body_under_the_same_command_is_refused() {
     let seen = gateway.clone();
     let mut outbox = opened(&path_in(&dir), gateway);
     person_hold(&mut outbox, text_intent("command-1", "hello"));
-    let changed = outbox.hold(text_intent("command-1", "hello!"), Initiator::Person);
+    let changed = outbox.hold(text_intent("command-1", "hello!"));
     assert_eq!(changed.unwrap_err(), OutboxError::Conflict);
     let with_image = PhoneIntent::new(
         CONVERSATION,
@@ -259,10 +268,7 @@ fn a_changed_body_under_the_same_command_is_refused() {
         vec![image()],
     )
     .unwrap();
-    assert_eq!(
-        outbox.hold(with_image, Initiator::Person).unwrap_err(),
-        OutboxError::Conflict
-    );
+    assert_eq!(outbox.hold(with_image).unwrap_err(), OutboxError::Conflict);
     let views = outbox.list().unwrap();
     assert_eq!(views.len(), 1);
     assert_eq!(views[0].intent().text(), "hello");
@@ -320,9 +326,7 @@ fn departure_is_durable_before_the_gateway_is_asked() {
     )
     .unwrap();
     person_hold(&mut outbox, text_intent("command-1", "hello"));
-    let view = outbox
-        .send(&command("command-1"), Initiator::Person)
-        .unwrap();
+    let view = outbox.send(&command("command-1")).unwrap();
     assert_eq!(*departed.lock().unwrap(), Some(1));
     assert_eq!(view.outcome(), PhoneOutcome::Accepted);
     assert!(view.claims_submission());
@@ -343,7 +347,7 @@ fn an_uncertain_departure_does_not_send() {
         clock(),
     );
     person_hold(&mut outbox, text_intent("command-1", "hello"));
-    let error = outbox.send(&command("command-1"), Initiator::Person);
+    let error = outbox.send(&command("command-1"));
     assert_eq!(error.unwrap_err(), OutboxError::Uncertain);
     assert!(seen.body().order.is_empty());
     let still = outbox.list().unwrap();
@@ -371,9 +375,7 @@ fn a_failed_save_after_a_send_keeps_possible_delivery() {
         );
         person_hold(&mut outbox, text_intent("command-1", "hello"));
         assert_eq!(
-            outbox
-                .send(&command("command-1"), Initiator::Person)
-                .unwrap_err(),
+            outbox.send(&command("command-1")).unwrap_err(),
             OutboxError::Unsaved
         );
         let still = outbox.list().unwrap();
@@ -384,9 +386,7 @@ fn a_failed_save_after_a_send_keeps_possible_delivery() {
         );
         assert!(!still[0].claims_submission());
         assert_eq!(still[0].intent().text(), "hello");
-        let again = outbox
-            .send(&command("command-1"), Initiator::Person)
-            .unwrap();
+        let again = outbox.send(&command("command-1")).unwrap();
         assert_eq!(
             again.outcome(),
             PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
@@ -403,16 +403,12 @@ fn accepted_send(delivery: Delivery, outcome: PhoneOutcome) {
     let seen = gateway.clone();
     let mut outbox = opened(&path_in(&dir), gateway);
     person_hold(&mut outbox, text_intent("command-1", "hello"));
-    let view = outbox
-        .send(&command("command-1"), Initiator::Person)
-        .unwrap();
+    let view = outbox.send(&command("command-1")).unwrap();
     assert_eq!(view.outcome(), outcome);
     assert!(view.claims_submission());
     assert_eq!(view.intent().text(), "hello");
     assert_eq!(seen.body().sent.len(), 1);
-    let again = outbox
-        .send(&command("command-1"), Initiator::Person)
-        .unwrap();
+    let again = outbox.send(&command("command-1")).unwrap();
     assert_eq!(again.outcome(), outcome);
     assert_eq!(seen.body().sent.len(), 1);
 }
@@ -442,9 +438,7 @@ fn a_refusal_is_failed_and_not_sent_again() {
     let seen = gateway.clone();
     let mut outbox = opened(&path_in(&dir), gateway);
     person_hold(&mut outbox, text_intent("command-1", "hello"));
-    let view = outbox
-        .send(&command("command-1"), Initiator::Person)
-        .unwrap();
+    let view = outbox.send(&command("command-1")).unwrap();
     assert_eq!(
         view.outcome(),
         PhoneOutcome::Failed(PhoneFailure::Conversation(
@@ -453,13 +447,9 @@ fn a_refusal_is_failed_and_not_sent_again() {
     );
     assert!(!view.claims_submission());
     assert_eq!(view.intent().text(), "hello");
-    let retried = outbox
-        .retry(&command("command-1"), Initiator::Person)
-        .unwrap();
+    let retried = outbox.retry(&command("command-1")).unwrap();
     assert_eq!(retried.outcome(), view.outcome());
-    outbox
-        .send(&command("command-1"), Initiator::Person)
-        .unwrap();
+    outbox.send(&command("command-1")).unwrap();
     assert_eq!(seen.body().sent.len(), 1);
     assert!(seen.body().looked.is_empty());
 }
@@ -474,9 +464,7 @@ fn turn_running_returns_the_text_to_a_new_draft() {
     let seen = gateway.clone();
     let mut outbox = opened(&path_in(&dir), gateway);
     person_hold(&mut outbox, text_intent("command-1", "keep this"));
-    let view = outbox
-        .send(&command("command-1"), Initiator::Person)
-        .unwrap();
+    let view = outbox.send(&command("command-1")).unwrap();
     assert_eq!(
         view.outcome(),
         PhoneOutcome::Failed(PhoneFailure::Conversation(
@@ -493,9 +481,7 @@ fn turn_running_returns_the_text_to_a_new_draft() {
     assert_eq!(draft.outcome(), PhoneOutcome::Draft);
     assert_eq!(draft.intent().text(), "keep this");
     assert!(!draft.claims_submission());
-    outbox
-        .retry(&command("command-1"), Initiator::Person)
-        .unwrap();
+    outbox.retry(&command("command-1")).unwrap();
     assert_eq!(seen.body().sent.len(), 1);
 }
 
@@ -523,15 +509,11 @@ fn refused_and_kept(answer: SendAnswer, outcome: PhoneOutcome) {
     let seen = gateway.clone();
     let mut outbox = opened(&path_in(&dir), gateway);
     person_hold(&mut outbox, text_intent("command-1", "hello"));
-    let view = outbox
-        .send(&command("command-1"), Initiator::Person)
-        .unwrap();
+    let view = outbox.send(&command("command-1")).unwrap();
     assert_eq!(view.outcome(), outcome);
     assert_eq!(view.intent().text(), "hello");
     assert!(!view.claims_submission());
-    outbox
-        .retry(&command("command-1"), Initiator::Person)
-        .unwrap();
+    outbox.retry(&command("command-1")).unwrap();
     assert_eq!(seen.body().sent.len(), 1);
 }
 
@@ -555,20 +537,14 @@ fn submission_unresolved_is_not_sent_again() {
     let seen = gateway.clone();
     let mut outbox = opened(&path_in(&dir), gateway);
     person_hold(&mut outbox, text_intent("command-1", "hello"));
-    let view = outbox
-        .send(&command("command-1"), Initiator::Person)
-        .unwrap();
+    let view = outbox.send(&command("command-1")).unwrap();
     assert_eq!(
         view.outcome(),
         PhoneOutcome::Unknown(UnknownCause::Unresolved)
     );
     assert!(!view.claims_submission());
-    outbox
-        .retry(&command("command-1"), Initiator::Person)
-        .unwrap();
-    outbox
-        .send(&command("command-1"), Initiator::Person)
-        .unwrap();
+    outbox.retry(&command("command-1")).unwrap();
+    outbox.send(&command("command-1")).unwrap();
     assert_eq!(seen.body().sent.len(), 1);
     assert!(seen.body().looked.is_empty());
 }
@@ -586,9 +562,7 @@ fn a_lost_answer_with_an_accepted_receipt_is_not_sent_again() {
     let seen = gateway.clone();
     let mut outbox = opened(&path_in(&dir), gateway);
     person_hold(&mut outbox, text_intent("command-1", "hello"));
-    let view = outbox
-        .send(&command("command-1"), Initiator::Person)
-        .unwrap();
+    let view = outbox.send(&command("command-1")).unwrap();
     assert_eq!(view.outcome(), PhoneOutcome::Accepted);
     assert!(view.claims_submission());
     let body = seen.body();
@@ -610,16 +584,12 @@ fn an_attempted_receipt_is_unknown_and_not_sent_again() {
     let seen = gateway.clone();
     let mut outbox = opened(&path_in(&dir), gateway);
     person_hold(&mut outbox, text_intent("command-1", "hello"));
-    let view = outbox
-        .send(&command("command-1"), Initiator::Person)
-        .unwrap();
+    let view = outbox.send(&command("command-1")).unwrap();
     assert_eq!(
         view.outcome(),
         PhoneOutcome::Unknown(UnknownCause::Attempted)
     );
-    outbox
-        .retry(&command("command-1"), Initiator::Person)
-        .unwrap();
+    outbox.retry(&command("command-1")).unwrap();
     assert_eq!(seen.body().sent.len(), 1);
     assert_eq!(seen.body().looked.len(), 1);
 }
@@ -633,9 +603,7 @@ fn a_dispatched_receipt_is_done() {
     );
     let mut outbox = opened(&path_in(&dir), gateway);
     person_hold(&mut outbox, text_intent("command-1", "hello"));
-    let view = outbox
-        .send(&command("command-1"), Initiator::Person)
-        .unwrap();
+    let view = outbox.send(&command("command-1")).unwrap();
     assert_eq!(view.outcome(), PhoneOutcome::Done);
     assert!(view.claims_submission());
 }
@@ -659,9 +627,7 @@ fn a_settled_refusal_is_failed() {
         let seen = gateway.clone();
         let mut outbox = opened(&path_in(&dir), gateway);
         person_hold(&mut outbox, text_intent("command-1", "hello"));
-        let view = outbox
-            .send(&command("command-1"), Initiator::Person)
-            .unwrap();
+        let view = outbox.send(&command("command-1")).unwrap();
         assert_eq!(
             view.outcome(),
             PhoneOutcome::Failed(PhoneFailure::Conversation(code))
@@ -683,9 +649,7 @@ fn a_lost_answer_retransmits_the_same_bytes_until_the_bound() {
     let saved = text_intent("command-1", "hello");
     let canonical = saved.canonical().to_vec();
     person_hold(&mut outbox, saved);
-    let view = outbox
-        .send(&command("command-1"), Initiator::Person)
-        .unwrap();
+    let view = outbox.send(&command("command-1")).unwrap();
     assert_eq!(view.outcome(), PhoneOutcome::Accepted);
     let body = seen.body();
     assert_eq!(body.sent.len(), 2);
@@ -705,9 +669,7 @@ fn foreground_send_stops_at_the_bound() {
     let saved = text_intent("command-1", "hello");
     let canonical = saved.canonical().to_vec();
     person_hold(&mut outbox, saved);
-    let view = outbox
-        .send(&command("command-1"), Initiator::Person)
-        .unwrap();
+    let view = outbox.send(&command("command-1")).unwrap();
     assert_eq!(
         view.outcome(),
         PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
@@ -726,9 +688,7 @@ fn a_lookup_that_cannot_be_asked_stays_unknown() {
     let seen = gateway.clone();
     let mut outbox = opened(&path_in(&dir), gateway);
     person_hold(&mut outbox, text_intent("command-1", "hello"));
-    let view = outbox
-        .send(&command("command-1"), Initiator::Person)
-        .unwrap();
+    let view = outbox.send(&command("command-1")).unwrap();
     assert_eq!(
         view.outcome(),
         PhoneOutcome::Unknown(UnknownCause::LookupFailed)
@@ -745,9 +705,7 @@ fn an_unreadable_send_answer_is_not_sent_again() {
     let seen = gateway.clone();
     let mut outbox = opened(&path_in(&dir), gateway);
     person_hold(&mut outbox, text_intent("command-1", "hello"));
-    let view = outbox
-        .send(&command("command-1"), Initiator::Person)
-        .unwrap();
+    let view = outbox.send(&command("command-1")).unwrap();
     assert_eq!(
         view.outcome(),
         PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
@@ -764,18 +722,14 @@ fn a_conflicting_lookup_is_failed() {
     let seen = gateway.clone();
     let mut outbox = opened(&path_in(&dir), gateway);
     person_hold(&mut outbox, text_intent("command-1", "hello"));
-    let view = outbox
-        .send(&command("command-1"), Initiator::Person)
-        .unwrap();
+    let view = outbox.send(&command("command-1")).unwrap();
     assert_eq!(
         view.outcome(),
         PhoneOutcome::Failed(PhoneFailure::Conversation(
             ConversationErrorCode::SubmissionConflict
         ))
     );
-    outbox
-        .retry(&command("command-1"), Initiator::Person)
-        .unwrap();
+    outbox.retry(&command("command-1")).unwrap();
     assert_eq!(seen.body().sent.len(), 1);
     assert_eq!(seen.body().looked.len(), 1);
 }
@@ -799,9 +753,7 @@ fn recovery_does_not_send_when_the_receipt_is_absent() {
     );
     assert!(!recovered[0].claims_submission());
     assert_eq!(recovered[0].intent().text(), "hello");
-    outbox
-        .send(&command("command-1"), Initiator::Person)
-        .unwrap();
+    outbox.send(&command("command-1")).unwrap();
     let body = seen.body();
     assert!(body.sent.is_empty());
     assert_eq!(body.order, ["lookup", "lookup"]);
@@ -820,6 +772,11 @@ fn recovery_adopts_a_dispatched_receipt_without_sending() {
     assert!(recovered[0].claims_submission());
     assert!(seen.body().sent.is_empty());
     assert_eq!(seen.body().order, ["lookup"]);
+    drop(outbox);
+    let mut store = SqliteIntents::open(&path).unwrap();
+    let events = store.events("command-1").unwrap();
+    assert_eq!(events[0].initiator, Initiator::Person);
+    assert_eq!(events.last().unwrap().initiator, Initiator::Recovery);
 }
 
 #[test]
@@ -835,9 +792,7 @@ fn an_explicit_retry_looks_up_before_it_sends() {
     );
     let seen = gateway.clone();
     let mut outbox = opened(&path, gateway);
-    let view = outbox
-        .retry(&command("command-1"), Initiator::Person)
-        .unwrap();
+    let view = outbox.retry(&command("command-1")).unwrap();
     assert_eq!(view.outcome(), PhoneOutcome::Accepted);
     {
         let body = seen.body();
@@ -870,6 +825,49 @@ fn an_explicit_retry_looks_up_before_it_sends() {
 }
 
 #[test]
+fn a_concurrent_retry_sends_the_departure_once() {
+    let dir = directory();
+    let path = path_in(&dir);
+    depart(&path, text_intent("command-1", "hello"));
+    let entered = Arc::new(Barrier::new(2));
+    let sends = Arc::new(AtomicUsize::new(0));
+    let spawn = |path: PathBuf, entered: Arc<Barrier>, sends: Arc<AtomicUsize>| {
+        thread::spawn(move || {
+            let mut outbox = open(
+                &path,
+                SharedRetry { entered, sends },
+                SeqIds::default(),
+                clock(),
+            )
+            .unwrap();
+            outbox.retry(&command("command-1")).unwrap().outcome()
+        })
+    };
+    let first = spawn(path.clone(), Arc::clone(&entered), Arc::clone(&sends));
+    let second = spawn(path, entered, sends.clone());
+    let left = first.join().unwrap();
+    let right = second.join().unwrap();
+    assert_eq!(sends.load(Ordering::SeqCst), 1);
+    assert_eq!(left, PhoneOutcome::Accepted);
+    assert_eq!(right, PhoneOutcome::Accepted);
+}
+
+struct SharedRetry {
+    entered: Arc<Barrier>,
+    sends: Arc<AtomicUsize>,
+}
+impl PhoneGateway for SharedRetry {
+    fn send(&mut self, _: &PhoneIntent) -> SendAnswer {
+        self.sends.fetch_add(1, Ordering::SeqCst);
+        SendAnswer::Receipt(Delivery::Queued)
+    }
+    fn lookup(&mut self, _: &PhoneIntent) -> LookupAnswer {
+        self.entered.wait();
+        LookupAnswer::NotFound
+    }
+}
+
+#[test]
 fn an_explicit_retry_does_not_send_an_uncertain_or_finished_command() {
     let dir = directory();
     let gateway = Scripted::new(
@@ -893,10 +891,10 @@ fn an_explicit_retry_does_not_send_an_uncertain_or_finished_command() {
         ("done", "done"),
     ] {
         person_hold(&mut outbox, text_intent(id, "hello"));
-        outbox.send(&command(id), Initiator::Person).unwrap();
+        outbox.send(&command(id)).unwrap();
     }
     for id in ["unresolved", "attempted", "failed", "done"] {
-        outbox.retry(&command(id), Initiator::Person).unwrap();
+        outbox.retry(&command(id)).unwrap();
     }
     let body = seen.body();
     assert_eq!(body.sent.len(), 4);
@@ -944,9 +942,7 @@ fn a_transition_keeps_its_cause_and_initiator() {
         let gateway = Scripted::new(vec![SendAnswer::Receipt(Delivery::Queued)], Vec::new());
         let mut outbox = opened(&path, gateway);
         person_hold(&mut outbox, text_intent("command-1", "hello"));
-        outbox
-            .send(&command("command-1"), Initiator::Person)
-            .unwrap();
+        outbox.send(&command("command-1")).unwrap();
     }
     let mut store = SqliteIntents::open(&path).unwrap();
     let events = store.events("command-1").unwrap();

@@ -131,6 +131,20 @@ fn a_receipt_result_keeps_found_stage_and_effect_together() {
         outcome: None,
     };
     assert!(lookup_answer(&intent(), ready).is_err());
+    for outcome in [
+        None,
+        Some(ConversationCommandOutcome::Withdrawn),
+        Some(ConversationCommandOutcome::Cancelled),
+        Some(ConversationCommandOutcome::AlreadyFinal),
+    ] {
+        let impossible = ConversationReceiptResult {
+            found: true,
+            request_id: "command-1".to_owned(),
+            stage: Some(ConversationCommandStage::Settled),
+            outcome,
+        };
+        assert!(lookup_answer(&intent(), impossible).is_err());
+    }
 }
 
 #[test]

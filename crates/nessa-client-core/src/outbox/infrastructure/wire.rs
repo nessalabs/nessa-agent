@@ -55,7 +55,8 @@ pub fn send_answer(intent: &PhoneIntent, receipt: ConversationReceipt) -> Result
 
 /// A `conversation.receipt` payload for a submit lookup.
 ///
-/// `ready` is creation's terminal stage, so a submit receipt that carries it
+/// `ready` is creation's terminal stage. A settled submit receipt with no
+/// effect, or with a stop effect (`withdrawn`, `cancelled`, `already_final`),
 /// is a protocol failure. The request id must be this intent's command.
 pub fn lookup_answer(
     intent: &PhoneIntent,
@@ -91,7 +92,22 @@ pub fn lookup_answer(
     if stage != ReceiptStage::Settled && effect.is_some() {
         return Err(());
     }
+    if stage == ReceiptStage::Settled && !submit_effect(effect) {
+        return Err(());
+    }
     Ok(LookupAnswer::Found { stage, effect })
+}
+
+fn submit_effect(effect: Option<ReceiptEffect>) -> bool {
+    matches!(
+        effect,
+        Some(
+            ReceiptEffect::Dispatched
+                | ReceiptEffect::NoEffect
+                | ReceiptEffect::RefusedAfterSave
+                | ReceiptEffect::UnavailableAfterSave
+        )
+    )
 }
 
 /// A refusal code this client was taught. Anything else is not guessed.

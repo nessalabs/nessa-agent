@@ -36,7 +36,13 @@ where
     /// Save `intent` before any send. The same bytes return the saved command.
     /// Different bytes under that command id are [`OutboxError::Conflict`] and
     /// the stored bytes stay (`a_changed_body_under_the_same_command_is_refused`).
-    pub fn hold(&mut self, intent: PhoneIntent, by: Initiator) -> Result<PhoneView, OutboxError> {
+    ///
+    /// The audit initiator is [`Initiator::Person`].
+    pub fn hold(&mut self, intent: PhoneIntent) -> Result<PhoneView, OutboxError> {
+        self.hold_as(intent, Initiator::Person)
+    }
+
+    fn hold_as(&mut self, intent: PhoneIntent, by: Initiator) -> Result<PhoneView, OutboxError> {
         match self.store.load(intent.command())? {
             None => {
                 let record = PhoneRecord::held(intent);
@@ -55,7 +61,13 @@ where
     /// already left is only looked up: this call does not send it again.
     /// An accepted, running, done, failed, attempted, or unresolved command
     /// is returned as saved.
-    pub fn send(&mut self, id: &PhoneCommandId, by: Initiator) -> Result<PhoneView, OutboxError> {
+    ///
+    /// The audit initiator is [`Initiator::Person`].
+    pub fn send(&mut self, id: &PhoneCommandId) -> Result<PhoneView, OutboxError> {
+        self.send_as(id, Initiator::Person)
+    }
+
+    fn send_as(&mut self, id: &PhoneCommandId, by: Initiator) -> Result<PhoneView, OutboxError> {
         let record = self.store.load(id)?.ok_or(OutboxError::NotHeld)?;
         if !matches!(record.outcome(), PhoneOutcome::Draft) {
             return self.reconcile(record, by, false);
@@ -68,20 +80,14 @@ where
     /// Look up every command that may have left and has no confirmed answer.
     ///
     /// This does not send (`recovery_does_not_send_when_the_receipt_is_absent`).
+    /// The audit initiator is [`Initiator::Recovery`], which `hold`, `send`,
+    /// and `retry` do not record.
     pub fn recover(&mut self) -> Result<Vec<PhoneView>, OutboxError> {
         let pending: Vec<PhoneRecord> = self
             .store
             .list()?
             .into_iter()
-            .filter(|record| {
-                record.departed()
-                    && matches!(
-                        record.outcome(),
-                        PhoneOutcome::Unknown(
-                            UnknownCause::NotAdmitted | UnknownCause::LookupFailed
-                        )
-                    )
-            })
+            .filter(|record| record.departed() && retryable(record))
             .collect();
         let mut views = Vec::with_capacity(pending.len());
         for record in pending {
@@ -95,28 +101,70 @@ where
     ///
     /// Unresolved, attempted, failed, and finished commands are not sent
     /// (`an_explicit_retry_does_not_send_an_uncertain_or_finished_command`).
-    pub fn retry(&mut self, id: &PhoneCommandId, by: Initiator) -> Result<PhoneView, OutboxError> {
+    ///
+    /// The audit initiator is [`Initiator::Person`]. A lookup that finds
+    /// nothing takes the store's writer lease before `conversation.send`, so
+    /// a second retry of the same row waits and does not send
+    /// (`a_concurrent_retry_sends_the_departure_once`).
+    pub fn retry(&mut self, id: &PhoneCommandId) -> Result<PhoneView, OutboxError> {
+        self.retry_as(id, Initiator::Person)
+    }
+
+    fn retry_as(&mut self, id: &PhoneCommandId, by: Initiator) -> Result<PhoneView, OutboxError> {
         let record = self.store.load(id)?.ok_or(OutboxError::NotHeld)?;
         if matches!(record.outcome(), PhoneOutcome::Draft) {
-            return self.send(id, by);
+            return self.send_as(id, by);
         }
-        if !matches!(
-            record.outcome(),
-            PhoneOutcome::Unknown(UnknownCause::NotAdmitted | UnknownCause::LookupFailed)
-        ) {
+        if !retryable(&record) {
             return Ok(record.view());
         }
         let answer = self.gateway.lookup(record.intent());
-        if matches!(answer, LookupAnswer::NotFound) {
-            let looked = record
-                .clone()
-                .with_outcome(PhoneOutcome::Unknown(UnknownCause::NotAdmitted));
-            self.persist_asked(&record, &looked, Cause::Lookup, by)?;
-            let reset = looked.clone().with_sends(0);
-            self.persist_asked(&looked, &reset, Cause::ExplicitRetry, by)?;
-            return self.foreground(reset, by, Cause::ExplicitRetry);
+        if !matches!(answer, LookupAnswer::NotFound) {
+            return self.apply_lookup(record, answer, by, false);
         }
-        self.apply_lookup(record, answer, by, false)
+        self.exclusive(|outbox| outbox.send_after_not_found(record, by))
+    }
+
+    /// The lease is already held. Send only when the row is still the one
+    /// the lookup authorized.
+    fn send_after_not_found(
+        &mut self,
+        original: PhoneRecord,
+        by: Initiator,
+    ) -> Result<PhoneView, OutboxError> {
+        let record = self
+            .store
+            .load(original.intent().command())?
+            .ok_or(OutboxError::NotHeld)?;
+        if record != original {
+            return Ok(record.view());
+        }
+        let looked = record
+            .clone()
+            .with_outcome(PhoneOutcome::Unknown(UnknownCause::NotAdmitted));
+        self.persist_asked(&record, &looked, Cause::Lookup, by)?;
+        let reset = looked.clone().with_sends(0);
+        self.persist_asked(&looked, &reset, Cause::ExplicitRetry, by)?;
+        self.foreground(reset, by, Cause::ExplicitRetry)
+    }
+
+    fn exclusive<T>(
+        &mut self,
+        body: impl FnOnce(&mut Self) -> Result<T, OutboxError>,
+    ) -> Result<T, OutboxError> {
+        self.store
+            .begin_exclusive()
+            .map_err(|error| asked(OutboxError::from(error)))?;
+        let result = body(self);
+        if result.is_ok() {
+            match self.store.end_exclusive() {
+                Ok(()) => result,
+                Err(error) => Err(asked(OutboxError::from(error))),
+            }
+        } else {
+            self.store.abort_exclusive();
+            result
+        }
     }
 
     /// Every saved command, drafts included.
@@ -282,6 +330,13 @@ where
             observed_at_ms: self.clock.unix_milliseconds(),
         }
     }
+}
+
+fn retryable(record: &PhoneRecord) -> bool {
+    matches!(
+        record.outcome(),
+        PhoneOutcome::Unknown(UnknownCause::NotAdmitted | UnknownCause::LookupFailed)
+    )
 }
 
 fn asked(error: OutboxError) -> OutboxError {

@@ -5,8 +5,11 @@
 
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 
-/// Who asked for the transition. Recovery is the process reopening the store,
-/// not a person.
+/// Who asked for the transition.
+///
+/// An explicit save, send, or retry records [`Self::Person`].
+/// [`Self::Recovery`] is the process reopening the store, and only that
+/// reopening records it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Initiator {
     /// The person holding the phone.

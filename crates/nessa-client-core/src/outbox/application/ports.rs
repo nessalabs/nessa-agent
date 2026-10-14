@@ -90,6 +90,15 @@ pub trait IntentStore {
     ) -> Result<(), StoreError>;
     /// Every saved command.
     fn list(&mut self) -> Result<Vec<PhoneRecord>, StoreError>;
+    /// Take the writer lease. Replaces until [`Self::end_exclusive`] stay in it.
+    ///
+    /// A second lease on the same file waits. The wait ending without the lease
+    /// is [`StoreError::Unavailable`].
+    fn begin_exclusive(&mut self) -> Result<(), StoreError>;
+    /// Commit the writer lease. A lost acknowledgement is [`StoreError::Uncertain`].
+    fn end_exclusive(&mut self) -> Result<(), StoreError>;
+    /// Drop the writer lease and the writes it has not committed.
+    fn abort_exclusive(&mut self);
 }
 
 /// `conversation.send` and `conversation.receipt` for one saved intent.
