@@ -24,7 +24,7 @@ One grant:
 | --- | --- |
 | Principal | Who. A paired device (its receiver), a gateway (`gateway:<key>`), a person, an agent, or an integration (a webhook). |
 | Resource | One conversation id, or one directory in an environment the grantor enforces. That environment is this gateway's machine, a remote environment it already leases, or a cloud environment a later agent uses. |
-| Capabilities | A set drawn from `read`, `comment`, `drive`, `write`, `exec`. `comment` and `drive` belong to a conversation. `write` and `exec` belong to a directory. |
+| Capabilities | A set drawn from `read`, `comment`, `drive`, `write`, `exec`. `read` applies to a conversation and to a directory. `comment` and `drive` apply to a conversation. `write` and `exec` apply to a directory. |
 | Constraints | The path boundary, the tool policy, and the command allow/deny rules that apply inside that resource. |
 | Epoch | The grant epoch: the counter that advances when capabilities or constraints change. A turn, a lease, and a webhook attempt keep the epoch they were admitted under. The next admission reads the epoch again. |
 
@@ -214,7 +214,7 @@ policy engine, a new crate, or a grant-by-list.
 | Remembered permission rules | Stay the owner's. `rules.cedar` already refuses a grant. |
 | `#797` targets | Stay a caller contract. |
 | `#811` owner phone | Left to that issue. Pairing classes are unchanged here. |
-| `PeerPoller` timer for an Active peer | Deleted. Grant add, revoke, and epoch changes arrive on a grant subscription. Chat views arrive on `conversation.subscribe`. Both use the cursor and resume rules in [record subscriptions](record-subscriptions.md). |
+| `PeerPoller` timer for an Active peer | Deleted. Grant add, revoke, and epoch changes arrive on a grant subscription. Chat views arrive on `conversation.subscribe`. Both use the cursor and resume rules in [record subscriptions](record-subscriptions.md). One connection follows at most eight chats. |
 | `conversation.watchRecords` | Stays the retained phone path ([#851](https://github.com/nessalabs/nessa-agent/issues/851)). Peers use `conversation.subscribe`. |
 | Grant by channel, folder-of-chats, or default sync | Already refused. Stays refused. |
 | A webhook-only access list | Not added. The webhook's share grant is the list. |
@@ -311,8 +311,27 @@ refused, `lagging` resumed from `lastDelivered`.
   names only the receiver's own grants, so the timing of ungranted work
   stays on the grantor.
 - **Chats.** `conversation.subscribe` for each shared chat the follower has
-  opened and chosen to follow. A refused chat subscribe withdraws that
-  local replica.
+  opened and chosen to follow, up to the connection's conversation cap. A
+  refused chat subscribe withdraws that local replica.
+
+`socket.conversation_subscriptions` is 8
+([limits](../limits.md)). A ninth `conversation.subscribe` on one socket
+is refused `subscription_capacity`. The grant subscription is not a
+conversation target, and it does not take a catalogue list slot
+(`listTargets` stays the two catalogue lists, which a peer does not
+subscribe to). The slice adds one grant target per connection beside the
+eight and does not raise the conversation cap. A second grant subscription
+on that socket is refused `subscription_capacity`.
+
+The follow rule may name more than eight chats. The live set on that
+connection is still eight. The least recently opened chat, by an explicit
+open rather than by a frame, is let go, the same eviction the desktop uses
+for `conversationTargets`
+([record subscriptions](record-subscriptions.md)). The local replica stays.
+It receives no frames until it is opened again, and then
+`conversation.subscribe` resumes with `after` from the cursor last applied.
+There is no second connection and no poller for the chat that was let go.
+A grant change still arrives while eight chats are live.
 
 The `PeerPoller` timer goes away for an Active peer. `peer.poll_interval`
 no longer wakes a `catalogueHead` or a record walk. After a disconnect the
@@ -353,6 +372,12 @@ already use; the webhook key is its own, stored with the registration, and
 is not written into the body. A retry repeats the same delivery id while
 the attempt's epoch still allows delivery.
 
+The sender does not follow redirects. A 3xx is not a delivery. The attempt
+records `not sent` or `retry scheduled` under the same permit rules, and
+the next POST, when the epoch still allows it, goes to the registered URL
+only. The signature headers are written on that POST and are not sent to
+another origin. A redirect to HTTPS is still not followed.
+
 Revoke and a delivery attempt share one permit for that registration, the
 same shape as `hold_revision` on a share grant. The attempt that holds the
 permit finishes under the epoch it read. Revoke then advances the epoch.
@@ -381,22 +406,58 @@ a POST.
 
 ## LAN announcement
 
-Off until the peer table has a paired gateway. The announcement carries a
-dial address, a port, and one rotating token per paired peer. The token is
-HMAC-SHA256 of the current time window, keyed by the pairing secret both
-sides stored for that peer beside the pinned key. The pinned key, its
-fingerprint, and any other stable gateway id stay out of the announcement.
-The owner name, the organization, conversation ids, directories, and
-grants stay out too.
+Off until the peer table has a paired gateway with a discovery key. The
+announcement carries a dial address, a port, and one rotating token per
+paired peer that has a discovery key. The pinned key, its fingerprint, and
+any other stable gateway id stay out of the announcement. The owner name,
+the organization, conversation ids, directories, and grants stay out too.
 
-A paired peer recomputes the HMAC for each pinned peer, for the current
-window and one window on either side, and matches. A match says which peer
-announced and which address to try. The number of tokens is the number of
-paired peers; the token values change when the window changes, so a
-listener cannot follow one gateway from window to window. The window
-length is a row the slice adds to [limits](../limits.md). An unpaired
-listener cannot enroll from an announcement. The connection is still the
-pinned TLS session and the issued credential.
+The token is HMAC-SHA256 over the canonical bytes of the current time
+window, the dial address, and the port, in that order. The window and the
+port are unsigned big-endian integers. The address is one numeric form,
+the same bytes for the same endpoint. The slice owns that encoding. A
+token copied onto a different address or port does not match. The key is a
+32-byte discovery MAC key shared with that one peer. It is not in the
+announcement.
+
+Shipped pairing does not have that key. [`PeerRecord`](../../crates/nessa-server/src/peer_gateways/infrastructure/records.rs)
+keeps the peer key, the pin, the address, the relay, the intent, and the
+phase. An Active phase also keeps the credential id and the receiver. The
+peer file stores those. [`DeviceCredential`](../../crates/nessa-auth/src/application/pairing/private_state.rs)
+keeps the dialer's private key, the gateway pin, the intent, the
+credential id, and the receiver. The enrollment PAKE proves the one-use
+code and does not leave a MAC key on either record.
+[#705](https://github.com/nessalabs/nessa-agent/issues/705) does not supply
+the HMAC key.
+
+This slice adds it. After the enrollment is Active, both sides already
+have a pinned TLS session. On that session each side offers an ephemeral
+X25519 public key. HKDF-SHA256 derives the 32-byte MAC key from the shared
+secret, with a fixed label used only for this announcement. The ephemeral
+private keys are dropped. Each side stores the MAC key beside the pin it
+already keeps for that peer: the dialing gateway on the peer file, the
+granting gateway on the pairing record that already stores that peer's pin
+and `class: "peer"`. The key is not written into the credential, the
+grant, or the announcement. The peer-file schema version bumps once. A
+record this build cannot read stays unreadable for that peer only, as the
+peer file already does.
+
+A peer row from before this slice has no discovery key. Alpha does not
+invent one. That peer is left out of the announcement and cannot match a
+token until it is paired again under this slice.
+
+A paired peer recomputes the HMAC for each pinned peer that has a
+discovery key, for the current window and one window on either side, using
+the address and port in the announcement, and matches. A match says which
+peer announced and which address to try. The number of tokens is the
+number of paired peers that have a discovery key. The dial address, the
+port, the network source, and that count stay visible, so an observer can
+correlate announcements by them. The token is not a stable id: its value
+changes with the window, and an observer without the discovery key cannot
+match it to a pinned key. The window length is a row the slice adds to
+[limits](../limits.md). An unpaired listener cannot enroll from an
+announcement. The connection is still the pinned TLS session and the
+issued credential. Pairing still requires the one-use code.
 
 ## Order
 
@@ -414,12 +475,20 @@ phone are not in this list.
 | 6 | (e) Grant and chat subscriptions; the peer poller timer goes away | (a), and #851 as already merged |
 | 7 | (f) Follow rules | (a) and (e) |
 | 8 | (h) Signed outbound webhooks | The refactor |
-| 9 | (g) LAN announcement | Paired gateways as already shipped (#705) |
+| 9 | (g) LAN announcement | Paired gateways (#705). That pairing does not store the discovery key; this slice adds the agreement and the stored field. |
 
 ## Issues to file
 
-File each of these on the Nessa Agents board. The bodies are the text to
-paste. They are not open yet.
+These issues are open, in this order: [#889](https://github.com/nessalabs/nessa-agent/issues/889),
+[#890](https://github.com/nessalabs/nessa-agent/issues/890),
+[#891](https://github.com/nessalabs/nessa-agent/issues/891),
+[#892](https://github.com/nessalabs/nessa-agent/issues/892),
+[#893](https://github.com/nessalabs/nessa-agent/issues/893),
+[#894](https://github.com/nessalabs/nessa-agent/issues/894),
+[#895](https://github.com/nessalabs/nessa-agent/issues/895),
+[#896](https://github.com/nessalabs/nessa-agent/issues/896),
+[#897](https://github.com/nessalabs/nessa-agent/issues/897).
+The bodies below are the current text of this proposal.
 
 ### 1. Unify conversation shares into one access grant
 
@@ -627,6 +696,21 @@ owner's whole catalogue. A chat the follower has opened follows on
 chat subscribe withdraws that local conversation.
 `conversation.watchRecords` stays the retained phone path.
 
+`socket.conversation_subscriptions` is 8. A ninth `conversation.subscribe`
+on one socket is refused `subscription_capacity`. The grant subscription
+is not a conversation target and does not take a catalogue list slot. This
+slice adds one grant target per connection beside the eight and does not
+raise the conversation cap. A second grant subscription on that socket is
+refused `subscription_capacity`.
+
+A follow rule may name more than eight chats. The live set on that
+connection is still eight. The least recently opened chat, by an explicit
+open rather than by a frame, is let go. Its local replica stays and
+receives no frames until it is opened again, then `conversation.subscribe`
+resumes with `after` from the cursor last applied. There is no second
+connection and no poller for that chat. A grant change still arrives while
+eight chats are live.
+
 Two waits stay, and neither reads the catalogue on a timer. Until the
 enrollment is Active there is no session, so the existing status dial runs
 until Active or ended, then stops. After the subscription connection
@@ -643,6 +727,10 @@ way. Reconnect resumes both cursors and does not move either backwards in
 the same incarnation. An Active peer has no poller timer. A pending
 enrollment still completes through the status dial, and that dial stops
 at Active. The follower does not call `conversation.watchRecords`.
+Following nine chats leaves the least recently opened one unsubscribed,
+and opening it subscribes it and lets another go. The grant subscription
+is still open while eight chats are live. A ninth `conversation.subscribe`
+on that socket is not opened.
 
 ## Depends on
 
@@ -663,12 +751,20 @@ intersection. The default is none until the person chooses. Changing the
 rule is an explicit reset of the local replica. The rule cannot widen a
 grant, and the grantor is not sent the rule.
 
+The rule may name more than eight conversations. The connection still
+subscribes to at most eight and lets the least recently opened go. A chat
+let go stays a local replica and resumes from its cursor when opened
+again. The rule does not open a ninth `conversation.subscribe` and does
+not start a poller.
+
 ## Gate
 
 Following one granted chat leaves the peer's other granted chats out of
 the cache. A grant with no follow rule can be opened by an explicit choice
 and is not replicated on its own. Shrinking the rule drops the local
-replica. The grantor's catalogue is unchanged by the choice.
+replica. The grantor's catalogue is unchanged by the choice. Following
+nine granted chats leaves one unsubscribed. Opening that one subscribes
+it and lets another go.
 
 ## Depends on
 
@@ -697,6 +793,12 @@ the mac algorithm backup manifests use, with this registration's key. The
 key stays out of the body. Retry with bounded backoff and the same
 delivery id while that attempt's epoch still allows delivery.
 
+The sender does not follow redirects. A 3xx is not a delivery. The attempt
+records `not sent` or `retry scheduled`, and the next POST, when the epoch
+still allows it, goes to the registered URL only. The signature headers
+are written on that POST and are not sent to another origin. A redirect
+to HTTPS is still not followed.
+
 Revoke and delivery share one permit for the registration. An attempt
 takes the permit, reads the epoch, and only then writes the POST. Revoke
 takes the same permit and, when an attempt holds it, waits until that
@@ -717,7 +819,8 @@ delivery id and the signature. The webhook credential cannot call
 permit; that attempt is recorded under the epoch it read, and the epoch
 then advances. A retry that takes the permit after that advance is not
 sent. An attempt that has not taken the permit when revoke commits is not
-sent.
+sent. A 3xx is not followed and is not a delivery. The signature is not
+sent to the redirect target.
 
 ## Depends on
 
@@ -731,30 +834,61 @@ Part of docs/design/access-grants.md.
 
 ## Deliver
 
-With at least one paired gateway in the peer table, this gateway may
-announce itself on the local network. The announcement carries a dial
-address, a port, and one rotating token per paired peer. The token is
-HMAC-SHA256 of the current time window, keyed by the pairing secret both
-sides stored for that peer beside the pinned key. The pinned key, its
-fingerprint, and any other stable gateway id are not in the announcement.
-Neither are the owner name, the organization, conversation ids,
-directories, or grants. A paired peer recomputes the HMAC for each pinned
-peer, for the current window and one window on either side, and matches.
-The connection uses the existing pinned credential. Pairing still requires
-the one-use code. The window length is a row in `docs/limits.md`. With no
-paired gateway, send nothing.
+With at least one paired gateway that has a discovery key, this gateway
+may announce itself on the local network. The announcement carries a dial
+address, a port, and one rotating token per such peer. The token is
+HMAC-SHA256 over the canonical bytes of the current time window, the dial
+address, and the port. The window and the port are unsigned big-endian
+integers. The address is one numeric form. A token copied onto a different
+address or port does not match.
+
+Shipped pairing does not store this key. `PeerRecord` keeps the peer key,
+the pin, the address, the relay, the intent, and the phase; an Active
+phase also keeps the credential id and the receiver. `DeviceCredential`
+keeps the dialer's private key, the gateway pin, the intent, the
+credential id, and the receiver. The enrollment PAKE does not leave a MAC
+key on either record. #705 does not supply the HMAC key.
+
+After the enrollment is Active, both sides already have a pinned TLS
+session. On that session each side offers an ephemeral X25519 public key.
+HKDF-SHA256 derives a 32-byte MAC key from the shared secret, with a fixed
+label used only for this announcement. The ephemeral private keys are
+dropped. The dialing gateway stores the key on the peer file beside the
+pin. The granting gateway stores it on the pairing record that already
+keeps that peer's pin. The peer-file schema version bumps once. The key
+is not written into the credential, the grant, or the announcement. A
+peer row from before this slice has no discovery key. Alpha does not
+invent one. That peer is left out of the announcement and cannot match a
+token until it is paired again under this slice.
+
+The pinned key, its fingerprint, and any other stable gateway id are not
+in the announcement. Neither are the owner name, the organization,
+conversation ids, directories, or grants. A paired peer recomputes the
+HMAC for each pinned peer that has a discovery key, for the current window
+and one window on either side, using the address and port in the
+announcement, and matches. The connection uses the existing pinned
+credential. Pairing still requires the one-use code. The window length is
+a row in `docs/limits.md`. With no discovery key, send nothing.
+
+The dial address, the port, the network source, and the number of tokens
+stay visible. An observer can correlate announcements by them. The token
+is not a stable id.
 
 ## Gate
 
-An unpaired gateway sends no announcement. An announcement cannot enroll a
-listener. The announcement bytes contain no key fingerprint and no stable
-gateway id. Two windows for the same peer produce two different tokens. A
+An unpaired gateway sends no announcement. A paired peer with no discovery
+key is left out, and is not given an invented key. An announcement cannot
+enroll a listener. The announcement bytes contain no key fingerprint and
+no stable gateway id. Two windows for the same peer produce two different
+tokens. A token copied onto a different address or port does not match. A
 paired peer matches a token to its pinned peer and is refused if the
-credential is wrong. A listener without the pairing secret cannot match
-the token to a pinned key.
+credential is wrong. An observer without the discovery key cannot match
+the token to a pinned key. The dial address, the port, and the token count
+remain in the announcement.
 
 ## Depends on
 
-Paired peer gateways as already shipped (#705). Sequenced after the grant
+Paired peer gateways (#705), which do not store the discovery key. This
+slice adds the agreement and the stored field. Sequenced after the grant
 slices so discovery does not become a second enrollment.
 ```
