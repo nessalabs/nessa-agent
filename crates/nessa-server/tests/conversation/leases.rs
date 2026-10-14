@@ -5455,9 +5455,10 @@ impl Harness {
                     files: Vec::new(),
                 },
                 SubmissionMode::Queue,
-                super::service::Writer::Person(Initiation::grant(
-                    GrantInitiator::new(grant, revision).unwrap(),
-                )),
+                super::service::Writer::Person(
+                    Initiation::grant(GrantInitiator::new(grant, revision).unwrap()),
+                    false,
+                ),
             )
             .await;
         match sent {

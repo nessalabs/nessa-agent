@@ -528,8 +528,9 @@ pub enum SubmissionMode {
 #[derive(Clone)]
 pub(super) enum Writer {
     /// The person, with who their turn is saved as started by: the owner, or
-    /// the share grant that admitted it.
-    Person(Initiation),
+    /// the share grant that admitted it. The flag is whether this membership
+    /// may use a remember choice. A grant turn is not offered one.
+    Person(Initiation, bool),
     App {
         sender: McpAppSource,
         apps: Arc<AppReviews>,
@@ -547,13 +548,22 @@ impl Writer {
     /// owner's own surface.
     fn initiation(&self) -> Initiation {
         match self {
-            Self::Person(initiation) => initiation.clone(),
+            Self::Person(initiation, _) => initiation.clone(),
             Self::App { .. } => Initiation::owner(),
+        }
+    }
+    /// Whether this message may be offered a remember choice. An app writes
+    /// on the owner's surface, so it may. A person's turn may only when the
+    /// membership that sent it can use one, and only an owner turn is armed.
+    fn offers_remember(&self) -> bool {
+        match self {
+            Self::Person(_, offered) => *offered,
+            Self::App { .. } => true,
         }
     }
     fn sender(&self) -> MessageSender {
         match self {
-            Self::Person(_) => MessageSender::Person,
+            Self::Person(_, _) => MessageSender::Person,
             Self::App { sender, .. } => MessageSender::App(sender.clone()),
         }
     }
@@ -574,7 +584,7 @@ impl Writer {
     /// admitted in ended or its mount was released. Never the person's.
     fn opening_ended(&self) -> bool {
         match self {
-            Self::Person(_) => false,
+            Self::Person(_, _) => false,
             Self::App {
                 apps, epoch, mount, ..
             } => apps.admit(*epoch, mount).is_err(),
@@ -2615,7 +2625,7 @@ impl ConversationService {
             execution_id,
             message,
             mode,
-            Writer::Person(Initiation::owner()),
+            Writer::Person(Initiation::owner(), true),
         )
         .await
         .map_err(SubmitFailure::into_error)
@@ -2970,7 +2980,7 @@ impl ConversationService {
             if let Some(rules) = service.inner.permission_rules.get() {
                 rules.arm(
                     &execution,
-                    matches!(initiation.initiator(), Initiator::Owner),
+                    writer.offers_remember() && matches!(initiation.initiator(), Initiator::Owner),
                 );
             }
             let request = ExecutionRequest {

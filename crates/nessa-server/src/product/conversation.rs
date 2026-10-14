@@ -189,12 +189,19 @@ pub(super) async fn dispatch(
                 let caller = caller(params.request_id.clone());
                 let execution_id = params.execution_id.clone();
                 let store = service.commands().ok_or(ConversationError::Unavailable)?;
+                // Admission still starts an unpaired session as an owner turn.
+                // Whether that turn may offer a remember choice is this
+                // membership, and a membership that cannot be read offers none.
+                let offers_remember = authenticated_rule_principal(state, session)
+                    .await
+                    .is_ok_and(|principal| principal == RulePrincipal::Owner);
                 let submitted = service
                     .submit_command(
                         store,
                         id.clone(),
                         caller.clone(),
                         initiation,
+                        offers_remember,
                         execution_id.clone(),
                         submitted_message(&params),
                         mode,

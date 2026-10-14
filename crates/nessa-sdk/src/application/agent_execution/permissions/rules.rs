@@ -112,7 +112,10 @@ pub trait PermissionRules: Send + Sync {
     /// Whether this execution may be offered Nessa's remember choices.
     fn offers_remember(&self, execution: &ExecutionId) -> bool;
 
-    /// Record that `execution` is an owner turn (`owner`) or is not.
+    /// Record whether `execution` may be offered remember choices.
+    ///
+    /// `owner` is that offer. An owner turn whose membership cannot use a
+    /// remember choice is recorded as not offered.
     fn arm(&self, execution: &ExecutionId, owner: bool);
 
     /// Record that the answer identified by `execution` and `request_id` is

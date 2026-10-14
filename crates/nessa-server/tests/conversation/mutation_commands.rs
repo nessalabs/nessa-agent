@@ -13,12 +13,15 @@ use crate::conversation_test_support::{
     Provider, ProviderFactory, RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_sdk::application::agent_execution::permissions::{
+    PermissionRules, RememberError, RememberRequest, SettledRule,
+};
 use nessa_sdk::application::agent_execution::{
     agents::{AgentError, AttachmentPhase},
     commands::CreationFailure,
     sessions::{SessionSnapshot, SessionStorage},
 };
-use nessa_sdk::domain::agent_execution::executions::Initiation;
+use nessa_sdk::domain::agent_execution::executions::{ExecutionId, Initiation};
 use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -299,6 +302,7 @@ async fn submit_commits_the_attempt_before_enqueue() {
                     target,
                     caller("submit"),
                     Initiation::owner(),
+                    true,
                     "turn".into(),
                     message("hello"),
                     SubmissionMode::Queue,
@@ -349,6 +353,7 @@ async fn a_settled_submit_reopens_without_enqueueing_again() {
             target.clone(),
             caller("submit"),
             Initiation::owner(),
+            true,
             "turn".into(),
             message("hello"),
             SubmissionMode::Queue,
@@ -369,6 +374,7 @@ async fn a_settled_submit_reopens_without_enqueueing_again() {
             target.clone(),
             caller("submit"),
             Initiation::owner(),
+            true,
             "turn".into(),
             message("hello"),
             SubmissionMode::Queue,
@@ -423,6 +429,7 @@ async fn a_submit_identity_conflicts_with_changed_bytes_or_a_creation_request() 
                 target.clone(),
                 caller("shared"),
                 Initiation::owner(),
+                true,
                 "turn".into(),
                 message("hello"),
                 SubmissionMode::Queue,
@@ -439,6 +446,7 @@ async fn a_submit_identity_conflicts_with_changed_bytes_or_a_creation_request() 
             other.clone(),
             caller("submit"),
             Initiation::owner(),
+            true,
             "turn".into(),
             message("hello"),
             SubmissionMode::Queue,
@@ -459,6 +467,7 @@ async fn a_submit_identity_conflicts_with_changed_bytes_or_a_creation_request() 
                 other.clone(),
                 caller("submit"),
                 Initiation::owner(),
+                true,
                 "turn".into(),
                 message("different"),
                 SubmissionMode::Queue,
@@ -473,6 +482,7 @@ async fn a_submit_identity_conflicts_with_changed_bytes_or_a_creation_request() 
                 id(),
                 caller("submit"),
                 Initiation::owner(),
+                true,
                 "other-turn".into(),
                 message("hello"),
                 SubmissionMode::Queue,
@@ -487,6 +497,7 @@ async fn a_submit_identity_conflicts_with_changed_bytes_or_a_creation_request() 
                 other.clone(),
                 caller_on("submit", "phone"),
                 Initiation::owner(),
+                true,
                 "turn".into(),
                 message("hello"),
                 SubmissionMode::Queue,
@@ -523,6 +534,7 @@ async fn a_changed_image_type_or_size_conflicts_with_the_saved_submit() {
             target.clone(),
             caller("picture"),
             Initiation::owner(),
+            true,
             "turn".into(),
             image_message("image/png", 4),
             SubmissionMode::Queue,
@@ -538,6 +550,7 @@ async fn a_changed_image_type_or_size_conflicts_with_the_saved_submit() {
                 target.clone(),
                 caller("picture"),
                 Initiation::owner(),
+                true,
                 "turn".into(),
                 changed,
                 SubmissionMode::Queue,
@@ -580,6 +593,7 @@ fn submit_crash_child() {
                     target_for_submit,
                     caller("submit"),
                     Initiation::owner(),
+                    true,
                     "turn".into(),
                     message("hello"),
                     SubmissionMode::Queue,
@@ -653,6 +667,7 @@ async fn an_interrupted_submit_does_not_enqueue_again() {
                 target.clone(),
                 caller("submit"),
                 Initiation::owner(),
+                true,
                 "turn".into(),
                 message("hello"),
                 SubmissionMode::Queue,
@@ -679,6 +694,7 @@ async fn deletion_refuses_submit_lookup_after_reopen() {
             target.clone(),
             caller("submit"),
             Initiation::owner(),
+            true,
             "turn".into(),
             message("hello"),
             SubmissionMode::Queue,
@@ -711,6 +727,7 @@ async fn deletion_refuses_submit_lookup_after_reopen() {
                 target,
                 caller("submit"),
                 Initiation::owner(),
+                true,
                 "turn".into(),
                 message("hello"),
                 SubmissionMode::Queue,
@@ -750,6 +767,7 @@ async fn a_command_the_policy_cannot_decide_is_refused_before_any_stage() {
                 target.clone(),
                 caller("submit"),
                 Initiation::owner(),
+                true,
                 "turn".into(),
                 message("hello"),
                 SubmissionMode::Queue,
@@ -1310,6 +1328,7 @@ async fn a_submit_linking_a_file_is_refused_on_a_host_before_it_is_staged() {
             target,
             caller("submit"),
             Initiation::owner(),
+            true,
             "turn".into(),
             linking,
             SubmissionMode::Queue,
@@ -1324,4 +1343,76 @@ async fn a_submit_linking_a_file_is_refused_on_a_host_before_it_is_staged() {
     assert_eq!(command_rows(&root), 0);
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
     retire(service, storage, metadata).await;
+}
+
+/// An owner initiation is not enough. The membership flag is what arms the
+/// remember offer, so a member whose turn is still saved as the owner's is
+/// not offered a choice they cannot use.
+#[tokio::test]
+async fn an_owner_turn_offers_remember_only_when_the_membership_may() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let rules = Arc::new(RecordingRules::default());
+    service.bind_permission_rules(rules.clone());
+    let target = id();
+    opened(&service, &provider, &target).await;
+    service
+        .submit_command(
+            storage.clone(),
+            target.clone(),
+            caller("submit"),
+            Initiation::owner(),
+            false,
+            "hidden".into(),
+            message("hello"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    assert!(!rules.offers_remember(&ExecutionId::new("hidden").unwrap()));
+    service
+        .submit_command(
+            storage.clone(),
+            target,
+            caller("again"),
+            Initiation::owner(),
+            true,
+            "offered".into(),
+            message("again"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    assert!(rules.offers_remember(&ExecutionId::new("offered").unwrap()));
+    retire(service, storage, metadata).await;
+}
+
+#[derive(Default)]
+struct RecordingRules {
+    armed: std::sync::Mutex<Vec<(String, bool)>>,
+}
+
+impl PermissionRules for RecordingRules {
+    fn settle(&self, _: &str, _: &str, _: &str) -> Option<SettledRule> {
+        None
+    }
+    fn offers_remember(&self, execution: &ExecutionId) -> bool {
+        self.armed
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(id, _)| id == execution.as_str())
+            .is_some_and(|(_, offered)| *offered)
+    }
+    fn arm(&self, execution: &ExecutionId, owner: bool) {
+        self.armed
+            .lock()
+            .unwrap()
+            .push((execution.as_str().to_owned(), owner));
+    }
+    fn remember(&self, _: RememberRequest<'_>) -> Result<SettledRule, RememberError> {
+        Err(RememberError::Refused)
+    }
 }

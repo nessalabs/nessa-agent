@@ -42,6 +42,9 @@ impl ConversationService {
     /// admitted with. The same turn sent again as a new request under another
     /// initiation (the grant's revision moved) is a conflict, as any other
     /// message under that turn's id is.
+    ///
+    /// `offers_remember` is whether this membership may use a remember choice.
+    /// An owner turn is offered one only when it is true. A grant turn is not.
     #[allow(clippy::too_many_arguments)]
     pub async fn submit_command(
         &self,
@@ -49,6 +52,7 @@ impl ConversationService {
         id: ConversationId,
         caller: ConversationCaller,
         initiation: Initiation,
+        offers_remember: bool,
         execution_id: String,
         message: SubmittedMessage,
         mode: SubmissionMode,
@@ -83,6 +87,7 @@ impl ConversationService {
                 id,
                 caller,
                 initiation,
+                offers_remember,
                 execution_id,
                 message: Mutex::new(Some(message)),
                 mode,
@@ -229,6 +234,7 @@ struct SubmitTarget {
     id: ConversationId,
     caller: ConversationCaller,
     initiation: Initiation,
+    offers_remember: bool,
     execution_id: String,
     message: Mutex<Option<SubmittedMessage>>,
     mode: SubmissionMode,
@@ -262,6 +268,7 @@ impl MutationTarget for SubmitTarget {
         let id = self.id.clone();
         let caller = self.caller.clone();
         let initiation = self.initiation.clone();
+        let offers_remember = self.offers_remember;
         let execution_id = self.execution_id.clone();
         let mode = self.mode;
         let delivery = self.delivery.clone();
@@ -273,7 +280,7 @@ impl MutationTarget for SubmitTarget {
                     execution_id,
                     message.map_err(CreationInitializationFailure::Target)?,
                     mode,
-                    Writer::Person(initiation),
+                    Writer::Person(initiation, offers_remember),
                 )
                 .await
                 .map_err(SubmitFailure::into_error)
