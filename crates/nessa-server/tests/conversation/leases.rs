@@ -4092,8 +4092,10 @@ impl Harness {
 }
 
 /// A fetch wait short enough to time out quickly, and long enough for a
-/// call that is answered to save its asking first, under a loaded machine.
-const FETCH_SAVE_WAIT: Duration = Duration::from_secs(1);
+/// call that is answered to save its asking and reach the host first, under
+/// a loaded machine. One second was not enough for a max-size file on a
+/// loaded Windows runner (local-auth run 38503431790).
+const FETCH_SAVE_WAIT: Duration = Duration::from_secs(5);
 
 /// A host's harness with its conversation created there, a turn running
 /// that `go` lets finish, and `bytes` held by the conversation.
