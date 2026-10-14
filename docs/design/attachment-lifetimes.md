@@ -70,7 +70,6 @@ Resource construction captures and validates scalar metadata once, normalizes it
 | AL21 | Resource value is dispatched alongside an unrelated class or Blob | Resource own scalar fields remain traversed; arbitrary nonserializable values still fail Redux diagnostics | Scoped isPlain-or-resource predicate tests |
 | AL22 | Constructor receives boxed/mutable scalar hooks or invalid sizes | Reject before issuing a value; getter fields captured once | Constructor negative/runtime/type tests |
 | AL23 | A File overrides size/type, or a caller tries to shadow retained Blob hooks after issuance | Manager preserves intrinsic Blob size/type/content in frozen snapshots, and exposes no mutable byte-wrapper metadata | Native Blob metadata provenance test |
-
 | AL24 | Stored input is refused, restored to its draft, then accepted by a new send, with or without reupload | Draft and pending send retain original bytes; terminal failed history no longer prevents shared preview eviction after acceptance | Refusal/resend resource-query regression and revert probe |
 | AL25 | Terminal failed content has no stored image fallback | Preserve its local resource rather than fabricate a gateway reference | Local-only failed-content query regression |
 
