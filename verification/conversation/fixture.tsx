@@ -15,7 +15,7 @@ import {
   setActive,
   closeTab,
   followConversation,
-  restoreConversations,
+  openListed,
 } from "../../src/conversation/adapters/store/slice"
 import {
   useConversationDispatch,
@@ -197,7 +197,7 @@ function HistoryTabConsumer() {
       },
     }
     const tabs = makeStore(createDependencies({ conversation: effects }))
-    tabs.dispatch(restoreConversations({ tabs: [{ conversationId: serverId }] }))
+    tabs.dispatch(openListed({ serverConversationId: serverId, title: null }))
     await tabs
       .dispatch(followConversation(tabs.getState().conversation.activeId))
       .unwrap()
@@ -211,8 +211,8 @@ function HistoryTabConsumer() {
   }
   const close = async () => {
     if (!active) return
-    const id = active.store.getState().conversation.activeId
-    await active.store.dispatch(closeTab(id)).unwrap()
+    const closedId = active.store.getState().conversation.activeId
+    await active.store.dispatch(closeTab(closedId)).unwrap()
     setResult(
       (previous) =>
         previous && {
@@ -220,7 +220,7 @@ function HistoryTabConsumer() {
           closes: active.closeCalls(),
           open: active.store
             .getState()
-            .conversation.conversations.some((item) => item.id === id),
+            .conversation.conversations.some((item) => item.id === closedId),
         },
     )
   }
