@@ -577,7 +577,10 @@ launches the bundled tree by absolute path so the gateway can bind, and a
 background thread holding the same lock publishes the generation afterwards.
 That publication flushes files on a bounded pool while it hashes the tree, and
 it still requires a matching digest and durable files and directories before
-the exclusive rename. The next registration points the service at that directory.
+the exclusive rename. The attempt journals the publication after its other
+effects and before its outcome, once the gateway is already ready. This
+process keeps the bundle path while the installed definition still names it.
+The next launch of the app points the service at that directory.
 Replacing or moving the app while that first job is running from the bundle does
 not retarget it; a copy that observes the change publishes nothing. Exclusive atomic
 publication prevents replacing an existing version, and no search path derives

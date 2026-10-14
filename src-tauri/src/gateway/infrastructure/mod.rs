@@ -11,7 +11,10 @@
 //! generation that is already published is verified again before the service
 //! changes. One that is not does not gate launchd: this registration runs the
 //! bundled tree by absolute path, and publication continues on a thread that
-//! keeps the service-label lock until `stage_runtime` returns. File durability
+//! keeps the service-label lock until `stage_runtime` returns. The attempt
+//! journals that publication after its other effects, before its outcome, and
+//! keeps the bundle path for the rest of this process while the installed
+//! definition still names it. File durability
 //! and the tree digest overlap on a pool sized to the machine; both finish
 //! before the exclusive rename. Existing versions remain available across app
 //! replacement.

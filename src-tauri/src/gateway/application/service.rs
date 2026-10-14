@@ -6,6 +6,8 @@
     )
 )]
 
+#[cfg(any(target_os = "macos", test))]
+use super::DeferredStageReporter;
 #[cfg(test)]
 use super::SystemMonotonicClock;
 use super::{
@@ -362,6 +364,19 @@ struct StartupProgress {
     )]
     journal: Arc<dyn GatewayReconciliationJournalSession>,
     state: Arc<Mutex<ProgressState>>,
+    deferred_stage: Mutex<Option<DeferredStageWait>>,
+}
+
+struct DeferredStageWait {
+    plan_id: String,
+    step_id: String,
+    fingerprint: String,
+    result: mpsc::Receiver<Result<(), String>>,
+}
+
+struct StartupRestore {
+    startup: GatewayStartup,
+    ready_gateway: Option<ReconciledGateway>,
 }
 
 #[derive(Clone)]
@@ -671,6 +686,140 @@ impl GatewayReconciliationProgress for StartupProgress {
         state.pending_observation = None;
         state.latest_observation = Some(observation.clone());
         Ok(observation)
+    }
+
+    #[cfg(any(target_os = "macos", test))]
+    fn begin_deferred_stage(
+        &self,
+        fingerprint: &str,
+    ) -> Result<Option<DeferredStageReporter>, GatewayError> {
+        // The plan is written later, after this attempt's other effects. A
+        // plan recorded here would stay pending and block every later effect.
+        let (reporter, result) = DeferredStageReporter::pair();
+        *self
+            .deferred_stage
+            .lock()
+            .map_err(|_| state_unavailable())? = Some(DeferredStageWait {
+            plan_id: "stage-runtime".into(),
+            step_id: "primary".into(),
+            fingerprint: fingerprint.to_owned(),
+            result,
+        });
+        Ok(Some(reporter))
+    }
+}
+
+impl StartupProgress {
+    fn take_deferred_stage(&self) -> Option<DeferredStageWait> {
+        self.deferred_stage.lock().ok()?.take()
+    }
+}
+
+fn publish_ready_while_stage_finishes(
+    executor: &ReconciliationExecutor,
+    receipt: &Arc<AttemptReceipt>,
+    gateway: &ReconciledGateway,
+) -> Option<StartupRestore> {
+    let Ok(mut current) = executor.lifecycle.lock() else {
+        return None;
+    };
+    let owns = current
+        .running
+        .as_ref()
+        .is_some_and(|running| Arc::ptr_eq(running, receipt));
+    if !owns {
+        return None;
+    }
+    let previous = StartupRestore {
+        startup: current.startup.clone(),
+        ready_gateway: current.ready_gateway.clone(),
+    };
+    current.ready_gateway = Some(gateway.clone());
+    current.startup = current.startup.next(GatewayStartupPhase::Ready);
+    let startup = current.startup.clone();
+    drop(current);
+    publish(&executor.startup_events, &startup);
+    Some(previous)
+}
+
+fn restore_startup(executor: &ReconciliationExecutor, previous: StartupRestore) {
+    if let Ok(mut current) = executor.lifecycle.lock() {
+        current.startup = previous.startup;
+        current.ready_gateway = previous.ready_gateway;
+    }
+}
+
+fn plan_deferred_stage(
+    progress: &StartupProgress,
+    deferred: &DeferredStageWait,
+    physical: &Result<ReconciledGateway, GatewayError>,
+) -> Result<(), GatewayError> {
+    let step = LifecyclePlanStep::new(
+        deferred.step_id.clone(),
+        LifecycleEffect::StageRuntime {
+            fingerprint: deferred.fingerprint.clone(),
+        },
+        LifecycleEffectPredicate::Always,
+    )
+    .map_err(|error| audit_around(GatewayError::Registration(error.to_string()), physical))?;
+    // No cleanup. An interrupted plan is settled without replay; a prune
+    // owed here could remove the directory the staging thread still holds.
+    progress
+        .effect_planned(&deferred.plan_id, &step, &[])
+        .map_err(|error| audit_around(error, physical))?;
+    Ok(())
+}
+
+fn complete_deferred_stage(
+    progress: &StartupProgress,
+    host: &dyn GatewayHost,
+    deferred: &DeferredStageWait,
+    physical: &Result<ReconciledGateway, GatewayError>,
+    stage_result: Result<(), String>,
+) -> Result<(), GatewayError> {
+    let completion = match &stage_result {
+        Ok(()) => LifecycleCommandResult::Accepted,
+        Err(error) => LifecycleCommandResult::Failed(error.clone()),
+    };
+    if let Err(error) = progress.effect_completed(&deferred.plan_id, &deferred.step_id, &completion)
+    {
+        return Err(audit_around(error, physical));
+    }
+    let incarnation = match physical {
+        Ok(gateway) => Some(
+            gateway
+                .audit_identity()
+                .map_err(|error| audit_around(error, physical))?,
+        ),
+        Err(_) => None,
+    };
+    let present = host
+        .published_runtime_is_present(&deferred.fingerprint)
+        .map_err(|error| audit_around(error, physical))?;
+    progress
+        .physical_observed(
+            &LifecycleObservationSource::Effect {
+                plan_id: deferred.plan_id.clone(),
+                step_id: deferred.step_id.clone(),
+            },
+            incarnation,
+            present,
+        )
+        .map_err(|error| audit_around(error, physical))?;
+    Ok(())
+}
+
+fn audit_around(
+    error: GatewayError,
+    physical: &Result<ReconciledGateway, GatewayError>,
+) -> GatewayError {
+    let physical = match physical {
+        Ok(_) => GatewayPhysicalResult::Succeeded,
+        Err(error) => GatewayPhysicalResult::Failed(Box::new(error.clone())),
+    };
+    GatewayError::Audit {
+        audit: error.to_string(),
+        physical: Some(physical),
     }
 }
 
@@ -1818,6 +1967,7 @@ fn execute_attempt(
             failed_phase: None,
             step: StartupStep::Preparing,
         })),
+        deferred_stage: Mutex::new(None),
     };
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         let agent_path = executor
@@ -1836,6 +1986,33 @@ fn execute_attempt(
             "gateway host panicked during reconciliation".into(),
         ))
     });
+    if let Some(deferred) = progress.take_deferred_stage() {
+        let early = physical
+            .as_ref()
+            .ok()
+            .and_then(|gateway| publish_ready_while_stage_finishes(executor, receipt, gateway));
+        // The plan is durable while the copy is still running. Recovery of a
+        // crash in that window settles the unpublished plan without pruning.
+        let planned = plan_deferred_stage(&progress, &deferred, &physical);
+        let recorded = planned.and_then(|()| {
+            let stage_result = deferred.result.recv().unwrap_or_else(|_| {
+                Err("deferred runtime publication ended without a result".into())
+            });
+            complete_deferred_stage(
+                &progress,
+                executor.host.as_ref(),
+                &deferred,
+                &physical,
+                stage_result,
+            )
+        });
+        if let Err(error) = recorded {
+            if let Some(early) = early {
+                restore_startup(executor, early);
+            }
+            physical = Err(error);
+        }
+    }
     let state = progress.state.lock().ok().map(|state| state.clone());
     let admission = state.as_ref().map(|state| state.admission.clone());
     let facts = state

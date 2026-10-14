@@ -17,6 +17,8 @@ use crate::gateway::domain::value_objects::{
     ReconciliationRejectedReport, ReconciliationRequestRecord, ReconciliationTarget, SearchPath,
     SearchPathError, SystemdJobAttempt, SystemdRuntimeObservation,
 };
+#[cfg(any(target_os = "macos", test))]
+use std::sync::mpsc;
 use std::{
     error::Error,
     fmt,
@@ -624,6 +626,27 @@ pub trait GatewayStartupEvents: Send + Sync {
     fn publish(&self, startup: &GatewayStartup);
 }
 
+/// The staging thread's report of one deferred publication.
+///
+/// Dropping it without [`Self::finish`] is a missing result. The attempt
+/// records that as a failed publication rather than waiting forever.
+#[cfg(any(target_os = "macos", test))]
+pub struct DeferredStageReporter {
+    result: mpsc::Sender<Result<(), String>>,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl DeferredStageReporter {
+    pub(crate) fn pair() -> (Self, mpsc::Receiver<Result<(), String>>) {
+        let (result, receiver) = mpsc::channel();
+        (Self { result }, receiver)
+    }
+
+    pub fn finish(self, result: Result<(), String>) {
+        let _ = self.result.send(result);
+    }
+}
+
 /// Reports readiness invalidation and the ordered native history for one attempt.
 ///
 /// Healthy verification never calls this port. A native adapter calls it before
@@ -698,6 +721,23 @@ pub trait GatewayReconciliationProgress: Send + Sync {
         incarnation: Option<ReconciliationIncarnation>,
         target_artifact_present: bool,
     ) -> Result<LifecycleObservation, GatewayError>;
+
+    /// Authorizes a runtime publication that finishes after this attempt has
+    /// reported the gateway ready.
+    ///
+    /// `Some` reserves the report. The attempt writes the plan — with no
+    /// cleanup, so recovery will not remove a generation the staging thread
+    /// may still be writing — only once its other effects have completed, then
+    /// waits for [`DeferredStageReporter`] and records the completion and
+    /// artifact observation before its outcome. `None` means this progress
+    /// does not journal the copy.
+    #[cfg(any(target_os = "macos", test))]
+    fn begin_deferred_stage(
+        &self,
+        _fingerprint: &str,
+    ) -> Result<Option<DeferredStageReporter>, GatewayError> {
+        Ok(None)
+    }
 
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn systemd_observed(
@@ -1409,6 +1449,17 @@ pub trait GatewayHost: Send + Sync {
         attempt: &GatewayReconciliationAttempt,
         progress: &dyn GatewayReconciliationProgress,
     ) -> Result<ReconciledGateway, GatewayError>;
+
+    /// Whether the private directory for `fingerprint` is present.
+    ///
+    /// Called after a deferred publication reports, so the attempt can record
+    /// the artifact without reading launchd itself. The default is for a host
+    /// that never defers one.
+    fn published_runtime_is_present(&self, _fingerprint: &str) -> Result<bool, GatewayError> {
+        Err(GatewayError::Registration(
+            "this gateway host does not publish a staged runtime".into(),
+        ))
+    }
 
     /// Reobserve and settle one validated persisted lifecycle before current
     /// configuration is allowed to allocate or mutate anything.

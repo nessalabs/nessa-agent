@@ -863,10 +863,16 @@ at that directory, so replacing `Nessa.app` cannot replace files under that
 gateway. A generation that is not there yet does not block the gateway: that
 registration runs the bundled tree by absolute path — the same fingerprint, still
 on nobody's `PATH` — and the publication runs afterwards on a thread that keeps
-the per-label lock until it finishes. The next registration points the service
-at the published directory. Until that registration, replacing the app can still
-change files the running process opens from the bundle; the running job keeps
-the bundle path it was given and is not retargeted onto the staged copy. Moving
+the per-label lock until it finishes. That attempt records the publication plan
+after its other effects, then the copy's result and whether the directory is
+present, before its outcome; the gateway is already reported ready while the
+copy finishes. This process keeps the bundle path for a fingerprint it launched
+that way while the installed definition still names the bundle, so a later
+reconciliation in the same launch leaves that healthy gateway in place. The
+next launch of the app points the service at the published directory. Until
+that launch, replacing the app can still change files the running process opens
+from the bundle; the running job keeps the bundle path it was given and is not
+retargeted onto the staged copy. Moving
 the bundle, or changing a file in it, while that copy is in progress publishes
 nothing and removes only that attempt's temporary directory. No search path is derived
 from either directory. Corrupt existing versions cause an error; they are never

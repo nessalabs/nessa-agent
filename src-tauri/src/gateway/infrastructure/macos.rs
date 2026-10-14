@@ -1,9 +1,10 @@
 //! launchd registration and loopback readiness. Service lifetime belongs to launchd.
 use crate::gateway::application::{
-    ClaudeDirectoryReplacement, GatewayError, GatewayHost, GatewayLifecycleRecovery,
-    GatewayPhysicalResult, GatewayReconciliationAttempt, GatewayReconciliationIntent,
-    GatewayReconciliationJournalSession, GatewayReconciliationProgress, GatewayStopSession,
-    ReconciledGateway, ReconciliationHistoryFact, StartupStep,
+    ClaudeDirectoryReplacement, DeferredStageReporter, GatewayError, GatewayHost,
+    GatewayLifecycleRecovery, GatewayPhysicalResult, GatewayReconciliationAttempt,
+    GatewayReconciliationIntent, GatewayReconciliationJournalSession,
+    GatewayReconciliationProgress, GatewayStopSession, ReconciledGateway,
+    ReconciliationHistoryFact, StartupStep,
 };
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
@@ -18,6 +19,7 @@ use serde_json::{Map, Value};
 #[cfg(test)]
 use std::sync::Condvar;
 use std::{
+    collections::HashSet,
     fmt::{self, Display, Formatter},
     fs::{self, OpenOptions},
     io::{ErrorKind, Read, Write},
@@ -186,6 +188,9 @@ pub(super) struct Launchd {
     disabled_services: Arc<dyn DisabledServiceStatus>,
     configuration: Mutex<ServiceConfiguration>,
     home: PathBuf,
+    /// Fingerprints this process launched from the bundle. Publication must
+    /// not make a later registration in this process retarget that job.
+    bundle_launches: Mutex<HashSet<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -262,7 +267,22 @@ impl Launchd {
             disabled_services,
             configuration: Mutex::new(configuration),
             home,
+            bundle_launches: Mutex::new(HashSet::new()),
         }
+    }
+
+    fn bundle_launch_noted(&self, fingerprint: &str) -> bool {
+        self.bundle_launches
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains(fingerprint)
+    }
+
+    fn note_bundle_launch(&self, fingerprint: &str) {
+        self.bundle_launches
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(fingerprint.to_owned());
     }
 
     fn service_configuration(&self) -> ServiceConfiguration {
@@ -338,6 +358,17 @@ impl GatewayHost for Launchd {
             RegisterFailure::Physical(message) => GatewayError::Registration(message),
             RegisterFailure::Audit(error) => error,
         })
+    }
+
+    fn published_runtime_is_present(&self, fingerprint: &str) -> Result<bool, GatewayError> {
+        let configuration = self.service_configuration();
+        let label = service_label(configuration.stage(), configuration.instance());
+        let path = self
+            .home
+            .join("Library/Application Support/Nessa/gateway-runtimes")
+            .join(label)
+            .join(fingerprint);
+        artifact_presence(&path).map_err(GatewayError::Registration)
     }
 
     fn recover(
@@ -1252,19 +1283,43 @@ fn launch_definition(
 /// A published generation is the immutable copy. Until that directory exists,
 /// the job runs the bundled tree of the same fingerprint so the gateway can
 /// bind, and [`HeldRegistration::defer_stage`] publishes the generation after
-/// this function returns.
-fn registration_runtime<'a>(published: bool, bundled: &'a Path, planned: &'a Path) -> &'a Path {
-    if published {
+/// this function returns. `keep_bundle` is that same choice for the rest of
+/// this process: publication must not replace a healthy bundle-backed job
+/// before the next launch.
+fn registration_runtime<'a>(
+    published: bool,
+    keep_bundle: bool,
+    bundled: &'a Path,
+    planned: &'a Path,
+) -> &'a Path {
+    if published && !keep_bundle {
         planned
     } else {
         bundled
     }
 }
 
+/// The installed definition is the bundle path this process registered, for
+/// this fingerprint.
+fn definition_uses_bundle(definition: Option<&Value>, bundled: &Path, fingerprint: &str) -> bool {
+    let Some(definition) = definition else {
+        return false;
+    };
+    if definition.get("ProgramArguments") != Some(&launch_settings(bundled)) {
+        return false;
+    }
+    definition
+        .get("EnvironmentVariables")
+        .and_then(|environment| environment.get("NESSA_RUNTIME_FINGERPRINT"))
+        .and_then(Value::as_str)
+        == Some(fingerprint)
+}
+
 struct DeferredStage {
     source: PathBuf,
     installations: PathBuf,
     fingerprint: String,
+    reporter: Option<DeferredStageReporter>,
     #[cfg(test)]
     pause: Option<Arc<StagePause>>,
 }
@@ -1288,11 +1343,18 @@ impl HeldRegistration {
         })
     }
 
-    fn defer_stage(&mut self, source: PathBuf, installations: PathBuf, fingerprint: String) {
+    fn defer_stage(
+        &mut self,
+        source: PathBuf,
+        installations: PathBuf,
+        fingerprint: String,
+        reporter: Option<DeferredStageReporter>,
+    ) {
         self.arm(DeferredStage {
             source,
             installations,
             fingerprint,
+            reporter,
             #[cfg(test)]
             pause: None,
         });
@@ -1310,6 +1372,7 @@ impl HeldRegistration {
             source,
             installations,
             fingerprint,
+            reporter: None,
             pause: Some(pause),
         });
     }
@@ -1330,17 +1393,18 @@ impl Drop for HeldRegistration {
         };
         let fingerprint = stage.fingerprint.clone();
         let lock = self.lock.take();
-        if std::thread::Builder::new()
+        // A failed spawn drops `stage`, and with it the reporter. The attempt
+        // records that missing result as a failed publication.
+        if let Err(error) = std::thread::Builder::new()
             .name("nessa-stage-runtime".into())
             .spawn(move || publish_deferred(stage, lock))
-            .is_err()
         {
-            eprintln!("[nessa] Could not start publishing gateway runtime {fingerprint}");
+            eprintln!("[nessa] Could not start publishing gateway runtime {fingerprint}: {error}");
         }
     }
 }
 
-fn publish_deferred(stage: DeferredStage, lock: Option<control::NamespaceLock>) {
+fn publish_deferred(mut stage: DeferredStage, lock: Option<control::NamespaceLock>) {
     #[cfg(test)]
     let pause = stage.pause.clone();
     #[cfg(test)]
@@ -1359,6 +1423,10 @@ fn publish_deferred(stage: DeferredStage, lock: Option<control::NamespaceLock>) 
                 stage.fingerprint
             );
         }
+    }
+    let publication = result.as_ref().map(|_| ()).map_err(Clone::clone);
+    if let Some(reporter) = stage.reporter.take() {
+        reporter.finish(publication);
     }
     // Release the label lock before telling a test the publication finished,
     // so "finished" means pruning is allowed to look at the directory.
@@ -1501,12 +1569,20 @@ fn register(
     let staged_effect = LifecycleEffect::StageRuntime {
         fingerprint: fingerprint.clone(),
     };
-    let published = fs::symlink_metadata(&planned_runtime).is_ok();
-    let runtime_for_definition = registration_runtime(published, runtime, &planned_runtime);
-    let arguments = launch_settings(runtime_for_definition);
-    let agents = home.join("Library/LaunchAgents");
     let path = artifacts.plist.clone();
     let installed = read_definition(&path).ok();
+    let published = fs::symlink_metadata(&planned_runtime).is_ok();
+    // A bundle-backed job this process registered keeps that path until the
+    // next launch, including after this process finishes publishing it.
+    let keep_bundle = host.bundle_launch_noted(&fingerprint)
+        && definition_uses_bundle(installed.as_ref(), runtime, &fingerprint);
+    let runtime_for_definition =
+        registration_runtime(published, keep_bundle, runtime, &planned_runtime);
+    if !published {
+        host.note_bundle_launch(&fingerprint);
+    }
+    let arguments = launch_settings(runtime_for_definition);
+    let agents = home.join("Library/LaunchAgents");
     let agent_path = registered_agent_path(agent_path, installed.as_ref(), runtime_for_definition);
     let environment = service_environment(configuration, home, &agent_path, &fingerprint);
     let mut definition = launch_definition(&label, &arguments, &data, &environment, &log);
@@ -1612,16 +1688,21 @@ fn register(
             },
         )?;
     } else {
-        // Not a journaled stage effect. This attempt does not publish, so it
-        // cannot record a publication or a cleanup that would prune one. The
-        // background call is `stage_runtime` itself: private modes, normalised
-        // extended attributes, full-tree digest before the exclusive rename,
-        // and a temporary directory only that attempt removes.
+        // The copy stays off this attempt's readiness path. The attempt
+        // journals the plan once its other effects have completed, then the
+        // publication's result and whether the directory is present, before
+        // the outcome. `stage_runtime` still requires private modes,
+        // normalised extended attributes, a matching full-tree digest, and
+        // removal of only this attempt's temporary directory.
         prepare_data_directory(base, stage, instance)?;
+        let reporter = progress
+            .begin_deferred_stage(&fingerprint)
+            .map_err(RegisterFailure::Audit)?;
         label_lock.defer_stage(
             runtime.to_path_buf(),
             installations.clone(),
             fingerprint.clone(),
+            reporter,
         );
     }
     match state {
@@ -2622,10 +2703,41 @@ mod tests {
             "/Users/me/Library/Application Support/Nessa/gateway-runtimes/so.nessa.gateway.prod/ab",
         );
         assert_eq!(
-            super::registration_runtime(false, bundled, planned),
+            super::registration_runtime(false, false, bundled, planned),
             bundled
         );
-        assert_eq!(super::registration_runtime(true, bundled, planned), planned);
+        assert_eq!(
+            super::registration_runtime(true, false, bundled, planned),
+            planned
+        );
+        assert_eq!(
+            super::registration_runtime(true, true, bundled, planned),
+            bundled
+        );
+        let fingerprint = "ab";
+        let bundle_definition = json!({
+            "ProgramArguments": launch_settings(bundled),
+            "EnvironmentVariables": {"NESSA_RUNTIME_FINGERPRINT": fingerprint},
+        });
+        assert!(super::definition_uses_bundle(
+            Some(&bundle_definition),
+            bundled,
+            fingerprint
+        ));
+        let published_definition = json!({
+            "ProgramArguments": launch_settings(planned),
+            "EnvironmentVariables": {"NESSA_RUNTIME_FINGERPRINT": fingerprint},
+        });
+        assert!(!super::definition_uses_bundle(
+            Some(&published_definition),
+            bundled,
+            fingerprint
+        ));
+        assert!(!super::definition_uses_bundle(
+            Some(&bundle_definition),
+            bundled,
+            "cd"
+        ));
     }
 
     #[test]

@@ -390,15 +390,20 @@ fn the_first_launch_keeps_the_bundle_path_when_the_app_is_replaced_or_moved() {
     let planned = Path::new(
         "/Users/me/Library/Application Support/Nessa/gateway-runtimes/so.nessa.gateway.prod/ab",
     );
-    let launched = super::super::registration_runtime(false, bundled, planned);
+    let launched = super::super::registration_runtime(false, false, bundled, planned);
     assert_eq!(launched, bundled);
     assert_eq!(launch_settings(launched), launch_settings(bundled));
     assert!(!launch_settings(launched)
         .to_string()
         .contains(planned.to_str().unwrap()));
-    // The next registration is the one that can point at the published tree.
+    // The same process keeps the bundle path after publication. The next
+    // launch of the app is what points launchd at the published tree.
     assert_eq!(
-        super::super::registration_runtime(true, bundled, planned),
+        super::super::registration_runtime(true, true, bundled, planned),
+        bundled
+    );
+    assert_eq!(
+        super::super::registration_runtime(true, false, bundled, planned),
         planned
     );
 }
