@@ -307,14 +307,14 @@ impl FollowedConversation {
 /// asks status again.
 #[derive(Debug)]
 pub struct SessionFollow {
-    initial: Result<RetainedEnrollmentStatus, NativeClientError>,
+    initial: SessionStatus,
     selection_failure: Option<NativeClientError>,
     followed: Option<Result<FollowedConversation, ReadFailure>>,
-    recheck: Option<Result<RetainedEnrollmentStatus, NativeClientError>>,
+    recheck: Option<SessionStatus>,
 }
 impl SessionFollow {
     /// Initial pinned status and its original operation purge.
-    pub fn initial(&self) -> &Result<RetainedEnrollmentStatus, NativeClientError> {
+    pub fn initial(&self) -> &SessionStatus {
         &self.initial
     }
     /// A contradictory or unreadable current binding refused product selection.
@@ -328,7 +328,7 @@ impl SessionFollow {
     /// Fresh refusal recheck. A conversation this device was not granted does
     /// not ask. A view already delivered does not hide a grant revoked before
     /// the feed's next batch.
-    pub fn recheck(&self) -> Option<&Result<RetainedEnrollmentStatus, NativeClientError>> {
+    pub fn recheck(&self) -> Option<&SessionStatus> {
         self.recheck.as_ref()
     }
 }
@@ -617,14 +617,28 @@ impl Driver {
             followed: None,
             recheck: None,
         };
-        let status = match &outcome.initial {
-            Ok(status) => match status.enrollment() {
-                Ok(status) => status,
-                Err(_) => return outcome,
-            },
-            Err(_) => return outcome,
+        let Some(status) = outcome.initial.settled_status() else {
+            return outcome;
         };
-        let reader = match RetainedDeviceReader::from_current(status, self.state.as_ref()) {
+        if !matches!(status, NativePairingStatus::Active { .. }) {
+            return outcome;
+        }
+        let (selection, address) = match &outcome.initial {
+            SessionStatus::ReadOnly(_) => (
+                RetainedDeviceReader::from_current(status, self.state.as_ref()),
+                self.address,
+            ),
+            SessionStatus::Owner(Ok(owner)) => {
+                let recovered = owner
+                    .recovery()
+                    .expect("settled owner has a successful recovery");
+                let selection = issued_owner_phone(self.state.as_ref(), recovered)
+                    .and_then(|issued| RetainedDeviceReader::from_issued(status, issued));
+                (selection, recovered.preparation().original().endpoint())
+            }
+            SessionStatus::Owner(Err(_)) => unreachable!("settled owner has captured completion"),
+        };
+        let reader = match selection {
             Ok(Some(reader)) => reader,
             Ok(None) => return outcome,
             Err(error) => {
@@ -632,7 +646,6 @@ impl Driver {
                 return outcome;
             }
         };
-        let address = self.address;
         let cache = match self.cache() {
             Ok(cache) => cache,
             Err(failure) => {
