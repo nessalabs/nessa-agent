@@ -1,7 +1,7 @@
 //! Local span store and the exporter plug a later sender implements.
 #![deny(missing_docs)]
 
-use super::span::{AttributeValue, GenAiSpan};
+use super::span::{AttributeValue, GenAiSpan, SpanStatus};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -14,15 +14,9 @@ thread_local! {
 }
 
 const CAPACITY: usize = 2048;
-// Captured message and tool text retained across finished and withheld spans.
+// Every retained string: span names, attributes, and pending note text.
 // Twice the 4 MiB user-message limit.
-const CONTENT_BUDGET: usize = 8 * 1024 * 1024;
-const CONTENT_KEYS: [&str; 4] = [
-    "gen_ai.input.messages",
-    "gen_ai.output.messages",
-    "gen_ai.tool.call.arguments",
-    "gen_ai.tool.call.result",
-];
+const RETAINED_BUDGET: usize = 8 * 1024 * 1024;
 const OP_AGENT: &str = "invoke_agent";
 const CONVERSATION: &str = "gen_ai.conversation.id";
 const EXECUTION: &str = "nessa.execution.id";
@@ -91,7 +85,7 @@ impl ExporterList {
 impl SpanExporter for ExporterList {
     fn export(&self, span: &GenAiSpan) {
         for exporter in &self.exporters {
-            exporter.export(span);
+            let _ = catch_unwind(AssertUnwindSafe(|| exporter.export(span)));
         }
     }
 }
@@ -143,8 +137,10 @@ struct Inner {
     pending_order: VecDeque<NoteKey>,
     /// Child spans of turns whose agent span has not closed, oldest first.
     withheld: VecDeque<GenAiSpan>,
-    /// Bytes of captured content attributes on `spans` and `withheld`.
-    content_bytes: usize,
+    /// Bytes of variable-sized strings on `spans` and `withheld`.
+    span_bytes: usize,
+    /// Bytes of variable-sized strings on pending notes.
+    pending_bytes: usize,
     extra: Option<Arc<dyn SpanExporter>>,
     capture: ContentCapture,
 }
@@ -154,10 +150,10 @@ struct Inner {
 ///
 /// The store keeps the most recent 2048 finished spans, and the same number of
 /// child spans from turns that have not closed. Older spans are dropped one at
-/// a time. Captured message and tool text is capped at 8 MiB across both.
-/// Older finished spans go first. The last finished span stays, and open-turn
-/// children go after that. A span that exceeds the budget on its own is stored
-/// without the oversized text.
+/// a time. Every retained string — names, attributes, and pending notes — shares
+/// an 8 MiB budget. Older finished spans go first. The last finished span stays,
+/// and open-turn children go after that. A span or note that exceeds the budget
+/// on its own is stored without the oversized text.
 /// A turn still running is absent until its agent span closes. Reads do not
 /// block on the provider.
 pub struct LocalTraceStore {
@@ -178,7 +174,8 @@ impl LocalTraceStore {
                 pending: HashMap::new(),
                 pending_order: VecDeque::new(),
                 withheld: VecDeque::new(),
-                content_bytes: 0,
+                span_bytes: 0,
+                pending_bytes: 0,
                 extra: None,
                 capture,
             }),
@@ -221,15 +218,31 @@ impl LocalTraceStore {
         tools_checked: bool,
     ) {
         let mut inner = self.lock();
-        if let Some(span) = agent_span(&mut inner.spans, conversation_id, execution_id) {
-            let updated = grant(span.clone(), grant_id, policy_revision, tools_checked);
-            *span = updated;
+        let replaced =
+            if let Some(span) = agent_span(&mut inner.spans, conversation_id, execution_id) {
+                let previous = retained_bytes(span);
+                let updated = grant(span.clone(), grant_id, policy_revision, tools_checked);
+                let added = retained_bytes(&updated);
+                *span = updated;
+                Some((previous, added))
+            } else {
+                None
+            };
+        if let Some((previous, added)) = replaced {
+            inner.span_bytes = inner
+                .span_bytes
+                .saturating_sub(previous)
+                .saturating_add(added);
+            enforce_bounds(&mut inner);
             return;
         }
-        let pending = hold_pending(&mut inner, conversation_id, execution_id);
-        pending.grant_id = Some(grant_id.to_owned());
-        pending.policy_revision = Some(policy_revision);
-        pending.tools_checked = Some(tools_checked);
+        {
+            let pending = hold_pending(&mut inner, conversation_id, execution_id);
+            pending.grant_id = Some(grant_id.to_owned());
+            pending.policy_revision = Some(policy_revision);
+            pending.tools_checked = Some(tools_checked);
+        }
+        enforce_bounds(&mut inner);
     }
 
     /// Record a hook verdict for `execution_id` in `conversation_id`.
@@ -239,15 +252,31 @@ impl LocalTraceStore {
     /// the note the same way [`Self::note_grant`] does.
     pub fn note_hook(&self, conversation_id: &str, execution_id: &str, event: &str, verdict: &str) {
         let mut inner = self.lock();
-        if let Some(span) = agent_span(&mut inner.spans, conversation_id, execution_id) {
-            let updated = hook_note(span, event, verdict, 1);
-            *span = updated;
+        let replaced =
+            if let Some(span) = agent_span(&mut inner.spans, conversation_id, execution_id) {
+                let previous = retained_bytes(span);
+                let updated = hook_note(span, event, verdict, 1);
+                let added = retained_bytes(&updated);
+                *span = updated;
+                Some((previous, added))
+            } else {
+                None
+            };
+        if let Some((previous, added)) = replaced {
+            inner.span_bytes = inner
+                .span_bytes
+                .saturating_sub(previous)
+                .saturating_add(added);
+            enforce_bounds(&mut inner);
             return;
         }
-        let pending = hold_pending(&mut inner, conversation_id, execution_id);
-        pending.hook_event = Some(event.to_owned());
-        pending.hook_verdict = Some(verdict.to_owned());
-        pending.hook_count = pending.hook_count.saturating_add(1);
+        {
+            let pending = hold_pending(&mut inner, conversation_id, execution_id);
+            pending.hook_event = Some(event.to_owned());
+            pending.hook_verdict = Some(verdict.to_owned());
+            pending.hook_count = pending.hook_count.saturating_add(1);
+        }
+        enforce_bounds(&mut inner);
     }
 
     /// Record that `execution_id` in `conversation_id` spawned subagent `child_id`
@@ -262,14 +291,30 @@ impl LocalTraceStore {
         parent_id: &str,
     ) {
         let mut inner = self.lock();
-        if let Some(span) = agent_span(&mut inner.spans, conversation_id, execution_id) {
-            let updated = subagent(span, child_id, parent_id);
-            *span = updated;
+        let replaced =
+            if let Some(span) = agent_span(&mut inner.spans, conversation_id, execution_id) {
+                let previous = retained_bytes(span);
+                let updated = subagent(span, child_id, parent_id);
+                let added = retained_bytes(&updated);
+                *span = updated;
+                Some((previous, added))
+            } else {
+                None
+            };
+        if let Some((previous, added)) = replaced {
+            inner.span_bytes = inner
+                .span_bytes
+                .saturating_sub(previous)
+                .saturating_add(added);
+            enforce_bounds(&mut inner);
             return;
         }
-        let pending = hold_pending(&mut inner, conversation_id, execution_id);
-        pending.subagent_id = Some(child_id.to_owned());
-        pending.subagent_parent = Some(parent_id.to_owned());
+        {
+            let pending = hold_pending(&mut inner, conversation_id, execution_id);
+            pending.subagent_id = Some(child_id.to_owned());
+            pending.subagent_parent = Some(parent_id.to_owned());
+        }
+        enforce_bounds(&mut inner);
     }
 
     /// Drop an unconsumed grant note for `execution_id` in `conversation_id`.
@@ -290,6 +335,7 @@ impl LocalTraceStore {
             inner.pending.remove(&key);
             inner.pending_order.retain(|existing| existing != &key);
         }
+        enforce_bounds(&mut inner);
     }
 
     /// Install the exporter that receives each span after this store has
@@ -424,8 +470,8 @@ fn publish_turn(inner: &mut Inner, agent: &GenAiSpan) {
 }
 
 fn remember(inner: &mut Inner, span: GenAiSpan, withheld: bool) {
-    let span = fit_captured(span);
-    inner.content_bytes = inner.content_bytes.saturating_add(captured_bytes(&span));
+    let span = fit_retained(span);
+    inner.span_bytes = inner.span_bytes.saturating_add(retained_bytes(&span));
     if withheld {
         inner.withheld.push_back(span);
     } else {
@@ -434,59 +480,113 @@ fn remember(inner: &mut Inner, span: GenAiSpan, withheld: bool) {
     enforce_bounds(inner);
 }
 
-fn fit_captured(mut span: GenAiSpan) -> GenAiSpan {
-    while captured_bytes(&span) > CONTENT_BUDGET {
-        let Some(key) = largest_content_key(&span) else {
-            break;
-        };
-        span = span.without_attribute(key);
+fn fit_retained(mut span: GenAiSpan) -> GenAiSpan {
+    while retained_bytes(&span) > RETAINED_BUDGET {
+        let key = largest_string_attribute(&span).map(str::to_owned);
+        if let Some(key) = key {
+            span = span.without_attribute(&key);
+            continue;
+        }
+        if span.name().len() > span.operation().len() {
+            let operation = span.operation().to_owned();
+            span = span.with_name(operation);
+            continue;
+        }
+        break;
     }
     span
 }
 
-fn captured_bytes(span: &GenAiSpan) -> usize {
-    CONTENT_KEYS.iter().fold(0, |total, key| {
-        total.saturating_add(span.string(key).map(str::len).unwrap_or(0))
-    })
+fn retained_bytes(span: &GenAiSpan) -> usize {
+    let mut total = span.name().len()
+        + span.trace_id().len()
+        + span.span_id().len()
+        + span.operation().len()
+        + span.parent_span_id().map(str::len).unwrap_or(0);
+    if let SpanStatus::Error { error_type } = span.status() {
+        total = total.saturating_add(error_type.len());
+    }
+    for value in span.attributes().values() {
+        total = total.saturating_add(attribute_bytes(value));
+    }
+    total
 }
 
-fn largest_content_key(span: &GenAiSpan) -> Option<&'static str> {
+fn attribute_bytes(value: &AttributeValue) -> usize {
+    match value {
+        AttributeValue::String(text) => text.len(),
+        AttributeValue::Strings(values) => values
+            .iter()
+            .map(String::len)
+            .fold(0, usize::saturating_add),
+        AttributeValue::Int(_) | AttributeValue::Bool(_) => 0,
+    }
+}
+
+fn largest_string_attribute(span: &GenAiSpan) -> Option<&str> {
     let mut best: Option<(&str, usize)> = None;
-    for key in CONTENT_KEYS {
-        let len = span.string(key).map(str::len).unwrap_or(0);
+    for (key, value) in span.attributes() {
+        let len = attribute_bytes(value);
         if len == 0 {
             continue;
         }
         match best {
             Some((_, best_len)) if len <= best_len => {}
-            _ => best = Some((key, len)),
+            _ => best = Some((key.as_str(), len)),
         }
     }
     best.map(|(key, _)| key)
 }
 
 fn enforce_bounds(inner: &mut Inner) {
+    recompute_pending_bytes(inner);
     while inner.spans.len() > CAPACITY {
-        drop_front(&mut inner.spans, &mut inner.content_bytes);
+        drop_front(&mut inner.spans, &mut inner.span_bytes);
     }
     while inner.withheld.len() > CAPACITY {
-        drop_front(&mut inner.withheld, &mut inner.content_bytes);
+        drop_front(&mut inner.withheld, &mut inner.span_bytes);
     }
-    while inner.content_bytes > CONTENT_BUDGET {
+    while inner.span_bytes.saturating_add(inner.pending_bytes) > RETAINED_BUDGET {
         if inner.spans.len() > 1 {
-            drop_front(&mut inner.spans, &mut inner.content_bytes);
+            drop_front(&mut inner.spans, &mut inner.span_bytes);
         } else if !inner.withheld.is_empty() {
-            drop_front(&mut inner.withheld, &mut inner.content_bytes);
+            drop_front(&mut inner.withheld, &mut inner.span_bytes);
+        } else if let Some(old) = inner.pending_order.pop_front() {
+            inner.pending.remove(&old);
+            recompute_pending_bytes(inner);
         } else {
             break;
         }
     }
 }
 
-fn drop_front(spans: &mut VecDeque<GenAiSpan>, content_bytes: &mut usize) {
+fn drop_front(spans: &mut VecDeque<GenAiSpan>, span_bytes: &mut usize) {
     if let Some(span) = spans.pop_front() {
-        *content_bytes = content_bytes.saturating_sub(captured_bytes(&span));
+        *span_bytes = span_bytes.saturating_sub(retained_bytes(&span));
     }
+}
+
+fn recompute_pending_bytes(inner: &mut Inner) {
+    inner.pending_bytes = inner
+        .pending
+        .iter()
+        .map(|(key, pending)| note_bytes(key, pending))
+        .fold(0, usize::saturating_add);
+}
+
+fn note_bytes(key: &NoteKey, pending: &Pending) -> usize {
+    key.conversation_id
+        .len()
+        .saturating_add(key.execution_id.len())
+        .saturating_add(text_len(pending.grant_id.as_deref()))
+        .saturating_add(text_len(pending.hook_event.as_deref()))
+        .saturating_add(text_len(pending.hook_verdict.as_deref()))
+        .saturating_add(text_len(pending.subagent_id.as_deref()))
+        .saturating_add(text_len(pending.subagent_parent.as_deref()))
+}
+
+fn text_len(value: Option<&str>) -> usize {
+    value.map(str::len).unwrap_or(0)
 }
 
 fn grant(span: GenAiSpan, grant_id: &str, policy_revision: u64, tools_checked: bool) -> GenAiSpan {

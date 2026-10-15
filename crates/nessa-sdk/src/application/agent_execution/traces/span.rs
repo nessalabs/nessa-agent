@@ -158,6 +158,13 @@ impl GenAiSpan {
         self.attributes.remove(key);
         self
     }
+
+    /// This span with a different name. The name is retained text, so the store
+    /// shortens an oversized tool title here.
+    pub(super) fn with_name(mut self, name: String) -> Self {
+        self.name = name;
+        self
+    }
 }
 
 /// Token and context figures a harness reported. Absent fields were not reported.

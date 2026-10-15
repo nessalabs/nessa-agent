@@ -9,12 +9,12 @@ recorder does not call the harness and does not open a network connection.
 ones for a conversation, in the order they closed. A turn still running is
 absent until its agent span closes. The store keeps the most recent 2048
 finished spans, and the same number of child spans from turns that are still
-open. Those children are dropped one span at a time, oldest first. Captured
-message and tool text is capped at 8 MiB across finished and open turns.
-Older finished spans are dropped while more than one remains; the last
-finished span stays, and open-turn children are dropped after that. A span
-whose own captured text exceeds that is stored without the oversized
-attribute.
+open. Those children are dropped one span at a time, oldest first. Every
+retained string, including tool names and pending notes, shares an 8 MiB
+budget with captured message text. Older finished spans are dropped while
+more than one remains; the last finished span stays, and open-turn children
+are dropped after that. A span whose own text exceeds that budget is stored
+without the oversized text.
 
 `SpanExporter` is the plug for a later user-chosen OTLP endpoint.
 `LocalTraceStore::set_exporter` installs it. No endpoint is read now, and the

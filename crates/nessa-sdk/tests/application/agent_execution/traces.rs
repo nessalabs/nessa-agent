@@ -968,3 +968,78 @@ fn a_closed_turn_keeps_its_agent_span_when_open_turns_hold_captured_text() {
         .iter()
         .any(|span| span.operation() == "invoke_agent"));
 }
+
+#[test]
+fn a_tool_name_longer_than_the_budget_is_not_retained() {
+    let budget = 8 * 1024 * 1024;
+    let store = LocalTraceStore::new();
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.tool(
+        at(2),
+        ToolFact::new(
+            "tool-1",
+            "n".repeat(budget + 1),
+            "function",
+            ToolProgress::Completed,
+            None,
+            None,
+        ),
+    );
+    recorder.finish(at(3), FinishReason::Stop);
+    let spans = store.read("conversation-1");
+    assert!(spans.iter().any(|span| span.operation() == "invoke_agent"));
+    let retained: usize = spans.iter().map(stored_text_bytes).sum();
+    assert!(retained <= budget);
+    assert!(spans.iter().all(|span| {
+        span.string("gen_ai.tool.name")
+            .is_none_or(|name| name.len() < 64)
+    }));
+}
+
+#[test]
+fn one_exporter_panic_does_not_skip_the_next() {
+    struct Boom;
+    impl SpanExporter for Boom {
+        fn export(&self, _span: &GenAiSpan) {
+            panic!("exporter failed");
+        }
+    }
+    struct Keep {
+        seen: Mutex<u32>,
+    }
+    impl SpanExporter for Keep {
+        fn export(&self, _span: &GenAiSpan) {
+            *self.seen.lock().unwrap() += 1;
+        }
+    }
+    let keep = Arc::new(Keep {
+        seen: Mutex::new(0),
+    });
+    let list = Arc::new(ExporterList::new(vec![Arc::new(Boom), keep.clone()]));
+    let mut recorder = TraceRecorder::new(list, ContentCapture::off());
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.finish(at(2), FinishReason::Stop);
+    assert!(*keep.seen.lock().unwrap() >= 1);
+}
+
+fn stored_text_bytes(span: &GenAiSpan) -> usize {
+    let mut total = span.name().len()
+        + span.trace_id().len()
+        + span.span_id().len()
+        + span.operation().len()
+        + span.parent_span_id().map(str::len).unwrap_or(0);
+    if let SpanStatus::Error { error_type } = span.status() {
+        total += error_type.len();
+    }
+    for value in span.attributes().values() {
+        match value {
+            AttributeValue::String(text) => total += text.len(),
+            AttributeValue::Strings(values) => {
+                total += values.iter().map(String::len).sum::<usize>()
+            }
+            AttributeValue::Int(_) | AttributeValue::Bool(_) => {}
+        }
+    }
+    total
+}
