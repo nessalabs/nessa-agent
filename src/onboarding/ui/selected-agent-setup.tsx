@@ -4,7 +4,11 @@ import {
   AgentActionCard,
 } from "../../provider-authentication/ui/agent-action-card"
 import type { AgentInstallations } from "../application/agent-installations"
-import type { AgentApiKeySink, AgentReadinessSource } from "../application/ports"
+import type {
+  AgentApiKeySink,
+  AgentReadinessSource,
+  ApiKeyAgent,
+} from "../application/ports"
 import { AGENT_CHOICES, type AgentId, type AgentReadiness } from "../model/onboarding"
 import { installationOutcomeText } from "./agent-downloads"
 import { useAgentDownloads } from "./use-agent-downloads"
@@ -79,7 +83,8 @@ function SelectedSetup({
   const credentials = useAgentApiKeySave(source.apiKeys)
   const [readiness, setReadiness] = React.useState<AgentReadiness>("unknown")
   const [checking, setChecking] = React.useState(true)
-  const [loginAvailable, setLoginAvailable] = React.useState(false)
+  // Undefined until the host answers, so neither sign-in nor key entry flashes.
+  const [loginAvailable, setLoginAvailable] = React.useState<boolean>()
   const [signingIn, setSigningIn] = React.useState(false)
   const [loginFailed, setLoginFailed] = React.useState(false)
   const loginWorking = React.useRef(false)
@@ -132,6 +137,12 @@ function SelectedSetup({
     !loginFailed
   )
     return null
+  // OpenCode signs in with a key only. Claude takes one too, so where this host
+  // cannot open Claude's own sign-in the key is the way to make it ready.
+  const keyAgent: ApiKeyAgent | undefined =
+    agent === "opencode" || (agent === "claude" && loginAvailable === false)
+      ? agent
+      : undefined
   const primary =
     readiness === "not-installed" && offer && !offer.installed ? (
       <AgentActionButton
@@ -142,7 +153,9 @@ function SelectedSetup({
           ? "Downloading…"
           : `Download ${name} · ${Math.ceil(offer.archiveBytes / 1_000_000)} MB`}
       </AgentActionButton>
-    ) : readiness === "needs-authentication" && agent !== "opencode" && loginAvailable ? (
+    ) : readiness === "needs-authentication" &&
+      agent !== "opencode" &&
+      loginAvailable === true ? (
       <AgentActionButton
         disabled={signingIn}
         onClick={async () => {
@@ -198,21 +211,21 @@ function SelectedSetup({
         {downloads.unavailable ? (
           <p>Downloads could not be checked. Retry to check them again.</p>
         ) : null}
-        {readiness === "needs-authentication" &&
-        agent === "opencode" &&
-        source.apiKeys ? (
+        {readiness === "needs-authentication" && source.apiKeys && keyAgent ? (
           <AgentApiKeyForm
-            agent="opencode"
-            agentName="OpenCode"
-            hint="OpenCode connects through Zen using your API key. Depending on the configured model, messages may be metered."
+            agent={keyAgent}
+            agentName={keyAgent === "opencode" ? "OpenCode" : name}
+            hint={
+              keyAgent === "opencode"
+                ? "OpenCode connects through Zen using your API key. Depending on the configured model, messages may be metered."
+                : undefined
+            }
             onSave={credentials.save}
             onSaved={check}
           />
         ) : null}
         <AgentApiKeyAuditWarning failure={credentials.auditFailure} />
-        {loginFailed ? (
-          <p>Sign-in could not be opened. Try again.</p>
-        ) : null}
+        {loginFailed ? <p>Sign-in could not be opened. Try again.</p> : null}
       </AgentActionCard>
     </section>
   )

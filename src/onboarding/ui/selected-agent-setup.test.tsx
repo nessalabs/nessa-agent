@@ -301,3 +301,21 @@ it("gives simultaneous recovery forms distinct accessible labels and hints", asy
     ).not.toBeNull()
   }
 })
+
+it("offers Claude key entry where this host cannot open Claude's sign-in", async () => {
+  const value = source("needs-authentication")
+  value.loginAvailable.mockResolvedValue(false)
+  const save = vi.fn(async () => ({ status: "saved" as const }))
+  await render({ ...value, apiKeys: { save } })
+  expect(container.querySelector("input")?.type).toBe("password")
+  expect(container.textContent).not.toContain("Sign in to Claude")
+  await saveKey("fixture-private-key")
+  expect(save).toHaveBeenCalledExactlyOnceWith("claude", "fixture-private-key")
+})
+
+it("offers Claude sign-in, not key entry, where the host can open it", async () => {
+  const value = source("needs-authentication")
+  await render({ ...value, apiKeys: { save: vi.fn() } })
+  expect(container.textContent).toContain("Sign in to Claude")
+  expect(container.querySelector("input")).toBeNull()
+})
