@@ -961,6 +961,63 @@ fn known_decoded_failure_is_reserved_before_held_cleanup_and_later_stop() {
 }
 
 #[test]
+fn injected_wake_panic_after_admission_returns_the_ticket() {
+    struct PanicWake {
+        armed: Arc<AtomicBool>,
+        inner: ThreadProductWake,
+    }
+    impl ProductWake for PanicWake {
+        fn revision(&self) -> u64 {
+            self.inner.revision()
+        }
+        fn wait(&self, revision: u64, timeout: Duration) {
+            self.inner.wait(revision, timeout)
+        }
+        fn wake(&self) {
+            if self.armed.load(Ordering::SeqCst) {
+                panic!("injected wake");
+            }
+            self.inner.wake();
+        }
+    }
+    let armed = Arc::new(AtomicBool::new(false));
+    let (release, held) = signal();
+    let (endpoint, peer) = peer(move |_wire| receive(&held));
+    let session = ProductSession::prepare(
+        endpoint.address,
+        endpoint.identity,
+        endpoint.pin,
+        "credential".into(),
+        "phone-instance".into(),
+        Arc::new(LocalProductConnector),
+        Arc::new(fixtures::Time(Instant::now())),
+        Arc::new(PanicWake {
+            armed: armed.clone(),
+            inner: ThreadProductWake::default(),
+        }),
+        limits(1),
+    );
+    session.start().unwrap();
+    session.wait_ready().unwrap();
+    armed.store(true, Ordering::SeqCst);
+    let admitted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        session.request("conversation.list", "{}")
+    }));
+    let ticket = admitted
+        .expect("wake panic must not escape request")
+        .expect("the admitted ticket is returned");
+    assert_eq!(session.failure(), Some(ProductFailure::WorkerPanicked));
+    assert!(matches!(
+        session.request("conversation.list", "{}"),
+        Err(ProductFailure::WorkerPanicked)
+    ));
+    drop(ticket);
+    release.send(()).unwrap();
+    assert_eq!(session.close(), Err(ProductFailure::WorkerPanicked));
+    peer.join();
+}
+
+#[test]
 fn injected_interrupt_panic_stays_inside_stop_and_close_still_joins() {
     struct PanicInterrupt;
     impl ProductInterrupt for PanicInterrupt {

@@ -122,7 +122,7 @@ fn pump(owner: &Arc<Owner>, open: &Open) -> Result<(), ProductFailure> {
     let (mut channel, ready) = session.into_product_channel();
     // Retain the factual opening even when a simultaneous stop fences new work.
     lock(&owner.state).ready = Some(Arc::new(ready));
-    owner.wake.wake();
+    owner.notify();
     // The borrowed channel survives result and panic capture. Record the first
     // known refusal before Drop starts possibly delayed physical shutdown.
     let result = catch_unwind(AssertUnwindSafe(|| exchange(owner, &mut channel)))
@@ -201,7 +201,7 @@ fn exchange(owner: &Arc<Owner>, channel: &mut Channel) -> Result<(), ProductFail
                 state.event_count += 1;
                 state.events.push_back((event, text.len()));
                 drop(state);
-                owner.wake.wake();
+                owner.notify();
             }
         }
     }

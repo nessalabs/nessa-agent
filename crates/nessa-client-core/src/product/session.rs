@@ -191,7 +191,22 @@ impl Owner {
             state.failure.get_or_insert(cause);
             state.closing = true;
         }
-        self.wake.wake();
+        self.notify();
+    }
+    /// The wake port is injected. A panic there must not unwind after admission
+    /// or cleanup has been committed: the caller still receives its ticket, and
+    /// the session failure is `WorkerPanicked` unless a decoded failure was
+    /// already recorded. This does not wake again.
+    pub(super) fn notify(&self) {
+        let panicked = catch_unwind(AssertUnwindSafe(|| self.wake.wake())).is_err();
+        if !panicked {
+            return;
+        }
+        let mut state = lock(&self.state);
+        state.closing = true;
+        if matches!(state.failure, None | Some(ProductFailure::Cancelled)) {
+            state.failure = Some(ProductFailure::WorkerPanicked);
+        }
     }
     pub(super) fn stop(&self) {
         let interrupt = {
@@ -212,7 +227,7 @@ impl Owner {
                 }
             }
         }
-        self.wake.wake();
+        self.notify();
     }
     pub(super) fn finish(&self, cause: ProductFailure) {
         let (queue, active, cause) = {
@@ -238,7 +253,7 @@ impl Owner {
         for ticket in queue {
             ticket.complete(ProductCompletion::NotDispatched(cause));
         }
-        self.wake.wake();
+        self.notify();
     }
 }
 enum Worker {
@@ -442,7 +457,7 @@ impl ProductSession {
         state.permits += 1;
         state.queue.push_back(ticket.clone());
         drop(state);
-        owner.wake.wake();
+        owner.notify();
         Ok(ProductTicket { ticket })
     }
     /// Take an event batch bounded by the session's count and byte capacities.
@@ -525,7 +540,7 @@ impl Ticket {
             if state.external == 0 {
                 lock(&owner.state).permits -= 1;
             }
-            owner.wake.wake();
+            owner.notify();
         }
     }
 }
@@ -580,7 +595,7 @@ impl Drop for ProductTicket {
         if state.external == 0 && state.completion.is_some() {
             if let Some(owner) = self.ticket.owner.upgrade() {
                 lock(&owner.state).permits -= 1;
-                owner.wake.wake();
+                owner.notify();
             }
         }
     }
@@ -616,7 +631,7 @@ impl Drop for EventBatch {
             state.event_count -= self.events.len();
             state.event_bytes -= self.bytes;
             drop(state);
-            owner.wake.wake();
+            owner.notify();
         }
     }
 }
