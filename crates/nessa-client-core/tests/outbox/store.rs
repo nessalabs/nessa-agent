@@ -2165,6 +2165,134 @@ fn an_uncertain_lease_rewrites_every_transition() {
     assert_eq!(events[6].outcome, PhoneOutcome::Accepted);
 }
 
+#[test]
+fn a_second_command_waits_for_the_file_lease() {
+    let dir = directory();
+    let path = path_in(&dir);
+    {
+        let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+        person_hold(&mut outbox, text_intent("command-1", "one"));
+        person_hold(&mut outbox, text_intent("command-2", "two"));
+    }
+    let sends = Arc::new(AtomicUsize::new(0));
+    let entered = Arc::new((Mutex::new(false), Condvar::new()));
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let started = Arc::new((Mutex::new(false), Condvar::new()));
+    let pausing = || PausingSend {
+        sends: Arc::clone(&sends),
+        entered: Arc::clone(&entered),
+        release: Arc::clone(&release),
+    };
+    let first_outbox = open(&path, pausing(), SeqIds::default(), clock()).unwrap();
+    let second_outbox = open(&path, pausing(), SeqIds::default(), clock()).unwrap();
+    let (done_tx, done_rx) = mpsc::channel();
+    let spawn = |mut outbox: PhoneOutbox<SqliteIntents, PausingSend, SeqIds>,
+                 id: &'static str,
+                 signal: bool| {
+        let started = Arc::clone(&started);
+        let done_tx = done_tx.clone();
+        thread::spawn(move || {
+            if signal {
+                let (lock, cv) = &*started;
+                let mut flag = lock.lock().unwrap();
+                *flag = true;
+                cv.notify_all();
+            }
+            let outcome = outbox.send(&command(id)).unwrap().outcome();
+            done_tx.send((id, outcome)).unwrap();
+        })
+    };
+    let first = spawn(first_outbox, "command-1", false);
+    {
+        let (lock, cv) = &*entered;
+        let mut flag = lock.lock().unwrap();
+        let start = Instant::now();
+        while !*flag {
+            let left = Duration::from_secs(5).saturating_sub(start.elapsed());
+            assert!(!left.is_zero(), "the first send did not take the lease");
+            let (next, status) = cv.wait_timeout(flag, left).unwrap();
+            flag = next;
+            if status.timed_out() && !*flag {
+                panic!("the first send did not take the lease");
+            }
+        }
+    }
+    let second = spawn(second_outbox, "command-2", true);
+    {
+        let (lock, cv) = &*started;
+        let mut flag = lock.lock().unwrap();
+        let start = Instant::now();
+        while !*flag {
+            let left = Duration::from_secs(5).saturating_sub(start.elapsed());
+            assert!(!left.is_zero(), "the second send did not start");
+            let (next, status) = cv.wait_timeout(flag, left).unwrap();
+            flag = next;
+            if status.timed_out() && !*flag {
+                panic!("the second send did not start");
+            }
+        }
+    }
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(sends.load(Ordering::SeqCst), 1);
+    {
+        let (lock, cv) = &*release;
+        let mut flag = lock.lock().unwrap();
+        *flag = true;
+        cv.notify_all();
+    }
+    let left = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let right = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    first.join().unwrap();
+    second.join().unwrap();
+    assert_eq!(left.1, PhoneOutcome::Accepted);
+    assert_eq!(right.1, PhoneOutcome::Accepted);
+    assert_eq!(sends.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn a_self_successor_is_corrupt() {
+    let dir = directory();
+    let path = path_in(&dir);
+    {
+        let mut outbox = opened(
+            &path,
+            Scripted::new(
+                vec![failure(ConversationErrorCode::TurnRunning)],
+                Vec::new(),
+            ),
+        );
+        person_hold(&mut outbox, text_intent("command-1", "keep this"));
+        let view = outbox.send(&command("command-1")).unwrap();
+        assert_ne!(view.successor().unwrap().as_str(), "command-1");
+    }
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE phone_intent SET successor = 'command-1' WHERE request_id = 'command-1'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    let gateway = Scripted::new(Vec::new(), Vec::new());
+    let seen = gateway.clone();
+    let mut outbox = opened(&path, gateway);
+    assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
+    assert_eq!(
+        outbox.send(&command("command-1")).unwrap_err(),
+        OutboxError::Corrupt
+    );
+    assert!(seen.body().order.is_empty());
+    let connection = Connection::open(&path).unwrap();
+    let successor: String = connection
+        .query_row(
+            "SELECT successor FROM phone_intent WHERE request_id = 'command-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(successor, "command-1");
+}
+
 struct CountingGateway {
     sends: Arc<AtomicUsize>,
     lookups: Arc<AtomicUsize>,

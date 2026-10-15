@@ -455,6 +455,18 @@ fn every_transition_and_precedence_pair() {
         &direct_return,
         false
     ));
+    assert!(
+        !history_reaches(
+            &not_admitted_row
+                .clone()
+                .with_sends(1)
+                .with_outcome(running_failure)
+                .with_successor(command("command-1")),
+            &direct_return,
+            false
+        ),
+        "a successor that names its own command does not reach"
+    );
     assert_eq!(stored_evidence(&direct_return), Evidence::Direct);
 
     let lookup_return = [

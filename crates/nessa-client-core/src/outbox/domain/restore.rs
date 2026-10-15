@@ -372,6 +372,12 @@ fn initiator_allowed(cause: Cause, initiator: Initiator) -> bool {
 }
 
 fn successor_follows(record: &PhoneRecord, events: &[IntentEvent]) -> bool {
+    if record
+        .successor()
+        .is_some_and(|successor| successor.as_str() == record.intent().command().as_str())
+    {
+        return false;
+    }
     let returned = events
         .last()
         .is_some_and(|event| event.cause == Cause::ReturnedToDraft);

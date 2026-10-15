@@ -2,7 +2,7 @@
 
 Issue: [#269](https://github.com/nessalabs/nessa-agent/issues/269).
 The send id, the receipt lookup, the five rendered outcomes, and replay are
-the [phone send contract](https://github.com/nessalabs/nessa-agent/blob/cursor/owner-phone-authorization-5058/docs/design/phone-send-contract.md)
+the [phone send contract](https://github.com/nessalabs/nessa-agent/blob/b2d6a2d86d1bbe09107c123df70a6bf74960adf3/docs/design/phone-send-contract.md)
 (pull request 885). This page is the device ordering around that contract.
 The contract is not restated here and is not edited by this work.
 
@@ -55,8 +55,10 @@ new ids. The original id is not sent again.
 
 ## One lease, and the transitions
 
-There is one writer lease per command. The first send takes it, and so does
-an explicit retry. Departure commits first. The lease is then held across
+The writer lease is the SQLite file lock. A send or retry of any command
+waits while another command holds it
+(`a_second_command_waits_for_the_file_lease`). The first send takes it, and
+so does an explicit retry. Departure commits first. The lease is then held across
 `conversation.send` and the save of that answer, including a `turn_running`
 save and its new draft, in that same commit. A second send or retry waits
 and reloads. It does not call `conversation.send` when a direct answer is
@@ -126,7 +128,9 @@ starts from the held draft. Departed is `PhoneRecord::depart`. Each later
 answer stays only when `budget`, `apply_send`, `apply_lookup`, or
 `apply_retry` returns that cause and that outcome. The row's outcome, send
 count, and departure must equal that replay
-(`a_send_count_the_replay_does_not_reach_is_corrupt`). Lookup and
+(`a_send_count_the_replay_does_not_reach_is_corrupt`). A successor names a
+different command. A row whose successor is its own id does not reach
+(`a_self_successor_is_corrupt`). Lookup and
 ReturnedToDraft for one `turn_running` share one initiator. A history this
 replay does not return is corrupt. The row is not repaired.
 
