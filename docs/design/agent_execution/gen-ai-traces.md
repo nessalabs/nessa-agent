@@ -35,7 +35,8 @@ store is built with content capture on. Thought text is never stored.
 | A tool call is announced | The open chat span closes with finish reason `tool_calls`. `execute_tool {name}` opens as a child of the agent span |
 | The tool completes or fails | The tool span closes. The next chat span opens when the harness speaks again and no tool is still open |
 | The turn finishes | The open chat span, any open tool spans, and the agent span close with the turn's finish reason |
-| `usage_update` before a turn | Held and applied when the turn starts |
+| `usage_update` before a turn | Held and applied when the turn starts. Dispatch of that prompt starts the hold, including the first prompt |
+| `usage_update` after a turn closes | Discarded until the next prompt is dispatched. It is not applied to the next turn |
 | `usage_update` during a turn | Context figures go on the agent span. Input and output tokens, when the payload actually has them, go on the open chat span and are summed onto the agent span |
 | A permission request, answer, cancel, decline, or deadline | `nessa.permission.*` on the tool span. A request that arrives before the tool update opens the tool span. A decline that names a tool is attached only when one open tool has that name; otherwise it is recorded on the agent span |
 | The recorder is dropped with a turn open | The turn closes as `cancelled` |

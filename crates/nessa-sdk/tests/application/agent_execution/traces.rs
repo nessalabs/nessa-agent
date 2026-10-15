@@ -222,6 +222,56 @@ fn tokens_are_usage_and_context_occupancy_is_not() {
 }
 
 #[test]
+fn usage_after_a_turn_closes_does_not_land_on_the_next_turn() {
+    let store = LocalTraceStore::new();
+    let mut recorder = turn(&store);
+    recorder.usage(ReportedUsage::new().with_input_tokens(1));
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.usage(ReportedUsage::new().with_input_tokens(3));
+    recorder.finish(at(2), FinishReason::Stop);
+    recorder.usage(
+        ReportedUsage::new()
+            .with_input_tokens(9)
+            .with_context_used(40),
+    );
+    recorder.accept_usage_before_turn();
+    recorder.usage(ReportedUsage::new().with_input_tokens(5));
+    recorder.begin_turn(
+        at(3),
+        TurnIdentity::new(
+            "conversation-1",
+            "execution-2",
+            "anthropic",
+            "claude",
+            "claude-sonnet",
+            Some(false),
+        ),
+        "",
+    );
+    recorder.finish(at(4), FinishReason::Stop);
+    let spans = store.read("conversation-1");
+    let agent = |execution: &str| {
+        spans
+            .iter()
+            .find(|span| {
+                span.operation() == "invoke_agent"
+                    && span.string("nessa.execution.id") == Some(execution)
+            })
+            .unwrap()
+    };
+    let first = agent("execution-1");
+    let second = agent("execution-2");
+    assert_eq!(first.int("gen_ai.usage.input_tokens"), Some(4));
+    assert_eq!(second.int("gen_ai.usage.input_tokens"), Some(5));
+    assert!(spans
+        .iter()
+        .all(|span| span.int("nessa.context.used_tokens") != Some(40)));
+    assert!(spans
+        .iter()
+        .all(|span| span.int("gen_ai.usage.input_tokens") != Some(9)));
+}
+
+#[test]
 fn permission_grant_hook_and_subagent_notes_land_on_the_spans() {
     let store = LocalTraceStore::new();
     store.note_grant("conversation-1", "execution-1", "grant-1", 7, true);

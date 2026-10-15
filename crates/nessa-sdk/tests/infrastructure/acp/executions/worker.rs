@@ -362,6 +362,68 @@ async fn a_rejected_tool_update_is_not_traced() {
         .unwrap();
 }
 
+#[tokio::test]
+async fn usage_after_the_turn_closes_is_not_applied_to_the_next_turn() {
+    let (mut worker, _commands, _close, _events) =
+        dispatch_policy::worker_with_ready_frames(&[], "").await;
+    let store = LocalTraceStore::new();
+    worker.traces = TraceRecorder::new(store.clone(), ContentCapture::off());
+    let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
+    let (reply, _result) = oneshot::channel();
+    worker
+        .dispatch_execution(
+            &mut execution,
+            dispatched(dispatch_policy::request(), None),
+            reply,
+        )
+        .await
+        .unwrap_or_else(|failure| panic!("{}", failure.error()));
+    let usage = |tokens: u64, used: Option<u64>| {
+        let mut update = json!({
+            "sessionUpdate": "usage_update",
+            "inputTokens": tokens,
+        });
+        if let Some(used) = used {
+            update["used"] = json!(used);
+        }
+        json!({"sessionId": "context", "update": update})
+    };
+    worker.update(&mut execution, usage(3, None)).unwrap();
+    worker
+        .traces
+        .finish(Duration::from_secs(1), FinishReason::Stop);
+    worker.active = None;
+    worker.update(&mut execution, usage(9, Some(40))).unwrap();
+    worker.traces.accept_usage_before_turn();
+    worker.update(&mut execution, usage(5, None)).unwrap();
+    worker.traces.begin_turn(
+        Duration::from_secs(2),
+        TurnIdentity::new("next", "later", "openai", "agent", "fixture", None),
+        "",
+    );
+    worker
+        .traces
+        .finish(Duration::from_secs(3), FinishReason::Stop);
+    let spans = store.read("next");
+    let agent = |execution: &str| {
+        spans
+            .iter()
+            .find(|span| {
+                span.operation() == "invoke_agent"
+                    && span.string("nessa.execution.id") == Some(execution)
+            })
+            .unwrap()
+    };
+    assert_eq!(agent("next").int("gen_ai.usage.input_tokens"), Some(3));
+    assert_eq!(agent("later").int("gen_ai.usage.input_tokens"), Some(5));
+    assert!(agent("later").int("nessa.context.used_tokens").is_none());
+    worker
+        .scope
+        .cleanup(Duration::ZERO, Duration::from_secs(2))
+        .await
+        .unwrap();
+}
+
 #[path = "worker/panics.rs"]
 mod panics;
 

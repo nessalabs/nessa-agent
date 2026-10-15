@@ -1886,6 +1886,7 @@ impl<P: AcpProfile> Worker<P> {
             return Ok(());
         }
         let deadline = prompt.deadline;
+        self.traces.accept_usage_before_turn();
         let readiness = self
             .drain_ready_before_dispatch(execution, &DispatchCaller::Execution(&reply), deadline)
             .await;

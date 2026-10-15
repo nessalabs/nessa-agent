@@ -292,6 +292,9 @@ pub struct TraceRecorder {
     next_id: u64,
     turn: Option<OpenTurn>,
     held_usage: ReportedUsage,
+    /// Figures that arrive before the next `begin_turn` belong to that turn.
+    /// A closed turn clears this until the worker dispatches another prompt.
+    accept_early_usage: bool,
     now: Duration,
 }
 
@@ -305,6 +308,7 @@ impl TraceRecorder {
             next_id: 1,
             turn: None,
             held_usage: ReportedUsage::new(),
+            accept_early_usage: true,
             now: Duration::ZERO,
         }
     }
@@ -312,6 +316,15 @@ impl TraceRecorder {
     /// Whether this recorder copies message and tool content.
     pub fn captures_content(&self) -> bool {
         self.capture
+    }
+
+    /// Hold usage that arrives before the next turn.
+    ///
+    /// Dispatch calls this before it reads the provider, so figures already
+    /// waiting for that prompt stay with it. Usage after a turn has closed,
+    /// and before this call, is not kept for a later turn.
+    pub fn accept_usage_before_turn(&mut self) {
+        self.accept_early_usage = true;
     }
 
     /// Open the agent span and the first model span for `identity`.
@@ -503,6 +516,9 @@ impl TraceRecorder {
     /// `nessa.context.*`, not `gen_ai.usage.*`.
     pub fn usage(&mut self, usage: ReportedUsage) {
         if self.turn.is_none() {
+            if !self.accept_early_usage {
+                return;
+            }
             self.held_usage = merge_usage(self.held_usage.clone(), &usage);
             return;
         }
@@ -516,6 +532,7 @@ impl TraceRecorder {
         let Some(mut turn) = self.turn.take() else {
             return;
         };
+        self.accept_early_usage = false;
         let tool_reason = if matches!(reason, FinishReason::Stop) {
             ToolProgress::Completed
         } else {
