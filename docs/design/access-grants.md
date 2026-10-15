@@ -12,9 +12,8 @@ command rules, a live follow, and an outbound webhook. Cedar remains the only
 decider. Alpha drops the previous share shape in the refactor; there is no
 reader of the old row and no second name for the new one.
 
-An ADR for the boundary is filed with the refactor issue, and takes that
-issue's number, when the issue is opened. This pull request does not invent
-a number.
+The ADR, when it is written, takes [#889](https://github.com/nessalabs/nessa-agent/issues/889).
+This document is the design. It does not add a second record.
 
 ## The primitive
 
@@ -37,7 +36,8 @@ what the grant allows. The **binding epoch** is the receiver access epoch in
 [session and stream contracts](session-and-stream-contracts.md#passive-receiver-read-admission-295):
 it advances when the credential or the binding is revoked or regranted, and
 a stale read scope is denied before the source. The refactor does not add a
-third counter.
+third counter. Issue, epoch bump, and revoke are the grant table in
+[Lifecycles](#lifecycles). This section does not add a grant state.
 
 ```mermaid
 flowchart TD
@@ -78,7 +78,7 @@ sequenceDiagram
   Admit->>Cedar: those facts and the action
   Cedar-->>Admit: permit or refuse, with the policy ids
   Admit->>Effect: on permit, stamped with the epoch just read
-  Note over Admit,Effect: a later revoke advances the epoch, and the next action reads it again
+  Note over Admit,Effect: an epoch bump keeps the row, and a revoke removes it
 ```
 
 ## What is already built
@@ -250,7 +250,9 @@ hooks are not allowed to answer first.
 The resource is one canonical directory in an environment the grantor
 enforces. The environment is this gateway's own machine, a remote
 environment it already leases over SSH or a paired connection, or a cloud
-environment a later agent slice will run. The decision is one directory
+environment a later agent slice will run. Marker states are the directory
+binding table in [Lifecycles](#lifecycles). This section does not add a
+binding state. The decision is one directory
 resource, minted once, with one marker. The resource id is not the path.
 The resource row stores the environment, the canonical path, and a
 directory binding. The binding is 32 random bytes. Share reads
@@ -424,7 +426,7 @@ Two waits are not that timer:
 
 - **Before the peer is Active.** An enrollment that is still pending has
   no session and no grant stream. The status dial already used to finish
-  pairing runs until the enrollment is Active or ended. It stops once the
+  pairing runs until the enrollment is Active or Revoked. It stops once the
   subscriptions can open.
 - **A connect that fails.** The follower waits on the existing connect
   backoff, then resumes the subscriptions. The wait does not read the
@@ -434,6 +436,9 @@ The silence bound on an environment's serving connection stays. That
 connection carries leases. It is not the peer poller.
 
 ## Webhooks
+
+Delivery states are the webhook outbox table in [Lifecycles](#lifecycles).
+This section does not add a delivery state.
 
 A webhook is an integration principal the owner issues with
 `credential.issue`. The registration stores an HTTPS URL and a 32-byte mac
@@ -504,9 +509,10 @@ order.
 
 Revoke and a delivery attempt share one permit for that registration, the
 same shape as `hold_revision` on a share grant. The attempt that holds the
-permit finishes under the epoch it read. Revoke then advances the epoch.
-The next admission reads the new epoch and is not sent. That is the Drive
-turn's rule: admitted work finishes, and the next command is refused.
+permit finishes under the epoch it read. Grant revoke then removes the
+grant row. The next admission finds no row and is not sent. An epoch bump
+is the other event: the row stays, and the next admission reads the new
+epoch. Admitted work finishes, and the next command is refused.
 
 - An attempt takes the permit, reads the grant epoch, and reads whether
   the integration credential is still current. The credential check is the
@@ -537,12 +543,13 @@ turn's rule: admitted work finishes, and the next command is refused.
 - Revoke takes the same permit. When an attempt holds it, revoke waits
   until that attempt records its outcome and drops the permit, and no
   longer than `webhook.post_deadline`. Revoke does not cancel a write that
-  finishes inside the deadline. It then advances the epoch and records the
-  transition: delivering, then stopped, with the revoke as cause and the
-  owner as initiator. The record names the delivery id it waited for, when
-  there was one.
-- A retry is a new admission. After the epoch advances it reads the new
-  epoch and is not sent.
+  finishes inside the deadline. It then removes the grant row and records
+  the transition: delivering, then stopped, with the revoke as cause and
+  the owner as initiator. The record names the delivery id it waited for,
+  when there was one.
+- A retry is a new admission. After the grant row is gone it finds no
+  grant and is not sent. After an epoch bump it reads the new epoch and
+  is not sent when that epoch no longer allows delivery.
 - When revoke commits before an attempt takes the permit, that attempt is
   not sent. Grant revoke and credential revoke share this rule.
   `credential.revoke`, and credential expiry, take the same registration
@@ -570,6 +577,9 @@ names the due time stored on the outbox row. An attempt is one observation of
 a POST.
 
 ## LAN announcement
+
+Pairing phases and discovery install are the peer table in
+[Lifecycles](#lifecycles). This section does not add a pairing phase.
 
 Off until the peer table has a paired gateway with a discovery key. The
 announcement carries a dial address, a port, and one rotating token per
@@ -640,6 +650,283 @@ match it to a pinned key. The window length is a row the slice adds to
 announcement. The connection is still the pinned TLS session and the
 issued credential. Pairing still requires the one-use code.
 
+## Lifecycles
+
+These tables are the states for this proposal. A slice's tests are written
+from the rows. A new state goes in the table before it goes into a slice.
+The sections above describe the same transitions and do not add a state.
+
+### Grant
+
+**Source of truth.** The grant row, keyed by `(subject_kind, subject_id,
+resource_kind, resource_id)`. The epoch is a field of that row. Cedar reads
+the row. A use case does not keep a second copy of the decision.
+
+**Invariants.** One row for one subject and one resource. A paired subject
+is the receiver, so two devices of one owner stay two rows. An integration
+or a later agent uses subject kind `principal`. The same-person link is not
+the subject. An admission keeps the epoch it read. The next admission reads
+the row again.
+
+| State | Meaning |
+| --- | --- |
+| absent | No row. |
+| active | The row is stored at an epoch. |
+
+| From | Event | To | What is stored |
+| --- | --- | --- | --- |
+| absent | `conversation.share` commits | active | The row, at the epoch of that commit. A Cedar denial writes nothing. |
+| active | Capabilities or constraints change | active | The same row, epoch incremented. |
+| active | Unshare or grant revoke commits | absent | The row is removed. An attempt that already holds the permit finishes under the epoch it read. The next admission finds no row. |
+| active | Directory open finds a missing or different marker | absent | Every grant for that directory resource is revoked. The cause is the marker mismatch. |
+
+```mermaid
+sequenceDiagram
+  participant Owner
+  participant Row as Grant row
+  participant Admit as Admission
+  participant Effect as Turn or POST
+  Owner->>Row: share commits the row
+  Admit->>Row: read the epoch
+  Admit->>Effect: stamp the epoch just read
+  Owner->>Row: epoch bump keeps the row
+  Effect-->>Admit: the stamped work finishes
+  Admit->>Row: the next admission reads the new epoch
+  Owner->>Row: revoke removes the row
+  Admit->>Row: the next admission finds no grant
+```
+
+**Alternatives rejected.**
+
+- Key the grant by principal alone. Two devices of one owner authenticate
+  as that owner, so one principal key would collapse two receivers into
+  one row.
+- Key a paired grant by `(principal, conversation)` only. A directory is
+  not a conversation, and the path can be replaced. The key is subject,
+  resource kind, and a minted resource id.
+- Use the same-person link as the subject. The link would merge two
+  receivers' grants. It stays a separate row and adds no capability.
+- Decide comment and drive by matching a gateway principal in Rust.
+  Cedar is the only decider. `conversation.share` asks the permits and
+  writes nothing on denial.
+
+### Webhook delivery outbox
+
+**Source of truth.** Which events exist is the conversation record stream.
+What will be sent, and what was sent, is the outbox row: delivery id,
+registration, checkpoint `(conversation id, incarnation, position)`, state,
+and `due_at` when the state is `retry scheduled`. The replay cursor is one
+field per registration and conversation: the last checkpoint whose outbox
+row committed. The cursor advances in the same write as that row. The
+conversation commit stays in the conversation store.
+
+**Invariants.** One active registration per integration principal. One
+delivery id per checkpoint per registration. Restart does not mint a second
+delivery id for a checkpoint that already has a row. `queued` and
+`retry scheduled` are admitted again. `sent`, `timed out`, `not sent`, and
+`unknown` are terminal and are not admitted again. `sending` is recorded
+before any POST byte and is not replaced by the later outcome.
+
+| State | Terminal | Meaning |
+| --- | --- | --- |
+| queued | no | The row and the replay cursor have committed. The attempt has not recorded `sending`. |
+| sending | no | The target, delivery id, epoch, and current credential are stored. No POST byte was written before this commit. |
+| retry scheduled | no | A retryable response stored `due_at` on this row. The delivery id stays. |
+| sent | yes | The response was success. The `sending` record stays beside this outcome. |
+| timed out | yes | The sender closed its side at `webhook.post_deadline`. A late arrival is not recorded as `sent`. |
+| not sent | yes | The epoch or the credential refused delivery, or the pre-send write failed. A 3xx is not a delivery and is recorded here or as `retry scheduled`. |
+| unknown | yes | `sending` committed and no later outcome did. Restart appends this outcome and does not POST that delivery id again. |
+
+| From | Event | To | Ordering |
+| --- | --- | --- | --- |
+| no row | The conversation checkpoint has committed, and this registration has no row for it | queued | Restart or the live reader inserts the row and advances the cursor in one write. A crash between the conversation commit and this write leaves the cursor behind, and the next restart inserts the row. |
+| queued | The attempt takes the permit, the epoch allows delivery, the credential is current, and the `sending` write commits | sending | This write commits before any POST byte. If it fails, the state is `not sent` and the POST is not written. |
+| queued | The epoch or the credential refuses delivery | not sent | No POST is written. |
+| sending | The response is a 3xx, or another retryable response | not sent, or retry scheduled | A 3xx is not a delivery. The next POST, when admitted, goes to the registered URL only. `retry scheduled` stores `due_at` in that write. |
+| sending | The response is success | sent | The outcome record does not replace `sending`. |
+| sending | The deadline fires | timed out | The sender closes its side and drops the permit. |
+| sending | The response is a final failure | not sent | The outcome record does not replace `sending`. |
+| sending | The process stops before an outcome write commits | unknown | Restart does not POST that delivery id again. |
+| retry scheduled | `due_at` has arrived | sending, or not sent | Restart, or the live wait, admits the same delivery id. The admission reads the grant again. No row means `not sent`. An epoch that no longer allows delivery means `not sent`. A row whose `due_at` is still ahead waits. The wait reads `due_at` from the row. |
+
+```mermaid
+sequenceDiagram
+  participant Source as Conversation stream
+  participant Outbox as Outbox row
+  participant Restart
+  Source->>Source: commit the record
+  Source->>Outbox: write queued and the replay cursor
+  Outbox->>Outbox: record sending before any POST byte
+  Outbox->>Outbox: retry scheduled stores due_at
+  Restart->>Outbox: admit the row when due_at has arrived
+  Outbox->>Outbox: sent, timed out, not sent, or unknown closes the delivery
+```
+
+**Alternatives rejected.**
+
+- Keep the retry in memory after recording `retry scheduled` as a terminal
+  outcome. A process exit before the timer fires loses the delivery.
+  `due_at` on the row is the due time.
+- Put the conversation commit and the outbox insert in one transaction.
+  They are not one store. The replay cursor closes that gap.
+- Key the grant by registration or credential so two registrations of one
+  principal stay apart. `credential.issue` only adds a credential. The
+  decision is one active registration per integration principal, and the
+  subject stays `principal`.
+- Replay a `sending` row that has no outcome. The POST bytes may already
+  have arrived. The outcome is `unknown`, and that delivery id is not sent
+  again.
+
+### Directory binding
+
+**Source of truth.** The directory resource row: environment, resource id,
+canonical path, and the 32-byte binding. Subject grants point at that
+resource id. The binding checked at open is the file `.nessa-binding` in
+the directory root. A grant row does not store a second binding.
+
+**Invariants.** The resource id is not the path. The marker is written
+once, when the file is absent. A later share of the same directory leaves
+the file unchanged. A failed grant commit leaves the marker and every
+grant already stored. The marker is removed only when this attempt created
+the file and no committed resource stores that binding. Device and inode
+numbers are not the binding.
+
+| State | Meaning |
+| --- | --- |
+| absent | No resource row. A marker file with no resource row is not a grant. |
+| minted | The resource row and `.nessa-binding` hold the same binding. |
+| revoked | An open found the root gone, the marker missing, or different bytes. The grants for that resource are removed. |
+
+| From | Event | To | What is stored |
+| --- | --- | --- | --- |
+| absent, file absent | First share | minted | Create `.nessa-binding`, commit the resource row, then the grant. A create leaves an existing file unchanged. |
+| absent, file present | Share finds an orphan marker | minted | Adopt the bytes already in the file, commit the resource, then the grant. The file is not rewritten. |
+| minted | Share to another subject | minted | Another grant row for the same resource id. The marker bytes stay. A failed grant commit leaves the marker and the first grant. |
+| minted | Open reads a matching marker | minted | The no-follow walk starts from the handle that matched. |
+| minted | Open finds a missing root, a missing marker, or different bytes | revoked | The use is refused and the grants for that resource are revoked. A directory recreated at the same path, including when device and inode numbers are reused, has no marker and does not receive the grants. |
+
+```mermaid
+sequenceDiagram
+  participant Share
+  participant Marker as Binding file
+  participant Resource as Directory resource
+  participant Grant as Subject grant
+  Share->>Marker: create the file only when it is absent
+  Share->>Resource: commit the resource row
+  Share->>Grant: commit the first grant
+  Share->>Grant: a second subject attaches to the same resource
+  Note over Marker,Grant: a failed grant commit leaves the marker and the first grant
+  Share->>Marker: open reads the file through the directory handle
+  Marker-->>Grant: missing or different bytes revoke the grants
+```
+
+**Alternatives rejected.**
+
+- Use the path as the resource id. A directory created later at that path
+  would inherit the grant.
+- Bind the grant to the device and inode captured at mint. Those numbers
+  are reused after deletion.
+- Add an operating-system identity with a generation component. The minted
+  marker is the binding. A copied marker is an explicit copy.
+- Rewrite the marker on every share, and delete it if that share's commit
+  fails. A second subject would revoke the first, and the cleanup would
+  remove the marker the first grant still needs. The resource is minted
+  once, and later grants attach to it.
+
+### Peer discovery and pairing
+
+**Source of truth.** Pairing phase is `PeerPhase` on the peer record:
+`Pending`, `Active`, or `Revoked`
+([`records.rs`](../../crates/nessa-server/src/peer_gateways/infrastructure/records.rs)).
+This proposal does not add a phase. The discovery install is a field on
+that same record, written after the phase is `Active`. The dialer stores
+it on the peer file beside the pin. The granting gateway stores it on the
+pairing record that already keeps that peer's pin.
+
+**Invariants.** Subscriptions open when the phase is `Active`. The status
+dial runs until then and does not read the catalogue. An announcement is
+sent only for an `Active` peer whose discovery field is `installed`. One
+install generation is in progress at a time. A retry resends the stored
+generation. The same-person link is not a phase and not a grant subject.
+The token is HMAC-SHA256 of the time window, the dial address, and the
+port. The pinned key stays out of the announcement.
+
+| Phase | Meaning | This proposal |
+| --- | --- | --- |
+| Pending | Enrollment is in progress. No session and no grant stream. | Unchanged. The status dial runs until Active or Revoked. |
+| Active | The credential id and the receiver are stored. | Subscriptions can open. Discovery install may start. |
+| Revoked | The enrollment is over. | No announcement. |
+
+| Discovery field | Meaning |
+| --- | --- |
+| none | No discovery key. The peer is left out of the announcement. Alpha does not invent a key. |
+| offered | One generation is stored: the generation, this side's ephemeral private key, and the peer's public key. `stored` is sent only after that write commits. |
+| installed | The same generation and the MAC key are stored. The ephemeral private key left in that write. |
+
+| From | Event | To | Ordering |
+| --- | --- | --- | --- |
+| none, phase Active | This side offers a public key for one generation | offered | The write commits before `stored` is sent. |
+| offered | Both sides have acked `stored` | installed | Derive with HKDF-SHA256 and a fixed label, then replace `offered` with `installed` in one write. |
+| offered | The session drops | offered | Resend the stored public key. Do not mint a new one. |
+| installed | The session drops | installed | Resend `installed`. Do not derive again. |
+| none | A retry arrives for a generation this side has not stored | offered or installed | Accept that same generation. A new generation does not start while one is unfinished. |
+| installed | Announce | installed | One token per such peer, for the current window. |
+
+```mermaid
+sequenceDiagram
+  participant Dialer
+  participant Record as Peer record
+  participant Grantor
+  Dialer->>Record: enrollment starts at Pending
+  Grantor->>Record: enrollment completes at Active
+  Note over Dialer,Record: subscriptions open only at Active
+  Dialer->>Grantor: offer this generation public key
+  Dialer->>Record: write offered, then send stored
+  Grantor->>Record: write offered, then send stored
+  Dialer->>Record: replace offered with installed
+  Grantor->>Record: replace offered with installed
+  Note over Dialer,Grantor: a retry resends the stored generation
+```
+
+**Alternatives rejected.**
+
+- Put a stable fingerprint in the announcement. The token rotates with the
+  window, the address, and the port.
+- Claim the announcement is unlinkable. The address, the port, the network
+  source, and the token count stay visible.
+- Take the MAC key from the enrollment PAKE or from `#705`. Those records
+  do not hold one. This slice installs one generation after Active.
+- Start a new generation when a retry finds a half-written install. A crash
+  would leave one side installed and the other unable to recompute. Retry
+  uses the stored generation.
+- Keep `PeerPoller` as the way an Active peer learns grants. Grant changes
+  arrive on the grant subscription. Chat copies wake on a record-hint frame.
+  The status dial and the connect backoff are waits, not a third poll of
+  the catalogue.
+
+## Open questions / known limits
+
+- A copied `.nessa-binding` matches the stored binding. That copy is an
+  explicit act. This proposal does not add a generation on top of the
+  marker.
+- A crash after POST bytes are written and before the outcome write commits
+  becomes `unknown`. That delivery id is not sent again. The receiver may
+  already have the event. This proposal does not add a receiver ack.
+- The wait until `due_at` reads the outbox row. This proposal does not add
+  a second scheduler store.
+- A peer paired before this slice has no discovery key. Alpha does not
+  invent one. That peer stays out of the announcement until it is paired
+  again under this slice.
+- The LAN address, port, network source, and token count can be correlated.
+  Unlinkability is not a property of the announcement.
+- A command a harness runs without asking Nessa is outside this gate.
+- Cloud agents and the owner phone are named as later principals. No slice
+  here builds them.
+- The conversation store and the webhook outbox are not one transaction.
+  The replay cursor is the recovery for a crash between them.
+- A case these tables do not settle is a test of the slice that owns it.
+  It is not a new state added in review.
+
 ## Order
 
 The refactor lands before any feature slice. Later slices depend on the
@@ -677,6 +964,9 @@ The bodies below are the current text of this proposal.
 Part of the access-grant proposal in `docs/design/access-grants.md`.
 
 ## Deliver
+
+Issue, epoch bump, and revoke follow the grant table in Lifecycles. This
+slice does not add a grant state.
 
 Make the conversation share row the access grant. The primary key is
 `(subject_kind, subject_id, resource_kind, resource_id)`, replacing
@@ -816,6 +1106,9 @@ a chat to act in.
 Part of docs/design/access-grants.md.
 
 ## Deliver
+
+Marker states follow the directory binding table in Lifecycles. This slice
+does not add a binding state.
 
 A grant resource is one directory in an environment the grantor enforces:
 this gateway's machine, a remote environment it already leases, or a cloud
@@ -998,7 +1291,7 @@ is not walked until it is opened again.
 
 Two waits stay, and neither reads the catalogue on a timer. Until the
 enrollment is Active there is no session, so the existing status dial runs
-until Active or ended, then stops. After the subscription connection
+until Active or Revoked, then stops. After the subscription connection
 drops, a failed connect waits on the existing connect backoff and then
 resumes both subscriptions and the record cursor. The environment serving
 connection's silence bound stays; it carries leases and is not this poller.
@@ -1068,6 +1361,9 @@ The local shared conversation and the subscribe follow.
 Part of docs/design/access-grants.md.
 
 ## Deliver
+
+Delivery states follow the webhook outbox table in Lifecycles. This slice
+does not add a delivery state.
 
 The owner issues an integration principal with `credential.issue`, holding
 `conversation.read`, and registers an HTTPS URL and a 32-byte mac key on
@@ -1148,7 +1444,7 @@ records `timed out`, and drops the permit. Bytes already written may still
 reach the receiver. That late arrival is not recorded as `sent` and does
 not schedule a retry. Revoke waits for the attempt's outcome or for that
 deadline, whichever comes first. Revoke does not cancel a write that
-finishes inside the deadline. Grant revoke then advances the epoch and
+finishes inside the deadline. Grant revoke then removes the grant row and
 records delivering, then stopped, with the revoke as cause, the owner as
 initiator, and the delivery id it waited for.
 `credential.revoke` and credential expiry take the same permit. They do
@@ -1169,15 +1465,15 @@ A webhook granted one chat receives that chat's events and no other. A
 retry of an attempt that is still at its admitted epoch repeats the
 delivery id and the signature. The webhook credential cannot call
 `conversation.send`. Revoke waits for the one attempt that holds the
-permit; that attempt is recorded under the epoch it read, and the epoch
-then advances. A retry that takes the permit after that advance is not
-sent. An attempt that has not taken the permit when revoke commits is not
+permit; that attempt is recorded under the epoch it read, and the grant
+row is then removed. A retry that takes the permit after that removal is
+not sent. An attempt that has not taken the permit when revoke commits is not
 sent. `credential.revoke`, or expiry, with the grants still present,
 sends no further POST. An attempt that already holds the permit can
 finish inside the deadline. One that has not taken the permit is not
 sent. A POST that does not finish within `webhook.post_deadline` records
-`timed out`, drops the permit, and revoke then advances the epoch without
-waiting further. A 3xx is not followed and is not a delivery. The
+`timed out`, drops the permit, and revoke then removes the grant row
+without waiting further. A 3xx is not followed and is not a delivery. The
 signature is not sent to the redirect target. A POST whose response is
 success and whose terminal audit write fails leaves `sending` in place,
 sends no second POST of that delivery id, and records outcome unknown.
@@ -1206,6 +1502,9 @@ The access-grant refactor.
 Part of docs/design/access-grants.md.
 
 ## Deliver
+
+Pairing phases and discovery install follow the peer table in Lifecycles.
+This slice does not add a pairing phase.
 
 With at least one paired gateway that has a discovery key, this gateway
 may announce itself on the local network. The announcement carries a dial
