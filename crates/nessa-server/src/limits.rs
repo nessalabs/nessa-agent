@@ -727,6 +727,9 @@ fn render(limits: &OperationalLimits, session: &SessionSettings) -> String {
          The client's preparing retries are named here and counted only in \
          `PREPARING_ATTEMPTS` (`crates/nessa-client-core/src/read_only_sync/application/watch.rs`); \
          this document does not copy that count. \
+         The client's foreground phone sends are named here and counted only in \
+         `FOREGROUND_SENDS` (`crates/nessa-client-core/src/outbox/domain/decide.rs`); \
+         this document does not copy that count. \
          A wire field carrying the limit id is a later schema change and is not these rows.\n\n\
          | id | tier | effective | owner | what hitting it means |\n\
          | --- | --- | --- | --- | --- |\n",
@@ -744,7 +747,10 @@ fn render(limits: &OperationalLimits, session: &SessionSettings) -> String {
     document.push_str(
         "\n| client.preparing_attempts | client | the client's own | \
          `PREPARING_ATTEMPTS` in `crates/nessa-client-core/src/read_only_sync/application/watch.rs` | \
-         how many times a preparing read is asked again |\n",
+         how many times a preparing read is asked again |\n\
+         | client.foreground_sends | client | the client's own | \
+         `FOREGROUND_SENDS` in `crates/nessa-client-core/src/outbox/domain/decide.rs` | \
+         how many times one foreground phone send is asked |\n",
     );
     document
 }
@@ -799,6 +805,13 @@ mod tests {
         assert!(row.contains("PREPARING_ATTEMPTS"));
         assert!(row.contains("the client's own"));
         assert!(!row.contains("| 4 |"));
+        let foreground = rendered
+            .lines()
+            .find(|line| line.contains("client.foreground_sends"))
+            .expect("foreground row");
+        assert!(foreground.contains("FOREGROUND_SENDS"));
+        assert!(foreground.contains("the client's own"));
+        assert!(!foreground.contains("| 3 |"));
     }
 
     #[test]

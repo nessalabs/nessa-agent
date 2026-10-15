@@ -2000,7 +2000,10 @@ the existing enrollment worker and purge policy, collecting status/purge effects
 inside physical admission and exposing original durable purge receipts separately.
 The native adapter below provides generated Swift binding and linked library
 execution. Phone repository/enrollment/authority wiring, artifact exports and
-durable deletion remain later ADR 782 slices.
+durable deletion remain later ADR 782 slices. `src/outbox/` keeps a typed phone
+send before `conversation.send` and reads `conversation.receipt` before any
+later send; its ordering is [phone outbox](design/phone-outbox.md). The phone
+application and the desktop saved-tabs caller are later.
 
 ### Retained read-only example
 

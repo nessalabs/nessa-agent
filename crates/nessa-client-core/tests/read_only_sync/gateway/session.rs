@@ -2,6 +2,9 @@
 //! the device key presented, `openProduct`, then product frames.
 use super::super::session::{DeviceEvidence, LocalConnector, RpcKind, Session};
 use super::super::sources::{CatalogueReader, GatewayConnection};
+use crate::outbox::{
+    LookupAnswer, PhoneCommandId, PhoneFailure, PhoneGateway, PhoneIntent, SendAnswer,
+};
 use crate::read_only_sync::application::{
     Cancellation, GatewayConnector, GatewayError, GatewayPolicy, GatewayStream,
 };
@@ -30,6 +33,7 @@ use nessa_protocol::product_contract::generated::{
     CatalogueReadErrorCode, RecordReadErrorCode, SessionCloseReason,
 };
 use nessa_protocol::protocol::{EventFrame, OutgoingMessage, RequestFrame, ResponseFrame};
+use nessa_sdk::domain::agent_execution::executions::ExecutionId;
 use nessa_sync::replication::application::{Access, ScopeAuthorizer};
 use nessa_sync::replication::catalogue::{
     CataloguePass, CatalogueSource, CatalogueSourceError, EntryKey, ManifestEntry, ManifestRequest,
@@ -1276,6 +1280,125 @@ fn public_retained_read_enforces_owner_scope_and_preserves_granted_peer_mode() {
         drop(cache);
         peer.join().unwrap();
     }
+}
+
+#[test]
+fn a_typed_send_refusal_keeps_the_session_for_the_receipt() {
+    let intent = PhoneIntent::new(
+        "01234567-89ab-4cde-8f01-23456789abcd",
+        PhoneCommandId::new("command-1").unwrap(),
+        ExecutionId::new("turn-1").unwrap(),
+        "hello from the phone",
+        Vec::new(),
+    )
+    .unwrap();
+    let (endpoint, peer) = peer(|socket| {
+        let sent = request(socket);
+        assert_eq!(sent.method, product_method::CONVERSATION_SEND);
+        assert_eq!(sent.params["requestId"], "command-1");
+        assert_eq!(sent.params["executionId"], "turn-1");
+        assert_eq!(sent.params["text"], "hello from the phone");
+        assert_eq!(sent.params["files"], json!([]));
+        send(
+            socket,
+            OutgoingMessage::Response(ResponseFrame::failure(&sent.id, "forbidden", "no")),
+        );
+        let lookup = request(socket);
+        assert_eq!(lookup.method, product_method::CONVERSATION_RECEIPT);
+        assert_eq!(lookup.params["operation"], "submit");
+        assert_eq!(lookup.params["requestId"], "command-1");
+        assert_eq!(lookup.params["executionId"], "turn-1");
+        assert_eq!(lookup.params["files"], json!([]));
+        send(
+            socket,
+            OutgoingMessage::Response(
+                ResponseFrame::success(
+                    &lookup.id,
+                    &json!({"found": false, "requestId": "command-1"}),
+                )
+                .unwrap(),
+            ),
+        );
+    });
+    let mut session = connect(&endpoint);
+    assert_eq!(
+        PhoneGateway::send(&mut session, &intent),
+        SendAnswer::Refused(PhoneFailure::Forbidden)
+    );
+    assert_eq!(
+        PhoneGateway::lookup(&mut session, &intent),
+        LookupAnswer::NotFound
+    );
+    session.begin().unwrap();
+    assert_eq!(session.finish().unwrap().failure, None);
+    drop(session);
+    peer.join().unwrap();
+}
+
+#[test]
+fn an_impossible_receipt_closes_the_session() {
+    let intent = PhoneIntent::new(
+        "01234567-89ab-4cde-8f01-23456789abcd",
+        PhoneCommandId::new("command-1").unwrap(),
+        ExecutionId::new("turn-1").unwrap(),
+        "hello from the phone",
+        Vec::new(),
+    )
+    .unwrap();
+    let (endpoint, peer) = peer(|socket| {
+        let lookup = request(socket);
+        assert_eq!(lookup.method, product_method::CONVERSATION_RECEIPT);
+        send(
+            socket,
+            OutgoingMessage::Response(
+                ResponseFrame::success(
+                    &lookup.id,
+                    &json!({
+                        "found": true,
+                        "requestId": "command-1",
+                        "stage": "ready"
+                    }),
+                )
+                .unwrap(),
+            ),
+        );
+    });
+    let mut session = connect(&endpoint);
+    assert_eq!(
+        PhoneGateway::lookup(&mut session, &intent),
+        LookupAnswer::Broken
+    );
+    assert_eq!(session.begin(), Err(GatewayError::Transport));
+    drop(session);
+    peer.join().unwrap();
+}
+
+#[test]
+fn an_unknown_send_refusal_closes_the_session() {
+    let intent = PhoneIntent::new(
+        "01234567-89ab-4cde-8f01-23456789abcd",
+        PhoneCommandId::new("command-1").unwrap(),
+        ExecutionId::new("turn-1").unwrap(),
+        "hello from the phone",
+        Vec::new(),
+    )
+    .unwrap();
+    let (endpoint, peer) = peer(|socket| {
+        let sent = request(socket);
+        assert_eq!(sent.method, product_method::CONVERSATION_SEND);
+        send(
+            socket,
+            OutgoingMessage::Response(ResponseFrame::failure(&sent.id, "not_a_real_code", "no")),
+        );
+    });
+    let mut session = connect(&endpoint);
+    assert_eq!(
+        PhoneGateway::send(&mut session, &intent),
+        SendAnswer::Broken
+    );
+    assert_eq!(session.begin(), Err(GatewayError::Transport));
+    drop(session);
+    peer.join().unwrap();
 }
 
 #[path = "session/held_files.rs"]

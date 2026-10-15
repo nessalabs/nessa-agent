@@ -7,6 +7,7 @@
 //! operation per range.
 mod deadline_stream;
 mod held_files;
+mod phone;
 mod session;
 pub(crate) use session::{
     subscription_refusal, DeviceEvidence, LocalConnector, Session, SubscriptionDelivery,
