@@ -1800,6 +1800,104 @@ fn a_recovery_draft_requires_its_turn_running_predecessor() {
         )
         .unwrap();
     assert_eq!(canonical, other.canonical());
+
+    let (_dir, path, successor) = prepare();
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE phone_intent_event SET initiator = 'person'
+             WHERE request_id = 'command-1'
+               AND cause IN ('lookup', 'returned_to_draft')",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+    assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
+    drop(outbox);
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let initiator: String = connection
+        .query_row(
+            "SELECT initiator FROM phone_intent_event
+             WHERE request_id = 'command-1' AND cause = 'lookup'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(initiator, "person");
+    let draft: String = connection
+        .query_row(
+            "SELECT outcome FROM phone_intent WHERE request_id = ?1",
+            nessa_local_database::rusqlite::params![successor.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(draft, "draft");
+}
+
+#[test]
+fn a_send_count_the_replay_does_not_reach_is_corrupt() {
+    let dir = directory();
+    let path = path_in(&dir);
+    {
+        let gateway = Scripted::new(vec![SendAnswer::Receipt(Delivery::Queued)], Vec::new());
+        let mut outbox = opened(&path, gateway);
+        person_hold(&mut outbox, text_intent("command-1", "hello"));
+        outbox.send(&command("command-1")).unwrap();
+    }
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE phone_intent SET sends = 0 WHERE request_id = 'command-1'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+    assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
+    drop(outbox);
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let sends: i64 = connection
+        .query_row(
+            "SELECT sends FROM phone_intent WHERE request_id = 'command-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(sends, 0);
+}
+
+#[test]
+fn a_recovery_of_lookup_failed_that_finds_nothing_is_not_admitted() {
+    let dir = directory();
+    let path = path_in(&dir);
+    {
+        let gateway = Scripted::new(vec![SendAnswer::Lost], vec![LookupAnswer::Lost]);
+        let mut outbox = opened(&path, gateway);
+        person_hold(&mut outbox, text_intent("command-1", "hello"));
+        let view = outbox.send(&command("command-1")).unwrap();
+        assert_eq!(
+            view.outcome(),
+            PhoneOutcome::Unknown(UnknownCause::LookupFailed)
+        );
+    }
+    let gateway = Scripted::new(Vec::new(), vec![LookupAnswer::NotFound]);
+    let seen = gateway.clone();
+    let mut outbox = opened(&path, gateway);
+    let recovered = outbox.recover().unwrap();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(
+        recovered[0].outcome(),
+        PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+    );
+    assert!(seen.body().sent.is_empty());
+    assert_eq!(seen.body().order, ["lookup"]);
+    drop(outbox);
+    let mut check = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+    assert_eq!(
+        check.list().unwrap()[0].outcome(),
+        PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+    );
 }
 
 #[test]

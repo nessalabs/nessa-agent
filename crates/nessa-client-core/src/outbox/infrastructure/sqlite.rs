@@ -383,7 +383,12 @@ fn tie_predecessor(
         return Err(StoreError::Corrupt);
     }
     let pred_events = read_events(connection, pred_id)?;
-    if pred_events.last().map(|event| event.cause) != Some(Cause::ReturnedToDraft) {
+    let paired = pred_events.len() >= 2
+        && pred_events[pred_events.len() - 2].cause == Cause::Lookup
+        && pred_events[pred_events.len() - 2].initiator == Initiator::Recovery
+        && pred_events[pred_events.len() - 1].cause == Cause::ReturnedToDraft
+        && pred_events[pred_events.len() - 1].initiator == Initiator::Recovery;
+    if !paired {
         return Err(StoreError::Corrupt);
     }
     if !seen.contains(pred_id) {

@@ -90,14 +90,14 @@ pub(crate) fn history_reaches(
     }
     let mut state = PhoneRecord::held(record.intent().clone());
     let mut older = first.cause;
-    let mut previous = first.cause;
+    let mut previous = first;
     for event in rest {
         let Some(next) = advance(&state, event, previous, older) else {
             return false;
         };
         state = next;
-        older = previous;
-        previous = event.cause;
+        older = previous.cause;
+        previous = event;
     }
     state.outcome() == record.outcome()
         && state.sends() == record.sends()
@@ -111,7 +111,7 @@ pub(crate) fn history_reaches(
 fn advance(
     before: &PhoneRecord,
     event: &IntentEvent,
-    previous: Cause,
+    previous: &IntentEvent,
     older: Cause,
 ) -> Option<PhoneRecord> {
     if !initiator_allowed(event.cause, event.initiator) {
@@ -130,8 +130,8 @@ fn advance(
             // The same call's next send. Not found that leaves the outcome
             // writes no lookup, so the predecessor is SendLost. Not found
             // that moves lookup failed to not admitted writes Lookup first.
-            let after_lost = previous == Cause::SendLost
-                || (previous == Cause::Lookup
+            let after_lost = previous.cause == Cause::SendLost
+                || (previous.cause == Cause::Lookup
                     && older == Cause::SendLost
                     && matches!(
                         before.outcome(),
@@ -142,9 +142,9 @@ fn advance(
             }
             terminal(before, event, Cause::ForegroundSend)
         }
-        Cause::ExplicitRetry => explicit(before, event, previous),
-        Cause::Lookup => lookup_event(before, event, previous),
-        Cause::Bound => bound(before, event, previous),
+        Cause::ExplicitRetry => explicit(before, event, previous.cause),
+        Cause::Lookup => lookup_event(before, event, previous.cause),
+        Cause::Bound => bound(before, event, previous.cause),
         Cause::ReturnedToDraft => returned(before, event, previous),
     }
 }
@@ -251,12 +251,20 @@ fn bound(before: &PhoneRecord, event: &IntentEvent, previous: Cause) -> Option<P
     None
 }
 
-fn returned(before: &PhoneRecord, event: &IntentEvent, previous: Cause) -> Option<PhoneRecord> {
+fn returned(
+    before: &PhoneRecord,
+    event: &IntentEvent,
+    previous: &IntentEvent,
+) -> Option<PhoneRecord> {
     if !turn_running_outcome(event.outcome) {
         return None;
     }
-    if previous == Cause::Lookup && before.outcome() == event.outcome {
-        return Some(before.clone());
+    // One caller writes the lookup and the return, and the direct send is the person.
+    if previous.cause == Cause::Lookup && before.outcome() == event.outcome {
+        return (previous.initiator == event.initiator).then_some(before.clone());
+    }
+    if event.initiator != Initiator::Person {
+        return None;
     }
     let answer = SendAnswer::Refused(PhoneFailure::Conversation(
         ConversationErrorCode::TurnRunning,

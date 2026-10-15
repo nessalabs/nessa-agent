@@ -1336,6 +1336,44 @@ fn a_typed_send_refusal_keeps_the_session_for_the_receipt() {
 }
 
 #[test]
+fn an_impossible_receipt_closes_the_session() {
+    let intent = PhoneIntent::new(
+        "01234567-89ab-4cde-8f01-23456789abcd",
+        PhoneCommandId::new("command-1").unwrap(),
+        ExecutionId::new("turn-1").unwrap(),
+        "hello from the phone",
+        Vec::new(),
+    )
+    .unwrap();
+    let (endpoint, peer) = peer(|socket| {
+        let lookup = request(socket);
+        assert_eq!(lookup.method, product_method::CONVERSATION_RECEIPT);
+        send(
+            socket,
+            OutgoingMessage::Response(
+                ResponseFrame::success(
+                    &lookup.id,
+                    &json!({
+                        "found": true,
+                        "requestId": "command-1",
+                        "stage": "ready"
+                    }),
+                )
+                .unwrap(),
+            ),
+        );
+    });
+    let mut session = connect(&endpoint);
+    assert_eq!(
+        PhoneGateway::lookup(&mut session, &intent),
+        LookupAnswer::Broken
+    );
+    assert_eq!(session.begin(), Err(GatewayError::Transport));
+    drop(session);
+    peer.join().unwrap();
+}
+
+#[test]
 fn an_unknown_send_refusal_closes_the_session() {
     let intent = PhoneIntent::new(
         "01234567-89ab-4cde-8f01-23456789abcd",

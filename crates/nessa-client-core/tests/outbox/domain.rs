@@ -467,11 +467,41 @@ fn every_transition_and_precedence_pair() {
         &not_admitted_row
             .clone()
             .with_outcome(running_failure)
-            .with_successor(successor),
+            .with_successor(successor.clone()),
         &lookup_return,
         false
     ));
     assert_eq!(stored_evidence(&lookup_return), Evidence::Lookup);
+    let mut split = lookup_return.to_vec();
+    split[3].initiator = Initiator::Person;
+    assert!(
+        !history_reaches(
+            &not_admitted_row
+                .clone()
+                .with_outcome(running_failure)
+                .with_successor(successor.clone()),
+            &split,
+            false
+        ),
+        "one caller writes the lookup and the return"
+    );
+    let recovery_direct = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit_by(Cause::ReturnedToDraft, running_failure, Initiator::Recovery),
+    ];
+    assert!(
+        !history_reaches(
+            &not_admitted_row
+                .clone()
+                .with_sends(1)
+                .with_outcome(running_failure)
+                .with_successor(successor),
+            &recovery_direct,
+            false
+        ),
+        "a direct return is the person"
+    );
     let minted = PhoneRecord::held(intent("hello"));
     assert!(history_reaches(
         &minted,

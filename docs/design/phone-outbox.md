@@ -95,7 +95,10 @@ Departure's unknown is not a direct answer.
 | Unknown, lookup failed | a later foreground call loses the send, then the lookup finds nothing, and the budget remains | Becomes not admitted, then the same bytes are sent again | Person, cause SendLost, then Lookup, then ForegroundSend | Yes, the same hold |
 | Unknown, not admitted or lookup failed | explicit retry after lookup found nothing | Not admitted, the send count returns to zero, then the same bytes are sent again | Person, cause Lookup, then ExplicitRetry | Yes. The waiter reloads |
 | Unknown, attempted | lookup finds a settled submit receipt | Done or failed, per the receipt | Person or Recovery, cause Lookup | No |
-| Any unknown | lookup lost, broken, or not a submit receipt | The row unchanged | Person or Recovery | No |
+| Unknown, attempted | lookup lost, broken, not found, or not a submit receipt | Stays attempted | Person or Recovery | No |
+| Unknown, lookup failed | lookup lost or broken | Stays lookup failed | Person or Recovery | No |
+| Unknown, lookup failed | recovery finds nothing | Not admitted. No send | Recovery, cause Lookup | No |
+| Any unknown | lookup is not a submit receipt | The row unchanged | Person or Recovery | No |
 | Any unknown | lookup returns `submission_unresolved` | Unknown, unresolved | Person or Recovery, cause Lookup | No |
 | Accepted, running, done, failed, unresolved | retry or recover | The row unchanged. No send | Person or Recovery | No |
 | Failed, `turn_running` | — | That failed row, plus a new Draft, one commit | The send path: Person, inside the lease already held. Recovery: Recovery on both ReturnedToDraft and the new Held | Send path: the lease already held. Recovery: no |
@@ -112,18 +115,21 @@ receipt. Restoration rejects a `Lookup` event whose outcome is running
 ## Restoration replays the live transition
 
 Restoration does not keep a second list of legal outcomes. `history_reaches`
-starts from the held draft and asks the same functions the outbox uses to
-decide what one answer persists. An event stays only when one of those
-functions returns that cause and that outcome. The row's outcome and its
-send count must equal the replay. A history those functions do not return
-is corrupt. The row is not repaired.
+starts from the held draft. Departed is `PhoneRecord::depart`. Each later
+answer stays only when `budget`, `apply_send`, `apply_lookup`, or
+`apply_retry` returns that cause and that outcome. The row's outcome, send
+count, and departure must equal that replay
+(`a_send_count_the_replay_does_not_reach_is_corrupt`). Lookup and
+ReturnedToDraft for one `turn_running` share one initiator. A history this
+replay does not return is corrupt. The row is not repaired.
 
 | Function | When the outbox asks | What it persists |
 | --- | --- | --- |
+| `PhoneRecord::depart` | A draft is sent. This commit finishes before the lease | Unknown, not admitted, cause Departed. The person |
 | `budget` | Foreground is entered and the send count is already at the budget | Not admitted stays not admitted, cause Bound. Nothing is sent. Lookup failed writes nothing |
-| `apply_send` | Foreground calls `conversation.send`. The outcome is not admitted or lookup failed, and the budget remains. The cause argument is SendAnswered, ForegroundSend, or ExplicitRetry | A terminal answer keeps that cause and is direct. Lost persists SendLost, then a lookup that may resend. Broken persists Unreadable, then a lookup that may not resend. `turn_running` persists only ReturnedToDraft |
-| `apply_lookup`, resend false | Reconcile, recovery, and the lookup after Unreadable | A changed receipt persists Lookup. Not found, lost, or broken on attempted persists nothing: attempted stays attempted and is not retryable. `turn_running` persists Lookup, then ReturnedToDraft |
-| `apply_lookup`, resend true | The lookup after SendLost in that same foreground call | Not found under the budget persists Lookup only when the outcome changes, then the next send is ForegroundSend. Not found at the budget persists Bound when the row is already not admitted. A not-found lookup that moves lookup failed to not admitted persists Lookup, including at the budget. Any other changed receipt persists Lookup |
+| `apply_send` | Foreground calls `conversation.send`. The outcome is not admitted or lookup failed, and the budget remains. The cause argument is SendAnswered, ForegroundSend, or ExplicitRetry | The send count increases by one. A terminal answer keeps that cause and is direct. Lost persists SendLost and keeps the outcome, then a lookup that may resend. Broken persists Unreadable and keeps the outcome, then a lookup that may not resend. `turn_running` returns the failed row. The outbox writes ReturnedToDraft, then Held on the new draft, with the caller's initiator on both |
+| `apply_lookup`, resend false | Reconcile, recovery, and the lookup after Unreadable | A changed outcome persists Lookup: a submit receipt, a refusal, a lost or broken lookup, and not-found that moves lookup failed to not admitted. Not found, lost, or broken on attempted persists nothing: attempted stays attempted and is not retryable. `turn_running` persists Lookup, then ReturnedToDraft, then Held on the new draft. One initiator is used for all three |
+| `apply_lookup`, resend true | The lookup after SendLost in that same foreground call | Not found under the budget persists Lookup only when the outcome changes, then the next send is ForegroundSend. Not found at the budget persists Bound when the row is already not admitted. A not-found lookup that moves lookup failed to not admitted persists Lookup, including at the budget. `turn_running` persists Lookup, then ReturnedToDraft, with that same initiator. Any other changed outcome persists Lookup |
 | `apply_retry` | Explicit retry after a lookup found nothing. Only not admitted or lookup failed | Lookup of not admitted, then ExplicitRetry that sets the send count to zero. The send after that reset is ExplicitRetry |
 
 Departed, SendAnswered, SendLost, Unreadable, ForegroundSend, ExplicitRetry,
@@ -154,8 +160,10 @@ Stage `ready`, and a settled receipt that omits its effect or carries
 `withdrawn`, `cancelled`, or `already_final`, are not outcomes. `no_effect`
 is a submit effect and is failed, as row L4. The domain refuses the others.
 The row stays. They are never stored as attempted. The wire decoder asks
-that same rule and closes the session. A custom gateway cannot store them
-as attempted.
+that same rule (`a_receipt_result_keeps_found_stage_and_effect_together`).
+The phone gateway closes the session
+(`an_impossible_receipt_closes_the_session`). A custom gateway cannot store
+them as attempted.
 
 ## Precedence
 
@@ -220,6 +228,7 @@ second rule.
 | L9 | A waiter reaches lookup failed after that budget is already spent | Stays lookup failed. No send and no Bound event. The row still loads | `a_spent_budget_keeps_lookup_failed` |
 | L8 | Lookup returns `submission_conflict` | Failed. `found` is not a receipt | `a_conflicting_lookup_is_failed` |
 | R1 | Restart after departure, lookup finds nothing | Unknown. No send | `recovery_does_not_send_when_the_receipt_is_absent` |
+| R7 | Restart after lookup failed, lookup finds nothing | Not admitted. No send | `a_recovery_of_lookup_failed_that_finds_nothing_is_not_admitted` |
 | R2 | Restart after departure, lookup finds settled `dispatched` | Done. No send | `recovery_adopts_a_dispatched_receipt_without_sending` |
 | R6 | Restart after attempted, lookup finds settled `dispatched` | Done. No send | `recovery_adopts_a_settled_receipt_after_attempted` |
 | R3 | Explicit retry after a lookup that found nothing | Same bytes, under the lease | `an_explicit_retry_looks_up_before_it_sends` |
@@ -229,8 +238,9 @@ second rule.
 | C3 | Events do not reach the row, or a send cause is marked recovery | Corrupt. The row is not rewritten | `a_done_row_whose_history_stops_at_departure_is_corrupt` |
 | C4 | A lookup event claims running | Corrupt. The row is not rewritten | `a_lookup_cannot_restore_running` |
 | C5 | Attempted is followed by not admitted or lookup failed | Corrupt. The attempt is not retried | `every_transition_and_precedence_pair`, `an_attempted_receipt_is_not_restored_as_not_admitted` |
-| C6 | A recovery hold whose predecessor is missing, not unique, a different prompt, or not `turn_running` | Corrupt. The draft is not sent | `a_recovery_draft_requires_its_turn_running_predecessor` |
+| C6 | A recovery hold whose predecessor is missing, not unique, a different prompt, not `turn_running`, or not the recovery caller | Corrupt. The draft is not sent | `a_recovery_draft_requires_its_turn_running_predecessor` |
 | C7 | An event's failure or unknown column contradicts its outcome | Corrupt. The column is not dropped | `an_event_column_contradiction_is_corrupt` |
+| C8 | The stored send count disagrees with the replay | Corrupt. The count is not rewritten | `a_send_count_the_replay_does_not_reach_is_corrupt` |
 | C2 | Each transition | Command, outcome, cause, and initiator | `a_transition_keeps_its_cause_and_initiator` |
 
 `FOREGROUND_SENDS` in `crates/nessa-client-core/src/outbox/domain/decide.rs`
