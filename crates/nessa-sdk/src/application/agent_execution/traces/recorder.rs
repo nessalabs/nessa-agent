@@ -462,6 +462,7 @@ impl TraceRecorder {
                     category_name,
                 );
                 self.note_extension(&tool_id, &tool_type);
+                self.note_arguments(&tool_id, arguments.as_deref());
                 if self.permission_is_terminal(&tool_id) {
                     self.prefer_tool_name(&tool_id, &tool_name, category_name);
                     return;
@@ -794,6 +795,22 @@ impl TraceRecorder {
         set_str(&mut tool.span.attributes, ATTR_TOOL_TYPE, "extension");
     }
 
+    fn note_arguments(&mut self, tool_id: &str, arguments: Option<&str>) {
+        let Some(arguments) = arguments else {
+            return;
+        };
+        if !self.capture {
+            return;
+        }
+        let Some(turn) = self.turn.as_mut() else {
+            return;
+        };
+        let Some(tool) = turn.tools.iter_mut().find(|tool| tool.id == tool_id) else {
+            return;
+        };
+        set_str(&mut tool.span.attributes, ATTR_TOOL_ARGUMENTS, arguments);
+    }
+
     fn permission_is_terminal(&self, tool_id: &str) -> bool {
         self.turn.as_ref().is_some_and(|turn| {
             turn.tools.iter().any(|tool| {
@@ -1080,7 +1097,9 @@ fn set_str(attributes: &mut BTreeMap<String, AttributeValue>, key: &str, value: 
 }
 
 fn set_int(attributes: &mut BTreeMap<String, AttributeValue>, key: &str, value: u64) {
-    let value = i64::try_from(value).unwrap_or(i64::MAX);
+    let Ok(value) = i64::try_from(value) else {
+        return;
+    };
     attributes.insert(key.to_owned(), AttributeValue::Int(value));
 }
 

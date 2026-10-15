@@ -272,6 +272,40 @@ fn usage_after_a_turn_closes_does_not_land_on_the_next_turn() {
 }
 
 #[test]
+fn an_unrepresentable_token_count_is_omitted() {
+    let store = LocalTraceStore::new();
+    let mut recorder = turn(&store);
+    let too_big = u64::try_from(i64::MAX).unwrap() + 1;
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.usage(
+        ReportedUsage::new()
+            .with_input_tokens(too_big)
+            .with_output_tokens(4)
+            .with_context_used(too_big)
+            .with_context_size(100),
+    );
+    recorder.finish(at(2), FinishReason::Stop);
+    let spans = store.read("conversation-1");
+    let agent = spans
+        .iter()
+        .find(|span| span.operation() == "invoke_agent")
+        .unwrap();
+    let chat = spans
+        .iter()
+        .find(|span| span.operation() == "chat")
+        .unwrap();
+    assert_eq!(agent.int("gen_ai.usage.input_tokens"), None);
+    assert_eq!(chat.int("gen_ai.usage.input_tokens"), None);
+    assert_eq!(agent.int("gen_ai.usage.output_tokens"), Some(4));
+    assert_eq!(chat.int("gen_ai.usage.output_tokens"), Some(4));
+    assert_eq!(agent.int("nessa.context.used_tokens"), None);
+    assert_eq!(agent.int("nessa.context.size_tokens"), Some(100));
+    assert!(spans
+        .iter()
+        .all(|span| span.int("gen_ai.usage.input_tokens") != Some(i64::MAX)));
+}
+
+#[test]
 fn permission_grant_hook_and_subagent_notes_land_on_the_spans() {
     let store = LocalTraceStore::new();
     store.note_grant("conversation-1", "execution-1", "grant-1", 7, true);
@@ -487,6 +521,39 @@ fn an_answer_recorded_before_the_request_stays_answered() {
     assert_eq!(tool.string("nessa.permission.effect"), Some("deny"));
     assert_eq!(tool.string("nessa.permission.decider"), Some("rule"));
     assert_eq!(tool.string("gen_ai.tool.name"), Some("Read"));
+}
+
+#[test]
+fn request_arguments_land_on_a_tool_the_answer_opened() {
+    let store = LocalTraceStore::with_capture(ContentCapture::on());
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.permission(PermissionFact::Answered {
+        id: "review-1".into(),
+        tool_id: "tool-1".into(),
+        effect: "deny".into(),
+        decider: "rule".into(),
+    });
+    recorder.permission(PermissionFact::Requested {
+        id: "review-1".into(),
+        tool_id: "tool-1".into(),
+        tool_name: "Read".into(),
+        arguments: Some("{\"path\":\"secret-marker\"}".into()),
+        tool_type: "function".into(),
+        category_name: false,
+    });
+    recorder.finish(at(2), FinishReason::Stop);
+    let tool = store
+        .read("conversation-1")
+        .into_iter()
+        .find(|span| span.operation() == "execute_tool")
+        .unwrap();
+    assert_eq!(tool.string("nessa.permission.state"), Some("answered"));
+    assert_eq!(tool.string("gen_ai.tool.name"), Some("Read"));
+    assert_eq!(
+        tool.string("gen_ai.tool.call.arguments"),
+        Some("{\"path\":\"secret-marker\"}")
+    );
 }
 
 #[test]
