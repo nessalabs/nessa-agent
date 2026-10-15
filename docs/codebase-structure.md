@@ -1733,6 +1733,13 @@ the command's output.
 
 ## Command-line surface
 
+The panel and desktop CSS entrypoints compile Nessa UI's source with automatic
+Tailwind scanning disabled. Their explicit `@source` roots include `src/`; the
+shared package registers its components and composites. Backend writes therefore
+do not enter the CSS watch graph. `scripts/tailwind-sources.test.mjs` exercises
+the real Vite/Tailwind pipeline and HMR socket in disposable roots, checking
+backend exclusion and positive app/shared UI updates in the existing script suite.
+
 Pinned UI preparation is owned by `scripts/ensure-nessa-ui.mjs`, with filesystem
 and subprocess-seam regressions beside it in `scripts/ensure-nessa-ui.test.mjs`.
 The calling checkout's `.vendor/nessa_ui` clone owns dependency installation and

@@ -22,7 +22,8 @@ function Fixture() {
       data-run-on-fixture
       data-case={name}
       data-chosen={host ?? ""}
-      className="flex h-screen flex-col justify-end bg-background p-4"
+      className="flex flex-col justify-end bg-background p-4"
+      style={{ height: "100vh" }}
     >
       <ComposerTray
         disabled={false}
