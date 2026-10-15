@@ -1,0 +1,22 @@
+[
+  {
+    "name": "native-clipboard-route",
+    "status": 1,
+    "rejected": true
+  },
+  {
+    "name": "first-use-auth",
+    "status": 1,
+    "rejected": true
+  },
+  {
+    "name": "first-use-audit-warning",
+    "status": 1,
+    "rejected": true
+  },
+  {
+    "name": "first-use-failed-result",
+    "status": 1,
+    "rejected": true
+  }
+]
