@@ -81,10 +81,12 @@ where
     /// A draft is marked departed, and that commit finishes, before the writer
     /// lease. The lease is then held across `conversation.send` and the save
     /// of the answer (`departure_is_durable_before_the_gateway_is_asked`).
-    /// A second send waits and reloads
-    /// (`a_lost_departure_does_not_send_again`). It sends the same id only
-    /// when the stored row is still unknown. If the wait ends without the
-    /// lease, the reloaded row is returned.
+    /// The caller that committed departure reloads inside the lease and sends
+    /// only when that row is still unknown and still inside the foreground
+    /// budget (`the_departure_winner_reloads_before_it_sends`). A second send
+    /// waits and reloads (`a_lost_departure_does_not_send_again`). It sends the same
+    /// id only when the stored row is still unknown. If the wait ends without
+    /// the lease, the reloaded row is returned.
     ///
     /// The audit initiator is [`Initiator::Person`].
     pub fn send(&mut self, id: &PhoneCommandId) -> Result<PhoneView, OutboxError> {
@@ -98,9 +100,7 @@ where
         }
         let departed = record.clone().depart().ok_or(OutboxError::Conflict)?;
         match self.persist(&record, &departed, Cause::Departed, by) {
-            Ok(()) => self.with_lease(id, |outbox| {
-                outbox.foreground(departed, by, Cause::SendAnswered)
-            }),
+            Ok(()) => self.with_lease(id, |outbox| outbox.follow(departed, by)),
             Err(OutboxError::Conflict) => {
                 let current = self.committed_record(record.intent().command())?;
                 if !current.intent().same_bytes(record.intent()) {
@@ -234,7 +234,11 @@ where
         }
     }
 
-    /// The other sender already departed this draft. The lease is held.
+    /// The lease is held. Send only from the row committed under it.
+    ///
+    /// The departure winner and the compare-and-swap loser both enter here
+    /// (`the_departure_winner_reloads_before_it_sends`,
+    /// `a_lost_departure_does_not_send_again`).
     fn follow(&mut self, fallen: PhoneRecord, by: Initiator) -> Result<LeaseBody, OutboxError> {
         let current = self
             .store

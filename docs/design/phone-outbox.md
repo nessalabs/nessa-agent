@@ -58,15 +58,18 @@ new ids. The original id is not sent again.
 The writer lease is the SQLite file lock. A send or retry of any command
 waits while another command holds it
 (`a_second_command_waits_for_the_file_lease`). The first send takes it, and
-so does an explicit retry. Departure commits first. The lease is then held across
-`conversation.send` and the save of that answer, including a `turn_running`
-save and its new draft, in that same commit. A second send or retry waits
-and reloads. It does not call `conversation.send` when a direct answer is
-already stored. If the wait ends without the lease, it reloads and returns
-that row. It does not return `Unavailable`, `Uncertain`, or `Conflict`.
-Unknown still means maybe sent. The gap between the departure commit and
-taking the lease can admit another `conversation.send` of the same id. That
-is at least once. The server dedupes it. Recovery does not send and does not
+so does an explicit retry. Departure commits first. The caller that committed
+it reloads inside the lease and sends only when that committed row is still
+unknown and still inside the foreground budget
+(`the_departure_winner_reloads_before_it_sends`). The lease is then
+held across `conversation.send` and the save of that answer, including a
+`turn_running` save and its new draft, in that same commit. A second send or
+retry waits and reloads. It does not call `conversation.send` when a direct
+answer is already stored, or when the foreground budget is already spent. If
+the wait ends without the lease, it reloads and returns that row. It does not
+return `Unavailable`, `Uncertain`, or `Conflict`. Unknown still means maybe
+sent. A send whose answer is lost may already have left the device. That is
+at least once. The server dedupes it. Recovery does not send and does not
 take the lease. Its write waits if a send holds the lease, then precedence
 applies.
 
@@ -243,6 +246,7 @@ second rule.
 | S2 | That save's commit is uncertain | `conversation.send` is not asked | `an_uncertain_departure_does_not_send` |
 | S15 | The lease commit is uncertain after SendLost, a lookup that changes the outcome, and ForegroundSend | Those events are written again, in order. The row loads | `an_uncertain_lease_rewrites_every_transition` |
 | S12 | Two sends of one draft overlap | The waiter blocks on the lease and reloads. It sends the same id only when the stored row is still unknown | `a_lost_departure_does_not_send_again` |
+| S19 | The departure commit wins, then the other caller holds the lease and stores a direct answer | The winner reloads inside the lease and does not send | `the_departure_winner_reloads_before_it_sends` |
 | S3 | Send returns queued, injected, or settled | Accepted, running, or done | `a_queued_send_is_accepted`, `an_injected_send_is_running`, `a_settled_send_is_done` |
 | S4 | Send returns a conversation refusal other than `submission_unresolved` | Failed. The same id is not sent again | `a_refusal_is_failed_and_not_sent_again` |
 | S5 | Send returns `turn_running` | Failed. The text is a new draft under new ids | `turn_running_returns_the_text_to_a_new_draft` |
