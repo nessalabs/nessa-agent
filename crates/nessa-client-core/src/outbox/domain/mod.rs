@@ -12,6 +12,7 @@ mod decide;
 mod intent;
 mod outcome;
 mod record;
+mod restore;
 
 pub use decide::FOREGROUND_SENDS;
 pub(crate) use decide::{after_lookup, after_send, Step};
@@ -21,6 +22,7 @@ pub use outcome::{
     ReceiptStage, SendAnswer, UnknownCause,
 };
 pub use record::{IntentEvent, PhoneRecord, PhoneView};
+pub(crate) use restore::{history_reaches, outranks, same_prompt};
 
 #[cfg(test)]
 #[path = "../../../tests/outbox/domain.rs"]

@@ -195,9 +195,22 @@ where
 
 fn depart(path: &Path, intent: PhoneIntent) {
     let mut store = SqliteIntents::open(path).unwrap();
-    let record = PhoneRecord::held(intent).depart().unwrap();
+    let draft = PhoneRecord::held(intent);
     store
         .insert(
+            &draft,
+            IntentEvent {
+                cause: Cause::Held,
+                outcome: PhoneOutcome::Draft,
+                initiator: Initiator::Person,
+                observed_at_ms: 1,
+            },
+        )
+        .unwrap();
+    let record = draft.clone().depart().unwrap();
+    store
+        .replace(
+            &draft,
             &record,
             IntentEvent {
                 cause: Cause::Departed,
@@ -438,6 +451,51 @@ fn a_reconciled_row_is_kept_when_the_send_save_loses() {
     assert_eq!(view.intent().text(), "hello");
     let again = outbox.send(&command("command-1")).unwrap();
     assert_eq!(again.outcome(), PhoneOutcome::Done);
+    assert_eq!(outbox.list().unwrap().len(), 1);
+}
+
+#[test]
+fn a_queued_receipt_replaces_a_weaker_lookup_failure() {
+    let dir = directory();
+    let path = path_in(&dir);
+    struct Race {
+        path: PathBuf,
+    }
+    impl PhoneGateway for Race {
+        fn send(&mut self, _: &PhoneIntent) -> SendAnswer {
+            let mut other = open(
+                &self.path,
+                Scripted::new(Vec::new(), vec![LookupAnswer::Lost]),
+                SeqIds::default(),
+                clock(),
+            )
+            .unwrap();
+            let recovered = other.recover().unwrap();
+            assert_eq!(
+                recovered[0].outcome(),
+                PhoneOutcome::Unknown(UnknownCause::LookupFailed)
+            );
+            SendAnswer::Receipt(Delivery::Queued)
+        }
+        fn lookup(&mut self, _: &PhoneIntent) -> LookupAnswer {
+            panic!("the saved receipt is not looked up again");
+        }
+    }
+    let mut outbox = open(
+        &path,
+        Race { path: path.clone() },
+        SeqIds::default(),
+        clock(),
+    )
+    .unwrap();
+    person_hold(&mut outbox, text_intent("command-1", "hello"));
+    let view = outbox.send(&command("command-1")).unwrap();
+    assert_eq!(view.outcome(), PhoneOutcome::Accepted);
+    assert!(view.claims_submission());
+    assert_eq!(view.intent().command().as_str(), "command-1");
+    assert_eq!(view.intent().text(), "hello");
+    let again = outbox.send(&command("command-1")).unwrap();
+    assert_eq!(again.outcome(), PhoneOutcome::Accepted);
     assert_eq!(outbox.list().unwrap().len(), 1);
 }
 
@@ -863,6 +921,7 @@ fn an_explicit_retry_looks_up_before_it_sends() {
     assert_eq!(
         causes,
         [
+            Cause::Held,
             Cause::Departed,
             Cause::Lookup,
             Cause::ExplicitRetry,
@@ -870,14 +929,14 @@ fn an_explicit_retry_looks_up_before_it_sends() {
         ]
     );
     assert_eq!(
-        events[1].outcome,
-        PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
-    );
-    assert_eq!(
         events[2].outcome,
         PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
     );
-    assert_eq!(events[3].outcome, PhoneOutcome::Accepted);
+    assert_eq!(
+        events[3].outcome,
+        PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+    );
+    assert_eq!(events[4].outcome, PhoneOutcome::Accepted);
 }
 
 #[test]
@@ -1153,6 +1212,40 @@ fn corrupt_canonical_bytes_are_left_in_place() {
         )
         .unwrap();
     assert_eq!(canonical, b"not-a-send");
+}
+
+#[test]
+fn a_done_row_whose_history_stops_at_departure_is_corrupt() {
+    let dir = directory();
+    let path = path_in(&dir);
+    depart(&path, text_intent("command-1", "hello"));
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE phone_intent SET outcome = 'done', failure = NULL, unknown = NULL
+             WHERE request_id = 'command-1'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    let gateway = Scripted::new(Vec::new(), Vec::new());
+    let seen = gateway.clone();
+    let mut outbox = opened(&path, gateway);
+    assert_eq!(
+        outbox.send(&command("command-1")).unwrap_err(),
+        OutboxError::Corrupt
+    );
+    assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
+    assert!(seen.body().order.is_empty());
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let outcome: String = connection
+        .query_row(
+            "SELECT outcome FROM phone_intent WHERE request_id = 'command-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(outcome, "done");
 }
 
 #[test]

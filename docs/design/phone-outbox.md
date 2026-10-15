@@ -2,7 +2,8 @@
 
 Issue: [#269](https://github.com/nessalabs/nessa-agent/issues/269).
 The send id, the receipt lookup, the five rendered outcomes, and replay are
-the [phone send contract](phone-send-contract.md). This page is the device
+the [phone send contract](https://github.com/nessalabs/nessa-agent/blob/cursor/owner-phone-authorization-5058/docs/design/phone-send-contract.md)
+(pull request 885). This page is the device
 ordering around that contract. The contract is not restated here and is not
 edited by this work.
 
@@ -33,7 +34,8 @@ Cedar admits the session. This outbox does not decide who may send.
 | S8 | Send returns `submission_unresolved` | Unknown, cause unresolved. The same id is not sent again | `submission_unresolved_is_not_sent_again` |
 | S9 | Send answer is not a receipt or a known refusal | The receipt is read. The same bytes are not sent again in that call | `an_unreadable_send_answer_is_not_sent_again` |
 | S10 | The send is answered and saving that answer fails | The error says the message may have been delivered. The saved row stays unknown and does not claim submission. A later send reads the receipt | `a_failed_save_after_a_send_keeps_possible_delivery` |
-| S11 | Another connection commits an outcome while `conversation.send` is in flight | This call returns that committed outcome. The command id stays | `a_reconciled_row_is_kept_when_the_send_save_loses` |
+| S11 | Another connection commits an outcome while `conversation.send` is in flight | This call returns that outcome when it is at least as strong as this receipt. The command id stays | `a_reconciled_row_is_kept_when_the_send_save_loses` |
+| S13 | That committed outcome is a weaker unknown, and this send returned a receipt | The receipt is saved. The command is not left retryable | `a_queued_receipt_replaces_a_weaker_lookup_failure` |
 | L1 | Send answer lost, lookup finds `accepted` | Accepted. No further send | `a_lost_answer_with_an_accepted_receipt_is_not_sent_again` |
 | L2 | Send answer lost, lookup finds `attempted` | Unknown, cause attempted. No further send | `an_attempted_receipt_is_unknown_and_not_sent_again` |
 | L3 | Send answer lost, lookup finds settled `dispatched` | Done | `a_dispatched_receipt_is_done` |
@@ -49,6 +51,7 @@ Cedar admits the session. This outbox does not decide who may send.
 | R5 | Two retries of one departed command share the file | One send. The waiter reads the committed outcome | `a_concurrent_retry_sends_the_departure_once` |
 | R4 | Explicit retry of unresolved, attempted, failed, or done | No send | `an_explicit_retry_does_not_send_an_uncertain_or_finished_command` |
 | C1 | Stored canonical bytes do not decode | Corrupt. The row is not rewritten | `corrupt_canonical_bytes_are_left_in_place` |
+| C3 | A done row whose events stop at departure | Corrupt. The row is not rewritten | `a_done_row_whose_history_stops_at_departure_is_corrupt` |
 | C2 | Each transition | The event records the command, the outcome, the cause, and the initiator. `hold`, `send`, and `retry` record the person. `recover` records recovery | `a_transition_keeps_its_cause_and_initiator`, `recovery_adopts_a_dispatched_receipt_without_sending` |
 
 `FOREGROUND_SENDS` in `crates/nessa-client-core/src/outbox/domain/decide.rs`

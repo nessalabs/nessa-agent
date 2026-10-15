@@ -1,8 +1,9 @@
 //! The phone outbox. A draft never claims it was submitted.
 
 use super::super::domain::{
-    after_lookup, after_send, Cause, Initiator, IntentEvent, LookupAnswer, PhoneCommandId,
-    PhoneIntent, PhoneOutcome, PhoneRecord, PhoneView, Step, UnknownCause, FOREGROUND_SENDS,
+    after_lookup, after_send, outranks, Cause, Initiator, IntentEvent, LookupAnswer,
+    PhoneCommandId, PhoneIntent, PhoneOutcome, PhoneRecord, PhoneView, Step, UnknownCause,
+    FOREGROUND_SENDS,
 };
 use super::ports::{CommandIds, IntentStore, OutboxError, PhoneGateway, StoreError};
 use nessa_auth::application::ports::Clock;
@@ -330,9 +331,39 @@ where
             .replace_and_insert(previous, &failed, &draft, failed_event, draft_event)
         {
             Ok(()) => Ok(failed.view()),
-            Err(StoreError::Conflict) => self.committed(previous),
+            Err(StoreError::Conflict) => self.retry_return(failed, draft, by),
             Err(error) => Err(asked(OutboxError::from(error))),
         }
+    }
+
+    /// The other connection committed while this `turn_running` answer was
+    /// being saved. A weaker row is replaced. An equal or stronger row stands.
+    fn retry_return(
+        &mut self,
+        failed: PhoneRecord,
+        draft: PhoneRecord,
+        by: Initiator,
+    ) -> Result<PhoneView, OutboxError> {
+        for _ in 0..SAVE_ATTEMPTS {
+            let saved = self.committed_record(failed.intent().command())?;
+            if !saved.intent().same_bytes(failed.intent())
+                || !outranks(failed.outcome(), saved.outcome())
+            {
+                return Ok(saved.view());
+            }
+            let next = overlay(&saved, &failed);
+            let failed_event = self.event(Cause::ReturnedToDraft, next.outcome(), by);
+            let draft_event = self.event(Cause::Held, draft.outcome(), by);
+            match self
+                .store
+                .replace_and_insert(&saved, &next, &draft, failed_event, draft_event)
+            {
+                Ok(()) => return Ok(next.view()),
+                Err(StoreError::Conflict) => continue,
+                Err(error) => return Err(asked(OutboxError::from(error))),
+            }
+        }
+        Err(OutboxError::Unsaved)
     }
 
     fn persist(
@@ -350,9 +381,10 @@ where
     /// The gateway has already been asked. A failed save must not be reported
     /// as [`OutboxError::Unavailable`] or [`OutboxError::Conflict`]: the first
     /// means nothing was sent, and the second means the command id stores
-    /// different bytes. A lost compare-and-swap returns the row another
-    /// connection already committed
-    /// (`a_reconciled_row_is_kept_when_the_send_save_loses`).
+    /// different bytes. A lost compare-and-swap keeps a committed row that is
+    /// at least as strong (`a_reconciled_row_is_kept_when_the_send_save_loses`)
+    /// and writes this answer over a weaker one
+    /// (`a_queued_receipt_replaces_a_weaker_lookup_failure`).
     fn asked_or_kept(
         &mut self,
         previous: &PhoneRecord,
@@ -362,9 +394,32 @@ where
     ) -> Result<Option<PhoneView>, OutboxError> {
         match self.persist(previous, next, cause, by) {
             Ok(()) => Ok(None),
-            Err(OutboxError::Conflict) => Ok(Some(self.committed(previous)?)),
+            Err(OutboxError::Conflict) => Ok(Some(self.prefer_stronger(next, cause, by)?)),
             Err(error) => Err(asked(error)),
         }
+    }
+
+    fn prefer_stronger(
+        &mut self,
+        next: &PhoneRecord,
+        cause: Cause,
+        by: Initiator,
+    ) -> Result<PhoneView, OutboxError> {
+        for _ in 0..SAVE_ATTEMPTS {
+            let saved = self.committed_record(next.intent().command())?;
+            if !saved.intent().same_bytes(next.intent())
+                || !outranks(next.outcome(), saved.outcome())
+            {
+                return Ok(saved.view());
+            }
+            let stronger = overlay(&saved, next);
+            match self.persist(&saved, &stronger, cause, by) {
+                Ok(()) => return Ok(stronger.view()),
+                Err(OutboxError::Conflict) => continue,
+                Err(error) => return Err(asked(error)),
+            }
+        }
+        Err(OutboxError::Unsaved)
     }
 
     fn asked_view(
@@ -377,11 +432,6 @@ where
         Ok(self
             .asked_or_kept(previous, next, cause, by)?
             .unwrap_or_else(|| next.view()))
-    }
-
-    fn committed(&mut self, previous: &PhoneRecord) -> Result<PhoneView, OutboxError> {
-        self.committed_record(previous.intent().command())
-            .map(|saved| saved.view())
     }
 
     fn committed_record(&mut self, id: &PhoneCommandId) -> Result<PhoneRecord, OutboxError> {
@@ -426,6 +476,21 @@ fn asked(error: OutboxError) -> OutboxError {
         OutboxError::Unavailable | OutboxError::Uncertain => OutboxError::Unsaved,
         other => other,
     }
+}
+
+/// How many times a lost compare-and-swap reloads the row before giving up.
+const SAVE_ATTEMPTS: usize = 4;
+
+/// `next`'s outcome and send count on the committed intent.
+fn overlay(saved: &PhoneRecord, next: &PhoneRecord) -> PhoneRecord {
+    let mut updated = saved
+        .clone()
+        .with_sends(next.sends().max(saved.sends()))
+        .with_outcome(next.outcome());
+    if let Some(successor) = next.successor() {
+        updated = updated.with_successor(successor.clone());
+    }
+    updated
 }
 
 fn stopped_at_bound(before: &PhoneRecord, next: &PhoneRecord) -> bool {

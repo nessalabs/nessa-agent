@@ -5,14 +5,15 @@ use crate::outbox::application::{
     CommandIds, IntentStore, OutboxError, PhoneGateway, PhoneOutbox, StoreError,
 };
 use crate::outbox::domain::{
-    Cause, Initiator, IntentEvent, PhoneCommandId, PhoneFailure, PhoneIntent, PhoneOutcome,
-    PhoneRecord, UnknownCause,
+    history_reaches, same_prompt, Cause, Initiator, IntentEvent, PhoneCommandId, PhoneFailure,
+    PhoneIntent, PhoneOutcome, PhoneRecord, UnknownCause,
 };
 use nessa_auth::application::ports::Clock;
 use nessa_local_database::{
     rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior},
     OpenError, Schema,
 };
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,20 +40,7 @@ impl SqliteIntents {
     /// Audit rows for `command`, oldest first.
     #[cfg(test)]
     pub(crate) fn events(&mut self, command: &str) -> Result<Vec<IntentEvent>, StoreError> {
-        let mut statement = self
-            .connection
-            .prepare(
-                "SELECT cause, outcome, failure, unknown, initiator, observed_at_ms
-                 FROM phone_intent_event WHERE request_id = ?1 ORDER BY ordinal",
-            )
-            .map_err(unavailable)?;
-        let rows = statement
-            .query_map(params![command], event_row)
-            .map_err(unavailable)?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(unavailable)?
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()
+        read_events(&self.connection, command)
     }
 }
 
@@ -73,17 +61,11 @@ pub fn open<G: PhoneGateway, I: CommandIds>(
 
 impl IntentStore for SqliteIntents {
     fn load(&mut self, id: &PhoneCommandId) -> Result<Option<PhoneRecord>, StoreError> {
-        let row = self
-            .connection
-            .query_row(
-                "SELECT canonical, departed, outcome, failure, unknown, sends, successor, request_id
-                 FROM phone_intent WHERE request_id = ?1",
-                params![id.as_str()],
-                record_row,
-            )
-            .optional()
-            .map_err(unavailable)?;
-        row.transpose()
+        let Some(record) = read_record(&self.connection, id.as_str())? else {
+            return Ok(None);
+        };
+        confirm(&self.connection, &record, &mut BTreeSet::new())?;
+        Ok(Some(record))
     }
 
     fn insert(&mut self, record: &PhoneRecord, event: IntentEvent) -> Result<(), StoreError> {
@@ -122,18 +104,11 @@ impl IntentStore for SqliteIntents {
     }
 
     fn list(&mut self) -> Result<Vec<PhoneRecord>, StoreError> {
-        let mut statement = self
-            .connection
-            .prepare(
-                "SELECT canonical, departed, outcome, failure, unknown, sends, successor, request_id
-                 FROM phone_intent ORDER BY request_id",
-            )
-            .map_err(unavailable)?;
-        let rows = statement.query_map([], record_row).map_err(unavailable)?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(unavailable)?
-            .into_iter()
-            .collect()
+        let records = read_records(&self.connection)?;
+        for record in &records {
+            confirm(&self.connection, record, &mut BTreeSet::new())?;
+        }
+        Ok(records)
     }
 
     fn begin_exclusive(&mut self) -> Result<(), StoreError> {
@@ -286,6 +261,80 @@ fn append_event(tx: &Connection, command: &str, event: &IntentEvent) -> Result<(
     Ok(())
 }
 
+fn read_record(connection: &Connection, id: &str) -> Result<Option<PhoneRecord>, StoreError> {
+    let row = connection
+        .query_row(
+            "SELECT canonical, departed, outcome, failure, unknown, sends, successor, request_id
+             FROM phone_intent WHERE request_id = ?1",
+            params![id],
+            record_row,
+        )
+        .optional()
+        .map_err(unavailable)?;
+    row.transpose()
+}
+
+fn read_records(connection: &Connection) -> Result<Vec<PhoneRecord>, StoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT canonical, departed, outcome, failure, unknown, sends, successor, request_id
+             FROM phone_intent ORDER BY request_id",
+        )
+        .map_err(unavailable)?;
+    let rows = statement.query_map([], record_row).map_err(unavailable)?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(unavailable)?
+        .into_iter()
+        .collect()
+}
+
+fn read_events(connection: &Connection, command: &str) -> Result<Vec<IntentEvent>, StoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT ordinal, cause, outcome, failure, unknown, initiator, observed_at_ms
+             FROM phone_intent_event WHERE request_id = ?1 ORDER BY ordinal",
+        )
+        .map_err(unavailable)?;
+    let rows = statement
+        .query_map(params![command], event_row)
+        .map_err(unavailable)?;
+    let mut events = Vec::new();
+    for (index, row) in rows.enumerate() {
+        let (ordinal, event) = row.map_err(unavailable)??;
+        if ordinal != i64::try_from(index).map_err(|_| StoreError::Corrupt)? {
+            return Err(StoreError::Corrupt);
+        }
+        events.push(event);
+    }
+    Ok(events)
+}
+
+/// The row's events reach it, and a successor names the draft that holds its text.
+fn confirm(
+    connection: &Connection,
+    record: &PhoneRecord,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), StoreError> {
+    let id = record.intent().command().as_str();
+    if !seen.insert(id.to_owned()) {
+        return Err(StoreError::Corrupt);
+    }
+    let events = read_events(connection, id)?;
+    if !history_reaches(record, &events) {
+        return Err(StoreError::Corrupt);
+    }
+    let Some(successor) = record.successor() else {
+        return Ok(());
+    };
+    let Some(draft) = read_record(connection, successor.as_str())? else {
+        return Err(StoreError::Corrupt);
+    };
+    if !same_prompt(record.intent(), draft.intent()) {
+        return Err(StoreError::Corrupt);
+    }
+    confirm(connection, &draft, seen)
+}
+
 fn record_row(
     row: &Row<'_>,
 ) -> Result<Result<PhoneRecord, StoreError>, nessa_local_database::rusqlite::Error> {
@@ -354,23 +403,26 @@ fn assemble(stored: StoredIntent<'_>) -> Result<PhoneRecord, StoreError> {
     Ok(record)
 }
 
-#[cfg(test)]
 fn event_row(
     row: &Row<'_>,
-) -> Result<Result<IntentEvent, StoreError>, nessa_local_database::rusqlite::Error> {
-    let cause: String = row.get(0)?;
-    let outcome: String = row.get(1)?;
-    let failure: Option<String> = row.get(2)?;
-    let unknown: Option<String> = row.get(3)?;
-    let initiator: String = row.get(4)?;
-    let observed: i64 = row.get(5)?;
+) -> Result<Result<(i64, IntentEvent), StoreError>, nessa_local_database::rusqlite::Error> {
+    let ordinal: i64 = row.get(0)?;
+    let cause: String = row.get(1)?;
+    let outcome: String = row.get(2)?;
+    let failure: Option<String> = row.get(3)?;
+    let unknown: Option<String> = row.get(4)?;
+    let initiator: String = row.get(5)?;
+    let observed: i64 = row.get(6)?;
     Ok((|| {
-        Ok(IntentEvent {
-            cause: parse_cause(&cause)?,
-            outcome: parse_outcome(&outcome, failure.as_deref(), unknown.as_deref())?,
-            initiator: parse_initiator(&initiator)?,
-            observed_at_ms: u64::try_from(observed).map_err(|_| StoreError::Corrupt)?,
-        })
+        Ok((
+            ordinal,
+            IntentEvent {
+                cause: parse_cause(&cause)?,
+                outcome: parse_outcome(&outcome, failure.as_deref(), unknown.as_deref())?,
+                initiator: parse_initiator(&initiator)?,
+                observed_at_ms: u64::try_from(observed).map_err(|_| StoreError::Corrupt)?,
+            },
+        ))
     })())
 }
 
@@ -448,7 +500,6 @@ fn cause_text(cause: Cause) -> &'static str {
     }
 }
 
-#[cfg(test)]
 fn parse_cause(text: &str) -> Result<Cause, StoreError> {
     match text {
         "held" => Ok(Cause::Held),
@@ -472,7 +523,6 @@ fn initiator_text(initiator: Initiator) -> &'static str {
     }
 }
 
-#[cfg(test)]
 fn parse_initiator(text: &str) -> Result<Initiator, StoreError> {
     match text {
         "person" => Ok(Initiator::Person),

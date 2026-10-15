@@ -21,7 +21,8 @@ pub enum OutboxError {
     /// The gateway was asked, and saving that answer failed. The message may
     /// already have been delivered. Keep this command id.
     Unsaved,
-    /// Stored bytes are not a phone send. They were left as they were.
+    /// Stored bytes are not a phone send, or the audit history does not reach
+    /// the row. They were left as they were.
     Corrupt,
     /// A new draft's ids could not be made.
     Id(IntentError),
@@ -36,7 +37,7 @@ impl fmt::Display for OutboxError {
             Self::Unsaved => {
                 output.write_str("phone send may have been delivered and its outcome was not saved")
             }
-            Self::Corrupt => output.write_str("phone outbox bytes are corrupt"),
+            Self::Corrupt => output.write_str("phone outbox row is corrupt"),
             Self::Id(error) => write!(output, "phone command id was refused: {error:?}"),
         }
     }
@@ -50,7 +51,8 @@ pub enum StoreError {
     Unavailable,
     /// The commit may have landed. Do not send.
     Uncertain,
-    /// The bytes on disk are not a phone send.
+    /// The bytes on disk are not a phone send, or the audit history does not
+    /// reach the row.
     Corrupt,
     /// The previous row was not the one being replaced.
     Conflict,

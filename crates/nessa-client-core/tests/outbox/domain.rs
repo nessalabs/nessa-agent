@@ -1,8 +1,8 @@
 //! Canonical bytes and the outcome a gateway answer becomes.
 use super::{
-    after_lookup, after_send, Delivery, IntentError, LookupAnswer, PhoneCommandId, PhoneFailure,
-    PhoneImage, PhoneIntent, PhoneOutcome, PhoneRecord, ReceiptEffect, ReceiptStage, SendAnswer,
-    UnknownCause, FOREGROUND_SENDS,
+    after_lookup, after_send, history_reaches, outranks, Cause, Delivery, Initiator, IntentError,
+    IntentEvent, LookupAnswer, PhoneCommandId, PhoneFailure, PhoneImage, PhoneIntent, PhoneOutcome,
+    PhoneRecord, ReceiptEffect, ReceiptStage, SendAnswer, UnknownCause, FOREGROUND_SENDS,
 };
 use nessa_protocol::product_contract::generated::{ConversationErrorCode, MAX_MCP_MESSAGE_BYTES};
 use nessa_sdk::domain::agent_execution::executions::ExecutionId;
@@ -200,6 +200,45 @@ fn a_settled_receipt_becomes_done_or_the_matching_refusal() {
             if saved.outcome()
                 == PhoneOutcome::Failed(PhoneFailure::Conversation(ConversationErrorCode::Revoked))
     ));
+}
+
+#[test]
+fn a_history_that_stops_before_the_row_does_not_reach_it() {
+    let done = departed("hello").with_outcome(PhoneOutcome::Done);
+    let stopped = [
+        audit(Cause::Held, PhoneOutcome::Draft),
+        audit(
+            Cause::Departed,
+            PhoneOutcome::Unknown(UnknownCause::NotAdmitted),
+        ),
+    ];
+    assert!(!history_reaches(&done, &stopped));
+    let accepted = departed("hello")
+        .with_sends(1)
+        .with_outcome(PhoneOutcome::Accepted);
+    let reached = [
+        audit(Cause::Held, PhoneOutcome::Draft),
+        audit(
+            Cause::Departed,
+            PhoneOutcome::Unknown(UnknownCause::NotAdmitted),
+        ),
+        audit(Cause::SendAnswered, PhoneOutcome::Accepted),
+    ];
+    assert!(history_reaches(&accepted, &reached));
+    assert!(outranks(
+        PhoneOutcome::Accepted,
+        PhoneOutcome::Unknown(UnknownCause::LookupFailed)
+    ));
+    assert!(!outranks(PhoneOutcome::Accepted, PhoneOutcome::Done));
+}
+
+fn audit(cause: Cause, outcome: PhoneOutcome) -> IntentEvent {
+    IntentEvent {
+        cause,
+        outcome,
+        initiator: Initiator::Person,
+        observed_at_ms: 1,
+    }
 }
 
 #[test]

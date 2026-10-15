@@ -12,8 +12,9 @@
 //! Arrows are calls. The store write that marks a send as departed finishes
 //! before `conversation.send` is asked (`departure_is_durable_before_the_gateway_is_asked`).
 //! A draft is not a submission (`a_saved_draft_is_not_a_submission`).
-//! The [phone send contract](../../../docs/design/phone-send-contract.md) owns
-//! the wire fields and the five outcomes. The ordering table is
+//! The [phone send contract](https://github.com/nessalabs/nessa-agent/blob/cursor/owner-phone-authorization-5058/docs/design/phone-send-contract.md)
+//! owns the wire fields and the five outcomes. It is on pull request 885 until
+//! that branch lands. The ordering table is
 //! [phone outbox](../../../docs/design/phone-outbox.md).
 //! Cedar admits the session that carries the two calls. This module does not.
 
