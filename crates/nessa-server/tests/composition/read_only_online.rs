@@ -730,14 +730,19 @@ fn online_replay_then_live_hints_converge_with_a_fresh_replay() {
     assert_eq!(live_view, show(&fresh));
 
     // L6: access revoked mid-watch. The next commit's hint is refused at
-    // delivery: the connection closes with no hint (a native close carries no
-    // reason), and the next command is refused before it reads.
+    // delivery: the connection names authorization_lost and then closes, and
+    // the next command is refused before it reads.
     gateway.act("revoke");
     gateway.act("commit");
     match receiver.frame() {
-        Frame::Closed => {}
-        Frame::Text { value, .. } => panic!("frame after revocation: {value}"),
+        Frame::Text { value, .. } => {
+            assert_eq!(value["event"], "session.terminated", "{value}");
+            assert_eq!(value["payload"]["code"], "authorization_lost");
+            assert_eq!(value["payload"]["retryable"], false);
+        }
+        Frame::Closed => panic!("revocation closed without session.terminated"),
     }
+    assert!(matches!(receiver.frame(), Frame::Closed));
     let (ok, denied) = command(record_command(&root, &cache, &setup, "100"), false);
     assert!(!ok);
     // The receiver no longer holds the pairing, so the native profile's
