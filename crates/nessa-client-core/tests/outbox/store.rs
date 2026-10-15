@@ -1,7 +1,6 @@
 //! The phone outbox against a real SQLite file and a scripted gateway.
 use super::sqlite::{open, SqliteIntents};
-use crate::outbox::application::StoreError;
-use crate::outbox::application::{CommandIds, IntentStore, PhoneOutbox};
+use crate::outbox::application::{CommandIds, IntentStore, PhoneOutbox, StoreError};
 use crate::outbox::domain::{
     history_reaches, Cause, Delivery, Initiator, IntentError, IntentEvent, LookupAnswer,
     PhoneCommandId, PhoneFailure, PhoneImage, PhoneIntent, PhoneOutcome, PhoneRecord,
@@ -460,7 +459,7 @@ fn a_failed_save_after_a_send_keeps_possible_delivery() {
 #[test]
 fn a_direct_answer_beats_a_lookup() {
     let intent = text_intent("command-1", "hello");
-    let planted = intent_record(&intent, PhoneOutcome::Done);
+    let planted = intent_record(&intent, PhoneOutcome::Done).with_sends(0);
     let mut outbox = PhoneOutbox::new(
         PlantOn {
             rows: BTreeMap::new(),
@@ -468,7 +467,14 @@ fn a_direct_answer_beats_a_lookup() {
             when: PhoneOutcome::Accepted,
             planted: Some(Planted {
                 record: planted,
-                events: vec![audit(Cause::Lookup, PhoneOutcome::Done)],
+                events: vec![
+                    audit(Cause::Held, PhoneOutcome::Draft),
+                    audit(
+                        Cause::Departed,
+                        PhoneOutcome::Unknown(UnknownCause::NotAdmitted),
+                    ),
+                    audit(Cause::Lookup, PhoneOutcome::Done),
+                ],
             }),
         },
         Scripted::new(vec![SendAnswer::Receipt(Delivery::Queued)], Vec::new()),
@@ -487,7 +493,8 @@ fn a_direct_answer_beats_a_lookup() {
 #[test]
 fn a_lookup_does_not_replace_a_direct_answer() {
     let intent = text_intent("command-1", "hello");
-    let departed = intent_record(&intent, PhoneOutcome::Unknown(UnknownCause::NotAdmitted));
+    let departed =
+        intent_record(&intent, PhoneOutcome::Unknown(UnknownCause::NotAdmitted)).with_sends(0);
     let mut rows = BTreeMap::new();
     rows.insert("command-1".to_owned(), departed);
     let mut events = BTreeMap::new();
@@ -508,7 +515,14 @@ fn a_lookup_does_not_replace_a_direct_answer() {
             when: PhoneOutcome::Done,
             planted: Some(Planted {
                 record: intent_record(&intent, PhoneOutcome::Accepted),
-                events: vec![audit(Cause::SendAnswered, PhoneOutcome::Accepted)],
+                events: vec![
+                    audit(Cause::Held, PhoneOutcome::Draft),
+                    audit(
+                        Cause::Departed,
+                        PhoneOutcome::Unknown(UnknownCause::NotAdmitted),
+                    ),
+                    audit(Cause::SendAnswered, PhoneOutcome::Accepted),
+                ],
             }),
         },
         Scripted::new(Vec::new(), vec![settled(ReceiptEffect::Dispatched)]),
@@ -2957,6 +2971,327 @@ fn a_replayed_explicit_retry_keeps_its_cause_when_the_draft_id_fails() {
 }
 
 #[test]
+fn a_replayed_explicit_retry_keeps_its_prefix_after_a_competing_answer() {
+    for contender in [
+        PlantedAnswer::LookupFailed,
+        PlantedAnswer::Done,
+        PlantedAnswer::WeakerDirect,
+        PlantedAnswer::TwoSendAccepted,
+        PlantedAnswer::TurnRunning,
+    ] {
+        for answer in [
+            SendAnswer::Receipt(Delivery::Settled),
+            failure(ConversationErrorCode::TurnRunning),
+        ] {
+            // A direct accepted answer outranks a direct turn_running refusal.
+            let kept = matches!(
+                contender,
+                PlantedAnswer::WeakerDirect | PlantedAnswer::TwoSendAccepted
+            ) && answer == failure(ConversationErrorCode::TurnRunning);
+            let outcome = if kept {
+                PhoneOutcome::Accepted
+            } else if answer == SendAnswer::Receipt(Delivery::Settled) {
+                PhoneOutcome::Done
+            } else {
+                turn_running_outcome()
+            };
+            let dir = directory();
+            let path = path_in(&dir);
+            depart(&path, text_intent("command-1", "keep this"));
+            let gateway = Scripted::new(vec![answer], vec![LookupAnswer::NotFound]);
+            let seen = gateway.clone();
+            let mut outbox = PhoneOutbox::new(
+                PlantLookup::open(&path, contender),
+                gateway,
+                SeqIds::default(),
+                clock(),
+            );
+            let view = outbox.retry(&command("command-1")).unwrap();
+            assert_eq!(view.outcome(), outcome);
+            assert_eq!(
+                outbox.retry(&command("command-1")).unwrap().outcome(),
+                outcome
+            );
+            assert_eq!(seen.body().order, ["lookup", "send"]);
+            let has_draft = outcome == turn_running_outcome();
+            assert_eq!(view.successor().is_some(), has_draft);
+            assert_eq!(outbox.list().unwrap().len(), if has_draft { 2 } else { 1 });
+            drop(outbox);
+            let mut store = SqliteIntents::open(&path).unwrap();
+            let record = store.load(&command("command-1")).unwrap().unwrap();
+            assert_eq!(record.outcome(), outcome);
+            assert_eq!(
+                record.sends(),
+                if kept && matches!(contender, PlantedAnswer::TwoSendAccepted) {
+                    2
+                } else {
+                    1
+                }
+            );
+            let events = store.events("command-1").unwrap();
+            if !kept {
+                let prefix = &events[events.len() - 3..];
+                assert_eq!(prefix[0].cause, Cause::Lookup);
+                assert_eq!(
+                    prefix[0].outcome,
+                    PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+                );
+                assert_eq!(prefix[1].cause, Cause::ExplicitRetry);
+                assert_eq!(
+                    prefix[1].outcome,
+                    PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+                );
+                assert_eq!(
+                    prefix[2].cause,
+                    if has_draft {
+                        Cause::ReturnedToDraft
+                    } else {
+                        Cause::ExplicitRetry
+                    }
+                );
+                assert_eq!(prefix[2].outcome, outcome);
+                assert!(prefix
+                    .iter()
+                    .all(|event| event.initiator == Initiator::Person));
+            }
+        }
+    }
+}
+
+#[test]
+fn a_recovery_mint_failure_reloads_after_a_competing_lookup() {
+    for contender in [
+        PlantedAnswer::LookupFailed,
+        PlantedAnswer::Done,
+        PlantedAnswer::WeakerDirect,
+        PlantedAnswer::TurnRunning,
+    ] {
+        let dir = directory();
+        let path = path_in(&dir);
+        depart(&path, text_intent("command-1", "keep this"));
+        let mut outbox = open(
+            &path,
+            CompetingLookup {
+                path: path.clone(),
+                contender,
+            },
+            FailMint,
+            clock(),
+        )
+        .unwrap();
+        assert_eq!(
+            outbox.recover().unwrap_err(),
+            OutboxError::Id(IntentError::EmptyId)
+        );
+        let outcome = match contender {
+            PlantedAnswer::Done => PhoneOutcome::Done,
+            PlantedAnswer::WeakerDirect => PhoneOutcome::Accepted,
+            _ => turn_running_outcome(),
+        };
+        assert_eq!(
+            outbox.retry(&command("command-1")).unwrap().outcome(),
+            outcome
+        );
+        let has_draft = matches!(contender, PlantedAnswer::TurnRunning);
+        assert_eq!(outbox.list().unwrap().len(), if has_draft { 2 } else { 1 });
+        drop(outbox);
+        let mut store = SqliteIntents::open(&path).unwrap();
+        let record = store.load(&command("command-1")).unwrap().unwrap();
+        assert_eq!(record.outcome(), outcome);
+        assert_eq!(
+            record.sends(),
+            u8::from(matches!(contender, PlantedAnswer::WeakerDirect))
+        );
+        assert_eq!(record.successor().is_some(), has_draft);
+        let events = store.events("command-1").unwrap();
+        if matches!(contender, PlantedAnswer::LookupFailed) {
+            assert_eq!(events.len(), 4);
+            assert_eq!(
+                events[2].outcome,
+                PhoneOutcome::Unknown(UnknownCause::LookupFailed)
+            );
+            assert_eq!(events[3].cause, Cause::Lookup);
+            assert_eq!(events[3].outcome, outcome);
+            assert_eq!(events[3].initiator, Initiator::Recovery);
+            assert!(events[3].successor.is_none());
+        }
+    }
+}
+
+struct CompetingLookup {
+    path: PathBuf,
+    contender: PlantedAnswer,
+}
+impl PhoneGateway for CompetingLookup {
+    fn send(&mut self, _: &PhoneIntent) -> SendAnswer {
+        panic!("recovery must not send");
+    }
+    fn lookup(&mut self, _: &PhoneIntent) -> LookupAnswer {
+        let mut store = SqliteIntents::open(&self.path).unwrap();
+        plant_committed_answer(&mut store, self.contender).unwrap();
+        failure_lookup(ConversationErrorCode::TurnRunning)
+    }
+}
+
+#[test]
+fn a_recovery_refusal_uses_the_committed_count_after_a_retry_reset() {
+    recovery_after_retry_reset(FailMint, true);
+}
+
+#[test]
+fn a_recovery_draft_uses_the_committed_count_after_a_retry_reset() {
+    recovery_after_retry_reset(SeqIds::default(), false);
+}
+
+fn recovery_after_retry_reset(ids: impl CommandIds, mint_fails: bool) {
+    let dir = directory();
+    let path = path_in(&dir);
+    {
+        let gateway = Scripted::new(
+            vec![SendAnswer::Lost; usize::from(FOREGROUND_SENDS)],
+            vec![
+                LookupAnswer::NotFound,
+                LookupAnswer::NotFound,
+                LookupAnswer::Lost,
+            ],
+        );
+        let mut outbox = opened(&path, gateway);
+        person_hold(&mut outbox, text_intent("command-1", "keep this"));
+        assert_eq!(
+            outbox.send(&command("command-1")).unwrap().outcome(),
+            PhoneOutcome::Unknown(UnknownCause::LookupFailed)
+        );
+    }
+    let mut outbox = open(&path, RetryingLookup(path.clone()), ids, clock()).unwrap();
+    let recovered = outbox.recover();
+    if mint_fails {
+        assert_eq!(
+            recovered.unwrap_err(),
+            OutboxError::Id(IntentError::EmptyId)
+        );
+    } else {
+        assert_eq!(recovered.unwrap()[0].outcome(), turn_running_outcome());
+    }
+    assert_eq!(outbox.list().unwrap().len(), if mint_fails { 1 } else { 2 });
+    drop(outbox);
+    let mut store = SqliteIntents::open(&path).unwrap();
+    let record = store.load(&command("command-1")).unwrap().unwrap();
+    assert_eq!(record.outcome(), turn_running_outcome());
+    assert_eq!(record.sends(), 1);
+    assert_eq!(record.successor().is_none(), mint_fails);
+    assert_eq!(store.list().unwrap().len(), if mint_fails { 1 } else { 2 });
+    let events = store.events("command-1").unwrap();
+    let refusal = &events[events.len() - if mint_fails { 1 } else { 2 }];
+    assert_eq!(refusal.cause, Cause::Lookup);
+    assert_eq!(refusal.outcome, turn_running_outcome());
+    assert_eq!(refusal.initiator, Initiator::Recovery);
+}
+
+struct RetryingLookup(PathBuf);
+impl PhoneGateway for RetryingLookup {
+    fn send(&mut self, _: &PhoneIntent) -> SendAnswer {
+        panic!("recovery must not send");
+    }
+    fn lookup(&mut self, _: &PhoneIntent) -> LookupAnswer {
+        let mut competitor = opened(
+            &self.0,
+            Scripted::new(
+                vec![SendAnswer::Lost],
+                vec![LookupAnswer::NotFound, LookupAnswer::Lost],
+            ),
+        );
+        assert_eq!(
+            competitor.retry(&command("command-1")).unwrap().outcome(),
+            PhoneOutcome::Unknown(UnknownCause::LookupFailed)
+        );
+        failure_lookup(ConversationErrorCode::TurnRunning)
+    }
+}
+
+#[test]
+fn a_direct_replay_rebases_after_a_concurrent_retry_reset() {
+    direct_replay_after_reset(
+        SeqIds::default(),
+        SendAnswer::Receipt(Delivery::Settled),
+        false,
+    );
+}
+
+#[test]
+fn a_returned_replay_rebases_after_a_concurrent_retry_reset() {
+    direct_replay_after_reset(
+        SeqIds::default(),
+        failure(ConversationErrorCode::TurnRunning),
+        false,
+    );
+}
+
+#[test]
+fn a_refusal_replay_rebases_after_a_concurrent_retry_reset() {
+    direct_replay_after_reset(
+        MintOnce::default(),
+        failure(ConversationErrorCode::TurnRunning),
+        true,
+    );
+}
+
+fn direct_replay_after_reset(ids: impl CommandIds, answer: SendAnswer, mint_fails: bool) {
+    let dir = directory();
+    let path = path_in(&dir);
+    let returned = answer == failure(ConversationErrorCode::TurnRunning);
+    let competing = if returned {
+        failure(ConversationErrorCode::SubmissionUnresolved)
+    } else {
+        SendAnswer::Receipt(Delivery::Queued)
+    };
+    let gateway = Scripted::new(vec![answer], Vec::new());
+    let seen = gateway.clone();
+    let mut outbox = PhoneOutbox::new(
+        PlantLookup::open(&path, PlantedAnswer::RetryReset(competing)),
+        gateway,
+        ids,
+        clock(),
+    );
+    person_hold(&mut outbox, text_intent("command-1", "keep this"));
+    let result = outbox.send(&command("command-1"));
+    let outcome = if returned {
+        turn_running_outcome()
+    } else {
+        PhoneOutcome::Done
+    };
+    if mint_fails {
+        assert_eq!(result.unwrap_err(), OutboxError::Id(IntentError::EmptyId));
+    } else {
+        assert_eq!(result.unwrap().outcome(), outcome);
+    }
+    assert_eq!(seen.body().order, ["send"]);
+    assert_eq!(
+        outbox.retry(&command("command-1")).unwrap().outcome(),
+        outcome
+    );
+    let has_draft = returned && !mint_fails;
+    assert_eq!(outbox.list().unwrap().len(), if has_draft { 2 } else { 1 });
+    drop(outbox);
+    let mut store = SqliteIntents::open(&path).unwrap();
+    let record = store.load(&command("command-1")).unwrap().unwrap();
+    assert_eq!(record.outcome(), outcome);
+    assert_eq!(record.sends(), 1);
+    assert_eq!(record.successor().is_some(), has_draft);
+    let events = store.events("command-1").unwrap();
+    let answer = events.last().unwrap();
+    assert_eq!(answer.outcome, outcome);
+    assert_eq!(answer.initiator, Initiator::Person);
+    assert_eq!(
+        answer.cause,
+        if has_draft {
+            Cause::ReturnedToDraft
+        } else {
+            Cause::SendAnswered
+        }
+    );
+}
+
+#[test]
 fn a_failed_lease_commit_after_turn_running_is_unsaved() {
     let gateway = Scripted::new(
         vec![
@@ -3562,6 +3897,9 @@ fn planted_outbox(path: &Path, kind: PlantedAnswer) -> PhoneOutbox<PlantLookup, 
 /// The answer lease rolls back, then a committed answer lands before replay.
 #[derive(Clone, Copy)]
 enum PlantedAnswer {
+    LookupFailed,
+    /// Normal retries reset the count before the first lease and after rollback.
+    RetryReset(SendAnswer),
     Done,
     TurnRunning,
     /// The replacement draft departed before the direct answer was saved.
@@ -3576,6 +3914,8 @@ enum PlantedAnswer {
 
 struct PlantLookup {
     inner: SqliteIntents,
+    path: PathBuf,
+    primed: bool,
     planted: bool,
     kind: PlantedAnswer,
 }
@@ -3584,6 +3924,8 @@ impl PlantLookup {
     fn open(path: &Path, kind: PlantedAnswer) -> Self {
         Self {
             inner: SqliteIntents::open(path).unwrap(),
+            path: path.to_owned(),
+            primed: false,
             planted: false,
             kind,
         }
@@ -3623,6 +3965,21 @@ impl IntentStore for PlantLookup {
         IntentStore::events(&mut self.inner, id)
     }
     fn begin_exclusive(&mut self) -> Result<(), StoreError> {
+        if matches!(self.kind, PlantedAnswer::RetryReset(_)) && !self.primed {
+            self.primed = true;
+            let mut competitor = opened(
+                &self.path,
+                Scripted::new(
+                    vec![SendAnswer::Lost, SendAnswer::Lost],
+                    vec![
+                        LookupAnswer::NotFound,
+                        LookupAnswer::NotFound,
+                        LookupAnswer::Lost,
+                    ],
+                ),
+            );
+            competitor.retry(&command("command-1")).unwrap();
+        }
         self.inner.begin_exclusive()
     }
     fn end_exclusive(&mut self) -> Result<(), StoreError> {
@@ -3632,7 +3989,15 @@ impl IntentStore for PlantLookup {
         self.planted = true;
         let kind = self.kind;
         self.inner.abort_exclusive();
-        plant_committed_answer(&mut self.inner, kind).expect("planted answer");
+        if let PlantedAnswer::RetryReset(answer) = kind {
+            let mut competitor = opened(
+                &self.path,
+                Scripted::new(vec![answer], vec![LookupAnswer::NotFound]),
+            );
+            competitor.retry(&command("command-1")).unwrap();
+        } else {
+            plant_committed_answer(&mut self.inner, kind).expect("planted answer");
+        }
         Err(StoreError::Uncertain)
     }
     fn abort_exclusive(&mut self) {
@@ -3647,6 +4012,21 @@ fn plant_committed_answer(
     let id = PhoneCommandId::new("command-1").map_err(|_| StoreError::Corrupt)?;
     let saved = store.load(&id)?.ok_or(StoreError::Corrupt)?;
     match kind {
+        PlantedAnswer::RetryReset(_) => Err(StoreError::Corrupt),
+        PlantedAnswer::LookupFailed => {
+            let outcome = PhoneOutcome::Unknown(UnknownCause::LookupFailed);
+            store.replace(
+                &saved,
+                &saved.clone().with_outcome(outcome),
+                IntentEvent {
+                    cause: Cause::Lookup,
+                    outcome,
+                    initiator: Initiator::Recovery,
+                    observed_at_ms: 1,
+                    successor: None,
+                },
+            )
+        }
         PlantedAnswer::Done => {
             let next = saved.clone().with_outcome(PhoneOutcome::Done);
             store.replace(

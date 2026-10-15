@@ -28,8 +28,8 @@ pub use outcome::{
 };
 pub use record::{IntentEvent, PhoneRecord, PhoneView};
 pub(crate) use restore::{
-    before_replaced_direct, counted_return, counted_step, history_reaches, replaces, same_prompt,
-    stored_evidence,
+    before_replaced_direct, counted_return, counted_step, history_reaches, rebase_answer, replaces,
+    same_prompt, stored_evidence,
 };
 
 #[cfg(test)]

@@ -6,9 +6,9 @@
 
 use super::super::domain::{
     apply_lookup as commit_lookup, apply_retry, apply_send as commit_send, before_replaced_direct,
-    budget, counted_return, counted_step, replaces, retryable, stored_evidence, Applied, Budget,
-    Cause, Evidence, Initiator, IntentEvent, LookupAnswer, PhoneCommandId, PhoneIntent,
-    PhoneOutcome, PhoneRecord, PhoneView, UnknownCause,
+    budget, counted_return, counted_step, rebase_answer, replaces, retryable, stored_evidence,
+    Applied, Budget, Cause, Evidence, Initiator, IntentEvent, LookupAnswer, PhoneCommandId,
+    PhoneIntent, PhoneOutcome, PhoneRecord, PhoneView, UnknownCause,
 };
 use super::ports::{CommandIds, IntentStore, OutboxError, PhoneGateway, StoreError};
 use nessa_auth::application::ports::Clock;
@@ -485,6 +485,7 @@ where
                     &failed,
                     by,
                     observation_cause(evidence, observed),
+                    evidence,
                 )?;
                 return Err(error);
             }
@@ -536,17 +537,21 @@ where
             if saved.outcome() == failed.outcome() && saved.successor().is_some() {
                 return Ok(kept_body(saved.view()));
             }
+            let next = self.rebase(
+                &saved,
+                &failed,
+                observation_cause(evidence, observed),
+                evidence,
+            )?;
             let (command, turn) = match self.ids.mint() {
                 Ok(minted) => minted,
                 Err(error) => {
-                    let Some(next) = counted_return(&saved, evidence) else {
-                        return Err(error);
-                    };
                     self.refuse_without_draft(
                         &saved,
                         &next,
                         by,
                         observation_cause(evidence, observed),
+                        evidence,
                     )?;
                     return Err(error);
                 }
@@ -557,7 +562,7 @@ where
                     .again(command.clone(), turn)
                     .map_err(OutboxError::Id)?,
             );
-            let next = overlay(&saved, &failed).with_successor(command.clone());
+            let next = next.with_successor(command.clone());
             let events = self.draft_events(next.outcome(), by, evidence, &command);
             let draft_event = self.event(Cause::Held, draft.outcome(), by);
             match self
@@ -788,9 +793,18 @@ where
         if !replaces(failed.outcome(), evidence, saved.outcome(), stored) {
             return Ok(saved.view());
         }
-        let base = if saved == previous { previous } else { saved };
+        let failed = if saved == previous {
+            failed
+        } else {
+            self.rebase(
+                &saved,
+                &failed,
+                observation_cause(evidence, cause),
+                evidence,
+            )?
+        };
         self.return_to_draft(
-            &base,
+            &saved,
             failed.clear_successor(),
             by,
             evidence,
@@ -833,15 +847,18 @@ where
     /// (`a_failed_lease_commit_after_turn_running_is_unsaved`). Recovery holds
     /// no lease. Its replace already committed, and the caller hears the id
     /// error (`a_recovery_turn_running_is_saved_when_the_draft_id_fails`).
+    /// A competing save uses the same precedence as other answered commands
+    /// (`a_recovery_mint_failure_reloads_after_a_competing_lookup`).
     fn refuse_without_draft(
         &mut self,
         previous: &PhoneRecord,
         failed: &PhoneRecord,
         by: Initiator,
         observed: Cause,
+        evidence: Evidence,
     ) -> Result<(), OutboxError> {
         let failed = failed.clone().clear_successor();
-        self.persist(previous, &failed, observed, by)?;
+        self.asked_or_kept(previous, &failed, observed, by, evidence)?;
         self.commit_open_lease()
     }
 
@@ -893,7 +910,7 @@ where
             if !replaces(next.outcome(), evidence, saved.outcome(), stored) {
                 return Ok(kept_body(saved.view()));
             }
-            let stronger = overlay(&saved, next);
+            let stronger = self.rebase(&saved, next, cause, evidence)?;
             match self.persist(&saved, &stronger, cause, by) {
                 Ok(()) => return Ok(saved_body(saved, stronger, cause, evidence, by)),
                 Err(OutboxError::Conflict) => continue,
@@ -901,6 +918,25 @@ where
             }
         }
         Err(OutboxError::Unsaved)
+    }
+
+    fn rebase(
+        &mut self,
+        saved: &PhoneRecord,
+        next: &PhoneRecord,
+        cause: Cause,
+        evidence: Evidence,
+    ) -> Result<PhoneRecord, OutboxError> {
+        let events = self
+            .store
+            .events(saved.intent().command())
+            .map_err(|error| asked(OutboxError::from(error)))?;
+        let record = rebase_answer(saved, &events, cause, next.outcome(), evidence)
+            .ok_or(OutboxError::Unsaved)?;
+        Ok(match next.successor() {
+            Some(successor) => record.with_successor(successor.clone()),
+            None => record,
+        })
     }
 
     fn evidence_of(&mut self, id: &PhoneCommandId) -> Result<Evidence, OutboxError> {
@@ -1102,20 +1138,5 @@ fn answer_command(step: Option<&Written>) -> Option<PhoneCommandId> {
     match step {
         Some(Written::Answer { next, .. }) => Some(next.intent().command().clone()),
         _ => None,
-    }
-}
-
-/// `next`'s outcome, send count, and successor on the committed intent.
-///
-/// A direct answer that replaces `turn_running` clears the successor in that
-/// same write (`a_direct_answer_clears_the_turn_running_successor`).
-fn overlay(saved: &PhoneRecord, next: &PhoneRecord) -> PhoneRecord {
-    let updated = saved
-        .clone()
-        .with_sends(next.sends().max(saved.sends()))
-        .with_outcome(next.outcome());
-    match next.successor() {
-        Some(successor) => updated.with_successor(successor.clone()),
-        None => updated.clear_successor(),
     }
 }

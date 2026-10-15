@@ -199,6 +199,17 @@ drops the lost send the fold counts
 A lost send with no later answer that outranks the stored row is not written,
 and a history that appends one does not reach.
 
+The committed history owns the send count when an answer replaces a competing
+row. A snapshot from a rolled-back lease is not a counter authority: another
+explicit retry may have reset the budget since that snapshot. Replacements ask
+the domain to reconstruct the answer from the committed state before the suffix
+it replaces. Lookups use the committed state without adding a send. Direct
+answers apply the same send transition as restoration. This also applies to a
+replayed `turn_running` answer before either minting or saving its refusal.
+Taking the maximum of the stale and committed counts is rejected: it can return
+success for a row whose history does not reach its count. `rebase_answer` owns
+this reconstruction for the application replacement paths.
+
 | Committed row when replay starts | Rolled-back lease | Durable result | Send count the fold reaches |
 | --- | --- | --- | --- |
 | Direct accepted, one send | Lost send, then done | The lost send, then done. The accepted event stays | 2 |
@@ -208,6 +219,9 @@ and a history that appends one does not reach.
 | Departed, not admitted, after a lost send | `ForegroundSend` `turn_running`, the lease commit is uncertain, and the replay cannot mint | The failed row. The cause is `ForegroundSend`. No draft. The caller hears `Id` | 2 |
 | Direct unresolved, one send | Lost send, then `ForegroundSend` `turn_running`, the lease commit is uncertain, a weaker direct answer lands first, and the replay cannot mint | The lost send, then the failed row. The cause is `ForegroundSend`. No draft. The caller hears `Id` | 2 |
 | Not admitted | Explicit retry sends `turn_running`, the lease commit is uncertain, and the replay cannot mint | The failed row. The cause is `ExplicitRetry`. No draft. The caller hears `Id` | 1 |
+| Lookup failed, a lookup answer, or a weaker direct answer | An explicit retry's lookup, reset, and direct answer roll back; the competing row lands before replay | Replay the not-found lookup and the reset through `apply_retry`, then the winning answer in one commit. The competing events stay. A stronger stored direct answer stays instead | 1 after the reset, plus any lost sends in that retry |
+| Lookup failed after a competing recovery write or retry reset | Recovery observes `turn_running` and loses its compare-and-swap, with or without a minted draft | Reload and apply the existing precedence. Save the refusal when it wins; preserve a stronger stored answer and any existing successor. Failed mint returns `Id` after the save | The reloaded committed count, including a concurrent retry's reset; recovery does not send |
+| A competing retry resets the budget and stores a weaker direct answer | A direct done or `turn_running` answer at the old count rolls back, then replays | Reconstruct the direct answer from the committed history's reset. A minted draft and a failed mint use that same reconstruction | One send after the committed reset |
 | Departed, not admitted | `turn_running`, the draft id cannot be minted, and the open lease commit is `Unavailable` | The departed row stays. The caller hears `Unsaved`. A later send asks the gateway | 0 |
 
 An intent row that is gone while its events remain is corrupt. The id is not
@@ -318,6 +332,10 @@ second rule.
 | S26 | S25, and a weaker direct answer is stored before the replay | The lost send is written, then the failed row. The cause stays `ForegroundSend` | `a_replayed_turn_running_keeps_its_cause_when_a_weaker_answer_landed_first` |
 | S27 | The open lease commit returns `Unavailable` after `turn_running` and a failed mint | The refusal is not durable. The caller hears `Unsaved` and a later send asks the gateway | `a_failed_lease_commit_after_turn_running_is_unsaved` |
 | S28 | Recovery observes `turn_running` and the draft id cannot be minted | The failed row is committed. The caller hears `Id`. No lease was open | `a_recovery_turn_running_is_saved_when_the_draft_id_fails` |
+| S29 | An explicit retry rolls back and a competing lookup or direct answer lands before replay | The lookup and reset precede the winning direct answer in one commit; its history reloads, with the reset count | `a_replayed_explicit_retry_keeps_its_prefix_after_a_competing_answer` |
+| S30 | Recovery observes `turn_running`, minting fails, and a competing write wins the first save | Reload and apply precedence, then return `Id`. A weaker lookup cannot erase the refusal; stronger evidence and existing successors stay | `a_recovery_mint_failure_reloads_after_a_competing_lookup` |
+| S31 | Recovery reads a spent send count, then another caller retries, resets that count and commits lookup failed before recovery saves `turn_running` | Both a failed mint and a successful mint preserve the reset committed count. The refusal and any new draft reload | `a_recovery_refusal_uses_the_committed_count_after_a_retry_reset`, `a_recovery_draft_uses_the_committed_count_after_a_retry_reset` |
+| S32 | A sender reloads count two and receives a direct answer at count three; its lease rolls back, then a retry resets the count and stores a weaker direct answer at one before replay | The winning receipt or refusal reloads at the count reconstructed from the committed reset, including successful and failed minting | `a_direct_replay_rebases_after_a_concurrent_retry_reset`, `a_returned_replay_rebases_after_a_concurrent_retry_reset`, `a_refusal_replay_rebases_after_a_concurrent_retry_reset` |
 | S17 | That lookup is `turn_running` and has already minted a draft | The direct answer is saved, the successor is cleared, and the still-held draft is removed | `a_direct_answer_clears_the_turn_running_successor` |
 | S14 | A lookup arrives after a direct answer was stored | The direct answer stays. This is the order the lease produces | `a_lookup_does_not_replace_a_direct_answer` |
 | L1 | Send answer lost, lookup finds `accepted` | Accepted. No further send | `a_lost_answer_with_an_accepted_receipt_is_not_sent_again` |

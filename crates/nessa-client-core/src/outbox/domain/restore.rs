@@ -124,7 +124,7 @@ fn fold_reached(
     Some(reached)
 }
 
-/// The committed row before the direct answers `winner` replaces.
+/// The committed row before the lookup or direct answers `winner` replaces.
 ///
 /// Counted replay applies its steps from here, which is the row
 /// [`counted_send_before_replaced`] uses for a prerequisite send
@@ -138,18 +138,45 @@ pub(crate) fn before_replaced_direct(
         .first()
         .is_some_and(|event| event.cause == Cause::Held && event.initiator == Initiator::Recovery);
     let reached = fold_reached(record, events, recovery_hold)?;
-    let cut = direct_suffix_cut(events, reached.len(), winner);
+    let cut = replaced_suffix_cut(events, reached.len(), winner);
     if cut == 0 || cut == reached.len() {
         return None;
     }
     Some(reached[cut - 1].clone())
 }
 
+/// Reconstruct an answer against committed history, including a retry reset.
+/// The rolled-back answer's send count is not an input
+/// (`a_direct_replay_rebases_after_a_concurrent_retry_reset`,
+/// `a_refusal_replay_rebases_after_a_concurrent_retry_reset`).
+pub(crate) fn rebase_answer(
+    saved: &PhoneRecord,
+    events: &[IntentEvent],
+    cause: Cause,
+    outcome: PhoneOutcome,
+    evidence: Evidence,
+) -> Option<PhoneRecord> {
+    let base = match evidence {
+        Evidence::Direct => {
+            before_replaced_direct(saved, events, outcome).unwrap_or_else(|| saved.clone())
+        }
+        Evidence::Lookup => saved.clone(),
+    };
+    let record = if cause == Cause::ReturnedToDraft {
+        counted_return(&base, evidence)?
+    } else {
+        counted_step(&base, cause, outcome)?
+    };
+    (record.outcome() == outcome).then_some(record)
+}
+
 /// The record `cause` persists when it is applied to `before`.
 ///
 /// Lost and unreadable marks keep `before`'s outcome and increment its send
 /// count. A terminal answer uses `outcome`. The rolled-back snapshot's count
-/// is not an input.
+/// is not an input. An explicit retry replays its not-found lookup even when
+/// unchanged, then resets the count through the same helpers as restoration
+/// (`a_replayed_explicit_retry_keeps_its_prefix_after_a_competing_answer`).
 pub(crate) fn counted_step(
     before: &PhoneRecord,
     cause: Cause,
@@ -165,14 +192,20 @@ pub(crate) fn counted_step(
     let record = match cause {
         Cause::SendLost => marked(before, SendAnswer::Lost, &event)?,
         Cause::Unreadable => marked(before, SendAnswer::Broken, &event)?,
-        Cause::SendAnswered | Cause::ForegroundSend | Cause::ExplicitRetry => {
-            terminal(before, &event, cause)
-                .or_else(|| observed_turn_running(before, &event, cause))?
-        }
-        Cause::Lookup => lookup_witnesses(outcome).into_iter().find_map(|answer| {
-            lookup_applied(before, answer, false, outcome)
-                .or_else(|| lookup_applied(before, answer, true, outcome))
-        })?,
+        Cause::SendAnswered | Cause::ForegroundSend => terminal(before, &event, cause)
+            .or_else(|| observed_turn_running(before, &event, cause))?,
+        Cause::ExplicitRetry => explicit(
+            before,
+            &event,
+            if outcome == PhoneOutcome::Unknown(UnknownCause::NotAdmitted) {
+                Cause::Lookup
+            } else {
+                Cause::ExplicitRetry
+            },
+        )?,
+        // The recorded lease may contain a foreground not-found lookup or
+        // the explicit retry's lookup, including one that changes no outcome.
+        Cause::Lookup => lookup_event(before, &event, Cause::SendLost)?,
         Cause::Held | Cause::Departed | Cause::Bound | Cause::ReturnedToDraft => return None,
     };
     Some(record.clear_successor())
@@ -208,17 +241,18 @@ pub(crate) fn counted_return(before: &PhoneRecord, evidence: Evidence) -> Option
     Some(record.clear_successor())
 }
 
-/// How far the trailing direct answers that `winner` outranks extend.
-fn direct_suffix_cut(events: &[IntentEvent], len: usize, winner: PhoneOutcome) -> usize {
+/// How far the trailing lookup or weaker direct answers extend.
+fn replaced_suffix_cut(events: &[IntentEvent], len: usize, winner: PhoneOutcome) -> usize {
     let mut cut = len;
     while cut > 0
-        && direct_answer_event(&events[cut - 1])
-        && replaces(
-            winner,
-            Evidence::Direct,
-            events[cut - 1].outcome,
-            Evidence::Direct,
-        )
+        && (lookup_suffix(&events[cut - 1], events.get(cut.wrapping_sub(2)))
+            || (direct_answer_event(&events[cut - 1])
+                && replaces(
+                    winner,
+                    Evidence::Direct,
+                    events[cut - 1].outcome,
+                    Evidence::Direct,
+                )))
     {
         cut -= 1;
     }
@@ -565,10 +599,7 @@ fn direct_over_replaced(
     if !direct_answer_event(event) {
         return None;
     }
-    let mut cut = reached.len();
-    while cut > 0 && replaced_by(event, &events[cut - 1], events.get(cut.wrapping_sub(2))) {
-        cut -= 1;
-    }
+    let cut = replaced_suffix_cut(events, reached.len(), event.outcome);
     if cut == reached.len() || cut == 0 {
         return None;
     }
@@ -615,28 +646,6 @@ fn direct_answer_event(event: &IntentEvent) -> bool {
     }
 }
 
-/// The stored event is a suffix `incoming` replaces.
-///
-/// A lookup suffix is replaced by any direct answer. A direct suffix is
-/// replaced only when [`replaces`] says the incoming outcome ranks higher.
-/// SendLost and departure stay, so the answer is not applied to a draft.
-fn replaced_by(
-    incoming: &IntentEvent,
-    suffix: &IntentEvent,
-    previous: Option<&IntentEvent>,
-) -> bool {
-    if lookup_suffix(suffix, previous) {
-        return true;
-    }
-    direct_answer_event(suffix)
-        && replaces(
-            incoming.outcome,
-            Evidence::Direct,
-            suffix.outcome,
-            Evidence::Direct,
-        )
-}
-
 /// A lost or unreadable send that a later direct answer still depends on.
 ///
 /// The send does not itself outrank a stored direct answer. It is applied to
@@ -657,7 +666,7 @@ fn counted_send_before_replaced(
         .get(index + 1..)?
         .iter()
         .find(|candidate| direct_answer_event(candidate))?;
-    let cut = direct_suffix_cut(events, reached.len(), later.outcome);
+    let cut = replaced_suffix_cut(events, reached.len(), later.outcome);
     if cut == reached.len() || cut == 0 {
         return None;
     }
