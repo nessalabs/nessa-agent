@@ -330,11 +330,6 @@
   height: var(--desktop-titlebar-height);
 }
 
-/* The loading surface, once a load runs past RAIL_LOADING_DELAY_MS. */
-.rail-view-loading {
-  width: min(360px, calc(100% - 4 * var(--desktop-gutter)));
-}
-
 :root[data-motion="reduced"] :is(.side-rail, .side-rail-toggle, .rail-view),
 :root[data-motion="reduced"] :is(.side-rail, .side-rail-toggle, .rail-view) * {
   animation: none !important;
