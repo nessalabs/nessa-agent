@@ -91,6 +91,7 @@ impl ReviewNoticeAudit for DurableReviewNoticeAudit {
                 .admit()
                 .await
                 .map_err(|_| ReviewNoticeAuditFailure::Unavailable)?;
+            #[allow(deprecated, reason = "Rust 1.89 MSRV; try_update requires Rust 1.95")]
             let sequence = self
                 .sequence
                 .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |next| {

@@ -1,8 +1,9 @@
 # Review-notice verification (#918, #920)
 
 Current behavioral source: `3f98e63c1d5643afad7beb05a9e411a43ae21a45`.
-Follow-up `5ffa33cb6576f5aaf6fa85883e04ab00994e6aef` qualifies existing platform durability wording,
-adds regression coverage and refreshes these captures; it changes no runtime behavior.
+Follow-up `5ffa33cb6576f5aaf6fa85883e04ab00994e6aef` strengthens regressions and qualifies platform durability.
+Commit `f24f4d1473bdd7b62784fc1eb48ab7dea00f2680` refreshes these captures.
+Neither changes runtime behavior.
 
 The gateway was rebuilt from assembly
 `b00a3cee0dd351949e93e9032951f9aa80059d5d`, tree
