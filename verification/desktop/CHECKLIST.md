@@ -1813,6 +1813,9 @@ Native first-use and refused-agent setup use the existing selected-agent readine
 installer and authentication controls, without automatic message replay. Both
 engines exercise download → sign-in → ready on first use; successful setup retires
 the ordinary hint, while independent audit failures remain visible.
+At 360px the setup card, with a production-sized **Download Claude · 117 MB**
+beside **Check setup again**, keeps both buttons whole inside the card and the
+card inside the viewport, within 1 pixel.
 The fixture’s `?clipboard=native` path uses the real host writer for isolated
 native window Copy verification rather than the browser test capture.
 

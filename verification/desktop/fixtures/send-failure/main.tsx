@@ -61,7 +61,7 @@ const setup: AgentSetupSource | undefined = setupCase
       installations: {
         subscribe: () => () => {},
         offers: async () => [
-          { agent: "claude", installed: state.installed, archiveBytes: 1_000_000 },
+          { agent: "claude", installed: state.installed, archiveBytes: 117_000_000 },
         ],
         install: async (agent) => {
           state.installs.push(agent)

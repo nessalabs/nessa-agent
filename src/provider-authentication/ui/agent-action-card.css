@@ -26,10 +26,13 @@
   color: var(--desktop-muted, color-mix(in oklab, var(--foreground) 56%, transparent));
   font-size: var(--desktop-text-footnote, 12px);
 }
+/* Shrinks to the card so a long label pushes the second action onto its own
+ * line rather than past the card's edge. */
 .agent-action-card-actions {
   display: flex;
-  flex: none;
+  flex: 0 1 auto;
   flex-wrap: wrap;
+  min-width: 0;
   gap: 8px;
 }
 

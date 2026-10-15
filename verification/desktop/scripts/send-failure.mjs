@@ -104,9 +104,29 @@ await main(
         try {
           const page = opened.page
           const setup = page.getByRole("region", { name: "Claude setup" })
-          await page
-            .getByRole("button", { name: "Download Claude · 1 MB", exact: true })
-            .click()
+          const download = page.getByRole("button", {
+            name: "Download Claude · 117 MB",
+            exact: true,
+          })
+          await download.waitFor()
+          // A production-sized label beside Check setup again must wrap inside
+          // the card, never run past it or the viewport.
+          const geometry = await setup.evaluate((region) => {
+            const card = region.querySelector(".agent-action-card")
+            if (!card) return "no setup card"
+            const box = card.getBoundingClientRect()
+            if (box.left < 0 || box.right > innerWidth + 1) return "card leaves viewport"
+            for (const button of card.querySelectorAll("button")) {
+              const own = button.getBoundingClientRect()
+              if (own.left < box.left - 1 || own.right > box.right + 1)
+                return `"${button.textContent}" leaves the card`
+              if (button.scrollWidth > button.clientWidth + 1)
+                return `"${button.textContent}" is clipped`
+            }
+            return card.scrollWidth > card.clientWidth + 1 ? "card overflows" : null
+          })
+          if (geometry) throw new Error(`setup card geometry: ${geometry}`)
+          await download.click()
           await page
             .getByText("Downloading and verifying Claude.", { exact: false })
             .waitFor()
