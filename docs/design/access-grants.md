@@ -332,7 +332,9 @@ person principal. Admission reports the person as who it acts for and the
 grant as what it may do. The link adds no capability, copies no
 conversation, and does not turn the peer into the owner phone. The grant
 subject stays that gateway's receiver. Two gateways linked as the same
-person keep two rows.
+person keep two rows. Credential revoke, expiry, and enrollment revoke
+remove that link. A later credential does not inherit it. The removal is
+G-unlink. This section does not add a link state.
 
 ## Live follow
 
@@ -491,8 +493,9 @@ carries three headers: `Nessa-Webhook-Timestamp` is the timestamp string,
 `Nessa-Webhook-Id` is the delivery id, and `Nessa-Webhook-Signature` is
 `v1=` plus 64 lowercase hex characters of the MAC. The receiver rebuilds
 the three fields from those headers and the raw body bytes. It does not
-re-encode JSON. A retry repeats the same delivery id while the attempt's
-epoch still allows delivery.
+re-encode JSON. A retry repeats the same delivery id and the timestamp
+stored when `sending` committed. It does not read the clock again. The
+epoch must still allow delivery.
 
 The sender does not follow redirects. A 3xx is `not sent`. It is not
 `retry scheduled`. The next POST, when a later event is admitted, goes to
@@ -587,11 +590,14 @@ epoch. Admitted work finishes, and the next command is refused.
   is not required.
 - The attempt holds the permit only until `webhook.post_deadline`, a row
   this slice adds to [limits](../limits.md). The clock starts when the
-  attempt takes the permit. At the deadline, if `sending` has committed
-  and no terminal record has, the sender closes its side of the POST,
-  records `timed out`, and drops the permit. If neither the `sending`
-  write nor the `not sent` write has committed, the deadline drops the
-  permit and the row stays `queued`. Revoke waits for the attempt's
+  attempt takes the permit. At the deadline, if `sending` has committed,
+  no terminal record has, and this attempt has not read a complete
+  response, the sender closes its side of the POST, records `timed out`,
+  and drops the permit. If a complete response has been read, the deadline
+  commits that outcome and does not record `timed out`. If neither the
+  `sending` write nor the `not sent` write has committed, the deadline
+  drops the permit and the row stays the state the attempt read. Revoke
+  waits for the attempt's
   outcome or for that deadline, whichever comes first, and
   does not wait longer. Revoke still does not cancel a write that finishes
   inside the deadline. Bytes already written may still reach the receiver
@@ -634,33 +640,14 @@ code and does not leave a MAC key on either record.
 [#705](https://github.com/nessalabs/nessa-agent/issues/705) does not supply
 the HMAC key.
 
-This slice adds it. After the enrollment is Active, both sides already
-have a pinned TLS session. Install is one generation, retried until both
-sides have stored the same MAC key. A new generation does not start while
-this one is unfinished.
-
-1. Each side offers an ephemeral X25519 public key for that generation.
-2. Each side durably writes `offered`: the generation, its ephemeral
-   private key, and the peer's public key. It sends `stored` only after
-   that write commits.
-3. After both `stored` messages, each side derives the MAC key with
-   HKDF-SHA256 and a fixed label used only for this announcement. It
-   durably replaces `offered` with `installed`: the generation and the
-   MAC key. The ephemeral private key leaves in that write. It then sends
-   `installed`.
-4. A dropped session retries the same generation. A side in `offered`
-   resends the public key it stored and does not mint a new one. A side
-   in `installed` resends `installed` and does not derive again. A side
-   with nothing stored accepts the same generation.
-
-Neither side derives before the other's `offered` write has been acked,
-so a crash cannot leave one side installed and the other unable to
-recompute. The dialing gateway stores the state on the peer file beside
-the pin. The granting gateway stores it on the pairing record that
-already keeps that peer's pin and `class: "peer"`. The key is not written
-into the credential, the grant, or the announcement. The peer-file schema
-version bumps once. A record this build cannot read stays unreadable for
-that peer only, as the peer file already does.
+This slice adds the discovery field after the enrollment is Active and
+both sides have a pinned TLS session. The field moves only by the pairing
+table. This section does not add a step. The dialing gateway stores the
+field on the peer file beside the pin. The granting gateway stores it on
+the pairing record that already keeps that peer's pin and `class: "peer"`.
+The key is not written into the credential, the grant, or the announcement.
+The peer-file schema version bumps once. A record this build cannot read
+stays unreadable for that peer only, as the peer file already does.
 
 A peer row from before this slice has no discovery key. Alpha does not
 invent one. That peer is left out of the announcement and cannot match a
@@ -718,6 +705,7 @@ decision.
 8. **G8.** `read` applies to a conversation and to a directory. `comment` and `drive` apply to a conversation. `write` and `exec` apply to a directory. Any other pairing is refused and writes nothing. Rows: G-caps.
 9. **G9.** A share of the same capabilities and constraints does not bump the epoch. Rows: G-same.
 10. **G10.** The refactor deletes `paired.peer_gateway`, bumps the metadata `user_version` once, and refuses a file this build cannot read. Rows: G-migrate, G-migrate-refuse.
+11. **G11.** Credential revoke, credential expiry, and enrollment revoke remove the same-person link. A later credential does not inherit it. Rows: G-unlink.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -732,6 +720,7 @@ decision.
 | G-next | absent | The next admission after revoke | No row for that key | absent | The next use | Nothing | Refusal, cause no grant, initiator the use |
 | G-inflight | active, or already absent | Work that already read an epoch finishes | The use stored that epoch at G-admit | The use's own terminal state. The grant row stays as the later grant commit left it. | The use that read the epoch | The use's own outcome. No second grant row | The use's own audit. The epoch on that record is the epoch it read |
 | G-link | any grant state | The same-person link is recorded | The link names who the gateway acts for | Unchanged. The grant subject stays the receiver. | The owner, at pairing | The link row only. No grant row is inserted or copied. | Target the gateway principal, before no link, after the person link, cause the same-person choice, initiator the owner |
+| G-unlink | link present | `credential.revoke`, credential expiry, or enrollment revoke | The link names that gateway principal | link absent. Grant rows stay. A later credential does not inherit it. | The owner, or expiry | The link row is removed. Enrollment revoke does this in the same commit as P-revoke. Credential revoke commits in the credential store first, and this removal commits next. A crash between them is C-G-unlink. | Target the gateway principal, before the person link, after no link, cause credential revoked, expired, or enrollment revoked, initiator the owner or expiry |
 | G-cred | active | `credential.revoke` or credential expiry | The credential is the one that subject uses | active, same epoch | The owner, or expiry | Nothing on the grant row | None on the grant row. W-cred records the registration stop |
 | G-marker | active | Directory open finds a missing root, a missing marker, or different bytes | The grant's resource is that directory resource | absent | The open | Every grant for that resource is removed. The cause and the audit-failure rule are D-open-bad and D-audit-down. | D12. This row does not add a second cause |
 | G-migrate | old metadata file | The migration runs to completion | The file is the previous share shape | The new grant rows, one `user_version` bump | Startup | `paired.peer_gateway` is deleted. The bump is one. | Target the metadata file, before the old shape, after the new rows, cause migration, initiator startup |
@@ -761,6 +750,7 @@ sequenceDiagram
 | C-G-bump | During an epoch bump, before G-bump commits | The previous epoch | The previous epoch. In-flight work keeps the epoch it read. |
 | C-G-revoke | Before G-revoke commits | The row still active | The row stays. The owner repeats the revoke. |
 | C-G-migrate | Before G-migrate commits | The old file | G-migrate-refuse if this build cannot read it. Otherwise the migration runs again. |
+| C-G-unlink | After the credential is revoked or the phase is `Revoked`, before G-unlink commits | The link row is still present | Restart removes the link before admission reports the person. It does not recreate the link. |
 
 **Concurrency.**
 
@@ -785,7 +775,8 @@ sequenceDiagram
 **Source of truth.** Which events exist is the conversation record stream.
 What will be sent, and what was sent, is the outbox row: delivery id,
 registration, checkpoint `(conversation id, incarnation, position)`,
-state, and `due_at` when the state is `retry scheduled`. The replay
+state, `due_at` when the state is `retry scheduled`, and, once
+`sending` has committed, the signed timestamp. The replay
 cursor is one field per registration and conversation: the last
 checkpoint whose outbox row committed. The cursor advances only in the
 same write as that row, and only to the next contiguous checkpoint. The
@@ -800,8 +791,8 @@ serializes revoke and delivery. The permit generation is in-process.
 4. **W4.** The conversation source beats a cursor that is behind it. Restart fills each missing checkpoint in order and does not skip a hole. Rows: W-queue, C-W-gap.
 5. **W5.** The `queued` row commits before the attempt waits for the permit. Rows: W-queue.
 6. **W6.** `sending` is recorded before any POST byte and is not replaced. A terminal record is appended beside it. Rows: W-send, W-sent, W-unknown.
-7. **W7.** If the `sending` write fails, no POST byte is written. The row is written `not sent`, cause audit unavailable, conditional on the row still being `queued`, and that write commits before the permit drops. Rows: W-audit-fail.
-8. **W8.** If that `not sent` write does not commit, the row stays `queued`. The permit drops at `webhook.post_deadline`, measured from when the attempt took it, even when neither write has committed. That attempt discards its uncommitted write before the drop. A late write commits only while the row is still the state it guarded. Restart admits `queued`. Revoke can take the permit after the drop. Rows: W-deadline-queued, W-audit-race.
+7. **W7.** If the `sending` write fails, no POST byte is written. The row is written `not sent`, cause audit unavailable, conditional on the row still being the state the attempt read, and that write commits before the permit drops. Rows: W-audit-fail.
+8. **W8.** If that `not sent` write does not commit, the row stays the state the attempt read, `queued` or `retry scheduled`. The permit drops at `webhook.post_deadline`, measured from when the attempt took it, even when neither write has committed. That attempt discards its uncommitted write before the drop. A late write commits only while the row is still the state it guarded. Restart admits that state. Revoke can take the permit after the drop. Rows: W-deadline-queued, W-audit-race.
 9. **W9.** `retry scheduled` is non-terminal and stores `due_at` on the same row in that write. The delivery id stays. Restart admits the row when `due_at` has arrived and waits while `due_at` is ahead. There is no second scheduler store. Rows: W-retry, W-due, W-wait.
 10. **W10.** `sent`, `timed out`, `not sent`, and `unknown` are terminal and are not admitted again. The first terminal record to commit wins. Restart that finds `sending` with no terminal record appends `unknown` and does not POST that delivery id again. Rows: W-sent, W-timeout, W-final, W-unknown, W-terminal-race.
 11. **W11.** The sender does not follow redirects. A 3xx is `not sent`. The next admitted POST goes to the registered URL only. Rows: W-3xx.
@@ -809,6 +800,8 @@ serializes revoke and delivery. The permit generation is in-process.
 13. **W13.** The body is `Content-Type: application/json`. It is UTF-8 JSON with keys in order `conversationId`, `incarnation`, `position`, `record`, and no insignificant whitespace. `record` is the committed record a read grant may see, the same bytes `recordsPage` returns for that checkpoint. The MAC covers those exact bytes. This table does not define the record schema. Rows: W-post.
 14. **W14.** Credential revoke or expiry takes the registration permit and does not bump the grant epoch. After the permit is free the registration stops. A credential that is not current beats an active registration. Rows: W-cred, W-refuse, C-W-cred, G-cred.
 15. **W15.** Grant revoke and a delivery attempt share the registration permit. The attempt that holds it finishes under the epoch it read, and no longer than `webhook.post_deadline`. The next admission finds no grant row. Rows: W-revoke, W-revoke-wait, G-inflight, G-next.
+16. **W16.** The signed timestamp is written in the `sending` commit, before any POST byte. A later admission of that delivery id uses that stored timestamp and does not read the clock again. Rows: W-send, W-post.
+17. **W17.** `webhook.post_deadline` records `timed out` only while this attempt has not read a complete response. A complete response commits its own outcome, including when that commit is the deadline's write. `timed out` does not replace it. Rows: W-timeout, W-deadline-known, W-prec-response.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -817,20 +810,21 @@ serializes revoke and delivery. The permit generation is in-process.
 | W-reissue | registration stopped | `credential.issue` | The previous registration is stopped | registration active, a new URL and mac key | The owner | One new registration and one credential | Target the principal, before stopped, after active, cause issue, initiator the owner |
 | W-queue | no outbox row | The conversation checkpoint has committed, and this registration has a grant | This writer holds the cursor. The cursor is unset and this is the first checkpoint, or the cursor is the previous checkpoint. No row exists for this checkpoint. | queued | The live reader, or restart | The queued row (delivery id, registration, checkpoint) and the cursor set to that same checkpoint. The conversation commit is not in this write. This commit finishes before the attempt waits for the permit. | Target the delivery id, before no row, after queued, cause source ahead of cursor, initiator the reader or restart |
 | W-queue-exists | a row for this checkpoint | A second insert | A row already stores this checkpoint for this registration | That row's state, same delivery id | The live reader, or restart | Nothing | None |
-| W-send | queued | The attempt takes the permit | The epoch allows delivery. The credential is current. The `sending` write commits. | sending | The delivery attempt | `sending`: target, delivery id, the epoch read, credential current. This commit finishes before any POST byte. | Target the delivery id, before queued, after sending, cause admitted, initiator the attempt, epoch the one read |
-| W-audit-fail | queued | The `sending` write fails | No POST byte has been written. The `not sent` write commits, conditional on the row still being `queued`. | not sent | The delivery attempt | `not sent`, same delivery id, cause audit unavailable. This commit finishes before the permit drops. | Target the delivery id, before queued, after not sent, cause audit unavailable, initiator the attempt |
-| W-deadline-queued | queued, permit held | `webhook.post_deadline`, measured from when this attempt took the permit | The `sending` write did not commit and the `not sent` write did not commit | queued. The permit drops. | The deadline, on that same attempt | None. The attempt discards its uncommitted write before the drop. | None. The delivery is not terminal. |
+| W-send | queued or retry scheduled | The attempt takes the permit | The epoch allows delivery. The credential is current. From `retry scheduled`, `due_at` has arrived. The `sending` write commits, or the `sending` record is already stored. | sending | The delivery attempt | From `queued`: `sending`, the target, the delivery id, the epoch read, credential current, and the signed timestamp. This commit finishes before any POST byte. From `retry scheduled`: the stored timestamp and delivery id stay. The clock is not read again. | Target the delivery id, before queued or retry scheduled, after sending, cause admitted, initiator the attempt, epoch the one read |
+| W-audit-fail | queued or retry scheduled | The `sending` write fails | No POST byte has been written. The `not sent` write commits, conditional on the row still being the state the attempt read. | not sent | The delivery attempt | `not sent`, same delivery id, cause audit unavailable. This commit finishes before the permit drops. | Target the delivery id, before queued or retry scheduled, after not sent, cause audit unavailable, initiator the attempt |
+| W-deadline-queued | queued or retry scheduled, permit held | `webhook.post_deadline`, measured from when this attempt took the permit | The `sending` write did not commit and the `not sent` write did not commit | That same state. The permit drops. | The deadline, on that same attempt | None. The attempt discards its uncommitted write before the drop. | None. The delivery is not terminal. |
 | W-refuse | queued or retry scheduled | The attempt takes the permit | The epoch no longer allows delivery, or the credential is not current | not sent | The delivery attempt | `not sent`, the epoch read. No POST. The permit drops after this commit. | Target the delivery id, before queued or retry scheduled, after not sent, cause epoch or credential, initiator the attempt |
-| W-post | sending | The attempt writes the POST | `sending` has committed. The body is `Content-Type: application/json`, UTF-8 JSON, keys in order `conversationId`, `incarnation`, `position`, `record`, no insignificant whitespace. `record` is the committed record a read grant may see, the same bytes `recordsPage` returns for that checkpoint. The record schema stays with `recordsPage`. The signature is HMAC-SHA256 of three length-prefixed fields, each a big-endian unsigned 64-bit length then that many bytes: ASCII decimal Unix milliseconds with no sign and no leading zeros except `0`, the delivery id's UTF-8, and the exact body bytes. Headers `Nessa-Webhook-Timestamp`, `Nessa-Webhook-Id`, and `Nessa-Webhook-Signature` as `v1=` plus 64 lowercase hex characters. The key is not in the body. No redirect is followed. | sending | The delivery attempt | None. `sending` already committed. The POST is not a terminal write. | None until the outcome row |
+| W-post | sending | The attempt writes the POST | `sending` has committed. The timestamp header is the signed timestamp stored on that row. A retry does not read the clock again. The body is `Content-Type: application/json`, UTF-8 JSON, keys in order `conversationId`, `incarnation`, `position`, `record`, no insignificant whitespace. `record` is the committed record a read grant may see, the same bytes `recordsPage` returns for that checkpoint. The record schema stays with `recordsPage`. The signature is HMAC-SHA256 of three length-prefixed fields, each a big-endian unsigned 64-bit length then that many bytes: ASCII decimal Unix milliseconds with no sign and no leading zeros except `0`, the delivery id's UTF-8, and the exact body bytes. Headers `Nessa-Webhook-Timestamp`, `Nessa-Webhook-Id`, and `Nessa-Webhook-Signature` as `v1=` plus 64 lowercase hex characters. The key is not in the body. No redirect is followed. | sending | The delivery attempt | None. `sending` already committed. The POST is not a terminal write. | None until the outcome row |
 | W-3xx | sending | The response is a 3xx | The response completed | not sent | The delivery attempt | `not sent`. The redirect is not followed. `sending` stays beside this record. The permit drops after this commit. | Target the delivery id, before sending, after not sent, cause redirect, initiator the attempt |
 | W-retry | sending | A retryable response | HTTP 408, 429, or any 5xx, or a transport error the live attempt observed with no response byte | retry scheduled | The delivery attempt | The same row, `due_at` set, same delivery id. `sending` stays beside this record. The permit drops after this commit. | Target the delivery id, before sending, after retry scheduled, cause the response or the transport error, initiator the attempt, due time the stored `due_at` |
 | W-sent | sending | The response is HTTP 2xx | The response completed | sent | The delivery attempt | `sent`. `sending` stays beside this record. The permit drops after this commit. | Target the delivery id, before sending, after sent, cause the response, initiator the attempt |
-| W-timeout | sending | `webhook.post_deadline` | The deadline is measured from when the attempt took the permit. No terminal record has committed. | timed out | The sender, at the deadline | `timed out`. The sender closes its side. The permit drops. `sending` stays. A later arrival is not recorded as `sent`. | Target the delivery id, before sending, after timed out, cause deadline, initiator the sender |
+| W-timeout | sending | `webhook.post_deadline` | The deadline is measured from when the attempt took the permit. This attempt has not read a complete response. No terminal record has committed. | timed out | The sender, at the deadline | `timed out`. The sender closes its side. The permit drops. `sending` stays. A later arrival is not recorded as `sent`. | Target the delivery id, before sending, after timed out, cause deadline, initiator the sender |
+| W-deadline-known | sending | `webhook.post_deadline` | This attempt has read a complete response. No terminal record has committed. | The outcome of that response: `sent` for HTTP 2xx, `not sent` for a 3xx or other final response, `retry scheduled` for a retryable response. Not `timed out`. | The deadline, on that same attempt | That outcome, beside `sending`, and `due_at` when the outcome is `retry scheduled`. The permit drops after this commit. If this write does not commit, the row stays `sending`, the permit still drops, and this attempt does not write `timed out`. | Target the delivery id, before sending, after the known outcome, cause the response, initiator the sender |
 | W-final | sending | Any other completed response | The response is not 2xx, 3xx, 408, 429, or 5xx | not sent | The delivery attempt | `not sent`. `sending` stays beside this record. The permit drops after this commit. | Target the delivery id, before sending, after not sent, cause the response, initiator the attempt |
 | W-unknown | sending | Restart finds no terminal record | `sending` has committed. No `sent`, `timed out`, `not sent`, or `retry scheduled` record has committed. | unknown | Restart | Append `unknown`, same delivery id, target, and epoch. `sending` stays. No POST of that id. | Target the delivery id, before sending, after unknown, cause audit unavailable after send, initiator restart |
-| W-due | retry scheduled | `due_at` has arrived | The wait reads `due_at` from this row | The admission in W-send or W-refuse, same delivery id | Restart, or the live wait | The admission's write | The admission's audit |
+| W-due | retry scheduled | `due_at` has arrived | The wait reads `due_at` from this row. W-send accepts `retry scheduled`. | sending by W-send, or not sent by W-refuse, same delivery id and stored timestamp | Restart, or the live wait | The admission's write. The stored timestamp stays. | The admission's audit |
 | W-wait | retry scheduled | The clock is before `due_at` | `due_at` is ahead | retry scheduled | The live wait | None | None |
-| W-revoke-wait | permit held | Grant revoke | The attempt still holds the permit and `webhook.post_deadline` has not fired | Unchanged until the attempt's outcome or W-timeout or W-deadline-queued | The owner waits. The attempt causes the outcome. | None by revoke while it waits. Revoke does not cancel a write that finishes inside the deadline. | None until W-revoke |
+| W-revoke-wait | permit held | Grant revoke | The attempt still holds the permit and `webhook.post_deadline` has not fired | Unchanged until the attempt's outcome, W-timeout, W-deadline-known, or W-deadline-queued | The owner waits. The attempt causes the outcome. | None by revoke while it waits. Revoke does not cancel a write that finishes inside the deadline. | None until W-revoke |
 | W-revoke | grant active | Grant revoke, permit free | The permit is free, or the deadline already dropped it | grant absent. Terminal outbox rows stay. | The owner | The grant row is removed, in one commit with this audit. A queued row's next admission is W-refuse. | Target the grant key, before active, after absent, cause revoke, initiator the owner, and the delivery id waited for when there was one |
 | W-cred | registration active | `credential.revoke` or expiry, permit free | The grant epoch is not read and is not written | registration stopped. Grant rows stay at their epochs. | The owner, or expiry | The registration is stopped | Target the registration, before active, after stopped, cause credential revoked or expired, initiator the owner or the expiry, and the delivery id waited for when there was one |
 
@@ -866,7 +860,7 @@ sequenceDiagram
 | W-cursor-race | Two writers of one registration and conversation cursor | One writer. The waiter reloads. The cursor moves only to the next contiguous checkpoint, in the same write as that row. |
 | W-permit-race | Two admissions of one queued row, or revoke against an admission | One permit. The waiter reloads. The holder finishes under the epoch it read, bounded by `webhook.post_deadline`. |
 | W-audit-race | A late `not sent` or `sending` write against the deadline drop, or against a newer admission | The write commits only while the row is still the state it guarded. The deadline writes no outbox state. The first conditional commit wins, and the other does not apply. |
-| W-terminal-race | Two terminal records for one `sending` row, including restart's `unknown` and a late response | The first terminal commit wins. A later write does not replace it and does not POST that id. |
+| W-terminal-race | Two terminal records for one `sending` row, including restart's `unknown` and a late response | The first terminal commit wins. A later write does not replace it and does not POST that id. A `timed out` write is refused once a complete response has been read. |
 
 **Precedence.**
 
@@ -880,6 +874,8 @@ sequenceDiagram
 | W-prec-due | `due_at` on the row | An in-memory timer | The row is the due time. |
 | W-prec-epoch | The epoch the attempt read | A later grant revoke, for that attempt only | The attempt finishes under that epoch. The next admission takes G-next. |
 | W-prec-credential | A credential that is not current | An active registration and a grant epoch that still allows delivery | W-refuse. The epoch is not bumped. |
+| W-prec-response | A complete response this attempt has read | `timed out` | W-deadline-known. The deadline commits that outcome. |
+| W-prec-stamp | The timestamp stored on `sending` | A fresh clock read on retry | W-post uses the stored timestamp. |
 
 **Rejected.** An in-memory retry after a terminal `retry scheduled` loses the delivery on exit. One transaction across the conversation store and the outbox is not available. A second registration for one principal would POST to a URL the first issue did not register. Replaying `sending` can deliver twice. Two cursor writers can commit checkpoint N+1 ahead of N.
 
@@ -1065,38 +1061,47 @@ sequenceDiagram
 
 **Source of truth.** `PeerPhase` on the peer record is `Pending`, `Active`,
 or `Revoked`. This proposal adds no phase. The discovery field on that
-same record, written only after `Active`, is `none`, `offered`, or
-`installed`. The dialer stores it on the peer file beside the pin. The
-granting gateway stores it on the pairing record that already keeps that
-peer's pin.
+same record, written only after `Active`, is `none`, `keyed`, `offered`,
+or `installed`. `keyed` is this side's generation and ephemeral private
+key. `offered` adds the peer's public key for that same generation. The
+dialer stores the field on the peer file beside the pin. The granting
+gateway stores it on the pairing record that already keeps that peer's
+pin. The LAN section does not add a discovery step.
 
 **Invariants.**
 
 1. **P1.** This proposal adds no `PeerPhase`. Rows: P-active, P-revoke.
 2. **P2.** Subscriptions open only when the phase is `Active`. The status dial runs until `Active` or `Revoked` and does not read the catalogue. Rows: P-active, U-dial.
 3. **P3.** An announcement is sent only for an `Active` peer whose discovery field is `installed`. Rows: P-announce, P-quiet.
-4. **P4.** One generation is in progress at a time. A retry resends the stored generation. A new generation does not start while one is unfinished. Rows: P-offer, P-retry-offered, P-retry-none.
-5. **P5.** `offered` stores the generation, this side's ephemeral private key, and the peer's public key. `stored` is sent only after that write commits. Rows: P-offer.
+4. **P4.** One generation is in progress at a time. A retry resends the stored generation. A new generation does not start while one is unfinished. The dialer is the only side that mints a generation id. Rows: P-key, P-accept, P-retry-keyed, P-cross.
+5. **P5.** `keyed` stores the generation and this side's ephemeral private key. `offered` adds the peer's public key for that same generation. `stored` is sent only after the `offered` write commits. Rows: P-key, P-offer.
 6. **P6.** `installed` replaces `offered` in one write: the same generation and the MAC key. The ephemeral private key leaves in that write. `installed` is sent only after that write commits. Neither side derives before the other's `offered` write has been acked. Rows: P-install, P-peer-installed.
 7. **P7.** The token is HMAC-SHA256 of the time window as an unsigned big-endian integer, the dial address in one numeric form, and the port as an unsigned big-endian integer, in that order. A token copied onto a different address or port does not match. The pinned key, its fingerprint, and any other stable gateway id stay out of the announcement. Rows: P-announce.
 8. **P8.** Unlinkability is not a property of the announcement. The dial address, the port, the network source, and the token count stay visible. Rows: P-announce.
 9. **P9.** Shipped pairing and `#705` do not supply the MAC key. A peer with no discovery key stays `none`. Alpha does not invent a key. That peer is left out of the announcement. Rows: P-old.
-10. **P10.** The same-person link is not a phase and not a grant subject. Rows: P-link, G-link.
-11. **P11.** `Revoked` beats announce. `Active` is required before `offered`. Rows: P-quiet, P-offer, P-prec-phase.
+10. **P10.** The same-person link is not a phase and not a grant subject. Rows: P-link, G-link, G-unlink.
+11. **P11.** `Revoked` beats announce. `Active` is required before `keyed`. Rows: P-quiet, P-key, P-prec-phase.
+12. **P12.** The local ephemeral private key is durable before its public half is sent. A crash before that commit publishes nothing. Rows: P-key, P-publish, P-accept, C-P-keyed.
+13. **P13.** The dialer's generation id beats any other unfinished id. If both sides have minted, the lesser 32-byte id wins. The loser persists a new private key for the winning generation before it sends that public half. Rows: P-cross, P-accept.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | P-pending | no enrollment | Enrollment starts | The one-use code | Pending. No session and no grant stream. | Pairing | The peer record at `Pending` | Target the peer, before none, after Pending, cause enrollment, initiator the owner |
-| P-active | Pending | Enrollment completes | The credential id and the receiver are stored | Active. No phase is added. Subscriptions can open. Discovery field is `none` until P-offer. | Enrollment | The phase `Active`, the credential id, and the receiver. No phase besides `Pending`, `Active`, and `Revoked`. | Target the peer, before Pending, after Active, cause enrollment complete, initiator the owner |
-| P-revoke | Pending or Active | Enrollment revoke | The owner's revoke | Revoked. No announcement. | The owner | The phase `Revoked` | Target the peer, before Pending or Active, after Revoked, cause revoke, initiator the owner |
-| P-offer | none, phase Active | This side offers one generation | The phase is Active. No generation is unfinished. | offered | This gateway | The generation, this side's ephemeral private key, and the peer's public key. `stored` is sent only after this commit. | Target the peer, before none, after offered, cause discovery offer, initiator this gateway |
+| P-active | Pending | Enrollment completes | The credential id and the receiver are stored | Active. No phase is added. Subscriptions can open. Discovery field is `none` until P-key or P-accept. | Enrollment | The phase `Active`, the credential id, and the receiver. No phase besides `Pending`, `Active`, and `Revoked`. | Target the peer, before Pending, after Active, cause enrollment complete, initiator the owner |
+| P-revoke | Pending or Active | Enrollment revoke | The owner's revoke | Revoked. No announcement. | The owner | The phase `Revoked`. A same-person link for this peer is removed by G-unlink in this commit. | Target the peer, before Pending or Active, after Revoked, cause revoke, initiator the owner |
+| P-key | none, phase Active | The dialer mints one generation | This side is the dialer. The phase is Active. No generation is unfinished. A new generation does not start while one is unfinished. | keyed | The dialer | The generation id, 32 bytes, and this side's ephemeral private key. No peer public. No discovery byte is sent in this commit. | Target the peer, before none, after keyed, cause local key, initiator this gateway |
+| P-publish | keyed or offered | Send this side's public half | The ephemeral private key for this generation is already durable. The bytes are the public key of that private key. The private key is durable before its public half is sent. | The same state | This gateway | None | None |
+| P-offer | keyed | The peer's public key for this same generation is known | The `keyed` write has committed. The generation matches. | offered | This gateway | Add the peer's public key. `stored` is sent only after this commit. | Target the peer, before keyed, after offered, cause peer public, initiator this gateway |
+| P-accept | none, phase Active | The dialer's generation and public key arrive | This side is the granting gateway. It has not minted a generation. The phase is Active. | offered | The granting gateway | That generation, this side's new ephemeral private key, and the dialer's public key. This commit finishes before this side sends its public half. | Target the peer, before none, after offered, cause accept dialer generation, initiator this gateway |
+| P-cross | keyed or offered | The peer presents a different generation id | Both generation ids are known | The winning generation. The dialer's id beats a grantor-minted id. If both sides minted, the lesser 32-byte id wins. The winner keeps its private key. The loser replaces its generation. | This gateway | On the loser: the winning generation and a new ephemeral private key. The old peer public is dropped. This commit finishes before the new public half is sent. On the winner: nothing until a public key for the winning generation arrives. | Target the peer, before the losing generation, after the winning generation, cause dialer generation or lesser generation, initiator this gateway |
 | P-install | offered | Both sides have acked `stored` | This side's `offered` write has committed. The peer's `stored` has been seen. | installed | This gateway | The same generation and the MAC key. The ephemeral private key leaves in this write. `installed` is sent only after this commit. | Target the peer, before offered, after installed, cause discovery install, initiator this gateway |
 | P-peer-installed | offered | The peer sends `installed` for this generation | This side's `offered` write has committed, so the private key and the peer public are stored | installed | This gateway, on the peer's message | The same generation and the MAC key. The ephemeral private key leaves. | Target the peer, before offered, after installed, cause peer installed, initiator this gateway |
-| P-retry-offered | offered | The session drops | The `offered` write has committed | offered | This gateway | Nothing. Resend the stored public key. Do not mint a new one. | None |
+| P-retry-keyed | keyed | The session drops | The `keyed` write has committed | keyed | This gateway | Nothing. Resend the public half of the stored private key. Do not mint. | None |
+| P-retry-offered | offered | The session drops | The `offered` write has committed | offered | This gateway | Nothing. Resend the stored public key and `stored`. Do not mint a new one. | None |
 | P-retry-installed | installed | The session drops | The `installed` write has committed | installed | This gateway | Nothing. Resend `installed`. Do not derive again. | None |
-| P-retry-none | none | A retry arrives for a generation this side has not stored | The peer's generation is unfinished. This side has no other generation. | offered, then installed, for that same generation | This gateway | P-offer, then P-install, for the peer's generation. A new generation does not start. | The P-offer and P-install audits |
+| P-retry-none | none | A generation arrives and this side has not stored one | This side is the granting gateway | P-accept for that generation. A new generation does not start. | The granting gateway | P-accept's write | P-accept's audit |
 | P-announce | installed, phase Active | Announce | The phase is Active and the field is `installed`. The token is HMAC-SHA256 of the time window as an unsigned big-endian integer, the dial address in one numeric form, and the port as an unsigned big-endian integer, in that order. | installed | This gateway | Nothing. The announcement is not a store. The pinned key, its fingerprint, and any other stable gateway id are absent from it. The address, the port, the network source, and the token count are visible. | None |
-| P-quiet | none, offered, Pending, or Revoked | Announce | The phase is not Active, or the field is not `installed` | Unchanged. No announcement. | This gateway | Nothing | None |
+| P-quiet | none, keyed, offered, Pending, or Revoked | Announce | The phase is not Active, or the field is not `installed` | Unchanged. No announcement. | This gateway | Nothing | None |
 | P-old | none, phase already Active from before this slice | Startup or announce | The record has no discovery field | none. No key is invented. | Startup | Nothing | None. The peer stays out of the announcement until it is paired again under this slice. |
 | P-link | Active | The same-person choice | The owner makes the choice on `pairing.create` | Active. The phase is unchanged. | The owner | The link row only. G-link. No discovery write. | G-link's audit |
 
@@ -1105,23 +1110,24 @@ sequenceDiagram
   participant Dialer
   participant Record as Peer record
   participant Grantor
-  Dialer->>Record: enrollment starts at Pending
-  Grantor->>Record: enrollment completes at Active
-  Note over Dialer,Record: subscriptions open only at Active
-  Dialer->>Grantor: offer this generation public key
-  Dialer->>Record: write offered, then send stored
-  Grantor->>Record: write offered, then send stored
+  Dialer->>Record: enrollment completes at Active
+  Dialer->>Record: commit keyed, the private key only
+  Dialer->>Grantor: send the public half after that commit
+  Grantor->>Record: commit offered, own private and the dialer public
+  Grantor->>Dialer: send the public half after that commit
+  Dialer->>Record: commit offered, then send stored
   Dialer->>Record: replace offered with installed
   Grantor->>Record: replace offered with installed
-  Note over Dialer,Grantor: a retry resends the stored generation
+  Note over Dialer,Grantor: a crossed generation keeps the dialer id
 ```
 
 **Crash.**
 
 | Row | Crash point | On disk | Restart |
 | --- | --- | --- | --- |
-| C-P-before | Before P-offer commits | `none` | Accept the peer's generation if one is unfinished. Do not mint a new one. |
-| C-P-offered | After P-offer commits, before `stored` is sent or acked | `offered`, ephemeral private present | P-retry-offered |
+| C-P-before | Before P-key or P-accept commits | `none`. No public half was sent. | The dialer may take P-key. The grantor stays `none` until a generation arrives. There is no published public key to recover. |
+| C-P-keyed | After P-key commits, before P-publish | `keyed`. The ephemeral private key is present. No peer public. | P-publish of the stored public half. Do not mint. |
+| C-P-offered | After P-offer or P-accept commits, before `stored` is acked | `offered`. The ephemeral private key is present. | P-retry-offered. Do not mint. |
 | C-P-both | After both `offered` writes, before P-install commits | `offered` on this side | P-install once the peer's `stored` is known. Do not mint. |
 | C-P-installed | After P-install commits, before `installed` is sent | `installed`, ephemeral private absent, MAC key present | P-retry-installed |
 | C-P-split | This side is `offered` and the peer is `installed` | `offered`, so the private key is still present | P-peer-installed. The peer resends `installed` and does not derive again. |
@@ -1130,21 +1136,22 @@ sequenceDiagram
 
 | Row | Pair | Winner |
 | --- | --- | --- |
-| P-gen-race | A new generation against an unfinished one | The stored generation. P-retry-offered, P-retry-installed, or P-retry-none. |
-| P-announce-race | Announce against `none`, `offered`, or `Revoked` | P-quiet |
+| P-gen-race | Two unfinished generation ids | P-cross. The dialer's id wins. If both sides minted, the lesser 32-byte id wins. The loser rekeys before it publishes. |
+| P-announce-race | Announce against `none`, `keyed`, `offered`, or `Revoked` | P-quiet |
 
 **Precedence.**
 
 | Row | Higher | Lower | Result |
 | --- | --- | --- | --- |
 | P-prec-phase | `Revoked` | Announce, offer, or install | P-quiet. No announcement. |
-| P-prec-active | `Active` | `offered` | P-offer requires Active. Pending does not install. |
+| P-prec-active | `Active` | `keyed` | P-key requires Active. Pending does not install. |
+| P-prec-key | A durable ephemeral private key | Publishing its public half | P-publish is refused until P-key or P-accept has committed. |
 | P-prec-installed | `installed` | A retry that would derive or mint again | P-retry-installed |
-| P-prec-generation | The stored generation | A new generation | P4 |
+| P-prec-generation | The dialer's generation id | Another unfinished id | P-cross |
 | P-prec-none | A missing discovery key | An invented key | P-old |
 | P-prec-token | The window, address, and port inside the HMAC | A token presented with a different address or port | No match |
 
-**Rejected.** A stable fingerprint in the announcement, an unlinkability claim, a MAC key taken from the enrollment PAKE or from `#705`, a new generation on a half-written install, and `PeerPoller` as the Active follow path.
+**Rejected.** Writing the peer's public key into the same first commit as the local private key, which made the public exchange precede the only durable write. Each side minting its own generation and keeping it. A stable fingerprint in the announcement, an unlinkability claim, a MAC key taken from the enrollment PAKE or from `#705`, a new generation on a half-written install, and `PeerPoller` as the Active follow path.
 
 ### Finding to row
 
@@ -1207,6 +1214,12 @@ not add a rule.
 | 4278447592 | W-deadline-queued, W-audit-race, W8 |
 | 4278447598 | D-exec-hide, D11 |
 | 4278447611 | W-post, W13 |
+| 4278552004 | P-key, P-publish, P-accept, C-P-keyed, P12 |
+| 4278552011 | P-cross, P-accept, P13 |
+| 4278552016 | W-send, W-due, W9 |
+| 4278552023 | W-timeout, W-deadline-known, W-prec-response, W17 |
+| 4278552027 | W-send, W-post, W16 |
+| 4278552033 | G-unlink, G11 |
 
 ## Open questions / known limits
 
@@ -1419,7 +1432,8 @@ The contract is Same person, above. The delta is the choice on
 Pairing with the choice records the person and the gateway principal. A
 read still requires a share grant. Two linked gateways with grants on
 the same conversation have two rows. A gateway paired without the choice has
-no person on its admission. Revoking the credential drops the link. An
+no person on its admission. Revoking the credential drops the link. A
+later enrollment does not inherit it. An
 invitation cannot be relabelled from one choice to the other in transit,
 as the enrollment class cannot today.
 
@@ -1503,7 +1517,7 @@ Part of docs/design/access-grants.md.
 The contract is Webhooks and the webhook outbox table. This slice adds
 `webhook.post_deadline` to `docs/limits.md`. It does not add a delivery
 state. The permit drops at `webhook.post_deadline` even when `not sent`
-has not committed. The row then stays `queued`.
+has not committed. The row stays the state the attempt read.
 
 ## Gate
 
@@ -1517,13 +1531,15 @@ not sent. An attempt that has not taken the permit when revoke commits is not
 sent. `credential.revoke`, or expiry, with the grants still present,
 sends no further POST. An attempt that already holds the permit can
 finish inside the deadline. One that has not taken the permit is not
-sent. A POST that does not finish within `webhook.post_deadline` records
-`timed out`, drops the permit, and revoke then removes the grant row
+sent. A POST that has not produced a complete response within
+`webhook.post_deadline` records `timed out`, drops the permit, and revoke then removes the grant row
 without waiting further. A 3xx is not followed and is not a delivery. The
 signature is not sent to the redirect target. A POST whose response is
-success and whose terminal audit write fails leaves `sending` in place,
-sends no second POST of that delivery id, and records outcome unknown.
-Restart from that row does the same. A failed `sending` write sends
+success and whose outcome write has not committed is not recorded as
+`timed out`. The deadline commits `sent` from that response. Restart that
+finds `sending` with no terminal record records unknown and sends no
+second POST of that delivery id. A retry signs with the timestamp stored
+on the `sending` row. A failed `sending` write sends
 nothing only after the row commits `not sent`. If that write does not
 commit, the row stays `queued` and the permit drops at
 `webhook.post_deadline`. A crash while an event waits for the permit leaves its `queued`
@@ -1563,10 +1579,10 @@ discovery field on the existing peer record, and the window-length row in
 ## Gate
 
 An unpaired gateway sends no announcement. A paired peer with no discovery
-key is left out, and is not given an invented key. A drop before either
-`offered` write, after one `offered` write, after both `offered` writes,
-after one `installed` write, and after `installed` before its ack, each
-resumes the same generation and ends with one MAC key on both sides. An announcement cannot
+key is left out, and is not given an invented key. A drop before the
+local private-key commit sends no public half. A drop after that commit
+resends the stored public half and does not mint. Two generation ids
+resolve to the dialer's id, and both sides finish on that generation. An announcement cannot
 enroll a listener. The announcement bytes contain no key fingerprint and
 no stable gateway id. Two windows for the same peer produce two different
 tokens. A token copied onto a different address or port does not match. A
