@@ -548,9 +548,9 @@ pub(super) async fn dispatch_share(
     })
 }
 
-/// A share that landed can change which waiting reviews a socket may see.
+/// A share or current membership change can alter which waiting reviews a socket sees.
 /// The board's generation does not move, so the publishers are asked directly.
-fn recheck_review_visibility(state: &ProductRouteState) {
+pub(super) fn recheck_review_visibility(state: &ProductRouteState) {
     if let Some(board) = state.permission_rules.as_ref() {
         board.recheck_visibility();
     }

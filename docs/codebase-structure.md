@@ -703,6 +703,30 @@ retain an admin role after a concurrent demotion.
 | Correlated conversation owned by someone else | Admin demoted to Member during the metadata read | Refused | `review_admission_reads_membership_after_metadata_returns` |
 | Correlated conversation | Membership disabled during the metadata read | Refused before policy | `review_admission_reads_membership_after_metadata_returns` |
 
+Review admission and retained visibility have separate owners. Cedar owns each
+filter decision; `PermissionMemory` owns its existing visibility generation;
+the authenticated connection owns bounded current-state refresh and tells that
+visibility owner when the committed authorization revision changes. The refresh
+keeps the coherent `AccessSnapshot` it already read instead of discarding it.
+The observed revision starts at `AuthenticatedSession::auth_revision()` and is
+only an invalidation observation, never authority for admission. The authority behind `AccessReader`
+publishes a new revision for credential and membership mutations, so
+future visibility facts in that snapshot use the same notification path without
+a second list of relevant fields. Share changes retain their existing visibility
+notification; invalid sessions follow the existing close path. No additional
+polling loop or policy cache is introduced. The missing connection-to-visibility
+notification caused the second temporal review finding after admission freshness
+was fixed.
+
+| Live connection ordering | Visibility action | Published result | Regression |
+| --- | --- | --- | --- |
+| Initial admin snapshot at revision R, demotion to R+1 before first refresh | Changed revision invalidates | Same board generation replaces foreign notices with owned notices only | `a_live_review_publisher_refilters_after_authority_refresh` |
+| Another committed revision with the same member role | Changed revision invalidates | Fresh Cedar filtering replaces the same owned notice set | `a_live_review_publisher_refilters_after_authority_refresh` |
+| Member promoted after an observed refresh | Changed revision invalidates | Foreign and owned notices are both restored by Cedar | `a_live_review_publisher_refilters_after_authority_refresh` |
+| Admin demoted after an observed refresh | Changed revision invalidates | Foreign notice removed; owned notice retained | `a_live_review_publisher_refilters_after_authority_refresh` |
+| Successful refresh at the authentication revision, or a later stable revision | No new invalidation | No replacement notice | `a_live_review_publisher_refilters_after_authority_refresh` |
+| Membership disabled after publication | Existing invalid-session close | Socket closes instead of retaining a valid session | `a_live_review_publisher_refilters_after_authority_refresh` |
+
 Client permission controls capture related IDs through
 `packages/nessa-client/src/application/permission-target.ts` and consume those
 opaque targets in `presentation/conversation-api.ts`. Panel effects and control

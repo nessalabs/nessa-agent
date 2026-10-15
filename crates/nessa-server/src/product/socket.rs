@@ -902,8 +902,13 @@ enum AuthenticatedInput {
 }
 
 type AuthorityCheck<'a> = Pin<Box<dyn Future<Output = Option<AccessError>> + Send + 'a>>;
-type RefreshCheck<'a> =
-    Pin<Box<dyn Future<Output = Result<AuthenticatedSession, AccessError>> + Send + 'a>>;
+type RefreshCheck<'a> = Pin<
+    Box<
+        dyn Future<Output = Result<(AuthenticatedSession, AccessSnapshot), AccessError>>
+            + Send
+            + 'a,
+    >,
+>;
 
 async fn run_authenticated<S>(socket: S, state: ProductRouteState, session: AuthenticatedSession)
 where
@@ -981,6 +986,9 @@ where
     let mut requests = FuturesUnordered::new();
     let mut writer_finished = false;
     let mut refresh: Option<RefreshCheck<'_>> = None;
+    // Authority versions invalidate retained notices; they never admit one.
+    // AccessReader owns the revision for credential and membership changes.
+    let mut review_revision = session.auth_revision();
     let mut input_check: Option<AuthorityCheck<'_>> = None;
     let mut pending_input: Option<AuthenticatedInput> = None;
     loop {
@@ -1084,7 +1092,13 @@ where
                     // The one identity check per tick also confirms each live
                     // watch's session; the watches then re-ask only their
                     // passive-read admission (row A3).
-                    Ok(current) => watches.recheck(&state, &current),
+                    Ok((current, snapshot)) => {
+                        if review_revision != snapshot.revision {
+                            review_revision = snapshot.revision;
+                            super::read_access::recheck_review_visibility(&state);
+                        }
+                        watches.recheck(&state, &current);
+                    }
                     Err(error) => {
                         let _ = rejected_lane(
                             "socket.control_lane",
@@ -1096,7 +1110,7 @@ where
                 None
             }
             _ = current_state.tick(), if refresh.is_none() => {
-                refresh = Some(Box::pin(current_session(&state, &session)));
+                refresh = Some(Box::pin(current_identity(&state, &session)));
                 None
             }
             permit = refusal_send.reserve(), if app_refusal.is_some() => {
@@ -2118,16 +2132,6 @@ pub(super) async fn watch_browser_present(
     ensure_browser_session_present(state, session).await
 }
 
-/// The connection's current session, or why it is no longer current.
-async fn current_session(
-    state: &ProductRouteState,
-    session: &AuthenticatedSession,
-) -> Result<AuthenticatedSession, AccessError> {
-    current_identity(state, session)
-        .await
-        .map(|(current, _)| current)
-}
-
 async fn current_session_error(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
@@ -2925,6 +2929,120 @@ mod tests {
         assert_eq!(owns_one.reviews.len(), 1);
         assert_eq!(owns_one.reviews[0].conversation_id, id_a);
         assert_eq!(owns_one.reviews[0].tool, "Bash");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_live_review_publisher_refilters_after_authority_refresh() {
+        for refresh_before_demotion in [false, true] {
+            let (_directory, board) = open_rules();
+            let own = "00000000-0000-4000-8000-00000000000a";
+            let foreign = "00000000-0000-4000-8000-00000000000b";
+            for id in [own, foreign] {
+                board.waiting(&ReviewNotice {
+                    conversation_id: id.into(),
+                    execution_id: ExecutionId::new("turn").unwrap(),
+                    permission_id: PermissionId::new(id).unwrap(),
+                    tool: "Bash".into(),
+                });
+            }
+            let (state, authority) = fixture(MembershipRole::Admin);
+            let state = state
+                .with_permission_rules(board.clone())
+                .with_passive_read(
+                    Arc::new(UnpairedBinding),
+                    repository_of(vec![
+                        owned_conversation(own, "principal"),
+                        owned_conversation(foreign, "other"),
+                    ]),
+                    Arc::new(GrantedConversation(own.into())),
+                    crate::conversation_test_support::access_policy(),
+                )
+                .with_settings(
+                    SessionSettings::new(
+                        Duration::from_secs(20),
+                        Duration::from_secs(5),
+                        Duration::from_secs(10),
+                    )
+                    .unwrap(),
+                );
+            let session = authenticate(&state).await;
+            let (socket, mut peer) = test_socket(None);
+            let task = tokio::spawn(run_authenticated(socket, state, session));
+            let read_notice = async |peer: &mut TestPeer| {
+                let message = timeout(Duration::from_secs(1), peer.output.recv())
+                    .await
+                    .expect("authority refresh must replace the live review snapshot")
+                    .expect("the connection remains open");
+                let Message::Text(text) = message else {
+                    panic!("review event expected")
+                };
+                let OutgoingMessage::Event(event) = serde_json::from_str(&text).unwrap() else {
+                    panic!("review event expected")
+                };
+                assert_eq!(event.event, product_event::PERMISSION_REVIEW_WAITING);
+                let payload: PermissionReviewWaiting =
+                    serde_json::from_value(event.payload).unwrap();
+                (event.state_version, event.seq, payload.reviews)
+            };
+            let (generation, mut sequence, initial) = read_notice(&mut peer).await;
+            assert_eq!(initial.len(), 2);
+            if refresh_before_demotion {
+                let visibility = board.visibility();
+                tokio::time::advance(Duration::from_secs(10)).await;
+                assert!(
+                    timeout(Duration::from_secs(1), peer.output.recv())
+                        .await
+                        .is_err(),
+                    "the authentication revision must not republish the snapshot"
+                );
+                assert_eq!(board.visibility(), visibility);
+            }
+            // The board and share state stay unchanged throughout. Keep the same
+            // connection/publisher alive across first refresh, promotion and demotion.
+            let replace_membership = |role, status| {
+                let mut current = authority.snapshot.lock().unwrap();
+                let mut next = snapshot(role, status);
+                next.revision = current.revision + 1;
+                *current = next;
+            };
+            for (role, expected) in [
+                (MembershipRole::Member, vec![own]),
+                (MembershipRole::Member, vec![own]),
+                (MembershipRole::Admin, vec![own, foreign]),
+                (MembershipRole::Member, vec![own]),
+            ] {
+                replace_membership(role, MembershipStatus::Active);
+                tokio::time::advance(Duration::from_secs(10)).await;
+                let (version, next, reviews) = read_notice(&mut peer).await;
+                assert_eq!(version, generation);
+                assert!(next > sequence);
+                sequence = next;
+                let mut ids: Vec<_> = reviews
+                    .iter()
+                    .map(|review| review.conversation_id.as_str())
+                    .collect();
+                ids.sort_unstable();
+                assert_eq!(ids, expected);
+                assert_eq!(board.current().0, generation);
+                let visibility = board.visibility();
+                tokio::time::advance(Duration::from_secs(10)).await;
+                assert!(
+                    timeout(Duration::from_secs(1), peer.output.recv())
+                        .await
+                        .is_err(),
+                    "unchanged authority revision must not republish the snapshot"
+                );
+                assert_eq!(board.visibility(), visibility);
+            }
+            replace_membership(MembershipRole::Member, MembershipStatus::Disabled);
+            tokio::time::advance(Duration::from_secs(10)).await;
+            let Message::Close(Some(frame)) = peer.message().await else {
+                panic!("disabled membership closes the live connection")
+            };
+            let termination: SessionTermination = serde_json::from_str(&frame.reason).unwrap();
+            assert_eq!(termination.code, SessionCloseReason::AuthorizationLost);
+            task.await.unwrap();
+        }
     }
 
     #[tokio::test]
