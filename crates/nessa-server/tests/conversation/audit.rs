@@ -1315,3 +1315,6 @@ fn audit_maps_why_a_hooks_launch_happened() {
     assert_eq!(direct["cause"], "open");
     assert_eq!(direct["initiator"], serde_json::json!({"kind": "direct"}));
 }
+
+#[path = "audit/physical.rs"]
+mod physical;

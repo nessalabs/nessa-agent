@@ -111,6 +111,34 @@ independently of the failing sink.
 | Reorder audit panics | Reorder consumes `Panicked` through its existing scheduler recovery and returns the retained scheduling-panic error | Queue receipts settle, physical cleanup is joined, and the proposed order is not applied | `conformance::queue_order::panicking_reorder_audit_fences_and_recovers_without_applying_order` |
 | Repeated stalled observations | Each observation drops its sink future at its own deadline | No detached SDK task/payload queue grows | `stalled_audit_observers_release_their_payloads_after_each_timeout` |
 
+### Supplied audit adapter physical admission
+
+The server's `DurableExecutionAudit` owns one independent
+`nessa_local_storage::physical_operation::Worker`. It waits for admission before
+allocating JSON or cloning its physical state. The admitted job owns the record,
+file writer, and slot through physical I/O and captured cleanup; dropping its
+observer cannot free that slot. At capacity, later calls wait asynchronously;
+the SDK's existing per-record deadline drops those waiters without submission.
+A replacement adapter instance has an independent slot, not a path-wide lock.
+`ExecutionAuditFileWriter` is the synchronous injected file boundary; the real
+implementation persists and syncs the private record and directory before success.
+
+This is the structural correction after review comment
+[4281000397](https://github.com/nessalabs/nessa-agent/pull/928#discussion_r4281000397):
+the SDK observer bound alone did not bound retained physical adapter work.
+The existing shared physical worker now owns that lifetime rather than adding
+an SDK queue or a second admission mechanism.
+
+| Physical/event order | Required result | Regression |
+| --- | --- | --- |
+| First record is writing; observer drops; repeated later observers expire or drop while awaiting admission | One physical job and retained physical payload; later waiters submit no work | `dropped_audit_observers_do_not_grow_physical_work` |
+| First job is queued behind an occupied blocking pool; observer drops | Slot remains with queued job; later calls cannot submit until physical completion | `queued_audit_keeps_admission_after_observer_drop` |
+| First physical writer returns after observer loss; next record arrives | Capacity releases after physical completion and the next record commits once | `dropped_audit_observers_do_not_grow_physical_work` |
+| Writer returns error or panics; injected observation clock panics | Typed `AuditFailure`; later record can acquire capacity | `physical_audit_faults_are_typed_and_release_capacity` |
+| Never-polled record future drops; waiter drops before admission | No writer invocation or metadata allocation for those records | `dropped_audit_observers_do_not_grow_physical_work` |
+| First poll has no runtime | Typed pre-effect `AuditFailure`; no clock sample or write | `audit_without_a_runtime_is_a_typed_pre_effect_failure` |
+| One adapter remains blocked; independent adapter records | Independent adapter succeeds | `independent_audit_instances_do_not_share_admission` |
+
 ## The queue runner and direct invocation
 
 Queued work and direct `invoke` share one invocation slot. `invoke` takes it
