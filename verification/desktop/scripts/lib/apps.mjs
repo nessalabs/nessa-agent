@@ -6,6 +6,7 @@
  */
 import { CannotRun } from "./cli.mjs"
 import { css, names, selectorFor } from "./selectors.mjs"
+import { settled } from "./workspace.mjs"
 
 /**
  * The app's own document in the frame drawn in `place` (inline, pane,
@@ -22,6 +23,24 @@ export async function appFrame(page, place, timeout = 10_000) {
     await page.waitForTimeout(100)
   }
   throw new CannotRun(`no app document in the ${place} frame`)
+}
+
+/**
+ * Wait for current finite host motion before acting in the discovered app.
+ * Frame-local actionability cannot see a moving ancestor (#906's `moving-frame`
+ * browser check). This does not initialize the app or cover later motion or
+ * navigation. A frame that detaches during the bounded wait is refused;
+ * settlement never looks up a replacement. The handles are captured before
+ * waiting, so a caller rewriting its carrier cannot change the target.
+ */
+export async function settleAppFrame(page, frames, timeout = 3000) {
+  if (!Number.isFinite(timeout) || timeout <= 0)
+    throw new CannotRun("app host settlement needs a positive finite timeout")
+  const { element, proxy, app } = frames
+  await settled(page, timeout)
+  if (proxy.isDetached() || app.isDetached())
+    throw new CannotRun("the app frame detached while its host settled")
+  return { element, proxy, app }
 }
 
 /**
