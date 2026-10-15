@@ -6,6 +6,10 @@ keeps its queues out of the returned page API; scripts receive classification
 actions and `heldErrorCount`, not the arrays. The owner takes the collector
 directly when it attaches, so a caller cannot retain a queue as result evidence.
 The queue-free API and once-only reporting are tested in `page-lines.test.mjs`.
+Its consumer check uses TypeScript inference to recognize the `openPage`
+contract through differently named handles and wrappers, rejecting queue
+member access and destructuring. It does not claim to resolve `any` or
+`unknown`; the public API test separately rejects exposing the queues.
 Browser regression evidence accompanies the #912 fix with its exact source.
 
 `run.mjs` binds the check's reporter once. `openPage` watches when a

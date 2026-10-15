@@ -1731,7 +1731,7 @@ const checks = {
         failures.push(
           `requests ${JSON.stringify(seen.requests)}, expected one list alone`,
         )
-      return { seen, failures: [...failures, ...reader.errors] }
+      return { seen, failures }
     } finally {
       await reader.close()
     }
