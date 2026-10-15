@@ -494,3 +494,66 @@ test("prepare only builds when the clone is already at the pin", (context) => {
   assert.equal(calls[0][0], "pnpm")
   assert.equal(calls[0][1], "install")
 })
+
+for (const damage of ["missing", "empty", "directory"]) {
+  test(`check refuses ${damage} declared workspace outputs at the correct pin`, (context) => {
+    const root = makeRoot(context)
+    for (const directory of linkedWorkspacePackages) {
+      const pkg = join(root, ".vendor/nessa_ui", directory)
+      const exports = {
+        ".": { types: "./dist/index.d.ts", import: "./dist/index.js" },
+        "./styles.css": "./dist/styles.css",
+      }
+      writeFileSync(
+        join(pkg, "package.json"),
+        JSON.stringify({
+          name: directory,
+          main: "./dist/index.js",
+          module: "./dist/index.js",
+          types: "./dist/index.d.ts",
+          exports,
+        }),
+      )
+      mkdirSync(join(pkg, "dist"), { recursive: true })
+      for (const output of ["index.js", "index.d.ts", "styles.css"])
+        writeFileSync(join(pkg, "dist", output), "built output")
+    }
+    assert.equal(checkVendor({ root, git: fakeGit({ head: PIN }) }), null)
+    for (const directory of linkedWorkspacePackages) {
+      for (const output of ["index.js", "index.d.ts", "styles.css"]) {
+        const file = join(root, ".vendor/nessa_ui", directory, "dist", output)
+        rmSync(file)
+        if (damage === "empty") writeFileSync(file, "")
+        if (damage === "directory") mkdirSync(file)
+        const problem = checkVendor({ root, git: fakeGit({ head: PIN }) })
+        assert.match(problem, /pnpm ui:types/)
+        assert.match(problem, new RegExp(output.replaceAll(".", "\\.")))
+        rmSync(file, { recursive: true, force: true })
+        writeFileSync(file, "rebuilt output")
+        assert.equal(checkVendor({ root, git: fakeGit({ head: PIN }) }), null)
+      }
+    }
+  })
+}
+
+for (const field of ["main", "module", "types", "typesVersions"]) {
+  test(`check follows the package-owned ${field} entry`, (context) => {
+    const root = makeRoot(context)
+    const pkg = join(root, ".vendor/nessa_ui", linkedWorkspacePackages[0])
+    const target = "./entry.js"
+    writeFileSync(
+      join(pkg, "package.json"),
+      JSON.stringify({
+        name: "fixture",
+        [field]: field === "typesVersions" ? { "*": { entry: [target] } } : target,
+      }),
+    )
+    writeFileSync(join(pkg, target), "built output")
+    assert.equal(checkVendor({ root, git: fakeGit({ head: PIN }) }), null)
+    rmSync(join(pkg, target))
+    assert.match(
+      checkVendor({ root, git: fakeGit({ head: PIN }) }),
+      /entry.js.*pnpm ui:types/,
+    )
+  })
+}

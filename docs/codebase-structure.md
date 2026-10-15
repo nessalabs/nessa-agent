@@ -884,13 +884,15 @@ the composition seam under `crates/nessa-server/tests/composition/`.
 
 [`scripts/cloud-startup.sh`](../scripts/cloud-startup.sh) owns Cloud setup and
 maintenance. Setup runs `bash scripts/cloud-startup.sh setup "$PWD"` and installs
-that recipe plus the canonical native installer into `/opt/nessa-cloud`.
+that recipe plus the canonical native installer and UI preparation module into
+`/opt/nessa-cloud`.
 Maintenance runs `bash /opt/nessa-cloud/bootstrap.sh maintenance "$PWD"` against
 the task checkout; the cached executable survives a branch that predates its
 source. Installed artifact hashes are checked against their setup record.
 The recipe verifies the owned Node 24 and
-repository pnpm, stable Rust, UI revision, offline pnpm/Cargo dependencies and
-installed Playwright executables before fetching missing capabilities. The native
+repository pnpm, stable Rust, the UI revision and declared package entries, offline
+pnpm/Cargo dependencies and installed Playwright executables before fetching missing
+capabilities. The native
 package list and installed-package check remain with
 [`install-linux-build-deps.sh`](../scripts/desktop/install-linux-build-deps.sh).
 Its adjacent root-level `cloud-startup.test.mjs` exercises cold preparation, warm
@@ -914,12 +916,14 @@ tests hold the observed outcomes rather than inferring readiness from file prese
 | --- | --- | --- |
 | No prepared state | Repository recipe installs its runtime artifacts, verifies capabilities, then mints the successful state identity | Setup receipt names the task and provisioning source plus actual outcomes |
 | Verified tools and dependencies already exist | Same recipe checks capabilities and uses offline dependency resolution | Same identity, a new timestamp and recorded reuse; the entry mode stays the mode actually invoked |
-| Task branch predates bootstrap source | Setup-installed, hash-checked recipe supplies maintenance; task checkout supplies manifests | Provisioning identity stays separate from the task commit |
+| Task branch predates bootstrap source | Setup-installed, hash-checked bootstrap/native/UI owners supply maintenance; task checkout supplies its pin and manifests | Provisioning identity stays separate from the task commit |
 | One tool, dependency or browser capability is missing | Its existing owner repairs it; Playwright owns both browser executables and their Linux dependency closure | A success receipt follows the capability check, including actual browser launch and local page assertion |
+| Pinned UI checkout lacks a declared package entry file, or that file is empty/not a regular file | UI preparation owner derives required files from package manifests; its offline check refuses reuse and its existing preparation builds them | `ui=prepared` only after the final owner check passes; no arbitrary content-integrity claim |
 | Browser repair stalls | Bootstrap bounds the Playwright-owned repair to 45 minutes with a 30-second forced-stop grace | Timeout exits unsuccessfully and preserves the prior success receipt |
 | A warm install runs the UI preinstall hook with a missing vendored dependency | Offline configuration is inherited by nested pnpm; missing dependencies force the explicit online fallback | A fetching attempt records `dependencies=fetched`, including nested UI resolution |
 | Checksum, dependency operation or readiness fails | Bootstrap exits unsuccessfully before publishing another success | Earlier receipt keeps its own timestamp; changed tool files are not claimed to be rolled back |
-| Installed recipe no longer matches setup hashes | Installed-artifact check refuses maintenance | No new preparation success; setup is the owner that can publish a replacement recipe |
+| UI readiness is lost during dependency preparation | Final check calls the installed UI owner again | No new success receipt; the earlier timestamp remains |
+| Installed recipe or UI owner no longer matches setup hashes | Installed-artifact check refuses maintenance | No new preparation success; setup is the owner that can publish a replacement recipe |
 | Platform invokes setup again | Idempotent setup performs the same capability checks | Reused identity/assets and `mode=setup` remain distinct facts; no maintenance or platform cache claim is invented |
 
 ## MCP tools
@@ -1788,7 +1792,10 @@ The calling checkout's `.vendor/nessa_ui` clone owns dependency installation and
 package build artifacts. Preparation replaces a borrowed vendor link without
 changing its target and refuses a symlinked `.vendor` parent before effects;
 `nessa-ui-revision` remains the revision owner. The offline check reads the current
-vendor without preparing it. See [the UI dependency](../README.md#the-nessa-ui-dependency).
+vendor and its nonempty regular package entry files derived from the pinned
+manifests without preparing it. Missing entries direct the caller to the same
+preparation owner; the check does not certify arbitrary content corruption or
+private bundle chunks. See [the UI dependency](../README.md#the-nessa-ui-dependency).
 
 Developer worktree lifecycle is owned by `scripts/worktree.sh`. Manual sibling
 worktrees and Claude Code's nested worktrees use different naming namespaces,

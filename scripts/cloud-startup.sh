@@ -4,10 +4,10 @@
 # Cold/warm/failure and inherited-tool regressions: cloud-startup.test.mjs.
 set -euo pipefail
 umask 077
-mode=${1:?Expected setup or maintenance}
+[ "$#" -eq 2 ] || { echo 'Usage: cloud-startup.sh setup|maintenance <checkout>' >&2; exit 2; }
+mode=$1
 node_major=24
 case "$mode" in setup|maintenance) ;; *) echo 'Expected setup or maintenance' >&2; exit 2 ;; esac
-[ "$#" -eq 2 ]
 [ "$(uname -s)" = Linux ] || { echo 'Cloud startup requires Linux.' >&2; exit 2; }
 script_file=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")
 repository=$(cd "${2:?Expected the task checkout directory}" && pwd)
@@ -43,8 +43,8 @@ python3 - "$cloud_root" "$repository" "$script_file" "$mode" <<'PY'
 import hashlib, json, pathlib, subprocess, sys
 root, repository, script = map(pathlib.Path, sys.argv[1:4])
 deployment = root / 'bootstrap.json'
+sources = {'bootstrap.sh': script, 'native-build-deps.sh': repository / 'scripts/desktop/install-linux-build-deps.sh', 'ui-workspace.mjs': repository / 'scripts/ensure-nessa-ui.mjs'}
 if sys.argv[4] == 'setup':
-    sources = {'bootstrap.sh': script, 'native-build-deps.sh': repository / 'scripts/desktop/install-linux-build-deps.sh'}
     hashes = {}
     for name, source in sources.items():
         content = source.read_bytes()
@@ -58,7 +58,7 @@ if sys.argv[4] == 'setup':
     temporary.replace(deployment)
 else:
     record = json.loads(deployment.read_text())
-    for name in ('bootstrap.sh', 'native-build-deps.sh'):
+    for name in sources:
         if hashlib.sha256((root / name).read_bytes()).hexdigest() != record['hashes'][name]:
             raise SystemExit('Cached provisioning artifact does not match its setup receipt.')
 PY
@@ -119,10 +119,25 @@ if ! rustup run stable rustc --version >/dev/null 2>&1 || [[ "$components" != *r
   rust_status=installed
   rustup toolchain install stable --profile minimal --component rustfmt --component clippy
 fi
+# Invoke the installed canonical owner against the task checkout. Its branch
+# may predate the readiness check; manifests and pin still belong to that task.
+ui_workspace() {
+  node --input-type=module - "$cloud_root/ui-workspace.mjs" "$repository" "$1" <<'JS'
+import { pathToFileURL } from 'node:url'
+const owner = await import(pathToFileURL(process.argv[2]).href)
+const root = process.argv[3]
+if (process.argv[4] === 'check') {
+  const problem = owner.checkVendor({ root })
+  if (problem) { console.error(problem); process.exitCode = 1 }
+} else {
+  owner.prepareVendor({ root })
+}
+JS
+}
 ui_status=reused
-if ! node scripts/ensure-nessa-ui.mjs --check; then
+if ! ui_workspace check; then
   ui_status=prepared
-  node scripts/ensure-nessa-ui.mjs
+  ui_workspace prepare
 fi
 dependencies_status=offline
 if ! PNPM_CONFIG_OFFLINE=true pnpm install --offline --frozen-lockfile; then
@@ -157,7 +172,7 @@ if ! browsers_ready; then
   timeout --kill-after=30s 45m pnpm exec playwright install --with-deps chromium webkit
 fi
 browsers_ready
-node scripts/ensure-nessa-ui.mjs --check
+ui_workspace check
 node --version
 pnpm --version
 rustup run stable rustc --version
@@ -176,6 +191,7 @@ receipt = {
     'prepareSha256': hashlib.sha256(pathlib.Path(sys.argv[11]).read_bytes()).hexdigest(),
     'bootstrapSourceHead': deployment['sourceHead'],
     'nativeSha256': deployment['hashes']['native-build-deps.sh'],
+    'uiSha256': deployment['hashes']['ui-workspace.mjs'],
     **before,
     'steps': dict(zip(('node', 'pnpm', 'rust', 'ui', 'dependencies', 'cargo', 'browsers'), sys.argv[4:11])),
 }

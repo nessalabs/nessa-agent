@@ -83,6 +83,7 @@ else if (tool === 'cargo') {
     if (exists('fail-pnpm')) process.exit(1)
     if (args.includes('--offline') && !exists('pnpm')) process.exit(1)
     touch('pnpm')
+    if (exists('invalidate-ui')) fs.rmSync(path.join(root,'repository','.ui-ready'), {force:true})
     const mod = path.join(process.cwd(), 'node_modules/playwright')
     fs.mkdirSync(mod, {recursive:true})
     fs.writeFileSync(path.join(mod, 'package.json'), '{"type":"module","exports":"./index.js"}')
@@ -127,7 +128,7 @@ else process.exit(2)
   writeFileSync(join(repository, "package.json"), '{"packageManager":"pnpm@11.9.0"}')
   writeFileSync(
     join(repository, "scripts/ensure-nessa-ui.mjs"),
-    `import{existsSync,writeFileSync}from'node:fs';if(process.argv.includes('--check')){if(!existsSync('.ui-ready'))process.exit(1)}else writeFileSync('.ui-ready','')`,
+    `import{existsSync,writeFileSync}from'node:fs';import{join}from'node:path';export const checkVendor=({root})=>existsSync(join(root,'.ui-ready'))?null:'UI fixture requires preparation';export const prepareVendor=({root})=>writeFileSync(join(root,'.ui-ready'),'')`,
   )
   const env = {
     ...process.env,
@@ -370,10 +371,14 @@ test("maintenance survives a task checkout that predates the provisioning source
   const first = f.receipt()
   rmSync(join(f.repository, "scripts/cloud-startup.sh"))
   rmSync(join(f.repository, "scripts/desktop/install-linux-build-deps.sh"))
+  rmSync(join(f.repository, "scripts/ensure-nessa-ui.mjs"))
+  rmSync(join(f.repository, ".ui-ready"))
   const maintained = f.prepare("maintenance")
   assert.equal(maintained.status, 0, maintained.stderr)
   assert.equal(f.receipt().prepareSha256, first.prepareSha256)
   assert.equal(f.receipt().nativeSha256, first.nativeSha256)
+  assert.equal(f.receipt().uiSha256, first.uiSha256)
+  assert.equal(f.receipt().steps.ui, "prepared")
   assert.deepEqual(f.receipt().cacheIdentity, first.cacheIdentity)
 })
 
@@ -440,4 +445,45 @@ test("nested UI dependency fetching cannot be reported as offline reuse", (t) =>
   const reused = f.prepare("maintenance")
   assert.equal(reused.status, 0, reused.stderr)
   assert.equal(f.receipt().steps.dependencies, "offline")
+})
+
+test("invalid cloud command arguments report usage before preparation", () => {
+  for (const args of [[], ["setup"], ["setup", ".", "extra"]]) {
+    const result = spawnSync("bash", [join(scripts, "cloud-startup.sh"), ...args], {
+      encoding: "utf8",
+    })
+    assert.equal(result.status, 2)
+    assert.equal(result.stdout, "")
+    assert.match(result.stderr, /Usage: cloud-startup.sh setup\|maintenance <checkout>/)
+  }
+})
+
+test("changed installed UI preparation cannot replace verified ownership", (t) => {
+  const f = bootstrapFixture(t)
+  assert.equal(f.prepare("setup").status, 0)
+  const receipt = join(f.env.NESSA_CLOUD_ROOT, "preparation.json")
+  const previous = readFileSync(receipt, "utf8")
+  const helper = join(f.env.NESSA_CLOUD_ROOT, "ui-workspace.mjs")
+  assert.equal(
+    createHash("sha256").update(readFileSync(helper)).digest("hex"),
+    f.receipt().uiSha256,
+  )
+  writeFileSync(helper, "throw new Error('unverified UI owner ran')")
+  const result = f.prepare("maintenance")
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /does not match its setup receipt/)
+  assert.equal(readFileSync(receipt, "utf8"), previous)
+  assert.doesNotMatch(result.stderr, /unverified UI owner ran/)
+})
+
+test("lost UI readiness after dependency work preserves the earlier receipt", (t) => {
+  const f = bootstrapFixture(t)
+  assert.equal(f.prepare("setup").status, 0)
+  const receipt = join(f.env.NESSA_CLOUD_ROOT, "preparation.json")
+  const previous = readFileSync(receipt, "utf8")
+  writeFileSync(join(f.root, "invalidate-ui"), "")
+  const result = f.prepare("maintenance")
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /UI fixture requires preparation/)
+  assert.equal(readFileSync(receipt, "utf8"), previous)
 })
