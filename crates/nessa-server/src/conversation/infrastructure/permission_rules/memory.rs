@@ -81,12 +81,20 @@ struct LiveRules {
     rows: Vec<StoredPermissionRule>,
 }
 
+/// Contents and their authoritative versions commit together. Watch channels
+/// project wakeups only; a delayed notification is not an admission token.
+struct WaitingReviews {
+    notices: Vec<PublishedReview>,
+    generation: u64,
+    visibility: u64,
+}
+
 /// Rules, who may be offered a remember choice, and the reviews still waiting.
 pub struct PermissionMemory {
     rules: Mutex<LiveRules>,
     arms: Mutex<Arms>,
     noted: Mutex<NotedCallers>,
-    notices: Mutex<Vec<PublishedReview>>,
+    waiting: Mutex<WaitingReviews>,
     generation: watch::Sender<u64>,
     /// Moves when who may see a waiting review may have changed.
     visibility: watch::Sender<u64>,
@@ -122,7 +130,11 @@ impl PermissionMemory {
                 order: VecDeque::new(),
                 callers: HashMap::new(),
             }),
-            notices: Mutex::new(Vec::new()),
+            waiting: Mutex::new(WaitingReviews {
+                notices: Vec::new(),
+                generation: 0,
+                visibility: 0,
+            }),
             generation,
             visibility,
             evaluator,
@@ -149,17 +161,31 @@ impl PermissionMemory {
 
     /// The generation and the waiting reviews a notice should carry.
     pub fn current(&self) -> (u64, Vec<PublishedReview>) {
-        let generation = *self.generation.borrow();
-        let notices = lock(&self.notices);
-        let skip = notices.len().saturating_sub(PUBLISHED_REVIEWS);
-        (generation, notices.iter().skip(skip).cloned().collect())
+        let waiting = lock(&self.waiting);
+        let skip = waiting.notices.len().saturating_sub(PUBLISHED_REVIEWS);
+        (
+            waiting.generation,
+            waiting.notices.iter().skip(skip).cloned().collect(),
+        )
+    }
+
+    /// Whether both shared versions still match a filtered candidate, without
+    /// cloning its notices. Audited publishers check before snapshot admission
+    /// (`review_notice_reselects_after_shared_changes_during_audit`).
+    pub fn is_current(&self, generation: u64, visibility: u64) -> bool {
+        let waiting = lock(&self.waiting);
+        generation != u64::MAX
+            && visibility != u64::MAX
+            && waiting.generation == generation
+            && waiting.visibility == visibility
     }
 
     /// Wait until the generation is no longer `seen`.
     pub async fn wait_after(&self, seen: u64) {
         let mut updates = self.generation.subscribe();
         loop {
-            if *updates.borrow() != seen {
+            drop(updates.borrow_and_update());
+            if lock(&self.waiting).generation != seen {
                 return;
             }
             if updates.changed().await.is_err() {
@@ -170,7 +196,7 @@ impl PermissionMemory {
 
     /// The visibility generation a notice publisher last filtered at.
     pub fn visibility(&self) -> u64 {
-        *self.visibility.borrow()
+        lock(&self.waiting).visibility
     }
 
     /// Ask every waiting-review publisher to filter its snapshot again.
@@ -179,15 +205,20 @@ impl PermissionMemory {
     /// that could see a review can lose that conversation while the review is
     /// still waiting, and the next snapshot is the filtered set.
     pub fn recheck_visibility(&self) {
-        let next = self.visibility.borrow().saturating_add(1);
-        self.visibility.send_replace(next);
+        let next = {
+            let mut waiting = lock(&self.waiting);
+            waiting.visibility = waiting.visibility.saturating_add(1);
+            waiting.visibility
+        };
+        publish_version(&self.visibility, next);
     }
 
     /// Wait until visibility should be filtered again.
     pub async fn wait_for_visibility(&self, seen: u64) {
         let mut updates = self.visibility.subscribe();
         loop {
-            if *updates.borrow() != seen {
+            drop(updates.borrow_and_update());
+            if lock(&self.waiting).visibility != seen {
                 return;
             }
             if updates.changed().await.is_err() {
@@ -195,11 +226,17 @@ impl PermissionMemory {
             }
         }
     }
+}
 
-    fn bump(&self) {
-        let next = self.generation.borrow().saturating_add(1);
-        self.generation.send_replace(next);
-    }
+fn publish_version(projection: &watch::Sender<u64>, version: u64) {
+    projection.send_if_modified(|published| {
+        if *published < version {
+            *published = version;
+            true
+        } else {
+            false
+        }
+    });
 }
 
 impl PermissionRules for PermissionMemory {
@@ -334,8 +371,8 @@ impl ReviewNotices for PermissionMemory {
     fn waiting(&self, notice: &ReviewNotice) {
         let execution_id = notice.execution_id.as_str().to_owned();
         let permission_id = notice.permission_id.as_str().to_owned();
-        let mut notices = lock(&self.notices);
-        if let Some(existing) = notices.iter_mut().find(|item| {
+        let mut waiting = lock(&self.waiting);
+        if let Some(existing) = waiting.notices.iter_mut().find(|item| {
             item.conversation_id == notice.conversation_id
                 && item.execution_id == execution_id
                 && item.permission_id == permission_id
@@ -345,32 +382,35 @@ impl ReviewNotices for PermissionMemory {
             }
             existing.tool.clone_from(&notice.tool);
         } else {
-            notices.push(PublishedReview {
+            waiting.notices.push(PublishedReview {
                 conversation_id: notice.conversation_id.clone(),
                 execution_id,
                 permission_id,
                 tool: notice.tool.clone(),
             });
-            while notices.len() > MAX_NOTICES {
-                notices.remove(0);
+            while waiting.notices.len() > MAX_NOTICES {
+                waiting.notices.remove(0);
             }
         }
-        drop(notices);
-        self.bump();
+        waiting.generation = waiting.generation.saturating_add(1);
+        let generation = waiting.generation;
+        drop(waiting);
+        publish_version(&self.generation, generation);
     }
 
     fn clear(&self, conversation: &str, execution: &ExecutionId, permission: &PermissionId) {
-        let mut notices = lock(&self.notices);
-        let before = notices.len();
-        notices.retain(|item| {
+        let mut waiting = lock(&self.waiting);
+        let before = waiting.notices.len();
+        waiting.notices.retain(|item| {
             item.conversation_id != conversation
                 || item.execution_id != execution.as_str()
                 || item.permission_id != permission.as_str()
         });
-        let removed = notices.len() != before;
-        drop(notices);
-        if removed {
-            self.bump();
+        if waiting.notices.len() != before {
+            waiting.generation = waiting.generation.saturating_add(1);
+            let generation = waiting.generation;
+            drop(waiting);
+            publish_version(&self.generation, generation);
         }
     }
 }
@@ -460,6 +500,11 @@ mod tests {
     use nessa_sdk::application::agent_execution::permissions::RememberRequest;
     use nessa_sdk::domain::agent_execution::executions::ExecutionId;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::{
+        sync::{mpsc as thread_channel, Barrier},
+        thread,
+        time::{Duration, Instant},
+    };
 
     struct FixedClock {
         now: AtomicU64,
@@ -492,6 +537,168 @@ mod tests {
         let path = private.join("permission-rules.sqlite3");
         let memory = PermissionMemory::open(&path, clock()).unwrap();
         (directory, memory)
+    }
+
+    #[test]
+    fn review_board_snapshot_owns_versions_before_notification() {
+        for clearing in [false, true] {
+            let (_directory, memory) = open();
+            let notice = ReviewNotice {
+                conversation_id: "conversation".into(),
+                execution_id: execution(),
+                permission_id: PermissionId::new("permission").unwrap(),
+                tool: "Read".into(),
+            };
+            if clearing {
+                memory.waiting(&notice);
+            }
+            let before = memory.current().0;
+            let visibility = memory.visibility();
+            thread::scope(|scope| {
+                let memory = &memory;
+                // This is the existing Tokio watch read guard, not a production
+                // test hook. It blocks only projection writes, not board state.
+                let projection = memory.generation.borrow();
+                let writer = scope.spawn(|| {
+                    if clearing {
+                        memory.clear(
+                            &notice.conversation_id,
+                            &notice.execution_id,
+                            &notice.permission_id,
+                        );
+                    } else {
+                        memory.waiting(&notice);
+                    }
+                });
+                let (send, receive) = thread_channel::sync_channel(1);
+                let reader = scope.spawn(move || {
+                    let deadline = Instant::now() + Duration::from_secs(2);
+                    loop {
+                        let (generation, notices) = memory.current();
+                        if notices.len() == usize::from(!clearing) {
+                            send.send((generation, memory.is_current(before, visibility)))
+                                .unwrap();
+                            return;
+                        }
+                        assert!(
+                            Instant::now() < deadline,
+                            "the actual board mutation must progress"
+                        );
+                        thread::yield_now();
+                    }
+                });
+                let observed = receive.recv_timeout(Duration::from_secs(3));
+                // Release even on an assertion failure before scoped joining.
+                drop(projection);
+                writer.join().unwrap();
+                reader.join().unwrap();
+                let (generation, old_current) = observed.expect(
+                    "board snapshot must read authoritative state independently of wake projection",
+                );
+                assert_eq!(
+                    generation,
+                    before + 1,
+                    "a snapshot generation must own its notice contents"
+                );
+                assert!(
+                    !old_current,
+                    "an earlier token must be invalid before notification catches up"
+                );
+                assert_eq!(*memory.generation.borrow(), generation);
+            });
+        }
+    }
+
+    #[test]
+    fn review_board_concurrent_mutations_keep_monotonic_versions() {
+        const WRITERS: usize = 8;
+        const CHANGES: usize = 64;
+        let (_directory, memory) = open();
+        let start = Barrier::new(WRITERS);
+        thread::scope(|scope| {
+            let memory = &memory;
+            let start = &start;
+            for writer in 0..WRITERS {
+                scope.spawn(move || {
+                    start.wait();
+                    for change in 0..CHANGES {
+                        memory.waiting(&ReviewNotice {
+                            conversation_id: format!("conversation-{writer}"),
+                            execution_id: execution(),
+                            permission_id: PermissionId::new(format!(
+                                "permission-{writer}-{change}"
+                            ))
+                            .unwrap(),
+                            tool: "Read".into(),
+                        });
+                        memory.recheck_visibility();
+                    }
+                });
+            }
+        });
+        let expected = u64::try_from(WRITERS * CHANGES).unwrap();
+        assert_eq!(
+            memory.current().0,
+            expected,
+            "each actual notice mutation owns one version"
+        );
+        assert_eq!(
+            memory.visibility(),
+            expected,
+            "concurrent visibility changes must not lose increments"
+        );
+        assert_eq!(*memory.generation.borrow(), expected);
+        assert_eq!(*memory.visibility.borrow(), expected);
+        assert!(memory.is_current(expected, expected));
+    }
+
+    #[tokio::test]
+    async fn review_board_late_projection_cannot_regress_waiters() {
+        let (_directory, memory) = open();
+        for permission in ["first", "second"] {
+            memory.waiting(&ReviewNotice {
+                conversation_id: "conversation".into(),
+                execution_id: execution(),
+                permission_id: PermissionId::new(permission).unwrap(),
+                tool: "Read".into(),
+            });
+        }
+        assert_eq!(memory.current().0, 2);
+        // A first writer can resume its projection after a second writer's
+        // projection. Drive that delivery ordering through the actual projector,
+        // then observe the public waiter rather than a helper return value.
+        publish_version(&memory.generation, 1);
+        assert_eq!(
+            *memory.generation.borrow(),
+            2,
+            "a late projection must not move the wake version backwards"
+        );
+        // A projection may also lag the committed source before its writer is
+        // scheduled. It is wake data, not the source comparison for a waiter.
+        memory.generation.send_replace(1);
+        let mut next = Box::pin(memory.wait_after(2));
+        assert!(
+            futures_util::poll!(next.as_mut()).is_pending(),
+            "a late projection must not regress a current waiter"
+        );
+        memory.clear(
+            "conversation",
+            &execution(),
+            &PermissionId::new("first").unwrap(),
+        );
+        assert!(futures_util::poll!(next.as_mut()).is_ready());
+        assert_eq!(memory.current().0, 3);
+    }
+
+    #[test]
+    fn review_board_exhausted_versions_refuse_candidate_validation() {
+        let (_directory, memory) = open();
+        assert!(memory.is_current(0, 0));
+        lock(&memory.waiting).generation = u64::MAX;
+        assert!(!memory.is_current(u64::MAX, 0));
+        lock(&memory.waiting).generation = 0;
+        lock(&memory.waiting).visibility = u64::MAX;
+        assert!(!memory.is_current(0, u64::MAX));
     }
 
     fn remember(

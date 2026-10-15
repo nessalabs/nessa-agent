@@ -703,6 +703,22 @@ retain an admin role after a concurrent demotion.
 | Correlated conversation owned by someone else | Admin demoted to Member during the metadata read | Refused | `review_admission_reads_membership_after_metadata_returns` |
 | Correlated conversation | Membership disabled during the metadata read | Refused before policy | `review_admission_reads_membership_after_metadata_returns` |
 
+The waiting-review board's `WaitingReviews` mutex owns notice contents and both
+authoritative versions. Mutations advance the corresponding version while that
+state is locked; `current`, `visibility` and `is_current` read that state. The
+watch channels only project monotonic wakeups after the lock is released, so
+notification backpressure cannot split an admission token from its contents or
+hold the state lock. A late projection cannot move a watch backwards. Exhausted
+versions cannot validate an audited candidate.
+
+| Board ordering | State/projection result | Regression |
+| --- | --- | --- |
+| Waiting/clear commits while a watch reader blocks notification | Contents and authoritative generation remain coherent; earlier token is invalid; projection catches up after release | `review_board_snapshot_owns_versions_before_notification` |
+| Concurrent waiting and visibility updates | Each actual mutation advances its authoritative version; final projection agrees | `review_board_concurrent_mutations_keep_monotonic_versions` |
+| Older notification arrives after a newer one | Watch remains at the newer version; a waiter on that version remains pending | `review_board_late_projection_cannot_regress_waiters` |
+| Source version is ahead of its wake projection | Waiters check authoritative state and use the projection only to wake; a waiter on the current source version does not spin | `review_board_late_projection_cannot_regress_waiters` |
+| Either authoritative version is exhausted | Candidate validation fails closed | `review_board_exhausted_versions_refuse_candidate_validation` |
+
 Review admission and retained visibility have separate owners. Cedar owns each
 filter decision. `PermissionMemory` owns board generation and the shared
 visibility generation for share/unshare changes. Each authenticated connection
