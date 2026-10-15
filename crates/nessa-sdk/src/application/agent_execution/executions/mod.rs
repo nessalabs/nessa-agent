@@ -13,10 +13,13 @@
 //!                 +--> ReviewDeclineRecord --> selected and delivery audit
 //!                 +--> ExecutionEvent
 //! Agent / adapter --> ExecutionAudit --> host-owned durable sink
+//! SessionLifecycle --> immutable AttachmentAuditRecord --> ExecutionAudit
 //! ```
 //!
 //! Arrows mean calling the controller or domain, and constructing an event from
 //! the accepted domain transition. No transport lives in this module.
+//! Attachment records are issued only by the lifecycle owner; sinks inspect their
+//! published fields without assembling transition facts themselves.
 
 mod audit;
 mod controller;

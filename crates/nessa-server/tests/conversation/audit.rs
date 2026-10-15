@@ -1,10 +1,11 @@
 use super::*;
+use crate::conversation_test_support::{Provider, ProviderFactory, RecordingModeExecutionAudit};
 use nessa_sdk::application::agent_execution::{
+    agents::{Agent, AttachmentRequest},
     executions::{
-        AdmittedQuestion, AttachmentAuditCause, AttachmentAuditRecord, AttachmentAuditStage,
-        ExecutionController, ExecutionUpdate, LateProviderResultRecord, QueueAdmissionRecord,
-        QueueOrderRecord, QueueSettlementRecord, SessionClosureRecord,
-        SteeringAcknowledgementRecord,
+        AdmittedQuestion, AttachmentAuditCause, AttachmentAuditStage, ExecutionController,
+        ExecutionUpdate, LateProviderResultRecord, QueueAdmissionRecord, QueueOrderRecord,
+        QueueSettlementRecord, SessionClosureRecord, SteeringAcknowledgementRecord,
     },
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, ApprovalRuleReference,
@@ -12,6 +13,7 @@ use nessa_sdk::application::agent_execution::{
         PermissionAnswerRecord, QuestionAnswerRecord, QuestionRefusalRecord, RefusedAsk,
         ReviewDeclineRecord,
     },
+    sessions::SessionManager,
     tools::ToolReviewInput,
 };
 use nessa_sdk::domain::agent_execution::{
@@ -35,6 +37,7 @@ use nessa_sdk::domain::agent_execution::{
     tools::{ToolCallId, ToolCallUpdate},
     ExecutionError,
 };
+use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, RuntimeMessageCommitClock};
 use std::fs;
 struct TestClock;
 impl Clock for TestClock {
@@ -48,23 +51,55 @@ fn finished(outcome: ExecutionOutcome) -> ExecutionAuditRecord {
     session.begin_execution(id.clone()).unwrap();
     ExecutionAuditRecord::Finished(session.finish_execution(&id, Ok(outcome)).unwrap().0)
 }
-#[test]
-fn audit_maps_attachment_and_admission_evidence_without_losing_correlation() {
+#[tokio::test]
+async fn audit_maps_attachment_and_admission_evidence_without_losing_correlation() {
     let session = SessionId::new("session").unwrap();
     let execution = ExecutionId::new("steering").unwrap();
     let target = ExecutionId::new("active").unwrap();
-    let attachment = record_value(&ExecutionAuditRecord::Attachment(
-        AttachmentAuditRecord::new(
-            session.clone(),
-            7,
-            AttachmentAuditStage::Waiting,
-            AttachmentAuditStage::Starting,
-            AttachmentAuditCause::Started(AttachmentCause::Reopen),
-            Some(actor()),
-        ),
-    ));
+    let audit = Arc::new(RecordingModeExecutionAudit::default());
+    let manager = SessionManager::open(
+        Some(session.clone()),
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(RuntimeMessageCommitClock::new()),
+    )
+    .await
+    .unwrap();
+    let agent = Agent::prepare(
+        Arc::new(Provider::new(Arc::new(ProviderFactory::default()))),
+        manager,
+        audit.clone(),
+    )
+    .await
+    .unwrap();
+    for _ in 0..2 {
+        let authorization = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        agent
+            .start_attachment(authorization)
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
+        agent.close(actor()).await.unwrap();
+    }
+    let attachment = {
+        let records = audit.records.lock().unwrap();
+        let reopened = records
+            .iter()
+            .find(|record| {
+                matches!(record,
+                    ExecutionAuditRecord::Attachment(record)
+                    if record.cause() == AttachmentAuditCause::Started(AttachmentCause::Reopen)
+                        && record.after() == AttachmentAuditStage::Starting
+                )
+            })
+            .unwrap();
+        record_value(reopened)
+    };
     assert_eq!(attachment["kind"], "attachment_transition");
-    assert_eq!(attachment["generation"], 7);
+    assert_eq!(attachment["sessionId"], "session");
+    assert_eq!(attachment["generation"], 1);
     assert_eq!(attachment["before"], "waiting");
     assert_eq!(attachment["after"], "starting");
     assert_eq!(attachment["cause"]["kind"], "started");

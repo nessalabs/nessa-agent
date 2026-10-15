@@ -3,6 +3,7 @@
 //! SDK tasks keep their work permits through recording and physical recovery.
 //! Scheduling retires a queued receipt's original permit before publication.
 //! Cleanup alone does not allow a new execution while accepted work is finishing.
+#![deny(missing_docs)]
 pub(super) use super::attachment_evidence::CloseAttempt;
 use super::lifetime::OwnedLifetime;
 use super::{
@@ -14,8 +15,7 @@ use super::{
 };
 use crate::application::agent_execution::{
     executions::{
-        AttachmentAuditCause, AttachmentAuditRecord, AttachmentAuditStage, ExecutionAudit,
-        ExecutionAuditRecord,
+        AttachmentAuditCause, AttachmentAuditStage, ExecutionAudit, ExecutionAuditRecord,
     },
     permissions::ActionContext,
     providers::{
@@ -47,6 +47,73 @@ use std::{
 #[cfg(test)]
 use tokio::sync::oneshot;
 use tokio::sync::{watch, Mutex as AsyncMutex};
+
+/// Attributed evidence issued by the Agent's attachment lifecycle owner.
+///
+/// Audit sinks may inspect or clone this immutable record. The lifecycle derives
+/// its session, generation, stages, cause and actor while accepting the transition;
+/// callers cannot construct or edit those facts. Audit acknowledgement remains a
+/// separate operation and this record alone does not grant dispatch authority.
+///
+/// Field-by-field construction is unavailable:
+/// ```compile_fail
+/// use nessa_sdk::application::agent_execution::executions::{
+///     AttachmentAuditRecord, AttachmentAuditStage, AttachmentAuditCause,
+/// };
+/// use nessa_sdk::domain::agent_execution::sessions::SessionId;
+/// fn forge(id: SessionId) -> AttachmentAuditRecord {
+///     AttachmentAuditRecord::new(id, 0, AttachmentAuditStage::Absent,
+///         AttachmentAuditStage::Attached, AttachmentAuditCause::AuthorizationAbandoned, None)
+/// }
+/// ```
+/// Private fields also prevent bypassing the public API:
+/// ```compile_fail
+/// use nessa_sdk::application::agent_execution::executions::{
+///     AttachmentAuditRecord, AttachmentAuditStage, AttachmentAuditCause,
+/// };
+/// use nessa_sdk::domain::agent_execution::sessions::SessionId;
+/// fn forge(session_id: SessionId) -> AttachmentAuditRecord {
+///     AttachmentAuditRecord { session_id, generation: 0,
+///         before: AttachmentAuditStage::Absent, after: AttachmentAuditStage::Attached,
+///         cause: AttachmentAuditCause::AuthorizationAbandoned, actor: None }
+/// }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttachmentAuditRecord {
+    session_id: SessionId,
+    generation: u64,
+    before: AttachmentAuditStage,
+    after: AttachmentAuditStage,
+    cause: AttachmentAuditCause,
+    actor: Option<ActionContext>,
+}
+impl AttachmentAuditRecord {
+    /// Local session whose attachment lifecycle changed.
+    pub fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+    /// Attachment generation affected by this transition.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+    /// Stage before the transition.
+    pub fn before(&self) -> AttachmentAuditStage {
+        self.before
+    }
+    /// Stage after the transition.
+    pub fn after(&self) -> AttachmentAuditStage {
+        self.after
+    }
+    /// Typed transition cause.
+    pub fn cause(&self) -> AttachmentAuditCause {
+        self.cause
+    }
+    /// Original authorizer for start, publication, failure and abandonment;
+    /// initiating caller for explicit close. Automatic recovery and close have no actor.
+    pub fn actor(&self) -> Option<&ActionContext> {
+        self.actor.as_ref()
+    }
+}
 
 // Stopping invalidates commands accepted in the previous work generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -142,12 +209,14 @@ enum AttachmentState {
     Starting {
         generation: u64,
         cause: AttachmentCause,
+        actor: Option<ActionContext>,
         recorded: bool,
         open_stop: watch::Sender<Option<SessionCloseRequest>>,
     },
     Attached {
         generation: u64,
         cause: AttachmentCause,
+        actor: Option<ActionContext>,
         provider: AttachedProvider,
     },
     Failed {
@@ -201,7 +270,7 @@ pub(super) struct WorkPermit {
 pub(super) struct AttachmentStart {
     pub(super) generation: u64,
     pub(super) cause: AttachmentCause,
-    pub(super) actor: Option<ActionContext>,
+    pub(super) record: AttachmentAuditRecord,
     pub(super) result: watch::Sender<Option<Result<(), AgentError>>>,
     pub(super) open_control: ProviderOpenControl,
     pub(super) started_evidence: watch::Sender<Option<Result<(), AgentError>>>,
@@ -526,7 +595,14 @@ impl SessionLifecycle {
         let start = AttachmentStart {
             generation: attachment_generation,
             cause: authorization.cause,
-            actor: authorization.actor.clone(),
+            record: AttachmentAuditRecord {
+                session_id: self.session_id.clone(),
+                generation: attachment_generation,
+                before: AttachmentAuditStage::Waiting,
+                after: AttachmentAuditStage::Starting,
+                cause: AttachmentAuditCause::Started(authorization.cause),
+                actor: authorization.actor.clone(),
+            },
             result,
             open_control: ProviderOpenControl::new(open_control),
             started_evidence,
@@ -538,6 +614,7 @@ impl SessionLifecycle {
         state.attachment = AttachmentState::Starting {
             generation: start.generation,
             cause: start.cause,
+            actor: authorization.actor.clone(),
             recorded: !matches!(start.cause, AttachmentCause::Initial),
             open_stop,
         };
@@ -560,25 +637,28 @@ impl SessionLifecycle {
             if !matching {
                 return;
             }
-            if let AttachmentState::Authorized(authority) = &state.attachment {
-                authority.cancelled.send_replace(true);
-            }
-            let recorded = !matches!(authorization.cause, AttachmentCause::Initial);
-            let cause = authorization.cause;
+            let (cause, actor) = match &state.attachment {
+                AttachmentState::Authorized(authority) => {
+                    authority.cancelled.send_replace(true);
+                    (authority.cause, authority.actor.clone())
+                }
+                _ => unreachable!("matching authorization"),
+            };
+            let recorded = !matches!(cause, AttachmentCause::Initial);
             state.attachment_generation += 1;
             let generation = state.attachment_generation;
             state.attachment = AttachmentState::Abandoning {
                 generation,
                 recorded,
             };
-            let record = AttachmentAuditRecord::new(
-                self.session_id.clone(),
-                authorization.attachment_generation,
-                AttachmentAuditStage::Waiting,
-                AttachmentAuditStage::Absent,
-                AttachmentAuditCause::AuthorizationAbandoned,
-                authorization.actor.clone(),
-            );
+            let record = AttachmentAuditRecord {
+                session_id: self.session_id.clone(),
+                generation: authorization.attachment_generation,
+                before: AttachmentAuditStage::Waiting,
+                after: AttachmentAuditStage::Absent,
+                cause: AttachmentAuditCause::AuthorizationAbandoned,
+                actor,
+            };
             let (completion, result) = watch::channel(None);
             state.attachment_evidence.push(AttachmentEvidenceSlot {
                 generation: authorization.attachment_generation,
@@ -726,7 +806,7 @@ impl SessionLifecycle {
         &self,
         generation: u64,
         attached: AttachedProvider,
-    ) -> Result<watch::Sender<Option<Result<(), AgentError>>>, Box<AttachedProvider>> {
+    ) -> Result<(AttachmentAuditRecord, AttachmentEvidenceCompletion), Box<AttachedProvider>> {
         let mut state = self.state.lock().expect("session lifecycle");
         if state.attachment_generation != generation
             || !matches!(state.work_status, WorkStatus::Open)
@@ -734,15 +814,24 @@ impl SessionLifecycle {
         {
             return Err(Box::new(attached));
         }
-        let cause = match &state.attachment {
-            AttachmentState::Starting { cause, .. } => *cause,
+        let (cause, actor) = match &state.attachment {
+            AttachmentState::Starting { cause, actor, .. } => (*cause, actor.clone()),
             _ => unreachable!("matching starting attachment"),
+        };
+        let record = AttachmentAuditRecord {
+            session_id: self.session_id.clone(),
+            generation,
+            before: AttachmentAuditStage::Starting,
+            after: AttachmentAuditStage::ContextPublished,
+            cause: AttachmentAuditCause::Published,
+            actor: actor.clone(),
         };
         state.provider_ready = false;
         state.automatic_recovery_ready = false;
         state.attachment = AttachmentState::Attached {
             generation,
             cause,
+            actor,
             provider: attached,
         };
         let (completion, result) = watch::channel(None);
@@ -752,7 +841,7 @@ impl SessionLifecycle {
             result,
         });
         self.changed.send_replace(());
-        Ok(completion)
+        Ok((record, completion))
     }
     pub(super) fn acknowledge_attachment_publication(&self, generation: u64) -> bool {
         let mut state = self.state.lock().expect("session lifecycle");
@@ -772,7 +861,7 @@ impl SessionLifecycle {
         code: AttachmentFailureCode,
         error: AgentError,
         recorded_context: bool,
-    ) -> Result<Option<AttachmentEvidenceCompletion>, ()> {
+    ) -> Result<Option<(AttachmentAuditRecord, AttachmentEvidenceCompletion)>, ()> {
         let mut state = self.state.lock().expect("session lifecycle");
         if state.attachment_generation == generation
             && matches!(state.attachment,
@@ -780,14 +869,31 @@ impl SessionLifecycle {
                 | AttachmentState::Attached { generation: current, .. }
                 if current == generation)
         {
-            state.provider_ready = false;
-            let (recorded, cause) = match &state.attachment {
+            let (recorded, cause, before, actor) = match &state.attachment {
                 AttachmentState::Starting {
-                    recorded, cause, ..
-                } => (*recorded || recorded_context, *cause),
-                AttachmentState::Attached { cause, .. } => (true, *cause),
-                _ => unreachable!("matching starting attachment"),
+                    recorded,
+                    cause,
+                    actor,
+                    ..
+                } => (
+                    *recorded || recorded_context,
+                    *cause,
+                    AttachmentAuditStage::Starting,
+                    actor.clone(),
+                ),
+                AttachmentState::Attached { cause, actor, .. } => (
+                    true,
+                    *cause,
+                    if state.provider_ready {
+                        AttachmentAuditStage::Attached
+                    } else {
+                        AttachmentAuditStage::ContextPublished
+                    },
+                    actor.clone(),
+                ),
+                _ => unreachable!("matching attachment attempt"),
             };
+            state.provider_ready = false;
             state.attachment = AttachmentState::Failed {
                 failure: AttachmentFailure::new(code, generation, cause, error),
                 recorded,
@@ -801,7 +907,15 @@ impl SessionLifecycle {
                     transition: AttachmentEvidenceTransition::Failed,
                     result,
                 });
-                Some(completion)
+                let record = AttachmentAuditRecord {
+                    session_id: self.session_id.clone(),
+                    generation,
+                    before,
+                    after: AttachmentAuditStage::Failed,
+                    cause: AttachmentAuditCause::Failed,
+                    actor,
+                };
+                Some((record, completion))
             };
             self.changed.send_replace(());
             Ok(completion)
@@ -1520,17 +1634,17 @@ impl SessionLifecycle {
                 None => AttachmentState::Absent { recorded },
             };
             if let Some((generation, before, attachment_cause)) = closing_attachment {
-                let record = AttachmentAuditRecord::new(
-                    self.session_id.clone(),
+                let record = AttachmentAuditRecord {
+                    session_id: self.session_id.clone(),
                     generation,
                     before,
-                    AttachmentAuditStage::Absent,
-                    AttachmentAuditCause::Closed,
-                    match &request {
+                    after: AttachmentAuditStage::Absent,
+                    cause: AttachmentAuditCause::Closed,
+                    actor: match &request {
                         SessionCloseRequest::Explicit(actor) => Some(actor.clone()),
                         _ => None,
                     },
-                );
+                };
                 let (completion, result) = watch::channel(None);
                 state.attachment_evidence.push(AttachmentEvidenceSlot {
                     generation,

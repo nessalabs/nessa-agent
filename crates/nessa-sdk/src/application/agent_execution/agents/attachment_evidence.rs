@@ -37,6 +37,12 @@ impl AttachmentAttemptFailure {
             facts: vec![(error, source)],
         }
     }
+    pub(super) fn attachment_audit_failed(&self, generation: u64) -> bool {
+        self.facts.iter().any(|(_, source)| {
+            matches!(source,
+            AttachmentFailureSource::Transition(current, _) if *current == generation)
+        })
+    }
     pub(super) fn error(&self) -> AgentError {
         Self::combine(self.facts.iter().map(|(error, _)| error.clone()))
             .expect("attachment failure has at least one fact")
