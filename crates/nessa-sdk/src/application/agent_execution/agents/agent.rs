@@ -40,6 +40,7 @@ use crate::application::agent_execution::sessions::{
     SessionManager, StorageError,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
+use crate::application::agent_execution::traces::GenAiSpan;
 use crate::domain::agent_execution::executions::{Initiation, Initiator, ToolChecking};
 use crate::domain::agent_execution::permissions::{
     CustomPermissionCancellationReason, PermissionAuthorityError, PermissionCancellationReason,
@@ -65,6 +66,36 @@ use std::{
     task::Poll,
 };
 use tokio::sync::{broadcast, watch, Mutex};
+
+fn hook_verdict_label(verdict: &ToolVerdict) -> &'static str {
+    match verdict {
+        ToolVerdict::Allow => "allow",
+        ToolVerdict::Stopped => "stopped",
+        ToolVerdict::Refuse(refusal) => match refusal.failure() {
+            Some(HookFailureKind::Error) => "error",
+            Some(HookFailureKind::Panic) => "panic",
+            Some(HookFailureKind::Timeout) => "timeout",
+            Some(HookFailureKind::Busy) => "busy",
+            None => "refuse",
+        },
+    }
+}
+
+/// Removes a grant note that no agent span consumed.
+///
+/// The note is taken before dispatch so a turn that does start still has it
+/// when the span closes. This runs when the invocation future is finished,
+/// which is after that close, or after a failure that never opened the turn.
+struct UnstartedGrant<'a> {
+    agent: &'a Agent,
+    execution_id: ExecutionId,
+}
+
+impl Drop for UnstartedGrant<'_> {
+    fn drop(&mut self) {
+        self.agent.retire_grant_trace(&self.execution_id);
+    }
+}
 
 // All observation and timer saves use this same supervisor-owned wait. Evidence
 // remains locked by the manager's one save future while ingress is paused.
@@ -383,6 +414,55 @@ impl Agent {
     /// receipt, or provider outcome to a transcript.
     pub fn active_execution_id(&self) -> Option<ExecutionId> {
         self.inner.lifecycle.active()
+    }
+    /// Finished GenAI spans for `conversation_id`, in the order they closed.
+    ///
+    /// Empty when this agent's provider does not record traces, or when that
+    /// conversation has no finished turn yet. A turn still running is absent
+    /// until its agent span closes. This does not call the provider.
+    pub fn read_traces(&self, conversation_id: &str) -> Vec<GenAiSpan> {
+        self.inner
+            .provider
+            .traces()
+            .map(|store| store.read(conversation_id))
+            .unwrap_or_default()
+    }
+    fn trace_conversation(&self) -> &str {
+        self.inner.manager.id().as_str()
+    }
+    fn note_grant_trace(&self, execution_id: &ExecutionId, submitter: &Submitter) -> bool {
+        let Some(store) = self.inner.provider.traces() else {
+            return false;
+        };
+        let Initiator::Grant(grant) = submitter.initiation.initiator() else {
+            return false;
+        };
+        let checked = submitter.initiation.tools() == ToolChecking::Checked;
+        store.note_grant(
+            self.trace_conversation(),
+            execution_id.as_str(),
+            grant.grant(),
+            grant.policy_revision(),
+            checked,
+        );
+        true
+    }
+    fn retire_grant_trace(&self, execution_id: &ExecutionId) {
+        let Some(store) = self.inner.provider.traces() else {
+            return;
+        };
+        store.retire(self.trace_conversation(), execution_id.as_str());
+    }
+    fn note_hook_trace(&self, execution_id: &str, verdict: &str) {
+        let Some(store) = self.inner.provider.traces() else {
+            return;
+        };
+        store.note_hook(
+            self.trace_conversation(),
+            execution_id,
+            "before_permission_review",
+            verdict,
+        );
     }
     /// Whether the attached provider can cancel one turn without closing the session.
     /// False when nothing is attached. This reads no provider I/O.
@@ -1236,6 +1316,14 @@ impl Agent {
         work: &WorkPermit,
     ) -> Result<ExecutionOutcome, AgentError> {
         let id = input.execution_id.clone();
+        // Only a grant note is retired. A hook note on a turn that was not
+        // started under a grant must survive until its agent span closes.
+        let _retire_unstarted_grant =
+            self.note_grant_trace(&id, &submitter)
+                .then(|| UnstartedGrant {
+                    agent: self,
+                    execution_id: id.clone(),
+                });
         // Close can retire the attachment after this invocation has acquired its
         // work permit. Keep panic recovery's observation owner when it is still
         // available, but never let that optional drain bypass persistence of the
@@ -1921,6 +2009,10 @@ impl Agent {
                                     },
                                 )
                                 .await;
+                                self.note_hook_trace(
+                                    input.execution_id.as_str(),
+                                    hook_verdict_label(&decision.verdict),
+                                );
                                 events = attached.events.lock().await;
                             }
                             let review_id = remembered_review_id(&event, &input.execution_id);
@@ -2813,5 +2905,16 @@ mod hook_wait_tests {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             assert!(!entered.load(Ordering::SeqCst), "the hook did not run");
         });
+    }
+
+    #[test]
+    fn a_refusal_that_says_panic_is_not_a_panic() {
+        use crate::domain::agent_execution::permissions::RefusalOutcome;
+        let forged = ToolVerdict::refuse("hook failed: panic", RefusalOutcome::Continue);
+        assert_eq!(hook_verdict_label(&forged), "refuse");
+        assert_eq!(
+            hook_verdict_label(&ToolVerdict::hook_failed(HookFailureKind::Panic)),
+            "panic"
+        );
     }
 }

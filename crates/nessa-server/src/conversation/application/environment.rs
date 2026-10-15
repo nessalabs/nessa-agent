@@ -52,6 +52,7 @@ use nessa_sdk::application::agent_execution::{
         CurrentLease, CurrentLeaseState, LeaseCommit, LeaseRecord, LeaseRecordError, PublishedFile,
         SessionManager,
     },
+    traces::LocalTraceStore,
 };
 use nessa_sdk::domain::{
     agent_execution::{
@@ -572,6 +573,9 @@ impl AgentProvider for LeaseFence {
     }
     fn capabilities(&self) -> &EffectiveCapabilities {
         self.inner.capabilities()
+    }
+    fn traces(&self) -> Option<Arc<LocalTraceStore>> {
+        self.inner.traces()
     }
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         if self.state().phase != FencePhase::Live {

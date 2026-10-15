@@ -21,6 +21,7 @@ use nessa_sdk::{
             ProviderOpenFuture, ProviderOpenRequest, ProviderSessionDeleter,
             ProviderSessionDeletionFuture,
         },
+        traces::LocalTraceStore,
     },
     domain::{
         agent_execution::{prompts::SystemPrompt, sessions::ExecutionSessionId},
@@ -51,6 +52,8 @@ pub struct CredentialedClaudeProvider {
     credentials: Arc<dyn AgentCredentialSource>,
     identity: ProviderIdentity,
     capabilities: EffectiveCapabilities,
+    /// The store every binding this factory builds records into.
+    traces: Arc<LocalTraceStore>,
     /// Every binding a deletion launched, kept until it has settled.
     deleting: LaunchedDeletions<ClaudeAcpProvider>,
 }
@@ -84,6 +87,7 @@ impl CredentialedClaudeProvider {
             credentials,
             identity,
             capabilities,
+            traces: LocalTraceStore::new(),
             deleting: LaunchedDeletions::default(),
         })
     }
@@ -128,6 +132,7 @@ impl CredentialedClaudeProvider {
             .map_err(ProviderOpenError::no_resources)?
             .with_system_prompt(self.prompt.clone())
             .with_native_hooks(self.native_hooks.clone())
+            .with_traces(self.traces.clone())
             .with_approval_mode(self.approval_mode)
             .map_err(ProviderOpenError::no_resources)
     }
@@ -168,6 +173,10 @@ impl AgentProvider for CredentialedClaudeProvider {
 
     fn capabilities(&self) -> &EffectiveCapabilities {
         &self.capabilities
+    }
+
+    fn traces(&self) -> Option<Arc<LocalTraceStore>> {
+        Some(self.traces.clone())
     }
 
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
@@ -333,10 +342,13 @@ mod tests {
         .with_approval_mode(ApprovalMode::Auto)
         .unwrap();
         assert_eq!(provider.approval_mode(), Some(ApprovalMode::Auto));
-        assert_eq!(
-            provider.current().await.unwrap().approval_mode(),
-            Some(ApprovalMode::Auto)
-        );
+        let first = provider.current().await.unwrap();
+        let second = provider.current().await.unwrap();
+        assert_eq!(first.approval_mode(), Some(ApprovalMode::Auto));
+        assert_eq!(second.approval_mode(), Some(ApprovalMode::Auto));
+        let store = provider.traces().unwrap();
+        assert!(Arc::ptr_eq(&store, &first.traces().unwrap()));
+        assert!(Arc::ptr_eq(&store, &second.traces().unwrap()));
     }
 
     #[test]

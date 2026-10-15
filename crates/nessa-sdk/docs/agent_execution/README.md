@@ -17,6 +17,7 @@ separate proposed work. Local snapshots and submission retry recovery are implem
 | [Prompts](prompts.md) | Immutable system instructions, contribution provenance, and new user input |
 | [Tools](tools.md) | Immutable sparse updates, observed snapshots, and review input |
 | [Transport](transport.md) | ACP dispatch, framing, event delivery, limits, and process cleanup |
+| [GenAI traces](traces.md) | Spans a turn records, and where the `nessa.*` attributes are defined |
 | [Claude provider](../claude-acp.md) | Supported native profile, installation, composition, and live verification |
 | [Codex provider](../codex-acp.md) | What is Codex's own: ordered session configuration, its read-only preset, and what that preset does not buy |
 | [Opencode provider](../opencode-acp.md) | What is Opencode's own: a profile written from a recording, private process configuration, and the permission policy its launch pins |
@@ -33,7 +34,7 @@ host --> Agent --> SessionManager --> SessionStorageLease
 Arrows show calls. Agent owns invocation and controls. Composition injects the
 provider, manager/storage, and required permission audit sink.
 Application feature modules are `agents`, `subagents`, `providers`, `sessions`, `hooks`,
-`executions`, `permissions`, `commands`, and `tools`. Domain features retain their existing
+`executions`, `permissions`, `commands`, `tools`, and `traces`. Domain features retain their existing
 live session, execution, tool, permission, and prompt boundaries, plus the subagent
 lifetime graph. Gateway spawn, product protocol, and desktop relationship views are
 not part of this SDK slice.
