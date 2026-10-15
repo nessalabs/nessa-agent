@@ -50,6 +50,7 @@ pub enum ToolKind {
     /// A provider activity outside the recognized categories.
     Other,
 }
+
 /// Last provider-reported progress; completion does not independently verify effects.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolStatus {

@@ -3,6 +3,25 @@ use super::*;
 use crate::domain::agent_execution::tools::ToolObservation;
 use serde_json::json;
 #[test]
+fn every_kind_spelling_round_trips() {
+    for kind in [
+        ToolKind::Read,
+        ToolKind::Edit,
+        ToolKind::Search,
+        ToolKind::Fetch,
+        ToolKind::Execute,
+        ToolKind::Think,
+        ToolKind::Delete,
+        ToolKind::Move,
+        ToolKind::SwitchMode,
+        ToolKind::Other,
+    ] {
+        assert_eq!(kind_from_spelling(kind_spelling(kind)), Some(kind));
+    }
+    assert_eq!(kind_from_spelling("exec_command"), None);
+}
+
+#[test]
 fn standard_tool_updates_preserve_sparse_content_without_provider_metadata() {
     let full = tool_call(
         &json!({"toolCallId":"read", "title":"Inspect file", "kind":"read",

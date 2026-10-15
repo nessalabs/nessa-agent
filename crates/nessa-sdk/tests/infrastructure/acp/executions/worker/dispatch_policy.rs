@@ -1,5 +1,6 @@
 //! Ready wire policy evidence precedes prompt writes, including native steering.
 use super::*;
+use crate::application::agent_execution::traces::{ContentCapture, LocalTraceStore, TraceRecorder};
 use crate::application::agent_execution::{
     agents::ProviderDiagnostic,
     executions::{ExecutionRequest, SubmissionMode},
@@ -320,6 +321,7 @@ async fn worker_with_ready_frames_boundary(
                 crate::application::agent_execution::executions::NativeHooksLaunchCause::Open,
             session_key: None,
             hold_remembered_allows: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            traces: TraceRecorder::new(LocalTraceStore::new(), ContentCapture::off()),
         },
         sender,
         close,

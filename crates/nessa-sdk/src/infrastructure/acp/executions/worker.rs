@@ -46,6 +46,9 @@ use crate::application::agent_execution::providers::{
     ProviderOperationFailure, ProviderOperationResult, ProviderSessionState, ResourceCleanup,
     SessionCloseRequest, SteeringOutcome,
 };
+use crate::application::agent_execution::traces::{
+    LocalTraceStore, PermissionFact, TraceRecorder, TurnIdentity,
+};
 use crate::domain::agent_execution::executions::{
     ExecutionId, ExecutionOutcome, MessageChunk, MessageId,
 };
@@ -67,6 +70,7 @@ use crate::infrastructure::{
     process::{ProcessOutput, ProcessScope},
 };
 use serde_json::{json, Value};
+use std::time::Duration;
 use std::{
     collections::{HashMap, VecDeque},
     future::{poll_fn, Future},
@@ -534,6 +538,8 @@ struct Worker<P> {
     launch_cause: NativeHooksLaunchCause,
     /// The conversation this process was opened for, when the open named one.
     session_key: Option<String>,
+    /// Spans for the turns this process runs. Recording never fails the turn.
+    traces: TraceRecorder,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -558,6 +564,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
     launch_cause: NativeHooksLaunchCause,
     session_key: Option<String>,
     hold_remembered_allows: Arc<AtomicBool>,
+    traces: Arc<LocalTraceStore>,
 ) {
     let reader = Reader::new(
         scope.stdout.take().expect("owned stdout"),
@@ -609,6 +616,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         launch_id,
         launch_cause,
         session_key,
+        traces: TraceRecorder::new(traces.clone(), traces.capture()),
     };
     let mut execution = None;
     let startup_started = worker.config.clock.now();
@@ -899,6 +907,7 @@ impl<P: AcpProfile> Worker<P> {
                     failure = Some(error);
                 }
             }
+            self.traces.abandon(self.trace_now());
         }
         let resources = match physical {
             Ok(outcome) => recovery.confirm_physical(outcome).await.resources().clone(),
@@ -1877,6 +1886,7 @@ impl<P: AcpProfile> Worker<P> {
             return Ok(());
         }
         let deadline = prompt.deadline;
+        self.traces.accept_usage_before_turn();
         let readiness = self
             .drain_ready_before_dispatch(execution, &DispatchCaller::Execution(&reply), deadline)
             .await;
@@ -1894,13 +1904,16 @@ impl<P: AcpProfile> Worker<P> {
                 ))
             };
             let _ = reply.send(report);
+            self.traces.release_usage_before_turn();
             return readiness.map(|_| ());
         }
         if reply.is_closed() {
+            self.traces.release_usage_before_turn();
             return Ok(());
         }
         if self.steering.is_some() {
             let _ = reply.send(ProviderExecutionReply::Rejected(AgentError::Busy));
+            self.traces.release_usage_before_turn();
             return Ok(());
         }
         let DispatchedPrompt {
@@ -1911,16 +1924,24 @@ impl<P: AcpProfile> Worker<P> {
         let _budget = images.take_charge();
         if let Err(error) = self.profile.validate_execution(&input, &self.capabilities) {
             let _ = reply.send(ProviderExecutionReply::Rejected(error));
+            self.traces.release_usage_before_turn();
             return Ok(());
         }
         let blocks = match self.prompt_blocks(&input.user_message, images) {
             Ok(blocks) => blocks,
             Err(error) => {
                 let _ = reply.send(ProviderExecutionReply::Rejected(error));
+                self.traces.release_usage_before_turn();
                 return Ok(());
             }
         };
-        let id = self.pending_id()?;
+        let id = match self.pending_id() {
+            Ok(id) => id,
+            Err(error) => {
+                self.traces.release_usage_before_turn();
+                return Err(error.into());
+            }
+        };
         let frame = match json_rpc::encode(
             json_rpc::request(
                 id,
@@ -1932,12 +1953,19 @@ impl<P: AcpProfile> Worker<P> {
             Ok(frame) => frame,
             Err(error) => {
                 let _ = reply.send(ProviderExecutionReply::Rejected(error));
+                self.traces.release_usage_before_turn();
                 return Ok(());
             }
+        };
+        let user_text = if self.traces.captures_content() {
+            input.user_message.text_str().to_owned()
+        } else {
+            String::new()
         };
         let execution_id = input.execution_id;
         if let Err(error) = execution.begin_execution(execution_id.clone()) {
             let _ = reply.send(ProviderExecutionReply::Rejected(error));
+            self.traces.release_usage_before_turn();
             return Ok(());
         }
         self.sequence = id;
@@ -1946,13 +1974,18 @@ impl<P: AcpProfile> Worker<P> {
         self.active = Some(ActiveExecution {
             first_response_started: Some(self.config.clock.now()),
             id,
-            execution_id,
+            execution_id: execution_id.clone(),
             reply,
             deadline,
         });
         self.provider_result = None;
         self.profile.begin_execution();
-        self.send_encoded(frame, deadline).await.map_err(Into::into)
+        if let Err(error) = self.send_encoded(frame, deadline).await {
+            self.traces.release_usage_before_turn();
+            return Err(WorkerFailure::from(error));
+        }
+        self.begin_trace(&execution_id, &user_text);
+        Ok(())
     }
     /// Send one `_session/steering` request for `prompt`, after applying
     /// provider evidence that is already readable.
@@ -2262,6 +2295,18 @@ impl<P: AcpProfile> Worker<P> {
                 return Ok(());
             }
         };
+        if let PermissionStateView::Answered { decision, .. } = resolution.request().state() {
+            self.traces.permission(
+                self.trace_now(),
+                PermissionFact::Answered {
+                    id: resolution.request().id().as_str().to_owned(),
+                    tool_id: resolution.request().tool_id().as_str().to_owned(),
+                    effect: decision.effect().as_str().to_owned(),
+                    decider: super::gen_ai::permission_decider(resolution.attribution().basis())
+                        .to_owned(),
+                },
+            );
+        }
         self.armed_permissions.remove(&permission_id);
         let correlation = self.next_correlation();
         if let Err(error) = self
@@ -2522,6 +2567,9 @@ impl<P: AcpProfile> Worker<P> {
                 return Err(WorkerFailure::new(error, [id]));
             }
             PromptReply::Outcome(result) => {
+                if let Some(value) = message.result.as_ref() {
+                    self.traces.usage(super::usage::reported_usage(value));
+                }
                 self.provider_result = Some(Ok(result));
                 let active_turn = self
                     .active
@@ -2573,8 +2621,36 @@ impl<P: AcpProfile> Worker<P> {
         }
     }
     fn emit(&mut self, event: ExecutionEvent) -> Result<(), AgentError> {
+        let at = self.trace_now();
+        super::gen_ai::observe_event(&mut self.traces, at, &event);
         let result = self.events.try_send(event);
         event_publication_result(&mut self.cancellation_cause, result)
+    }
+    fn trace_now(&self) -> Duration {
+        self.config.clock.now().since_origin()
+    }
+    fn begin_trace(&mut self, execution_id: &ExecutionId, user_text: &str) {
+        let (agent_name, native_hooks) = match self.profile.native_hooks_launch() {
+            Some((name, allowed)) => (name, Some(allowed)),
+            None => ("agent", None),
+        };
+        let conversation = self
+            .session_key
+            .clone()
+            .filter(|key| !key.is_empty())
+            .unwrap_or_else(|| execution_id.as_str().to_owned());
+        self.traces.begin_turn(
+            self.trace_now(),
+            TurnIdentity::new(
+                conversation,
+                execution_id.as_str(),
+                self.capabilities.model().provider().as_str(),
+                agent_name,
+                self.capabilities.model().model_id(),
+                native_hooks,
+            ),
+            user_text,
+        );
     }
     fn check_session(
         &self,
@@ -2634,6 +2710,10 @@ impl<P: AcpProfile> Worker<P> {
                     &self.capabilities,
                     self.configured,
                 );
+            }
+            "usage_update" => {
+                self.traces.usage(super::usage::reported_usage(update));
+                return Ok(());
             }
             "agent_message_chunk" | "agent_thought_chunk" | "tool_call" | "tool_call_update" => {
                 // A stopped turn's updates have no prompt id. While a stop is
@@ -2707,7 +2787,17 @@ impl<P: AcpProfile> Worker<P> {
                 attach_forwarded(self.profile.tool_call(update)?, forwarded),
                 forwarded,
             );
-            self.emit(execution.tool_event(&target, tool)?)
+            let name = self.profile.traced_tool_name(tool.id().as_str());
+            let arguments = self
+                .traces
+                .captures_content()
+                .then(|| self.profile.traced_tool_arguments(tool.id().as_str()))
+                .flatten();
+            let fact =
+                super::gen_ai::tool_fact(name, arguments, &tool, self.traces.captures_content());
+            let event = execution.tool_event(&target, tool)?;
+            self.traces.tool(self.trace_now(), fact);
+            self.emit(event)
         }
     }
     async fn permission(

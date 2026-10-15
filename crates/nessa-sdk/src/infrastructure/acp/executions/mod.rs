@@ -26,6 +26,9 @@
 //! A partial frame waiting for more OS input does not block dispatch indefinitely;
 //! buffered decode work and task-budget exhaustion do not count as absent input.
 //! Permission audit delivery precedes successful settlement.
+//! Session updates the worker already decodes are also folded into GenAI spans
+//! (`gen_ai`). The recorder does not call the harness, and a span is never a
+//! reason to fail the turn.
 //! Diagnostic timings use `nessa_sdk::timing`: startup exchanges and the first
 //! accepted nonempty answer per dispatched prompt, measured on the injected clock.
 //! They contain identifiers and durations, not message or credential payloads.
@@ -42,7 +45,9 @@
 //! an ambiguous result retires the worker and is never treated as unconsumed input.
 pub(in crate::infrastructure::acp) mod event_queue;
 mod failure;
+mod gen_ai;
 pub(in crate::infrastructure::acp) mod prompt_content;
 pub(in crate::infrastructure::acp) mod steering;
+pub(crate) mod usage;
 mod wire;
 pub(crate) mod worker;
