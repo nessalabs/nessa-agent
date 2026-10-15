@@ -23,6 +23,7 @@ use nessa_sdk::application::agent_execution::sessions::ChangeWatchError;
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use std::task::Waker;
 use tempfile::TempDir;
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 /// How long a test waits for a frame it expects.
@@ -4369,7 +4370,7 @@ struct CatalogFixture {
     inner: SubscriptionFixture,
     connected: Arc<Mutex<Vec<String>>>,
     changes: tokio::sync::watch::Sender<u64>,
-    read: Arc<tokio::sync::Notify>,
+    read: Arc<Notify>,
 }
 
 impl CatalogFixture {
@@ -4378,7 +4379,7 @@ impl CatalogFixture {
         let connected = Arc::new(Mutex::new(Vec::new()));
         let changes = tokio::sync::watch::Sender::new(0);
         let names = connected.clone();
-        let read = Arc::new(tokio::sync::Notify::new());
+        let read = Arc::new(Notify::new());
         let observed = read.clone();
         inner.state =
             inner
@@ -4519,7 +4520,9 @@ async fn changes_while_a_catalog_frame_waits_collapse_into_one_frame() {
     let fixture = CatalogFixture::new().await;
     let mut client = fixture.connect();
     let (id, _) = fixture.subscribe(&mut client, "agents").await;
-    fixture.read.notified().await; // Consume the initial read's notification.
+    timeout(EXPECTED, fixture.read.notified())
+        .await
+        .expect("initial catalog read");
     // All real fixture/authentication/storage setup is complete. The held
     // phase uses synchronous catalog changes and the actual in-memory socket.
     tokio::time::pause();
@@ -4532,7 +4535,9 @@ async fn changes_while_a_catalog_frame_waits_collapse_into_one_frame() {
     // On this current-thread runtime the synchronous read returns to the
     // shared loop, which offers its first frame before yielding here. The
     // writer is still held, so later updates overlap an actual pending offer.
-    fixture.read.notified().await;
+    timeout(EXPECTED, fixture.read.notified())
+        .await
+        .expect("changed catalog read");
     for name in &names[1..] {
         fixture.connects(name);
     }
