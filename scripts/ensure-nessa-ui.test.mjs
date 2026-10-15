@@ -583,3 +583,32 @@ for (const field of ["exports", "typesVersions"]) {
     )
   })
 }
+
+for (const ready of [0, 1]) {
+  test(`typesVersions accepts concrete fallback ${ready} and rejects no ready alternative`, (context) => {
+    const root = makeRoot(context)
+    const pkg = join(root, ".vendor/nessa_ui", linkedWorkspacePackages[0])
+    const targets = ["./legacy.d.ts", "./current.d.ts"]
+    writeFileSync(
+      join(pkg, "package.json"),
+      JSON.stringify({ name: "fixture", typesVersions: { "*": { index: targets } } }),
+    )
+    writeFileSync(join(pkg, targets[ready]), "export declare const ready: true")
+    assert.equal(checkVendor({ root, git: fakeGit({ head: PIN }) }), null)
+    rmSync(join(pkg, targets[ready]))
+    assert.match(checkVendor({ root, git: fakeGit({ head: PIN }) }), /pnpm ui:types/)
+  })
+}
+
+test("typesVersions pattern alternatives remain outside concrete-file completeness", (context) => {
+  const root = makeRoot(context)
+  const pkg = join(root, ".vendor/nessa_ui", linkedWorkspacePackages[0])
+  writeFileSync(
+    join(pkg, "package.json"),
+    JSON.stringify({
+      name: "fixture",
+      typesVersions: { "*": { index: ["./missing.d.ts", "./dist/*.d.ts"] } },
+    }),
+  )
+  assert.equal(checkVendor({ root, git: fakeGit({ head: PIN }) }), null)
+})

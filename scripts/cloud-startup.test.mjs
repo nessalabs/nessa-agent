@@ -61,12 +61,28 @@ else if (tool === 'curl') {
     console.log('11.9.0'); process.exit(0)
   }
   const prefix = args[args.indexOf('--prefix') + 1]
-  fs.symlinkSync(fs.realpathSync(process.argv[1]), path.join(prefix, 'bin/pnpm'))
+  if (args[0] === 'uninstall') {
+    fs.rmSync(path.join(prefix,'bin/pnpm'),{force:true}); touch('pnpm-removed')
+  } else {
+    fs.symlinkSync(fs.realpathSync(process.argv[1]), path.join(prefix, 'bin/pnpm'))
+    if (exists('pnpm-removed') && !exists('fail-pnpm-repair')) fs.rmSync(marker('broken-pnpm-install'),{force:true})
+    fs.rmSync(marker('pnpm-removed'),{force:true})
+  }
 } else if (tool === 'rustup') {
-  if (args[0] === 'toolchain') touch('rust')
+  if (args[0] === 'toolchain') {
+    if (args[1] === 'uninstall') { fs.rmSync(marker('rust'),{force:true}); touch('rust-removed') }
+    else {
+      touch('rust')
+      if (exists('rust-removed') && !exists('fail-rust-repair')) fs.rmSync(marker('broken-rust-command'),{force:true})
+      fs.rmSync(marker('rust-removed'),{force:true})
+    }
+  }
   else if (!exists('rust')) process.exit(1)
   else if (args[0] === 'component') console.log('rustfmt-x86_64-unknown-linux-gnu\nclippy-x86_64-unknown-linux-gnu')
-  else console.log('rustc 1.99.1')
+  else {
+    if (args[0] === 'run' && exists('broken-rust-command') && args.slice(2,4).join(' ') === fs.readFileSync(marker('broken-rust-command'),'utf8')) process.exit(7)
+    console.log('rustc 1.99.1')
+  }
 } else if (tool === 'rustc') console.log('rustc 1.99.1')
 else if (tool === 'cargo') {
   if (args.includes('--offline') && !exists('cargo')) process.exit(1)
@@ -74,6 +90,15 @@ else if (tool === 'cargo') {
 } else if (tool === 'pnpm') {
   if (args.includes('--version')) console.log('11.9.0')
   else if (args[0] === 'install') {
+    const manifest=JSON.parse(fs.readFileSync(path.join(process.cwd(),'package.json'),'utf8'))
+    if (manifest.name === 'nessa-cloud-probe') {
+      if (exists('containing-workspace') && !args.includes('--ignore-workspace')) { touch('parent-workspace-effect'); process.exit(7) }
+      if (exists('broken-pnpm-install')) process.exit(fs.readFileSync(marker('broken-pnpm-install'),'utf8') === 'silent' ? 0 : 7)
+      const pkg=path.join(process.cwd(),'node_modules/nessa-cloud-readiness'); fs.mkdirSync(pkg,{recursive:true})
+      fs.writeFileSync(path.join(pkg,'package.json'),'{"main":"index.cjs"}');fs.writeFileSync(path.join(pkg,'index.cjs'),'module.exports = 42')
+      process.exit(0)
+    }
+    if (exists('broken-pnpm-install')) process.exit(7)
     if (args.includes('--nested-ui')) {
       if (!exists('ui-dependency')) {
         if (process.env.PNPM_CONFIG_OFFLINE === 'true') process.exit(1)
@@ -320,6 +345,12 @@ test("inherited pnpm cannot substitute for the owned binary", (t) => {
   const f = bootstrapFixture(t)
   const first = f.prepare("setup")
   assert.equal(first.status, 0, first.stderr)
+  assert.equal(
+    spawnSync(join(f.env.NESSA_CLOUD_ROOT, "node/bin/pnpm"), ["--version"], {
+      env: f.env,
+    }).status,
+    0,
+  )
   rmSync(join(f.env.NESSA_CLOUD_ROOT, "node/bin/pnpm"))
   const second = f.prepare("maintenance")
   assert.equal(second.status, 0, second.stderr)
@@ -615,7 +646,7 @@ test("npm version alone cannot hide a missing install dependency", (t) => {
   rmSync(npm)
   writeFileSync(
     npm,
-    '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 11.19.1; exit 0; fi\necho "Cannot find module @npmcli/arborist" >&2\nexit 7\n',
+    '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 11.19.1; exit 0; fi\nif [ "$1" = "uninstall" ]; then exit 0; fi\necho "Cannot find module npm/lib/commands/install.js" >&2\nexit 7\n',
   )
   chmodSync(npm, 0o755)
   rmSync(join(f.env.NESSA_CLOUD_ROOT, "node/bin/pnpm"))
@@ -656,4 +687,96 @@ test("failed npm install capability after extraction preserves prior preparation
   const failed = f.prepare("maintenance")
   assert.notEqual(failed.status, 0)
   assert.equal(readFileSync(receipt, "utf8"), prior)
+})
+
+for (const command of ["cargo check", "cargo fmt", "cargo clippy"]) {
+  test(`stable ${command} capability is exercised before reuse`, (t) => {
+    const f = bootstrapFixture(t)
+    assert.equal(f.prepare("setup").status, 0)
+    writeFileSync(join(f.root, "broken-rust-command"), command)
+    const repaired = f.prepare("maintenance")
+    assert.equal(repaired.status, 0, repaired.stderr)
+    assert.equal(f.receipt().steps.rust, "installed")
+    assert.ok(
+      f
+        .calls()
+        .some(
+          ({ tool, args }) =>
+            tool === "rustup" && args[0] === "toolchain" && args[1] === "uninstall",
+        ),
+    )
+  })
+}
+
+test("failed stable capability repair preserves prior preparation", (t) => {
+  const f = bootstrapFixture(t)
+  assert.equal(f.prepare("setup").status, 0)
+  const receipt = join(f.env.NESSA_CLOUD_ROOT, "preparation.json")
+  const previous = readFileSync(receipt, "utf8")
+  writeFileSync(join(f.root, "broken-rust-command"), "cargo fmt")
+  writeFileSync(join(f.root, "fail-rust-repair"), "")
+  const failed = f.prepare("maintenance")
+  assert.notEqual(failed.status, 0)
+  assert.equal(readFileSync(receipt, "utf8"), previous)
+})
+
+for (const failure of ["exit", "silent"]) {
+  test(`pnpm import capability repairs a ${failure} missing-worker failure`, (t) => {
+    const f = bootstrapFixture(t)
+    assert.equal(f.prepare("setup").status, 0)
+    writeFileSync(join(f.root, "broken-pnpm-install"), failure)
+    const repaired = f.prepare("maintenance")
+    assert.equal(repaired.status, 0, repaired.stderr)
+    assert.equal(f.receipt().steps.pnpm, "installed")
+  })
+}
+
+test("failed pnpm capability repair stops before checkout dependencies and preserves prior preparation", (t) => {
+  const f = bootstrapFixture(t)
+  assert.equal(f.prepare("setup").status, 0)
+  const receipt = join(f.env.NESSA_CLOUD_ROOT, "preparation.json")
+  const previous = readFileSync(receipt, "utf8")
+  writeFileSync(join(f.root, "broken-pnpm-install"), "silent")
+  writeFileSync(join(f.root, "fail-pnpm-repair"), "")
+  const offset = f.calls().length
+  const failed = f.prepare("maintenance")
+  assert.notEqual(failed.status, 0)
+  assert.equal(readFileSync(receipt, "utf8"), previous)
+  assert.equal(
+    f
+      .calls()
+      .slice(offset)
+      .filter(
+        ({ tool, args }) =>
+          tool === "pnpm" &&
+          args[0] === "install" &&
+          !args.includes("--ignore-workspace"),
+      ).length,
+    0,
+  )
+})
+
+test("npm uninstall capability is verified before reusing the bundle", (t) => {
+  const f = bootstrapFixture(t)
+  assert.equal(f.prepare("setup").status, 0)
+  const npm = join(f.env.NESSA_CLOUD_ROOT, "node/bin/npm")
+  rmSync(npm)
+  writeFileSync(
+    npm,
+    '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 11.19.1; exit 0; fi\nif [ "$1" = "install" ]; then exit 0; fi\nexit 7\n',
+  )
+  chmodSync(npm, 0o755)
+  const repaired = f.prepare("maintenance")
+  assert.equal(repaired.status, 0, repaired.stderr)
+  assert.equal(f.receipt().steps.node, "installed")
+})
+
+test("pnpm capability probe ignores a containing workspace", (t) => {
+  const f = bootstrapFixture(t)
+  writeFileSync(join(f.root, "containing-workspace"), "")
+  const prepared = f.prepare("setup")
+  assert.equal(prepared.status, 0, prepared.stderr)
+  assert.throws(() => readFileSync(join(f.root, "parent-workspace-effect")), {
+    code: "ENOENT",
+  })
 })

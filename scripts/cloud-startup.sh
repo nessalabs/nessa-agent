@@ -67,13 +67,14 @@ PY
 node_ready() {
   [ -x "$cloud_root/node/bin/node" ] &&
     [[ "$("$cloud_root/node/bin/node" --version)" == "v${node_major}."* ]] || return 1
+  local PATH="$cloud_root/node/bin:$PATH"
   local probe
   probe=$(mktemp -d) || return 1
   printf '{"private":true}\n' > "$probe/package.json" || { rm -rf "$probe"; return 1; }
+  local args=(--dry-run --offline --ignore-scripts --package-lock=false --global=false --prefix "$probe" --cache "$probe/cache")
   local result=0
-  PATH="$cloud_root/node/bin:$PATH" "$cloud_root/node/bin/npm" install \
-    --dry-run --offline --ignore-scripts --package-lock=false --global=false \
-    --prefix "$probe" --cache "$probe/cache" >/dev/null 2>&1 || result=$?
+  "$cloud_root/node/bin/npm" install "${args[@]}" >/dev/null 2>&1 &&
+    "$cloud_root/node/bin/npm" uninstall pnpm "${args[@]}" >/dev/null 2>&1 || result=$?
   rm -rf "$probe"
   return "$result"
 }
@@ -120,20 +121,69 @@ manager=$(node -p 'const p=JSON.parse(require("node:fs").readFileSync("package.j
 case "$manager" in pnpm@*) ;; *) echo 'Expected a pnpm packageManager.' >&2; exit 2 ;; esac
 wanted=${manager#pnpm@}
 wanted=${wanted%%+*}
+# A working version path can coexist with a missing pnpm import worker. Import
+# a tiny local tarball into a private store and consume its known module value.
+pnpm_ready() {
+  [ -x "$cloud_root/node/bin/pnpm" ] &&
+    [ "$("$cloud_root/node/bin/pnpm" --version)" = "$wanted" ] || return 1
+  local probe
+  probe=$(mktemp -d) || return 1
+  python3 - "$probe" <<'PY_PNPM' || { rm -rf "$probe"; return 1; }
+import io, json, pathlib, sys, tarfile
+root = pathlib.Path(sys.argv[1])
+package = {'name': 'nessa-cloud-readiness', 'version': '1.0.0', 'main': 'index.cjs'}
+with tarfile.open(root / 'dependency.tgz', 'w:gz') as archive:
+    for name, content in [('package.json', json.dumps(package)), ('index.cjs', 'module.exports = 42\n')]:
+        data = content.encode()
+        entry = tarfile.TarInfo('package/' + name)
+        entry.size, entry.mode = len(data), 0o644
+        archive.addfile(entry, io.BytesIO(data))
+(root / 'package.json').write_text(json.dumps({'name': 'nessa-cloud-probe', 'private': True, 'dependencies': {'nessa-cloud-readiness': 'file:./dependency.tgz'}}))
+PY_PNPM
+  local result=0
+  (
+    cd "$probe" &&
+      "$cloud_root/node/bin/pnpm" install --ignore-workspace --offline --ignore-scripts --lockfile=false --store-dir "$probe/store" &&
+      node -e 'if (require(process.argv[1]) !== 42) process.exit(1)' "$probe/node_modules/nessa-cloud-readiness"
+  ) >/dev/null 2>&1 || result=$?
+  rm -rf "$probe"
+  return "$result"
+}
 pnpm_status=reused
-if [ ! -x "$cloud_root/node/bin/pnpm" ] || [ "$("$cloud_root/node/bin/pnpm" --version)" != "$wanted" ]; then
+if ! pnpm_ready; then
   pnpm_status=installed
+  "$cloud_root/node/bin/npm" uninstall --global --prefix "$cloud_root/node" pnpm
   "$cloud_root/node/bin/npm" install --global --prefix "$cloud_root/node" "$manager"
+  pnpm_ready
 fi
-[ "$("$cloud_root/node/bin/pnpm" --version)" = "$wanted" ]
 [[ "$(node --version)" = "v${node_major}."* ]]
 
 bash "$cloud_root/native-build-deps.sh" webkit2gtk-driver xvfb gh
+# Component metadata is not executable readiness. Exercise the compiler, Cargo,
+# formatter and Clippy on private source, without dependencies or shared targets.
+rust_ready() {
+  local probe
+  probe=$(mktemp -d) || return 1
+  mkdir "$probe/src" &&
+    printf '[package]\nname = "nessa-cloud-readiness"\nversion = "0.0.0"\nedition = "2024"\n[workspace]\n' > "$probe/Cargo.toml" &&
+    printf 'pub fn ready() -> bool {\n    true\n}\n' > "$probe/src/lib.rs" || { rm -rf "$probe"; return 1; }
+  local result=0
+  (
+    cd "$probe" &&
+      rustup run stable cargo check --offline --target-dir "$probe/target" &&
+      rustup run stable cargo fmt --check &&
+      rustup run stable cargo clippy --offline --target-dir "$probe/target" -- -D warnings
+  ) >/dev/null 2>&1 || result=$?
+  rm -rf "$probe"
+  return "$result"
+}
 rust_status=reused
-components=$(rustup component list --toolchain stable --installed 2>/dev/null || true)
-if ! rustup run stable rustc --version >/dev/null 2>&1 || [[ "$components" != *rustfmt-* ]] || [[ "$components" != *clippy-* ]]; then
+if ! rust_ready; then
   rust_status=installed
+  # Reinstall from an absent toolchain: install alone trusts component metadata.
+  rustup toolchain uninstall stable
   rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+  rust_ready
 fi
 # Invoke the installed canonical owner against the task checkout. Its branch
 # may predate the readiness check; manifests and pin still belong to that task.

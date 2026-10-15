@@ -74,6 +74,18 @@ function declaredFiles(value) {
   return []
 }
 
+// Substitution arrays are ordered fallbacks. If a pattern participates, leave
+// that mapping to TypeScript; only fully concrete groups can be checked here.
+function declaredTypeAlternatives(value) {
+  if (Array.isArray(value)) {
+    const files = declaredFiles(value)
+    return files.length > 0 && files.length === value.length ? [files] : []
+  }
+  if (value && typeof value === "object")
+    return Object.values(value).flatMap(declaredTypeAlternatives)
+  return []
+}
+
 /**
  * Compare the vendored checkout with the pin without touching the network.
  * Checks concrete declared package entry files too. Returns null when ready, otherwise
@@ -97,17 +109,25 @@ export function checkVendor({ root, git = gitQuery } = {}) {
       readFileSync(resolve(packageRoot, "package.json"), "utf8"),
     )
     // The package owns its entry points; consumers must not copy a dist list.
-    const entries = new Set([
-      ...declaredFiles(manifest.exports),
-      ...declaredFiles(manifest.typesVersions),
-      ...declaredFiles(manifest.main),
-      ...declaredFiles(manifest.module),
-      ...declaredFiles(manifest.types),
-    ])
-    for (const entry of entries) {
-      const file = statSync(resolve(packageRoot, entry), { throwIfNoEntry: false })
-      if (!file?.isFile() || file.size === 0)
-        return `Vendored Nessa UI entry ${directory}/${entry} is missing or empty. Run \`pnpm ui:types\` to rebuild it.`
+    const entries = [
+      ...new Set([
+        ...declaredFiles(manifest.exports),
+        ...declaredFiles(manifest.main),
+        ...declaredFiles(manifest.module),
+        ...declaredFiles(manifest.types),
+      ]),
+    ].map((entry) => [entry])
+    for (const alternatives of [
+      ...entries,
+      ...declaredTypeAlternatives(manifest.typesVersions),
+    ]) {
+      const ready = alternatives.some((entry) => {
+        const file = statSync(resolve(packageRoot, entry), { throwIfNoEntry: false })
+        if (!file?.isFile() || file.size === 0) return false
+        return true
+      })
+      if (!ready)
+        return `Vendored Nessa UI entry ${directory}/${alternatives.join(" or ")} is missing or empty. Run \`pnpm ui:types\` to rebuild it.`
     }
   }
   return null
