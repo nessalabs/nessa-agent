@@ -3,7 +3,7 @@
 ## Purpose
 
 Make a product-method extension incomplete until the gateway deliberately chooses
-its handler, response lane, and paired-admission shape. This closes an extension
+its handler, response lane, execution capacity, and paired-admission shape. This closes an extension
 contract; it does not change any method's current behavior or give Rust a policy
 decision that belongs to Cedar.
 
@@ -14,15 +14,21 @@ decision that belongs to Cedar.
 
 The manifest already owns product method names, parameter types, and the Cedar
 grant asked before dispatch. Its generator publishes string constants,
-`PRODUCT_READY_METHODS`, and `action_for_method`. The gateway then makes three
+`PRODUCT_READY_METHODS`, and `action_for_method`. The gateway then makes four
 independent choices from the original string:
 
 1. `product/socket.rs` routes exact names and name prefixes to handler modules;
 2. `ResponseClass::for_method` selects Control, App, Record, or the Ordinary
-   default before work takes a lane permit; and
-3. `product/read_access.rs` selects Drive and Comment paired access from exact
+   default before work takes a lane permit;
+3. the socket separately selects server execution capacity (controls, record
+   reads, deletions, upload beginnings, artifact reads, or ordinary requests);
+   App work has no socket-owned server permit, and connection-owned paths branch
+   before these pools; and
+4. `product/read_access.rs` selects Drive and Comment paired access from exact
    names, gives every other conversation write the Write default, and separately
-   lists methods whose own read/list/follow admission is authoritative.
+   lists methods whose own read/list/follow admission is authoritative. Its share
+   handler also applies paired Share/Unshare/Shares checks after manifest-grant
+   admission.
 
 Handler modules make further exact-name choices. Watches and subscriptions have
 connection-owned dispatch before the ordinary handler; the handshake and
@@ -34,7 +40,7 @@ capacity. An invalid or saturated request can therefore be refused earlier.
 The test named `every_manifest_method_has_one_runtime_dispatch_path` proves only
 that manifest names equal the generated advertised-name list and that most names
 have a generated grant. A newly generated, granted name satisfies those checks
-without selecting a handler, a non-default lane, or paired admission. No
+without selecting a handler, a non-default lane or execution pool, or paired admission. No
 advertised method is presently known to lack a handler, and this finding was
 source inspection rather than a runtime reproduction.
 
@@ -47,7 +53,8 @@ The extension path therefore crosses these owners:
 | Authentication lifecycle | product socket | Place handshake/session/watch methods in their lifecycle path |
 | Handler route | product socket and handler module | Add a top-level route and the handler's exact method case |
 | Response capacity | product socket | Add a lane case only when the Ordinary default is wrong |
-| Paired admission shape | `product/read_access.rs` | Add to the own-check list or Drive/Comment match only when a default is wrong |
+| Execution capacity | product socket | Select a server pool; otherwise the ordinary-request pool is inherited |
+| Paired admission shape | `product/read_access.rs` | Update the own-check list, Drive/Comment choice, or compound paired share action |
 | Policy verdict | Cedar behind the access ports | Keep deciding whether the admitted principal may act |
 | Client presentation | generated client plus the consuming feature | Add the typed call and its product behavior |
 
@@ -71,21 +78,32 @@ Current source owners (reviewed at `9812c3c`):
 Generate a closed Rust `ProductMethod` enum from the existing manifest beside
 the generated method constants. Its fallible parser accepts exactly the manifest
 names; generation refuses two wire names that normalize to the same Rust variant.
-Parse each request once at the socket boundary. Do not add routing, lane, or
-paired access fields to the manifest: those are gateway behavior, not client
+Parse each request once at the socket boundary. Do not add routing, lane,
+execution-capacity or paired-access fields to the manifest: those are gateway behavior, not client
 protocol.
 
 Add one gateway-owned exhaustive classification from `ProductMethod` to a
-`MethodPlan` containing three independent typed choices:
+`MethodPlan` containing four explicit typed choices:
 
 - `Handler`: the exact lifecycle or handler-module entry point;
-- `ResponseLane`: Control, App, Record, or Ordinary; and
+- `ResponseLane`: Control, App, Record, or Ordinary;
+- `ExecutionCapacity`: Controls, RecordReads, Deletions, UploadBegins,
+  ArtifactReads, Requests, AppOwned, ConnectionOwned, or Authentication. AppOwned takes no server
+  permit here: the conversation service retains the running call's capacity
+  after socket departure. ConnectionOwned preserves watch/subscription
+  paths that branch before execution-pool admission. Authentication preserves
+  the handshake's pre-authentication owner and uses Requests for its
+  already-authenticated refusal path; and
 - `PairedAdmission`: manifest-grant admission, an existing method-owned
   read/list/follow check, Drive, Comment, catalogue Write, or lifecycle-owned
-  admission for the handshake/session/watch paths.
+  admission for the handshake/session/watch paths, plus compound
+  ManifestGrantThenShare, ManifestGrantThenUnshare and ManifestGrantThenShares
+  shapes. Those compound shapes retain the manifest grant and, for a paired
+  party, the existing checked target/grant lookup and corresponding
+  `AccessAction::Share`, `Unshare` or `Shares` question before handler effects.
 
-The names may differ during implementation, but the three fields stay explicit
-and have no `Default`. Each arm supplies the three fields directly: no
+The names may differ during implementation, but the four fields stay explicit
+and have no `Default`. Each arm supplies the four fields directly: no
 shared catch-all plan, wildcard, or prefix arm. `Handler` names an existing
 lifecycle or handler-module entry point. It deliberately classifies ownership;
 selecting a module alone does not prove the module implements that method.
@@ -102,6 +120,10 @@ well, while retaining its existing pre-authentication lifecycle and the
 `already_authenticated` response when it appears on an authenticated connection.
 
 The method plan describes which admission question to ask, not its answer.
+Compound share shapes identify both stages; their execution remains in the
+existing share-admission owner, consuming the typed shape rather than rematching
+the wire string. Transactional share policy checks remain with `ShareConversation`
+and storage; they protect writes and are not replaced by socket admission.
 Manifest grants remain generated from the manifest. Paired Drive, Comment, and
 Write remain facts supplied to `PairedAccess`; Cedar remains the sole authority
 that allows or denies them. The plan does not cache a verdict, role, grant, or
@@ -113,9 +135,9 @@ policy revision.
 | --- | --- |
 | Manifest method has no unique Rust identity | Generator collision/coverage test fails; generated-output drift check fails |
 | Generated `ProductMethod` gains a variant with no method plan | Rust compilation fails on the non-exhaustive match |
-| A method arm omits handler, lane, or paired shape | Required `MethodPlan` fields make that arm fail Rust compilation |
+| A method arm omits handler, lane, execution capacity, or paired shape | Required `MethodPlan` fields make that arm fail Rust compilation |
 | A new method silently inherits a catch-all plan | The synthetic extension compile probe fails if the unedited classifier compiles |
-| Existing method is assigned the wrong handler/lane/paired shape | Table-driven gateway tests compare the plan with reviewed expectations |
+| Existing method is assigned the wrong handler/lane/capacity/paired shape | Table-driven gateway tests compare the plan with reviewed expectations |
 | A selected handler does not implement its assigned method | Per-method handler tests reject `unknown_method`; classification compilation alone cannot detect this |
 | Generated names/actions disagree with the manifest | Generator tests and the renamed membership/action test fail |
 | Unknown input becomes known or bypasses refusal | Socket test fails before handler effects and asserts `unknown_method` after successful existing admission prerequisites |
@@ -127,8 +149,8 @@ classifier module without editing it. The expected result is a non-exhaustive-ma
 error. This proves omission detection for a new identity: it cannot inherit an
 existing plan. Required struct fields separately check completeness of the
 plan. It does not prove correct assignments or handler invocation. After a
-deliberate plan is added, focused tests assert its exact handler, lane, and paired
-shape. The
+deliberate plan is added, focused tests assert its exact handler, lane, capacity,
+and paired shape. The
 fixture must not modify checked-in generated files or the live manifest. Keep
 the classifier dependency-light enough to compile that real module with
 `rustc` in the temporary fixture; do not compile a retyped example classifier.
@@ -147,8 +169,34 @@ that admission and execution consume the selected plan.
 | Slice | Change | Behavior proof |
 | --- | --- | --- |
 | Identity | Teach the generator to emit `ProductMethod`, `as_str`, and fallible parsing, preserving current wire strings. This inert publication replaces no running classifier | Generator round trips each manifest name and refuses unknown/case-changed names and variant collisions |
-| Gateway cutover | Add the exhaustive `MethodPlan` and switch socket admission, queue classification, lifecycle routing and handler entry points to the parsed identity in the same PR. Delete `ResponseClass::for_method`, `paired_action`, the own-check string list and prefix routing as their consumers move; no merged intermediate state keeps two authorities | A reviewed per-method table checks handler/lane/paired shape; handler tests exercise each target; existing authorization, unknown-method, capacity and saturation suites pass |
+| Gateway cutover | Add the exhaustive `MethodPlan` and switch socket admission, queue/lane and execution-pool classification, lifecycle routing and handler entry points to the parsed identity in the same PR. Delete `ResponseClass::for_method`, `paired_action`, the own-check string list, execution-pool string checks, paired-share action string checks and prefix routing as their consumers move; no merged intermediate state keeps two authorities | A reviewed per-method table checks handler/lane/capacity/paired shape; handler tests exercise each target; existing authorization, unknown-method, capacity and saturation suites pass |
 | Extension proof (part of cutover) | Rename the overstated membership test and add the synthetic extension compile probe to the existing product-protocol check | A new manifest variant cannot compile against the unedited classifier; making a plan field optional/defaulted must be rejected in review and exercised by the classification tests |
+
+The implementation expectation table must cover each manifest method and all
+four choices. These current examples distinguish choices that a response lane
+alone cannot describe; the complete table belongs to the cutover's tests.
+
+| Method/path | Response lane | Execution capacity | Paired admission |
+| --- | --- | --- | --- |
+| `conversation.stop` | Control | Controls | Drive |
+| `conversation.recordsHead` | Record | RecordReads | Manifest grant plus the existing read admission |
+| `mcp.callTool` | App | AppOwned | Catalogue Write |
+| `conversation.delete` | Ordinary | Deletions | Catalogue Write |
+| `attachment.begin` | Ordinary | UploadBegins | Catalogue Write |
+| `artifact.read` | Ordinary | ArtifactReads | Manifest grant plus the existing artifact-read admission |
+| `server.health` | Ordinary | Requests | Manifest grant |
+| `conversation.share` / `.unshare` / `.shares` | Ordinary | Requests | ManifestGrantThenShare / ManifestGrantThenUnshare / ManifestGrantThenShares |
+| `conversation.watchRecords` / `.subscribe` | Ordinary | ConnectionOwned | Lifecycle watch / existing method-owned follow admission |
+| `session.authenticate` | Ordinary on authenticated path | Authentication | Lifecycle authentication / already-authenticated refusal |
+
+The explicit Authentication capacity choice retains the handshake's existing
+phase distinction: its lifecycle owner admits pre-authentication work, while an
+authenticated repeat takes the existing Requests pool and Ordinary refusal
+route. Do not encode that distinction as a second wire method or a second method classifier. Tests compare related facts
+(lane, pool, admission stages and handler path), including AppOwned capacity
+retained after socket departure and saturation of the Requests execution pool
+alongside independent Deletions, UploadBegins and ArtifactReads pools. The
+Ordinary response-slot bound still applies to those ordinary-lane methods.
 
 The following ordering cases supply the cutover's socket regression matrix.
 Each row needs a positive and refusal assertion where applicable; implementation
@@ -162,6 +210,7 @@ adds exact test names to the PR, rather than treating this design as executed pr
 | Unknown name with invalid frame, expired session or saturated Ordinary lane | Existing validation/authentication/capacity refusal ordering; no early parser response that bypasses it | Socket validation, expiry and saturation tests |
 | Ordinary or App work held while a control arrives | Control admission and bounded response delivery keep their independent capacity | Existing writer/control saturation tests plus typed-method counterpart |
 | Paired Drive, Comment, catalogue Write and own-check method | Same target, initiator and Cedar question before effects; unchanged policy verdict authority | Paired-access and socket tests |
+| Share/unshare/shares from a paired party, including a credential holding the manifest grant | Preserve both the manifest grant and the distinct paired Share/Unshare/Shares question before effects; refusing either stage prevents handler effects | Paired share admission and socket tests |
 | Watch/subscription starts, refreshes and ends | Existing connection ownership, per-batch authority checks and teardown | Watch/subscription socket tests |
 
 Each slice updates generated output and consumers together. There is one current
@@ -173,7 +222,7 @@ their existing admission owners and are read at the same boundaries as today.
 
 ## Alternatives considered
 
-**Put handler, lane, and paired access in the protocol manifest.** Rejected.
+**Put handler, lane, execution capacity, and paired access in the protocol manifest.** Rejected.
 Clients need method identity, params, and the requested grant; gateway capacity
 and routing are server implementation. Publishing them would invert ownership
 and make the manifest a universal behavior registry.
@@ -194,13 +243,15 @@ dispatch architecture. Admission and freshness retain their existing owners.
 ## Consequences
 
 Adding a method becomes intentionally noisier: regeneration creates a variant,
-and the server does not compile until all three gateway choices are reviewed.
+and the server does not compile until all four gateway choices are reviewed.
 Changing a choice remains ordinary reviewed gateway code, with table tests for
 semantic mistakes the type system cannot recognize.
 
 The gateway gains a small catalogue type and carries a parsed enum with each
 request. In exchange it deletes distributed string classification and misleading
-defaults. Unknown-method refusal and the Ordinary capacity used to deliver it
-remain unchanged; control, app, and record lane ownership and saturation behavior
+defaults. Execution pool identity stays distinct from response capacity;
+classification does not acquire permits or change their release owner.
+Unknown-method refusal and the Ordinary capacity used to deliver it remain
+unchanged; control, app, and record lane ownership and saturation behavior
 remain in the gateway. Cedar keeps all allow/deny authority. Runtime behavior is
 unchanged until a separately reviewed implementation issue performs the migration.

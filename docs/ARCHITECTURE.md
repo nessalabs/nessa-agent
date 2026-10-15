@@ -996,7 +996,7 @@ committed state. Only auth mutations serialize; network writes share no admissio
 only liveness, without product state.
 
 Currently the manifest generates method names and requested grants, while the
-gateway independently matches strings for handler routing, response lanes and
+gateway independently matches strings for handler routing, response lanes, execution capacity and
 paired-admission shape. [ADR 921](adr/todo/921-close-product-method-classification.md)
 proposes a generated closed method identity and one exhaustive gateway plan. It
 is not implemented: current runtime behavior, including unknown-method refusal
