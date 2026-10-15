@@ -37,6 +37,24 @@ impl CommandIds for FailMint {
     }
 }
 
+/// The first mint succeeds. The replay's mint fails.
+#[derive(Default)]
+struct MintOnce {
+    minted: bool,
+}
+impl CommandIds for MintOnce {
+    fn mint(&mut self) -> Result<(PhoneCommandId, ExecutionId), OutboxError> {
+        if self.minted {
+            return Err(OutboxError::Id(IntentError::EmptyId));
+        }
+        self.minted = true;
+        let command = PhoneCommandId::new("replay-draft").map_err(OutboxError::Id)?;
+        let turn =
+            ExecutionId::new("replay-turn").map_err(|_| OutboxError::Id(IntentError::EmptyId))?;
+        Ok((command, turn))
+    }
+}
+
 #[derive(Default)]
 struct SeqIds {
     next: u64,
@@ -2795,6 +2813,486 @@ fn a_lookup_turn_running_is_saved_when_the_draft_id_fails() {
     assert_eq!(events[3].outcome, running);
     assert_eq!(events[3].initiator, Initiator::Person);
     assert!(events[3].successor.is_none());
+}
+
+#[test]
+fn a_replayed_foreground_send_keeps_its_cause_when_the_draft_id_fails() {
+    let gateway = Scripted::new(
+        vec![
+            SendAnswer::Lost,
+            failure(ConversationErrorCode::TurnRunning),
+        ],
+        vec![LookupAnswer::NotFound],
+    );
+    let seen = gateway.clone();
+    let store = LeaseScript::new(LeaseCommit::UncertainOnce);
+    let saved = store.clone();
+    let mut outbox = PhoneOutbox::new(store, gateway, MintOnce::default(), clock());
+    person_hold(&mut outbox, text_intent("command-1", "keep this"));
+    let running = turn_running_outcome();
+    assert_eq!(
+        outbox.send(&command("command-1")).unwrap_err(),
+        OutboxError::Id(IntentError::EmptyId)
+    );
+    let again = outbox.send(&command("command-1")).unwrap();
+    assert_eq!(again.outcome(), running);
+    assert!(again.successor().is_none());
+    assert_eq!(seen.body().order, ["send", "lookup", "send"]);
+    assert_eq!(outbox.list().unwrap().len(), 1);
+    let (record, events) = saved.committed("command-1");
+    assert_eq!(record.outcome(), running);
+    assert_eq!(record.sends(), 2);
+    assert!(record.successor().is_none());
+    assert_eq!(
+        events.iter().map(|event| event.cause).collect::<Vec<_>>(),
+        [
+            Cause::Held,
+            Cause::Departed,
+            Cause::SendLost,
+            Cause::ForegroundSend,
+        ]
+    );
+    assert_eq!(events[3].outcome, running);
+    assert_eq!(events[3].initiator, Initiator::Person);
+    assert!(events[3].successor.is_none());
+}
+
+#[test]
+fn a_replayed_turn_running_keeps_its_cause_when_a_weaker_answer_landed_first() {
+    let dir = directory();
+    let path = path_in(&dir);
+    let gateway = Scripted::new(
+        vec![
+            SendAnswer::Lost,
+            failure(ConversationErrorCode::TurnRunning),
+        ],
+        vec![LookupAnswer::NotFound],
+    );
+    let seen = gateway.clone();
+    let mut outbox = PhoneOutbox::new(
+        PlantLookup::open(&path, PlantedAnswer::WeakerUnresolved),
+        gateway,
+        MintOnce::default(),
+        clock(),
+    );
+    person_hold(&mut outbox, text_intent("command-1", "keep this"));
+    let running = turn_running_outcome();
+    assert_eq!(
+        outbox.send(&command("command-1")).unwrap_err(),
+        OutboxError::Id(IntentError::EmptyId)
+    );
+    let again = outbox.send(&command("command-1")).unwrap();
+    assert_eq!(again.outcome(), running);
+    assert!(again.successor().is_none());
+    assert_eq!(seen.body().order, ["send", "lookup", "send"]);
+    assert_eq!(outbox.list().unwrap().len(), 1);
+    drop(outbox);
+    let mut store = SqliteIntents::open(&path).unwrap();
+    let record = store.load(&command("command-1")).unwrap().unwrap();
+    assert_eq!(record.outcome(), running);
+    assert_eq!(record.sends(), 2);
+    assert!(record.successor().is_none());
+    let events = store.events("command-1").unwrap();
+    assert_eq!(
+        events.iter().map(|event| event.cause).collect::<Vec<_>>(),
+        [
+            Cause::Held,
+            Cause::Departed,
+            Cause::SendAnswered,
+            Cause::SendLost,
+            Cause::ForegroundSend,
+        ]
+    );
+    assert_eq!(
+        events[2].outcome,
+        PhoneOutcome::Unknown(UnknownCause::Unresolved)
+    );
+    assert_eq!(events[4].outcome, running);
+    assert_eq!(events[4].initiator, Initiator::Person);
+    assert!(events[4].successor.is_none());
+}
+
+#[test]
+fn a_replayed_explicit_retry_keeps_its_cause_when_the_draft_id_fails() {
+    let gateway = Scripted::new(
+        vec![failure(ConversationErrorCode::TurnRunning)],
+        vec![LookupAnswer::NotFound],
+    );
+    let seen = gateway.clone();
+    let store = LeaseScript::new(LeaseCommit::UncertainOnce);
+    store.seed_departed(text_intent("command-1", "keep this"));
+    let saved = store.clone();
+    let mut outbox = PhoneOutbox::new(store, gateway, MintOnce::default(), clock());
+    let running = turn_running_outcome();
+    assert_eq!(
+        outbox.retry(&command("command-1")).unwrap_err(),
+        OutboxError::Id(IntentError::EmptyId)
+    );
+    let again = outbox.retry(&command("command-1")).unwrap();
+    assert_eq!(again.outcome(), running);
+    assert!(again.successor().is_none());
+    assert_eq!(seen.body().order, ["lookup", "send"]);
+    assert_eq!(outbox.list().unwrap().len(), 1);
+    let (record, events) = saved.committed("command-1");
+    assert_eq!(record.outcome(), running);
+    assert_eq!(record.sends(), 1);
+    assert!(record.successor().is_none());
+    assert_eq!(
+        events.iter().map(|event| event.cause).collect::<Vec<_>>(),
+        [
+            Cause::Held,
+            Cause::Departed,
+            Cause::Lookup,
+            Cause::ExplicitRetry,
+            Cause::ExplicitRetry,
+        ]
+    );
+    assert_eq!(
+        events[3].outcome,
+        PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+    );
+    assert_eq!(events[4].outcome, running);
+    assert_eq!(events[4].initiator, Initiator::Person);
+    assert!(events[4].successor.is_none());
+}
+
+#[test]
+fn a_failed_lease_commit_after_turn_running_is_unsaved() {
+    let gateway = Scripted::new(
+        vec![
+            failure(ConversationErrorCode::TurnRunning),
+            SendAnswer::Receipt(Delivery::Queued),
+        ],
+        vec![LookupAnswer::NotFound],
+    );
+    let seen = gateway.clone();
+    let store = LeaseScript::new(LeaseCommit::Unavailable);
+    let saved = store.clone();
+    let mut outbox = PhoneOutbox::new(store, gateway, FailMint, clock());
+    person_hold(&mut outbox, text_intent("command-1", "keep this"));
+    assert_eq!(
+        outbox.send(&command("command-1")).unwrap_err(),
+        OutboxError::Unsaved
+    );
+    let (record, events) = saved.committed("command-1");
+    assert_eq!(
+        record.outcome(),
+        PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+    );
+    assert_eq!(record.sends(), 0);
+    assert!(record.successor().is_none());
+    assert_eq!(
+        events.iter().map(|event| event.cause).collect::<Vec<_>>(),
+        [Cause::Held, Cause::Departed]
+    );
+    let again = outbox.retry(&command("command-1")).unwrap();
+    assert_eq!(again.outcome(), PhoneOutcome::Accepted);
+    assert_eq!(seen.body().order, ["send", "lookup", "send"]);
+}
+
+#[test]
+fn a_recovery_turn_running_is_saved_when_the_draft_id_fails() {
+    let dir = directory();
+    let path = path_in(&dir);
+    depart(&path, text_intent("command-1", "keep this"));
+    let gateway = Scripted::new(
+        Vec::new(),
+        vec![failure_lookup(ConversationErrorCode::TurnRunning)],
+    );
+    let seen = gateway.clone();
+    let mut outbox = open(&path, gateway, FailMint, clock()).unwrap();
+    let running = turn_running_outcome();
+    assert_eq!(
+        outbox.recover().unwrap_err(),
+        OutboxError::Id(IntentError::EmptyId)
+    );
+    let again = outbox.send(&command("command-1")).unwrap();
+    assert_eq!(again.outcome(), running);
+    assert!(again.successor().is_none());
+    assert_eq!(seen.body().order, ["lookup"]);
+    assert_eq!(outbox.list().unwrap().len(), 1);
+    drop(outbox);
+    let mut store = SqliteIntents::open(&path).unwrap();
+    let record = store.load(&command("command-1")).unwrap().unwrap();
+    assert_eq!(record.outcome(), running);
+    assert_eq!(record.sends(), 0);
+    assert!(record.successor().is_none());
+    let events = store.events("command-1").unwrap();
+    assert_eq!(
+        events.iter().map(|event| event.cause).collect::<Vec<_>>(),
+        [Cause::Held, Cause::Departed, Cause::Lookup]
+    );
+    assert_eq!(events[2].outcome, running);
+    assert_eq!(events[2].initiator, Initiator::Recovery);
+    assert!(events[2].successor.is_none());
+}
+
+fn turn_running_outcome() -> PhoneOutcome {
+    PhoneOutcome::Failed(PhoneFailure::Conversation(
+        ConversationErrorCode::TurnRunning,
+    ))
+}
+
+/// How the answer lease's commit ends.
+#[derive(Clone, Copy)]
+enum LeaseCommit {
+    /// The first finished lease rolls back. A later commit lands.
+    UncertainOnce,
+    /// The finish reports [`StoreError::Unavailable`] and publishes nothing.
+    Unavailable,
+}
+
+#[derive(Clone, Default)]
+struct LeaseBook {
+    rows: BTreeMap<String, PhoneRecord>,
+    events: BTreeMap<String, Vec<IntentEvent>>,
+}
+
+struct ScriptedLease {
+    committed: LeaseBook,
+    working: Option<LeaseBook>,
+    leased: bool,
+    finished: usize,
+    commit: LeaseCommit,
+}
+
+/// A writer lease whose commit outcome the test chooses.
+#[derive(Clone)]
+struct LeaseScript {
+    state: Arc<Mutex<ScriptedLease>>,
+}
+
+impl LeaseScript {
+    fn new(commit: LeaseCommit) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(ScriptedLease {
+                committed: LeaseBook::default(),
+                working: None,
+                leased: false,
+                finished: 0,
+                commit,
+            })),
+        }
+    }
+
+    fn seed_departed(&self, intent: PhoneIntent) {
+        let mut store = self.clone();
+        let draft = PhoneRecord::held(intent);
+        IntentStore::insert(
+            &mut store,
+            &draft,
+            IntentEvent {
+                cause: Cause::Held,
+                outcome: PhoneOutcome::Draft,
+                initiator: Initiator::Person,
+                observed_at_ms: 1,
+                successor: None,
+            },
+        )
+        .unwrap();
+        let record = draft.clone().depart().unwrap();
+        IntentStore::replace(
+            &mut store,
+            &draft,
+            &record,
+            IntentEvent {
+                cause: Cause::Departed,
+                outcome: record.outcome(),
+                initiator: Initiator::Person,
+                observed_at_ms: 1,
+                successor: None,
+            },
+        )
+        .unwrap();
+    }
+
+    fn committed(&self, id: &str) -> (PhoneRecord, Vec<IntentEvent>) {
+        let state = self.state.lock().unwrap();
+        let record = state
+            .committed
+            .rows
+            .get(id)
+            .cloned()
+            .expect("committed row");
+        let events = state.committed.events.get(id).cloned().unwrap_or_default();
+        (record, events)
+    }
+}
+
+impl IntentStore for LeaseScript {
+    fn load(&mut self, id: &PhoneCommandId) -> Result<Option<PhoneRecord>, StoreError> {
+        let state = self.state.lock().unwrap();
+        let book = visible(&state);
+        let Some(record) = book.rows.get(id.as_str()).cloned() else {
+            return Ok(None);
+        };
+        let events = book.events.get(id.as_str()).cloned().unwrap_or_default();
+        if !audit_reaches(&record, &events) {
+            return Err(StoreError::Corrupt);
+        }
+        Ok(Some(record))
+    }
+
+    fn insert(&mut self, record: &PhoneRecord, event: IntentEvent) -> Result<(), StoreError> {
+        let mut state = self.state.lock().unwrap();
+        let id = record.intent().command().as_str().to_owned();
+        let book = script_book(&mut state);
+        if book.rows.contains_key(&id) {
+            return Err(StoreError::Conflict);
+        }
+        book.events.entry(id.clone()).or_default().push(event);
+        book.rows.insert(id, record.clone());
+        Ok(())
+    }
+
+    fn replace(
+        &mut self,
+        previous: &PhoneRecord,
+        next: &PhoneRecord,
+        event: IntentEvent,
+    ) -> Result<(), StoreError> {
+        let mut state = self.state.lock().unwrap();
+        let id = next.intent().command().as_str().to_owned();
+        let book = script_book(&mut state);
+        match book.rows.get(&id) {
+            Some(stored) if stored == previous => {
+                book.events.entry(id.clone()).or_default().push(event);
+                book.rows.insert(id, next.clone());
+                Ok(())
+            }
+            _ => Err(StoreError::Conflict),
+        }
+    }
+
+    fn replace_and_insert(
+        &mut self,
+        previous: &PhoneRecord,
+        next: &PhoneRecord,
+        draft: &PhoneRecord,
+        events: &[IntentEvent],
+        draft_event: IntentEvent,
+    ) -> Result<(), StoreError> {
+        let mut state = self.state.lock().unwrap();
+        let id = next.intent().command().as_str().to_owned();
+        {
+            let book = script_book(&mut state);
+            match book.rows.get(&id) {
+                Some(stored) if stored == previous => {
+                    book.events
+                        .entry(id.clone())
+                        .or_default()
+                        .extend(events.iter().cloned());
+                    book.rows.insert(id, next.clone());
+                }
+                _ => return Err(StoreError::Conflict),
+            }
+        }
+        let draft_id = draft.intent().command().as_str().to_owned();
+        let book = script_book(&mut state);
+        if book.rows.contains_key(&draft_id) {
+            return Err(StoreError::Conflict);
+        }
+        book.events
+            .entry(draft_id.clone())
+            .or_default()
+            .push(draft_event);
+        book.rows.insert(draft_id, draft.clone());
+        Ok(())
+    }
+
+    fn list(&mut self) -> Result<Vec<PhoneRecord>, StoreError> {
+        let state = self.state.lock().unwrap();
+        let book = visible(&state);
+        let mut records: Vec<_> = book.rows.values().cloned().collect();
+        records.sort_by(|left, right| {
+            left.intent()
+                .command()
+                .as_str()
+                .cmp(right.intent().command().as_str())
+        });
+        for record in &records {
+            let events = book
+                .events
+                .get(record.intent().command().as_str())
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            if !audit_reaches(record, events) {
+                return Err(StoreError::Corrupt);
+            }
+        }
+        Ok(records)
+    }
+
+    fn events(&mut self, id: &PhoneCommandId) -> Result<Vec<IntentEvent>, StoreError> {
+        let state = self.state.lock().unwrap();
+        Ok(visible(&state)
+            .events
+            .get(id.as_str())
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn begin_exclusive(&mut self) -> Result<(), StoreError> {
+        let mut state = self.state.lock().unwrap();
+        if state.leased {
+            return Err(StoreError::Unavailable);
+        }
+        state.working = Some(state.committed.clone());
+        state.leased = true;
+        Ok(())
+    }
+
+    fn end_exclusive(&mut self) -> Result<(), StoreError> {
+        let mut state = self.state.lock().unwrap();
+        if !state.leased {
+            return Err(StoreError::Unavailable);
+        }
+        match state.commit {
+            LeaseCommit::Unavailable => Err(StoreError::Unavailable),
+            LeaseCommit::UncertainOnce if state.finished == 0 => {
+                state.finished += 1;
+                state.working = None;
+                state.leased = false;
+                Err(StoreError::Uncertain)
+            }
+            LeaseCommit::UncertainOnce => {
+                state.finished += 1;
+                if let Some(working) = state.working.take() {
+                    state.committed = working;
+                }
+                state.leased = false;
+                Ok(())
+            }
+        }
+    }
+
+    fn abort_exclusive(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        if !state.leased {
+            return;
+        }
+        state.working = None;
+        state.leased = false;
+    }
+}
+
+fn visible(state: &ScriptedLease) -> &LeaseBook {
+    state.working.as_ref().unwrap_or(&state.committed)
+}
+
+fn script_book(state: &mut ScriptedLease) -> &mut LeaseBook {
+    if state.leased {
+        state.working.as_mut().expect("open lease")
+    } else {
+        &mut state.committed
+    }
+}
+
+fn audit_reaches(record: &PhoneRecord, events: &[IntentEvent]) -> bool {
+    let recovery_hold = events
+        .first()
+        .is_some_and(|event| event.cause == Cause::Held && event.initiator == Initiator::Recovery);
+    history_reaches(record, events, recovery_hold)
 }
 
 #[test]

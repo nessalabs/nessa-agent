@@ -20,6 +20,8 @@ pub struct PhoneOutbox<S, G, I> {
     gateway: G,
     ids: I,
     clock: Arc<dyn Clock>,
+    /// This outbox opened the writer lease and has not committed or dropped it.
+    lease_open: bool,
 }
 impl<S, G, I> PhoneOutbox<S, G, I>
 where
@@ -36,6 +38,7 @@ where
             gateway,
             ids,
             clock,
+            lease_open: false,
         }
     }
 
@@ -220,19 +223,46 @@ where
         id: &PhoneCommandId,
         body: impl FnOnce(&mut Self) -> Result<LeaseBody, OutboxError>,
     ) -> Result<PhoneView, OutboxError> {
-        if self.store.begin_exclusive().is_err() {
+        if self.open_lease().is_err() {
             return self.row_or_unsaved(id);
         }
         match body(self) {
-            Ok(done) => match self.store.end_exclusive() {
+            Ok(done) => match self.finish_lease() {
                 Ok(()) => Ok(done.view),
                 Err(_) => self.replay(done),
             },
             Err(error) => {
-                self.store.abort_exclusive();
+                self.release_lease();
                 Err(error)
             }
         }
+    }
+
+    fn open_lease(&mut self) -> Result<(), StoreError> {
+        self.store.begin_exclusive()?;
+        self.lease_open = true;
+        Ok(())
+    }
+
+    /// Commit the lease this outbox opened.
+    ///
+    /// [`StoreError::Uncertain`] means the store rolled that lease back. Any
+    /// other failure drops what the store still holds.
+    fn finish_lease(&mut self) -> Result<(), StoreError> {
+        let result = self.store.end_exclusive();
+        match &result {
+            Ok(()) | Err(StoreError::Uncertain) => self.lease_open = false,
+            Err(_) => self.release_lease(),
+        }
+        result
+    }
+
+    fn release_lease(&mut self) {
+        if !self.lease_open {
+            return;
+        }
+        self.store.abort_exclusive();
+        self.lease_open = false;
     }
 
     /// The lease is held. Send only from the row committed under it.
@@ -476,6 +506,7 @@ where
                 previous.clone(),
                 failed.view(),
                 intended,
+                observed,
                 evidence,
                 by,
             )),
@@ -533,7 +564,16 @@ where
                 .store
                 .replace_and_insert(&saved, &next, &draft, &events, draft_event)
             {
-                Ok(()) => return Ok(draft_body(saved, next.view(), failed.clone(), evidence, by)),
+                Ok(()) => {
+                    return Ok(draft_body(
+                        saved,
+                        next.view(),
+                        failed.clone(),
+                        observed,
+                        evidence,
+                        by,
+                    ))
+                }
                 Err(StoreError::Conflict) => continue,
                 Err(error) => return Err(asked(OutboxError::from(error))),
             }
@@ -554,10 +594,17 @@ where
                 Written::Draft {
                     previous,
                     failed,
+                    cause,
                     evidence,
                     by,
                 } => {
-                    view = self.replay_draft(previous.clone(), failed.clone(), *evidence, *by)?;
+                    view = self.replay_draft(
+                        previous.clone(),
+                        failed.clone(),
+                        *cause,
+                        *evidence,
+                        *by,
+                    )?;
                     index += 1;
                 }
                 Written::Answer {
@@ -600,37 +647,37 @@ where
             return Err(OutboxError::Unsaved);
         };
         for _ in 0..SAVE_ATTEMPTS {
-            if self.store.begin_exclusive().is_err() {
+            if self.open_lease().is_err() {
                 return Err(OutboxError::Unsaved);
             }
             let saved = match self.committed_record(&id) {
                 Ok(row) => row,
                 Err(error) => {
-                    self.store.abort_exclusive();
+                    self.release_lease();
                     return Err(error);
                 }
             };
             let Some(Written::Answer { next, .. }) = steps.first() else {
-                self.store.abort_exclusive();
+                self.release_lease();
                 return Err(OutboxError::Unsaved);
             };
             if !saved.intent().same_bytes(next.intent()) {
-                self.store.abort_exclusive();
+                self.release_lease();
                 return Err(OutboxError::Conflict);
             }
             let stored_evidence = match self.evidence_of(&id) {
                 Ok(evidence) => evidence,
                 Err(error) => {
-                    self.store.abort_exclusive();
+                    self.release_lease();
                     return Err(error);
                 }
             };
             let Some((winning, evidence)) = counted_winner(steps.last()) else {
-                self.store.abort_exclusive();
+                self.release_lease();
                 return Err(OutboxError::Unsaved);
             };
             if !replaces(winning, evidence, saved.outcome(), stored_evidence) {
-                self.store.abort_exclusive();
+                self.release_lease();
                 return Ok(saved.view());
             }
             match self.write_counted(&saved, steps) {
@@ -648,18 +695,18 @@ where
         steps: &[Written],
     ) -> Result<PhoneView, OutboxError> {
         let Some((winner, _)) = counted_winner(steps.last()) else {
-            self.store.abort_exclusive();
+            self.release_lease();
             return Err(OutboxError::Unsaved);
         };
         let events = match self.store.events(saved.intent().command()) {
             Ok(events) => events,
             Err(error) => {
-                self.store.abort_exclusive();
+                self.release_lease();
                 return Err(OutboxError::from(error));
             }
         };
         let Some(base) = before_replaced_direct(saved, &events, winner) else {
-            self.store.abort_exclusive();
+            self.release_lease();
             return Err(OutboxError::Unsaved);
         };
         let mut previous = saved.clone();
@@ -672,11 +719,11 @@ where
                     next, cause, by, ..
                 } => {
                     let Some(record) = counted_step(&cursor, *cause, next.outcome()) else {
-                        self.store.abort_exclusive();
+                        self.release_lease();
                         return Err(OutboxError::Unsaved);
                     };
                     if let Err(error) = self.persist(&previous, &record, *cause, *by) {
-                        self.store.abort_exclusive();
+                        self.release_lease();
                         return Err(asked(error));
                     }
                     previous = record.clone();
@@ -685,16 +732,17 @@ where
                 }
                 Written::Draft {
                     failed,
+                    cause,
                     evidence,
                     by,
                     ..
                 } if offset == last => {
                     let Some(record) = counted_return(&cursor, *evidence) else {
-                        self.store.abort_exclusive();
+                        self.release_lease();
                         return Err(OutboxError::Unsaved);
                     };
                     if record.outcome() != failed.outcome() {
-                        self.store.abort_exclusive();
+                        self.release_lease();
                         return Err(OutboxError::Unsaved);
                     }
                     match self.return_to_draft(
@@ -702,31 +750,30 @@ where
                         record,
                         *by,
                         *evidence,
-                        observation_cause(*evidence, Cause::SendAnswered),
+                        observation_cause(*evidence, *cause),
                     ) {
                         Ok(body) => view = body.view,
                         Err(error) => {
-                            self.store.abort_exclusive();
+                            self.release_lease();
                             return Err(error);
                         }
                     }
                 }
                 Written::Draft { .. } => {
-                    self.store.abort_exclusive();
+                    self.release_lease();
                     return Err(OutboxError::Unsaved);
                 }
             }
         }
-        match self.store.end_exclusive() {
-            Ok(()) => Ok(view),
-            Err(_) => Err(OutboxError::Unsaved),
-        }
+        self.finish_lease().map_err(|_| OutboxError::Unsaved)?;
+        Ok(view)
     }
 
     fn replay_draft(
         &mut self,
         previous: PhoneRecord,
         failed: PhoneRecord,
+        cause: Cause,
         evidence: Evidence,
         by: Initiator,
     ) -> Result<PhoneView, OutboxError> {
@@ -747,7 +794,7 @@ where
             failed.clear_successor(),
             by,
             evidence,
-            observation_cause(evidence, Cause::SendAnswered),
+            observation_cause(evidence, cause),
         )
         .map(|body| body.view)
     }
@@ -779,9 +826,13 @@ where
         Ok(())
     }
 
-    /// The refusal is durable before the id error leaves. An open lease is
-    /// committed with it, so aborting that error does not drop the row
-    /// (`a_turn_running_refusal_is_saved_when_the_draft_id_fails`).
+    /// The refusal is durable before the id error leaves, when its commit lands.
+    ///
+    /// A send already holds the lease, so that lease commits with the refusal.
+    /// A failed commit is [`OutboxError::Unsaved`]: the row was not written
+    /// (`a_failed_lease_commit_after_turn_running_is_unsaved`). Recovery holds
+    /// no lease. Its replace already committed, and the caller hears the id
+    /// error (`a_recovery_turn_running_is_saved_when_the_draft_id_fails`).
     fn refuse_without_draft(
         &mut self,
         previous: &PhoneRecord,
@@ -795,12 +846,11 @@ where
     }
 
     fn commit_open_lease(&mut self) -> Result<(), OutboxError> {
-        match self.store.end_exclusive() {
-            Ok(()) => Ok(()),
-            Err(StoreError::Unavailable) => Ok(()),
-            Err(StoreError::Uncertain) => Err(OutboxError::Unsaved),
-            Err(error) => Err(OutboxError::from(error)),
+        if !self.lease_open {
+            return Ok(());
         }
+        self.finish_lease()
+            .map_err(|error| asked(OutboxError::from(error)))
     }
 
     /// A lost compare-and-swap keeps the row precedence selects
@@ -909,9 +959,14 @@ enum Written {
         by: Initiator,
     },
     /// `failed` has no successor yet. A replay mints the draft again.
+    ///
+    /// `cause` is the send or retry that observed `turn_running`. Replay uses
+    /// it when the second mint fails
+    /// (`a_replayed_foreground_send_keeps_its_cause_when_the_draft_id_fails`).
     Draft {
         previous: PhoneRecord,
         failed: PhoneRecord,
+        cause: Cause,
         evidence: Evidence,
         by: Initiator,
     },
@@ -941,6 +996,7 @@ fn draft_body(
     previous: PhoneRecord,
     view: PhoneView,
     failed: PhoneRecord,
+    cause: Cause,
     evidence: Evidence,
     by: Initiator,
 ) -> LeaseBody {
@@ -949,6 +1005,7 @@ fn draft_body(
         written: vec![Written::Draft {
             previous,
             failed,
+            cause,
             evidence,
             by,
         }],
