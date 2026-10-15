@@ -120,6 +120,11 @@ async fn signed_owner_phone_lost_observer_retains_late_pair_and_first_expiry_unt
     let registry = namespace.registry();
     let token = credential(&registry);
     let clock = Arc::new(Time(AtomicU64::new(SystemClock.unix_milliseconds())));
+    // A canonicalized temp path is a reparse point on Windows, which the
+    // private-directory check refuses. Unix resolves the temp alias first.
+    #[cfg(windows)]
+    let parent = namespace.root();
+    #[cfg(not(windows))]
     let parent = namespace.root().canonicalize().unwrap();
     let private = parent.join("late-private");
     nessa_local_storage::create_directory(&private).unwrap();

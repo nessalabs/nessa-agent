@@ -13,6 +13,14 @@ async fn canonical_access_sources_change_receiver_profile_and_fence_saved_read_e
     let auth = CedarPolicyEvaluator::profile_digest();
     let sources = CedarConversationAccessPolicy::profile_sources();
     let profile = CedarOwnerPhonePolicyEvaluator::receiver_profile_digest(&auth, &sources);
+    // A canonicalized temp path is a reparse point on Windows, which the
+    // private-directory check refuses. Unix resolves the temp alias first.
+    #[cfg(windows)]
+    let path = f
+        ._directory
+        .path()
+        .join("receiver-access/receiver-access.sqlite3");
+    #[cfg(not(windows))]
     let path = f
         ._directory
         .path()
@@ -73,6 +81,9 @@ async fn canonical_access_sources_change_receiver_profile_and_fence_saved_read_e
         )
     );
 
+    #[cfg(windows)]
+    let metadata_root = f._directory.path().join("profile-metadata");
+    #[cfg(not(windows))]
     let metadata_root = f
         ._directory
         .path()

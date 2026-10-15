@@ -61,6 +61,11 @@ async fn phone(
     .unwrap()
 }
 fn metadata(f: &Fixture) -> Arc<LocalConversationStore> {
+    // A canonicalized temp path is a reparse point on Windows, which the
+    // private-directory check refuses. Unix resolves the temp alias first.
+    #[cfg(windows)]
+    let root = f._directory.path().join("metadata");
+    #[cfg(not(windows))]
     let root = f._directory.path().canonicalize().unwrap().join("metadata");
     nessa_local_storage::create_directory(&root).unwrap();
     Arc::new(LocalConversationStore::open(&root.join("metadata.sqlite3")).unwrap())
