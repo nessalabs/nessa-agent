@@ -162,7 +162,9 @@ fn result_text(update: &ToolCallUpdate) -> Option<String> {
             }
         }
     }
-    (!text.is_empty()).then_some(text)
+    // Present content that renders nothing is an explicit empty result.
+    // Omitted content stays `None`, so an earlier result is left in place.
+    Some(text)
 }
 
 #[cfg(test)]
@@ -182,7 +184,7 @@ mod tests {
         PermissionOption, PermissionOptionId, PermissionOptions, PermissionScope,
     };
     use crate::domain::agent_execution::tools::{
-        McpTool, ToolCallId, ToolCallUpdate, ToolKind, ToolObservation, ToolStatus,
+        McpTool, ToolCallId, ToolCallUpdate, ToolContent, ToolKind, ToolObservation, ToolStatus,
     };
     use std::time::Duration;
 
@@ -279,6 +281,87 @@ mod tests {
             Some("websearch secret-marker")
         );
         assert_eq!(tool.name(), "execute_tool websearch secret-marker");
+    }
+
+    #[test]
+    fn an_explicit_empty_tool_result_replaces_the_one_seen_while_running() {
+        let store = LocalTraceStore::with_capture(ContentCapture::on());
+        let mut recorder = TraceRecorder::new(store.clone(), ContentCapture::on());
+        recorder.begin_turn(
+            Duration::from_millis(1),
+            TurnIdentity::new(
+                "conversation-1",
+                "execution-1",
+                "opencode",
+                "agent",
+                "model",
+                None,
+            ),
+            "",
+        );
+        let running = ToolCallUpdate::new(
+            ToolCallId::new("call-1").unwrap(),
+            None,
+            Some(ToolKind::Read),
+            Some(ToolStatus::Running),
+            None,
+            Some(vec![ToolContent::text("secret-marker")]),
+        );
+        let cleared = ToolCallUpdate::new(
+            ToolCallId::new("call-1").unwrap(),
+            None,
+            Some(ToolKind::Read),
+            Some(ToolStatus::Completed),
+            None,
+            Some(vec![]),
+        );
+        recorder.tool(
+            Duration::from_millis(2),
+            tool_fact(Some("Read".into()), None, &running, true),
+        );
+        recorder.tool(
+            Duration::from_millis(3),
+            tool_fact(Some("Read".into()), None, &cleared, true),
+        );
+        recorder.finish(Duration::from_millis(4), FinishReason::Stop);
+        let spans = store.read("conversation-1");
+        let tool = tool_span(&spans);
+        assert_eq!(tool.string("gen_ai.tool.call.result"), Some(""));
+        assert!(!format!("{tool:?}").contains("secret-marker"));
+    }
+
+    #[test]
+    fn an_explicit_empty_tool_result_is_recorded_when_nothing_preceded_it() {
+        let store = LocalTraceStore::with_capture(ContentCapture::on());
+        let mut recorder = TraceRecorder::new(store.clone(), ContentCapture::on());
+        recorder.begin_turn(
+            Duration::from_millis(1),
+            TurnIdentity::new(
+                "conversation-1",
+                "execution-1",
+                "opencode",
+                "agent",
+                "model",
+                None,
+            ),
+            "",
+        );
+        let cleared = ToolCallUpdate::new(
+            ToolCallId::new("call-1").unwrap(),
+            None,
+            None,
+            Some(ToolStatus::Completed),
+            None,
+            Some(vec![]),
+        );
+        recorder.tool(
+            Duration::from_millis(2),
+            tool_fact(Some("Read".into()), None, &cleared, true),
+        );
+        recorder.finish(Duration::from_millis(3), FinishReason::Stop);
+        let spans = store.read("conversation-1");
+        let tool = tool_span(&spans);
+        assert_eq!(tool.string("gen_ai.tool.call.result"), Some(""));
     }
 
     #[test]
