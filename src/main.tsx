@@ -127,7 +127,9 @@ function renderApplication() {
           <SessionLifecycle dependencies={dependencies} />
         </Provider>
       ) : !hasNativeHost() && environment.conversation.backend === "local" ? (
-        <BrowserApplication environment={environment} />
+        <ClipboardProvider write={writeClipboardText}>
+          <BrowserApplication environment={environment} />
+        </ClipboardProvider>
       ) : (
         panel
       )}
