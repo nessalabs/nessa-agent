@@ -259,9 +259,9 @@ mod tests {
             assert_eq!(failure, Some(super::ProductFailure::Closed(Some(reason))));
             assert_eq!(
                 failure.unwrap().connection_outcome(),
-                Some(nessa_protocol::product::handshake::connection_outcome(
-                    Some(reason)
-                ))
+                Some(nessa_protocol::product_contract::connection_outcome(Some(
+                    reason
+                )))
             );
         }
         let ordinary = EventFrame::push("conversation.changed", &json!({}), 1, 0).unwrap();
@@ -282,7 +282,7 @@ mod tests {
         );
         assert_eq!(
             super::ProductFailure::Closed(None).connection_outcome(),
-            Some(nessa_protocol::product::handshake::ConnectionOutcome::Retryable)
+            Some(nessa_protocol::product_contract::ConnectionOutcome::Retryable)
         );
         assert_eq!(super::ProductFailure::Protocol.connection_outcome(), None);
     }

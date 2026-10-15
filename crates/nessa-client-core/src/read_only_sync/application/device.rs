@@ -22,10 +22,10 @@ use nessa_auth::{
     domain::{pairing::PublicIntent, CredentialId, ResourceId},
 };
 use nessa_protocol::pairing::wire::NativePairingStatus;
-use nessa_protocol::product::handshake::{connection_outcome, ConnectionOutcome};
 use nessa_protocol::product_contract::generated::{
     CatalogueReadErrorCode, ChangeWatchErrorCode, RecordReadErrorCode,
 };
+use nessa_protocol::product_contract::{connection_outcome, ConnectionOutcome};
 use nessa_sync::replication::domain::Id;
 use std::sync::{Arc, Mutex, PoisonError};
 

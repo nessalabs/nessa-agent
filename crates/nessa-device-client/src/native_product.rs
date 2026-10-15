@@ -8,7 +8,7 @@ use nessa_client_core::product::{
 };
 use nessa_protocol::{
     pairing::MAX_PROTECTED_RESPONSE_BYTES, product::generated::ProductSessionReady,
-    product::handshake::ConnectionOutcome, product_contract::generated::SessionCloseReason,
+    product_contract::generated::SessionCloseReason, product_contract::ConnectionOutcome,
 };
 use std::{
     error::Error,

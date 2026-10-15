@@ -18,7 +18,7 @@ Auth owns a separate OwnerPhoneReadWrite class, its complete ordered capability 
 
 ## Lifecycle
 
-This table is the order for authorizing an owner phone and for the connection that follows. `SessionCloseReason` stays the wire reason. `connection_outcome` in `crates/nessa-protocol/src/product/handshake.rs` is the only projection of a reason, or of a close that carried none, into what the client does next. `retryable()` stays on the reason and is not copied into that projection. A command that already happened is idempotent success; it is not a close and it does not end the session.
+This table is the order for authorizing an owner phone and for the connection that follows. `SessionCloseReason` stays the wire reason. `connection_outcome` in `crates/nessa-protocol/src/product_contract/outcome.rs` is the only projection of a reason, or of a close that carried none, into what the client does next. `retryable()` stays on the reason and is not copied into that projection. A command that already happened is idempotent success; it is not a close and it does not end the session.
 
 A wildcard listener is published as the configured `native.advertisedAddress` on the configured port. A specific bind is published as itself. An absent listener, a configured port of zero, an unspecified address, or a wildcard with no advertised address discloses nothing. Binding port zero assigns an ephemeral port; that port is not published and is not stored in an authorization. An advertised address is a unicast host: an IPv6 link-local address is refused because the setting has no interface scope, and the IPv4 limited broadcast `255.255.255.255` is refused because a phone cannot open TCP to it. The process does not look up a route.
 

@@ -27,7 +27,7 @@ use std::{
     time::Instant,
 };
 
-use nessa_protocol::product::handshake::connection_outcome;
+use nessa_protocol::product_contract::connection_outcome;
 use nessa_protocol::product_contract::generated::SessionCloseReason;
 #[test]
 fn no_issued_record_or_closed_parent_opens_no_product() {
