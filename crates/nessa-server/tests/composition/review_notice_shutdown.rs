@@ -5,15 +5,16 @@ use crate::conversation::application::{
     SelectReviewNotice,
 };
 use crate::conversation::infrastructure::{DurableReviewNoticeAudit, MonotonicReviewNoticeClock};
-use nessa_auth::application::ports::CredentialEvidence;
-use nessa_auth::application::{ports::Clock, session::AuthenticateSession};
-use nessa_sdk::domain::agent_execution::{executions::ExecutionId, permissions::PermissionId};
-use std::{pin::Pin, sync::Condvar};
-use tokio::sync::{Notify, Semaphore};
-
 use crate::conversation_test_support::RecordingReviewNoticeAudit;
 use crate::core::{Outcome, ShutdownStage};
 use crate::product::HostWatchFixture;
+use nessa_auth::application::{
+    ports::{Clock, CredentialEvidence},
+    session::AuthenticateSession,
+};
+use nessa_sdk::domain::agent_execution::{executions::ExecutionId, permissions::PermissionId};
+use std::{future::Ready, pin::Pin, sync::Condvar};
+use tokio::sync::{Notify, Semaphore};
 
 #[tokio::test]
 async fn review_audit_admission_is_fenced_and_pending_metadata_prevents_confirmation() {
@@ -31,7 +32,7 @@ async fn review_audit_admission_is_fenced_and_pending_metadata_prevents_confirma
         &state,
         async { Ok(()) },
         async { Ok(()) },
-        None::<std::future::Ready<Result<(), ConversationError>>>,
+        None::<Ready<Result<(), ConversationError>>>,
         async { Ok(()) },
         async { Ok(()) },
         Duration::from_secs(2),
@@ -76,7 +77,7 @@ async fn review_audit_ready_completion_wins_expired_deadline() {
             Ok(())
         },
         async { Ok(()) },
-        None::<std::future::Ready<Result<(), ConversationError>>>,
+        None::<Ready<Result<(), ConversationError>>>,
         async { Ok(()) },
         async { Ok(()) },
         Duration::from_millis(10),
@@ -209,7 +210,7 @@ async fn review_audit_host_shutdown_joins_physical_write_and_queued_selection() 
             &state,
             async { Ok(()) },
             async { Ok(()) },
-            None::<std::future::Ready<Result<(), ConversationError>>>,
+            None::<Ready<Result<(), ConversationError>>>,
             async { Ok(()) },
             async { Ok(()) },
             Duration::from_secs(3),
@@ -277,7 +278,7 @@ async fn review_audit_cancelled_cleanup_retains_unknown_outcome() {
         async { Ok(()) },
         async { Ok(()) },
         async { Ok(()) },
-        None::<std::future::Ready<Result<(), ConversationError>>>,
+        None::<Ready<Result<(), ConversationError>>>,
         async { Ok(()) },
         async { Ok(()) },
         Duration::from_secs(30),
@@ -307,7 +308,7 @@ async fn review_audit_ready_at_zero_deadline_confirms() {
         async { Ok(()) },
         async { Ok(()) },
         async { Ok(()) },
-        None::<std::future::Ready<Result<(), ConversationError>>>,
+        None::<Ready<Result<(), ConversationError>>>,
         async { Ok(()) },
         async { Ok(()) },
         Duration::ZERO,
@@ -371,7 +372,7 @@ async fn review_audit_host_deadline_preserves_first_delivery_failure() {
         &state,
         async { Ok(()) },
         async { Ok(()) },
-        None::<std::future::Ready<Result<(), ConversationError>>>,
+        None::<Ready<Result<(), ConversationError>>>,
         async { Ok(()) },
         async { Ok(()) },
         Duration::from_millis(10),

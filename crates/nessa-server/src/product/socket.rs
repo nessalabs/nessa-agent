@@ -2445,8 +2445,9 @@ mod tests {
         ShareGrantReceipt, ShareGrants,
     };
     use crate::conversation::domain::{Capabilities, Conversation, ToolPolicy};
-    use crate::conversation::infrastructure::MonotonicReviewNoticeClock;
-    use crate::conversation::infrastructure::{LocalConversationStore, NessaRecordReadSource};
+    use crate::conversation::infrastructure::{
+        LocalConversationStore, MonotonicReviewNoticeClock, NessaRecordReadSource,
+    };
     use crate::product::ProductDependencies;
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;

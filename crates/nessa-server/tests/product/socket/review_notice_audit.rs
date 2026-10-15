@@ -1,15 +1,15 @@
 use super::*;
 use crate::conversation::application::{
     ReviewNoticeAudit, ReviewNoticeAuditCause, ReviewNoticeAuditRecord,
+    ReviewNoticeClock as AuditClock, ReviewNoticeSleep,
 };
-use crate::conversation::application::{ReviewNoticeClock as AuditClock, ReviewNoticeSleep};
 use crate::conversation::infrastructure::{DurableReviewNoticeAudit, PermissionMemory};
 use crate::conversation_test_support::{ObservedPolicy, RecordingReviewNoticeAudit};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::{collections::VecDeque, fs, sync::Condvar};
-use tokio::{sync::Notify, task::JoinHandle};
+use tokio::{runtime::Builder, sync::Notify, task::JoinHandle};
 
 const TARGET: &str = "00000000-0000-4000-8000-00000000000a";
 
@@ -1431,9 +1431,7 @@ async fn review_notice_shutdown_retains_lost_transferred_task() {
     // A runtime that is never polled drops the transferred owner before its
     // first instruction. There is no task left that could publish its result.
     let observer = tokio::task::spawn_blocking(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
+        let runtime = Builder::new_current_thread().build().unwrap();
         let entered = runtime.enter();
         let observer = admitted.record(record);
         drop(entered);

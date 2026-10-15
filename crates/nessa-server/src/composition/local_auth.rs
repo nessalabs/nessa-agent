@@ -6,7 +6,6 @@ use super::current_agent::{CurrentAgentResolver, CurrentAgentResolverInput};
 use super::opencode_profile::{EffectiveOpenCodeProfile, OpenCodeProfile};
 #[cfg(unix)]
 use super::warm_up::{CurrentOpenCodeWarmUp, PreparedRuntime};
-use crate::conversation::infrastructure::MonotonicReviewNoticeClock;
 #[cfg(unix)]
 use crate::conversation::infrastructure::NessaRecordWatches;
 #[cfg(unix)]
@@ -47,7 +46,7 @@ use crate::{
         },
         infrastructure::{
             CedarConversationAccessPolicy, DurableReviewNoticeAudit, LocalReceiverAuthority,
-            NessaCatalogueReadSource, NessaRecordReadSource,
+            MonotonicReviewNoticeClock, NessaCatalogueReadSource, NessaRecordReadSource,
         },
     },
     core::RunError,
