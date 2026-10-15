@@ -1018,6 +1018,113 @@ fn injected_wake_panic_after_admission_returns_the_ticket() {
 }
 
 #[test]
+fn injected_wake_revision_panic_is_a_typed_open_failure() {
+    struct PanicRevision {
+        inner: ThreadProductWake,
+    }
+    impl ProductWake for PanicRevision {
+        fn revision(&self) -> u64 {
+            panic!("injected revision");
+        }
+        fn wait(&self, revision: u64, timeout: Duration) {
+            self.inner.wait(revision, timeout)
+        }
+        fn wake(&self) {
+            self.inner.wake()
+        }
+    }
+    let (endpoint, peer, seen, release) = fixtures::held_opening();
+    let session = ProductSession::prepare(
+        endpoint.address,
+        endpoint.identity,
+        endpoint.pin,
+        "credential".into(),
+        "phone-instance".into(),
+        Arc::new(LocalProductConnector),
+        Arc::new(fixtures::Time(Instant::now())),
+        Arc::new(PanicRevision {
+            inner: ThreadProductWake::default(),
+        }),
+        limits(1),
+    );
+    session.start().unwrap();
+    receive(&seen);
+    assert!(matches!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| session.wait_ready()))
+            .expect("revision panic must not escape wait_ready"),
+        Err(ProductFailure::WorkerPanicked)
+    ));
+    assert!(matches!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| session.events(u64::MAX)))
+            .expect("revision panic must not escape events"),
+        Err(ProductFailure::WorkerPanicked)
+    ));
+    assert_eq!(session.failure(), Some(ProductFailure::WorkerPanicked));
+    assert_eq!(session.close(), Err(ProductFailure::WorkerPanicked));
+    drop(release);
+    peer.join();
+}
+
+#[test]
+fn injected_wake_wait_panic_settles_the_ticket_and_events() {
+    struct PanicWait {
+        armed: Arc<AtomicBool>,
+        inner: ThreadProductWake,
+    }
+    impl ProductWake for PanicWait {
+        fn revision(&self) -> u64 {
+            self.inner.revision()
+        }
+        fn wait(&self, revision: u64, timeout: Duration) {
+            if self.armed.load(Ordering::SeqCst) {
+                panic!("injected wait");
+            }
+            self.inner.wait(revision, timeout)
+        }
+        fn wake(&self) {
+            self.inner.wake()
+        }
+    }
+    let armed = Arc::new(AtomicBool::new(false));
+    let (release, held) = signal();
+    let (endpoint, peer) = peer(move |_wire| receive(&held));
+    let session = ProductSession::prepare(
+        endpoint.address,
+        endpoint.identity,
+        endpoint.pin,
+        "credential".into(),
+        "phone-instance".into(),
+        Arc::new(LocalProductConnector),
+        Arc::new(fixtures::Time(Instant::now())),
+        Arc::new(PanicWait {
+            armed: armed.clone(),
+            inner: ThreadProductWake::default(),
+        }),
+        limits(1),
+    );
+    session.start().unwrap();
+    session.wait_ready().unwrap();
+    let ticket = session.request("conversation.list", "{}").unwrap();
+    armed.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| session.events(u64::MAX)))
+            .expect("wait panic must not escape events"),
+        Err(ProductFailure::WorkerPanicked)
+    ));
+    let settlement = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ticket.wait()))
+        .expect("wait panic must not escape ticket wait");
+    assert!(matches!(
+        settlement.value(),
+        ProductCompletion::Uncertain(ProductFailure::WorkerPanicked)
+            | ProductCompletion::NotDispatched(ProductFailure::WorkerPanicked)
+    ));
+    drop(ticket);
+    release.send(()).unwrap();
+    assert_eq!(session.close(), Err(ProductFailure::WorkerPanicked));
+    peer.join();
+}
+
+#[test]
 fn injected_interrupt_panic_stays_inside_stop_and_close_still_joins() {
     struct PanicInterrupt;
     impl ProductInterrupt for PanicInterrupt {

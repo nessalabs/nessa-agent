@@ -193,20 +193,31 @@ impl Owner {
         }
         self.notify();
     }
-    /// The wake port is injected. A panic there must not unwind after admission
-    /// or cleanup has been committed: the caller still receives its ticket, and
-    /// the session failure is `WorkerPanicked` unless a decoded failure was
-    /// already recorded. This does not wake again.
+    /// The injected wake port. `revision`, `wait`, and `wake` share this
+    /// boundary. A panic records `WorkerPanicked` unless a decoded failure is
+    /// already stored, marks the session closing, and does not unwind. It does
+    /// not call the port again.
+    fn observe<T>(&self, operation: impl FnOnce() -> T) -> Result<T, ProductFailure> {
+        match catch_unwind(AssertUnwindSafe(operation)) {
+            Ok(value) => Ok(value),
+            Err(_) => {
+                let mut state = lock(&self.state);
+                state.closing = true;
+                if matches!(state.failure, None | Some(ProductFailure::Cancelled)) {
+                    state.failure = Some(ProductFailure::WorkerPanicked);
+                }
+                Err(state.failure.unwrap_or(ProductFailure::WorkerPanicked))
+            }
+        }
+    }
+    fn revision(&self) -> Result<u64, ProductFailure> {
+        self.observe(|| self.wake.revision())
+    }
+    fn wait_revision(&self, revision: u64, timeout: Duration) -> Result<(), ProductFailure> {
+        self.observe(|| self.wake.wait(revision, timeout))
+    }
     pub(super) fn notify(&self) {
-        let panicked = catch_unwind(AssertUnwindSafe(|| self.wake.wake())).is_err();
-        if !panicked {
-            return;
-        }
-        let mut state = lock(&self.state);
-        state.closing = true;
-        if matches!(state.failure, None | Some(ProductFailure::Cancelled)) {
-            state.failure = Some(ProductFailure::WorkerPanicked);
-        }
+        let _ = self.observe(|| self.wake.wake());
     }
     pub(super) fn stop(&self) {
         let interrupt = {
@@ -385,7 +396,7 @@ impl ProductSession {
     pub fn wait_ready(&self) -> Result<Arc<ProductSessionReady>, ProductFailure> {
         let owner = &self.handle.owner;
         loop {
-            let revision = owner.wake.revision();
+            let revision = owner.revision()?;
             {
                 let state = lock(&owner.state);
                 if let Some(ready) = &state.ready {
@@ -398,9 +409,7 @@ impl ProductSession {
                     return Err(ProductFailure::Cancelled);
                 }
             }
-            owner
-                .wake
-                .wait(revision, Duration::from_millis(owner.limits.poll_ms));
+            owner.wait_revision(revision, Duration::from_millis(owner.limits.poll_ms))?;
         }
     }
     /// Admit one original bounded request. Capacity covers queued, dispatched and
@@ -465,7 +474,7 @@ impl ProductSession {
     pub fn events(&self, deadline_ms: u64) -> Result<ProductEventBatch, ProductFailure> {
         let owner = &self.handle.owner;
         loop {
-            let revision = owner.wake.revision();
+            let revision = owner.revision()?;
             {
                 let mut state = lock(&owner.state);
                 if !state.events.is_empty() {
@@ -503,10 +512,10 @@ impl ProductSession {
                     }),
                 });
             }
-            owner.wake.wait(
+            owner.wait_revision(
                 revision,
                 Duration::from_millis(left.min(owner.limits.poll_ms)),
-            );
+            )?;
         }
     }
     /// Fence admission and independently interrupt blocked native I/O.
@@ -565,19 +574,37 @@ impl ProductTicket {
     pub fn wait(&self) -> ProductSettlement {
         loop {
             if let Some(owner) = self.ticket.owner.upgrade() {
-                let revision = owner.wake.revision();
+                let revision = match owner.revision() {
+                    Ok(revision) => revision,
+                    Err(_) => return self.settled_after_wake_failure(&owner),
+                };
                 if let Some(completion) = self.completion() {
                     return completion;
                 }
-                owner
-                    .wake
-                    .wait(revision, Duration::from_millis(owner.limits.poll_ms));
+                if owner
+                    .wait_revision(revision, Duration::from_millis(owner.limits.poll_ms))
+                    .is_err()
+                {
+                    return self.settled_after_wake_failure(&owner);
+                }
             } else {
                 return self
                     .completion()
                     .expect("last session joined original tickets");
             }
         }
+    }
+    fn settled_after_wake_failure(&self, owner: &Owner) -> ProductSettlement {
+        let cause = lock(&owner.state)
+            .failure
+            .unwrap_or(ProductFailure::WorkerPanicked);
+        owner.finish(cause);
+        if let Some(completion) = self.completion() {
+            return completion;
+        }
+        self.ticket
+            .complete(ProductCompletion::NotDispatched(cause));
+        self.completion().expect("wake failure settles the ticket")
     }
 }
 impl Clone for ProductTicket {
