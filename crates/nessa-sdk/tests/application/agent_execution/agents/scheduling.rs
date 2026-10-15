@@ -38,6 +38,9 @@ use std::{
 };
 use tokio::sync::{oneshot, watch};
 
+#[path = "scheduling/audit_logging.rs"]
+mod audit_logging;
+
 #[derive(Default)]
 struct SettlementPanickingAudit {
     panic_once: AtomicBool,

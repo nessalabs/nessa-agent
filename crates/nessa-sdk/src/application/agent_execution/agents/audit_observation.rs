@@ -81,7 +81,11 @@ impl AuditObserver {
         }
         .await;
         if let Err(error) = &result {
-            tracing::warn!(operation, ?error, "audit observation failed");
+            let failure = match error {
+                AuditObservationFailure::Unacknowledged(_) => "unacknowledged",
+                AuditObservationFailure::Panicked => "panicked",
+            };
+            tracing::warn!(operation, failure, "audit observation failed");
         }
         result
     }
