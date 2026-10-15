@@ -868,6 +868,24 @@ async fn review_notice_audit_sink_panic_closes_without_disclosure() {
             Arc::new(MonotonicReviewNoticeClock::new()),
         );
         let session = authenticate(&fixture.state).await;
+        let (_authority, updates) = watch::channel(session.auth_revision());
+        let (send, mut receive) = mpsc::channel(1);
+        assert_eq!(
+            forward_review_notices(
+                fixture.board.clone(),
+                send,
+                Arc::new(Semaphore::new(1)),
+                fixture.state.clone(),
+                session.clone(),
+                updates,
+            )
+            .await,
+            Err(ReviewNoticePublicationFailure::Audit(
+                ReviewNoticeAuditFailure::Panicked
+            )),
+            "the audit owner must contain and report the original sink panic"
+        );
+        assert!(receive.recv().await.is_none());
         let (socket, mut peer) = test_socket(None);
         let task = tokio::spawn(run_authenticated(socket, fixture.state.clone(), session));
         let Message::Close(Some(frame)) = timeout(Duration::from_secs(2), peer.output.recv())
