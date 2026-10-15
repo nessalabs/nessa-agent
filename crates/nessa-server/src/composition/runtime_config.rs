@@ -16,16 +16,16 @@ use std::{
     time::Duration,
 };
 
-/// A host that may be stored as `native.advertisedAddress`: one unicast
-/// address a phone can open TCP to. An IPv6 link-local address needs an
-/// interface scope, and this setting is only an `IpAddr`.
+/// A host a phone can open TCP to. Unspecified, loopback, multicast, the
+/// IPv4 this-network block `0.0.0.0/8`, the IPv4 limited broadcast, and an
+/// IPv6 link-local address are not that host.
 pub(super) fn routable_advertised_host(address: IpAddr) -> bool {
     if address.is_unspecified() || address.is_loopback() || address.is_multicast() {
         return false;
     }
     match address {
         IpAddr::V6(address) => !address.is_unicast_link_local(),
-        IpAddr::V4(address) => !address.is_broadcast(),
+        IpAddr::V4(address) => address.octets()[0] != 0 && !address.is_broadcast(),
     }
 }
 
@@ -510,6 +510,7 @@ mod tests {
             br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"224.0.0.1"}}"#,
             br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"2001:db8::1"}}"#,
             br#"{"native":{"listenAddress":"[::]:47650","advertisedAddress":"fe80::1"}}"#,
+            br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"0.0.0.1"}}"#,
             br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"255.255.255.255"}}"#,
             br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"not-an-address"}}"#,
         ] {
