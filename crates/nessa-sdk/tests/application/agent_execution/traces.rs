@@ -862,3 +862,34 @@ fn a_kind_fallback_tool_name_is_replaced_by_the_provider_name() {
     assert_eq!(name("call-2"), Some("exec_command"));
     assert_eq!(name("call-3"), Some("exec_command"));
 }
+
+#[test]
+fn an_exporter_panic_keeps_the_span_and_later_exports() {
+    let store = LocalTraceStore::new();
+    struct Boom {
+        seen: Mutex<Vec<String>>,
+    }
+    impl SpanExporter for Boom {
+        fn export(&self, span: &GenAiSpan) {
+            self.seen.lock().unwrap().push(span.operation().to_owned());
+            if span.operation() == "chat" {
+                panic!("exporter failed");
+            }
+        }
+    }
+    let boom = Arc::new(Boom {
+        seen: Mutex::new(Vec::new()),
+    });
+    store.set_exporter(boom.clone());
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.finish(at(2), FinishReason::Stop);
+    assert!(store
+        .read("conversation-1")
+        .iter()
+        .any(|span| span.operation() == "invoke_agent"));
+    assert_eq!(
+        boom.seen.lock().unwrap().as_slice(),
+        ["chat", "invoke_agent"]
+    );
+}

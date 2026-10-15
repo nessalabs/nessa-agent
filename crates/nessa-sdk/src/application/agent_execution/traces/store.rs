@@ -4,6 +4,7 @@
 use super::span::{AttributeValue, GenAiSpan};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 thread_local! {
@@ -69,6 +70,9 @@ impl ContentCapture {
 /// [`LocalTraceStore::set_exporter`]. Nothing in this module opens a connection.
 pub trait SpanExporter: Send + Sync {
     /// Accept one finished span. Losing it is acceptable; failing the turn is not.
+    ///
+    /// [`LocalTraceStore`] catches a panic from an installed exporter and keeps
+    /// the span it already stored.
     fn export(&self, span: &GenAiSpan);
 }
 
@@ -321,7 +325,8 @@ impl SpanExporter for LocalTraceStore {
         if let Some(extra) = extra {
             EXPORTING.with(|stack| stack.borrow_mut().push(me));
             let _frame = ExportFrame;
-            extra.export(&finished);
+            // The span is already stored. An exporter panic must not fail the turn.
+            let _ = catch_unwind(AssertUnwindSafe(|| extra.export(&finished)));
         }
     }
 }
