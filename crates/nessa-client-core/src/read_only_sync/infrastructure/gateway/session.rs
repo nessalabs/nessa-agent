@@ -42,7 +42,9 @@ use nessa_protocol::product::generated::{
     MIN_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS, PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
     TRANSCRIPT_STATES,
 };
-use nessa_protocol::product::handshake::{authentication_close_reason, supports_product_version};
+use nessa_protocol::product::handshake::{
+    accepted_termination, authentication_close_reason, supports_product_version,
+};
 use nessa_protocol::product::passive_read::{
     conforming_view_cursor, encode_request, view_cursor_behind, ReadEncodeError,
 };
@@ -196,9 +198,17 @@ impl Events {
     }
     /// A watch event names a watch this connection minted, or the connection
     /// is broken: identities are per connection, so none can be foreign
-    /// (rows U2, W15).
+    /// (rows U2, W15). `session.terminated` is this connection's close, the
+    /// same acceptance the product worker uses. It is not queued and it does
+    /// not count as unexpected. A malformed payload is a protocol failure.
     fn observe(&mut self, event: EventFrame) -> Result<(), GatewayError> {
         let watch = match event.event.as_str() {
+            product_event::SESSION_TERMINATED => {
+                return match accepted_termination(&event.payload) {
+                    Some(termination) => Err(GatewayError::Closed(Some(termination.code))),
+                    None => Err(GatewayError::Protocol),
+                };
+            }
             product_event::CONVERSATION_CHANGED => {
                 strict_decode::<ConversationChanged>(event.payload)?.watch_id
             }

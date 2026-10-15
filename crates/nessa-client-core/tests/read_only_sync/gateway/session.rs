@@ -21,7 +21,7 @@ use nessa_protocol::pairing::{
 };
 use nessa_protocol::product::catalogue_read::wire_descriptor;
 use nessa_protocol::product::generated::{
-    product_event, product_method, ProductSessionReady, SessionChallenge,
+    product_event, product_method, ProductSessionReady, SessionChallenge, SessionTermination,
     MAX_AUTH_CREDENTIAL_CHARACTERS, MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_RECORD_RESPONSE_BYTES,
     PRODUCT_VERSION,
 };
@@ -647,6 +647,74 @@ fn bounded_event_and_frame_refusals_preserve_actual_typed_cause() {
         drop(session);
         peer.join().unwrap();
     }
+}
+
+/// A retained refresh or follow reads `session.terminated` as the close.
+/// The following EOF is not a second, untyped close. A payload
+/// `accepted_termination` refuses is a protocol failure and is not queued.
+#[test]
+fn terminated_session_is_the_close_reason_and_a_malformed_one_is_protocol() {
+    let (revoked, revoked_peer) = peer(|socket| {
+        let _ = request(socket);
+        send(
+            socket,
+            OutgoingMessage::Event(
+                EventFrame::push(
+                    product_event::SESSION_TERMINATED,
+                    &SessionTermination {
+                        code: SessionCloseReason::CredentialRevoked,
+                        retryable: false,
+                        retry_after_ms: None,
+                    },
+                    0,
+                    0,
+                )
+                .unwrap(),
+            ),
+        );
+    });
+    let mut session = connect(&revoked);
+    session.begin().unwrap();
+    assert_eq!(
+        session.rpc(
+            product_method::CONVERSATION_RECORDS_HEAD,
+            &json!({}),
+            RpcKind::Record
+        ),
+        Err(GatewayError::Closed(Some(
+            SessionCloseReason::CredentialRevoked
+        )))
+    );
+    drop(session);
+    revoked_peer.join().unwrap();
+
+    let (malformed, malformed_peer) = peer(|socket| {
+        let _ = request(socket);
+        send(
+            socket,
+            OutgoingMessage::Event(
+                EventFrame::push(
+                    product_event::SESSION_TERMINATED,
+                    &json!({"code": "credential_revoked", "retryable": true}),
+                    0,
+                    0,
+                )
+                .unwrap(),
+            ),
+        );
+    });
+    let mut session = connect(&malformed);
+    session.begin().unwrap();
+    assert_eq!(
+        session.rpc(
+            product_method::CONVERSATION_RECORDS_HEAD,
+            &json!({}),
+            RpcKind::Record
+        ),
+        Err(GatewayError::Protocol)
+    );
+    drop(session);
+    malformed_peer.join().unwrap();
 }
 
 /// Row PR9 (client): a frame cut short by the gateway's close is an untyped

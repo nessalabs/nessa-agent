@@ -22,6 +22,7 @@ use nessa_auth::{
     domain::{pairing::PublicIntent, CredentialId, ResourceId},
 };
 use nessa_protocol::pairing::wire::NativePairingStatus;
+use nessa_protocol::product::handshake::{connection_outcome, ConnectionOutcome};
 use nessa_protocol::product_contract::generated::{
     CatalogueReadErrorCode, ChangeWatchErrorCode, RecordReadErrorCode,
 };
@@ -184,8 +185,13 @@ impl ClientPendingStore for PurgeBeforeEnd {
 /// the pinned status is asked again before anything else (design row PC5).
 /// A refused `openProduct` counts: a revoked key is its usual cause (row
 /// PR5), and the status read is what tells that cause from a full pool.
-/// The refusal itself never purges.
+/// A close counts only when [`connection_outcome`] is a terminal revoke.
+/// Plain EOF, a retryable close, `server_shutdown`, and `protocol_incompatible`
+/// do not. The refusal itself never purges.
 pub(crate) fn asks_status(error: GatewayError) -> bool {
+    if let GatewayError::Closed(reason) = error {
+        return connection_outcome(reason) == ConnectionOutcome::TerminalRevoke;
+    }
     matches!(
         error,
         GatewayError::ProductRefused

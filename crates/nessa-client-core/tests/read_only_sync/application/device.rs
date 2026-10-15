@@ -288,11 +288,19 @@ fn only_authority_refusals_ask_status_again() {
         GatewayError::HeldFile(HeldFileRefusal::Forbidden),
         GatewayError::Subscription(SubscriptionRefusal::Unauthorized),
         GatewayError::Subscription(SubscriptionRefusal::Forbidden),
+        GatewayError::Closed(Some(SessionCloseReason::AuthenticationFailed)),
+        GatewayError::Closed(Some(SessionCloseReason::CredentialRevoked)),
+        GatewayError::Closed(Some(SessionCloseReason::CredentialExpired)),
+        GatewayError::Closed(Some(SessionCloseReason::AuthorizationLost)),
     ] {
         assert!(asks_status(asks), "{asks:?}");
     }
     for keeps in [
         GatewayError::Closed(None),
+        GatewayError::Closed(Some(SessionCloseReason::TemporaryUnavailable)),
+        GatewayError::Closed(Some(SessionCloseReason::ServerShutdown)),
+        GatewayError::Closed(Some(SessionCloseReason::ProtocolIncompatible)),
+        GatewayError::Closed(Some(SessionCloseReason::TransportInterrupted)),
         GatewayError::Transport,
         GatewayError::TimedOut,
         GatewayError::NativeHandshake,
