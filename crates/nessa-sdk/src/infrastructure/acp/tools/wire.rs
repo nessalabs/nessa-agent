@@ -13,18 +13,10 @@ pub(crate) fn tool_call(value: &Value) -> Result<ToolCallUpdate, AgentError> {
     let id = identifier(value, "toolCallId")?.to_owned();
     let kind = value
         .get("kind")
-        .map(|kind| match kind.as_str() {
-            Some("read") => Ok(ToolKind::Read),
-            Some("edit") => Ok(ToolKind::Edit),
-            Some("search") => Ok(ToolKind::Search),
-            Some("fetch") => Ok(ToolKind::Fetch),
-            Some("execute") => Ok(ToolKind::Execute),
-            Some("think") => Ok(ToolKind::Think),
-            Some("delete") => Ok(ToolKind::Delete),
-            Some("move") => Ok(ToolKind::Move),
-            Some("switch_mode") => Ok(ToolKind::SwitchMode),
-            Some("other") => Ok(ToolKind::Other),
-            _ => Err(protocol("unsupported tool kind")),
+        .map(|kind| {
+            kind.as_str()
+                .and_then(ToolKind::from_label)
+                .ok_or_else(|| protocol("unsupported tool kind"))
         })
         .transpose()?;
     let status = value

@@ -152,6 +152,12 @@ impl GenAiSpan {
         self.attributes.insert(key.to_owned(), value);
         self
     }
+
+    /// This span without `key`. A missing key leaves the attributes unchanged.
+    pub(super) fn without_attribute(mut self, key: &str) -> Self {
+        self.attributes.remove(key);
+        self
+    }
 }
 
 /// Token and context figures a harness reported. Absent fields were not reported.

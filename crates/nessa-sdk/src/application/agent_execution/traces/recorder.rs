@@ -9,6 +9,7 @@
 
 use super::span::{AttributeValue, GenAiSpan, ReportedUsage, SpanStatus};
 use super::store::SpanExporter;
+use crate::domain::agent_execution::tools::ToolKind;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -405,11 +406,7 @@ impl TraceRecorder {
             self.close_tool(at, &fact);
         } else if let Some(turn) = self.turn.as_mut() {
             if let Some(tool) = turn.tools.iter_mut().find(|tool| tool.id == fact.id) {
-                let current = tool.span.string_attr(ATTR_TOOL_NAME).map(str::to_owned);
-                if !fact.name.is_empty() && current.as_deref().is_none_or(|name| name == tool.id) {
-                    set_str(&mut tool.span.attributes, ATTR_TOOL_NAME, &fact.name);
-                    tool.span.name = format!("execute_tool {}", fact.name);
-                }
+                assign_tool_name(&mut tool.span, &tool.id, &fact.name);
                 if turn.capture {
                     if let Some(arguments) = fact.arguments {
                         set_str(&mut tool.span.attributes, ATTR_TOOL_ARGUMENTS, &arguments);
@@ -693,10 +690,7 @@ impl TraceRecorder {
         fact: &ToolFact,
         error_type: Option<&str>,
     ) {
-        if !tool.span.attributes.contains_key(ATTR_TOOL_NAME) && !fact.name.is_empty() {
-            set_str(&mut tool.span.attributes, ATTR_TOOL_NAME, &fact.name);
-            tool.span.name = format!("execute_tool {}", fact.name);
-        }
+        assign_tool_name(&mut tool.span, &tool.id, &fact.name);
         if self.capture {
             if let Some(result) = &fact.result {
                 if !result.is_empty() {
@@ -752,20 +746,13 @@ impl TraceRecorder {
     }
 
     fn prefer_tool_name(&mut self, tool_id: &str, tool_name: &str) {
-        if tool_name.is_empty() {
-            return;
-        }
         let Some(turn) = self.turn.as_mut() else {
             return;
         };
         let Some(tool) = turn.tools.iter_mut().find(|tool| tool.id == tool_id) else {
             return;
         };
-        let current = tool.span.string_attr(ATTR_TOOL_NAME).map(str::to_owned);
-        if current.as_deref().is_none_or(|name| name == tool.id) {
-            set_str(&mut tool.span.attributes, ATTR_TOOL_NAME, tool_name);
-            tool.span.name = format!("execute_tool {tool_name}");
-        }
+        assign_tool_name(&mut tool.span, &tool.id, tool_name);
     }
 
     fn mark_permission(
@@ -797,13 +784,21 @@ impl TraceRecorder {
         let Some(turn) = self.turn.as_mut() else {
             return;
         };
+        let matches = turn
+            .tools
+            .iter()
+            .filter(|tool| tool.span.string_attr(ATTR_TOOL_NAME) == Some(tool_name))
+            .count();
+        if matches != 1 {
+            set_str(&mut turn.agent.attributes, NESSA_PERMISSION_ID, review_id);
+            set_str(&mut turn.agent.attributes, NESSA_PERMISSION_STATE, state);
+            return;
+        }
         let Some(tool) = turn
             .tools
             .iter_mut()
             .find(|tool| tool.span.string_attr(ATTR_TOOL_NAME) == Some(tool_name))
         else {
-            set_str(&mut turn.agent.attributes, NESSA_PERMISSION_ID, review_id);
-            set_str(&mut turn.agent.attributes, NESSA_PERMISSION_STATE, state);
             return;
         };
         tool.permission_id = Some(review_id.to_owned());
@@ -957,6 +952,32 @@ fn apply_context(attributes: &mut BTreeMap<String, AttributeValue>, usage: &Repo
     }
     if let Some(currency) = usage.cost_currency() {
         set_str(attributes, NESSA_COST_CURRENCY, currency);
+    }
+}
+
+fn assign_tool_name(span: &mut OpenSpan, tool_id: &str, next: &str) {
+    if !should_replace_tool_name(span.string_attr(ATTR_TOOL_NAME), tool_id, next) {
+        return;
+    }
+    set_str(&mut span.attributes, ATTR_TOOL_NAME, next);
+    span.name = format!("execute_tool {next}");
+}
+
+fn should_replace_tool_name(current: Option<&str>, tool_id: &str, next: &str) -> bool {
+    if next.is_empty() {
+        return false;
+    }
+    match current {
+        None => true,
+        Some(name) if name == tool_id => true,
+        Some(name)
+            if ToolKind::from_label(name).is_some()
+                && next != tool_id
+                && ToolKind::from_label(next).is_none() =>
+        {
+            true
+        }
+        _ => false,
     }
 }
 

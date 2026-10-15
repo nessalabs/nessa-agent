@@ -83,7 +83,7 @@ pub(super) fn tool_fact(
     let name = name
         .filter(|name| !name.is_empty())
         .or_else(|| update.title().clone().filter(|title| !title.is_empty()))
-        .or_else(|| update.kind().as_ref().map(kind_label).map(str::to_owned))
+        .or_else(|| update.kind().map(ToolKind::label).map(str::to_owned))
         .unwrap_or_else(|| id.clone());
     let tool_type = if update.mcp_tool().is_some() {
         "extension"
@@ -122,21 +122,6 @@ pub(super) fn finish_reason(outcome: ExecutionOutcome) -> FinishReason {
         ExecutionOutcome::RequestLimit => FinishReason::RequestLimit,
         ExecutionOutcome::Refused => FinishReason::Refused,
         ExecutionOutcome::Cancelled => FinishReason::Cancelled,
-    }
-}
-
-fn kind_label(kind: &ToolKind) -> &'static str {
-    match kind {
-        ToolKind::Read => "read",
-        ToolKind::Edit => "edit",
-        ToolKind::Search => "search",
-        ToolKind::Fetch => "fetch",
-        ToolKind::Execute => "execute",
-        ToolKind::Think => "think",
-        ToolKind::Delete => "delete",
-        ToolKind::Move => "move",
-        ToolKind::SwitchMode => "switch_mode",
-        ToolKind::Other => "other",
     }
 }
 

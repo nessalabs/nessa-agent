@@ -589,3 +589,276 @@ fn a_span_finished_while_an_exporter_runs_is_kept() {
         .iter()
         .any(|span| span.operation() == "invoke_agent"));
 }
+
+#[test]
+fn captured_text_stays_within_the_byte_budget() {
+    let budget = 8 * 1024 * 1024;
+    let store = LocalTraceStore::with_capture(ContentCapture::on());
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "short-prompt");
+    recorder.tool(
+        at(2),
+        ToolFact::new(
+            "tool-1",
+            "Read",
+            "function",
+            ToolProgress::Completed,
+            Some("small-args".into()),
+            Some("R".repeat(budget + 1)),
+        ),
+    );
+    recorder.finish(at(3), FinishReason::Stop);
+    let spans = store.read("conversation-1");
+    let chat = spans
+        .iter()
+        .find(|span| span.operation() == "chat")
+        .unwrap();
+    let tool = spans
+        .iter()
+        .find(|span| span.operation() == "execute_tool")
+        .unwrap();
+    assert!(chat
+        .string("gen_ai.input.messages")
+        .is_some_and(|text| text.contains("short-prompt")));
+    assert_eq!(
+        tool.string("gen_ai.tool.call.arguments"),
+        Some("small-args")
+    );
+    assert!(tool.string("gen_ai.tool.call.result").is_none());
+
+    let mut older = turn(&store);
+    older.begin_turn(
+        at(4),
+        TurnIdentity::new(
+            "conversation-1",
+            "execution-old",
+            "anthropic",
+            "claude",
+            "claude-sonnet",
+            None,
+        ),
+        &format!("old-marker{}", "o".repeat(budget / 2)),
+    );
+    older.finish(at(5), FinishReason::Stop);
+    let mut newer = turn(&store);
+    newer.begin_turn(
+        at(6),
+        TurnIdentity::new(
+            "conversation-1",
+            "execution-new",
+            "anthropic",
+            "claude",
+            "claude-sonnet",
+            None,
+        ),
+        &format!("new-marker{}", "n".repeat(budget / 2)),
+    );
+    newer.finish(at(7), FinishReason::Stop);
+    let spans = store.read("conversation-1");
+    assert!(spans.iter().all(|span| {
+        span.string("gen_ai.input.messages")
+            .is_none_or(|text| !text.contains("old-marker"))
+    }));
+    assert!(spans.iter().any(|span| {
+        span.string("gen_ai.input.messages")
+            .is_some_and(|text| text.contains("new-marker"))
+    }));
+}
+
+#[test]
+fn a_long_tool_list_keeps_the_newest_call() {
+    let store = LocalTraceStore::new();
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    for index in 0..=2048 {
+        recorder.tool(
+            at(2 + u64::try_from(index).unwrap()),
+            ToolFact::new(
+                format!("tool-{index}"),
+                format!("tool-{index}"),
+                "function",
+                ToolProgress::Completed,
+                None,
+                None,
+            ),
+        );
+    }
+    recorder.finish(at(3000), FinishReason::Stop);
+    let spans = store.read("conversation-1");
+    assert!(spans.len() <= 2048);
+    assert!(spans.iter().all(|span| {
+        span.string("gen_ai.tool.call.id")
+            .is_none_or(|id| id != "tool-0")
+    }));
+    assert!(spans
+        .iter()
+        .any(|span| span.string("gen_ai.tool.call.id") == Some("tool-2048")));
+}
+
+#[test]
+fn a_decline_by_name_attaches_only_when_one_tool_has_that_name() {
+    let store = LocalTraceStore::new();
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.tool(
+        at(2),
+        ToolFact::new(
+            "tool-1",
+            "Read",
+            "function",
+            ToolProgress::Running,
+            None,
+            None,
+        ),
+    );
+    recorder.tool(
+        at(3),
+        ToolFact::new(
+            "tool-2",
+            "Read",
+            "function",
+            ToolProgress::Running,
+            None,
+            None,
+        ),
+    );
+    recorder.permission(PermissionFact::Declined {
+        id: "review-ambiguous".into(),
+        tool_name: Some("Read".into()),
+    });
+    recorder.tool(
+        at(4),
+        ToolFact::new(
+            "tool-3",
+            "Grep",
+            "function",
+            ToolProgress::Running,
+            None,
+            None,
+        ),
+    );
+    recorder.permission(PermissionFact::Declined {
+        id: "review-grep".into(),
+        tool_name: Some("Grep".into()),
+    });
+    recorder.finish(at(5), FinishReason::Stop);
+    let spans = store.read("conversation-1");
+    let agent = spans
+        .iter()
+        .find(|span| span.operation() == "invoke_agent")
+        .unwrap();
+    assert_eq!(
+        agent.string("nessa.permission.id"),
+        Some("review-ambiguous")
+    );
+    assert_eq!(agent.string("nessa.permission.state"), Some("declined"));
+    for span in spans
+        .iter()
+        .filter(|span| span.string("gen_ai.tool.name") == Some("Read"))
+    {
+        assert!(span.string("nessa.permission.id").is_none());
+    }
+    let grep = spans
+        .iter()
+        .find(|span| span.string("gen_ai.tool.name") == Some("Grep"))
+        .unwrap();
+    assert_eq!(grep.string("nessa.permission.id"), Some("review-grep"));
+    assert_eq!(grep.string("nessa.permission.state"), Some("declined"));
+}
+
+#[test]
+fn a_kind_fallback_tool_name_is_replaced_by_the_provider_name() {
+    let store = LocalTraceStore::new();
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.tool(
+        at(2),
+        ToolFact::new(
+            "call-1",
+            "execute",
+            "function",
+            ToolProgress::Running,
+            None,
+            None,
+        ),
+    );
+    recorder.tool(
+        at(3),
+        ToolFact::new(
+            "call-1",
+            "exec_command",
+            "function",
+            ToolProgress::Completed,
+            None,
+            None,
+        ),
+    );
+    recorder.tool(
+        at(4),
+        ToolFact::new(
+            "call-2",
+            "exec_command",
+            "function",
+            ToolProgress::Running,
+            None,
+            None,
+        ),
+    );
+    recorder.tool(
+        at(5),
+        ToolFact::new(
+            "call-2",
+            "execute",
+            "function",
+            ToolProgress::Completed,
+            None,
+            None,
+        ),
+    );
+    recorder.tool(
+        at(6),
+        ToolFact::new(
+            "call-3",
+            "execute",
+            "function",
+            ToolProgress::Running,
+            None,
+            None,
+        ),
+    );
+    recorder.permission(PermissionFact::Answered {
+        id: "review-3".into(),
+        tool_id: "call-3".into(),
+        effect: "allow".into(),
+        decider: "person".into(),
+    });
+    recorder.permission(PermissionFact::Requested {
+        id: "review-3".into(),
+        tool_id: "call-3".into(),
+        tool_name: "exec_command".into(),
+        arguments: None,
+    });
+    recorder.tool(
+        at(7),
+        ToolFact::new(
+            "call-3",
+            "execute",
+            "function",
+            ToolProgress::Completed,
+            None,
+            None,
+        ),
+    );
+    recorder.finish(at(8), FinishReason::Stop);
+    let spans = store.read("conversation-1");
+    let name = |id: &str| {
+        spans
+            .iter()
+            .find(|span| span.string("gen_ai.tool.call.id") == Some(id))
+            .unwrap()
+            .string("gen_ai.tool.name")
+    };
+    assert_eq!(name("call-1"), Some("exec_command"));
+    assert_eq!(name("call-2"), Some("exec_command"));
+    assert_eq!(name("call-3"), Some("exec_command"));
+}

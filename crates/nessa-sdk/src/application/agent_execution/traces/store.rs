@@ -13,6 +13,15 @@ thread_local! {
 }
 
 const CAPACITY: usize = 2048;
+// Captured message and tool text retained across finished and withheld spans.
+// Twice the 4 MiB user-message limit.
+const CONTENT_BUDGET: usize = 8 * 1024 * 1024;
+const CONTENT_KEYS: [&str; 4] = [
+    "gen_ai.input.messages",
+    "gen_ai.output.messages",
+    "gen_ai.tool.call.arguments",
+    "gen_ai.tool.call.result",
+];
 const OP_AGENT: &str = "invoke_agent";
 const CONVERSATION: &str = "gen_ai.conversation.id";
 const EXECUTION: &str = "nessa.execution.id";
@@ -128,10 +137,10 @@ struct Inner {
     spans: VecDeque<GenAiSpan>,
     pending: HashMap<NoteKey, Pending>,
     pending_order: VecDeque<NoteKey>,
-    /// Child spans of a turn whose agent span has not closed.
-    withheld: HashMap<String, Vec<GenAiSpan>>,
-    withheld_order: VecDeque<String>,
-    withheld_count: usize,
+    /// Child spans of turns whose agent span has not closed, oldest first.
+    withheld: VecDeque<GenAiSpan>,
+    /// Bytes of captured content attributes on `spans` and `withheld`.
+    content_bytes: usize,
     extra: Option<Arc<dyn SpanExporter>>,
     capture: ContentCapture,
 }
@@ -139,7 +148,10 @@ struct Inner {
 /// Finished spans for the conversations this process has run, and the place a
 /// later exporter is attached.
 ///
-/// The store keeps the most recent 2048 finished spans. Older spans are dropped.
+/// The store keeps the most recent 2048 finished spans, and the same number of
+/// child spans from turns that have not closed. Older spans are dropped one at
+/// a time. Captured message and tool text is capped at 8 MiB across both;
+/// a span that exceeds that on its own is stored without the oversized text.
 /// A turn still running is absent until its agent span closes. Reads do not
 /// block on the provider.
 pub struct LocalTraceStore {
@@ -159,9 +171,8 @@ impl LocalTraceStore {
                 spans: VecDeque::new(),
                 pending: HashMap::new(),
                 pending_order: VecDeque::new(),
-                withheld: HashMap::new(),
-                withheld_order: VecDeque::new(),
-                withheld_count: 0,
+                withheld: VecDeque::new(),
+                content_bytes: 0,
                 extra: None,
                 capture,
             }),
@@ -386,36 +397,88 @@ fn hold_pending<'a>(
 }
 
 fn withhold(inner: &mut Inner, span: GenAiSpan) {
-    let trace_id = span.trace_id().to_owned();
-    if !inner.withheld.contains_key(&trace_id) {
-        inner.withheld_order.push_back(trace_id.clone());
-    }
-    inner.withheld.entry(trace_id).or_default().push(span);
-    inner.withheld_count = inner.withheld_count.saturating_add(1);
-    while inner.withheld_count > CAPACITY {
-        let Some(oldest) = inner.withheld_order.pop_front() else {
-            break;
-        };
-        if let Some(dropped) = inner.withheld.remove(&oldest) {
-            inner.withheld_count = inner.withheld_count.saturating_sub(dropped.len());
-        }
-    }
+    remember(inner, span, true);
 }
 
 fn publish_turn(inner: &mut Inner, agent: &GenAiSpan) {
     let trace_id = agent.trace_id();
-    if let Some(position) = inner.withheld_order.iter().position(|id| id == trace_id) {
-        inner.withheld_order.remove(position);
-    }
-    if let Some(children) = inner.withheld.remove(trace_id) {
-        inner.withheld_count = inner.withheld_count.saturating_sub(children.len());
-        for child in children {
-            inner.spans.push_back(child);
+    let mut kept = VecDeque::new();
+    let mut children = VecDeque::new();
+    for span in inner.withheld.drain(..) {
+        if span.trace_id() == trace_id {
+            children.push_back(span);
+        } else {
+            kept.push_back(span);
         }
     }
-    inner.spans.push_back(agent.clone());
+    inner.withheld = kept;
+    inner.spans.extend(children);
+    remember(inner, agent.clone(), false);
+}
+
+fn remember(inner: &mut Inner, span: GenAiSpan, withheld: bool) {
+    let span = fit_captured(span);
+    inner.content_bytes = inner.content_bytes.saturating_add(captured_bytes(&span));
+    if withheld {
+        inner.withheld.push_back(span);
+    } else {
+        inner.spans.push_back(span);
+    }
+    enforce_bounds(inner);
+}
+
+fn fit_captured(mut span: GenAiSpan) -> GenAiSpan {
+    while captured_bytes(&span) > CONTENT_BUDGET {
+        let Some(key) = largest_content_key(&span) else {
+            break;
+        };
+        span = span.without_attribute(key);
+    }
+    span
+}
+
+fn captured_bytes(span: &GenAiSpan) -> usize {
+    CONTENT_KEYS.iter().fold(0, |total, key| {
+        total.saturating_add(span.string(key).map(str::len).unwrap_or(0))
+    })
+}
+
+fn largest_content_key(span: &GenAiSpan) -> Option<&'static str> {
+    let mut best: Option<(&str, usize)> = None;
+    for key in CONTENT_KEYS {
+        let len = span.string(key).map(str::len).unwrap_or(0);
+        if len == 0 {
+            continue;
+        }
+        match best {
+            Some((_, best_len)) if len <= best_len => {}
+            _ => best = Some((key, len)),
+        }
+    }
+    best.map(|(key, _)| key)
+}
+
+fn enforce_bounds(inner: &mut Inner) {
     while inner.spans.len() > CAPACITY {
-        inner.spans.pop_front();
+        drop_front(&mut inner.spans, &mut inner.content_bytes);
+    }
+    while inner.withheld.len() > CAPACITY {
+        drop_front(&mut inner.withheld, &mut inner.content_bytes);
+    }
+    while inner.content_bytes > CONTENT_BUDGET {
+        if !inner.spans.is_empty() && !(inner.spans.len() == 1 && inner.withheld.is_empty()) {
+            drop_front(&mut inner.spans, &mut inner.content_bytes);
+        } else if inner.withheld.len() > 1 {
+            drop_front(&mut inner.withheld, &mut inner.content_bytes);
+        } else {
+            break;
+        }
+    }
+}
+
+fn drop_front(spans: &mut VecDeque<GenAiSpan>, content_bytes: &mut usize) {
+    if let Some(span) = spans.pop_front() {
+        *content_bytes = content_bytes.saturating_sub(captured_bytes(&span));
     }
 }
 

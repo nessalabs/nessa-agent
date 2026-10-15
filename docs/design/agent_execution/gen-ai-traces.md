@@ -8,7 +8,11 @@ recorder does not call the harness and does not open a network connection.
 `LocalTraceStore` keeps the finished spans. `Agent::read_traces` returns the
 ones for a conversation, in the order they closed. A turn still running is
 absent until its agent span closes. The store keeps the most recent 2048
-finished spans.
+finished spans, and the same number of child spans from turns that are still
+open. Those children are dropped one span at a time, oldest first. Captured
+message and tool text is capped at 8 MiB across finished and open turns. A
+span whose own captured text exceeds that is stored without the oversized
+attribute.
 
 `SpanExporter` is the plug for a later user-chosen OTLP endpoint.
 `LocalTraceStore::set_exporter` installs it. No endpoint is read now, and the
@@ -28,7 +32,7 @@ store is built with content capture on. Thought text is never stored.
 | The turn finishes | The open chat span, any open tool spans, and the agent span close with the turn's finish reason |
 | `usage_update` before a turn | Held and applied when the turn starts |
 | `usage_update` during a turn | Context figures go on the agent span. Input and output tokens, when the payload actually has them, go on the open chat span and are summed onto the agent span |
-| A permission request, answer, cancel, decline, or deadline | `nessa.permission.*` on the tool span. A request that arrives before the tool update opens the tool span |
+| A permission request, answer, cancel, decline, or deadline | `nessa.permission.*` on the tool span. A request that arrives before the tool update opens the tool span. A decline that names a tool is attached only when one open tool has that name; otherwise it is recorded on the agent span |
 | The recorder is dropped with a turn open | The turn closes as `cancelled` |
 
 A turn that only speaks is an agent span and one chat span. A turn that calls
@@ -60,8 +64,12 @@ underscores). ACP `usage_update.used` is context occupancy, not input tokens.
 
 `gen_ai.tool.name` is the provider's tool name when the profile kept one
 (Claude's `_meta.claudeCode.toolName` or ACP `name`; Codex's `name`, otherwise
-its kind). `gen_ai.tool.call.id` is the tool-call id. `gen_ai.tool.type` is
-`function`, or `extension` when the call names an MCP tool.
+its kind). A kind label stored first (`read`, `edit`, `search`, `fetch`,
+`execute`, `think`, `delete`, `move`, `switch_mode`, `other`) is replaced when
+a later update carries the provider's tool name. A specific name is left in
+place when a later update only repeats the kind. `gen_ai.tool.call.id` is the
+tool-call id. `gen_ai.tool.type` is `function`, or `extension` when the call
+names an MCP tool.
 
 When content capture is on, `gen_ai.input.messages`, `gen_ai.output.messages`,
 `gen_ai.tool.call.arguments`, and `gen_ai.tool.call.result` carry the text.
@@ -79,7 +87,7 @@ only when that fact was observed.
 | `nessa.hook.event` | Agent span | The hook that ran. A permission-review hook is `before_permission_review` |
 | `nessa.hook.verdict` | Agent span | `allow`, `refuse`, `stopped`, `error`, `panic`, `timeout`, or `busy` |
 | `nessa.hook.count` | Agent span | How many hook notes were applied to the turn. The event and verdict are the latest |
-| `nessa.permission.id` | Tool span, or the agent span when the decline names no open tool | The review id |
+| `nessa.permission.id` | Tool span, or the agent span when the decline names no open tool or more than one open tool has that name | The review id |
 | `nessa.permission.effect` | Tool span | `allow` or `deny`, once a decision exists |
 | `nessa.permission.state` | Tool span | `requested`, `answered`, `cancelled`, `declined`, or `deadline` |
 | `nessa.permission.decider` | Tool span | `person` for an explicit choice, `rule` for a remembered rule, `mode` for the host's approval mode, `hook` for a permission-review hook, `deadline` when the deadline answered, or `provider` or `runtime` when that side withdrew the review |
