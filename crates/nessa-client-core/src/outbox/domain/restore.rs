@@ -9,7 +9,7 @@
 
 use super::decide::{apply_lookup, apply_retry, apply_send, budget, Applied, Budget, Evidence};
 use super::{
-    Cause, Initiator, IntentEvent, LookupAnswer, PhoneFailure, PhoneIntent, PhoneOutcome,
+    Cause, Delivery, Initiator, IntentEvent, LookupAnswer, PhoneFailure, PhoneIntent, PhoneOutcome,
     PhoneRecord, ReceiptEffect, ReceiptStage, SendAnswer, UnknownCause,
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
@@ -280,9 +280,9 @@ fn returned(
 
 fn send_witness(outcome: PhoneOutcome) -> Option<SendAnswer> {
     Some(match outcome {
-        PhoneOutcome::Accepted => SendAnswer::Receipt(super::Delivery::Queued),
-        PhoneOutcome::Running => SendAnswer::Receipt(super::Delivery::Injected),
-        PhoneOutcome::Done => SendAnswer::Receipt(super::Delivery::Settled),
+        PhoneOutcome::Accepted => SendAnswer::Receipt(Delivery::Queued),
+        PhoneOutcome::Running => SendAnswer::Receipt(Delivery::Injected),
+        PhoneOutcome::Done => SendAnswer::Receipt(Delivery::Settled),
         PhoneOutcome::Unknown(UnknownCause::Unresolved) => SendAnswer::Refused(
             PhoneFailure::Conversation(ConversationErrorCode::SubmissionUnresolved),
         ),

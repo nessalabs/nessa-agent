@@ -3,12 +3,13 @@ use super::sqlite::{open, SqliteIntents};
 use crate::outbox::application::StoreError;
 use crate::outbox::application::{CommandIds, IntentStore, PhoneOutbox};
 use crate::outbox::domain::{
-    Cause, Delivery, Initiator, IntentError, IntentEvent, LookupAnswer, PhoneCommandId,
-    PhoneFailure, PhoneImage, PhoneIntent, PhoneOutcome, PhoneRecord, ReceiptEffect, ReceiptStage,
-    SendAnswer, UnknownCause, FOREGROUND_SENDS,
+    history_reaches, Cause, Delivery, Initiator, IntentError, IntentEvent, LookupAnswer,
+    PhoneCommandId, PhoneFailure, PhoneImage, PhoneIntent, PhoneOutcome, PhoneRecord,
+    ReceiptEffect, ReceiptStage, SendAnswer, UnknownCause, FOREGROUND_SENDS,
 };
 use crate::outbox::{OutboxError, PhoneGateway, PhoneView};
 use nessa_auth::application::ports::Clock;
+use nessa_local_database::rusqlite::{params, Connection};
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_sdk::domain::agent_execution::executions::ExecutionId;
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
@@ -17,8 +18,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Barrier, Condvar, Mutex};
-use std::thread;
-use std::time::Duration;
+use std::thread::{self, ThreadId};
+use std::time::{Duration, Instant};
 
 const CONVERSATION: &str = "01234567-89ab-4cde-8f01-23456789abcd";
 
@@ -330,11 +331,11 @@ fn departure_is_durable_before_the_gateway_is_asked() {
     }
     impl PhoneGateway for Watch {
         fn send(&mut self, intent: &PhoneIntent) -> SendAnswer {
-            let connection = nessa_local_database::rusqlite::Connection::open(&self.path).unwrap();
+            let connection = Connection::open(&self.path).unwrap();
             let bit: i64 = connection
                 .query_row(
                     "SELECT departed FROM phone_intent WHERE request_id = ?1",
-                    nessa_local_database::rusqlite::params![intent.command().as_str()],
+                    params![intent.command().as_str()],
                     |row| row.get(0),
                 )
                 .unwrap();
@@ -1222,7 +1223,7 @@ fn a_concurrent_hold_of_the_same_bytes_keeps_one_draft() {
     let left = spawn(path.clone(), Arc::clone(&ready), Arc::clone(&go));
     let right = spawn(path.clone(), Arc::clone(&ready), Arc::clone(&go));
     ready.wait();
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     connection.busy_timeout(Duration::from_secs(5)).unwrap();
     connection.execute_batch("BEGIN IMMEDIATE").unwrap();
     go.wait();
@@ -1345,7 +1346,7 @@ fn a_spent_budget_keeps_lookup_failed() {
     let first = spawn(path.clone());
     let second = spawn(path.clone());
     ready.wait();
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     connection.busy_timeout(Duration::from_secs(5)).unwrap();
     connection.execute_batch("BEGIN IMMEDIATE").unwrap();
     go.wait();
@@ -1526,11 +1527,11 @@ fn corrupt_canonical_bytes_are_left_in_place() {
         let mut outbox = opened(&path, gateway);
         person_hold(&mut outbox, text_intent("command-1", "hello"));
     }
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     connection
         .execute(
             "UPDATE phone_intent SET canonical = ?1 WHERE request_id = 'command-1'",
-            nessa_local_database::rusqlite::params![b"not-a-send".as_slice()],
+            params![b"not-a-send".as_slice()],
         )
         .unwrap();
     drop(connection);
@@ -1539,7 +1540,7 @@ fn corrupt_canonical_bytes_are_left_in_place() {
     let mut outbox = opened(&path, gateway);
     assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
     assert!(seen.body().order.is_empty());
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     let canonical: Vec<u8> = connection
         .query_row(
             "SELECT canonical FROM phone_intent WHERE request_id = 'command-1'",
@@ -1555,7 +1556,7 @@ fn a_done_row_whose_history_stops_at_departure_is_corrupt() {
     let dir = directory();
     let path = path_in(&dir);
     depart(&path, text_intent("command-1", "hello"));
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     connection
         .execute(
             "UPDATE phone_intent SET outcome = 'done', failure = NULL, unknown = NULL
@@ -1573,7 +1574,7 @@ fn a_done_row_whose_history_stops_at_departure_is_corrupt() {
     );
     assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
     assert!(seen.body().order.is_empty());
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     let outcome: String = connection
         .query_row(
             "SELECT outcome FROM phone_intent WHERE request_id = 'command-1'",
@@ -1586,7 +1587,7 @@ fn a_done_row_whose_history_stops_at_departure_is_corrupt() {
     let dir = directory();
     let path = path_in(&dir);
     depart(&path, text_intent("command-2", "hello"));
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     connection
         .execute(
             "UPDATE phone_intent_event SET initiator = 'recovery' WHERE cause = 'departed'",
@@ -1599,7 +1600,7 @@ fn a_done_row_whose_history_stops_at_departure_is_corrupt() {
         outbox.send(&command("command-2")).unwrap_err(),
         OutboxError::Corrupt
     );
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     let initiator: String = connection
         .query_row(
             "SELECT initiator FROM phone_intent_event WHERE cause = 'departed'",
@@ -1630,7 +1631,7 @@ fn an_attempted_receipt_is_not_restored_as_not_admitted() {
             PhoneOutcome::Unknown(UnknownCause::Attempted)
         );
     }
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     let ordinal: i64 = connection
         .query_row(
             "SELECT COALESCE(MAX(ordinal), -1) + 1 FROM phone_intent_event
@@ -1651,14 +1652,14 @@ fn an_attempted_receipt_is_not_restored_as_not_admitted() {
             "INSERT INTO phone_intent_event
              (request_id, ordinal, cause, outcome, failure, unknown, initiator, observed_at_ms)
              VALUES ('command-1', ?1, 'lookup', 'unknown', NULL, 'not_admitted', 'person', 1)",
-            nessa_local_database::rusqlite::params![ordinal],
+            params![ordinal],
         )
         .unwrap();
     drop(connection);
     let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
     assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
     drop(outbox);
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     let unknown: String = connection
         .query_row(
             "SELECT unknown FROM phone_intent WHERE request_id = 'command-1'",
@@ -1688,7 +1689,7 @@ fn a_recovery_draft_requires_its_turn_running_predecessor() {
     };
 
     let (_dir, path, successor) = prepare();
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     connection
         .execute(
             "DELETE FROM phone_intent WHERE request_id = 'command-1'",
@@ -1699,11 +1700,11 @@ fn a_recovery_draft_requires_its_turn_running_predecessor() {
     let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
     assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
     drop(outbox);
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     let outcome: String = connection
         .query_row(
             "SELECT outcome FROM phone_intent WHERE request_id = ?1",
-            nessa_local_database::rusqlite::params![successor.as_str()],
+            params![successor.as_str()],
             |row| row.get(0),
         )
         .unwrap();
@@ -1711,13 +1712,13 @@ fn a_recovery_draft_requires_its_turn_running_predecessor() {
 
     let (_dir, path, successor) = prepare();
     let duplicate = text_intent("command-2", "keep this");
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     connection
         .execute(
             "INSERT INTO phone_intent
              SELECT 'command-2', ?1, departed, outcome, failure, unknown, sends, successor
              FROM phone_intent WHERE request_id = 'command-1'",
-            nessa_local_database::rusqlite::params![duplicate.canonical()],
+            params![duplicate.canonical()],
         )
         .unwrap();
     connection
@@ -1732,18 +1733,18 @@ fn a_recovery_draft_requires_its_turn_running_predecessor() {
     let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
     assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
     drop(outbox);
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     let pointed: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM phone_intent WHERE successor = ?1",
-            nessa_local_database::rusqlite::params![successor.as_str()],
+            params![successor.as_str()],
             |row| row.get(0),
         )
         .unwrap();
     assert_eq!(pointed, 2);
 
     let (_dir, path, _successor) = prepare();
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     connection
         .execute(
             "UPDATE phone_intent SET outcome = 'done', failure = NULL, unknown = NULL
@@ -1755,7 +1756,7 @@ fn a_recovery_draft_requires_its_turn_running_predecessor() {
     let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
     assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
     drop(outbox);
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     let outcome: String = connection
         .query_row(
             "SELECT outcome FROM phone_intent WHERE request_id = 'command-1'",
@@ -1767,11 +1768,11 @@ fn a_recovery_draft_requires_its_turn_running_predecessor() {
 
     let (_dir, path, successor) = prepare();
     depart(&path, text_intent("command-2", "keep this"));
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     connection
         .execute(
             "UPDATE phone_intent SET successor = ?1 WHERE request_id = 'command-2'",
-            nessa_local_database::rusqlite::params![successor.as_str()],
+            params![successor.as_str()],
         )
         .unwrap();
     drop(connection);
@@ -1780,18 +1781,18 @@ fn a_recovery_draft_requires_its_turn_running_predecessor() {
 
     let (_dir, path, _successor) = prepare();
     let other = text_intent("command-1", "other");
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     connection
         .execute(
             "UPDATE phone_intent SET canonical = ?1 WHERE request_id = 'command-1'",
-            nessa_local_database::rusqlite::params![other.canonical()],
+            params![other.canonical()],
         )
         .unwrap();
     drop(connection);
     let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
     assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
     drop(outbox);
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     let canonical: Vec<u8> = connection
         .query_row(
             "SELECT canonical FROM phone_intent WHERE request_id = 'command-1'",
@@ -1802,7 +1803,7 @@ fn a_recovery_draft_requires_its_turn_running_predecessor() {
     assert_eq!(canonical, other.canonical());
 
     let (_dir, path, successor) = prepare();
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     connection
         .execute(
             "UPDATE phone_intent_event SET initiator = 'person'
@@ -1815,7 +1816,7 @@ fn a_recovery_draft_requires_its_turn_running_predecessor() {
     let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
     assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
     drop(outbox);
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     let initiator: String = connection
         .query_row(
             "SELECT initiator FROM phone_intent_event
@@ -1828,7 +1829,7 @@ fn a_recovery_draft_requires_its_turn_running_predecessor() {
     let draft: String = connection
         .query_row(
             "SELECT outcome FROM phone_intent WHERE request_id = ?1",
-            nessa_local_database::rusqlite::params![successor.as_str()],
+            params![successor.as_str()],
             |row| row.get(0),
         )
         .unwrap();
@@ -1845,7 +1846,7 @@ fn a_send_count_the_replay_does_not_reach_is_corrupt() {
         person_hold(&mut outbox, text_intent("command-1", "hello"));
         outbox.send(&command("command-1")).unwrap();
     }
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     connection
         .execute(
             "UPDATE phone_intent SET sends = 0 WHERE request_id = 'command-1'",
@@ -1856,7 +1857,7 @@ fn a_send_count_the_replay_does_not_reach_is_corrupt() {
     let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
     assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
     drop(outbox);
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     let sends: i64 = connection
         .query_row(
             "SELECT sends FROM phone_intent WHERE request_id = 'command-1'",
@@ -1919,7 +1920,7 @@ fn an_event_column_contradiction_is_corrupt() {
         let failed = outbox.send(&command("command-2")).unwrap();
         assert!(matches!(failed.outcome(), PhoneOutcome::Failed(_)));
     }
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     let accepted = connection
         .execute(
             "UPDATE phone_intent_event SET failure = 'forbidden'
@@ -1940,7 +1941,7 @@ fn an_event_column_contradiction_is_corrupt() {
     let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
     assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
     drop(outbox);
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     let failure: String = connection
         .query_row(
             "SELECT failure FROM phone_intent_event
@@ -1963,7 +1964,7 @@ fn a_lookup_cannot_restore_running() {
         let view = outbox.send(&command("command-1")).unwrap();
         assert_eq!(view.outcome(), PhoneOutcome::Running);
     }
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     let changed = connection
         .execute(
             "UPDATE phone_intent_event SET cause = 'lookup' WHERE cause = 'send_answered'",
@@ -1979,7 +1980,7 @@ fn a_lookup_cannot_restore_running() {
         OutboxError::Corrupt
     );
     drop(outbox);
-    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     let outcome: String = connection
         .query_row(
             "SELECT outcome FROM phone_intent WHERE request_id = 'command-1'",
@@ -2065,4 +2066,378 @@ fn a_transition_keeps_its_cause_and_initiator() {
         PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
     );
     assert_eq!(events[2].outcome, PhoneOutcome::Accepted);
+}
+
+/// The second sender's lease writes SendLost, a lookup that changes the
+/// outcome, and ForegroundSend. That commit rolls back. Those three events
+/// are written again, and `list` still loads the row
+/// (`docs/design/phone-outbox.md` S15).
+#[test]
+fn an_uncertain_lease_rewrites_every_transition() {
+    let mut store = RollbackLease::new();
+    store
+        .insert(
+            &PhoneRecord::held(text_intent("command-1", "hello")),
+            audit(Cause::Held, PhoneOutcome::Draft),
+        )
+        .unwrap();
+    let sends = Arc::new(AtomicUsize::new(0));
+    let lookups = Arc::new(AtomicUsize::new(0));
+    let (done_tx, done_rx) = mpsc::channel();
+    let spawn = |store: RollbackLease,
+                 sends: Arc<AtomicUsize>,
+                 lookups: Arc<AtomicUsize>,
+                 done_tx: mpsc::Sender<Result<PhoneOutcome, OutboxError>>| {
+        thread::spawn(move || {
+            let mut outbox = PhoneOutbox::new(
+                store,
+                CountingGateway { sends, lookups },
+                SeqIds::default(),
+                clock(),
+            );
+            let outcome = outbox
+                .send(&command("command-1"))
+                .map(|view| view.outcome());
+            done_tx.send(outcome).unwrap();
+        })
+    };
+    let first = spawn(
+        store.clone(),
+        Arc::clone(&sends),
+        Arc::clone(&lookups),
+        done_tx.clone(),
+    );
+    let second = spawn(store.clone(), sends.clone(), lookups.clone(), done_tx);
+    let left = done_rx.recv_timeout(Duration::from_secs(8)).unwrap();
+    let right = done_rx.recv_timeout(Duration::from_secs(8)).unwrap();
+    first.join().unwrap();
+    second.join().unwrap();
+    let left = left.unwrap();
+    let right = right.unwrap();
+    let lookup_failed = PhoneOutcome::Unknown(UnknownCause::LookupFailed);
+    assert!(
+        (left == lookup_failed && right == PhoneOutcome::Accepted)
+            || (left == PhoneOutcome::Accepted && right == lookup_failed),
+        "{left:?} {right:?}"
+    );
+    assert_eq!(sends.load(Ordering::SeqCst), 3);
+    assert_eq!(lookups.load(Ordering::SeqCst), 2);
+    assert_eq!(store.uncertain_commits(), 1);
+
+    let mut check = PhoneOutbox::new(
+        store.clone(),
+        Scripted::new(Vec::new(), Vec::new()),
+        SeqIds::default(),
+        clock(),
+    );
+    let views = check.list().unwrap();
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].outcome(), PhoneOutcome::Accepted);
+    assert_eq!(views[0].intent().text(), "hello");
+    let records = store.list().unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].sends(), 3);
+    assert!(records[0].departed());
+    let events = store.events(&command("command-1")).unwrap();
+    let causes: Vec<_> = events.iter().map(|event| event.cause).collect();
+    assert_eq!(
+        causes,
+        [
+            Cause::Held,
+            Cause::Departed,
+            Cause::SendLost,
+            Cause::Lookup,
+            Cause::SendLost,
+            Cause::Lookup,
+            Cause::ForegroundSend,
+        ]
+    );
+    assert_eq!(
+        events[2].outcome,
+        PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+    );
+    assert_eq!(events[3].outcome, lookup_failed);
+    assert_eq!(events[4].outcome, lookup_failed);
+    assert_eq!(
+        events[5].outcome,
+        PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+    );
+    assert_eq!(events[6].outcome, PhoneOutcome::Accepted);
+}
+
+struct CountingGateway {
+    sends: Arc<AtomicUsize>,
+    lookups: Arc<AtomicUsize>,
+}
+impl PhoneGateway for CountingGateway {
+    fn send(&mut self, _: &PhoneIntent) -> SendAnswer {
+        match self.sends.fetch_add(1, Ordering::SeqCst) {
+            0 | 1 => SendAnswer::Lost,
+            _ => SendAnswer::Receipt(Delivery::Queued),
+        }
+    }
+    fn lookup(&mut self, _: &PhoneIntent) -> LookupAnswer {
+        match self.lookups.fetch_add(1, Ordering::SeqCst) {
+            0 => LookupAnswer::Lost,
+            _ => LookupAnswer::NotFound,
+        }
+    }
+}
+
+/// Compare-and-swap rows. The second lease commit discards its writes and
+/// returns [`StoreError::Uncertain`]. `list` asks the same replay as SQLite.
+struct RollbackLease {
+    state: Arc<Mutex<LeaseState>>,
+    cv: Arc<Condvar>,
+}
+struct LeaseState {
+    committed: Book,
+    working: Option<Book>,
+    leased: bool,
+    draft_loads: usize,
+    depart_owner: Option<ThreadId>,
+    finished_leases: usize,
+    uncertain: usize,
+}
+#[derive(Clone, Default)]
+struct Book {
+    rows: BTreeMap<String, PhoneRecord>,
+    events: BTreeMap<String, Vec<IntentEvent>>,
+}
+const LEASE_WAIT: Duration = Duration::from_secs(5);
+
+impl RollbackLease {
+    fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(LeaseState {
+                committed: Book::default(),
+                working: None,
+                leased: false,
+                draft_loads: 0,
+                depart_owner: None,
+                finished_leases: 0,
+                uncertain: 0,
+            })),
+            cv: Arc::new(Condvar::new()),
+        }
+    }
+
+    fn uncertain_commits(&self) -> usize {
+        self.state.lock().unwrap().uncertain
+    }
+}
+impl Clone for RollbackLease {
+    fn clone(&self) -> Self {
+        Self {
+            state: Arc::clone(&self.state),
+            cv: Arc::clone(&self.cv),
+        }
+    }
+}
+impl IntentStore for RollbackLease {
+    fn load(&mut self, id: &PhoneCommandId) -> Result<Option<PhoneRecord>, StoreError> {
+        let mut state = self.state.lock().unwrap();
+        let record = book(&state).rows.get(id.as_str()).cloned();
+        if record
+            .as_ref()
+            .is_some_and(|row| !row.departed() && matches!(row.outcome(), PhoneOutcome::Draft))
+        {
+            state.draft_loads += 1;
+            self.cv.notify_all();
+        }
+        Ok(record)
+    }
+
+    fn insert(&mut self, record: &PhoneRecord, event: IntentEvent) -> Result<(), StoreError> {
+        let mut state = self.state.lock().unwrap();
+        write_insert(&mut state, record, event)
+    }
+
+    fn replace(
+        &mut self,
+        previous: &PhoneRecord,
+        next: &PhoneRecord,
+        event: IntentEvent,
+    ) -> Result<(), StoreError> {
+        let mut state = if !previous.departed() && next.departed() {
+            wait_until(&self.state, &self.cv, |state| state.draft_loads >= 2)?
+        } else {
+            self.state.lock().unwrap()
+        };
+        write_replace(&mut state, previous, next, event)
+    }
+
+    fn replace_and_insert(
+        &mut self,
+        previous: &PhoneRecord,
+        next: &PhoneRecord,
+        draft: &PhoneRecord,
+        events: &[IntentEvent],
+        draft_event: IntentEvent,
+    ) -> Result<(), StoreError> {
+        let mut state = self.state.lock().unwrap();
+        let id = next.intent().command().as_str().to_owned();
+        {
+            let rows = book_mut(&mut state);
+            match rows.rows.get(&id) {
+                Some(stored) if stored == previous => {
+                    rows.events.entry(id.clone()).or_default().extend(events);
+                    rows.rows.insert(id, next.clone());
+                }
+                _ => return Err(StoreError::Conflict),
+            }
+        }
+        write_insert(&mut state, draft, draft_event)
+    }
+
+    fn list(&mut self) -> Result<Vec<PhoneRecord>, StoreError> {
+        let state = self.state.lock().unwrap();
+        let mut records: Vec<_> = state.committed.rows.values().cloned().collect();
+        records.sort_by(|left, right| {
+            left.intent()
+                .command()
+                .as_str()
+                .cmp(right.intent().command().as_str())
+        });
+        for record in &records {
+            let events = state
+                .committed
+                .events
+                .get(record.intent().command().as_str())
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let recovery_hold = events.first().is_some_and(|event| {
+                event.cause == Cause::Held && event.initiator == Initiator::Recovery
+            });
+            if !history_reaches(record, events, recovery_hold) {
+                return Err(StoreError::Corrupt);
+            }
+        }
+        Ok(records)
+    }
+
+    fn events(&mut self, id: &PhoneCommandId) -> Result<Vec<IntentEvent>, StoreError> {
+        let state = self.state.lock().unwrap();
+        Ok(book(&state)
+            .events
+            .get(id.as_str())
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn begin_exclusive(&mut self) -> Result<(), StoreError> {
+        let me = thread::current().id();
+        let mut state = wait_until(&self.state, &self.cv, |state| {
+            !state.leased && (state.finished_leases > 0 || state.depart_owner == Some(me))
+        })?;
+        state.leased = true;
+        state.working = Some(state.committed.clone());
+        Ok(())
+    }
+
+    fn end_exclusive(&mut self) -> Result<(), StoreError> {
+        let mut state = self.state.lock().unwrap();
+        if !state.leased {
+            return Err(StoreError::Unavailable);
+        }
+        state.finished_leases += 1;
+        let uncertain = state.finished_leases == 2;
+        if uncertain {
+            state.uncertain += 1;
+            state.working = None;
+        } else if let Some(working) = state.working.take() {
+            state.committed = working;
+        }
+        state.leased = false;
+        self.cv.notify_all();
+        if uncertain {
+            Err(StoreError::Uncertain)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn abort_exclusive(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        if !state.leased {
+            return;
+        }
+        state.working = None;
+        state.leased = false;
+        self.cv.notify_all();
+    }
+}
+
+fn wait_until<'a>(
+    state: &'a Mutex<LeaseState>,
+    cv: &Condvar,
+    mut ready: impl FnMut(&LeaseState) -> bool,
+) -> Result<std::sync::MutexGuard<'a, LeaseState>, StoreError> {
+    let mut guard = state.lock().unwrap();
+    let start = Instant::now();
+    loop {
+        if ready(&guard) {
+            return Ok(guard);
+        }
+        let left = LEASE_WAIT.saturating_sub(start.elapsed());
+        if left.is_zero() {
+            return Err(StoreError::Unavailable);
+        }
+        let (next, status) = cv.wait_timeout(guard, left).unwrap();
+        guard = next;
+        if status.timed_out() && !ready(&guard) {
+            return Err(StoreError::Unavailable);
+        }
+    }
+}
+
+fn book(state: &LeaseState) -> &Book {
+    state.working.as_ref().unwrap_or(&state.committed)
+}
+
+fn book_mut(state: &mut LeaseState) -> &mut Book {
+    if state.leased {
+        state.working.as_mut().expect("open lease")
+    } else {
+        &mut state.committed
+    }
+}
+
+fn write_insert(
+    state: &mut LeaseState,
+    record: &PhoneRecord,
+    event: IntentEvent,
+) -> Result<(), StoreError> {
+    let id = record.intent().command().as_str().to_owned();
+    let rows = book_mut(state);
+    if rows.rows.contains_key(&id) {
+        return Err(StoreError::Conflict);
+    }
+    rows.events.entry(id.clone()).or_default().push(event);
+    rows.rows.insert(id, record.clone());
+    Ok(())
+}
+
+fn write_replace(
+    state: &mut LeaseState,
+    previous: &PhoneRecord,
+    next: &PhoneRecord,
+    event: IntentEvent,
+) -> Result<(), StoreError> {
+    let id = next.intent().command().as_str().to_owned();
+    let leased = state.leased;
+    {
+        let rows = book_mut(state);
+        match rows.rows.get(&id) {
+            Some(stored) if stored == previous => {
+                rows.events.entry(id.clone()).or_default().push(event);
+                rows.rows.insert(id, next.clone());
+            }
+            _ => return Err(StoreError::Conflict),
+        }
+    }
+    if !leased && !previous.departed() && next.departed() {
+        state.depart_owner = Some(thread::current().id());
+    }
+    Ok(())
 }

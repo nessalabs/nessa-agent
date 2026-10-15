@@ -68,6 +68,13 @@ is at least once. The server dedupes it. Recovery does not send and does not
 take the lease. Its write waits if a send holds the lease, then precedence
 applies.
 
+The lease commit is one transaction. If that commit is uncertain, the
+transaction is rolled back and every transition it contained is written
+again, in the same order. Each answer is the compare-and-swap that saved it.
+A `turn_running` mint stays one write: the lookup, the return, and the new
+draft. Replaying only the last answer leaves a history restoration rejects
+(`an_uncertain_lease_rewrites_every_transition`).
+
 `hold`, `send`, and `retry` record the person. `recover` records recovery.
 A history reaches the row only by folding this table, so a history that
 skips departure is corrupt. Restoration also rejects `Initiator::Recovery`
@@ -205,6 +212,7 @@ second rule.
 | H5 | Two holders save the same bytes at once | One draft. Both calls return it | `a_concurrent_hold_of_the_same_bytes_keeps_one_draft` |
 | S1 | Send starts | Departed is durable before `conversation.send` is asked | `departure_is_durable_before_the_gateway_is_asked` |
 | S2 | That save's commit is uncertain | `conversation.send` is not asked | `an_uncertain_departure_does_not_send` |
+| S15 | The lease commit is uncertain after SendLost, a lookup that changes the outcome, and ForegroundSend | Those events are written again, in order. The row loads | `an_uncertain_lease_rewrites_every_transition` |
 | S12 | Two sends of one draft overlap | The waiter blocks on the lease and reloads. It sends the same id only when the stored row is still unknown | `a_lost_departure_does_not_send_again` |
 | S3 | Send returns queued, injected, or settled | Accepted, running, or done | `a_queued_send_is_accepted`, `an_injected_send_is_running`, `a_settled_send_is_done` |
 | S4 | Send returns a conversation refusal other than `submission_unresolved` | Failed. The same id is not sent again | `a_refusal_is_failed_and_not_sent_again` |

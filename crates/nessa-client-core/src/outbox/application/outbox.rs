@@ -190,22 +190,24 @@ where
         let Some(reset) = apply_retry(record.clone()) else {
             return Ok(kept_body(record.view()));
         };
-        let marked =
+        let looked =
             self.asked_or_kept(&record, &reset.looked, Cause::Lookup, by, Evidence::Lookup)?;
-        if marked.resave.is_none() {
-            return Ok(marked);
+        if looked.kept {
+            return Ok(looked);
         }
-        let marked = self.asked_or_kept(
+        let reset_step = self.asked_or_kept(
             &reset.looked,
             &reset.reset,
             Cause::ExplicitRetry,
             by,
             Evidence::Lookup,
         )?;
-        if marked.resave.is_none() {
-            return Ok(marked);
+        let chain = carry(looked, reset_step);
+        if chain.kept {
+            return Ok(chain);
         }
-        self.foreground(reset.reset, by, Cause::ExplicitRetry)
+        let sent = self.foreground(reset.reset, by, Cause::ExplicitRetry)?;
+        Ok(carry(chain, sent))
     }
 
     /// Wait for the writer lease, run `body`, and commit it.
@@ -281,6 +283,7 @@ where
         by: Initiator,
         mut cause: Cause,
     ) -> Result<LeaseBody, OutboxError> {
+        let mut chain = kept_body(record.view());
         loop {
             match budget(record.clone()) {
                 Budget::Bound(next) => {
@@ -288,11 +291,13 @@ where
                         limit = "client.foreground_sends",
                         "product session hit an operational limit"
                     );
-                    return self.asked_or_kept(&record, &next, Cause::Bound, by, Evidence::Lookup);
+                    let step =
+                        self.asked_or_kept(&record, &next, Cause::Bound, by, Evidence::Lookup)?;
+                    return Ok(carry(chain, step));
                 }
                 // Lookup failed at the budget writes nothing
                 // (`a_spent_budget_keeps_lookup_failed`).
-                Budget::Stop => return Ok(kept_body(record.view())),
+                Budget::Stop => return Ok(chain),
                 Budget::Send => {}
             }
             let answer = self.gateway.send(record.intent());
@@ -301,11 +306,17 @@ where
                     record: next,
                     cause,
                     evidence,
-                } => return self.asked_or_kept(&record, &next, cause, by, evidence),
+                } => {
+                    let step = self.asked_or_kept(&record, &next, cause, by, evidence)?;
+                    return Ok(carry(chain, step));
+                }
                 Applied::Return {
                     record: next,
                     lookup: false,
-                } => return self.return_to_draft(&record, next, by, Evidence::Direct),
+                } => {
+                    let step = self.return_to_draft(&record, next, by, Evidence::Direct)?;
+                    return Ok(carry(chain, step));
+                }
                 Applied::Mark {
                     record: bumped,
                     cause: lost,
@@ -313,8 +324,9 @@ where
                 } => {
                     let marked =
                         self.asked_or_kept(&record, &bumped, lost, by, Evidence::Lookup)?;
-                    if marked.resave.is_none() {
-                        return Ok(marked);
+                    chain = carry(chain, marked);
+                    if chain.kept {
+                        return Ok(chain);
                     }
                     let looked = self.gateway.lookup(bumped.intent());
                     match commit_lookup(bumped.clone(), looked, resend) {
@@ -329,12 +341,16 @@ where
                                     "product session hit an operational limit"
                                 );
                             }
-                            return self.asked_or_kept(&bumped, &next, cause, by, evidence);
+                            let step = self.asked_or_kept(&bumped, &next, cause, by, evidence)?;
+                            return Ok(carry(chain, step));
                         }
                         Applied::Return {
                             record: next,
                             lookup: true,
-                        } => return self.return_to_draft(&bumped, next, by, Evidence::Lookup),
+                        } => {
+                            let step = self.return_to_draft(&bumped, next, by, Evidence::Lookup)?;
+                            return Ok(carry(chain, step));
+                        }
                         Applied::Resend { record: next } => {
                             // Not found under the budget writes Lookup only
                             // when that changes the outcome. The resend is
@@ -348,8 +364,9 @@ where
                                     by,
                                     Evidence::Lookup,
                                 )?;
-                                if marked.resave.is_none() {
-                                    return Ok(marked);
+                                chain = carry(chain, marked);
+                                if chain.kept {
+                                    return Ok(chain);
                                 }
                             }
                             record = next;
@@ -357,7 +374,7 @@ where
                         }
                         // An impossible receipt, or not-found after an
                         // unreadable answer, leaves the marked row.
-                        Applied::Keep => return Ok(marked),
+                        Applied::Keep => return Ok(chain),
                         Applied::Mark { .. } | Applied::Return { .. } => {
                             return Err(OutboxError::Unsaved)
                         }
@@ -389,14 +406,17 @@ where
                 lookup: true,
             } => self.return_to_draft(&record, next, by, Evidence::Lookup),
             Applied::Resend { record: next } => {
+                let mut chain = kept_body(record.view());
                 if next.outcome() != record.outcome() {
                     let marked =
                         self.asked_or_kept(&record, &next, Cause::Lookup, by, Evidence::Lookup)?;
-                    if marked.resave.is_none() {
-                        return Ok(marked);
+                    chain = carry(chain, marked);
+                    if chain.kept {
+                        return Ok(chain);
                     }
                 }
-                self.foreground(next, by, Cause::ForegroundSend)
+                let sent = self.foreground(next, by, Cause::ForegroundSend)?;
+                Ok(carry(chain, sent))
             }
             Applied::Mark { .. } | Applied::Return { lookup: false, .. } => {
                 Err(OutboxError::Unsaved)
@@ -429,14 +449,13 @@ where
             .store
             .replace_and_insert(previous, &failed, &draft, &events, draft_event)
         {
-            Ok(()) => Ok(LeaseBody {
-                view: failed.view(),
-                resave: Some(Resave::Draft {
-                    failed: intended,
-                    evidence,
-                    by,
-                }),
-            }),
+            Ok(()) => Ok(draft_body(
+                previous.clone(),
+                failed.view(),
+                intended,
+                evidence,
+                by,
+            )),
             Err(StoreError::Conflict) => self.retry_return(intended, evidence, by),
             Err(error) => Err(asked(OutboxError::from(error))),
         }
@@ -476,16 +495,7 @@ where
                 .store
                 .replace_and_insert(&saved, &next, &draft, &events, draft_event)
             {
-                Ok(()) => {
-                    return Ok(LeaseBody {
-                        view: next.view(),
-                        resave: Some(Resave::Draft {
-                            failed: failed.clone(),
-                            evidence,
-                            by,
-                        }),
-                    })
-                }
+                Ok(()) => return Ok(draft_body(saved, next.view(), failed.clone(), evidence, by)),
                 Err(StoreError::Conflict) => continue,
                 Err(error) => return Err(asked(OutboxError::from(error))),
             }
@@ -494,29 +504,37 @@ where
     }
 
     fn replay(&mut self, done: LeaseBody) -> Result<PhoneView, OutboxError> {
-        match done.resave {
-            None => {
-                let id = done.view.intent().command().clone();
-                self.row_or_unsaved(&id)
-            }
-            Some(Resave::Outcome {
-                next,
-                cause,
-                evidence,
-                by,
-            }) => self
-                .prefer(&next, cause, evidence, by)
-                .map(|body| body.view),
-            Some(Resave::Draft {
-                failed,
-                evidence,
-                by,
-            }) => self.replay_draft(failed, evidence, by),
+        if done.written.is_empty() {
+            let id = done.view.intent().command().clone();
+            return self.row_or_unsaved(&id);
         }
+        let mut view = done.view;
+        for step in done.written {
+            view = match step {
+                Written::Answer {
+                    previous,
+                    next,
+                    cause,
+                    evidence,
+                    by,
+                } => {
+                    self.asked_or_kept(&previous, &next, cause, by, evidence)?
+                        .view
+                }
+                Written::Draft {
+                    previous,
+                    failed,
+                    evidence,
+                    by,
+                } => self.replay_draft(previous, failed, evidence, by)?,
+            };
+        }
+        Ok(view)
     }
 
     fn replay_draft(
         &mut self,
+        previous: PhoneRecord,
         failed: PhoneRecord,
         evidence: Evidence,
         by: Initiator,
@@ -532,7 +550,8 @@ where
         if !replaces(failed.outcome(), evidence, saved.outcome(), stored) {
             return Ok(saved.view());
         }
-        self.return_to_draft(&saved, failed.clear_successor(), by, evidence)
+        let base = if saved == previous { previous } else { saved };
+        self.return_to_draft(&base, failed.clear_successor(), by, evidence)
             .map(|body| body.view)
     }
 
@@ -573,7 +592,13 @@ where
         evidence: Evidence,
     ) -> Result<LeaseBody, OutboxError> {
         match self.persist(previous, next, cause, by) {
-            Ok(()) => Ok(saved_body(next.clone(), cause, evidence, by)),
+            Ok(()) => Ok(saved_body(
+                previous.clone(),
+                next.clone(),
+                cause,
+                evidence,
+                by,
+            )),
             Err(OutboxError::Conflict) => self.prefer(next, cause, evidence, by),
             Err(error) => Err(asked(error)),
         }
@@ -597,7 +622,7 @@ where
             }
             let stronger = overlay(&saved, next);
             match self.persist(&saved, &stronger, cause, by) {
-                Ok(()) => return Ok(saved_body(stronger, cause, evidence, by)),
+                Ok(()) => return Ok(saved_body(saved, stronger, cause, evidence, by)),
                 Err(OutboxError::Conflict) => continue,
                 Err(error) => return Err(asked(error)),
             }
@@ -640,13 +665,20 @@ where
 }
 
 /// What the lease's transaction was going to make durable.
+///
+/// `written` is every transition in that transaction, in order. An uncertain
+/// commit rolls the transaction back and [`PhoneOutbox::replay`] writes each
+/// one again (`an_uncertain_lease_rewrites_every_transition`).
 struct LeaseBody {
     view: PhoneView,
-    resave: Option<Resave>,
+    written: Vec<Written>,
+    /// The last save did not append a transition.
+    kept: bool,
 }
 
-enum Resave {
-    Outcome {
+enum Written {
+    Answer {
+        previous: PhoneRecord,
         next: PhoneRecord,
         cause: Cause,
         evidence: Evidence,
@@ -654,26 +686,67 @@ enum Resave {
     },
     /// `failed` has no successor yet. A replay mints the draft again.
     Draft {
+        previous: PhoneRecord,
         failed: PhoneRecord,
         evidence: Evidence,
         by: Initiator,
     },
 }
 
-fn saved_body(next: PhoneRecord, cause: Cause, evidence: Evidence, by: Initiator) -> LeaseBody {
+fn saved_body(
+    previous: PhoneRecord,
+    next: PhoneRecord,
+    cause: Cause,
+    evidence: Evidence,
+    by: Initiator,
+) -> LeaseBody {
     LeaseBody {
         view: next.view(),
-        resave: Some(Resave::Outcome {
+        written: vec![Written::Answer {
+            previous,
             next,
             cause,
             evidence,
             by,
-        }),
+        }],
+        kept: false,
+    }
+}
+
+fn draft_body(
+    previous: PhoneRecord,
+    view: PhoneView,
+    failed: PhoneRecord,
+    evidence: Evidence,
+    by: Initiator,
+) -> LeaseBody {
+    LeaseBody {
+        view,
+        written: vec![Written::Draft {
+            previous,
+            failed,
+            evidence,
+            by,
+        }],
+        kept: false,
     }
 }
 
 fn kept_body(view: PhoneView) -> LeaseBody {
-    LeaseBody { view, resave: None }
+    LeaseBody {
+        view,
+        written: Vec::new(),
+        kept: true,
+    }
+}
+
+fn carry(mut earlier: LeaseBody, later: LeaseBody) -> LeaseBody {
+    earlier.written.extend(later.written);
+    LeaseBody {
+        view: later.view,
+        written: earlier.written,
+        kept: later.kept,
+    }
 }
 
 /// A departed command whose receipt may still change. Attempted is included
