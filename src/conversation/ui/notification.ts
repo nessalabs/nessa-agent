@@ -124,18 +124,16 @@ export function conversationNotice(
         "The gateway may have received your message. Retry checks the same submission; reconnecting does not resend it.",
       retry: { kind: "submission", executionId: unknown.executionId },
     }
+  // A refused turn keeps its own error and diagnostic, so it is offered from the
+  // turn, not from the conversation's last error: retrying a newer refused turn
+  // clears that error, and an older one still needs Send Again and Discard.
   const unsent = [...conversation.turns]
     .reverse()
-    .find(
-      (turn) =>
-        turn.from === "user" &&
-        turn.receipt === "failed" &&
-        turn.error === conversation.error,
-    )
-  if (unsent)
+    .find((turn) => turn.from === "user" && turn.receipt === "failed")
+  if (unsent?.from === "user")
     return {
       title: "Error sending",
-      description: conversation.error ?? "The message could not be sent.",
+      description: unsent.error ?? conversation.error ?? "The message could not be sent.",
       retry: { kind: "draft", turnId: unsent.id },
     }
   const error = conversation.remote?.interactionViewError ?? conversation.error

@@ -132,6 +132,20 @@ describe("conversation notification", () => {
       retry: { kind: "draft" },
     })
   })
+  it("still offers an older refused turn after a newer one was retried", () => {
+    // Retrying the newer turn clears the conversation's error; the older turn
+    // is still refused and keeps its own error.
+    const value = conversation("tab")
+    value.turns = [
+      { id: "older", from: "user", content: [], receipt: "failed", error: "offline" },
+      { id: "newer", from: "user", content: [], receipt: "accepted" },
+    ]
+    expect(conversationNotice(value)).toEqual({
+      title: "Error sending",
+      description: "offline",
+      retry: { kind: "draft", turnId: "older" },
+    })
+  })
   it("says the agent was still starting when the gateway rejected the send", () => {
     const value = conversation("tab")
     value.error = "The agent was still starting and ran out of time, so nothing was sent."
