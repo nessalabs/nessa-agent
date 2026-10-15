@@ -9,8 +9,11 @@ adds it. The implemented contracts stay where they are:
 
 This is the plan for one access fact, reused by peer chats, a shared folder,
 command rules, a live follow, and an outbound webhook. Cedar remains the only
-decider. Alpha drops the previous share shape in the refactor; there is no
-reader of the old row and no second name for the new one.
+decider. Alpha has no migration and no reader of an older share shape.
+This build reads only a metadata file at its own version. Any other
+version, including the previous share shape, is refused. Startup does not
+delete that file and does not rewrite it. The owner deletes it. There is
+no second name for the new row.
 
 The ADR, when it is written, takes [#889](https://github.com/nessalabs/nessa-agent/issues/889).
 This document is the design. It does not add a second record.
@@ -206,9 +209,9 @@ policy engine, a new crate, or a grant-by-list.
 | Share role Read / Comment / Drive | Becomes the capability set: Read is `read`, Comment is `read` + `comment`, Drive is those plus `drive`. One wire field, `capabilities`. The role enum goes. |
 | Tool policy and `commandHosts` | Stay as constraints on a grant that has `drive`. |
 | `policy_revision` | Stays, under the name grant epoch. |
-| `paired.peer_gateway` | Deleted. `grant.comment` and `grant.drive` require the capability and, until the peer-write slice, a principal signed in as the binding owner. One condition, on the permit. |
+| `paired.peer_gateway` | Not in this build's Cedar policies. `grant.comment` and `grant.drive` require the capability and, until the peer-write slice, a principal signed in as the binding owner. One condition, on the permit. Startup does not delete the id out of an older metadata file. An older file is refused whole. |
 | A stored Drive role that a peer cannot use | `conversation.share` asks those permits before it writes. A denial writes nothing and returns the policy ids. The use case does not match a gateway principal on its own. The same permits deny a hand-built row at admission. |
-| `share_grants` key `(receiver_id, conversation_id)` | Becomes `(subject_kind, subject_id, resource_kind, resource_id)` in the refactor, one metadata version bump. A paired device or gateway uses subject kind `receiver` and its receiver id, so two devices of one owner stay two rows. An integration or a later agent uses subject kind `principal`. One integration principal has one active webhook registration. The same-person link is not the subject. The directory slice does not change the key. A directory resource and its marker are minted once, and later subject grants reuse that resource id. |
+| `share_grants` key `(receiver_id, conversation_id)` | This build writes `(subject_kind, subject_id, resource_kind, resource_id)`. A paired device or gateway uses subject kind `receiver` and its receiver id, so two devices of one owner stay two rows. An integration or a later agent uses subject kind `principal`. One integration principal has one active webhook registration. The same-person link is not the subject. The directory slice does not change the key. A directory resource and its marker are minted once, and later subject grants on that same directory reuse that resource id. A metadata file at any other version is refused and not rewritten. |
 | Credential `conversation.read`, `conversation.write`, `environment.serve` | Stay. They say whether this credential may read, may be the conversation authority, or may serve. They do not name a conversation or a directory. `hold.peer` stays as written. |
 | `grants.json` on the environment | Stays on that machine, so the gateway cannot widen it. The same capability and constraint words. `domain::unwritten` stays the default facts (an absent ssh entry is the host's own set; an absent dialed gateway is empty). |
 | Gateway `denyPrograms` / `allowPrograms` | Stay the host's own program list in `commands.cedar`. A grant's command rules are a further constraint, deny wins. |
@@ -255,25 +258,34 @@ binding table in [Lifecycles](#lifecycles). This section does not add a
 binding state. The decision is one directory
 resource, minted once, with one marker. The resource id is not the path.
 The resource row stores the environment, the canonical path, and a
-directory binding. The binding is 32 random bytes. Share reads
-`.nessa-binding` through a directory handle on the path. When the file
-is present, those bytes are the binding. Share stores the resource if
-none is stored for that binding, then attaches the subject grant to that
-resource id. Share writes the file only when it is absent, with a create
-that leaves an existing file unchanged, then commits the resource row,
-then the grant. A later share of the same directory finds the file and
-leaves it unchanged. If the resource commit fails, share removes the
-marker only when this attempt created the file and no committed resource
-stores that binding. A failed grant commit leaves the marker and every
-grant already stored. A second subject on the same directory gets another
-grant row for the same resource id. The first subject's grant stays, and
-the marker bytes stay. The first open reads `.nessa-binding` through a
-directory handle on the stored path. A missing root, a missing marker, or
-different bytes refuse the use and revoke the grants for that resource.
-A directory created later at the same path has no marker, so it does not
-receive those grants. That holds when the filesystem reuses the device
-and inode numbers of the deleted directory. Copying `.nessa-binding`
-into another directory is a copy of the binding. The reuse test creates
+directory binding. The binding is 32 random bytes. The environment, the
+canonical path, and those bytes are the identity a share checks. Share
+reads `.nessa-binding` through a directory handle on the path being
+shared. Share writes the file only when it is absent, with a create that
+leaves an existing file unchanged, then commits the resource row for this
+environment and this canonical path, then the grant. When the file is
+present and a resource already stores those bytes for this same
+environment and canonical path, share attaches the subject grant to that
+resource id and does not rewrite the file. When the file is present and
+no resource stores those bytes, share adopts them for this path and does
+not rewrite the file. When the bytes equal a resource stored for a
+different environment or a different canonical path, share refuses. It
+writes no grant, and it does not rewrite or delete the file. The existing
+resource stays on its stored path. Binding bytes alone do not attach a
+grant. If the resource commit fails, share removes the marker only when
+this attempt created the file and no committed resource stores that
+binding. A failed grant commit leaves the marker and every grant already
+stored. A second subject on the same directory gets another grant row for
+the same resource id. The first subject's grant stays, and the marker
+bytes stay. The first open reads `.nessa-binding` through a directory
+handle on the resource's stored path in its environment. A missing root,
+a missing marker, or different bytes refuse the use and revoke the grants
+for that resource. A directory created later at the same path has no
+marker, so it does not receive those grants. That holds when the
+filesystem reuses the device and inode numbers of the deleted directory.
+Copying `.nessa-binding` into another directory does not make that
+directory this resource. The share is refused. No operating-system
+generation is added. The reuse test creates
 a new directory at the same path, on a filesystem that reuses device and
 inode numbers, and does not copy the marker. The open is refused and the
 grants are revoked. The no-follow walk starts from the handle whose
@@ -390,14 +402,17 @@ eight and does not raise the conversation cap. A second grant subscription
 on that socket is refused `subscription_capacity`.
 
 The follow rule may name more than eight chats. The live set on that
-connection is still eight. The least recently opened chat, by an explicit
-open rather than by a frame, is let go, the same eviction the desktop uses
-for `conversationTargets`
-([record subscriptions](record-subscriptions.md)). The local replica stays.
-It receives no frames until it is opened again, and then
-`conversation.subscribe` resumes with `after` from the cursor last applied.
-There is no second connection and no poller for the chat that was let go.
-A grant change still arrives while eight chats are live.
+connection is still eight. Before the follower subscribes another chat, it
+unsubscribes one it already opened. The chat it lets go is the least
+recently opened, by its own explicit open rather than by a frame. That
+unsubscribe is the follower's request. The server closes only the
+subscription the follower named. A raw ninth `conversation.subscribe` is
+refused `subscription_capacity` and closes nothing. The local replica of
+a chat the follower closed stays. It receives no frames until it is opened
+again, and then `conversation.subscribe` resumes with `after` from the
+cursor last applied. There is no second connection and no poller for the
+chat that was let go. A grant change still arrives while eight chats are
+live.
 
 `conversation.subscribe` is a bounded view, the same shape as
 `conversation.read`. It is not a record stream.
@@ -522,9 +537,16 @@ also sets the cursor to the same checkpoint, and the two commit together.
 The conversation commit stays in the conversation store. A crash after
 that commit and before the outbox write leaves the cursor behind the
 source. Restart, before it admits work, reads each granted conversation
-from its cursor, or from the start when the cursor is unset, and inserts
-a `queued` row for every checkpoint that does not have one. A checkpoint
-that already has a row keeps that delivery id. A crash while the attempt
+inside the cursor's incarnation, or from the start of the current
+incarnation when the cursor is unset, and inserts a `queued` row for every
+checkpoint of that incarnation that does not have one. A checkpoint that
+already has a row keeps that delivery id. A stream incarnation that is
+not the cursor's incarnation does not backfill. The cursor is marked
+reset-required and keeps the old checkpoint. `queued` and `retry scheduled`
+rows for the old incarnation are written `not sent`. A `sending` row is
+not cancelled. Restart does not clear a reset-required cursor. The owner
+resets it, and the next queue starts at the first checkpoint of the
+current incarnation. A crash while the attempt
 is waiting leaves the `queued` row. Restart admits each `queued` row, and
 each `retry scheduled` row whose `due_at` has arrived, in checkpoint
 order.
@@ -626,8 +648,9 @@ The token is HMAC-SHA256 over the canonical bytes of the current time
 window, the dial address, and the port, in that order. The window and the
 port are unsigned big-endian integers. The address is one numeric form,
 the same bytes for the same endpoint. The slice owns that encoding. A
-token copied onto a different address or port does not match. The key is a
-32-byte discovery MAC key shared with that one peer. It is not in the
+token copied onto a different address or port does not match. The key is the
+32-byte MAC key from the P-install derivation, shared with that one peer.
+This section does not define a second derivation. It is not in the
 announcement.
 
 Shipped pairing does not have that key. [`PeerRecord`](../../crates/nessa-server/src/peer_gateways/infrastructure/records.rs)
@@ -646,8 +669,10 @@ table. This section does not add a step. The dialing gateway stores the
 field on the peer file beside the pin. The granting gateway stores it on
 the pairing record that already keeps that peer's pin and `class: "peer"`.
 The key is not written into the credential, the grant, or the announcement.
-The peer-file schema version bumps once. A record this build cannot read
-stays unreadable for that peer only, as the peer file already does.
+This build writes the discovery field on a peer record it can already read.
+A record this build cannot read stays unreadable for that peer only, as
+the peer file already does. Startup does not rewrite it and does not invent
+a discovery key.
 
 A peer row from before this slice has no discovery key. Alpha does not
 invent one. That peer is left out of the announcement and cannot match a
@@ -704,7 +729,7 @@ decision.
 7. **G7.** Credential revoke or expiry does not change the grant epoch and does not remove the grant row. The webhook registration permit stops the next delivery. Rows: G-cred, W-cred.
 8. **G8.** `read` applies to a conversation and to a directory. `comment` and `drive` apply to a conversation. `write` and `exec` apply to a directory. Any other pairing is refused and writes nothing. Rows: G-caps.
 9. **G9.** A share of the same capabilities and constraints does not bump the epoch. Rows: G-same.
-10. **G10.** The refactor deletes `paired.peer_gateway`, bumps the metadata `user_version` once, and refuses a file this build cannot read. Rows: G-migrate, G-migrate-refuse.
+10. **G10.** This build reads only a metadata file at its own version. A previous share shape, or any other version, is refused. Startup does not migrate, does not delete, and does not rewrite the file. The owner deletes it. There is no reader of the old row. Rows: G-current, G-refuse-old.
 11. **G11.** Credential revoke, credential expiry, and enrollment revoke remove the same-person link. A later credential does not inherit it. Rows: G-unlink.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
@@ -723,8 +748,8 @@ decision.
 | G-unlink | link present | `credential.revoke`, credential expiry, or enrollment revoke | The link names that gateway principal | link absent. Grant rows stay. A later credential does not inherit it. | The owner, or expiry | The link row is removed. Enrollment revoke does this in the same commit as P-revoke. Credential revoke commits in the credential store first, and this removal commits next. A crash between them is C-G-unlink. | Target the gateway principal, before the person link, after no link, cause credential revoked, expired, or enrollment revoked, initiator the owner or expiry |
 | G-cred | active | `credential.revoke` or credential expiry | The credential is the one that subject uses | active, same epoch | The owner, or expiry | Nothing on the grant row | None on the grant row. W-cred records the registration stop |
 | G-marker | active | Directory open finds a missing root, a missing marker, or different bytes | The grant's resource is that directory resource | absent | The open | Every grant for that resource is removed. The cause and the audit-failure rule are D-open-bad and D-audit-down. | D12. This row does not add a second cause |
-| G-migrate | old metadata file | The migration runs to completion | The file is the previous share shape | The new grant rows, one `user_version` bump | Startup | `paired.peer_gateway` is deleted. The bump is one. | Target the metadata file, before the old shape, after the new rows, cause migration, initiator startup |
-| G-migrate-refuse | metadata file | Process open | This build cannot read the file | Refused. The process does not serve that file. | Startup | Nothing | Refusal, cause unreadable metadata, initiator startup |
+| G-current | metadata file at this build's version | Process open | The file is this build's version | Open. The process serves that file. | Startup | Nothing. Startup does not rewrite the file. | None |
+| G-refuse-old | metadata file at another version | Process open | The version is not this build's, including the previous share shape | Refused. The process does not serve that file. | Startup | Nothing. Startup does not migrate, does not delete, and does not rewrite the file. The owner deletes it. | Refusal, target the metadata file, before the other version, after refused, cause metadata version, initiator startup |
 
 ```mermaid
 sequenceDiagram
@@ -749,7 +774,7 @@ sequenceDiagram
 | C-G-share | After Cedar permits, before G-share commits | No row | Absent. Restart does not replay the share. The owner repeats it. |
 | C-G-bump | During an epoch bump, before G-bump commits | The previous epoch | The previous epoch. In-flight work keeps the epoch it read. |
 | C-G-revoke | Before G-revoke commits | The row still active | The row stays. The owner repeats the revoke. |
-| C-G-migrate | Before G-migrate commits | The old file | G-migrate-refuse if this build cannot read it. Otherwise the migration runs again. |
+| C-G-refuse | Startup reads a file at another version | The other version, unchanged | G-refuse-old again. Startup does not migrate and does not rewrite the file. |
 | C-G-unlink | After the credential is revoked or the phase is `Revoked`, before G-unlink commits | The link row is still present | Restart removes the link before admission reports the person. It does not recreate the link. |
 
 **Concurrency.**
@@ -768,7 +793,7 @@ sequenceDiagram
 | G-prec-cedar | Cedar's denial | A use-case write | Nothing is stored. |
 | G-prec-cred | A credential that is not current, for the next delivery | The grant epoch | The epoch stays. W-refuse sends nothing. |
 
-**Rejected.** Keying a paired grant by principal alone, or by the same-person link, would collapse two receivers. Keying by path would follow a replaced directory. A Rust principal match would decide beside Cedar.
+**Rejected.** Keying a paired grant by principal alone, or by the same-person link, would collapse two receivers. Keying by path would follow a replaced directory. A Rust principal match would decide beside Cedar. A startup migration of the previous share shape would invent a reader of a file this build refuses.
 
 ### Webhook delivery outbox
 
@@ -788,7 +813,7 @@ serializes revoke and delivery. The permit generation is in-process.
 1. **W1.** One active registration per integration principal. A second `credential.issue` while one is active writes nothing. After that registration is stopped, a later issue creates one new registration. Rows: W-issue, W-issue-refuse, W-reissue.
 2. **W2.** One delivery id per checkpoint per registration. A checkpoint that already has a row keeps that id. Rows: W-queue, W-queue-exists.
 3. **W3.** One writer advances the replay cursor for a registration and conversation, in checkpoint order, only to the next contiguous checkpoint, in the same write as that row. Rows: W-queue, W-cursor-race.
-4. **W4.** The conversation source beats a cursor that is behind it. Restart fills each missing checkpoint in order and does not skip a hole. Rows: W-queue, C-W-gap.
+4. **W4.** Within one incarnation, the conversation source beats a cursor that is behind it. Restart fills each missing checkpoint of that incarnation in order and does not skip a hole. A different incarnation is not a hole. Rows: W-queue, C-W-gap, W-incarnation.
 5. **W5.** The `queued` row commits before the attempt waits for the permit. Rows: W-queue.
 6. **W6.** `sending` is recorded before any POST byte and is not replaced. A terminal record is appended beside it. Rows: W-send, W-sent, W-unknown.
 7. **W7.** If the `sending` write fails, no POST byte is written. The row is written `not sent`, cause audit unavailable, conditional on the row still being the state the attempt read, and that write commits before the permit drops. Rows: W-audit-fail.
@@ -802,14 +827,17 @@ serializes revoke and delivery. The permit generation is in-process.
 15. **W15.** Grant revoke and a delivery attempt share the registration permit. The attempt that holds it finishes under the epoch it read, and no longer than `webhook.post_deadline`. The next admission finds no grant row. Rows: W-revoke, W-revoke-wait, G-inflight, G-next.
 16. **W16.** The signed timestamp is written in the `sending` commit, before any POST byte. A later admission of that delivery id uses that stored timestamp and does not read the clock again. Rows: W-send, W-post.
 17. **W17.** `webhook.post_deadline` records `timed out` only while this attempt has not read a complete response. A complete response commits its own outcome, including when that commit is the deadline's write. `timed out` does not replace it. Rows: W-timeout, W-deadline-known, W-prec-response.
+18. **W18.** An incarnation change does not advance the cursor and does not backfill. The old checkpoint is retained and the cursor is marked reset-required. `queued` and `retry scheduled` rows for the old incarnation are written `not sent`. A `sending` row is not cancelled. The new incarnation is queued only after the owner resets that cursor. Restart does not reset it. Rows: W-incarnation, W-reset, C-W-incarnation, C-W-reset.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | W-issue | registration none | `credential.issue` | No active registration for that integration principal | registration active | The owner | One registration, its URL, its mac key, and one credential | Target the principal, before none, after active, cause issue, initiator the owner |
 | W-issue-refuse | registration active | `credential.issue` | A registration for that principal is already active | registration active | The owner | Nothing. No credential and no second registration. | Refusal, cause registration active, initiator the owner |
 | W-reissue | registration stopped | `credential.issue` | The previous registration is stopped | registration active, a new URL and mac key | The owner | One new registration and one credential | Target the principal, before stopped, after active, cause issue, initiator the owner |
-| W-queue | no outbox row | The conversation checkpoint has committed, and this registration has a grant | This writer holds the cursor. The cursor is unset and this is the first checkpoint, or the cursor is the previous checkpoint. No row exists for this checkpoint. | queued | The live reader, or restart | The queued row (delivery id, registration, checkpoint) and the cursor set to that same checkpoint. The conversation commit is not in this write. This commit finishes before the attempt waits for the permit. | Target the delivery id, before no row, after queued, cause source ahead of cursor, initiator the reader or restart |
+| W-queue | no outbox row | The conversation checkpoint has committed, and this registration has a grant | This writer holds the cursor. The cursor is not reset-required. Either the cursor is unset and this checkpoint is the first of the conversation's current incarnation, or the cursor names the previous checkpoint of this same incarnation. No row exists for this checkpoint. | queued | The live reader, or restart | The queued row (delivery id, registration, checkpoint) and the cursor set to that same checkpoint. The conversation commit is not in this write. This commit finishes before the attempt waits for the permit. | Target the delivery id, before no row, after queued, cause source ahead of cursor, initiator the reader or restart |
 | W-queue-exists | a row for this checkpoint | A second insert | A row already stores this checkpoint for this registration | That row's state, same delivery id | The live reader, or restart | Nothing | None |
+| W-incarnation | cursor at incarnation I | The stream incarnation is J, and J is not I | The cursor names a checkpoint of I and is not yet reset-required | reset-required, still naming I and its position. No row is queued for J. | The live reader, or restart | Mark the cursor reset-required. Write every `queued` or `retry scheduled` row for that registration, conversation, and I as `not sent`, cause incarnation replaced. A `sending` row is not cancelled. | Target the registration and conversation, before cursor at I, after reset-required holding I, cause incarnation changed, initiator the reader or restart |
+| W-reset | reset-required | The owner resets the webhook cursor | The owner asks. Restart does not. | Cursor unset for the current incarnation. Old outbox rows stay keyed by their incarnation and stay terminal. | The owner | The cursor is cleared in this commit. The next W-queue starts at the first checkpoint of the current incarnation. | Target the registration and conversation, before reset-required at I, after unset, cause owner reset, initiator the owner |
 | W-send | queued or retry scheduled | The attempt takes the permit | The epoch allows delivery. The credential is current. From `retry scheduled`, `due_at` has arrived. The `sending` write commits, or the `sending` record is already stored. | sending | The delivery attempt | From `queued`: `sending`, the target, the delivery id, the epoch read, credential current, and the signed timestamp. This commit finishes before any POST byte. From `retry scheduled`: the stored timestamp and delivery id stay. The clock is not read again. | Target the delivery id, before queued or retry scheduled, after sending, cause admitted, initiator the attempt, epoch the one read |
 | W-audit-fail | queued or retry scheduled | The `sending` write fails | No POST byte has been written. The `not sent` write commits, conditional on the row still being the state the attempt read. | not sent | The delivery attempt | `not sent`, same delivery id, cause audit unavailable. This commit finishes before the permit drops. | Target the delivery id, before queued or retry scheduled, after not sent, cause audit unavailable, initiator the attempt |
 | W-deadline-queued | queued or retry scheduled, permit held | `webhook.post_deadline`, measured from when this attempt took the permit | The `sending` write did not commit and the `not sent` write did not commit | That same state. The permit drops. | The deadline, on that same attempt | None. The attempt discards its uncommitted write before the drop. | None. The delivery is not terminal. |
@@ -846,7 +874,9 @@ sequenceDiagram
 
 | Row | Crash point | On disk | Restart |
 | --- | --- | --- | --- |
-| C-W-gap | After the conversation commit, before W-queue commits | The checkpoint is in the conversation stream. The cursor is behind it. No row for that checkpoint. | W-queue, in order. A checkpoint that already has a row takes W-queue-exists. |
+| C-W-gap | After the conversation commit, before W-queue commits, inside the cursor's incarnation | The checkpoint is in that incarnation. The cursor is behind it. No row for that checkpoint. | W-queue, in order, for that incarnation. A checkpoint that already has a row takes W-queue-exists. |
+| C-W-incarnation | After the stream incarnation changes, before W-incarnation commits | The cursor still names incarnation I. No row has been queued for J. | W-incarnation. Restart does not queue J and does not clear the cursor. |
+| C-W-reset | After W-incarnation commits, before the owner resets | reset-required, holding I. `queued` and `retry scheduled` rows for I are `not sent`. | Leave the cursor. Restart does not reset it and does not queue J. |
 | C-W-queued | While `queued`, waiting for the permit, or after W-deadline-queued | `queued` | Admit the row. The permit died with the process. |
 | C-W-sending | After `sending` commits and before a terminal record commits, whether or not a POST byte was written | `sending`, no terminal record | W-unknown. That delivery id is not posted again. |
 | C-W-due | After W-retry commits | `retry scheduled` and `due_at` | W-wait until `due_at`, then W-due. Same delivery id. |
@@ -857,7 +887,8 @@ sequenceDiagram
 
 | Row | Pair | Winner |
 | --- | --- | --- |
-| W-cursor-race | Two writers of one registration and conversation cursor | One writer. The waiter reloads. The cursor moves only to the next contiguous checkpoint, in the same write as that row. |
+| W-cursor-race | Two writers of one registration and conversation cursor | One writer. The waiter reloads. The cursor moves only to the next contiguous checkpoint of its incarnation, in the same write as that row. |
+| W-incarnation-race | W-incarnation against an admission of a `queued` or `retry scheduled` row for the old incarnation | The `not sent` write commits only while the row is still `queued` or `retry scheduled`. A row already `sending` finishes under W-send and is not cancelled. |
 | W-permit-race | Two admissions of one queued row, or revoke against an admission | One permit. The waiter reloads. The holder finishes under the epoch it read, bounded by `webhook.post_deadline`. |
 | W-audit-race | A late `not sent` or `sending` write against the deadline drop, or against a newer admission | The write commits only while the row is still the state it guarded. The deadline writes no outbox state. The first conditional commit wins, and the other does not apply. |
 | W-terminal-race | Two terminal records for one `sending` row, including restart's `unknown` and a late response | The first terminal commit wins. A later write does not replace it and does not POST that id. A `timed out` write is refused once a complete response has been read. |
@@ -867,7 +898,8 @@ sequenceDiagram
 | Row | Higher | Lower | Result |
 | --- | --- | --- | --- |
 | W-prec-row | An outbox row already stored for that checkpoint | A second delivery id | The stored id stays. |
-| W-prec-source | The conversation record stream | A replay cursor behind it | Restart fills the hole. The cursor does not jump past a checkpoint with no row. |
+| W-prec-source | The conversation record stream, within the cursor's incarnation | A replay cursor behind it in that incarnation | Restart fills the hole. The cursor does not jump past a checkpoint with no row. A different incarnation is W-incarnation and is not filled. |
+| W-prec-incarnation | The cursor's incarnation | A newer stream incarnation | W-incarnation. The old checkpoint stays. Nothing is queued for the new incarnation until W-reset. |
 | W-prec-sending | The `sending` record | A terminal outcome | `sending` stays. The outcome is appended beside it. |
 | W-prec-terminal | The first committed terminal record | A later outcome, including upgrading `unknown` to `sent` | The first record stays. |
 | W-prec-url | The registered URL | A redirect target | W-3xx. Signature headers are not sent to the other origin. |
@@ -877,20 +909,23 @@ sequenceDiagram
 | W-prec-response | A complete response this attempt has read | `timed out` | W-deadline-known. The deadline commits that outcome. |
 | W-prec-stamp | The timestamp stored on `sending` | A fresh clock read on retry | W-post uses the stored timestamp. |
 
-**Rejected.** An in-memory retry after a terminal `retry scheduled` loses the delivery on exit. One transaction across the conversation store and the outbox is not available. A second registration for one principal would POST to a URL the first issue did not register. Replaying `sending` can deliver twice. Two cursor writers can commit checkpoint N+1 ahead of N.
+**Rejected.** An in-memory retry after a terminal `retry scheduled` loses the delivery on exit. One transaction across the conversation store and the outbox is not available. A second registration for one principal would POST to a URL the first issue did not register. Replaying `sending` can deliver twice. Two cursor writers can commit checkpoint N+1 ahead of N. Backfilling a new stream incarnation from the old cursor, or clearing that cursor on restart, would deliver a stream the owner has not reset.
 
 ### Directory binding
 
 **Source of truth.** The directory resource row: environment, minted
-resource id, canonical path, and the 32-byte binding. Subject grants
-point at that resource id. The binding checked at open is the bytes of
-`.nessa-binding`, read through a directory handle. A grant row does not
-store a second binding. Device and inode numbers are not a source.
+resource id, canonical path, and the 32-byte binding. A share attaches a
+grant only when the stored environment, the stored canonical path, and
+the binding bytes are the directory being shared. Subject grants point
+at that resource id. The binding checked at open is the bytes of
+`.nessa-binding`, read through a directory handle on that stored path.
+A grant row does not store a second binding. Device and inode numbers
+are not a source. Binding bytes alone are not a source.
 
 **Invariants.**
 
-1. **D1.** The resource id is not the path. Marker bytes beat the path, the device, and the inode. Rows: D-open-bad, D-prec-marker.
-2. **D2.** One resource stores a binding. A second share does not mint another resource for that binding. Rows: D-second, D-adopt.
+1. **D1.** The resource id is not the path. Open checks the resource's stored environment and canonical path, then the marker bytes. Device and inode numbers are not an identity. A copy of the marker at another path is not this resource. Rows: D-open-ok, D-open-bad, D-prec-marker, D-copy.
+2. **D2.** One binding value is one resource, and the environment and canonical path are part of that identity. A second share of the same directory does not mint another resource. A share at a different environment or path that presents the same bytes is refused. Rows: D-second, D-adopt, D-copy.
 3. **D3.** The marker is created only when the file is absent. A create leaves an existing file unchanged. A later share does not rewrite the marker. Rows: D-create, D-second.
 4. **D4.** A failed grant commit leaves the marker and every grant already stored. Rows: D-grant-fail.
 5. **D5.** The marker is removed only when this attempt created the file and no committed resource stores that binding. Rows: D-cleanup, D-cleanup-keep.
@@ -901,18 +936,18 @@ store a second binding. Device and inode numbers are not a source.
 10. **D10.** The name `.nessa-binding` is refused to `read`, `write`, and `exec`. The grantor's open is the reader of that file. Grants stay. Rows: D-name.
 11. **D11.** `exec` is admitted only when the process cannot open `.nessa-binding` at all and every sandbox root is inside the granted directory. A profile that exposes that name is refused `exec`. Sandbox `none` is refused `exec`. A root outside the granted directory is refused `exec`. Rows: D-exec, D-exec-hide, D-exec-none, D-exec-root.
 12. **D12.** A marker mismatch records the resource id, before active, after absent, cause marker missing or marker bytes differ, and the open as initiator. A repeated open keeps that first cause. If the audit sink is unavailable, the grants are still removed, the use is still refused, and the result says the audit was not recorded. Rows: D-open-bad, D-open-again, D-audit-down.
-13. **D13.** Copying the marker into another directory is an explicit copy. The copied bytes match. This proposal adds no operating-system generation. Rows: D-copy.
+13. **D13.** Copying the marker into another directory is refused. The copied bytes do not attach a grant. This proposal adds no operating-system generation. Rows: D-copy.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| D-create | absent, file absent | First share | This attempt holds the directory lease. The create finds the file absent. | minted, after the resource commit. The grant follows in its own commit. | The owner's share | The file create is not the resource commit. The resource commit stores the row for those 32 bytes. The grant commit is the next commit, G-share. A crash between the create and the resource commit is C-D-create. | Target the resource id, before absent, after minted, cause first share, initiator the owner. Written with the resource commit. |
-| D-adopt | absent, file present | Share finds an orphan marker | No resource row stores those bytes. This attempt holds the lease. | minted | The owner's share | Commit the resource row for the bytes already in the file. The file is not rewritten. Then G-share. | Target the resource id, before absent, after minted, cause adopt, initiator the owner |
-| D-second | minted | Share to another subject | A resource already stores that binding | minted, same marker bytes | The owner's share | Another grant row for the same resource id. No marker write. | The new grant's G-share audit. The first grant is not rewritten. |
+| D-create | absent, file absent | First share | This attempt holds the directory lease. The create finds the file absent. No resource stores these bytes. | minted, after the resource commit. The grant follows in its own commit. | The owner's share | The file create is not the resource commit. The resource commit stores the environment, the canonical path, and those 32 bytes. The grant commit is the next commit, G-share. A crash between the create and the resource commit is C-D-create. | Target the resource id, before absent, after minted, cause first share, initiator the owner. Written with the resource commit. |
+| D-adopt | absent, file present | Share finds an orphan marker | No resource row stores those bytes. This attempt holds the lease. | minted | The owner's share | Commit the resource row for this environment, this canonical path, and the bytes already in the file. The file is not rewritten. Then G-share. | Target the resource id, before absent, after minted, cause adopt, initiator the owner |
+| D-second | minted | Share to another subject of this same directory | A resource stores that binding, and its stored environment and canonical path are this directory | minted, same marker bytes | The owner's share | Another grant row for the same resource id. No marker write. | The new grant's G-share audit. The first grant is not rewritten. |
 | D-grant-fail | minted | The grant commit fails | The resource commit has already happened | minted. Existing grants stay. | The owner's share | Nothing further. The marker stays. | None for the failed grant. The resource audit from D-create or D-adopt stays. |
 | D-cleanup | absent | The resource commit fails | This attempt created the file. No committed resource stores that binding. | absent, file absent | The owner's share, before it releases the lease | Remove the marker this attempt created | Target the path, before file created, after file absent, cause resource commit failed, initiator the share |
 | D-cleanup-keep | minted | Cleanup runs | A committed resource stores that binding | minted. The file stays. | The owner's share | Nothing | None |
 | D-lease | any | A second share of that canonical directory | A share already holds the lease for that canonical path in that environment | The second share has not read the file yet | The second share waits | None until the lease holder commits its resource or finishes D-cleanup | None until the waiter proceeds |
-| D-open-ok | minted | Open | The directory handle's `.nessa-binding` bytes equal the resource binding | minted | The grantee's use, checked by the grantor | Nothing. The no-follow walk starts from that handle. | None |
+| D-open-ok | minted | Open | The directory handle is the resource's stored canonical path in its environment, and that handle's `.nessa-binding` bytes equal the resource binding. A copy at another path is not an open of this resource. | minted | The grantee's use, checked by the grantor | Nothing. The no-follow walk starts from that handle. | None |
 | D-open-bad | minted | Open | The root is missing, the marker is missing, or the bytes differ. Device and inode reuse without the same marker bytes is this guard. | revoked. Every grant for that resource is removed. | The open | Remove those grant rows even when the audit write fails. See D-audit-down. | Target the resource id, before active, after absent, cause marker missing or marker bytes differ, initiator the open |
 | D-open-again | revoked | A later open finds the same mismatch | A mismatch audit for that resource has already committed | revoked. Grants stay absent. | The open | Nothing | None. The first cause stays. |
 | D-audit-down | minted | Open, and the audit sink is unavailable | The same guard as D-open-bad | revoked. The use is refused. | The open | The grant rows are still removed | No audit record. The refusal says the audit was not recorded. |
@@ -922,7 +957,7 @@ store a second binding. Device and inode numbers are not a source.
 | D-exec-hide | minted | `exec` | The sandbox can expose `.nessa-binding` to the process, including read-only | minted. `exec` is refused. The process does not start. | The grantor | Nothing | Refusal, cause marker visible to the process, initiator the command |
 | D-exec-none | minted | `exec` | The environment can only run sandbox `none` | minted. `exec` is refused. | The grantor | Nothing | Refusal, cause sandbox none, initiator the command |
 | D-exec-root | minted | `exec` | A sandbox root is outside the granted directory | minted. `exec` is refused. | The grantor | Nothing | Refusal, cause root outside the grant, initiator the command |
-| D-copy | minted | `.nessa-binding` is copied into another directory | The bytes match a stored binding | The copy compares equal at open. This proposal adds no generation to distinguish it. | An actor outside the grant, with its own write to that other directory | Nothing in this store. The copy is the other directory's file. | None. The known limit is the copied bytes. |
+| D-copy | minted | Share of a directory whose environment or canonical path differs | The marker bytes equal a stored binding, and the stored environment or canonical path is not this directory | No grant. The existing resource and its path stay. The file at this path is not rewritten and not removed. No generation is added. | The owner's share | Nothing | Refusal, target the existing resource id and the path offered, before no grant, after no grant, cause binding belongs to another directory, initiator the share |
 
 ```mermaid
 sequenceDiagram
@@ -933,7 +968,7 @@ sequenceDiagram
   Share->>Marker: create the file only when it is absent
   Share->>Resource: commit the resource row
   Share->>Grant: commit the first grant
-  Share->>Grant: a second subject attaches to the same resource
+  Share->>Grant: a second subject on that same path attaches to the same resource
   Note over Marker,Grant: a failed grant commit leaves the marker and the first grant
   Share->>Marker: open reads the file through the directory handle
   Marker-->>Grant: missing or different bytes revoke the grants
@@ -943,7 +978,7 @@ sequenceDiagram
 
 | Row | Crash point | On disk | Restart |
 | --- | --- | --- | --- |
-| C-D-create | After the create, before the resource commit | An orphan marker. No resource row. | Restart does not delete the file, because it cannot tell this create from a copy. The next share takes D-adopt. |
+| C-D-create | After the create, before the resource commit | An orphan marker. No resource row. | Restart does not delete the file. The next share of this same path takes D-adopt. A share of another path that presents the same bytes, once a resource exists, takes D-copy. |
 | C-D-resource | After the resource commit, before the grant commit | Minted resource, marker, no new grant | The next share takes D-second. D-cleanup-keep. |
 | C-D-cleanup | During D-cleanup, before the remove commits | The orphan marker may still be there | The next share takes D-adopt if the file remains. |
 | C-D-revoke | During D-open-bad, before the grant removal commits | Grants still present. Marker still missing or different. | The next open takes D-open-bad again. |
@@ -954,6 +989,7 @@ sequenceDiagram
 | Row | Pair | Winner |
 | --- | --- | --- |
 | D-lease | Two shares of one canonical directory | One lease on that canonical path, taken after canonicalization. The waiter reads the file only after the holder commits the resource or finishes D-cleanup. |
+| D-bind-race | Two shares of different paths whose marker bytes are equal, and neither resource has committed | One resource insert wins. The loser reloads and takes D-copy. No second resource is minted. The loser's subject gets no grant on the winner's path. |
 | D-share-open | Share against open, before the resource commit | Open sees no resource, so it sees no grants. An orphan marker is not a grant. Open does not mint. |
 | D-name-race | A grantee names `.nessa-binding` against the grantor's open | D-name. The grantee does not become a reader. |
 | D-exec-race | `exec` against a profile that can open the marker | D-exec-hide. The process does not start. |
@@ -962,13 +998,13 @@ sequenceDiagram
 
 | Row | Higher | Lower | Result |
 | --- | --- | --- | --- |
-| D-prec-marker | Marker bytes | The path, the device, and the inode | A recreated directory with no marker, or with different bytes, takes D-open-bad. |
-| D-prec-resource | A resource row that stores the binding | A second mint, or D-cleanup | D-second or D-cleanup-keep. The file is not rewritten. |
+| D-prec-marker | Marker bytes on the stored path | The path alone, the device, and the inode | A recreated directory with no marker, or with different bytes, takes D-open-bad. A copy at another path is D-copy. |
+| D-prec-resource | A resource row that stores the binding for this environment and canonical path | A second mint, D-adopt, or D-cleanup | D-second or D-cleanup-keep. The file is not rewritten. D-adopt does not apply once a resource stores those bytes. A different path is D-copy, not D-second. |
 | D-prec-orphan | Bytes already in an orphan file | A fresh 32-byte mint | D-adopt. |
 | D-prec-cause | The first committed mismatch cause | A later open | D-open-again. |
 | D-prec-exec | A sandbox that cannot hide `.nessa-binding`, sandbox `none`, or a root outside the grant | `exec` admission | D-exec-hide, D-exec-none, or D-exec-root. |
 
-**Rejected.** The path as the resource id follows a later directory. Device and inode numbers are reused. An operating-system generation is not added. Rewriting the marker on every share drops the first subject's binding. A count of in-flight sharers is a second protocol beside the one lease.
+**Rejected.** The path as the resource id follows a later directory. Device and inode numbers are reused. An operating-system generation is not added. Rewriting the marker on every share drops the first subject's binding. A count of in-flight sharers is a second protocol beside the one lease. Attaching a grant because the marker bytes match a resource stored at another path would open that other path.
 
 ### Grant subscription stream and cursor
 
@@ -981,7 +1017,7 @@ connection. It is not a second catalogue.
 
 **Invariants.**
 
-1. **U1.** `socket.conversation_subscriptions` is 8. A ninth `conversation.subscribe` on that socket is not opened. The least recently opened chat, by an explicit open, is let go and stays a cold replica. The grant subscription is one target per connection and is not a conversation slot. A second grant subscription is refused `subscription_capacity`. Rows: U-cap, U-grant-cap.
+1. **U1.** `socket.conversation_subscriptions` is 8. A ninth `conversation.subscribe` on that socket is refused `subscription_capacity` and closes no existing subscription. The follower may unsubscribe one chat it opened before it subscribes another. That close is the follower's request. The least recently opened chat is the follower's local choice, by an explicit open, and stays a cold replica. The server does not choose the victim. The grant subscription is one target per connection and is not a conversation slot. A second grant subscription is refused `subscription_capacity`. Rows: U-cap, U-local-close, U-grant-cap.
 2. **U2.** The grant cursor position is opaque and per receiver. It is not an owner catalogue revision. A gap from the owner's other work does not appear in it. Rows: U-cursor.
 3. **U3.** A frame cut on a grant boundary at the 64 KiB product-frame bound is `complete: false`. It does not advance the stream cursor. `after` stays the last complete snapshot. The frame names the last grant in its prefix as `page`. Rows: U-page.
 4. **U4.** The first incomplete frame mints `snapshotId`. The follower sends `page` and `snapshotId` with the same `after`. The server serves the next prefix of that pinned snapshot. Rows: U-page, U-continue.
@@ -990,7 +1026,7 @@ connection. It is not a second catalogue.
 7. **U7.** Every stored grant fits in one frame with the frame overhead. `conversation.share` refuses a grant past that cap and writes nothing. The subscription is not ended `too_large`. Rows: U-fit.
 8. **U8.** A record-hint frame on `conversation.subscribe` is the wake. It carries the subscription id and the head cursor `{incarnation, position}`. It is sent when the record head moves, including when the bounded view is unchanged. The follower then calls `recordsHead` and `recordsPage`. A view frame is not the wake. `conversation.watchRecords` stays the retained phone path. Rows: U-hint.
 9. **U9.** An Active peer has no `PeerPoller` timer. Two waits remain: the status dial until Active or Revoked, and the connect backoff. Neither reads the catalogue. Rows: U-dial, U-backoff.
-10. **U10.** Reconnect resumes from the cursors last applied and does not move a cursor backwards in the same incarnation. `cursor_ahead` is refused. A follower with no `after` receives a full snapshot and replaces its local grant replica. A frame does not write a grant row. Rows: U-resume, U-ahead, U-full.
+10. **U10.** Reconnect resumes from the cursors last applied and does not move a cursor backwards in the same incarnation. `cursor_ahead` is refused. A grant-stream `after` whose incarnation is not the server's current incarnation is refused. The follower drops that `after` and takes a full snapshot. The server does not merge the two incarnations. A conversation view still follows #851: a new incarnation replaces the view. A follower with no `after` receives a full snapshot and replaces its local grant replica. A frame does not write a grant row. Rows: U-resume, U-ahead, U-full.
 11. **U11.** The follower's durable `after` is written only when a frame is `complete: true`. `page` and `snapshotId` are not required to be durable. Rows: U-done, U-page.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
@@ -1004,9 +1040,10 @@ connection. It is not a second catalogue.
 | U-lost | paging | The server no longer holds the pin | Restart, or the pin was dropped | open at `after`. `page` is discarded. | The follower | None. `after` stays. | None |
 | U-drop | paging | The follower disconnects | A pin is held | closed. The pin is dropped. | The connection | None. The follower's `after` stays the last complete snapshot. | None |
 | U-full | closed or open | Subscribe with no `after` | The follower has no durable cursor | open, after the full snapshot is applied. The local grant replica is replaced by that snapshot. | The follower | The follower stores `after` at U-done | None. No grant row is written. |
-| U-resume | closed | Reconnect | The follower has `after` and the record cursor it last applied | open at those cursors. A cursor does not move backwards in the same incarnation. | The follower | None until U-done | None |
+| U-resume | closed | Reconnect | The follower has a grant-stream `after` for the server's current incarnation, and the record cursor it last applied. A grant-stream `after` from another incarnation is refused. The follower drops that `after` and takes U-full. The server does not merge. | open at the matching grant-stream `after`. A conversation view follows #851, which replaces the view on a new incarnation. A cursor does not move backwards in the same incarnation. | The follower | None until U-done | Refusal when the grant-stream incarnation differs, cause incarnation changed, initiator the follower. None when the incarnation matches. |
 | U-ahead | open | The follower presents a cursor ahead of the stream | `cursor_ahead` | open. The presented cursor is refused. | The follower | Nothing | Refusal, cause cursor ahead, initiator the follower |
-| U-cap | eight conversation subscriptions | A ninth `conversation.subscribe`, or a ninth chat the rule would follow | The cap is `socket.conversation_subscriptions` | The least recently opened chat, by an explicit open, is unsubscribed. Its replica and cursor stay. The grant subscription stays. | The follower | The follower records which chat is cold | None on a grant row |
+| U-cap | eight conversation subscriptions | A ninth `conversation.subscribe` | The socket already holds `socket.conversation_subscriptions` | The ninth is refused `subscription_capacity`. No existing subscription is closed. The grant subscription stays. | The server | Nothing | Refusal, cause subscription capacity, initiator the subscriber |
+| U-local-close | eight conversation subscriptions | The follower unsubscribes one chat before it subscribes another | The follower names the subscription. The least recently opened chat is the follower's choice, by its own explicit open, not by frame arrival. | That named chat is unsubscribed and stays a cold replica. The server closes only the subscription the follower named. | The follower | The follower records which chat is cold | None on a grant row |
 | U-grant-cap | one grant subscription | A second grant subscribe on that socket | One grant target is already open | closed for the second target. The first stays. | The follower | Nothing | Refusal, cause subscription capacity, initiator the follower |
 | U-fit | absent or active | `conversation.share` or an epoch bump | The encoded grant would not fit in one frame with the frame overhead | Unchanged | The owner | Nothing | Refusal, cause grant frame, initiator the owner. The subscription is not ended `too_large`. |
 | U-hint | a chat subscription is open | The record head moves | The head cursor changed, whether or not the bounded view changed | The subscription stays. The follower calls `recordsHead`, then `recordsPage` from the cache cursor. | The grantor's subscription task | The follower writes the records it applies. The hint itself is not the cursor. | None |
@@ -1041,7 +1078,7 @@ sequenceDiagram
 | Row | Pair | Winner |
 | --- | --- | --- |
 | U-pin-race | A grant change against a held pin | U-change. The pin stays. The change is the next snapshot. |
-| U-cap-race | A ninth chat against the grant subscription | U-cap. The grant target stays. The least recently opened chat loses its conversation slot. |
+| U-cap-race | A ninth `conversation.subscribe` against the grant subscription | U-cap. The grant target stays. No chat is evicted. |
 | U-hint-race | An unchanged bounded view against a moved record head | U-hint. The hint is sent. The view frame is not the wake. |
 
 **Precedence.**
@@ -1052,10 +1089,10 @@ sequenceDiagram
 | U-prec-after | `after` | A `page` whose pin is gone | U-lost. `page` is discarded. |
 | U-prec-cursor | This receiver's opaque cursor | An owner catalogue revision | U-cursor. Catalogue gaps are not stream gaps. |
 | U-prec-hint | The record-hint frame | "No frame when the view is unchanged" | U-hint |
-| U-prec-open | An explicit open | Frame arrival, for eviction order | U-cap |
+| U-prec-open | The follower's explicit unsubscribe | A ninth subscribe, for which chat goes cold | U-local-close. The server does not rank open order. U-cap closes nothing. |
 | U-prec-grant | The grant rows | A replayed frame | The frame writes nothing. U-full replaces the local replica from the rows. |
 
-**Rejected.** Ending the subscription `too_large`, advancing `after` on `complete: false`, and keeping `PeerPoller` as the Active peer's grant path are each a second cursor. `conversation.watchRecords` stays the phone path because one record watch cannot wake every chat on this connection.
+**Rejected.** Ending the subscription `too_large`, advancing `after` on `complete: false`, and keeping `PeerPoller` as the Active peer's grant path are each a second cursor. `conversation.watchRecords` stays the phone path because one record watch cannot wake every chat on this connection. The server unsubscribing a chat the follower did not name, to make room for a ninth subscribe, would close a slot the follower still holds. Merging a grant-stream `after` from another incarnation would keep a cursor the server has replaced.
 
 ### Pairing and discovery
 
@@ -1083,19 +1120,21 @@ pin. The LAN section does not add a discovery step.
 11. **P11.** `Revoked` beats announce. `Active` is required before `keyed`. Rows: P-quiet, P-key, P-prec-phase.
 12. **P12.** The local ephemeral private key is durable before its public half is sent. A crash before that commit publishes nothing. Rows: P-key, P-publish, P-accept, C-P-keyed.
 13. **P13.** The dialer's generation id beats any other unfinished id. If both sides have minted, the lesser 32-byte id wins. The loser persists a new private key for the winning generation before it sends that public half. Rows: P-cross, P-accept.
+14. **P14.** The discovery MAC key is 32 bytes, produced by the P-install derivation. Each ephemeral key is X25519 (RFC 7748). A public key that is not the RFC 7748 32-byte encoding, or is 32 zero bytes, is rejected. A shared secret of 32 zero bytes is not installed. The raw shared secret is not stored. Rows: P-key, P-publish, P-install, P-reject.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | P-pending | no enrollment | Enrollment starts | The one-use code | Pending. No session and no grant stream. | Pairing | The peer record at `Pending` | Target the peer, before none, after Pending, cause enrollment, initiator the owner |
 | P-active | Pending | Enrollment completes | The credential id and the receiver are stored | Active. No phase is added. Subscriptions can open. Discovery field is `none` until P-key or P-accept. | Enrollment | The phase `Active`, the credential id, and the receiver. No phase besides `Pending`, `Active`, and `Revoked`. | Target the peer, before Pending, after Active, cause enrollment complete, initiator the owner |
 | P-revoke | Pending or Active | Enrollment revoke | The owner's revoke | Revoked. No announcement. | The owner | The phase `Revoked`. A same-person link for this peer is removed by G-unlink in this commit. | Target the peer, before Pending or Active, after Revoked, cause revoke, initiator the owner |
-| P-key | none, phase Active | The dialer mints one generation | This side is the dialer. The phase is Active. No generation is unfinished. A new generation does not start while one is unfinished. | keyed | The dialer | The generation id, 32 bytes, and this side's ephemeral private key. No peer public. No discovery byte is sent in this commit. | Target the peer, before none, after keyed, cause local key, initiator this gateway |
-| P-publish | keyed or offered | Send this side's public half | The ephemeral private key for this generation is already durable. The bytes are the public key of that private key. The private key is durable before its public half is sent. | The same state | This gateway | None | None |
-| P-offer | keyed | The peer's public key for this same generation is known | The `keyed` write has committed. The generation matches. | offered | This gateway | Add the peer's public key. `stored` is sent only after this commit. | Target the peer, before keyed, after offered, cause peer public, initiator this gateway |
-| P-accept | none, phase Active | The dialer's generation and public key arrive | This side is the granting gateway. It has not minted a generation. The phase is Active. | offered | The granting gateway | That generation, this side's new ephemeral private key, and the dialer's public key. This commit finishes before this side sends its public half. | Target the peer, before none, after offered, cause accept dialer generation, initiator this gateway |
-| P-cross | keyed or offered | The peer presents a different generation id | Both generation ids are known | The winning generation. The dialer's id beats a grantor-minted id. If both sides minted, the lesser 32-byte id wins. The winner keeps its private key. The loser replaces its generation. | This gateway | On the loser: the winning generation and a new ephemeral private key. The old peer public is dropped. This commit finishes before the new public half is sent. On the winner: nothing until a public key for the winning generation arrives. | Target the peer, before the losing generation, after the winning generation, cause dialer generation or lesser generation, initiator this gateway |
-| P-install | offered | Both sides have acked `stored` | This side's `offered` write has committed. The peer's `stored` has been seen. | installed | This gateway | The same generation and the MAC key. The ephemeral private key leaves in this write. `installed` is sent only after this commit. | Target the peer, before offered, after installed, cause discovery install, initiator this gateway |
-| P-peer-installed | offered | The peer sends `installed` for this generation | This side's `offered` write has committed, so the private key and the peer public are stored | installed | This gateway, on the peer's message | The same generation and the MAC key. The ephemeral private key leaves. | Target the peer, before offered, after installed, cause peer installed, initiator this gateway |
+| P-key | none, phase Active | The dialer mints one generation | This side is the dialer. The phase is Active. No generation is unfinished. A new generation does not start while one is unfinished. | keyed | The dialer | The generation id, 32 bytes, and this side's X25519 private key (RFC 7748), 32 bytes. The public half is the RFC 7748 32-byte little-endian encoding of that private key, and it is sent only after this commit. No peer public. No discovery byte is sent in this commit. | Target the peer, before none, after keyed, cause local key, initiator this gateway |
+| P-publish | keyed or offered | Send this side's public half | The ephemeral private key for this generation is already durable. The bytes are the RFC 7748 32-byte little-endian public encoding of that private key, and they are not 32 zero bytes. The private key is durable before its public half is sent. | The same state | This gateway | None | None |
+| P-offer | keyed | The peer's public key for this same generation is known | The `keyed` write has committed. The generation matches. The peer public is exactly 32 bytes and is not 32 zero bytes. Any other public key takes P-reject. | offered | This gateway | Add the peer's public key. `stored` is sent only after this commit. | Target the peer, before keyed, after offered, cause peer public, initiator this gateway |
+| P-accept | none, phase Active | The dialer's generation and public key arrive | This side is the granting gateway. It has not minted a generation. The phase is Active. The dialer's public key is exactly 32 bytes and is not 32 zero bytes. Any other public key takes P-reject. | offered | The granting gateway | That generation, this side's new X25519 private key (RFC 7748), 32 bytes, and the dialer's public key. The public half this side will send is the RFC 7748 32-byte little-endian encoding of that private key. This commit finishes before this side sends its public half. | Target the peer, before none, after offered, cause accept dialer generation, initiator this gateway |
+| P-cross | keyed or offered | The peer presents a different generation id | Both generation ids are known | The winning generation. The dialer's id beats a grantor-minted id. If both sides minted, the lesser 32-byte id wins. The winner keeps its private key. The loser replaces its generation. | This gateway | On the loser: the winning generation and a new X25519 private key (RFC 7748), 32 bytes. Its public half is the RFC 7748 32-byte little-endian encoding, sent only after this commit. The old peer public is dropped. On the winner: nothing until a public key for the winning generation arrives. | Target the peer, before the losing generation, after the winning generation, cause dialer generation or lesser generation, initiator this gateway |
+| P-reject | none, keyed, or offered | A public key is presented, or install would derive | The public key is not exactly 32 bytes, or it is 32 zero bytes, or X25519 of our private key and that public key is 32 zero bytes | The discovery field stays. No MAC key is stored. | This gateway | Nothing. The ephemeral private key stays until a later P-install. | Refusal, target the peer, before the current field, after the same field, cause public key rejected or shared secret all zeros, initiator this gateway |
+| P-install | offered | Both sides have acked `stored` | This side's `offered` write has committed. The peer's `stored` has been seen. Both public keys are exactly 32 bytes and neither is 32 zero bytes. The shared secret is X25519 (RFC 7748) of this side's private key and the peer's public key, and that secret is not 32 zero bytes. Otherwise P-reject. | installed | This gateway | The same generation and the 32-byte MAC key. The MAC key is HKDF-SHA256 (RFC 5869). Salt is the 32-byte generation id. IKM is the X25519 shared secret. Info is the 22 ASCII bytes of nessa-discovery-mac-v1, then the dialer's 32-byte public key, then the grantor's 32-byte public key, with no length prefix. L is 32. Role order is dialer then grantor on both sides. Dialer and grantor are the enrollment roles on the peer record, not the winner of P-cross. The label separates this announcement MAC from TLS, the enrollment PAKE, and the webhook HMAC. The raw shared secret is not stored. The ephemeral private key leaves in this write. `installed` is sent only after this commit. | Target the peer, before offered, after installed, cause discovery install, initiator this gateway |
+| P-peer-installed | offered | The peer sends `installed` for this generation | This side's `offered` write has committed, so the private key and the peer public are stored. The P-install derivation succeeds. A shared secret of 32 zero bytes takes P-reject and does not install. | installed | This gateway, on the peer's message | The same generation and the MAC key from the P-install derivation. The ephemeral private key leaves. | Target the peer, before offered, after installed, cause peer installed, initiator this gateway |
 | P-retry-keyed | keyed | The session drops | The `keyed` write has committed | keyed | This gateway | Nothing. Resend the public half of the stored private key. Do not mint. | None |
 | P-retry-offered | offered | The session drops | The `offered` write has committed | offered | This gateway | Nothing. Resend the stored public key and `stored`. Do not mint a new one. | None |
 | P-retry-installed | installed | The session drops | The `installed` write has committed | installed | This gateway | Nothing. Resend `installed`. Do not derive again. | None |
@@ -1151,7 +1190,7 @@ sequenceDiagram
 | P-prec-none | A missing discovery key | An invented key | P-old |
 | P-prec-token | The window, address, and port inside the HMAC | A token presented with a different address or port | No match |
 
-**Rejected.** Writing the peer's public key into the same first commit as the local private key, which made the public exchange precede the only durable write. Each side minting its own generation and keeping it. A stable fingerprint in the announcement, an unlinkability claim, a MAC key taken from the enrollment PAKE or from `#705`, a new generation on a half-written install, and `PeerPoller` as the Active follow path.
+**Rejected.** Writing the peer's public key into the same first commit as the local private key, which made the public exchange precede the only durable write. Each side minting its own generation and keeping it. A stable fingerprint in the announcement, an unlinkability claim, a MAC key taken from the enrollment PAKE or from `#705`, installing the raw X25519 shared secret as the MAC key, a new generation on a half-written install, and `PeerPoller` as the Active follow path.
 
 ### Finding to row
 
@@ -1220,14 +1259,19 @@ not add a rule.
 | 4278552023 | W-timeout, W-deadline-known, W-prec-response, W17 |
 | 4278552027 | W-send, W-post, W16 |
 | 4278552033 | G-unlink, G11 |
+| 4278630299 | D-copy, D-second, D2, D13 |
+| 4278630308 | W-incarnation, W-reset, C-W-incarnation, W18 |
+| 4278630314 | G-refuse-old, G-current, G10 |
+| 4278630316 | P-install, P-reject, P-key, P14 |
+| 4278630318 | U-cap, U-local-close, U1 |
 
 ## Open questions / known limits
 
 These limits are accepted. The row is the contract. This list does not add
 a procedure.
 
-- A copied `.nessa-binding` matches the stored binding (D-copy). No
-  generation is added on top of the marker.
+- A copied `.nessa-binding` at another path is refused (D-copy). No
+  generation is added. The existing resource stays on its stored path.
 - `unknown` means the POST may have left (W-unknown). There is no receiver
   acknowledgement.
 - The due time is `due_at` on the outbox row (W-due). There is no second
@@ -1291,10 +1335,13 @@ Part of the access-grant proposal in `docs/design/access-grants.md`.
 ## Deliver
 
 The contract is the grant table in Lifecycles and the primitive above.
-This slice writes resource kind `conversation`. It deletes
-`paired.peer_gateway`, bumps the metadata version once, and refuses a
-file this build cannot read. It updates `docs/design/read-grants.md` in
-the same change. It does not add a grant state.
+This slice writes resource kind `conversation`. This build writes only
+its own metadata version. A file at any other version, including the
+previous share shape, is refused and not rewritten. The owner deletes
+that file. There is no migration and no reader of the old row.
+`paired.peer_gateway` is not carried forward. It updates
+`docs/design/read-grants.md` in the same change. It does not add a grant
+state.
 
 ## Gate
 
@@ -1308,8 +1355,9 @@ paired grant is still found by its receiver. Two devices of one owner
 can each hold a grant on the same conversation. Two rows for the same
 subject and resource cannot both exist. A same-person link does not
 collapse two receiver subjects. A retry journals before
-equal to after. The previous metadata version is refused. A test fails if
-the capability check is removed from the permit.
+equal to after. The previous metadata version is refused. Startup does
+not rewrite it. A test fails if the capability check is removed from the
+permit.
 
 ## Depends on
 
@@ -1395,7 +1443,9 @@ and creating another at the same path does not keep the grant. The reuse
 test does that on a filesystem that reuses device and inode numbers and
 does not copy `.nessa-binding`. The open is refused and the grants are
 revoked. Sharing the same directory with a second subject leaves the
-first grant in place and leaves the marker bytes unchanged. A second
+first grant in place and leaves the marker bytes unchanged. Sharing a
+different directory whose marker bytes equal that resource is refused
+and writes no grant. A second
 share whose grant commit fails leaves the marker and the first grant. A
 subject with `write` is refused `.nessa-binding`, and the grants stay.
 An allowed program cannot read, unlink, or rewrite the marker. A profile
@@ -1471,10 +1521,10 @@ them backwards in the same incarnation. An Active peer has no poller
 timer. A pending
 enrollment still completes through the status dial, and that dial stops
 at Active. The follower does not call `conversation.watchRecords`.
-Following nine chats leaves the least recently opened one unsubscribed,
-and opening it subscribes it and lets another go. The grant subscription
-is still open while eight chats are live. A ninth `conversation.subscribe`
-on that socket is not opened.
+The follower unsubscribes one chat it opened before it subscribes
+another. A raw ninth `conversation.subscribe` is refused
+`subscription_capacity` and closes nothing. The grant subscription
+is still open while eight chats are live.
 
 ## Depends on
 
@@ -1499,8 +1549,9 @@ Following one granted chat leaves the peer's other granted chats out of
 the cache. A grant with no follow rule can be opened by an explicit choice
 and is not replicated on its own. Shrinking the rule drops the local
 replica. The grantor's catalogue is unchanged by the choice. Following
-nine granted chats leaves one unsubscribed. Opening that one subscribes
-it and lets another go.
+nine granted chats is the follower's choice: it unsubscribes one before
+it subscribes another. A raw ninth `conversation.subscribe` is refused
+and closes nothing.
 
 ## Depends on
 
@@ -1548,7 +1599,9 @@ conversation commit and before the outbox write is recovered from the
 replay cursor: restart inserts the missing `queued` row, and a checkpoint
 that already has a row keeps its delivery id. Two checkpoints of one
 registration and conversation commit in order. A crash cannot leave the
-cursor past a checkpoint that has no row. A crash after `retry
+cursor past a checkpoint that has no row. A new stream incarnation leaves
+the cursor reset-required at the old checkpoint and queues nothing for
+the new incarnation until the owner resets that cursor. A crash after `retry
 scheduled` and its `due_at` are written leaves that row. Restart admits
 the same delivery id once `due_at` has arrived. A second `credential.issue`
 while a registration is active is refused and writes nothing. After that
