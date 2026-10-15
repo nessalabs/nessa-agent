@@ -26,6 +26,9 @@ pub fn open(app: &AppHandle) {
         return;
     }
     crate::host_log::window_shown(DESKTOP_WINDOW);
+    if let Err(error) = platform::current().hold_window_controls(&window) {
+        crate::host_log::warn(format!("could not place the window controls: {error}"));
+    }
     let _ = window.unminimize();
     let _ = window.set_focus();
 }

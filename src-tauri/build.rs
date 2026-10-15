@@ -1,4 +1,5 @@
 mod build_stage;
+mod titlebar_geometry;
 
 use std::{collections::BTreeSet, env, fs, path::PathBuf};
 
@@ -34,12 +35,32 @@ fn main() {
         verify_frontend_stage(&known, &stage);
     }
     println!("cargo:rustc-env=NESSA_BUNDLE_STAGE={stage}");
+    write_titlebar_height();
 
     let attributes = tauri_build::Attributes::new().plugin(
         "dev-console",
         tauri_build::InlinedPlugin::new().commands(&["forward_webview_console"]),
     );
     tauri_build::try_build(attributes).expect("failed to build Tauri application metadata")
+}
+
+/// Hands the page's titlebar height to the host, which centres the traffic
+/// lights on the page's row (`titlebar_geometry.rs`).
+fn write_titlebar_height() {
+    println!("cargo:rerun-if-changed={}", titlebar_geometry::STYLES);
+    let css = fs::read_to_string(titlebar_geometry::STYLES)
+        .expect("the desktop stylesheet must be readable");
+    let height = titlebar_geometry::titlebar_height(&css)
+        .unwrap_or_else(|error| panic!("cannot read the titlebar height: {error}"));
+    let out = PathBuf::from(env::var("OUT_DIR").expect("Cargo must provide OUT_DIR"));
+    fs::write(
+        out.join("titlebar.rs"),
+        format!(
+            "/// `--desktop-titlebar-height` from `src/desktop/styles.css`, in points.\n\
+             pub const TITLEBAR_HEIGHT: f64 = {height:?};\n"
+        ),
+    )
+    .expect("the titlebar height must be writable");
 }
 
 fn verify_frontend_stage(known: &BTreeSet<String>, bundle: &str) {

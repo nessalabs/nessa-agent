@@ -113,6 +113,13 @@ pub trait Host: Send + Sync {
         Ok(())
     }
 
+    /// Keep the window's own controls (the macOS traffic lights) on the
+    /// titlebar row the desktop page draws its controls on. Hosts whose window
+    /// controls the page does not line up with ignore it.
+    fn hold_window_controls(&self, _window: &WebviewWindow) -> Result<(), String> {
+        Ok(())
+    }
+
     /// After the shared attach (size, frost, watches). Linux uses this to put
     /// the panel on the taskbar and show it; macOS leaves it hidden until the
     /// tray summons it.

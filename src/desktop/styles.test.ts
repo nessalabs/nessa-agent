@@ -35,6 +35,27 @@ it("glides without overshoot: the composer lands, and never passes its place", (
   )
 })
 
+it("moves the layout when the sidebar opens or closes, and stops only for reduced motion", () => {
+  // The sidebar's slide (`--desktop-slow`) and the panes' travel beside it
+  // (`--desktop-flight`) are seen many times a day and keep their motion, in
+  // the drawer band and under 300ms. Reduced motion is what makes them instant.
+  const token = (sheet: string, name: string) =>
+    new RegExp(`${name}:\\s*(\\d+)ms`).exec(sheet)?.[1]
+  const full = styles.slice(
+    0,
+    styles.indexOf(':root[data-motion="reduced"] [data-surface]'),
+  )
+  const reduced = /:root\[data-motion="reduced"\] \[data-surface\] \{([^}]*)\}/.exec(
+    styles,
+  )?.[1]
+  for (const name of ["--desktop-slow", "--desktop-flight"]) {
+    const duration = Number(token(full, name))
+    expect(duration, name).toBeGreaterThanOrEqual(200)
+    expect(duration, name).toBeLessThan(300)
+    expect(token(reduced ?? "", name), name).toBe("0")
+  }
+})
+
 it("keeps the surfaces' element resets weightless, so no component's own colour loses to them", () => {
   // `.workspace button { color: inherit }` once outranked `.desktop-send`'s own colour and
   // drew the send arrow in the colour of its fill. A reset under a surface is `:where(...)`.
