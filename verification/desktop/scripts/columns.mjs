@@ -24,6 +24,10 @@
  *                    between where they were and where they land: still, in a
  *                    window whose controls are placed from its edge (macOS),
  *                    and never under its traffic lights.
+ *   titlebar-row     the titlebar's controls are centred 24px below the window's
+ *                    top, the line the host centres the traffic lights on
+ *                    (`src-tauri/src/platform/macos/traffic_lights.rs`), in
+ *                    every frame of a sidebar toggle, with the rail open and closed.
  *   rail-off         the rail is a preview, off until Settings › Advanced ›
  *                    Experimental turns it on: off, there is no rail and no
  *                    toggle, nothing sits where the rail would, and "nessa
@@ -44,6 +48,7 @@ const checks = [
   "rail-corner",
   "rail-view-inert",
   "titlebar-steady",
+  "titlebar-row",
   "rail-off",
   "overview-covers",
   "rail-fold-focus",
@@ -75,6 +80,8 @@ Checks, per engine, layout and size:
   rail-view-inert  ⌘B, ⌘0 and ⌥⌘S under a full view change nothing behind it
   titlebar-steady  through a rail toggle the titlebar's controls stay between
                    where they were and where they land, every frame
+  titlebar-row     the titlebar's controls are centred 24px down, on the traffic
+                   lights' line, in every frame of ⌘B closing and opening the sidebar
   rail-off         with the preview off (the default): no rail, no toggle
   overview-covers  with the Agents overview open, the session list and the
                    panes under it are inert
@@ -443,6 +450,64 @@ const body = {
       }
     }
     return { runs, failures }
+  },
+
+  "titlebar-row": async ({ page, size }) => {
+    const failures = []
+    const runs = []
+    for (const rail of [true, false]) {
+      await arrange(page, size, { rail, sidebar: true })
+      for (const step of ["close", "open"]) {
+        await page.evaluate(
+          (sel) => {
+            window.__titlebarRows = []
+            const start = performance.now()
+            const tick = () => {
+              const titlebar = document.querySelector(sel.titlebar)
+              const half = titlebar ? titlebar.getBoundingClientRect().height / 2 : null
+              const centres = [...document.querySelectorAll(sel.controls)]
+                .filter((button) => getComputedStyle(button).visibility !== "hidden")
+                .map((button) => {
+                  const box = button.getBoundingClientRect()
+                  return {
+                    name: button.getAttribute("aria-label"),
+                    y: box.top + box.height / 2,
+                  }
+                })
+              window.__titlebarRows.push({ half, centres })
+              if (performance.now() - start < 700) requestAnimationFrame(tick)
+            }
+            requestAnimationFrame(tick)
+          },
+          { titlebar: css.titlebar, controls: `${css.titlebar} .desktop-icon-button` },
+        )
+        await page.keyboard.press(keys.toggleSidebar)
+        await rest(page, size)
+        const frames = await page.evaluate(() => window.__titlebarRows)
+        if (!frames.length || frames.some((frame) => frame.centres.length === 0))
+          throw new Error(
+            `rail ${rail ? "open" : "closed"}, ${step}: no titlebar control measured`,
+          )
+        runs.push({ rail, step, frames: frames.length })
+        // 24px is the native row centre too: the host reads the same height
+        // from styles.css (`src-tauri/titlebar_geometry.rs`).
+        for (const frame of frames) {
+          if (frame.half !== 24)
+            failures.push(
+              `rail ${rail ? "open" : "closed"}, ${step}: ` +
+                (frame.half === null
+                  ? "no titlebar"
+                  : `the titlebar is ${frame.half * 2}px tall, not 48`),
+            )
+          for (const { name, y } of frame.centres)
+            if (Math.abs(y - 24) > 0.5)
+              failures.push(
+                `rail ${rail ? "open" : "closed"}, ${step}: ${name} centred at ${y.toFixed(1)}px, not 24`,
+              )
+        }
+      }
+    }
+    return { runs, failures: [...new Set(failures)] }
   },
 
   "rail-off": async ({ page }) => {

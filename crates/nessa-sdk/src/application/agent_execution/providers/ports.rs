@@ -18,6 +18,7 @@ use crate::application::agent_execution::{
         PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
         PermissionResolution, QuestionAnswer,
     },
+    traces::LocalTraceStore,
 };
 use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
@@ -291,6 +292,14 @@ pub trait AgentProvider: Send + Sync {
     /// A panic without a returned cleanup handle leaves cleanup unprovable; Agent
     /// retains the protective storage lease for the process lifetime in that case.
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_>;
+    /// Finished GenAI spans this provider recorded, when it records them.
+    ///
+    /// Claude, Codex, and OpenCode return the store their sessions write.
+    /// Other providers return nothing. The store is shared across opens of
+    /// this factory. Reading it does not call the provider.
+    fn traces(&self) -> Option<Arc<LocalTraceStore>> {
+        None
+    }
     /// The same factory, starting its harness on `host` rather than as a
     /// child of this process: the binding, its permissions, its audit and
     /// its events stay here, and only the harness's standard streams cross.

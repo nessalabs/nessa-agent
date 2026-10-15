@@ -123,8 +123,10 @@ they wait on the operating system rather than the agent.
 
 Output queue count or byte overflow is a binding failure; events are not silently dropped while
 execution continues. The worker tears down the scope, then the reader reports the
-failure after previously queued events. Advisory usage/plan/metadata extensions
-are bounded and ignored; they cannot change capabilities or imply success.
+failure after previously queued events. Advisory plan and metadata extensions
+are bounded and ignored. `usage_update` is read only as trace attributes
+(context occupancy, and token counts when a payload actually carries
+`inputTokens` or `outputTokens`); it cannot change capabilities or imply success.
 
 Tool events are sparse patches: `None` means omitted, while `Some([])` replaces a
 collection with an empty collection. Text and file diffs are normalized into

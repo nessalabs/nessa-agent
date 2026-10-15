@@ -1,5 +1,6 @@
 //! Live responses and completion cancellation retain their operation deadlines.
 use super::*;
+use crate::application::agent_execution::traces::{ContentCapture, LocalTraceStore, TraceRecorder};
 use crate::application::agent_execution::{
     executions::ExecutionRequest, permissions::ActionContext,
 };
@@ -138,6 +139,7 @@ async fn blocked_worker(
         launch_cause: crate::application::agent_execution::executions::NativeHooksLaunchCause::Open,
         session_key: None,
         hold_remembered_allows: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        traces: TraceRecorder::new(LocalTraceStore::new(), ContentCapture::off()),
     };
     (worker, execution, receiver, recovery, clock)
 }

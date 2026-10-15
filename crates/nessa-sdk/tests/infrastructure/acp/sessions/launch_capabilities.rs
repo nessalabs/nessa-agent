@@ -18,6 +18,7 @@ use crate::application::agent_execution::providers::{
     ExecutableUseSnapshot, OperationCapabilities,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
+use crate::application::agent_execution::traces::LocalTraceStore;
 use crate::application::dto::{ModalitiesDto, ModelMetadataDto};
 use crate::domain::agent_execution::permissions::PermissionOfferPolicy;
 use crate::domain::agent_execution::tools::ToolCallUpdate;
@@ -185,6 +186,7 @@ fn published_when_start_fails(allowed: bool) -> ProviderOperationCapabilities {
         permission_sequence: Arc::new(AtomicU64::new(0)),
         question_sequence: Arc::new(AtomicU64::new(0)),
         hold_remembered_allows: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        traces: LocalTraceStore::new(),
         _stand_in_grant: None,
     };
     let Err(error) = factory.start(

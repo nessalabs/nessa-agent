@@ -46,11 +46,13 @@ opens it again; where there is no Dock either, closing it quits the app
 (`desktop_window::on_close`) — it is never destroyed while the app runs on,
 since nothing could open it again. On macOS an overlay titlebar retains the native traffic lights;
 a fixed full-width WindowTitlebar places the sidebar toggle beside them, without
-a title label or divider. The desktop window's `trafficLightPosition` (16, 26)
-centres the native buttons 24px below the window's top, and the titlebar's
-controls sit on the same 24px centre. Both were measured in the running macOS
-window through the accessibility frames of the close button and the window;
-recheck native geometry when changing the Tauri/Tao version or macOS version.
+a title label or divider. The host centres the native buttons 24px below the
+window's top (`platform/macos/traffic_lights.rs`), on the same centre as the
+titlebar's controls. It places them by their measured centre rather than a
+fixed offset, so a macOS release that redraws the buttons keeps them on the
+row. AppKit moves them back to its own spot on some changes without any
+notice (a title change does), so it checks them each time the main run loop
+is about to sleep and moves only a button that is off the row. `tauri.conf.json` sets no `trafficLightPosition`, so nothing else moves them.
 The inset is macOS-only; browser and other hosts use ordinary header padding.
 The surface uses the design system's dark theme. Back/forward controls are
 disabled because the single-view shell has no navigation history.
@@ -994,6 +996,15 @@ on the server-resolved gateway resource at operation admission. Admitted handler
 and responses may finish after revocation; later operations read the latest
 committed state. Only auth mutations serialize; network writes share no admission mutex. The HTTP `/health` probe returns
 only liveness, without product state.
+
+Currently the manifest generates method names and requested grants, while the
+gateway independently matches strings for handler routing, response lanes, execution capacity and
+paired-admission shape. [ADR 921](adr/todo/921-close-product-method-classification.md)
+proposes a generated closed method identity and one exhaustive gateway plan. Its
+[source catalogue and migration plan](design/product-method-classification.md)
+records the proposed cutover. It
+is not implemented: current runtime behavior, including unknown-method refusal
+and the separate control lane, is unchanged.
 
 The panel authenticates using its distinct private surface credential loaded by
 the native host; the desktop window connects under the same credential and

@@ -7,6 +7,7 @@ use crate::application::agent_execution::providers::{
     AgentProvider, ApprovalMode, HarnessHost, HarnessLaunch, NativeHooksSwitch, ProviderIdentity,
     ProviderOpenFuture, ProviderOpenRequest,
 };
+use crate::application::agent_execution::traces::LocalTraceStore;
 use crate::domain::agent_execution::permissions::PermissionScope;
 use crate::domain::agent_execution::prompts::SystemPrompt;
 use crate::domain::common::value_objects::TokenLimits;
@@ -49,6 +50,8 @@ pub struct CodexAcpProvider {
     /// Where its harness is started when that is not this machine
     /// ([`AgentProvider::on_host`]).
     host: Option<Arc<dyn HarnessHost>>,
+    /// Spans for every session this factory opens.
+    traces: Arc<LocalTraceStore>,
 }
 impl CodexAcpProvider {
     /// The variables this binding sets for one launch of its harness, and
@@ -157,7 +160,16 @@ impl CodexAcpProvider {
             audit,
             deletions: DeletionCleanups::default(),
             host: None,
+            traces: LocalTraceStore::new(),
         })
+    }
+    /// Record this factory's turns into `traces`.
+    ///
+    /// The default store is private to the factory. A host that rebuilds the
+    /// factory for the same conversation passes the store it already reads.
+    pub fn with_traces(mut self, traces: Arc<LocalTraceStore>) -> Self {
+        self.traces = traces;
+        self
     }
     /// Replace the harness's default instructions with these attributed ones.
     /// The metadata stays local; only composed text reaches the launched process.
@@ -322,6 +334,7 @@ impl AgentProvider for CodexAcpProvider {
         let launch = Arc::new(AtomicBool::new(false));
         let profile = self.launch_profile(launch.clone());
         let process = self.process_factory_following(launch);
+        let traces = self.traces.clone();
         Box::pin(async move {
             acp_binding::open(
                 process,
@@ -330,9 +343,13 @@ impl AgentProvider for CodexAcpProvider {
                 profile,
                 self.audit.clone(),
                 request,
+                traces,
             )
             .await
         })
+    }
+    fn traces(&self) -> Option<Arc<LocalTraceStore>> {
+        Some(self.traces.clone())
     }
 }
 impl CodexAcpProvider {

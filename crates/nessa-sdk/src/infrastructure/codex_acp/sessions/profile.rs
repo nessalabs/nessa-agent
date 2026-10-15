@@ -335,6 +335,12 @@ impl AcpProfile for CodexProfile {
     fn tool_call(&mut self, value: &Value) -> Result<ToolCallUpdate, AgentError> {
         wire::tool_call(value, &mut self.tools)
     }
+    fn traced_tool_name(&self, id: &str) -> Option<String> {
+        self.tools.traced_name(id)
+    }
+    fn traced_tool_arguments(&self, id: &str) -> Option<String> {
+        self.tools.traced_arguments(id)
+    }
 
     fn permission_input(&self, request: &Value) -> Result<ToolReviewInput, AgentError> {
         wire::permission_input(request, &self.tools)

@@ -9,6 +9,7 @@
 //! adapter -> ExecutionController -> domain session
 //! adapter -> ExecutionAudit
 //! caller -> subagents::OwnershipCoordinator -> ordinary child Agent
+//! ACP worker -> traces::TraceRecorder -> traces::LocalTraceStore
 //! ```
 //! Arrows show calls. Authentication stays with the host; mandatory permission
 //! audit remains separate from session snapshots and optional UI subscribers.
@@ -25,3 +26,4 @@ pub mod providers;
 pub mod sessions;
 pub mod subagents;
 pub mod tools;
+pub mod traces;

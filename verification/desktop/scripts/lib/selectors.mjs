@@ -155,6 +155,7 @@ export const css = {
   chat: ".workspace-chat", // class: the chat area, the panes' column
   sideRail: ".side-rail", // class: the rail beside the workspace
   workspaceWindow: ".workspace-window", // class: the frame holding the rail and the workspace; data-rail, data-sidebar
+  titlebar: ".workspace-titlebar", // class: the window's titlebar row, 48px tall
   titlebarSidebarToggle: '.workspace-titlebar [aria-controls="workspace-sidebar"]', // the titlebar's Show/Hide Sidebar
   sideRailToggle: ".side-rail-toggle", // class: shows or hides the rail; aria-expanded
   studio: ".workspace-identity .desktop-identity-button", // class: "nessa Studio", which opens Settings
