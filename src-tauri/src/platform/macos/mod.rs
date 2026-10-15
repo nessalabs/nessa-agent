@@ -1,10 +1,13 @@
-//! macOS host: accessory app, native frost, WKWebView pin, AppKit live resize.
+//! macOS host: accessory app, native frost, WKWebView pin, AppKit live resize,
+//! the desktop window's traffic lights.
 
 mod live_resize;
 mod overlay;
 mod provider_login;
+mod traffic_lights;
 mod vibrancy;
 mod viewport;
+mod window_controls;
 
 use std::{process::Command, thread};
 
@@ -68,6 +71,10 @@ impl Host for Macos {
 
     fn watch_live_resize(&self, window: &WebviewWindow) -> Result<(), String> {
         live_resize::watch(window)
+    }
+
+    fn hold_window_controls(&self, window: &WebviewWindow) -> Result<(), String> {
+        window_controls::hold(window)
     }
 
     fn after_attach(&self, window: &WebviewWindow, _settings: &crate::settings::Settings) {

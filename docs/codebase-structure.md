@@ -555,6 +555,14 @@ The local backend, embedded Cedar, and `/session` gateway are implemented.
 providers. See [local authentication](adr/done/0010-local-authentication.md). Hosted
 identity providers remain future adapters.
 
+Today the product socket and read-access adapter classify manifest method strings
+separately for handler routing, response capacity, execution capacity and paired admission, with
+fallbacks for some choices. [ADR 921](adr/todo/921-close-product-method-classification.md)
+proposes generated closed method identity and one exhaustive gateway-owned plan
+([source catalogue and migration](design/product-method-classification.md));
+it is not implemented, and the manifest remains the owner only of wire names,
+parameter shapes and requested grants.
+
 `application/credential_registry.rs` owns the secret-free refusal facts and
 audit port for a registry authority file that cannot be trusted. The local
 registry adapter keeps one content-validation path and translates
@@ -1783,6 +1791,12 @@ Annotated identifier byte caps derive from that owner; generator `--check`
 refuses a stale schema. The adjacent core-contract tests run through the existing
 product protocol check. Cargo's reported target directory owns artifact location;
 the export builds in its `wire-contract` subdirectory.
+
+`protocol/product/manifest.json` currently generates method-name constants, the
+advertised ready-method list and grant lookup. It does not generate a closed Rust
+method identity or prove gateway dispatch. [ADR 921](adr/todo/921-close-product-method-classification.md)
+proposes that identity while keeping routing, response lanes, execution capacity and paired-admission
+shape in the gateway.
 
 ### Shared product contract values
 
