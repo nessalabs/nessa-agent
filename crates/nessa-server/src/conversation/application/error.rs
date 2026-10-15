@@ -37,6 +37,12 @@ pub enum ConversationError {
     /// A share named a credential that is not an active paired device of
     /// the conversation's owner.
     ShareTargetNotPaired,
+    /// Cedar refused the capabilities this share would write. Nothing was
+    /// written. `policies` are the ids Cedar named; empty when no permit
+    /// matched.
+    CapabilitiesRefused {
+        policies: Vec<String>,
+    },
     /// A share or revoke named the policy revision it was built on, and the
     /// party's grant no longer holds it: changed or revoked since. Nothing
     /// was changed.

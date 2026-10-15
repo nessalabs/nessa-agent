@@ -6151,7 +6151,7 @@ async fn grant_drive(harness: &Harness, receiver: &str) -> u64 {
         .unwrap()
         .grants
         .into_iter()
-        .find(|grant| grant.receiver_id == receiver)
+        .find(|grant| grant.receiver_id.as_deref() == Some(receiver))
         .expect("the grant")
         .policy_revision
 }
@@ -6169,6 +6169,7 @@ async fn revoke_drive(store: &LocalConversationStore, id: &ConversationId, recei
         ShareGrantChange {
             transition: ShareGrantTransition::Revoke,
             conversation_id: id.clone(),
+            principal_id: None,
             receiver_id: None,
             credential_id: nessa_auth::domain::CredentialId::new(format!("{receiver}-credential"))
                 .unwrap(),
@@ -6850,7 +6851,7 @@ async fn a_stalled_save_on_one_conversation_does_not_block_another() {
         .unwrap()
         .grants
         .into_iter()
-        .find(|grant| grant.receiver_id == "phone")
+        .find(|grant| grant.receiver_id.as_deref() == Some("phone"))
         .expect("the other grant")
         .policy_revision;
     let (entered, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));

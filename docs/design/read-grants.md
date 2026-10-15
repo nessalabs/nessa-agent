@@ -23,9 +23,16 @@ default and access is per conversation.
 
 ## What a grant is
 
-A grant is one row: the paired receiver, one conversation id, a capability
+A grant is one row: the grantee's principal, one conversation id, a capability
 set, the constraints a drive grant carries, and the grant epoch. The
-metadata database keeps it in `share_grants`, beside the conversations.
+metadata database keeps it in `share_grants`, beside the conversations,
+keyed by principal and conversation. `receiver_id` is the receiver a paired
+device or gateway is bound to, because admission still finds that grant by
+its receiver. An integration, and a later agent, store the principal and no
+receiver. A grant with a principal and no receiver can be stored, a paired
+grant is still found by its receiver, and two rows for the same principal
+and conversation cannot both exist
+(`a_grant_is_keyed_by_principal_and_may_name_no_receiver`).
 The only sets are `read`, `read` and `comment`, and those plus `drive`.
 What they used to be called — Read, Comment, Drive — is that set. A set
 that includes `drive`, and only that set, also carries constraints: the
@@ -48,9 +55,12 @@ The owner manages grants with three socket methods, each admitted by Cedar for
   the caller's and not deleted, and the credential an active paired device
   of the same owner (`share_target_not_paired` otherwise). A paired peer
   gateway is shared `read` the same way, and reads only what it is granted
-  ([peer gateways](auth/peer-gateways.md), row H8). Comment and drive for a
-  gateway principal are refused `invalid_request` and write nothing: no
-  row and no journal. A credential that does not hold `conversation.read`,
+  ([peer gateways](auth/peer-gateways.md), row H8). Comment and drive are
+  written only when Cedar permits `grant.comment` and `grant.drive` for the
+  principal the credential names. A denial writes nothing — no row and no
+  journal — and the answer is `capabilities_refused`, with `details.policies` the policy
+  ids Cedar named, empty when no permit matched. The share does not match a
+  gateway principal on its own. A credential that does not hold `conversation.read`,
   such as an environment's (row I1), is refused `share_target_not_paired`.
 - `conversation.unshare {requestId, conversationId, credentialId}` revokes. It
   needs only ownership, so access can be taken away from a deleted
@@ -967,7 +977,7 @@ otherwise.
 | J7 | `conversation.shares` | Each grant's capabilities, its policy when the set includes drive, and its grant epoch, which moves only with its own capabilities or constraints | `shares_reports_each_grants_role_policy_and_policy_revision` |
 | J8 | Unshare a comment or a drive grant | Revoked like read, journaled with the capabilities and constraints it took away | `a_revoke_ends_a_grant_of_any_role`; `share_refuses_what_the_owner_cannot_grant` (unshare names no capability set) |
 | J9 | A drive grant past `MAX_DRIVE_GRANTS_PER_CONVERSATION` (8), new or a change from another set | Refused `InvalidInput`, nothing written; a driver's own constraints can still change | `a_conversation_holds_a_bounded_number_of_drive_grants` |
-| J32 | Share comment or drive with a gateway principal | Refused `invalid_request`; the row unchanged and nothing journaled | `a_gateway_is_refused_comment_and_drive_and_the_grant_is_unchanged` |
+| J32 | Share comment or drive with a principal that is not signed in as the binding owner, a gateway or any other | Refused `capabilities_refused`; `details.policies` names the Cedar policy ids, empty when no permit matched; the row unchanged and nothing journaled. The share does not match a gateway prefix | `a_gateway_is_refused_comment_and_drive_and_the_grant_is_unchanged` |
 | J33 | A device holding drive sends on that conversation, and the same command names another | Admitted on the granted conversation; `conversation_not_found` on the other | `a_drive_grant_drives_only_the_conversation_it_names` |
 | J34 | A gateway holding read; the same gateway holding a hand-built comment set; a device holding only read, signed in as the binding owner | The gateway reads and is `NotPermitted` comment and drive; the device is `NotPermitted` comment and drive | `paired_peer_gateway_never_comments_or_drives`, `a_hand_built_comment_grant_for_a_gateway_is_denied_by_cedar`, `grant_comment_and_drive_need_their_capability` (`tests/conversation/access_policy.rs`, `tests/conversation/store.rs`) |
 | J10 | One page of `conversation.shares`: the page size of grants, each a Drive grant with the largest policy (both pattern lists full, 16 hosts of 253 bytes), every text at its longest, a cursor, and the catalogue revision at the largest safe integer | Fits one frame (`MAX_PAYLOAD_BYTES`); the schema states the page size, the grant cap, the host bounds the domain enforces, and the revision bound. A later page resumes after the cursor and names the same revision | `a_full_page_of_largest_grants_fits_one_frame`, `a_shares_page_resumes_after_its_cursor`, `the_schema_states_the_share_bounds_the_domain_enforces` (`tests/product/read_access.rs`); `shares_returns_one_page_and_refuses_a_page_size_past_its_bound` |

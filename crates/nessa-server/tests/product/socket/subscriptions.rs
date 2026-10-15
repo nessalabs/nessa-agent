@@ -2043,6 +2043,7 @@ impl SubscriptionFixture {
             .change(ShareGrantChange {
                 transition,
                 conversation_id: self.id.clone(),
+                principal_id: Some(PrincipalId::new("grantee-receiver").unwrap()),
                 receiver_id: Some("receiver".into()),
                 credential_id: CredentialId::new("credential").unwrap(),
                 expected_policy_revision: None,
@@ -2526,16 +2527,19 @@ async fn share_refuses_what_the_owner_cannot_grant() {
     assert_eq!(answer["payload"]["applied"], true, "{answer}");
 }
 
-/// Comment and drive for a gateway principal are refused `invalid_request`
-/// and write nothing: the read grant already held is unchanged, and no
-/// journal row is added.
+/// Comment and drive are written only when Cedar permits `grant.comment` and
+/// `grant.drive`. A principal that is not signed in as the binding owner — a
+/// gateway, or any other principal — is refused `capabilities_refused`. The answer names
+/// the policy ids Cedar named, and nothing is written. A match on the
+/// `gateway:` prefix would let the other principal through.
 #[tokio::test]
 async fn a_gateway_is_refused_comment_and_drive_and_the_grant_is_unchanged() {
     use crate::conversation::application::ShareGrants;
     use nessa_auth::domain::PrincipalId;
-    let fixture = SubscriptionFixture::new()
-        .await
-        .with_devices(Devices::new(&[("peer", "peer", "principal", true)]));
+    let fixture = SubscriptionFixture::new().await.with_devices(Devices::new(&[
+        ("peer", "peer", "principal", true),
+        ("person", "person", "principal", true),
+    ]));
     *fixture.authority.snapshot.lock().unwrap() =
         snapshot(MembershipRole::Admin, MembershipStatus::Active);
     grants(
@@ -2547,54 +2551,66 @@ async fn a_gateway_is_refused_comment_and_drive_and_the_grant_is_unchanged() {
             "credential.manage",
         ],
     );
-    fixture.authority.target_principal.lock().unwrap().insert(
-        "peer".into(),
-        PrincipalId::new("gateway:peer").unwrap(),
-    );
-    let id = fixture.id.to_string();
-    let share = |request: &str, capabilities: Value| {
-        json!({
-            "conversationId": id,
-            "requestId": request,
-            "credentialId": "peer",
-            "capabilities": capabilities,
-        })
-    };
-    let granted = fixture
-        .call("conversation.share", share("share-read", json!(["read"])))
-        .await;
-    assert_eq!(granted["payload"]["applied"], true, "{granted}");
-    let before = fixture.metadata.grants(&fixture.id).await.unwrap();
-    let journal = journal_rows(&fixture);
-    for (request, capabilities) in [
-        ("share-comment", json!(["read", "comment"])),
-        (
-            "share-drive",
-            json!(["drive", "comment", "read"]),
-        ),
-    ] {
-        let mut params = share(request, capabilities);
-        params["policy"] = json!({"preset": "no_shell"});
-        if request == "share-comment" {
-            params.as_object_mut().unwrap().remove("policy");
-        }
-        let answer = fixture.call("conversation.share", params).await;
-        assert_eq!(
-            answer["error"]["code"], "invalid_request",
-            "{request}: {answer}"
+    {
+        let mut targets = fixture.authority.target_principal.lock().unwrap();
+        targets.insert("peer".into(), PrincipalId::new("gateway:peer").unwrap());
+        targets.insert(
+            "person".into(),
+            PrincipalId::new("other-person").unwrap(),
         );
     }
-    assert_eq!(fixture.metadata.grants(&fixture.id).await.unwrap(), before);
-    assert_eq!(journal_rows(&fixture), journal);
+    let id = fixture.id.to_string();
+    for credential in ["peer", "person"] {
+        let share = |request: &str, capabilities: Value| {
+            json!({
+                "conversationId": id,
+                "requestId": format!("{request}-{credential}"),
+                "credentialId": credential,
+                "capabilities": capabilities,
+            })
+        };
+        let granted = fixture
+            .call(
+                "conversation.share",
+                share("share-read", json!(["read"])),
+            )
+            .await;
+        assert_eq!(granted["payload"]["applied"], true, "{credential}: {granted}");
+        let before = fixture.metadata.grants(&fixture.id).await.unwrap();
+        let journal = journal_rows(&fixture);
+        for (request, capabilities) in [
+            ("share-comment", json!(["read", "comment"])),
+            ("share-drive", json!(["drive", "comment", "read"])),
+        ] {
+            let mut params = share(request, capabilities);
+            params["policy"] = json!({"preset": "no_shell"});
+            if request == "share-comment" {
+                params.as_object_mut().unwrap().remove("policy");
+            }
+            let answer = fixture.call("conversation.share", params).await;
+            assert_eq!(
+                answer["error"]["code"], "capabilities_refused",
+                "{credential} {request}: {answer}"
+            );
+            assert_eq!(
+                answer["error"]["details"]["policies"],
+                json!([]),
+                "{credential} {request}: {answer}"
+            );
+        }
+        assert_eq!(fixture.metadata.grants(&fixture.id).await.unwrap(), before);
+        assert_eq!(journal_rows(&fixture), journal);
+    }
     let listed = fixture
         .call(
             "conversation.shares",
             json!({"conversationId": id, "pageSize": MAX_SHARE_PAGE}),
         )
         .await;
-    assert_eq!(
-        listed["payload"]["items"][0]["capabilities"],
-        json!(["read"])
+    let items = listed["payload"]["items"].as_array().unwrap();
+    assert!(
+        items.iter().all(|item| item["capabilities"] == json!(["read"])),
+        "{listed}"
     );
 }
 
@@ -3877,6 +3893,17 @@ async fn a_note_outside_its_bounds_or_on_a_deleted_conversation_is_refused() {
 
 /// The owner's share fixture: a paired device `phone` and `tablet`, and the
 /// owner's session able to share with them.
+/// The credential `credential` reads as `principal`, not the session's actor.
+/// A grant is keyed by that principal, so two credentials of one principal
+/// are one row. Comment and drive are written only when this principal is
+/// the binding owner.
+fn reads_as(fixture: &SubscriptionFixture, credential: &str, principal: &str) {
+    fixture.authority.target_principal.lock().unwrap().insert(
+        credential.to_owned(),
+        nessa_auth::domain::PrincipalId::new(principal).unwrap(),
+    );
+}
+
 async fn sharing_fixture() -> SubscriptionFixture {
     let fixture = SubscriptionFixture::new()
         .await
@@ -3987,6 +4014,9 @@ async fn a_drive_grants_command_hosts_round_trip_and_their_bounds_are_refused() 
     use crate::conversation::application::ShareGrants;
     use crate::conversation::domain::{CommandHosts, ToolRules};
     let fixture = sharing_fixture().await;
+    // Phone and tablet are one principal, so one drive grant. The policy
+    // updates below replace that grant; the bounds are refused first, while
+    // the named hosts are what it holds.
     let share = |request: &str, credential: &str, policy: Value| {
         json!({
             "conversationId": fixture.id.to_string(),
@@ -4034,41 +4064,6 @@ async fn a_drive_grants_command_hosts_round_trip_and_their_bounds_are_refused() 
         ["devbox", &peer]
     );
 
-    let answer = fixture
-        .call(
-            "conversation.share",
-            share(
-                "empty",
-                "tablet",
-                json!({"preset": "no_shell", "commandHosts": []}),
-            ),
-        )
-        .await;
-    assert_eq!(answer["payload"]["applied"], true, "{answer}");
-    assert_eq!(policy_of("tablet").await, json!({"preset": "no_shell"}));
-
-    fn pattern(n: usize) -> String {
-        format!("t{n}")
-    }
-    let full = ToolRules::MAX_RULES;
-    let longest_host = format!("h{}", "a".repeat(CommandHosts::MAX_HOST_BYTES - 1));
-    let full_policy = json!({
-        "allow": (0..full).map(pattern).collect::<Vec<_>>(),
-        "deny": (0..full).map(pattern).collect::<Vec<_>>(),
-        "commandHosts": [longest_host],
-    });
-    let answer = fixture
-        .call(
-            "conversation.share",
-            share("full-hosts", "tablet", full_policy.clone()),
-        )
-        .await;
-    assert_eq!(answer["payload"]["applied"], true, "{answer}");
-    assert_eq!(
-        policy_of("tablet").await["commandHosts"][0],
-        longest_host
-    );
-
     let too_long = format!("h{}", "a".repeat(CommandHosts::MAX_HOST_BYTES));
     let refused = [
         json!({"preset": "all", "commandHosts": ["here"]}),
@@ -4094,6 +4089,41 @@ async fn a_drive_grants_command_hosts_round_trip_and_their_bounds_are_refused() 
         );
     }
     assert_eq!(policy_of("phone").await, named);
+
+    let answer = fixture
+        .call(
+            "conversation.share",
+            share(
+                "empty",
+                "phone",
+                json!({"preset": "no_shell", "commandHosts": []}),
+            ),
+        )
+        .await;
+    assert_eq!(answer["payload"]["applied"], true, "{answer}");
+    assert_eq!(policy_of("phone").await, json!({"preset": "no_shell"}));
+
+    fn pattern(n: usize) -> String {
+        format!("t{n}")
+    }
+    let full = ToolRules::MAX_RULES;
+    let longest_host = format!("h{}", "a".repeat(CommandHosts::MAX_HOST_BYTES - 1));
+    let full_policy = json!({
+        "allow": (0..full).map(pattern).collect::<Vec<_>>(),
+        "deny": (0..full).map(pattern).collect::<Vec<_>>(),
+        "commandHosts": [longest_host],
+    });
+    let answer = fixture
+        .call(
+            "conversation.share",
+            share("full-hosts", "phone", full_policy.clone()),
+        )
+        .await;
+    assert_eq!(answer["payload"]["applied"], true, "{answer}");
+    assert_eq!(
+        policy_of("phone").await["commandHosts"][0],
+        longest_host
+    );
 }
 
 /// `conversation.shares` returns one page and resumes after the cursor it
@@ -4102,6 +4132,9 @@ async fn a_drive_grants_command_hosts_round_trip_and_their_bounds_are_refused() 
 #[tokio::test]
 async fn shares_returns_one_page_and_refuses_a_page_size_past_its_bound() {
     let fixture = sharing_fixture().await;
+    // Two grants are two principals. Tablet is not the session's actor, so
+    // its read grant is a second row.
+    reads_as(&fixture, "tablet", "reader-tablet");
     let id = fixture.id.to_string();
     let share = |request: &str, credential: &str| {
         json!({
@@ -4166,6 +4199,10 @@ async fn shares_returns_one_page_and_refuses_a_page_size_past_its_bound() {
 #[tokio::test]
 async fn shares_reports_each_grants_role_policy_and_policy_revision() {
     let fixture = sharing_fixture().await;
+    // Drive is written for the principal signed in as the binding owner
+    // (tablet, the session). Phone is another principal and holds read, so
+    // the two grants stay two rows.
+    reads_as(&fixture, "phone", "reader-phone");
     let share = |request: &str, credential: &str, terms: Value| {
         let mut params = json!({
             "conversationId": fixture.id.to_string(),

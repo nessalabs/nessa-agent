@@ -283,6 +283,7 @@ async fn seed(store: &Arc<LocalConversationStore>, size: usize) -> Result<String
                     ShareAccess::new(role, None).map_err(|error| format!("{error:?}"))?,
                 ),
                 conversation_id: id.clone(),
+                principal_id: Some(PrincipalId::new(format!("grantee-{RECEIVER}")).unwrap()),
                 receiver_id: Some(RECEIVER.into()),
                 credential_id: CredentialId::new(format!("{RECEIVER}-credential"))?,
                 expected_policy_revision: None,

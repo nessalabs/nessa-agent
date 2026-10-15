@@ -632,6 +632,7 @@ fn change(
     ShareGrantChange {
         transition,
         conversation_id: id.clone(),
+        principal_id: receiver.map(|id| PrincipalId::new(format!("grantee-{id}")).unwrap()),
         receiver_id: receiver.map(str::to_owned),
         credential_id: CredentialId::new(format!("{credential}-credential")).unwrap(),
         expected_policy_revision: None,

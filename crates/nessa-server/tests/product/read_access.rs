@@ -6,7 +6,7 @@ use crate::conversation::application::{
     MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 use crate::conversation::domain::{Capabilities, CommandHosts, ShareAccess, ToolPolicy, ToolRules};
-use nessa_auth::domain::{CredentialId, MAX_IDENTIFIER_BYTES};
+use nessa_auth::domain::{CredentialId, PrincipalId, MAX_IDENTIFIER_BYTES};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::product::generated::{
     ConversationSharesCursor, ConversationSharesResult, MAX_PAYLOAD_BYTES, MAX_SHARE_PAGE,
@@ -21,7 +21,8 @@ fn grant(n: i64, access: ShareAccess) -> ShareGrant {
     let id = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
     ShareGrant {
         conversation_id: id,
-        receiver_id: format!("receiver-{n}"),
+        principal_id: PrincipalId::new(format!("grantee-{n}")).unwrap(),
+        receiver_id: Some(format!("receiver-{n}")),
         credential_id: CredentialId::new(longest(MAX_IDENTIFIER_BYTES, n)).unwrap(),
         access,
         policy_revision: u64::MAX >> 11,

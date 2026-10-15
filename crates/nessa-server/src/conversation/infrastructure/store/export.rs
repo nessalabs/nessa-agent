@@ -148,8 +148,9 @@ pub(super) fn read(connection: &Connection) -> Result<ExportFacts, ConversationE
     let tombstones = tombstones(connection, &mut skipped)?;
     let grants = json_rows(
         connection,
-        "SELECT conversation_id, receiver_id, credential_id, capabilities, policy, policy_revision
-         FROM share_grants ORDER BY conversation_id, receiver_id",
+        "SELECT conversation_id, principal_id, receiver_id, credential_id, capabilities, policy,
+                policy_revision
+         FROM share_grants ORDER BY conversation_id, principal_id",
         &mut skipped,
         grant_skip,
         grant_row,
@@ -212,18 +213,22 @@ fn tombstone_row(row: &Row<'_>) -> Result<Value, Error> {
 }
 
 fn grant_row(row: &Row<'_>) -> Result<Value, Error> {
-    let capabilities: String = row.get(3)?;
+    let capabilities: String = row.get(4)?;
     if !known_capabilities(&capabilities) {
         return Ok(Value::Null);
     }
-    Ok(json!({
+    let mut value = json!({
         "conversationId": row.get::<_, String>(0)?,
-        "receiverId": row.get::<_, String>(1)?,
-        "credentialId": row.get::<_, String>(2)?,
+        "principalId": row.get::<_, String>(1)?,
+        "credentialId": row.get::<_, String>(3)?,
         "capabilities": capabilities,
-        "policy": row.get::<_, Option<String>>(4)?,
-        "policyRevision": row.get::<_, i64>(5)?,
-    }))
+        "policy": row.get::<_, Option<String>>(5)?,
+        "policyRevision": row.get::<_, i64>(6)?,
+    });
+    if let Some(receiver) = row.get::<_, Option<String>>(2)? {
+        value["receiverId"] = Value::String(receiver);
+    }
+    Ok(value)
 }
 
 fn json_rows(
@@ -266,13 +271,14 @@ fn revocation_rows(
 ) -> Result<Vec<RevocationFact>, ConversationError> {
     let mut statement = connection
         .prepare(
-            "SELECT j.conversation_id, j.receiver_id, j.credential_id, j.before, j.sequence
+            "SELECT j.conversation_id, j.principal_id, j.receiver_id, j.credential_id, j.before,
+                    j.sequence
              FROM share_grant_changes AS j
              WHERE j.after = 'none'
                AND j.sequence = (
                    SELECT MAX(j2.sequence) FROM share_grant_changes AS j2
                    WHERE j2.conversation_id = j.conversation_id
-                     AND j2.receiver_id = j.receiver_id
+                     AND j2.principal_id = j.principal_id
                )
              ORDER BY j.sequence",
         )
@@ -284,10 +290,15 @@ fn revocation_rows(
         index += 1;
         let parsed = (|| {
             let conversation_id: String = row.get(0)?;
-            let receiver_id: String = row.get(1)?;
-            let credential_id: String = row.get(2)?;
-            let capabilities: String = row.get(3)?;
-            let sequence: i64 = row.get(4)?;
+            let principal_id: String = row.get(1)?;
+            let receiver_id: Option<String> = row.get(2)?;
+            let credential_id: String = row.get(3)?;
+            let capabilities: String = row.get(4)?;
+            let sequence: i64 = row.get(5)?;
+            // A paired grant is fenced by its receiver. A grant that stores
+            // none is fenced by its principal, in the same field: the
+            // deletion line still names one party.
+            let receiver_id = receiver_id.unwrap_or(principal_id);
             Ok::<_, Error>((
                 conversation_id,
                 receiver_id,
@@ -344,7 +355,8 @@ fn identity_of(prefix: &str, value: &Value) -> Option<String> {
     let extra = value
         .get("receiverId")
         .and_then(Value::as_str)
-        .map(|receiver| format!(":{receiver}"))
+        .or_else(|| value.get("principalId").and_then(Value::as_str))
+        .map(|party| format!(":{party}"))
         .unwrap_or_default();
     let identity = format!("{prefix}-{id}{extra}");
     nameable(&identity).then_some(identity)

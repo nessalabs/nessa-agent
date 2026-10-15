@@ -24,7 +24,7 @@
 //! ```
 use super::{
     conversation::{caller, conversation_id},
-    socket::{admit_action, admit_grant, failure, success},
+    socket::{admit_action, admit_grant, failure, failure_with_details, success},
     state::ProductRouteState,
 };
 use crate::conversation::application::{
@@ -547,7 +547,14 @@ pub(super) async fn dispatch_share(
         }
     }
     .await;
-    result.unwrap_or_else(|error| failure(&frame.id, error_code(&error).as_str()))
+    result.unwrap_or_else(|error| match &error {
+        ConversationError::CapabilitiesRefused { policies } => failure_with_details(
+            &frame.id,
+            error_code(&error).as_str(),
+            serde_json::json!({ "policies": policies }),
+        ),
+        _ => failure(&frame.id, error_code(&error).as_str()),
+    })
 }
 
 /// A share that landed can change which waiting reviews a socket may see.

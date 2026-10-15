@@ -69,6 +69,9 @@ export interface SharingClient {
 /** Every conversation code, as what it means to sharing. */
 const conversationFailure: Record<ConversationErrorCode, SharingFailure> = {
   [ConversationErrorCode.ShareTargetNotPaired]: "not-paired",
+  // Cedar denied the capabilities this share would write. Nothing was
+  // written. The dialog has no sentence of its own for which set was refused.
+  [ConversationErrorCode.CapabilitiesRefused]: "other",
   [ConversationErrorCode.ShareGrantChanged]: "changed",
   [ConversationErrorCode.InvalidRequest]: "invalid",
   [ConversationErrorCode.ConversationDeleted]: "deleted",

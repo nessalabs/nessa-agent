@@ -3238,6 +3238,7 @@ async fn an_unmarked_chat_cannot_be_read_and_can_be_deleted() {
                             crate::conversation::domain::ShareAccess::read()
                         ),
                         conversation_id: id,
+                        principal_id: Some(PrincipalId::new("grantee-phone").unwrap()),
                         receiver_id: Some("phone".into()),
                         credential_id: nessa_auth::domain::CredentialId::new("phone-credential")
                             .unwrap(),

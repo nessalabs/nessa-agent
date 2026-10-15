@@ -244,6 +244,10 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   // business making.
   share_target_not_paired: "invalid-request",
   share_grant_changed: "invalid-request",
+  // Cedar denied the capabilities a share would write. Nothing was written.
+  // The panel does not send that share; one that met another command is a
+  // request it had no business making.
+  capabilities_refused: "invalid-request",
   // Answer only `conversation.message`, which the panel does not send yet;
   // either meeting another command is a request it had no business making.
   idempotency_conflict: "invalid-request",
@@ -343,6 +347,7 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   // A share is never a read; a read that met it would be no answer it knows.
   share_target_not_paired: "unavailable",
   share_grant_changed: "unavailable",
+  capabilities_refused: "unavailable",
   // A note's refusals; no read is ever answered with them.
   idempotency_conflict: "unavailable",
   message_quota_exceeded: "unavailable",

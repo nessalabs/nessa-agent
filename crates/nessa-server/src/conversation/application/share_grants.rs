@@ -57,8 +57,7 @@ use crate::conversation::domain::{
     Capabilities, Capability, Conversation, ReceiverBinding, ShareAccess, ToolPolicy,
 };
 use nessa_auth::application::ports::{AccessError, AccessReader};
-use nessa_auth::domain::pairing::is_peer_principal;
-use nessa_auth::domain::{AuthContext, CredentialId, Resource};
+use nessa_auth::domain::{AuthContext, CredentialId, PrincipalId, Resource};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
 use nessa_sdk::application::agent_execution::sessions::{NoteCandidates, NoteRecord};
@@ -231,7 +230,11 @@ pub struct HeldGrant {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShareGrant {
     pub conversation_id: ConversationId,
-    pub receiver_id: String,
+    /// The grantee. The row's key, with the conversation.
+    pub principal_id: PrincipalId,
+    /// The receiver a paired device or gateway is bound to. Absent for an
+    /// integration, and for a later agent, which store no receiver.
+    pub receiver_id: Option<String>,
     pub credential_id: CredentialId,
     pub access: ShareAccess,
     /// The grant epoch: the journal sequence of the change that last set
@@ -293,8 +296,12 @@ pub const MAX_DRIVE_GRANTS_PER_CONVERSATION: i64 = 8;
 pub struct ShareGrantChange {
     pub transition: ShareGrantTransition,
     pub conversation_id: ConversationId,
-    /// Absent only for a revoke of a device whose binding is gone: the grant
-    /// is then found by its credential.
+    /// The grantee. Required for a grant. A revoke may omit it and is then
+    /// found by its credential.
+    pub principal_id: Option<PrincipalId>,
+    /// The receiver a paired device or gateway is bound to. Absent for a
+    /// grant that stores none, and for a revoke of a device whose binding
+    /// is gone: that revoke is found by its credential.
     pub receiver_id: Option<String>,
     pub credential_id: CredentialId,
     /// The policy revision the caller read the party's grant at, when it
@@ -445,10 +452,11 @@ impl ShareConversation<'_> {
     /// Grant `credential`'s receiver `capabilities` on `id` with `policy`, or
     /// replace the capabilities and constraints it holds there. A drive grant
     /// needs a policy and any other grant takes none; either mistake is
-    /// `InvalidInput` and writes nothing (row J3). Comment and drive for a
-    /// gateway principal are refused the same way and write nothing: Cedar
-    /// would deny them, because a gateway is not signed in as the binding
-    /// owner. The credential must have an active receiver
+    /// `InvalidInput` and writes nothing (row J3). Comment and drive are
+    /// asked of Cedar (`grant.comment`, `grant.drive`) before they are
+    /// written. A denial writes nothing and carries the policy ids Cedar
+    /// named. The use case does not match a gateway principal on its own.
+    /// The credential must have an active receiver
     /// binding and a registry answer about that exact credential, or
     /// `ShareTargetNotPaired`. Whether the caller may share this
     /// conversation with it is the access policy's (`conversation.share`):
@@ -512,13 +520,6 @@ impl ShareConversation<'_> {
         {
             return Err(ConversationError::ShareTargetNotPaired);
         }
-        // A gateway signs in as itself, so Cedar's comment and drive permits
-        // do not match it. Refusing here writes no row Cedar would deny.
-        if access.capabilities().contains(Capability::Comment)
-            && is_peer_principal(named.principal_id())
-        {
-            return Err(ConversationError::InvalidInput);
-        }
         let ask = AccessAsk {
             subject: AccessSubject::Person {
                 organization: &caller.organization_id,
@@ -547,11 +548,57 @@ impl ShareConversation<'_> {
                 return Err(ConversationError::ShareTargetNotPaired);
             }
         }
+        // Comment and drive are written only when those permits allow them
+        // for this principal. The facts are the principal the credential
+        // names and the owner the binding reads; the principal's kind is
+        // not a condition here.
+        if access.capabilities().contains(Capability::Comment) {
+            let mut policies = Vec::new();
+            let mut denied = false;
+            let actions = [AccessAction::Comment, AccessAction::Drive];
+            for action in actions {
+                if action == AccessAction::Drive
+                    && !access.capabilities().contains(Capability::Drive)
+                {
+                    continue;
+                }
+                let grant_ask = AccessAsk {
+                    subject: AccessSubject::PairedReader {
+                        organization: &binding.organization_id,
+                        signed_in_as: named.principal_id(),
+                        binding_owner: &binding.owner_id,
+                        receiver: &binding.receiver_id,
+                    },
+                    action,
+                    resource: AccessResource::of(&conversation),
+                    held: Some(access.capabilities()),
+                    request: RequestShape::default(),
+                    target: None,
+                };
+                match self.policy.evaluate(&grant_ask) {
+                    AccessDecision::Allow { .. } => {}
+                    AccessDecision::Deny(AccessDenial::Unavailable) => {
+                        return Err(ConversationError::Metadata)
+                    }
+                    AccessDecision::Deny(AccessDenial::Forbidden { policies: ids }) => {
+                        denied = true;
+                        policies.extend(ids);
+                    }
+                    AccessDecision::Deny(AccessDenial::NotPermitted) => denied = true,
+                }
+            }
+            if denied {
+                policies.sort();
+                policies.dedup();
+                return Err(ConversationError::CapabilitiesRefused { policies });
+            }
+        }
         let receipt = self
             .grants
             .change(ShareGrantChange {
                 transition: ShareGrantTransition::Grant(access),
                 conversation_id: id,
+                principal_id: Some(named.principal_id().clone()),
                 receiver_id: Some(binding.receiver_id),
                 credential_id: credential,
                 expected_policy_revision,
@@ -589,6 +636,7 @@ impl ShareConversation<'_> {
             .change(ShareGrantChange {
                 transition: ShareGrantTransition::Revoke,
                 conversation_id: id,
+                principal_id: None,
                 receiver_id: None,
                 credential_id: credential,
                 expected_policy_revision,

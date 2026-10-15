@@ -1953,6 +1953,7 @@ pub(crate) async fn grant_as(
         crate::conversation::application::ShareGrantChange {
             transition: crate::conversation::application::ShareGrantTransition::Grant(access),
             conversation_id: id.clone(),
+            principal_id: Some(PrincipalId::new(format!("grantee-{receiver}")).unwrap()),
             receiver_id: Some(receiver.to_owned()),
             credential_id: nessa_auth::domain::CredentialId::new(format!("{receiver}-credential"))
                 .unwrap(),

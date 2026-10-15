@@ -2665,6 +2665,7 @@ fn grant_change(
     crate::conversation::application::ShareGrantChange {
         transition,
         conversation_id: id.clone(),
+        principal_id: receiver.map(|id| PrincipalId::new(format!("grantee-{id}")).unwrap()),
         receiver_id: receiver.map(str::to_owned),
         credential_id: nessa_auth::domain::CredentialId::new(credential).unwrap(),
         expected_policy_revision: None,
@@ -2984,6 +2985,112 @@ async fn a_hand_built_comment_grant_for_a_gateway_is_denied_by_cedar() {
     assert_eq!(
         ask(&gateway, AccessAction::Drive),
         AccessDecision::Deny(AccessDenial::NotPermitted)
+    );
+}
+
+/// A grant is keyed by principal and conversation. One may name no receiver,
+/// and is not found by a receiver lookup. A paired grant is still found by
+/// its receiver. A second row for the same principal and conversation cannot
+/// be stored: a later change of that principal replaces the row it has.
+#[tokio::test]
+async fn a_grant_is_keyed_by_principal_and_may_name_no_receiver() {
+    use crate::conversation::application::{ShareGrantChange, ShareGrantTransition, ShareGrants};
+    use nessa_auth::domain::CredentialId;
+    let opened = opened();
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    let principal = PrincipalId::new("webhook:one").unwrap();
+    let caller = |request: &str| crate::conversation::application::ConversationCaller {
+        organization_id: org(),
+        principal_id: alice(),
+        surface_id: "desktop".into(),
+        action_id: request.into(),
+    };
+    let stored = opened
+        .store
+        .change(ShareGrantChange {
+            transition: ShareGrantTransition::Grant(ShareAccess::read()),
+            conversation_id: id.clone(),
+            principal_id: Some(principal.clone()),
+            receiver_id: None,
+            credential_id: CredentialId::new("webhook-credential").unwrap(),
+            expected_policy_revision: None,
+            initiator: caller("grant-webhook"),
+            at_ms: 7,
+        })
+        .await
+        .unwrap();
+    assert!(stored.applied);
+    assert_eq!(
+        opened.store.held_grant(&id, "anyone").await.unwrap(),
+        None,
+        "a grant with no receiver is not found by one"
+    );
+    let listed = opened.store.grants(&id).await.unwrap().grants;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].principal_id, principal);
+    assert_eq!(listed[0].receiver_id, None);
+
+    assert!(grant(&opened.store, &id, "phone").await);
+    assert!(opened
+        .store
+        .held_grant(&id, "phone")
+        .await
+        .unwrap()
+        .is_some());
+    let replaced = opened
+        .store
+        .change(ShareGrantChange {
+            transition: ShareGrantTransition::Grant(
+                ShareAccess::new(Capabilities::comment(), None).unwrap(),
+            ),
+            conversation_id: id.clone(),
+            principal_id: Some(PrincipalId::new("grantee-phone").unwrap()),
+            receiver_id: Some("tablet".into()),
+            credential_id: CredentialId::new("tablet-credential").unwrap(),
+            expected_policy_revision: None,
+            initiator: caller("replace-phone"),
+            at_ms: 8,
+        })
+        .await
+        .unwrap();
+    assert!(replaced.applied);
+    let grants = opened.store.grants(&id).await.unwrap().grants;
+    assert_eq!(grants.len(), 2, "the webhook and the one paired principal");
+    let paired = grants
+        .iter()
+        .find(|grant| grant.principal_id.as_str() == "grantee-phone")
+        .expect("the paired principal");
+    assert_eq!(paired.receiver_id.as_deref(), Some("tablet"));
+    assert_eq!(paired.credential_id.as_str(), "tablet-credential");
+    assert_eq!(paired.access.capabilities(), Capabilities::comment());
+    assert!(opened
+        .store
+        .held_grant(&id, "phone")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(opened
+        .store
+        .held_grant(&id, "tablet")
+        .await
+        .unwrap()
+        .is_some());
+    let duplicated = raw(&opened.path).execute(
+        "INSERT INTO share_grants
+            (conversation_id, principal_id, receiver_id, credential_id, capabilities, policy,
+             policy_revision, granted_at_ms)
+         SELECT conversation_id, principal_id, 'other', 'other-credential', capabilities, policy,
+                policy_revision, granted_at_ms
+         FROM share_grants WHERE principal_id = 'grantee-phone'",
+        [],
+    );
+    let error = duplicated
+        .expect_err("the primary key refuses a second row")
+        .to_string();
+    assert!(
+        error.contains("UNIQUE"),
+        "the primary key refuses a second row for one principal: {error}"
     );
 }
 

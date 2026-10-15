@@ -2449,6 +2449,7 @@ async fn revoke_grant(fixture: &WatchFixture) {
         .change(crate::conversation::application::ShareGrantChange {
             transition: crate::conversation::application::ShareGrantTransition::Revoke,
             conversation_id: fixture.id.clone(),
+            principal_id: None,
             receiver_id: None,
             credential_id: CredentialId::new("receiver-credential").unwrap(),
             expected_policy_revision: None,
