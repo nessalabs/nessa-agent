@@ -5,6 +5,7 @@
 set -euo pipefail
 umask 077
 mode=${1:?Expected setup or maintenance}
+node_major=24
 case "$mode" in setup|maintenance) ;; *) echo 'Expected setup or maintenance' >&2; exit 2 ;; esac
 [ "$#" -eq 2 ]
 [ "$(uname -s)" = Linux ] || { echo 'Cloud startup requires Linux.' >&2; exit 2; }
@@ -62,13 +63,13 @@ else:
             raise SystemExit('Cached provisioning artifact does not match its setup receipt.')
 PY
 node_status=reused
-if [ ! -x "$cloud_root/node/bin/node" ] || [[ "$("$cloud_root/node/bin/node" --version)" != v24.* ]]; then
+if [ ! -x "$cloud_root/node/bin/node" ] || [[ "$("$cloud_root/node/bin/node" --version)" != "v${node_major}."* ]]; then
   node_status=installed
   case "$(uname -m)" in x86_64) node_arch=x64 ;; aarch64|arm64) node_arch=arm64 ;; *) echo 'Unsupported Node architecture.' >&2; exit 2 ;; esac
   node_download=$(mktemp -d)
-  node_dist=https://nodejs.org/dist/latest-v24.x
+  node_dist="https://nodejs.org/dist/latest-v${node_major}.x"
   curl --fail --silent --show-error --location --connect-timeout 30 --max-time 300 "$node_dist/SHASUMS256.txt" -o "$node_download/SHASUMS256.txt"
-  node_archive=$(awk -v arch="$node_arch" '$2 ~ ("^node-v24[.][0-9]+[.][0-9]+-linux-" arch "[.]tar[.]xz$") {print $2; exit}' "$node_download/SHASUMS256.txt")
+  node_archive=$(awk -v major="$node_major" -v arch="$node_arch" '$2 ~ ("^node-v" major "[.][0-9]+[.][0-9]+-linux-" arch "[.]tar[.]xz$") {print $2; exit}' "$node_download/SHASUMS256.txt")
   [ -n "$node_archive" ]
   curl --fail --silent --show-error --location --connect-timeout 30 --max-time 300 "$node_dist/$node_archive" -o "$node_download/$node_archive"
   python3 - "$node_download" "$node_archive" <<'PY'
@@ -109,7 +110,7 @@ if [ ! -x "$cloud_root/node/bin/pnpm" ] || [ "$("$cloud_root/node/bin/pnpm" --ve
   npm install --global --prefix "$cloud_root/node" "$manager"
 fi
 [ "$("$cloud_root/node/bin/pnpm" --version)" = "$wanted" ]
-[[ "$(node --version)" = v24.* ]]
+[[ "$(node --version)" = "v${node_major}."* ]]
 
 bash "$cloud_root/native-build-deps.sh" webkit2gtk-driver xvfb gh
 rust_status=reused
@@ -135,11 +136,25 @@ if ! cargo fetch --offline --locked; then
 fi
 browser_status=reused
 browsers_ready() {
-  node --input-type=module -e 'import {accessSync,constants} from "node:fs"; import {chromium,webkit} from "playwright"; for(const browser of [chromium,webkit]) accessSync(browser.executablePath(),constants.X_OK)'
+  node --input-type=module <<'JS'
+import { accessSync, constants } from 'node:fs'
+import { chromium, webkit } from 'playwright'
+for (const engine of [chromium, webkit]) {
+  accessSync(engine.executablePath(), constants.X_OK)
+  const browser = await engine.launch({ headless: true, timeout: 15_000 })
+  try {
+    const page = await browser.newPage()
+    await page.setContent('<body>Nessa cloud startup</body>')
+    if (await page.textContent('body') !== 'Nessa cloud startup') throw new Error('Browser readiness page did not match.')
+  } finally {
+    await browser.close()
+  }
+}
+JS
 }
 if ! browsers_ready; then
   browser_status=installed
-  pnpm exec playwright install chromium webkit
+  pnpm exec playwright install --with-deps chromium webkit
 fi
 browsers_ready
 node scripts/ensure-nessa-ui.mjs --check

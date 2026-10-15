@@ -907,6 +907,19 @@ these receipts do not promise that the platform will resume a cache. Toolchain
 updates beyond the required Node line, stable Rust channel and packageManager pin
 are explicit provisioning work rather than an unconditional update on each chat.
 
+Preparation has these ownership and failure boundaries; the bootstrap's colocated
+tests hold the observed outcomes rather than inferring readiness from file presence.
+
+| Starting state | Owner and transition | Evidence after the attempt |
+| --- | --- | --- |
+| No prepared state | Repository recipe installs its runtime artifacts, verifies capabilities, then mints the successful state identity | Setup receipt names the task and provisioning source plus actual outcomes |
+| Verified tools and dependencies already exist | Same recipe checks capabilities and uses offline dependency resolution | Same identity, a new timestamp and recorded reuse; the entry mode stays the mode actually invoked |
+| Task branch predates bootstrap source | Setup-installed, hash-checked recipe supplies maintenance; task checkout supplies manifests | Provisioning identity stays separate from the task commit |
+| One tool, dependency or browser capability is missing | Its existing owner repairs it; Playwright owns both browser executables and their Linux dependency closure | A success receipt follows the capability check, including actual browser launch and local page assertion |
+| Checksum, dependency operation or readiness fails | Bootstrap exits unsuccessfully before publishing another success | Earlier receipt keeps its own timestamp; changed tool files are not claimed to be rolled back |
+| Installed recipe no longer matches setup hashes | Installed-artifact check refuses maintenance | No new preparation success; setup is the owner that can publish a replacement recipe |
+| Platform invokes setup again | Idempotent setup performs the same capability checks | Reused identity/assets and `mode=setup` remain distinct facts; no maintenance or platform cache claim is invented |
+
 ## MCP tools
 
 `crates/nessa-mcp/src/mcp.rs` owns stdio transport and routing. Nessa-owned tools

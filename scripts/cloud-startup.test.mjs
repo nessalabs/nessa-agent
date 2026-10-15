@@ -69,8 +69,9 @@ else if (tool === 'cargo') {
     const mod = path.join(process.cwd(), 'node_modules/playwright')
     fs.mkdirSync(mod, {recursive:true})
     fs.writeFileSync(path.join(mod, 'package.json'), '{"type":"module","exports":"./index.js"}')
-    fs.writeFileSync(path.join(mod, 'index.js'), 'export const chromium={executablePath:()=>'+JSON.stringify(marker('chromium'))+'};export const webkit={executablePath:()=>'+JSON.stringify(marker('webkit'))+'};')
+    fs.writeFileSync(path.join(mod, 'index.js'), 'import fs from \'node:fs\';const engine=file=>({executablePath:()=>file,launch:async()=>{if(!fs.existsSync('+JSON.stringify(marker('browser-libraries'))+'))throw new Error(\'missing browser runtime libraries\');return{newPage:async()=>({setContent:async()=>{},textContent:async()=>\'Nessa cloud startup\'}),close:async()=>{}}}});export const chromium=engine('+JSON.stringify(marker('chromium'))+');export const webkit=engine('+JSON.stringify(marker('webkit'))+');')
   } else if (args.includes('playwright')) {
+    if(args.includes('--with-deps')) touch('browser-libraries')
     for (const name of ['chromium','webkit']) { touch(name); fs.chmodSync(marker(name),0o755) }
   }
 } else if (tool === 'git') console.log('1111111111111111111111111111111111111111')
@@ -369,4 +370,20 @@ test("a changed installed recipe cannot impersonate its successful setup", (t) =
   assert.notEqual(changed.status, 0)
   assert.match(changed.stderr, /does not match its setup receipt/)
   assert.equal(readFileSync(receiptPath, "utf8"), previous)
+})
+
+test("present browser executables do not hide missing runtime libraries", (t) => {
+  const f = bootstrapFixture(t)
+  assert.equal(f.prepare("setup").status, 0)
+  rmSync(join(f.root, "browser-libraries"))
+  const offset = f.calls().length
+  const repaired = f.prepare("maintenance")
+  assert.equal(repaired.status, 0, repaired.stderr)
+  assert.equal(f.receipt().steps.browsers, "installed")
+  const calls = f
+    .calls()
+    .slice(offset)
+    .filter(({ tool, args }) => tool === "pnpm" && args.includes("playwright"))
+  assert.equal(calls.length, 1)
+  assert.ok(calls[0].args.includes("--with-deps"))
 })
