@@ -512,9 +512,20 @@ where
             let id = done.view.intent().command().clone();
             return self.row_or_unsaved(&id);
         }
+        let steps = done.written;
         let mut view = done.view;
-        for step in done.written {
-            view = match step {
+        let mut index = 0;
+        while index < steps.len() {
+            match &steps[index] {
+                Written::Draft {
+                    previous,
+                    failed,
+                    evidence,
+                    by,
+                } => {
+                    view = self.replay_draft(previous.clone(), failed.clone(), *evidence, *by)?;
+                    index += 1;
+                }
                 Written::Answer {
                     previous,
                     next,
@@ -522,18 +533,119 @@ where
                     evidence,
                     by,
                 } => {
-                    self.asked_or_kept(&previous, &next, cause, by, evidence)?
-                        .view
+                    let saved = self.asked_or_kept(previous, next, *cause, *by, *evidence)?;
+                    if !saved.kept {
+                        view = saved.view;
+                        index += 1;
+                        continue;
+                    }
+                    let id = next.intent().command().clone();
+                    let stored = self.committed_record(&id)?;
+                    let stored_evidence = self.evidence_of(&id)?;
+                    if let Some(end) = winning_answer(&steps, index, &stored, stored_evidence) {
+                        view = self.replay_counted(&steps[index..=end])?;
+                        index = end + 1;
+                    } else {
+                        view = saved.view;
+                        index += 1;
+                    }
                 }
-                Written::Draft {
-                    previous,
-                    failed,
-                    evidence,
-                    by,
-                } => self.replay_draft(previous, failed, evidence, by)?,
-            };
+            }
         }
         Ok(view)
+    }
+
+    /// The kept prefix changes the send count. The later answer outranks the
+    /// stored row. Both are one commit, so the row never shows the lost send
+    /// as its outcome
+    /// (`a_replay_writes_the_lost_send_before_the_stronger_answer`).
+    fn replay_counted(&mut self, steps: &[Written]) -> Result<PhoneView, OutboxError> {
+        let Some(id) = answer_command(steps.first()) else {
+            return Err(OutboxError::Unsaved);
+        };
+        for _ in 0..SAVE_ATTEMPTS {
+            if self.store.begin_exclusive().is_err() {
+                return Err(OutboxError::Unsaved);
+            }
+            let saved = match self.committed_record(&id) {
+                Ok(row) => row,
+                Err(error) => {
+                    self.store.abort_exclusive();
+                    return Err(error);
+                }
+            };
+            let Some(Written::Answer { next, .. }) = steps.first() else {
+                self.store.abort_exclusive();
+                return Err(OutboxError::Unsaved);
+            };
+            if !saved.intent().same_bytes(next.intent()) {
+                self.store.abort_exclusive();
+                return Err(OutboxError::Conflict);
+            }
+            let stored_evidence = match self.evidence_of(&id) {
+                Ok(evidence) => evidence,
+                Err(error) => {
+                    self.store.abort_exclusive();
+                    return Err(error);
+                }
+            };
+            let Some(Written::Answer {
+                next: winning,
+                evidence,
+                ..
+            }) = steps.last()
+            else {
+                self.store.abort_exclusive();
+                return Err(OutboxError::Unsaved);
+            };
+            if !replaces(
+                winning.outcome(),
+                *evidence,
+                saved.outcome(),
+                stored_evidence,
+            ) {
+                self.store.abort_exclusive();
+                return Ok(saved.view());
+            }
+            match self.write_counted(&saved, steps) {
+                Ok(view) => return Ok(view),
+                Err(OutboxError::Conflict) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(OutboxError::Unsaved)
+    }
+
+    fn write_counted(
+        &mut self,
+        saved: &PhoneRecord,
+        steps: &[Written],
+    ) -> Result<PhoneView, OutboxError> {
+        let mut cursor = saved.clone();
+        let last = steps.len() - 1;
+        for (offset, step) in steps.iter().enumerate() {
+            let Written::Answer {
+                next, cause, by, ..
+            } = step
+            else {
+                self.store.abort_exclusive();
+                return Err(OutboxError::Unsaved);
+            };
+            let record = if offset == last {
+                overlay(saved, next)
+            } else {
+                next.clone()
+            };
+            if let Err(error) = self.persist(&cursor, &record, *cause, *by) {
+                self.store.abort_exclusive();
+                return Err(asked(error));
+            }
+            cursor = record;
+        }
+        match self.store.end_exclusive() {
+            Ok(()) => Ok(cursor.view()),
+            Err(_) => Err(OutboxError::Unsaved),
+        }
     }
 
     fn replay_draft(
@@ -775,6 +887,33 @@ fn asked(error: OutboxError) -> OutboxError {
 
 /// How many times a lost compare-and-swap reloads the row before giving up.
 const SAVE_ATTEMPTS: usize = 4;
+
+/// The first later answer that outranks `stored`. A draft ends the scan.
+fn winning_answer(
+    steps: &[Written],
+    kept: usize,
+    stored: &PhoneRecord,
+    stored_evidence: Evidence,
+) -> Option<usize> {
+    for (offset, step) in steps.iter().enumerate().skip(kept + 1) {
+        match step {
+            Written::Draft { .. } => return None,
+            Written::Answer { next, evidence, .. } => {
+                if replaces(next.outcome(), *evidence, stored.outcome(), stored_evidence) {
+                    return Some(offset);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn answer_command(step: Option<&Written>) -> Option<PhoneCommandId> {
+    match step {
+        Some(Written::Answer { next, .. }) => Some(next.intent().command().clone()),
+        _ => None,
+    }
+}
 
 /// `next`'s outcome, send count, and successor on the committed intent.
 ///

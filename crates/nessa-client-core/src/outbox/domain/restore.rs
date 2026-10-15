@@ -98,9 +98,10 @@ pub(crate) fn history_reaches(
     // `reached[i]` is the row after `events[i]`. A direct answer that cannot
     // move the stored row is applied to the row before the suffix it replaces.
     let mut reached = vec![state.clone()];
-    for event in rest {
+    for (offset, event) in rest.iter().enumerate() {
         let Some(next) = advance(&state, event, previous, older)
             .or_else(|| direct_over_replaced(events, &reached, event))
+            .or_else(|| counted_send_before_replaced(events, &reached, offset + 1, event))
         else {
             return false;
         };
@@ -490,6 +491,54 @@ fn replaced_by(
             suffix.outcome,
             Evidence::Direct,
         )
+}
+
+/// A lost or unreadable send that a later direct answer still depends on.
+///
+/// The send does not itself outrank a stored direct answer. It is applied to
+/// the row before the lower direct suffix that the later answer replaces, so
+/// the fold counts that send
+/// (`a_replay_writes_the_lost_send_before_the_stronger_answer`).
+/// A lost send with no later outranking answer is not a replay.
+fn counted_send_before_replaced(
+    events: &[IntentEvent],
+    reached: &[PhoneRecord],
+    index: usize,
+    event: &IntentEvent,
+) -> Option<PhoneRecord> {
+    if !matches!(event.cause, Cause::SendLost | Cause::Unreadable) {
+        return None;
+    }
+    let later = events
+        .get(index + 1..)?
+        .iter()
+        .find(|candidate| direct_answer_event(candidate))?;
+    let mut cut = reached.len();
+    while cut > 0
+        && direct_answer_event(&events[cut - 1])
+        && replaces(
+            later.outcome,
+            Evidence::Direct,
+            events[cut - 1].outcome,
+            Evidence::Direct,
+        )
+    {
+        cut -= 1;
+    }
+    if cut == reached.len() || cut == 0 {
+        return None;
+    }
+    let base = &reached[cut - 1];
+    let previous = &events[cut - 1];
+    let older = if cut >= 2 {
+        events[cut - 2].cause
+    } else {
+        previous.cause
+    };
+    if !initiator_allowed(event.cause, event.initiator) {
+        return None;
+    }
+    advance(base, event, previous, older)
 }
 
 fn lookup_suffix(event: &IntentEvent, previous: Option<&IntentEvent>) -> bool {

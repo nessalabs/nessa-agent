@@ -2570,6 +2570,50 @@ fn a_stronger_direct_answer_replaces_a_weaker_one() {
 }
 
 #[test]
+fn a_replay_writes_the_lost_send_before_the_stronger_answer() {
+    let dir = directory();
+    let path = path_in(&dir);
+    let mut outbox = PhoneOutbox::new(
+        PlantLookup::open(&path, PlantedAnswer::WeakerDirect),
+        Scripted::new(
+            vec![SendAnswer::Lost, SendAnswer::Receipt(Delivery::Settled)],
+            vec![LookupAnswer::NotFound],
+        ),
+        SeqIds::default(),
+        clock(),
+    );
+    person_hold(&mut outbox, text_intent("command-1", "hello"));
+    let view = outbox.send(&command("command-1")).unwrap();
+    assert_eq!(view.outcome(), PhoneOutcome::Done);
+    let listed = outbox.list().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].outcome(), PhoneOutcome::Done);
+    drop(outbox);
+    let mut store = SqliteIntents::open(&path).unwrap();
+    let record = store.load(&command("command-1")).unwrap().unwrap();
+    assert_eq!(record.outcome(), PhoneOutcome::Done);
+    assert_eq!(record.sends(), 2);
+    let events = store.events("command-1").unwrap();
+    assert_eq!(
+        events.iter().map(|event| event.cause).collect::<Vec<_>>(),
+        [
+            Cause::Held,
+            Cause::Departed,
+            Cause::SendAnswered,
+            Cause::SendLost,
+            Cause::ForegroundSend,
+        ]
+    );
+    assert_eq!(events[2].outcome, PhoneOutcome::Accepted);
+    assert_eq!(
+        events[3].outcome,
+        PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+    );
+    assert_eq!(events[4].outcome, PhoneOutcome::Done);
+    assert_eq!(events[4].initiator, Initiator::Person);
+}
+
+#[test]
 fn a_direct_answer_clears_the_turn_running_successor() {
     let dir = directory();
     let path = path_in(&dir);

@@ -163,6 +163,14 @@ answer. The replaced events stay
 A lower or equal direct answer does not replace a stored one, and a history
 that appends one does not reach.
 
+A stronger answer from the same replay may depend on a lost or unreadable
+send. That send is written in the same commit, before the answer. Restoration
+applies it to the row before the lower direct answer, then applies the
+answer, so the send count matches
+(`a_replay_writes_the_lost_send_before_the_stronger_answer`).
+A lost send with no later answer that outranks the stored row is not written,
+and a history that appends one does not reach.
+
 An intent row that is gone while its events remain is corrupt. The id is not
 held again (`an_orphaned_audit_history_is_corrupt`).
 
@@ -262,6 +270,7 @@ second rule.
 | S11 | A direct answer arrives against a stored lookup, including forbidden and done | The direct answer is saved | `a_direct_answer_beats_a_lookup` |
 | S16 | An uncertain answer commit rolls back, and a lookup of done is saved before the direct answer is written again | The direct answer loads. The lookup event stays | `a_direct_answer_after_a_lookup_still_loads` |
 | S20 | That rollback lets another caller store a lower direct answer before the stronger one is written again | The stronger answer loads. The lower direct event stays | `a_stronger_direct_answer_replaces_a_weaker_one` |
+| S21 | That stronger answer was a second send after SendLost | SendLost is written in the same commit, then the stronger answer. The row loads at that send count | `a_replay_writes_the_lost_send_before_the_stronger_answer` |
 | S17 | That lookup is `turn_running` and has already minted a draft | The direct answer is saved, the successor is cleared, and the still-held draft is removed | `a_direct_answer_clears_the_turn_running_successor` |
 | S14 | A lookup arrives after a direct answer was stored | The direct answer stays. This is the order the lease produces | `a_lookup_does_not_replace_a_direct_answer` |
 | L1 | Send answer lost, lookup finds `accepted` | Accepted. No further send | `a_lost_answer_with_an_accepted_receipt_is_not_sent_again` |

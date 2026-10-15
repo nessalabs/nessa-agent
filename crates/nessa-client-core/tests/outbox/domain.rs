@@ -405,6 +405,56 @@ fn every_transition_and_precedence_pair() {
         &repeated,
         false
     ));
+    let counted = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::SendAnswered, accepted),
+        audit(Cause::SendLost, not_admitted),
+        audit(Cause::ForegroundSend, done),
+    ];
+    assert!(history_reaches(
+        &not_admitted_row.clone().with_sends(2).with_outcome(done),
+        &counted,
+        false
+    ));
+    assert!(!history_reaches(
+        &not_admitted_row.clone().with_sends(1).with_outcome(done),
+        &counted,
+        false
+    ));
+    let missing_lost = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::SendAnswered, accepted),
+        audit(Cause::ForegroundSend, done),
+    ];
+    assert!(!history_reaches(
+        &not_admitted_row.clone().with_sends(2).with_outcome(done),
+        &missing_lost,
+        false
+    ));
+    let stranded = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::SendAnswered, accepted),
+        audit(Cause::SendLost, not_admitted),
+    ];
+    assert!(!history_reaches(
+        &not_admitted_row
+            .clone()
+            .with_sends(1)
+            .with_outcome(not_admitted),
+        &stranded,
+        false
+    ));
+    assert!(!history_reaches(
+        &not_admitted_row
+            .clone()
+            .with_sends(1)
+            .with_outcome(accepted),
+        &stranded,
+        false
+    ));
 
     let lookup_done = [
         audit(Cause::Held, draft),
