@@ -3345,3 +3345,48 @@ it("PS16: captures immutable workspace intent before creation can await", async 
   expect(gateway.live(conversationS)).toBe(1)
   expect(gateway.live(conversationB)).toBe(0)
 })
+
+it("keeps input attachments when a fresh desktop source reopens a retained conversation", async () => {
+  const gateway = fakeGateway()
+  const image = { digest: "a".repeat(64), mimeType: "image/png" as const, size: 2048 }
+  const file = { path: "/workspace/quarterly [report].csv" }
+  gateway.views.set(
+    conversationA,
+    view(conversationA, {
+      messages: [
+        {
+          executionId: "original-turn",
+          userText: "Inspect this.",
+          attachments: [image],
+          files: [file],
+          status: "completed",
+          parts: [],
+        },
+      ],
+    }),
+  )
+  const first = started(gateway)
+  const stop = first.follow()
+  const original = await first.source.transcript(conversationA)
+  stop()
+  const reopened = started(gateway)
+  const stopReopened = reopened.follow()
+  try {
+    const restored = await reopened.source.transcript(conversationA)
+    expect(restored.sessionId).toBe(conversationA)
+    expect(restored.messages[0].parts).toEqual(original.messages[0].parts)
+    expect(restored.messages[0].parts).toEqual([
+      { kind: "text", text: "Inspect this." },
+      {
+        kind: "attachments",
+        content: [
+          { type: "image-reference", ...image },
+          { type: "file-reference", ...file },
+        ],
+      },
+    ])
+    expect(gateway.count("subscribe")).toBe(2)
+  } finally {
+    stopReopened()
+  }
+})

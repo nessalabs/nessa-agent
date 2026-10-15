@@ -1,6 +1,7 @@
 import { memo } from "react"
 import {
   PublishedFiles,
+  MessageImages,
   TranscriptNote,
   UnreadableOverflowLine,
   UnreadablePartLine,
@@ -97,10 +98,12 @@ export const Message = memo(function Message({
         ) : null}
         <div className="workspace-bubble">
           {message.parts.map((part, index) =>
-            part.kind === "text" ? (
+            part.kind === "text" && part.text ? (
               <p key={index}>
                 <RichText text={part.text} />
               </p>
+            ) : part.kind === "attachments" ? (
+              <MessageImages key={index} content={part.content} />
             ) : null,
           )}
         </div>

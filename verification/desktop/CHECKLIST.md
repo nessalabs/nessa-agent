@@ -1783,3 +1783,7 @@ surfaces use.
   `data-unreadable-report`, and contains no button. The empty welcome, the
   whole-chat unread sentence, and the omitted-history sentence are absent.
   The screenshots show both transcripts.
+
+## User attachments in desktop reads — #682
+
+`user-attachments.mjs` drives the production gateway projection and desktop message renderer at 360, 600 and 1440 pixels in Chromium and WebKit. Committed, pending and serialized/reopened image-only, linked-file-only and mixed inputs retain the exact image encoding/size and linked path, a labelled attachment list and adjacent text. The reference placeholders show no preview or action when bytes are unavailable and fit the surface within 1 pixel of overflow. Reloading the fixture preserves the same metadata. The mapper and browser regressions hold this contract; agent-published file reads/saves remain covered separately by `published-files.mjs`.

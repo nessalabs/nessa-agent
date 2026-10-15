@@ -32,6 +32,8 @@ export { Transcript } from "./ui/transcript"
 // Files a conversation holds, read back verified and shown: the panel's
 // transcripts and the desktop window's alike.
 export { HeldFilesProvider } from "./ui/held-files"
+// Input reference tiles, also used by desktop metadata placeholders.
+export { MessageImages } from "./ui/message-images"
 export { PublishedFiles } from "./ui/published-files"
 export { heldFileReader } from "./adapters/gateway/held-files"
 export { shownNote } from "./adapters/gateway/notes"
@@ -52,6 +54,7 @@ export {
   UNREADABLE_SENTENCE,
 } from "./ui/unreadable-part"
 export {
+  referencedContent,
   historyExtent,
   historyNotices,
   placeNotes,
@@ -71,6 +74,8 @@ export {
   AttachmentResource,
   type AttachmentResourceData,
   type ImageReference,
+  type ImageReferencePart,
+  type LinkedFileReferencePart,
   type UploadFailure,
   MAX_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENT_BYTES,

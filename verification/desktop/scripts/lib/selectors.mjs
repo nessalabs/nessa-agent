@@ -921,3 +921,15 @@ export const transcriptUnreadable = {
   report: "[data-unreadable-report]",
   said: ".workspace-bubble, .workspace-message-body, [data-slot='chat-bubble']",
 }
+
+/** Retained user inputs through the desktop projection and message renderer. */
+export const userAttachments = {
+  page: "/verification/desktop/fixtures/user-attachments/index.html",
+  ready: "[data-user-attachments]",
+  case: (phase, kind) => `[data-input-case="${phase}-${kind}"]`,
+  tiles: ".nessa-message-images li",
+  lists: ".nessa-message-images",
+  text: ".workspace-bubble p",
+  pictures: "img",
+  controls: "button",
+}
