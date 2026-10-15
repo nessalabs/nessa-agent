@@ -276,9 +276,13 @@ not rewrite the file. When the bytes equal a resource stored for a
 different environment or a different canonical path, share refuses. It
 writes no grant, and it does not rewrite or delete the file. The existing
 resource stays on its stored path. Binding bytes alone do not attach a
-grant. If the resource commit fails, share removes the marker only when
-this attempt created the file and no committed resource stores that
-binding. A failed grant commit leaves the marker and every grant already
+grant. If the resource commit fails, and this attempt created the file
+and no committed resource stores that binding, the grant store records
+cleanup-pending for that path. That write does not claim the file is
+absent. The unlink and its audit commit as later writes. A failed unlink
+leaves the file. A failed audit leaves the gap and does not restore the
+file. A share of that path does not adopt it while cleanup-pending names
+it. A failed grant commit leaves the marker and every grant already
 stored. A second subject on the same directory gets another grant row for
 the same resource id. The first subject's grant stays, and the marker
 bytes stay. The first open reads `.nessa-binding` through a directory
@@ -465,8 +469,13 @@ retained phone path. Its hint carries no cursor, and a connection holds
 one record watch, so it cannot wake the chats this connection follows.
 Opening or reconnecting the chat sends the record-hint when the cache
 cursor is behind the committed head, including when the head has not
-moved since the record committed. A crash after the commit and before
-the live hint is recovered by that open.
+moved since the record committed. It also sends the hint when the cache
+cursor's incarnation, schema, or epoch is not the committed head. That
+mismatch is reset-required. The follower retains the old checkpoint and
+does not page it. The conversation view may still be replaced. The record
+cache is not, until an explicit later open replaces the cache scope and
+the downloaded records together. Restart does not approve that reset. A
+crash after the commit and before the live hint is recovered by that open.
 
 A grant frame that adds a chat the follower has chosen to follow starts
 the first copy. The walk is not `catalogueHead` and not
@@ -650,9 +659,14 @@ epoch. Admitted work finishes, and the next command is refused.
   permit. They do not advance the grant epoch. After the permit is free
   they stop the registration: delivering, then stopped, with the cause
   credential revoked or expired, the owner or the expiry as initiator, and
-  the delivery id waited for when there was one. Grants may still name
+  the delivery id waited for when there was one. If that stop write does
+  not commit, the live process retries it on the next read of the
+  registration and does not wait for a queued delivery or for process
+  exit. A new issue stays refused until the stop commits. Grants may still name
   that principal. No later attempt is sent. Unsharing each conversation
-  is not required.
+  is not required. Terminal outbox rows for one registration stay within
+  `webhook.outbox_retained`. A terminal row is deleted only after its
+  audit has committed, and that deletion does not move the replay cursor.
 - The attempt holds the permit only until `webhook.post_deadline`, a row
   this slice adds to [limits](../limits.md). The clock starts when the
   attempt takes the permit. At the deadline, if `sending` has committed,
@@ -763,9 +777,16 @@ Inside one store, a change a peer can observe and the cursor or outcome
 that names it commit in the same write. A non-terminal in-flight row is
 reconciled by the live sender when the next read or write of that store
 succeeds. Restart uses that same reconciler. Process exit is not the
-reconciler. The conversation store and the outbox are not one store, so
-the outbox scan fills the gap between them. The snapshot pin stays
-process memory. X2 names the rows.
+reconciler. Every effect still owed after another store committed is that
+same gap, including a registration stop, a marker unlink, and that
+unlink's audit. The next write of the owing store finishes it while the
+process stays up, and it does not wait for an unrelated row. A retained
+log has a ceiling. A terminal row is deleted only after its audit has
+committed. A record hint is sent when the cache cursor's incarnation,
+schema, or epoch is not the committed head, and that mismatch is
+reset-required rather than a cursor that is behind. The conversation
+store and the outbox are not one store, so the outbox scan fills the gap
+between them. The snapshot pin stays process memory. X2 names the rows.
 
 ### Grant
 
@@ -872,7 +893,10 @@ live sender and restart run one scan of the outbox. A `queued` row, or a
 `retry scheduled` row, with the permit free is admitted by that scan. The
 scan does not wait for process exit. A failed read does not admit and
 does not start a timer. A second insert does not admit an existing row.
-A `sending` row is not scanned into a new POST.
+A `sending` row is not scanned into a new POST. Terminal rows for one
+registration are kept up to `webhook.outbox_retained`, 1024. A terminal
+row is deleted only after its audit has committed. That deletion does
+not move the replay cursor.
 
 **Invariants.**
 
@@ -889,13 +913,14 @@ A `sending` row is not scanned into a new POST.
 11. **W11.** The sender does not follow redirects. A 3xx is `not sent`. The next admitted POST goes to the registered URL only. Rows: W-3xx.
 12. **W12.** The signature is HMAC-SHA256 of three length-prefixed fields, each a big-endian unsigned 64-bit length then that many bytes: ASCII decimal Unix milliseconds with no sign and no leading zeros except `0`, the delivery id's UTF-8, and the exact body bytes. The headers are `Nessa-Webhook-Timestamp`, `Nessa-Webhook-Id`, and `Nessa-Webhook-Signature` as `v1=` plus 64 lowercase hex characters. The receiver rebuilds those fields from the headers and the raw body. Rows: W-post.
 13. **W13.** The body is `Content-Type: application/json`. It is UTF-8 JSON with keys in order `conversationId`, `incarnation`, `position`, `record`, and no insignificant whitespace. `record` is the committed record a read grant may see, the same bytes `recordsPage` returns for that checkpoint. The MAC covers those exact bytes. This table does not define the record schema. Rows: W-post.
-14. **W14.** Credential revoke or expiry takes the registration permit and does not bump the grant epoch. After the permit is free the registration stops. A credential that is not current beats an active registration. Rows: W-cred, W-refuse, C-W-cred, G-cred.
+14. **W14.** Credential revoke or expiry takes the registration permit and does not bump the grant epoch. After the permit is free the registration stops. If that stop write does not commit, the live process retries it and does not wait for a queued delivery or for process exit. A new issue stays refused until the stop commits. A credential that is not current beats an active registration. Rows: W-cred, W-cred-retry, W-refuse, C-W-cred, G-cred.
 15. **W15.** Grant revoke and a delivery attempt share the registration permit. The attempt that holds it finishes under the epoch it read, and no longer than `webhook.post_deadline`. The next admission finds no grant row. Rows: W-revoke, W-revoke-wait, G-inflight, G-next.
 16. **W16.** The signed timestamp is written in the `sending` commit, before any POST byte. A later admission of that delivery id uses that stored timestamp and does not read the clock again. Rows: W-send, W-post.
 17. **W17.** `webhook.post_deadline` records `timed out` only while this attempt has not read a complete response. A complete response commits its own outcome, including when that commit is the deadline's write. `timed out` does not replace it. Rows: W-timeout, W-deadline-known, W-prec-response.
 18. **W18.** An incarnation change does not advance the cursor and does not backfill. The old checkpoint is retained and the cursor is marked reset-required. `queued` and `retry scheduled` rows for the old incarnation are written `not sent`. A `sending` row is not cancelled. The new incarnation is queued only after the owner resets that cursor. Restart does not reset it. Rows: W-incarnation, W-reset, C-W-incarnation, C-W-reset.
 19. **W19.** The live sender and restart run one scan. A `queued` or `retry scheduled` row with the permit free is admitted by that scan when a read of that registration's outbox succeeds, including after the deadline drop. The scan does not wait for process exit and does not start a timer. A failed read does not admit. A second insert does not admit an existing row. A `sending` row is not scanned into a new POST. A `sending` row with the permit free is W-reconcile or W-unknown. Rows: W-rescan, W-deadline-queued, W-queue-exists, C-W-queued, W-reconcile.
 20. **W20.** A `sending` row with the permit free and no terminal record is reconciled by the live sender when the next write of that outbox succeeds. If this process holds the outcome it already decided, it writes that outcome and does not POST. If it holds no outcome, it appends `unknown` and does not POST. Restart uses that same row. `timed out` does not replace a held complete response. Rows: W-reconcile, W-unknown, W-deadline-known, W-timeout.
+21. **W21.** The outbox retains `webhook.outbox_retained` terminal rows per registration, 1024. When a new terminal commit would exceed that ceiling, the same write deletes older terminal rows whose audit has committed. It does not delete a `queued`, `retry scheduled`, or `sending` row. It does not delete a row whose audit is still owed. It does not move the replay cursor. A deleted row is not re-admitted. Rows: W-trim.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -925,6 +950,8 @@ A `sending` row is not scanned into a new POST.
 | W-revoke-wait | permit held | Grant revoke | The attempt still holds the permit and `webhook.post_deadline` has not fired | Unchanged until the attempt's outcome, W-timeout, W-deadline-known, or W-deadline-queued | The owner waits. The attempt causes the outcome. | None by revoke while it waits. Revoke does not cancel a write that finishes inside the deadline. | None until W-revoke |
 | W-revoke | grant active | Grant revoke, permit free | The permit is free, or the deadline already dropped it | grant absent. Terminal outbox rows stay. | The owner | The grant row is removed, in one commit with this audit. A queued row's next admission is W-refuse. | Target the grant key, before active, after absent, cause revoke, initiator the owner, and the delivery id waited for when there was one |
 | W-cred | registration active | `credential.revoke` or expiry, permit free | The grant epoch is not read and is not written | registration stopped. Grant rows stay at their epochs. | The owner, or expiry | The registration is stopped | Target the registration, before active, after stopped, cause credential revoked or expired, initiator the owner or the expiry, and the delivery id waited for when there was one |
+| W-cred-retry | credential revoked or expired, registration still active | The stop write failed, or the next read of this registration succeeds | W-issue-refuse stays until the stop commits. The grant epoch is not read and is not written. No queued row is required. | registration stopped. The grant epoch is not written. | The live process, or restart | The registration is stopped. No POST. A failed write leaves the registration active. The retry does not wait for a queued delivery or for process exit. | Target the registration, before active, after stopped, cause credential revoked or expired, initiator the owner or the expiry. The writer is not a new initiator. |
+| W-trim | the registration's outbox holds `webhook.outbox_retained` terminal rows, 1024 | A new terminal commit would exceed that ceiling | The rows to delete are terminal and their audit has committed. A `queued`, `retry scheduled`, or `sending` row stays. A row whose audit is still owed stays. | The outbox holds at most `webhook.outbox_retained` terminal rows for this registration. | The delivery attempt, or the live sender | This same write deletes older terminal rows whose audit has committed. The replay cursor is not moved. A checkpoint at or before that cursor is not queued again. A deleted row is not re-admitted. | None. Each deleted row's audit already committed. |
 
 ```mermaid
 sequenceDiagram
@@ -953,7 +980,7 @@ sequenceDiagram
 | C-W-sending | After `sending` commits and before a terminal record commits, whether or not a POST byte was written | `sending`, no terminal record | W-unknown. That delivery id is not posted again. |
 | C-W-due | After W-retry commits | `retry scheduled` and `due_at` | W-wait until `due_at`, then W-due. Same delivery id. |
 | C-W-terminal | After `sent`, `timed out`, `not sent`, or `unknown` commits | That terminal record, `sending` still beside it when the attempt had reached `sending` | Do not admit that delivery id. |
-| C-W-cred | After the credential store marks revoked or expired, before W-cred commits | Credential not current. Registration still active. | Do not POST. W-refuse for a queued row. Then W-cred. |
+| C-W-cred | After the credential store marks revoked or expired, before the registration stop commits | Credential not current. Registration still active. | Do not POST. W-refuse for a queued row. W-cred-retry on the next read of this registration. Restart uses that same row. The retry does not wait for a queued delivery. |
 
 **Concurrency.**
 
@@ -982,7 +1009,7 @@ sequenceDiagram
 | W-prec-stamp | The timestamp stored on `sending` | A fresh clock read on retry | W-post uses the stored timestamp. |
 | W-prec-scan | A successful read of a `queued` or due row with the permit free | Waiting for process exit | W-rescan. W-queue-exists does not admit. A `sending` row is not posted again. |
 
-**Rejected.** An in-memory retry after a terminal `retry scheduled` loses the delivery on exit. One transaction across the conversation store and the outbox is not available. A second registration for one principal would POST to a URL the first issue did not register. Replaying `sending` can deliver twice. Two cursor writers can commit checkpoint N+1 ahead of N. Backfilling a new stream incarnation from the old cursor, or clearing that cursor on restart, would deliver a stream the owner has not reset. Waiting for process exit to admit a `queued` row the live sender can already read would skip that delivery. Leaving a known outcome in memory until process exit would hide a result the next outbox write can store. A second scan beside the outbox read would be a second scheduler.
+**Rejected.** An in-memory retry after a terminal `retry scheduled` loses the delivery on exit. One transaction across the conversation store and the outbox is not available. A second registration for one principal would POST to a URL the first issue did not register. Replaying `sending` can deliver twice. Two cursor writers can commit checkpoint N+1 ahead of N. Backfilling a new stream incarnation from the old cursor, or clearing that cursor on restart, would deliver a stream the owner has not reset. Waiting for process exit to admit a `queued` row the live sender can already read would skip that delivery. Leaving a known outcome in memory until process exit would hide a result the next outbox write can store. A second scan beside the outbox read would be a second scheduler. Waiting for process exit to stop a registration whose credential is already revoked would leave that registration active, so a replacement issue stays refused until restart. An unbounded terminal outbox would grow after the replay cursor has passed those checkpoints. Deleting a terminal row before its audit commits, or deleting a queued or sending row to meet the ceiling, would drop a record the cursor still names or a delivery that is not finished.
 
 ### Directory binding
 
@@ -1001,9 +1028,9 @@ are not a source. Binding bytes alone are not a source.
 2. **D2.** One binding value is one resource, and the environment and canonical path are part of that identity. A second share of the same directory does not mint another resource. A share at a different environment or path that presents the same bytes is refused. Rows: D-second, D-adopt, D-copy.
 3. **D3.** The marker is created only when the file is absent. A create leaves an existing file unchanged. A later share does not rewrite the marker. Rows: D-create, D-second.
 4. **D4.** A failed grant commit leaves the marker and every grant already stored. Rows: D-grant-fail.
-5. **D5.** The marker is removed only when this attempt created the file and no committed resource stores that binding. Rows: D-cleanup, D-cleanup-keep.
-6. **D6.** An orphan marker, file present and no resource row, is adopted. The file is not rewritten. Rows: D-adopt.
-7. **D7.** One share of a directory runs at a time. The lease is the canonical path in that environment, taken after canonicalization. The next share reads the file only after the earlier attempt has committed its resource or removed a marker that attempt created and that no committed resource stores. Rows: D-lease.
+5. **D5.** The marker is removed only when this attempt created the file and no committed resource stores that binding. The grant store records cleanup-pending first. That write does not claim the file is absent. The unlink and the audit commit later, and each can fail alone. Rows: D-cleanup, D-cleanup-retry, D-cleanup-keep.
+6. **D6.** An orphan marker, file present and no resource row, is adopted. The file is not rewritten. A path named by cleanup-pending is not adopted. Rows: D-adopt.
+7. **D7.** One share of a directory runs at a time. The lease is the canonical path in that environment, taken after canonicalization. The next share reads the file only after the earlier attempt has committed its resource or D-cleanup-retry has removed the marker that attempt created and that no committed resource stores. Rows: D-lease.
 8. **D8.** Open reads the marker through a directory handle. A missing root, a missing marker, or different bytes refuse the use and revoke every grant for that resource. A directory recreated at the same path, including when device and inode numbers are reused, does not receive the grants. Rows: D-open-ok, D-open-bad.
 9. **D9.** The named-path walk is no-follow from the handle whose marker matched. A component that is `..`, a symlink, or otherwise leaves that directory is refused. Rows: D-walk.
 10. **D10.** The marker file is refused to `read`, `write`, and `exec`. The check is the directory entry the filesystem opens, so a case-folded alias of `.nessa-binding` is that same marker name. A case-sensitive string compare is not the check. The grantor's open is the reader of that file. Grants stay. Rows: D-name.
@@ -1014,12 +1041,13 @@ are not a source. Binding bytes alone are not a source.
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | D-create | absent, file absent | First share | This attempt holds the directory lease. The create finds the file absent. No resource stores these bytes. | minted, after the resource commit. The grant follows in its own commit. | The owner's share | The file create is not the resource commit. The resource commit stores the environment, the canonical path, and those 32 bytes. The grant commit is the next commit, G-share. A crash between the create and the resource commit is C-D-create. | Target the resource id, before absent, after minted, cause first share, initiator the owner. Written with the resource commit. |
-| D-adopt | absent, file present | Share finds an orphan marker | No resource row stores those bytes. This attempt holds the lease. | minted | The owner's share | Commit the resource row for this environment, this canonical path, and the bytes already in the file. The file is not rewritten. Then G-share. | Target the resource id, before absent, after minted, cause adopt, initiator the owner |
+| D-adopt | absent, file present | Share finds an orphan marker | No resource row stores those bytes. This attempt holds the lease. The path is not named by cleanup-pending. | minted | The owner's share | Commit the resource row for this environment, this canonical path, and the bytes already in the file. The file is not rewritten. Then G-share. | Target the resource id, before absent, after minted, cause adopt, initiator the owner |
 | D-second | minted | Share to another subject of this same directory | A resource stores that binding, and its stored environment and canonical path are this directory | minted, same marker bytes | The owner's share | Another grant row for the same resource id. No marker write. | The new grant's G-share audit. The first grant is not rewritten. |
 | D-grant-fail | minted | The grant commit fails | The resource commit has already happened | minted. Existing grants stay. | The owner's share | Nothing further. The marker stays. | None for the failed grant. The resource audit from D-create or D-adopt stays. |
-| D-cleanup | absent | The resource commit fails | This attempt created the file. No committed resource stores that binding. | absent, file absent | The owner's share, before it releases the lease | Remove the marker this attempt created | Target the path, before file created, after file absent, cause resource commit failed, initiator the share |
+| D-cleanup | absent | The resource commit fails | This attempt created the file. No committed resource stores that binding. | cleanup-pending. The file may still be present. | The owner's share. The lease stays until D-cleanup-retry commits. | The grant store records cleanup-pending: the path, the binding, cause resource commit failed, initiator the share. This write does not claim the file is absent. | None yet. |
+| D-cleanup-retry | cleanup-pending | The next successful filesystem unlink and the next successful audit write, independently, live or on restart | No committed resource stores that binding. This attempt created the file. | The file is absent once the unlink commits. The audit has committed once the sink accepts the original evidence. The pending fact stays until both writes have committed. | The live process, or restart | Remove the marker this attempt created when the unlink commits. The unlink and the audit are not one commit. A failed unlink leaves the file and does not let the audit say absent. A failed audit leaves the gap and does not restore the file. | Target the path, before file created, after file absent only when the unlink has committed, cause resource commit failed, initiator the share. The retrying process is not a new initiator. |
 | D-cleanup-keep | minted | Cleanup runs | A committed resource stores that binding | minted. The file stays. | The owner's share | Nothing | None |
-| D-lease | any | A second share of that canonical directory | A share already holds the lease for that canonical path in that environment | The second share has not read the file yet | The second share waits | None until the lease holder commits its resource or finishes D-cleanup | None until the waiter proceeds |
+| D-lease | any | A second share of that canonical directory | A share already holds the lease for that canonical path in that environment | The second share has not read the file yet | The second share waits | None until the lease holder commits its resource or finishes D-cleanup-retry | None until the waiter proceeds |
 | D-open-ok | minted | Open | The directory handle is the resource's stored canonical path in its environment, and that handle's `.nessa-binding` bytes equal the resource binding. A copy at another path is not an open of this resource. | minted | The grantee's use, checked by the grantor | Nothing. The no-follow walk starts from that handle. | None |
 | D-open-bad | minted | Open | The root is missing, the marker is missing, or the bytes differ. Device and inode reuse without the same marker bytes is this guard. | revoked. Every grant for that resource is removed. | The open | Remove those grant rows even when the audit write fails. G-marker writes each receiver tombstone in that removal. See D-audit-down. | Target the resource id, before active, after absent, cause marker missing or marker bytes differ, initiator the open |
 | D-open-again | revoked | A later open finds the same mismatch | A mismatch audit for that resource has already committed. No committed audit takes D-audit-retry, not this row. | revoked. Grants stay absent. | The open | Nothing | None. The first cause stays. |
@@ -1054,7 +1082,7 @@ sequenceDiagram
 | --- | --- | --- | --- |
 | C-D-create | After the create, before the resource commit | An orphan marker. No resource row. | Restart does not delete the file. The next share of this same path takes D-adopt. A share of another path that presents the same bytes, once a resource exists, takes D-copy. |
 | C-D-resource | After the resource commit, before the grant commit | Minted resource, marker, no new grant | The next share takes D-second. D-cleanup-keep. |
-| C-D-cleanup | During D-cleanup, before the remove commits | The orphan marker may still be there | The next share takes D-adopt if the file remains. |
+| C-D-cleanup | During D-cleanup or D-cleanup-retry, before the unlink and the cleanup audit have both committed | cleanup-pending names the path. The file may still be present. | D-cleanup-retry. A share of this path does not take D-adopt while cleanup-pending names it. |
 | C-D-revoke | During D-open-bad, before the grant removal commits | Grants still present. Marker still missing or different. | The next open takes D-open-bad again. |
 | C-D-audit | After the grants are removed, before the mismatch audit commits | Grants absent. No audit record. The original mismatch evidence is kept. | D-audit-retry. The next successful audit write records that evidence. D-open-again does not apply until that audit commits. Another unavailable sink leaves the gap. The use stays refused. |
 
@@ -1062,7 +1090,7 @@ sequenceDiagram
 
 | Row | Pair | Winner |
 | --- | --- | --- |
-| D-lease | Two shares of one canonical directory | One lease on that canonical path, taken after canonicalization. The waiter reads the file only after the holder commits the resource or finishes D-cleanup. |
+| D-lease | Two shares of one canonical directory | One lease on that canonical path, taken after canonicalization. The waiter reads the file only after the holder commits the resource or finishes D-cleanup-retry. |
 | D-bind-race | Two shares of different paths whose marker bytes are equal, and neither resource has committed | One resource insert wins. The loser reloads and takes D-copy. No second resource is minted. The loser's subject gets no grant on the winner's path. |
 | D-share-open | Share against open, before the resource commit | Open sees no resource, so it sees no grants. An orphan marker is not a grant. Open does not mint. |
 | D-name-race | A grantee names the marker, including a case-folded alias, against the grantor's open | D-name. The grantee does not become a reader. |
@@ -1074,12 +1102,13 @@ sequenceDiagram
 | --- | --- | --- | --- |
 | D-prec-marker | Marker bytes on the stored path | The path alone, the device, and the inode | A recreated directory with no marker, or with different bytes, takes D-open-bad. A copy at another path is D-copy. |
 | D-prec-resource | A resource row that stores the binding for this environment and canonical path | A second mint, D-adopt, or D-cleanup | D-second or D-cleanup-keep. The file is not rewritten. D-adopt does not apply once a resource stores those bytes. A different path is D-copy, not D-second. |
-| D-prec-orphan | Bytes already in an orphan file | A fresh 32-byte mint | D-adopt. |
+| D-prec-orphan | Bytes already in an orphan file | A fresh 32-byte mint | D-adopt. A path named by cleanup-pending is not this row. |
+| D-prec-cleanup | A cleanup-pending fact for this path | D-adopt of the file that fact names | D-cleanup-retry. D-adopt does not apply while cleanup-pending names the path. |
 | D-prec-cause | The first committed mismatch cause | A later open | D-open-again. |
 | D-prec-audit | The original mismatch evidence, with no committed audit | A later open that would invent a new cause | D-audit-retry. The initiator stays the open that saw the mismatch. |
 | D-prec-exec | A sandbox that cannot hide `.nessa-binding`, sandbox `none`, or a root outside the grant | `exec` admission | D-exec-hide, D-exec-none, or D-exec-root. |
 
-**Rejected.** The path as the resource id follows a later directory. Device and inode numbers are reused. An operating-system generation is not added. Rewriting the marker on every share drops the first subject's binding. A count of in-flight sharers is a second protocol beside the one lease. Attaching a grant because the marker bytes match a resource stored at another path would open that other path. Treating only the literal spelling `.nessa-binding` as the marker would let a case-folded alias open that file. Leaving a revoked resource with no later write of the original mismatch audit would drop a required record.
+**Rejected.** The path as the resource id follows a later directory. Device and inode numbers are reused. An operating-system generation is not added. Rewriting the marker on every share drops the first subject's binding. A count of in-flight sharers is a second protocol beside the one lease. Attaching a grant because the marker bytes match a resource stored at another path would open that other path. Treating only the literal spelling `.nessa-binding` as the marker would let a case-folded alias open that file. Leaving a revoked resource with no later write of the original mismatch audit would drop a required record. Claiming the marker absent before the unlink commits, or unlinking it with no later audit, would record a file that is still present or drop the cleanup record. Adopting a path named by cleanup-pending would keep a marker this attempt was removing.
 
 ### Grant subscription stream and cursor
 
@@ -1106,7 +1135,7 @@ The subscription task reads the log. It does not invent a position.
 5. **U5.** A grant change during paging is the next snapshot. It does not change the pinned snapshot. Rows: U-change.
 6. **U6.** The pin lasts until the snapshot completes, the follower disconnects, or the server process stops. A lost pin discards `page`. The follower resumes from `after`. Rows: U-lost, U-drop.
 7. **U7.** Every stored grant fits in one frame with the frame overhead. `conversation.share` refuses a grant past that cap and writes nothing. The subscription is not ended `too_large`. Rows: U-fit.
-8. **U8.** A record-hint frame on `conversation.subscribe` is the wake. It carries the subscription id and the head cursor `{incarnation, position}`. It is sent when the subscription opens or reconnects and the follower's cache cursor is behind the committed head, and when the record head moves, including when the bounded view is unchanged. The follower then calls `recordsHead` and `recordsPage`. A view frame is not the wake. `conversation.watchRecords` stays the retained phone path. Rows: U-hint.
+8. **U8.** A record-hint frame on `conversation.subscribe` is the wake. It carries the subscription id and the head cursor `{incarnation, position}`. It is sent when the subscription opens or reconnects and the follower's cache cursor is behind the committed head in the same incarnation, schema, and epoch, or the follower has no cache cursor, when the cache cursor's incarnation, schema, or epoch is not the committed head, and when the record head moves, including when the bounded view is unchanged. A same-incarnation head that is ahead calls `recordsHead`, then `recordsPage`. A mismatch retains the old checkpoint, does not page it, and is reset-required. The conversation view may still be replaced. The record cache is not, until an explicit later open takes U-reset. Restart does not approve that reset. A view frame is not the wake. `conversation.watchRecords` stays the retained phone path. Rows: U-hint, U-reset.
 9. **U9.** An Active peer has no `PeerPoller` timer. Two waits remain: the status dial until Active or Revoked, and the connect backoff. Neither reads the catalogue. Rows: U-dial, U-backoff.
 10. **U10.** Reconnect resumes from the cursors last applied and does not move a cursor backwards in the same incarnation. `cursor_ahead` is refused. A grant-stream `after` whose incarnation is not the server's current incarnation is refused. The follower drops that `after` and takes a full snapshot. The server does not merge the two incarnations. A conversation view still follows #851: a new incarnation replaces the view. A follower with no `after` receives a full snapshot and replaces its local grant replica. A frame does not write a grant row. Rows: U-resume, U-ahead, U-full.
 11. **U11.** The follower's durable `after` is written only when a frame is `complete: true`. That write applies every buffered prefix of the snapshot and the completing frame. `page` and `snapshotId` are not required to be durable. An incomplete frame buffers its prefix and writes neither the replica nor `after`. Rows: U-done, U-page, U-full.
@@ -1134,7 +1163,8 @@ The subscription task reads the log. It does not invent a position.
 | U-local-close | eight conversation subscriptions | The follower unsubscribes one chat before it subscribes another | The follower names the subscription. The least recently opened chat is the follower's choice, by its own explicit open, not by frame arrival. | That named chat is unsubscribed and stays a cold replica. The server closes only the subscription the follower named. | The follower | The follower records which chat is cold | None on a grant row |
 | U-grant-cap | one grant subscription | A second grant subscribe on that socket | One grant target is already open | closed for the second target. The first stays. | The follower | Nothing | Refusal, cause subscription capacity, initiator the follower |
 | U-fit | absent or active | `conversation.share` or an epoch bump | The encoded grant would not fit in one frame with the frame overhead | Unchanged | The owner | Nothing | Refusal, cause grant frame, initiator the owner. The subscription is not ended `too_large`. |
-| U-hint | a chat subscription opens, reconnects, or is open | Subscribe, reconnect, or the record head moves | On open or reconnect, the follower's cache cursor is behind the committed head, or the follower has no cache cursor. On a later move, the head cursor changed, whether or not the bounded view changed. | The subscription stays. The grantor sends the current head hint. The follower calls `recordsHead`, then `recordsPage` from the cache cursor. | The grantor's subscription task | None on the grantor. The record already committed. The hint is not the cursor. The follower writes the records it applies. | None |
+| U-hint | a chat subscription opens, reconnects, or is open | Subscribe, reconnect, or the record head moves | On open or reconnect, the follower's cache cursor is behind the committed head in the same incarnation, schema, and epoch, or the follower has no cache cursor, or the cache cursor's incarnation, schema, or epoch is not the committed head. On a later move, the head cursor changed, including an incarnation, schema, or epoch change, whether or not the bounded view changed. | The subscription stays. The grantor sends the current head hint. A same-incarnation head that is ahead: the follower calls `recordsHead`, then `recordsPage` from the cache cursor. A mismatch: the follower retains the old checkpoint and does not page it. The conversation view may still be replaced. The record cache is not. The cache cursor is marked reset-required. | The grantor's subscription task | None on the grantor. The record already committed. The hint is not the cursor. The follower writes the records it applies only from a same-incarnation page. | None |
+| U-reset | reset-required on that chat's cache cursor | The follower opens that chat again | The previous open recorded reset-required. This open is the explicit approval. Restart does not approve it. | The old checkpoint is replaced by the new head in one write. Then `recordsPage` copies from that head. | The follower's explicit open | The durable write replaces the cache scope and the downloaded records together. | Target the chat, before the old cursor, after the new head, cause incarnation, schema, or epoch changed, initiator the record source. The open is the approval, not a new cause. |
 | U-dial | peer phase Pending | Wait until the enrollment finishes | The phase is not Active | Pending, until Active or Revoked | The status dial | None. The dial does not read the catalogue. | None |
 | U-backoff | connect failed | Wait, then resume | The connect backoff | The subscriptions resume from U-resume | The follower | None. The wait does not read the catalogue or the records. | None |
 
@@ -1162,7 +1192,8 @@ sequenceDiagram
 | C-U-apply | During U-done, before the replica and `after` commit | The previous `after` and the previous replica. The buffer is not on disk. | Restart resumes from that previous pair. It does not apply a partial buffer and does not leave a new `after` on an old replica. |
 | C-U-server | The server stops while paging, or after a grant commit and before the task publishes | Grant rows and their log records as the grant commits left them. The pin is gone. | The follower takes U-lost, U-resume, or U-stale. A follower with `after` at or after the oldest retained position receives every later log record, including a tombstone. |
 | C-U-hint | The follower stops after a hint and before `recordsPage` commits | The last committed record cursor | `recordsPage` resumes from that cursor. The hint did not advance it. |
-| C-U-hint-miss | The grantor stops after a record commit and before the live hint | The record is committed. No hint was delivered. | The follower's next subscribe or reconnect takes U-hint from the committed head. The view frame is not that hint. |
+| C-U-hint-miss | The grantor stops after a record commit and before the live hint | The record is committed. No hint was delivered. | The follower's next subscribe or reconnect takes U-hint from the committed head. A mismatch is reset-required and is not paged. The view frame is not that hint. |
+| C-U-reset | After U-hint records reset-required, before the explicit open | The old checkpoint is retained. The cache cursor is reset-required. | Restart does not approve the reset and does not page the old checkpoint. The next explicit open takes U-reset. |
 
 **Concurrency.**
 
@@ -1170,7 +1201,7 @@ sequenceDiagram
 | --- | --- | --- |
 | U-pin-race | A grant change against a held pin | U-change. The pin stays. The change is the next snapshot. |
 | U-cap-race | A ninth `conversation.subscribe` against the grant subscription | U-cap. The grant target stays. No chat is evicted. |
-| U-hint-race | An unchanged bounded view against a moved record head | U-hint. The hint is sent. The view frame is not the wake. |
+| U-hint-race | An unchanged bounded view against a moved record head, or an old incarnation, schema, or epoch against a same-incarnation behind check | U-hint. The hint is sent. A mismatch is reset-required. The follower does not page the old checkpoint. The view frame is not the wake. |
 
 **Precedence.**
 
@@ -1183,7 +1214,7 @@ sequenceDiagram
 | U-prec-open | The follower's explicit unsubscribe | A ninth subscribe, for which chat goes cold | U-local-close. The server does not rank open order. U-cap closes nothing. |
 | U-prec-grant | The grant rows | A replayed frame | The frame writes nothing. U-full replaces the local replica from the rows. |
 
-**Rejected.** Ending the subscription `too_large`, advancing `after` on `complete: false`, and keeping `PeerPoller` as the Active peer's grant path are each a second cursor. Advancing `after` without every buffered prefix in that same write would omit a grant or tombstone from an earlier page. Filling an older log position from the current grant row would send a later capability set under an earlier cursor. Treating the bounded view as the record wake would leave a committed record unwoken after a crash between the commit and the live hint. An unbounded grant log would promise replay of a cursor the server no longer holds. `conversation.watchRecords` stays the phone path because one record watch cannot wake every chat on this connection. The server unsubscribing a chat the follower did not name, to make room for a ninth subscribe, would close a slot the follower still holds. Merging a grant-stream `after` from another incarnation would keep a cursor the server has replaced. Publishing a grant change from the subscription task without a log record in the grant commit would drop a revocation after `PeerPoller` is gone.
+**Rejected.** Ending the subscription `too_large`, advancing `after` on `complete: false`, and keeping `PeerPoller` as the Active peer's grant path are each a second cursor. Advancing `after` without every buffered prefix in that same write would omit a grant or tombstone from an earlier page. Filling an older log position from the current grant row would send a later capability set under an earlier cursor. Treating the bounded view as the record wake would leave a committed record unwoken after a crash between the commit and the live hint. Treating an incarnation, schema, or epoch change as a cursor that is behind would page a checkpoint the source has replaced. Restart approving that reset would replace the record cache without the explicit open. An unbounded grant log would promise replay of a cursor the server no longer holds. `conversation.watchRecords` stays the phone path because one record watch cannot wake every chat on this connection. The server unsubscribing a chat the follower did not name, to make room for a ninth subscribe, would close a slot the follower still holds. Merging a grant-stream `after` from another incarnation would keep a cursor the server has replaced. Publishing a grant change from the subscription task without a log record in the grant commit would drop a revocation after `PeerPoller` is gone.
 
 ### Pairing and discovery
 
@@ -1294,7 +1325,7 @@ not add a rule.
 **Invariant.**
 
 1. **X1.** Issues `#889` through `#897` are filed. A fence states the slice delta and the gate. A fence does not add a lifecycle state. Rows: X-filed.
-2. **X2.** Inside one store, a change a peer can observe, the cursor that names every part of it, and the audit record that transition requires commit in the same write. A cursor does not advance over a part that write did not apply. A snapshot split across frames is one part: the follower buffers every incomplete prefix and applies that whole buffer with `after` in the completing write. A non-terminal gap is the uncommitted part: a grant-store effect after a credential-store commit, or an audit record whose cleanup already committed. The live sender reconciles that gap when the next read or write of that store succeeds. Restart uses that same reconciler. Process exit is not the reconciler. The retry writes the original target, before, after, cause, and initiator. The retrying process is not a new initiator. A peer reads the committed record the cursor names. An older grant-log position stores the grant contents of that write. A lost live hint is recovered when subscribe or reconnect compares the cache cursor to the committed head. An announcement requires a current credential. Phase Active does not replace that check. The conversation store and the outbox are not one store. The grant store and the conversation file are not one store. The credential store and the grant store are not one store. The audit sink is not the grant store. Rows: U-done, U-page, U-log, U-resume, U-hint, G-link-retry, G-unlink-retry, D-audit-retry, P-revoke, P-announce, P-quiet, W-reconcile, W-rescan.
+2. **X2.** Inside one store, a change a peer can observe, the cursor that names every part of it, and the audit record that transition requires commit in the same write. A cursor does not advance over a part that write did not apply. A snapshot split across frames is one part: the follower buffers every incomplete prefix and applies that whole buffer with `after` in the completing write. A non-terminal gap is the uncommitted part: a grant-store effect after a credential-store commit, or an audit record whose cleanup already committed. Every effect still owed after another store has committed is that same gap, including a registration stop, a marker unlink, and that unlink's audit. The next successful write of the owing store finishes it while the process stays up. The retry does not wait for an unrelated row and does not wait for process exit. Restart uses that same reconciler. Process exit is not the reconciler. The retry writes the original target, before, after, cause, and initiator. The retrying process is not a new initiator. A retained operational log has a ceiling. A terminal row is deleted only after its audit has committed. A peer reads the committed record the cursor names. An older grant-log position stores the grant contents of that write. A lost live hint is recovered when subscribe or reconnect compares the cache cursor to the committed head. A record hint is also sent when that cursor's incarnation, schema, or epoch is not the committed head. That mismatch is reset-required. It is not a cursor that is behind. An announcement requires a current credential. Phase Active does not replace that check. The conversation store and the outbox are not one store. The grant store and the conversation file are not one store. The credential store and the grant store are not one store. The audit sink is not the grant store. The filesystem and the audit sink are not one store. Rows: U-done, U-page, U-log, U-resume, U-hint, U-reset, G-link-retry, G-unlink-retry, D-audit-retry, D-cleanup-retry, P-revoke, P-announce, P-quiet, W-reconcile, W-rescan, W-cred-retry, W-trim.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -1379,6 +1410,10 @@ not add a rule.
 | 4279666552 | U-log, U-resume, G-share, G-bump, U12 |
 | 4279666560 | U-hint, C-U-hint-miss, U8 |
 | 4279666567 | P-announce, P-quiet, P-prec-cred, P3 |
+| 4279896535 | U-hint, U-reset, C-U-reset, U8 |
+| 4279896541 | W-cred-retry, C-W-cred, W14 |
+| 4279896551 | D-cleanup, D-cleanup-retry, C-D-cleanup, D5 |
+| 4279896563 | W-trim, W21 |
 
 ## Open questions / known limits
 
@@ -1410,7 +1445,8 @@ a procedure.
   (U-trim). An older cursor takes a full snapshot (U-stale).
 - Refusing or deleting the grant store leaves the conversation metadata
   file in place (G-refuse-old). The credential store and the link row
-  are not one transaction. The live retry closes a removal (G-unlink-retry), a missing insert (G-link-retry), and a missing mismatch audit (D-audit-retry). The retry keeps the original initiator. Admission does not report the person until a true choice's link commits.
+  are not one transaction. The live retry closes a removal (G-unlink-retry), a missing insert (G-link-retry), a missing mismatch audit (D-audit-retry), a registration stop (W-cred-retry), and a marker cleanup with its audit (D-cleanup-retry). The retry keeps the original initiator. Admission does not report the person until a true choice's link commits.
+- The webhook outbox retains `webhook.outbox_retained` terminal rows per registration (W-trim). A row is deleted only after its audit has committed. The replay cursor is not moved.
 - A case these tables do not settle is a test of the slice that owns it.
   It is not a new state added in review.
 
@@ -1575,8 +1611,7 @@ subject with `write` is refused the marker file, including a case-folded alias o
 An allowed program cannot read, unlink, or rewrite the marker. A profile
 that exposes that name is refused `exec`. A
 second share of a directory waits until the first attempt has committed
-its resource or removed the marker it created. A failed first attempt
-leaves no marker and no grant. An open that finds a missing or different
+its resource or the cleanup of a marker that attempt created has committed. A failed resource commit records cleanup-pending and does not claim the marker absent until the unlink and its original audit have both committed. An open that finds a missing or different
 marker revokes the grants and records the resource, the before and after,
 the marker cause, and the open as initiator. An unavailable audit sink
 still revokes, and the refusal says the audit was not recorded. The next successful write of the audit sink records that same evidence, with the open as initiator. Another unavailable sink leaves the gap.
@@ -1644,7 +1679,7 @@ commits a tombstone on that receiver's grant log in the same write. A
 follower that reconnects with the old `after` in the same incarnation
 receives that tombstone. A complete frame stores every buffered prefix
 and `after` in the same write. An incomplete prefix is buffered and is not
-the replica. Each grant-log record stores the capabilities and constraints of that commit, and reconnect sends those stored contents. Opening or reconnecting a chat sends the current head hint when the cache cursor is behind the committed head. An `after` older than the grant-log floor
+the replica. Each grant-log record stores the capabilities and constraints of that commit, and reconnect sends those stored contents. Opening or reconnecting a chat sends the current head hint when the cache cursor is behind the committed head, and when its incarnation, schema, or epoch is not that head. That mismatch is reset-required until an explicit later open replaces the cache. An `after` older than the grant-log floor
 takes a full snapshot. A grant
 set larger than 64 KiB arrives as frames cut inside that bound. An
 incomplete frame keeps the stream cursor and resumes with `page` and
@@ -1704,7 +1739,7 @@ Part of docs/design/access-grants.md.
 ## Deliver
 
 The contract is Webhooks and the webhook outbox table. This slice adds
-`webhook.post_deadline` to `docs/limits.md`. It does not add a delivery
+`webhook.post_deadline` and `webhook.outbox_retained` to `docs/limits.md`. It does not add a delivery
 state. The permit drops at `webhook.post_deadline` even when `not sent`
 has not committed. The row stays the state the attempt read.
 
@@ -1714,7 +1749,7 @@ A webhook granted one chat receives that chat's events and no other. A
 retry of an attempt that is still at its admitted epoch repeats the
 delivery id and the signature. A transport error with no response byte
 can deliver that same id twice. A receiver that applies a side effect
-deduplicates by `Nessa-Webhook-Id`. `unknown` is not posted again. The webhook credential cannot call
+deduplicates by `Nessa-Webhook-Id`. `unknown` is not posted again. A failed registration stop is retried on the next read of that registration while the process stays up, and a terminal row past `webhook.outbox_retained` is deleted only after its audit has committed. The webhook credential cannot call
 `conversation.send`. Revoke waits for the one attempt that holds the
 permit; that attempt is recorded under the epoch it read, and the grant
 row is then removed. A retry that takes the permit after that removal is
