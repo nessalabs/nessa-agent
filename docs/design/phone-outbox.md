@@ -172,7 +172,8 @@ A lost send with no later answer that outranks the stored row is not written,
 and a history that appends one does not reach.
 
 An intent row that is gone while its events remain is corrupt. The id is not
-held again (`an_orphaned_audit_history_is_corrupt`).
+held again. Listing and recovery report that corruption and do not return the
+other rows (`an_orphaned_audit_history_is_corrupt`).
 
 | Function | When the outbox asks | What it persists |
 | --- | --- | --- |
@@ -299,7 +300,7 @@ second rule.
 | C7 | An event's failure or unknown column contradicts its outcome | Corrupt. The column is not dropped | `an_event_column_contradiction_is_corrupt` |
 | C8 | The stored send count disagrees with the replay | Corrupt. The count is not rewritten | `a_send_count_the_replay_does_not_reach_is_corrupt` |
 | C9 | The successor column names a different command than the return event | Corrupt. The column is left | `a_successor_names_the_draft_the_return_minted` |
-| C10 | The intent row is gone and its events remain | Corrupt. The id is not held again | `an_orphaned_audit_history_is_corrupt` |
+| C10 | The intent row is gone and its events remain | Corrupt. The id is not held again. List and recovery do not return the other rows | `an_orphaned_audit_history_is_corrupt` |
 | C11 | Successor edges cycle, including two commands that name each other | Corrupt. The columns are left | `a_successor_cycle_is_corrupt` |
 | S18 | A direct answer replaces a lookup after the recovery draft has departed | The draft stays. The return event is its lineage. Both rows load | `a_departed_recovery_successor_keeps_its_lineage` |
 | C2 | Each transition | Command, outcome, cause, and initiator | `a_transition_keeps_its_cause_and_initiator` |

@@ -64,10 +64,10 @@ impl IntentStore for SqliteIntents {
         let Some(record) = read_record(&self.connection, id.as_str())? else {
             // Events left behind a deleted row are not "never saved"
             // (`an_orphaned_audit_history_is_corrupt`).
-            if read_events(&self.connection, id.as_str())?.is_empty() {
-                return Ok(None);
+            if events_without_owner(&self.connection, Some(id.as_str()))? {
+                return Err(StoreError::Corrupt);
             }
-            return Err(StoreError::Corrupt);
+            return Ok(None);
         };
         confirm(&self.connection, &record, &mut BTreeMap::new())?;
         Ok(Some(record))
@@ -112,6 +112,11 @@ impl IntentStore for SqliteIntents {
     }
 
     fn list(&mut self) -> Result<Vec<PhoneRecord>, StoreError> {
+        // The same orphan is corrupt when enumerating, so a surviving row is
+        // not returned in its place (`an_orphaned_audit_history_is_corrupt`).
+        if events_without_owner(&self.connection, None)? {
+            return Err(StoreError::Corrupt);
+        }
         let records = read_records(&self.connection)?;
         let mut walk = BTreeMap::new();
         for record in &records {
@@ -318,6 +323,27 @@ fn read_record(connection: &Connection, id: &str) -> Result<Option<PhoneRecord>,
         .optional()
         .map_err(unavailable)?;
     row.transpose()
+}
+
+/// Whether `phone_intent_event` has a `request_id` with no `phone_intent` row.
+///
+/// `id` limits the check to one command. `None` checks every event.
+fn events_without_owner(connection: &Connection, id: Option<&str>) -> Result<bool, StoreError> {
+    let found = connection
+        .query_row(
+            "SELECT 1 FROM phone_intent_event
+             WHERE (?1 IS NULL OR request_id = ?1)
+               AND NOT EXISTS (
+                   SELECT 1 FROM phone_intent
+                   WHERE phone_intent.request_id = phone_intent_event.request_id
+               )
+             LIMIT 1",
+            params![id],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(unavailable)?;
+    Ok(found.is_some())
 }
 
 fn read_records(connection: &Connection) -> Result<Vec<PhoneRecord>, StoreError> {

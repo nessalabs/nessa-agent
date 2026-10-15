@@ -2816,6 +2816,7 @@ fn an_orphaned_audit_history_is_corrupt() {
     {
         let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
         person_hold(&mut outbox, text_intent("command-1", "hello"));
+        person_hold(&mut outbox, text_intent("command-2", "other"));
     }
     let connection = Connection::open(&path).unwrap();
     connection
@@ -2834,6 +2835,8 @@ fn an_orphaned_audit_history_is_corrupt() {
         outbox.send(&command("command-1")).unwrap_err(),
         OutboxError::Corrupt
     );
+    assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
+    assert_eq!(outbox.recover().unwrap_err(), OutboxError::Corrupt);
     drop(outbox);
     let connection = Connection::open(&path).unwrap();
     let events: i64 = connection
@@ -2844,6 +2847,14 @@ fn an_orphaned_audit_history_is_corrupt() {
         )
         .unwrap();
     assert_eq!(events, 1);
+    let surviving: String = connection
+        .query_row(
+            "SELECT request_id FROM phone_intent WHERE request_id = 'command-2'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(surviving, "command-2");
 }
 
 fn event_causes(connection: &Connection, id: &str) -> Vec<String> {
