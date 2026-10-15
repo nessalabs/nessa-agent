@@ -998,7 +998,9 @@ only liveness, without product state.
 Currently the manifest generates method names and requested grants, while the
 gateway independently matches strings for handler routing, response lanes, execution capacity and
 paired-admission shape. [ADR 921](adr/todo/921-close-product-method-classification.md)
-proposes a generated closed method identity and one exhaustive gateway plan. It
+proposes a generated closed method identity and one exhaustive gateway plan. Its
+[source catalogue and migration plan](design/product-method-classification.md)
+records the proposed cutover. It
 is not implemented: current runtime behavior, including unknown-method refusal
 and the separate control lane, is unchanged.
 

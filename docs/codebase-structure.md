@@ -558,7 +558,8 @@ identity providers remain future adapters.
 Today the product socket and read-access adapter classify manifest method strings
 separately for handler routing, response capacity, execution capacity and paired admission, with
 fallbacks for some choices. [ADR 921](adr/todo/921-close-product-method-classification.md)
-proposes generated closed method identity and one exhaustive gateway-owned plan;
+proposes generated closed method identity and one exhaustive gateway-owned plan
+([source catalogue and migration](design/product-method-classification.md));
 it is not implemented, and the manifest remains the owner only of wire names,
 parameter shapes and requested grants.
 
