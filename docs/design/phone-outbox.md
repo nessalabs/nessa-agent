@@ -128,23 +128,33 @@ starts from the held draft. Departed is `PhoneRecord::depart`. Each later
 answer stays only when `budget`, `apply_send`, `apply_lookup`, or
 `apply_retry` returns that cause and that outcome. The row's outcome, send
 count, and departure must equal that replay
-(`a_send_count_the_replay_does_not_reach_is_corrupt`). A successor names a
-different command. A row whose successor is its own id does not reach
-(`a_self_successor_is_corrupt`). The `ReturnedToDraft` event names the draft
-that return minted, and the row's successor is that id. Exactly one row
-points at that draft, the prompt matches, and the draft's first event is
-Held by the same initiator. A later send of that draft still loads. A pointer
-that names another command does not reach
-(`a_successor_names_the_draft_the_return_minted`). Lookup and
+(`a_send_count_the_replay_does_not_reach_is_corrupt`). Lookup and
 ReturnedToDraft for one `turn_running` share one initiator. A history this
 replay does not return is corrupt. The row is not repaired.
 
+The successor chain is one path. `confirm` is the only walk, and `load` and
+`list` use it. A node is visiting while the walk is on it and visited when
+the walk has finished it. A live successor edge into a visiting node is a
+cycle, including two commands that name each other
+(`a_successor_cycle_is_corrupt`). A row whose successor is its own id is that
+cycle on one row (`a_self_successor_is_corrupt`). The `ReturnedToDraft` event
+is the lineage. The live `successor` column is that edge only while the row's
+outcome is still the return, and it names the same id
+(`a_successor_names_the_draft_the_return_minted`). A direct answer clears the
+live column. A successor that is still only held is deleted in that write
+(`a_direct_answer_clears_the_turn_running_successor`). A successor that has
+already departed stays. Its return event is still the lineage, so `list`
+loads both rows
+(`a_departed_recovery_successor_keeps_its_lineage`). A recovery hold resolves
+to exactly one command whose return event names it, the prompt matches, and
+that command's history reaches its current row. The live column, when it is
+still set, is that same command. The walk checks this link in place. It does
+not follow the return backward as a second successor edge
+(`a_recovery_draft_requires_its_turn_running_predecessor`).
+
 A direct answer that replaces a lookup is replayed from the row before that
 lookup. The lookup events stay
-(`a_direct_answer_after_a_lookup_still_loads`). That same write clears a
-`turn_running` successor the direct answer replaces, and removes a replacement
-draft that is still only held
-(`a_direct_answer_clears_the_turn_running_successor`).
+(`a_direct_answer_after_a_lookup_still_loads`).
 
 An intent row that is gone while its events remain is corrupt. The id is not
 held again (`an_orphaned_audit_history_is_corrupt`).
@@ -267,11 +277,13 @@ second rule.
 | C3 | Events do not reach the row, or a send cause is marked recovery | Corrupt. The row is not rewritten | `a_done_row_whose_history_stops_at_departure_is_corrupt` |
 | C4 | A lookup event claims running | Corrupt. The row is not rewritten | `a_lookup_cannot_restore_running` |
 | C5 | Attempted is followed by not admitted or lookup failed | Corrupt. The attempt is not retried | `every_transition_and_precedence_pair`, `an_attempted_receipt_is_not_restored_as_not_admitted` |
-| C6 | A recovery hold whose predecessor is missing, not unique, a different prompt, not `turn_running`, or not the recovery caller | Corrupt. The draft is not sent | `a_recovery_draft_requires_its_turn_running_predecessor` |
+| C6 | A recovery hold whose return event is missing, not unique, a different prompt, whose history does not reach, or not the recovery caller | Corrupt. The draft is not sent | `a_recovery_draft_requires_its_turn_running_predecessor` |
 | C7 | An event's failure or unknown column contradicts its outcome | Corrupt. The column is not dropped | `an_event_column_contradiction_is_corrupt` |
 | C8 | The stored send count disagrees with the replay | Corrupt. The count is not rewritten | `a_send_count_the_replay_does_not_reach_is_corrupt` |
 | C9 | The successor column names a different command than the return event | Corrupt. The column is left | `a_successor_names_the_draft_the_return_minted` |
 | C10 | The intent row is gone and its events remain | Corrupt. The id is not held again | `an_orphaned_audit_history_is_corrupt` |
+| C11 | Successor edges cycle, including two commands that name each other | Corrupt. The columns are left | `a_successor_cycle_is_corrupt` |
+| S18 | A direct answer replaces a lookup after the recovery draft has departed | The draft stays. The return event is its lineage. Both rows load | `a_departed_recovery_successor_keeps_its_lineage` |
 | C2 | Each transition | Command, outcome, cause, and initiator | `a_transition_keeps_its_cause_and_initiator` |
 
 `FOREGROUND_SENDS` in `crates/nessa-client-core/src/outbox/domain/decide.rs`

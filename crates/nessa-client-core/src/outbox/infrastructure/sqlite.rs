@@ -13,8 +13,7 @@ use nessa_local_database::{
     rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior},
     OpenError, Schema,
 };
-use nessa_protocol::product_contract::generated::ConversationErrorCode;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -70,7 +69,7 @@ impl IntentStore for SqliteIntents {
             }
             return Err(StoreError::Corrupt);
         };
-        confirm(&self.connection, &record, &mut BTreeSet::new())?;
+        confirm(&self.connection, &record, &mut BTreeMap::new())?;
         Ok(Some(record))
     }
 
@@ -114,8 +113,9 @@ impl IntentStore for SqliteIntents {
 
     fn list(&mut self) -> Result<Vec<PhoneRecord>, StoreError> {
         let records = read_records(&self.connection)?;
+        let mut walk = BTreeMap::new();
         for record in &records {
-            confirm(&self.connection, record, &mut BTreeSet::new())?;
+            confirm(&self.connection, record, &mut walk)?;
         }
         Ok(records)
     }
@@ -355,39 +355,58 @@ fn read_events(connection: &Connection, command: &str) -> Result<Vec<IntentEvent
     Ok(events)
 }
 
-/// The row's events reach it, and a successor names the draft that holds its text.
+/// Where `confirm` is on the successor path.
+///
+/// Visiting is the node the walk is on. A live edge back to it is a cycle
+/// (`a_successor_cycle_is_corrupt`). Visited has finished the walk.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Walk {
+    Visiting,
+    Visited,
+}
+
+/// The row's events reach it, and its successor edges form one path.
+///
+/// This is the only walk. `load` and `list` both call it
+/// (`a_successor_cycle_is_corrupt`,
+/// `a_departed_recovery_successor_keeps_its_lineage`).
 fn confirm(
     connection: &Connection,
     record: &PhoneRecord,
-    seen: &mut BTreeSet<String>,
+    walk: &mut BTreeMap<String, Walk>,
 ) -> Result<(), StoreError> {
     let id = record.intent().command().as_str();
-    if !seen.insert(id.to_owned()) {
-        return Ok(());
+    match walk.get(id) {
+        Some(Walk::Visited) => return Ok(()),
+        Some(Walk::Visiting) => return Err(StoreError::Corrupt),
+        None => {}
     }
+    walk.insert(id.to_owned(), Walk::Visiting);
     let events = read_events(connection, id)?;
     let recovery_hold = events
         .first()
         .is_some_and(|event| event.cause == Cause::Held && event.initiator == Initiator::Recovery);
     if recovery_hold {
-        tie_predecessor(connection, record, seen)?;
+        tie_predecessor(connection, record, &events, walk)?;
     }
     if !history_reaches(record, &events, recovery_hold) {
         return Err(StoreError::Corrupt);
     }
-    tie_successor(connection, record, &events, seen)
+    tie_successor(connection, record, &events, walk)?;
+    walk.insert(id.to_owned(), Walk::Visited);
+    Ok(())
 }
 
-/// The successor is the draft this return minted.
+/// The live successor is the draft this return minted.
 ///
 /// The event owns the id (`successor_follows`). This checks the other row:
-/// one predecessor, the same prompt, and Held by that return's initiator
+/// one live predecessor, the same prompt, and Held by that return's initiator
 /// (`a_successor_names_the_draft_the_return_minted`).
 fn tie_successor(
     connection: &Connection,
     record: &PhoneRecord,
     events: &[IntentEvent],
-    seen: &mut BTreeSet<String>,
+    walk: &mut BTreeMap<String, Walk>,
 ) -> Result<(), StoreError> {
     let Some(successor) = record.successor() else {
         return Ok(());
@@ -415,56 +434,92 @@ fn tie_successor(
     if !held {
         return Err(StoreError::Corrupt);
     }
-    if seen.contains(successor.as_str()) {
-        return Ok(());
-    }
-    confirm(connection, &draft, seen)
+    confirm(connection, &draft, walk)
 }
 
-/// The one `turn_running` row that minted this recovery draft.
+/// The return event that minted this recovery command.
 ///
-/// A count of successors is not that row
+/// The live column may already be clear because a direct answer replaced the
+/// return after this command departed
+/// (`a_departed_recovery_successor_keeps_its_lineage`). The check stays on
+/// this node. Following it as another successor edge would call a cycle on
+/// the parent that is already walking forward
 /// (`a_recovery_draft_requires_its_turn_running_predecessor`).
 fn tie_predecessor(
     connection: &Connection,
     record: &PhoneRecord,
-    seen: &mut BTreeSet<String>,
+    events: &[IntentEvent],
+    walk: &BTreeMap<String, Walk>,
 ) -> Result<(), StoreError> {
-    let id = record.intent().command().as_str();
-    let preds = predecessor_ids(connection, id)?;
-    let [pred_id] = preds.as_slice() else {
-        return Err(StoreError::Corrupt);
-    };
-    let Some(pred) = read_record(connection, pred_id)? else {
-        return Err(StoreError::Corrupt);
-    };
-    if pred.successor().map(PhoneCommandId::as_str) != Some(id) {
-        return Err(StoreError::Corrupt);
+    let mut current = record.clone();
+    let mut current_events = events.to_vec();
+    let mut stepped = BTreeSet::new();
+    loop {
+        let id = current.intent().command().as_str().to_owned();
+        if !stepped.insert(id.clone()) {
+            return Err(StoreError::Corrupt);
+        }
+        let hold_initiator = current_events
+            .first()
+            .filter(|event| event.cause == Cause::Held)
+            .map(|event| event.initiator)
+            .ok_or(StoreError::Corrupt)?;
+        let audit = return_commands(connection, &id)?;
+        let [pred_id] = audit.as_slice() else {
+            return Err(StoreError::Corrupt);
+        };
+        let columns = predecessor_ids(connection, &id)?;
+        if columns.iter().any(|column| column != pred_id) {
+            return Err(StoreError::Corrupt);
+        }
+        let Some(pred) = read_record(connection, pred_id)? else {
+            return Err(StoreError::Corrupt);
+        };
+        if !same_prompt(pred.intent(), current.intent()) {
+            return Err(StoreError::Corrupt);
+        }
+        let pred_events = read_events(connection, pred_id)?;
+        let named = pred_events.iter().any(|event| {
+            event.cause == Cause::ReturnedToDraft
+                && event.successor.as_ref().map(PhoneCommandId::as_str) == Some(id.as_str())
+                && event.initiator == hold_initiator
+        });
+        if !named {
+            return Err(StoreError::Corrupt);
+        }
+        if pred
+            .successor()
+            .is_some_and(|successor| successor.as_str() != id)
+        {
+            return Err(StoreError::Corrupt);
+        }
+        let pred_recovery = pred_events.first().is_some_and(|event| {
+            event.cause == Cause::Held && event.initiator == Initiator::Recovery
+        });
+        if !history_reaches(&pred, &pred_events, pred_recovery) {
+            return Err(StoreError::Corrupt);
+        }
+        let settled = matches!(walk.get(pred_id), Some(Walk::Visiting | Walk::Visited));
+        if !pred_recovery || settled {
+            return Ok(());
+        }
+        current = pred;
+        current_events = pred_events;
     }
-    if !same_prompt(pred.intent(), record.intent()) {
-        return Err(StoreError::Corrupt);
-    }
-    if !matches!(
-        pred.outcome(),
-        PhoneOutcome::Failed(PhoneFailure::Conversation(
-            ConversationErrorCode::TurnRunning
-        ))
-    ) {
-        return Err(StoreError::Corrupt);
-    }
-    let pred_events = read_events(connection, pred_id)?;
-    let paired = pred_events.len() >= 2
-        && pred_events[pred_events.len() - 2].cause == Cause::Lookup
-        && pred_events[pred_events.len() - 2].initiator == Initiator::Recovery
-        && pred_events[pred_events.len() - 1].cause == Cause::ReturnedToDraft
-        && pred_events[pred_events.len() - 1].initiator == Initiator::Recovery;
-    if !paired {
-        return Err(StoreError::Corrupt);
-    }
-    if !seen.contains(pred_id) {
-        confirm(connection, &pred, seen)?;
-    }
-    Ok(())
+}
+
+fn return_commands(connection: &Connection, id: &str) -> Result<Vec<String>, StoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT DISTINCT request_id FROM phone_intent_event
+             WHERE cause = 'returned_to_draft' AND successor = ?1
+             ORDER BY request_id",
+        )
+        .map_err(unavailable)?;
+    let rows = statement
+        .query_map(params![id], |row| row.get(0))
+        .map_err(unavailable)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(unavailable)
 }
 
 fn predecessor_ids(connection: &Connection, id: &str) -> Result<Vec<String>, StoreError> {

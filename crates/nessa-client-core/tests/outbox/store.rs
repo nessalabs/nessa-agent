@@ -2352,6 +2352,113 @@ fn a_direct_answer_clears_the_turn_running_successor() {
 }
 
 #[test]
+fn a_departed_recovery_successor_keeps_its_lineage() {
+    let dir = directory();
+    let path = path_in(&dir);
+    let mut outbox = planted_outbox(&path, PlantedAnswer::DepartedDraft);
+    person_hold(&mut outbox, text_intent("command-1", "hello"));
+    let view = outbox.send(&command("command-1")).unwrap();
+    assert_eq!(view.outcome(), PhoneOutcome::Accepted);
+    assert!(view.successor().is_none());
+    let listed = outbox.list().unwrap();
+    assert_eq!(listed.len(), 2);
+    assert!(listed.iter().any(|row| {
+        row.intent().command().as_str() == "command-1"
+            && row.outcome() == PhoneOutcome::Accepted
+            && row.successor().is_none()
+    }));
+    assert!(listed.iter().any(|row| {
+        row.intent().command().as_str() == "planted-draft"
+            && row.outcome() == PhoneOutcome::Accepted
+    }));
+    drop(outbox);
+    let connection = Connection::open(&path).unwrap();
+    let named: String = connection
+        .query_row(
+            "SELECT successor FROM phone_intent_event
+             WHERE request_id = 'command-1' AND cause = 'returned_to_draft'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(named, "planted-draft");
+    assert_eq!(
+        event_causes(&connection, "planted-draft"),
+        ["held", "departed", "send_answered"]
+    );
+}
+
+#[test]
+fn a_successor_cycle_is_corrupt() {
+    let dir = directory();
+    let path = path_in(&dir);
+    {
+        let mut outbox = opened(
+            &path,
+            Scripted::new(
+                vec![
+                    failure(ConversationErrorCode::TurnRunning),
+                    failure(ConversationErrorCode::TurnRunning),
+                ],
+                Vec::new(),
+            ),
+        );
+        person_hold(&mut outbox, text_intent("command-1", "same words"));
+        person_hold(&mut outbox, text_intent("command-2", "same words"));
+        outbox.send(&command("command-1")).unwrap();
+        outbox.send(&command("command-2")).unwrap();
+    }
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE phone_intent SET successor = 'command-2' WHERE request_id = 'command-1'",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE phone_intent SET successor = 'command-1' WHERE request_id = 'command-2'",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE phone_intent_event SET successor = 'command-2'
+             WHERE request_id = 'command-1' AND cause = 'returned_to_draft'",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE phone_intent_event SET successor = 'command-1'
+             WHERE request_id = 'command-2' AND cause = 'returned_to_draft'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+    assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
+    drop(outbox);
+    let connection = Connection::open(&path).unwrap();
+    let first: String = connection
+        .query_row(
+            "SELECT successor FROM phone_intent WHERE request_id = 'command-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let second: String = connection
+        .query_row(
+            "SELECT successor FROM phone_intent WHERE request_id = 'command-2'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(first, "command-2");
+    assert_eq!(second, "command-1");
+}
+
+#[test]
 fn a_successor_names_the_draft_the_return_minted() {
     let dir = directory();
     let path = path_in(&dir);
@@ -2467,6 +2574,8 @@ fn planted_outbox(path: &Path, kind: PlantedAnswer) -> PhoneOutbox<PlantLookup, 
 enum PlantedAnswer {
     Done,
     TurnRunning,
+    /// The replacement draft departed before the direct answer was saved.
+    DepartedDraft,
 }
 
 struct PlantLookup {
@@ -2556,53 +2665,88 @@ fn plant_committed_lookup(
                 },
             )
         }
-        PlantedAnswer::TurnRunning => {
-            let outcome = PhoneOutcome::Failed(PhoneFailure::Conversation(
-                ConversationErrorCode::TurnRunning,
-            ));
-            let successor =
-                PhoneCommandId::new("planted-draft").map_err(|_| StoreError::Corrupt)?;
-            let turn = ExecutionId::new("planted-turn").map_err(|_| StoreError::Corrupt)?;
-            let draft = PhoneRecord::held(
-                saved
-                    .intent()
-                    .again(successor.clone(), turn)
-                    .map_err(|_| StoreError::Corrupt)?,
-            );
-            let next = saved
-                .clone()
-                .with_outcome(outcome)
-                .with_successor(successor.clone());
-            store.replace_and_insert(
-                &saved,
-                &next,
-                &draft,
-                &[
-                    IntentEvent {
-                        cause: Cause::Lookup,
-                        outcome,
-                        initiator: Initiator::Recovery,
-                        observed_at_ms: 1,
-                        successor: None,
-                    },
-                    IntentEvent {
-                        cause: Cause::ReturnedToDraft,
-                        outcome,
-                        initiator: Initiator::Recovery,
-                        observed_at_ms: 1,
-                        successor: Some(successor),
-                    },
-                ],
+        PlantedAnswer::TurnRunning => plant_turn_running(store).map(|_| ()),
+        PlantedAnswer::DepartedDraft => {
+            let successor = plant_turn_running(store)?;
+            let held = store.load(&successor)?.ok_or(StoreError::Corrupt)?;
+            let departed = held.clone().depart().ok_or(StoreError::Corrupt)?;
+            store.replace(
+                &held,
+                &departed,
                 IntentEvent {
-                    cause: Cause::Held,
-                    outcome: PhoneOutcome::Draft,
-                    initiator: Initiator::Recovery,
+                    cause: Cause::Departed,
+                    outcome: departed.outcome(),
+                    initiator: Initiator::Person,
+                    observed_at_ms: 1,
+                    successor: None,
+                },
+            )?;
+            let accepted = departed
+                .clone()
+                .with_sends(1)
+                .with_outcome(PhoneOutcome::Accepted);
+            store.replace(
+                &departed,
+                &accepted,
+                IntentEvent {
+                    cause: Cause::SendAnswered,
+                    outcome: PhoneOutcome::Accepted,
+                    initiator: Initiator::Person,
                     observed_at_ms: 1,
                     successor: None,
                 },
             )
         }
     }
+}
+
+fn plant_turn_running(store: &mut SqliteIntents) -> Result<PhoneCommandId, StoreError> {
+    let id = PhoneCommandId::new("command-1").map_err(|_| StoreError::Corrupt)?;
+    let saved = store.load(&id)?.ok_or(StoreError::Corrupt)?;
+    let outcome = PhoneOutcome::Failed(PhoneFailure::Conversation(
+        ConversationErrorCode::TurnRunning,
+    ));
+    let successor = PhoneCommandId::new("planted-draft").map_err(|_| StoreError::Corrupt)?;
+    let turn = ExecutionId::new("planted-turn").map_err(|_| StoreError::Corrupt)?;
+    let draft = PhoneRecord::held(
+        saved
+            .intent()
+            .again(successor.clone(), turn)
+            .map_err(|_| StoreError::Corrupt)?,
+    );
+    let next = saved
+        .clone()
+        .with_outcome(outcome)
+        .with_successor(successor.clone());
+    store.replace_and_insert(
+        &saved,
+        &next,
+        &draft,
+        &[
+            IntentEvent {
+                cause: Cause::Lookup,
+                outcome,
+                initiator: Initiator::Recovery,
+                observed_at_ms: 1,
+                successor: None,
+            },
+            IntentEvent {
+                cause: Cause::ReturnedToDraft,
+                outcome,
+                initiator: Initiator::Recovery,
+                observed_at_ms: 1,
+                successor: Some(successor.clone()),
+            },
+        ],
+        IntentEvent {
+            cause: Cause::Held,
+            outcome: PhoneOutcome::Draft,
+            initiator: Initiator::Recovery,
+            observed_at_ms: 1,
+            successor: None,
+        },
+    )?;
+    Ok(successor)
 }
 
 struct CountingGateway {
