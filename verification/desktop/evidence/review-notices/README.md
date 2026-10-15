@@ -1,16 +1,15 @@
 # Review-notice verification (#918, #920)
 
-Current notice source: `ce0dc3bffee2697bfb9775bd39dbd8499fb257cc`.
-Base: main `4219790db1827ee841eacfaf73c00605eec6bc07`.
+Current behavioral source: `3f98e63c1d5643afad7beb05a9e411a43ae21a45`.
+Follow-up `5ffa33cb6576f5aaf6fa85883e04ab00994e6aef` qualifies existing platform durability wording,
+adds regression coverage and refreshes these captures; it changes no runtime behavior.
 
 The gateway was rebuilt from assembly
-`0d7bd5e6218af559dde93295f85b05009a91e6e0`, tree
-`5a1e5be8d9e83a6587449cd84c9e2a8da74ce4f7`. It combines that main, the current
-notice source, and audit source `c11524cb6693fe50784b97ed3e8a8f898e8f7966`
-from #928. Both integrations were conflict-free. This verifies the final notice
-implementation; #928's later attachment-observation correction remains under separate
-verification and is not claimed by this run. The evidence-only follow-up changes
-no executable source.
+`b00a3cee0dd351949e93e9032951f9aa80059d5d`, tree
+`980894a0d6412cc422f34f707dce22ca0cea5702`. It combines that notice source,
+main `76d2f7317cdca2b050988da281697e9231d2b335`, and final audit source
+`4864b1aa7a482ef541de962ddaef9c3bc28ed04c` from #928. Both integrations were
+conflict-free. The current-main UI pin was already prepared and passed `ui:check`.
 
 Environment: local macOS, Vite development mode, bundled Chromium and WebKit,
 columns layout. `MCP_LIVE_NESSA` selected the newly built gateway.
@@ -37,11 +36,10 @@ HTTP 204 appeared in the console. This functional run makes no performance claim
 
 ## Current captures
 
-These four inspected JPEGs replace the earlier integrated captures. They are
-resized to 1440 pixels wide from this run's screenshots. Permission images show
-the permitted recipient's notice and review card; gateway images show the live
-conversation flow. The Rust wire regressions establish membership revocation and
-connection-local invalidation rather than screenshots alone.
+These four inspected 1440-pixel-wide JPEGs come from the rebuilt assembly above.
+Permission images show the permitted recipient's notice and review card; gateway
+images show the live conversation flow. Rust wire regressions establish authority
+changes, audit failure and connection teardown rather than screenshots alone.
 
 ![Current permission review in Chromium](integrated-permission-chromium.jpg)
 
@@ -51,26 +49,39 @@ connection-local invalidation rather than screenshots alone.
 
 ![Current gateway in WebKit](integrated-gateway-webkit.jpg)
 
-## Current source checks
+## Current behavioral checks and limits
 
-The exact notice source passed 70 review tests, 26 Cedar policy tests and
-295 socket tests, with one existing latency measurement ignored. These suites
+The exact behavioral source passed 96 affected review tests, 26 Cedar policy tests,
+and 317 socket tests with one existing latency measurement ignored. These suites
 overlap. The exact seven-package CI selection passed all-target Clippy with
-`-D warnings`; formatting and architecture checks passed. A fresh independent
-full source review found no actionable findings at any priority.
+`-D warnings`; formatting and architecture checks passed. Reversal results and
+final independent review are recorded on the PR against their actual source.
 
-The actual long-lived socket regression checks owned/foreign notices, demotion,
-promotion, disabled membership, unchanged board generation and increasing wire
-sequence. Two live sockets and policy-read counts prove one connection's refresh
-does not wake another publisher, while shared visibility and board changes still
-wake both. Separate cases retain authority changes preloaded or received during
-metadata filtering and blocked publication, and end on sender closure. Each
-connection may still observe the global registry revision once; the correction
-removes repeated global fanout rather than claiming principal-specific revisions.
+The structural regression holds an allow acknowledgement while current authority
+or shared state changes, then requires a new coherent candidate before admission.
+Independent owned audit work outlives publisher loss; its capacity and observation
+deadlines do not claim to bound physical writes or an already-admitted UI response.
+A real full control queue formerly lost the fatal close: the regression failed
+before the owner supervised the publisher and passes with owner/input termination
+while the peer input sender remains live. Unexpected publisher panic is covered too.
 
-The PR discussion tracks current-source reversal execution and its disposition.
-The historical reversals below do not establish the local-watch guarantee.
+The final candidate check validates current recipient authority and board/shared
+generations. It does not establish a globally atomic metadata/authority snapshot;
+that inherited boundary is tracked in [#934](https://github.com/nessalabs/nessa-agent/issues/934). Durable audit uses the existing storage
+platform contract: file sync and create-only publication, with directory sync where
+supported; Windows does not promise directory-entry durability on power loss.
 Current-head CI and external review remain separate merge gates.
+
+## Earlier integrated evidence (historical)
+
+The previous four integrated captures were refreshed at `67a9321f0` from notice
+source `ce0dc3bffee2697bfb9775bd39dbd8499fb257cc`, assembly
+`0d7bd5e6218af559dde93295f85b05009a91e6e0`, tree
+`5a1e5be8d9e83a6587449cd84c9e2a8da74ce4f7`, with old main `4219790` and audit
+`c11524cb6693fe50784b97ed3e8a8f898e8f7966`. That source passed 70 review tests,
+26 policy tests and 295 socket tests (one existing ignore), plus both browser
+engines with counts 16/16, 13/13 and 8/8. It predates the audit/admission/board and
+publisher-supervision corrections and does not verify them.
 
 ## Earlier captures and authority-refresh evidence (historical)
 
