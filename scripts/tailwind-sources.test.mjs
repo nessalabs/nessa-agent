@@ -82,8 +82,9 @@ for (const entry of ["src/styles.css", "src/desktop/styles.css"]) {
               watching = once(starting.watcher, "ready")
             },
             hotUpdate({ file }) {
-              // The same WebSocket orders Tailwind's reload before this fence. No
-              // sleep-based assertion of an event's absence or private hook call.
+              // Tailwind sends its direct full-reload inside hotUpdate, before
+              // this fence on the same socket. Ordinary Vite updates may also
+              // arrive; this fence does not attribute or exclude those (#937).
               this.environment.hot.send({
                 type: "custom",
                 event: "watch-event",
@@ -135,12 +136,24 @@ for (const entry of ["src/styles.css", "src/desktop/styles.css"]) {
           await once(socket, "message")
       }
       const before = await readFile(backend, "utf8")
-      await changed(backend, () => utimes(backend, new Date(), new Date()))
+      await changed(backend, async () => {
+        // A normal CSS update preserves the document. Exercise it beside the
+        // backend event so the reload assertion cannot reject all HMR packets.
+        const client = server.environments.client
+        const modules = client.moduleGraph.getModulesByFile(join(root, entry))
+        assert.ok(modules?.size, "loaded stylesheet module")
+        for (const module of modules) await client.reloadModule(module)
+        await utimes(backend, new Date(), new Date())
+      })
       assert.equal(await readFile(backend, "utf8"), before)
       assert.deepEqual(
-        packets.filter((packet) => ["full-reload", "update"].includes(packet.type)),
+        packets.filter((packet) => packet.type === "full-reload"),
         [],
         "backend touch must not interrupt the frontend document",
+      )
+      assert.ok(
+        packets.some((packet) => packet.type === "update"),
+        "ordinary CSS update is compatible with document lifetime",
       )
       assert.ok(
         !initial.includes("z-index: 8199;"),
@@ -149,7 +162,7 @@ for (const entry of ["src/styles.css", "src/desktop/styles.css"]) {
       assert.equal(
         server.environments.client.moduleGraph.getModulesByFile(backend)?.size ?? 0,
         0,
-        "backend files must not invalidate a CSS module after the hook fence",
+        "backend files stay outside the CSS dependency graph",
       )
 
       for (const [file, value] of [

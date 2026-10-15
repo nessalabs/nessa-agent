@@ -1891,6 +1891,9 @@ shared package registers its components and composites. Backend writes therefore
 do not enter the CSS watch graph. `scripts/tailwind-sources.test.mjs` exercises
 the real Vite/Tailwind pipeline and HMR socket in disposable roots, checking
 backend exclusion and positive app/shared UI updates in the existing script suite.
+The post-hook fence orders Tailwind's direct full document reload; ordinary CSS
+updates preserve document lifetime and are exercised explicitly alongside the
+backend event. The test does not infer the origin of unrelated socket updates.
 
 Pinned UI preparation is owned by `scripts/ensure-nessa-ui.mjs`, with filesystem
 and subprocess-seam regressions beside it in `scripts/ensure-nessa-ui.test.mjs`.
