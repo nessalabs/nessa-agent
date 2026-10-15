@@ -10,10 +10,14 @@ adds it. The implemented contracts stay where they are:
 This is the plan for one access fact, reused by peer chats, a shared folder,
 command rules, a live follow, and an outbound webhook. Cedar remains the only
 decider. Alpha has no migration and no reader of an older share shape.
-This build reads only a metadata file at its own version. Any other
-version, including the previous share shape, is refused. Startup does not
-delete that file and does not rewrite it. The owner deletes it. There is
-no second name for the new row.
+Grants, the grant log, and the same-person link live in their own grant
+store, with its own version. This proposal does not change the
+conversation file's version. This build reads only a grant store at its
+own version. Any other version of that store, including the previous
+share shape, is refused. Startup does not delete that store and does not
+rewrite it. The owner may copy the grant store aside and delete it.
+That refusal does not open or delete the conversation metadata file.
+There is no second name for the new row.
 
 The ADR, when it is written, takes [#889](https://github.com/nessalabs/nessa-agent/issues/889).
 This document is the design. It does not add a second record.
@@ -209,9 +213,9 @@ policy engine, a new crate, or a grant-by-list.
 | Share role Read / Comment / Drive | Becomes the capability set: Read is `read`, Comment is `read` + `comment`, Drive is those plus `drive`. One wire field, `capabilities`. The role enum goes. |
 | Tool policy and `commandHosts` | Stay as constraints on a grant that has `drive`. |
 | `policy_revision` | Stays, under the name grant epoch. |
-| `paired.peer_gateway` | Not in this build's Cedar policies. `grant.comment` and `grant.drive` require the capability and, until the peer-write slice, a principal signed in as the binding owner. One condition, on the permit. Startup does not delete the id out of an older metadata file. An older file is refused whole. |
+| `paired.peer_gateway` | Not in this build's Cedar policies. `grant.comment` and `grant.drive` require the capability and, until the peer-write slice, a principal signed in as the binding owner. One condition, on the permit. Startup does not delete the id out of an older conversation file. An older grant store is refused whole. That refusal does not open or delete the conversation file. |
 | A stored Drive role that a peer cannot use | `conversation.share` asks those permits before it writes. A denial writes nothing and returns the policy ids. The use case does not match a gateway principal on its own. The same permits deny a hand-built row at admission. |
-| `share_grants` key `(receiver_id, conversation_id)` | This build writes `(subject_kind, subject_id, resource_kind, resource_id)`. A paired device or gateway uses subject kind `receiver` and its receiver id, so two devices of one owner stay two rows. An integration or a later agent uses subject kind `principal`. One integration principal has one active webhook registration. The same-person link is not the subject. The directory slice does not change the key. A directory resource and its marker are minted once, and later subject grants on that same directory reuse that resource id. A metadata file at any other version is refused and not rewritten. |
+| `share_grants` key `(receiver_id, conversation_id)` | This build writes `(subject_kind, subject_id, resource_kind, resource_id)`. A paired device or gateway uses subject kind `receiver` and its receiver id, so two devices of one owner stay two rows. An integration or a later agent uses subject kind `principal`. One integration principal has one active webhook registration. The same-person link is not the subject. The directory slice does not change the key. A directory resource and its marker are minted once, and later subject grants on that same directory reuse that resource id. The grant store is its own file. A grant store at any other version is refused and not rewritten. Old `share_grants` rows left in the conversation file are not read and are not migrated. Refusing or deleting the grant store leaves conversations, deletions, and summaries in place. |
 | Credential `conversation.read`, `conversation.write`, `environment.serve` | Stay. They say whether this credential may read, may be the conversation authority, or may serve. They do not name a conversation or a directory. `hold.peer` stays as written. |
 | `grants.json` on the environment | Stays on that machine, so the gateway cannot widen it. The same capability and constraint words. `domain::unwritten` stays the default facts (an absent ssh entry is the host's own set; an absent dialed gateway is empty). |
 | Gateway `denyPrograms` / `allowPrograms` | Stay the host's own program list in `commands.cedar`. A grant's command rules are a further constraint, deny wins. |
@@ -351,7 +355,10 @@ conversation, and does not turn the peer into the owner phone. The grant
 subject stays that gateway's receiver. Two gateways linked as the same
 person keep two rows. Credential revoke, expiry, and enrollment revoke
 remove that link. A later credential does not inherit it. The removal is
-G-unlink. This section does not add a link state.
+G-unlink. If that removal fails while the process stays up, the next
+successful write of the grant store retries it, and a new enrollment of
+that gateway key is refused until the removal commits. This section does
+not add a link state.
 
 ## Live follow
 
@@ -389,7 +396,12 @@ owner's other work does not appear in it.
   sends that `page` and `snapshotId` with the same `after` to receive
   the next prefix of that pinned snapshot. A grant change during paging
   is the next snapshot. The stream cursor advances when a
-  frame is `complete: true`. A grant left out of an incomplete prefix stays
+  frame is `complete: true`. That advance applies the replica changes in
+  the frame and stores `after` in the same write, including the last page
+  of a snapshot. The log keeps `grant.log_retained` records per receiver,
+  1024, a row the subscription slice adds to [limits](../limits.md). A
+  cursor older than the oldest retained position takes a full snapshot.
+  A grant left out of an incomplete prefix stays
   ahead of the stream cursor and is sent before that advance. The follower
   does not walk the owner's catalogue. The
 subscription is not ended `too_large` because the set did not fit. Every
@@ -752,8 +764,8 @@ decision.
 7. **G7.** Credential revoke or expiry does not change the grant epoch and does not remove the grant row. The webhook registration permit stops the next delivery. Rows: G-cred, W-cred.
 8. **G8.** `read` applies to a conversation and to a directory. `comment` and `drive` apply to a conversation. `write` and `exec` apply to a directory. Any other pairing is refused and writes nothing. Rows: G-caps.
 9. **G9.** A share of the same capabilities and constraints does not bump the epoch. Rows: G-same.
-10. **G10.** This build reads only a metadata file at its own version. A previous share shape, or any other version, is refused. Startup does not migrate, does not delete, and does not rewrite the file. The owner deletes it. There is no reader of the old row. Rows: G-current, G-refuse-old.
-11. **G11.** Credential revoke, credential expiry, and enrollment revoke remove the same-person link. A later credential does not inherit it. Rows: G-unlink.
+10. **G10.** This build reads only a grant store at its own version. A previous share shape, or any other version of that store, is refused. Startup does not migrate, does not delete, and does not rewrite the grant store. The owner may copy that store aside and delete it. That refusal does not open or delete the conversation metadata file. There is no reader of the old row. A conversation file at another version stays that file's existing refusal. This proposal does not tell the owner to delete conversations to adopt grants. Rows: G-current, G-refuse-old.
+11. **G11.** Credential revoke, credential expiry, and enrollment revoke remove the same-person link. A later credential does not inherit it. While the link remains after the credential is revoked or the phase is `Revoked`, the live process retries the removal, and a new enrollment of that gateway key is refused until the removal commits. Rows: G-unlink, G-unlink-retry.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -768,11 +780,12 @@ decision.
 | G-next | absent | The next admission after revoke | No row for that key | absent | The next use | Nothing | Refusal, cause no grant, initiator the use |
 | G-inflight | active, or already absent | Work that already read an epoch finishes | The use stored that epoch at G-admit | The use's own terminal state. The grant row stays as the later grant commit left it. | The use that read the epoch | The use's own outcome. No second grant row | The use's own audit. The epoch on that record is the epoch it read |
 | G-link | any grant state | Activation applies the invitation's stored choice | The invitation's choice is true. The principal is the `gateway:<key>` this activation stored. The choice was not asked again. | Unchanged. The grant subject stays the receiver. | Activation, in the P-active commit | The link row only, in that same write. No grant row is inserted or copied. | Target the gateway principal, before no link, after the person link, cause the same-person choice, initiator the owner |
-| G-unlink | link present | `credential.revoke`, credential expiry, or enrollment revoke | The link names that gateway principal | link absent. Grant rows stay. A later credential does not inherit it. | The owner, or expiry | The link row is removed. Enrollment revoke does this in the same commit as P-revoke. Credential revoke commits in the credential store first, and this removal commits next. A crash between them is C-G-unlink. | Target the gateway principal, before the person link, after no link, cause credential revoked, expired, or enrollment revoked, initiator the owner or expiry |
+| G-unlink | link present | `credential.revoke`, credential expiry, or enrollment revoke | The link names that gateway principal | link absent. Grant rows stay. A later credential does not inherit it. | The owner, or expiry | The link row is removed. Enrollment revoke does this in the same commit as P-revoke. Credential revoke commits in the credential store first, and this removal commits next. A failure of that next write, while the process stays up, is G-unlink-retry. A crash between them is C-G-unlink. | Target the gateway principal, before the person link, after no link, cause credential revoked, expired, or enrollment revoked, initiator the owner or expiry |
+| G-unlink-retry | credential revoked or expired, or phase `Revoked`, and the link is still present | The next successful write of the grant store, live or on restart | The link names that gateway principal. A new enrollment of that gateway key is refused until this removal commits. | link absent. A later credential does not inherit it. | The live process, or restart | The link row is removed in this write. No new link is written. P-active does not commit while this row is still present. | Target the gateway principal, before the person link, after no link, cause credential revoked, expired, or enrollment revoked, initiator the live retry or restart |
 | G-cred | active | `credential.revoke` or credential expiry | The credential is the one that subject uses | active, same epoch | The owner, or expiry | Nothing on the grant row | None on the grant row. W-cred records the registration stop |
 | G-marker | active | Directory open finds a missing root, a missing marker, or different bytes | The grant's resource is that directory resource | absent | The open | Every grant for that resource is removed. Each receiver subject's grant log gets a tombstone in this same write. The cause and the audit-failure rule are D-open-bad and D-audit-down. | D12. This row does not add a second cause |
-| G-current | metadata file at this build's version | Process open | The file is this build's version | Open. The process serves that file. | Startup | Nothing. Startup does not rewrite the file. | None |
-| G-refuse-old | metadata file at another version | Process open | The version is not this build's, including the previous share shape | Refused. The process does not serve that file. | Startup | Nothing. Startup does not migrate, does not delete, and does not rewrite the file. The owner deletes it. | Refusal, target the metadata file, before the other version, after refused, cause metadata version, initiator startup |
+| G-current | grant store at this build's version | Process open | The grant store is this build's version | Open. The process serves that grant store. The conversation metadata file is a different store and is not rewritten by this open. | Startup | Nothing. Startup does not rewrite the grant store. | None |
+| G-refuse-old | grant store at another version | Process open | The version is not this build's, including the previous share shape | Refused. The process does not serve that grant store. Conversations, deletions, and summaries stay in the conversation metadata file. A conversation file at another version stays that file's existing refusal. | Startup | Nothing. Startup does not migrate, does not delete, and does not rewrite the grant store. The owner may copy the grant store aside and delete it. Startup does not delete the conversation metadata file. Old share rows in that file are not read. | Refusal, target the grant store, before the other version, after refused, cause grant store version, initiator startup |
 
 ```mermaid
 sequenceDiagram
@@ -797,8 +810,8 @@ sequenceDiagram
 | C-G-share | After Cedar permits, before G-share commits | No row | Absent. Restart does not replay the share. The owner repeats it. |
 | C-G-bump | During an epoch bump, before G-bump commits | The previous epoch | The previous epoch. In-flight work keeps the epoch it read. |
 | C-G-revoke | Before G-revoke commits | The row still active | The row stays. The owner repeats the revoke. |
-| C-G-refuse | Startup reads a file at another version | The other version, unchanged | G-refuse-old again. Startup does not migrate and does not rewrite the file. |
-| C-G-unlink | After the credential is revoked or the phase is `Revoked`, before G-unlink commits | The link row is still present | Restart removes the link before admission reports the person. It does not recreate the link. |
+| C-G-refuse | Startup reads a grant store at another version | The other version, unchanged. The conversation metadata file is unchanged. | G-refuse-old again. Startup does not migrate and does not rewrite the grant store. It does not delete the conversation file. |
+| C-G-unlink | After the credential is revoked or the phase is `Revoked`, before G-unlink commits | The link row is still present | G-unlink-retry. Restart removes the link before admission reports the person and before a new enrollment of that gateway key. It does not recreate the link. |
 
 **Concurrency.**
 
@@ -807,6 +820,7 @@ sequenceDiagram
 | G-race-share | Two shares of one key | One writer for that key. The waiter reloads. The same capabilities take G-same. A different set takes G-bump. A revoke that committed first leaves absent, and the waiter takes G-share. |
 | G-race-revoke | Share or bump against revoke | The commit that lands owns the row. G-inflight still finishes under the epoch already read. |
 | G-race-admit | Two admissions | Both keep the epoch each read. Neither writes the grant row. |
+| G-race-link | Re-enrollment of a gateway key against a link that remains after revoke | G-unlink-retry. P-active does not commit until the link is absent. A false choice does not clear the stale link by omission. |
 
 **Precedence.**
 
@@ -816,7 +830,7 @@ sequenceDiagram
 | G-prec-cedar | Cedar's denial | A use-case write | Nothing is stored. |
 | G-prec-cred | A credential that is not current, for the next delivery | The grant epoch | The epoch stays. W-refuse sends nothing. |
 
-**Rejected.** Keying a paired grant by principal alone, or by the same-person link, would collapse two receivers. Keying by path would follow a replaced directory. A Rust principal match would decide beside Cedar. A startup migration of the previous share shape would invent a reader of a file this build refuses.
+**Rejected.** Keying a paired grant by principal alone, or by the same-person link, would collapse two receivers. Keying by path would follow a replaced directory. A Rust principal match would decide beside Cedar. A startup migration of the previous share shape would invent a reader of a file this build refuses. Deleting the conversation metadata file to refuse an old grant shape would drop conversations, deletions, and summaries. Re-enrolling while a revoked link row remains would report the new credential as that person.
 
 ### Webhook delivery outbox
 
@@ -1048,7 +1062,10 @@ stream is that receiver's grant log. Each record is the next position,
 committed in the same write as the grant change, and a removal is a
 tombstone `absent`. The follower's durable cursor is `after`, the last
 complete snapshot it applied: an opaque `{incarnation, position}` for
-this receiver, not an owner catalogue revision. The server's snapshot
+this receiver, not an owner catalogue revision. A complete frame applies
+the replica changes and stores `after` in the same write. The log retains
+`grant.log_retained` records per receiver. A cursor older than the oldest
+retained position takes a full snapshot. The server's snapshot
 pin is process memory for that connection. It is not a second catalogue.
 The subscription task reads the log. It does not invent a position.
 
@@ -1064,22 +1081,26 @@ The subscription task reads the log. It does not invent a position.
 8. **U8.** A record-hint frame on `conversation.subscribe` is the wake. It carries the subscription id and the head cursor `{incarnation, position}`. It is sent when the record head moves, including when the bounded view is unchanged. The follower then calls `recordsHead` and `recordsPage`. A view frame is not the wake. `conversation.watchRecords` stays the retained phone path. Rows: U-hint.
 9. **U9.** An Active peer has no `PeerPoller` timer. Two waits remain: the status dial until Active or Revoked, and the connect backoff. Neither reads the catalogue. Rows: U-dial, U-backoff.
 10. **U10.** Reconnect resumes from the cursors last applied and does not move a cursor backwards in the same incarnation. `cursor_ahead` is refused. A grant-stream `after` whose incarnation is not the server's current incarnation is refused. The follower drops that `after` and takes a full snapshot. The server does not merge the two incarnations. A conversation view still follows #851: a new incarnation replaces the view. A follower with no `after` receives a full snapshot and replaces its local grant replica. A frame does not write a grant row. Rows: U-resume, U-ahead, U-full.
-11. **U11.** The follower's durable `after` is written only when a frame is `complete: true`. `page` and `snapshotId` are not required to be durable. Rows: U-done, U-page.
-12. **U12.** A receiver's grant change and its grant-log record commit in the same write. The record is the next position and either `active` at the new epoch or a tombstone `absent`. A follower that reconnects with an older `after` in the same incarnation receives every later record, including a tombstone. The subscription task does not publish a change that has no log record. Rows: U-log, G-share, G-revoke, U-resume.
+11. **U11.** The follower's durable `after` is written only when a frame is `complete: true`. That write also applies the replica changes in the frame. `page` and `snapshotId` are not required to be durable. An incomplete frame writes neither the replica changes nor `after`. Rows: U-done, U-page, U-full.
+12. **U12.** A receiver's grant change and its grant-log record commit in the same write. The record is the next position and either `active` at the new epoch or a tombstone `absent`. A follower that reconnects with an older `after` in the same incarnation, at or after the oldest retained position, receives every later record, including a tombstone. A cursor older than that floor is U-stale and takes a full snapshot. The subscription task does not publish a change that has no log record. Rows: U-log, G-share, G-revoke, U-resume, U-stale.
+13. **U13.** A complete frame's applied replica changes and the new `after` commit in the same write, including the last page of a snapshot. A crash that stores neither resumes from the previous `after` and the previous replica. A revoke or capability change in that frame is in the replica when `after` names it. Rows: U-done, U-full, C-U-apply.
+14. **U14.** The grant log retains `grant.log_retained` records per receiver, 1024. When appending the next record would pass that ceiling, the same write deletes records at or below the new position minus that ceiling. A follower `after` whose position is older than the oldest retained position is refused. The follower drops that `after` and takes a full snapshot. The server does not replay a hole and does not merge. Trimming does not bump the incarnation. Rows: U-trim, U-stale, U-full.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-open | closed | Grant subscribe | The socket has no grant subscription. `after` is the last complete snapshot, or absent on the first subscribe. | open at that `after` | The follower | None on a grant row. The follower keeps `after`. | None |
 | U-cursor | open | A frame is built | The position is this receiver's grant-log counter from U-log | open. Owner catalogue revisions are not positions in this stream. | The grantor's subscription task | None. The log record already committed with the grant. | None |
-| U-log | receiver grant log at position N | A grant for this receiver is inserted, its epoch changes, or it is removed | The grant write commits. The subject kind is `receiver`. | Position N+1. An insert or epoch change stores active at the new epoch. A removal stores a tombstone absent for that grant key. | The owner's grant write | The grant change and this log record in the same write. The subscription task is not in this commit. | The grant row's audit. This record names the position, the grant key, and active or absent. |
+| U-log | receiver grant log at position N | A grant for this receiver is inserted, its epoch changes, or it is removed | The grant write commits. The subject kind is `receiver`. | Position N+1. An insert or epoch change stores active at the new epoch. A removal stores a tombstone absent for that grant key. | The owner's grant write | The grant change and this log record in the same write. Retention past the ceiling is U-trim in this same write. The subscription task is not in this commit. | The grant row's audit. This record names the position, the grant key, and active or absent. |
+| U-trim | grant log holds `grant.log_retained` records, 1024 | U-log appends the next record | N+1 would exceed `grant.log_retained` | The log holds the newest `grant.log_retained` records. The oldest retained position is the floor. | The owner's grant write | This same write deletes every record at or below N+1 minus `grant.log_retained`. The incarnation is not bumped. | None. The grant row's audit is U-log. |
+| U-stale | closed or open | Reconnect presents `after` | `after` is the server's current incarnation and `after.position` is older than the oldest retained position | The presented `after` is refused. The follower drops it and takes U-full. The server does not replay a hole and does not merge. | The follower | Nothing on the server. The follower's next write is U-full. | Refusal, cause grant log floor, initiator the follower |
 | U-page | open | The next prefix would pass 64 KiB | The cut is on a grant boundary. This is the first incomplete frame of the snapshot. | paging. Stream cursor stays at `after`. | The grantor's subscription task | None. The follower's durable `after` stays. The server keeps `snapshotId` in process memory. The frame carries `complete: false`, `page`, and `snapshotId`. | None |
 | U-continue | paging | The follower sends `page` and `snapshotId` with the same `after` | The server still holds that pin | paging, or open if this prefix finishes the snapshot | The follower | When the prefix finishes, U-done. Otherwise none. | None |
 | U-change | paging | A grant row changes | A pin is held | paging. The pin is unchanged. The grant change is the next snapshot. | The owner's grant write, which is the grant table's commit | The grant write is U-log, including the log record. The pin is not rewritten. | The grant table's audit. None on the pin. |
-| U-done | paging or open | A frame is `complete: true` | The frame names every grant of this snapshot through the new cursor | open. The stream cursor advances to this snapshot. The pin is dropped. | The grantor's subscription task | The follower stores the new `after` | None on the grant row. The frame did not write a grant. |
+| U-done | paging or open | A frame is `complete: true` | The frame names every grant of this snapshot through the new cursor | open. The stream cursor advances to this snapshot. The pin is dropped. | The grantor's subscription task | The follower applies this frame's replica changes and stores the new `after` in the same write. A revoke removes the local row. An epoch or capability change replaces the local row. Neither lands without the other. This includes the last page of a paged snapshot. An incomplete frame writes neither. | None on the grantor's grant row. The frame did not write a grantor grant. |
 | U-lost | paging | The server no longer holds the pin | Restart, or the pin was dropped | open at `after`. `page` is discarded. | The follower | None. `after` stays. | None |
 | U-drop | paging | The follower disconnects | A pin is held | closed. The pin is dropped. | The connection | None. The follower's `after` stays the last complete snapshot. | None |
-| U-full | closed or open | Subscribe with no `after` | The follower has no durable cursor | open, after the full snapshot is applied. The local grant replica is replaced by that snapshot. | The follower | The follower stores `after` at U-done | None. No grant row is written. |
-| U-resume | closed | Reconnect | The follower has a grant-stream `after` for the server's current incarnation, and the record cursor it last applied. A grant-stream `after` from another incarnation is refused. The follower drops that `after` and takes U-full. The server does not merge. | open at the matching grant-stream `after`. The server sends each log record with position greater than `after`, including a tombstone. It does not skip a removal. A conversation view follows #851, which replaces the view on a new incarnation. A cursor does not move backwards in the same incarnation. | The follower | None until U-done | Refusal when the grant-stream incarnation differs, cause incarnation changed, initiator the follower. None when the incarnation matches. |
+| U-full | closed or open | Subscribe with no `after`, or U-stale | The follower has no durable cursor, or the cursor is older than the retained floor | open, after the full snapshot is applied. The local grant replica is replaced by that snapshot. | The follower | The follower replaces the replica and stores `after` in the same write, at U-done | None. No grantor grant row is written. |
+| U-resume | closed | Reconnect | The follower has a grant-stream `after` for the server's current incarnation, `after.position` is at or after the oldest retained position, and the record cursor it last applied. A grant-stream `after` from another incarnation is refused. The follower drops that `after` and takes U-full. An `after` older than the log floor takes U-stale. The server does not merge. | open at the matching grant-stream `after`. The server sends each log record with position greater than `after`, including a tombstone. It does not skip a removal. A conversation view follows #851, which replaces the view on a new incarnation. A cursor does not move backwards in the same incarnation. | The follower | None until U-done | Refusal when the grant-stream incarnation differs, cause incarnation changed, initiator the follower. None when the incarnation matches. |
 | U-ahead | open | The follower presents a cursor ahead of the stream | `cursor_ahead` | open. The presented cursor is refused. | The follower | Nothing | Refusal, cause cursor ahead, initiator the follower |
 | U-cap | eight conversation subscriptions | A ninth `conversation.subscribe` | The socket already holds `socket.conversation_subscriptions` | The ninth is refused `subscription_capacity`. No existing subscription is closed. The grant subscription stays. | The server | Nothing | Refusal, cause subscription capacity, initiator the subscriber |
 | U-local-close | eight conversation subscriptions | The follower unsubscribes one chat before it subscribes another | The follower names the subscription. The least recently opened chat is the follower's choice, by its own explicit open, not by frame arrival. | That named chat is unsubscribed and stays a cold replica. The server closes only the subscription the follower named. | The follower | The follower records which chat is cold | None on a grant row |
@@ -1101,7 +1122,7 @@ sequenceDiagram
   Stream->>Follower: the next prefix of that pin
   Note over Pin: a grant change is the next snapshot
   Note over Stream: the grant commit appends that receiver log record
-  Stream->>Follower: complete true advances the cursor
+  Stream->>Follower: complete true stores the replica and after together
   Note over Pin: a lost pin discards page and resumes from after
 ```
 
@@ -1110,7 +1131,8 @@ sequenceDiagram
 | Row | Crash point | On disk | Restart |
 | --- | --- | --- | --- |
 | C-U-follower | The follower stops while paging | `after` at the last U-done, if that write committed. `page` and `snapshotId` may be absent. | U-continue if the follower still has `page` and `snapshotId` and the server still holds the pin. Otherwise U-lost. |
-| C-U-server | The server stops while paging, or after a grant commit and before the task publishes | Grant rows and their log records as the grant commits left them. The pin is gone. | The follower takes U-lost or U-resume. A follower with `after` receives every later log record, including a tombstone. |
+| C-U-apply | During U-done, before the replica and `after` commit | The previous `after` and the previous replica | Restart resumes from that previous pair. It does not leave a new `after` on an old replica. |
+| C-U-server | The server stops while paging, or after a grant commit and before the task publishes | Grant rows and their log records as the grant commits left them. The pin is gone. | The follower takes U-lost, U-resume, or U-stale. A follower with `after` at or after the oldest retained position receives every later log record, including a tombstone. |
 | C-U-hint | The follower stops after a hint and before `recordsPage` commits | The last committed record cursor | `recordsPage` resumes from that cursor. The hint did not advance it. |
 
 **Concurrency.**
@@ -1132,7 +1154,7 @@ sequenceDiagram
 | U-prec-open | The follower's explicit unsubscribe | A ninth subscribe, for which chat goes cold | U-local-close. The server does not rank open order. U-cap closes nothing. |
 | U-prec-grant | The grant rows | A replayed frame | The frame writes nothing. U-full replaces the local replica from the rows. |
 
-**Rejected.** Ending the subscription `too_large`, advancing `after` on `complete: false`, and keeping `PeerPoller` as the Active peer's grant path are each a second cursor. `conversation.watchRecords` stays the phone path because one record watch cannot wake every chat on this connection. The server unsubscribing a chat the follower did not name, to make room for a ninth subscribe, would close a slot the follower still holds. Merging a grant-stream `after` from another incarnation would keep a cursor the server has replaced. Publishing a grant change from the subscription task without a log record in the grant commit would drop a revocation after `PeerPoller` is gone.
+**Rejected.** Ending the subscription `too_large`, advancing `after` on `complete: false`, and keeping `PeerPoller` as the Active peer's grant path are each a second cursor. Advancing `after` without the replica changes in that same write would resume past a revoke. An unbounded grant log would promise replay of a cursor the server no longer holds. `conversation.watchRecords` stays the phone path because one record watch cannot wake every chat on this connection. The server unsubscribing a chat the follower did not name, to make room for a ninth subscribe, would close a slot the follower still holds. Merging a grant-stream `after` from another incarnation would keep a cursor the server has replaced. Publishing a grant change from the subscription task without a log record in the grant commit would drop a revocation after `PeerPoller` is gone.
 
 ### Pairing and discovery
 
@@ -1165,7 +1187,7 @@ pin. The LAN section does not add a discovery step.
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | P-pending | no enrollment | Enrollment starts | The one-use code | Pending. No session and no grant stream. | Pairing | The peer record at `Pending`, and the invitation's same-person choice. The choice is true or false and does not change after this commit. No link row. The gateway principal is not known yet. | Target the invitation, before none, after Pending, cause enrollment, initiator the owner. The choice is part of that record. |
-| P-active | Pending | Enrollment completes | The credential id and the receiver are stored. The invitation's choice is the one P-pending stored. | Active. No phase is added. Subscriptions can open. Discovery field is `none` until P-key or P-accept. | Enrollment | The phase `Active`, the credential id, and the receiver, in the same write. When the choice is true, that write inserts the link row naming `gateway:<key>`, as G-link. When the choice is false, no link is written. The choice is not asked again. No phase besides `Pending`, `Active`, and `Revoked`. | Target the peer, before Pending, after Active, cause enrollment complete, initiator the owner |
+| P-active | Pending | Enrollment completes | The credential id and the receiver are stored. The invitation's choice is the one P-pending stored. No link for this gateway key remains after a revoke. A remaining link is G-unlink-retry, and this commit waits. | Active. No phase is added. Subscriptions can open. Discovery field is `none` until P-key or P-accept. | Enrollment | The phase `Active`, the credential id, and the receiver, in the same write. When the choice is true, that write inserts the link row naming `gateway:<key>`, as G-link. When the choice is false, no link is written. A false choice does not clear a stale link by omission. The choice is not asked again. No phase besides `Pending`, `Active`, and `Revoked`. | Target the peer, before Pending, after Active, cause enrollment complete, initiator the owner |
 | P-revoke | Pending or Active | Enrollment revoke | The owner's revoke | Revoked. No announcement. | The owner | The phase `Revoked`. A same-person link for this peer is removed by G-unlink in this commit. | Target the peer, before Pending or Active, after Revoked, cause revoke, initiator the owner |
 | P-key | none, phase Active | The dialer mints one generation | This side is the dialer. The phase is Active. No generation is unfinished. A new generation does not start while one is unfinished. | keyed | The dialer | The generation id, 32 bytes, and this side's X25519 private key (RFC 7748), 32 bytes. The public half is the RFC 7748 32-byte little-endian encoding of that private key, and it is sent only after this commit. No peer public. No discovery byte is sent in this commit. | Target the peer, before none, after keyed, cause local key, initiator this gateway |
 | P-publish | keyed or offered | Send this side's public half | The ephemeral private key for this generation is already durable. The bytes are the RFC 7748 32-byte little-endian public encoding of that private key, and they are not 32 zero bytes. The private key is durable before its public half is sent. | The same state | This gateway | None | None |
@@ -1232,7 +1254,7 @@ sequenceDiagram
 | P-prec-token | The window, address, and port inside the HMAC | A token presented with a different address or port | No match. The bytes are the P-announce widths. An IPv4-mapped address is family 4. |
 | P-prec-choice | The choice stored on the invitation | Asking again at activation | P-active. The link is written only when that stored choice is true. |
 
-**Rejected.** Writing the peer's public key into the same first commit as the local private key, which made the public exchange precede the only durable write. Each side minting its own generation and keeping it. A stable fingerprint in the announcement, an unlinkability claim, a MAC key taken from the enrollment PAKE or from `#705`, installing the raw X25519 shared secret as the MAC key, a new generation on a half-written install, and `PeerPoller` as the Active follow path. Asking the same-person choice again at activation, or writing the link before the principal exists, would lose the choice on restart or name a principal the invitation does not have.
+**Rejected.** Writing the peer's public key into the same first commit as the local private key, which made the public exchange precede the only durable write. Each side minting its own generation and keeping it. A stable fingerprint in the announcement, an unlinkability claim, a MAC key taken from the enrollment PAKE or from `#705`, installing the raw X25519 shared secret as the MAC key, a new generation on a half-written install, and `PeerPoller` as the Active follow path. Asking the same-person choice again at activation, or writing the link before the principal exists, would lose the choice on restart or name a principal the invitation does not have. Activating a new enrollment while a link remains after revoke would report the new credential as that person.
 
 ### Finding to row
 
@@ -1242,7 +1264,7 @@ not add a rule.
 **Invariant.**
 
 1. **X1.** Issues `#889` through `#897` are filed. A fence states the slice delta and the gate. A fence does not add a lifecycle state. Rows: X-filed.
-2. **X2.** Inside one store, a change a peer can observe and the cursor or outcome that names it commit in the same write. A non-terminal in-flight row is reconciled by the live sender when the next read or write of that store succeeds. Restart uses that same reconciler. Process exit is not the reconciler. The conversation store and the outbox are not one store. Rows: U-log, W-reconcile, W-rescan, P-active.
+2. **X2.** Inside one store, a change a peer can observe and the cursor or outcome that names it commit in the same write. A non-terminal in-flight row is reconciled by the live sender when the next read or write of that store succeeds. Restart uses that same reconciler. Process exit is not the reconciler. The conversation store and the outbox are not one store. The grant store and the conversation file are not one store. Rows: U-log, U-done, W-reconcile, W-rescan, P-active, G-unlink-retry.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -1312,6 +1334,10 @@ not add a rule.
 | 4278952343 | P-pending, P-active, P-link, G-link, C-P-choice |
 | 4278952347 | W-reconcile, W-unknown, W-deadline-known, W20 |
 | 4278952353 | P-announce, P7 |
+| 4279054325 | U-done, U-full, C-U-apply, U13 |
+| 4279054331 | U-trim, U-stale, U-full, U14 |
+| 4279054335 | G-unlink-retry, C-G-unlink, G11 |
+| 4279068029 | G-refuse-old, G-current, G10 |
 
 ## Open questions / known limits
 
@@ -1339,6 +1365,11 @@ a procedure.
   This document does not restate that schema.
 - The conversation store and the webhook outbox are not one transaction
   (C-W-gap).
+- The grant log retains `grant.log_retained` records per receiver
+  (U-trim). An older cursor takes a full snapshot (U-stale).
+- Refusing or deleting the grant store leaves the conversation metadata
+  file in place (G-refuse-old). The credential store and the link row
+  are not one transaction. The live retry closes that gap (G-unlink-retry).
 - A case these tables do not settle is a test of the slice that owns it.
   It is not a new state added in review.
 
@@ -1383,10 +1414,14 @@ Part of the access-grant proposal in `docs/design/access-grants.md`.
 ## Deliver
 
 The contract is the grant table in Lifecycles and the primitive above.
-This slice writes resource kind `conversation`. This build writes only
-its own metadata version. A file at any other version, including the
-previous share shape, is refused and not rewritten. The owner deletes
-that file. There is no migration and no reader of the old row.
+This slice writes resource kind `conversation`. Grants, the grant log,
+and the same-person link live in their own grant store with its own
+version. This proposal does not change the conversation file's version.
+This build writes only its own grant-store version. A grant store at any
+other version, including the previous share shape, is refused and not
+rewritten. The owner may copy the grant store aside and delete it. That
+does not open or delete the conversation metadata file. There is no
+migration and no reader of the old row.
 `paired.peer_gateway` is not carried forward. It updates
 `docs/design/read-grants.md` in the same change. It does not add a grant
 state.
@@ -1403,8 +1438,8 @@ paired grant is still found by its receiver. Two devices of one owner
 can each hold a grant on the same conversation. Two rows for the same
 subject and resource cannot both exist. A same-person link does not
 collapse two receiver subjects. A retry journals before
-equal to after. The previous metadata version is refused. Startup does
-not rewrite it. A test fails if the capability check is removed from the
+equal to after. The previous grant-store version is refused. Startup does
+not rewrite it and does not delete the conversation file. A test fails if the capability check is removed from the
 permit.
 
 ## Depends on
@@ -1534,7 +1569,9 @@ the choice records the person and the gateway principal. A
 read still requires a share grant. Two linked gateways with grants on
 the same conversation have two rows. A gateway paired without the choice has
 no person on its admission. Revoking the credential drops the link. A
-later enrollment does not inherit it. An
+later enrollment does not inherit it. Re-enrollment of that gateway key
+is refused while a link remains after revoke, and the live process
+retries the unlink before activation commits. An
 invitation cannot be relabelled from one choice to the other in transit,
 as the enrollment class cannot today.
 
@@ -1554,6 +1591,7 @@ Part of docs/design/access-grants.md.
 The contract is Live follow, above. The delta is deleting the `PeerPoller`
 timer for an Active peer and adding one grant-subscription target per
 connection. An incomplete grant frame does not advance the stream cursor.
+This slice adds `grant.log_retained` to `docs/limits.md`.
 
 ## Gate
 
@@ -1561,7 +1599,9 @@ A new share, a revoke, and an epoch change each arrive on the grant
 subscription with no `catalogueHead` from `peer.poll_interval`. A revoke
 commits a tombstone on that receiver's grant log in the same write. A
 follower that reconnects with the old `after` in the same incarnation
-receives that tombstone. A grant
+receives that tombstone. A complete frame stores the replica changes
+and `after` in the same write. An `after` older than the grant-log floor
+takes a full snapshot. A grant
 set larger than 64 KiB arrives as frames cut inside that bound. An
 incomplete frame keeps the stream cursor and resumes with `page` and
 `snapshotId`. The
