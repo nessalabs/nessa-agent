@@ -433,17 +433,25 @@ async fn protected_session_refuses_another_devices_credential() {
                 let mut probe = Probe::open(address, &second.store);
                 let nonce = probe.nonce.clone();
                 let refused = probe.authenticate(&evidence, &nonce);
-                let after = probe.value();
-                (refused, after)
+                let terminated = probe.value();
+                let closed = probe.value();
+                (refused, terminated, closed)
             })
             .collect::<Vec<_>>()
     })
     .await;
-    for (refused, after) in refusals {
+    for (refused, terminated, closed) in refusals {
         let refused = refused.unwrap();
         assert_eq!(refused["ok"], false, "{refused}");
         assert_eq!(code(&refused), "unauthorized");
-        assert!(after.is_none(), "the connection closes after the refusal");
+        let terminated = terminated.expect("the refusal names why the session ends");
+        assert_eq!(terminated["event"], "session.terminated", "{terminated}");
+        assert_eq!(terminated["payload"]["code"], "authentication_failed");
+        assert_eq!(terminated["payload"]["retryable"], false);
+        assert!(
+            closed.is_none(),
+            "the connection closes after the termination"
+        );
     }
     stop.send(()).unwrap();
     listener.await.unwrap().unwrap();
