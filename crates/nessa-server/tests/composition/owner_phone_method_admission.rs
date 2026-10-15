@@ -114,7 +114,7 @@ async fn ordinary_native_request_asks_method_once_and_denial_has_zero_handler_ef
     let token = credential(&registry);
     let inputs = namespace.inputs(registry.clone());
     let receivers = inputs.receivers.clone();
-    let (prepared, commands, _) = prepare(&loopback(), inputs).await.unwrap();
+    let (prepared, commands, _) = prepared_loopback(inputs).await;
     let policy = Arc::new(CountPolicy {
         real: CedarOwnerPhonePolicyEvaluator::new().unwrap(),
         methods: Mutex::new(vec![]),

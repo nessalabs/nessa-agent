@@ -50,7 +50,7 @@ async fn expired_resume(elapse_at: usize, expected_prior: &str) {
         management_calls: AtomicUsize::new(0),
         elapse_at,
     });
-    let (prepared, commands, _peers) = prepare(&loopback(), inputs).await.unwrap();
+    let (prepared, commands, _peers) = prepared_loopback(inputs).await;
     let state = product(registry.clone()).with_pairing(Arc::new(commands));
     let bound = bind(
         prepared,

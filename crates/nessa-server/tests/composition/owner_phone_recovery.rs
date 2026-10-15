@@ -54,7 +54,7 @@ async fn original_tls_recovery_is_exact_read_only_and_survives_bootstrap_revocat
     let token = credential(&registry);
     let inputs = namespace.inputs(registry.clone());
     let receivers = inputs.receivers.clone();
-    let (prepared, commands, _) = prepare(&loopback(), inputs).await.unwrap();
+    let (prepared, commands, _) = prepared_loopback(inputs).await;
     let state = product(registry.clone()).with_pairing(Arc::new(commands));
     let bound = bind(
         prepared,

@@ -62,15 +62,16 @@ async fn endpoint_discloses_actual_bound_port_and_current_source_without_allocat
     let namespace = Namespace::new();
     let registry = namespace.registry();
     let credential = token(&registry, true);
-    let port = {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.local_addr().unwrap().port()
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let config = NativeConfig {
+        listen_address: listener.local_addr().unwrap(),
+        relay: None,
+        advertised_address: None,
     };
-    let mut config = loopback();
-    config.listen_address = format!("127.0.0.1:{port}").parse().unwrap();
     let (prepared, commands, _peers) = prepare(&config, namespace.inputs(registry.clone()))
         .await
         .unwrap();
+    let prepared = adopt(prepared, listener);
     assert!(
         commands.native_endpoint().is_none(),
         "publication waits until the listener is bound"
@@ -171,9 +172,11 @@ async fn endpoint_refuses_absent_and_unbound_native_destinations() {
     });
     serving.abort();
     let _ = serving.await;
-    let mut config = loopback();
-    config.listen_address = "0.0.0.0:0".parse().unwrap();
-    config.advertised_address = Some("192.0.2.10".parse().unwrap());
+    let config = NativeConfig {
+        listen_address: "0.0.0.0:0".parse().unwrap(),
+        relay: None,
+        advertised_address: Some("192.0.2.10".parse().unwrap()),
+    };
     let (prepared, commands, _peers) = prepare(&config, namespace.inputs(registry.clone()))
         .await
         .unwrap();
@@ -207,16 +210,16 @@ async fn endpoint_publishes_the_configured_address_for_a_wildcard_bind() {
     let registry = namespace.registry();
     let credential = token(&registry, true);
     let advertised = "192.0.2.10".parse().unwrap();
-    let mut config = loopback();
-    config.advertised_address = Some(advertised);
-    let port = {
-        let listener = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
-        listener.local_addr().unwrap().port()
+    let listener = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+    let config = NativeConfig {
+        listen_address: listener.local_addr().unwrap(),
+        relay: None,
+        advertised_address: Some(advertised),
     };
-    config.listen_address = format!("0.0.0.0:{port}").parse().unwrap();
     let (prepared, commands, _peers) = prepare(&config, namespace.inputs(registry.clone()))
         .await
         .unwrap();
+    let prepared = adopt(prepared, listener);
     let commands = Arc::new(commands);
     let state = product(registry).with_pairing(commands.clone());
     let bound = bind(
@@ -252,9 +255,7 @@ async fn endpoint_asks_current_socket_policy_before_native_disclosure() {
     let namespace = Namespace::new();
     let registry = namespace.registry();
     let credential = token(&registry, false);
-    let (prepared, commands, _peers) = prepare(&loopback(), namespace.inputs(registry.clone()))
-        .await
-        .unwrap();
+    let (prepared, commands, _peers) = prepared_loopback(namespace.inputs(registry.clone())).await;
     let commands = Arc::new(commands);
     let state = product(registry.clone()).with_pairing(commands);
     let bound = bind(

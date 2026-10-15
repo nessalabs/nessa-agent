@@ -151,17 +151,49 @@ fn product(registry: Arc<LocalCredentialStore>) -> ProductRouteState {
 }
 
 /// A specific loopback bind on a fixed port. The lifecycle table publishes
-/// that address. A configured port of zero stays unpublished, including
-/// after the socket is given an ephemeral port, so these tests do not use one.
-fn loopback() -> NativeConfig {
-    let reserved = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let listen_address = reserved.local_addr().unwrap();
-    drop(reserved);
+/// that address. The listener stays owned until `bind` adopts it. A
+/// configured port of zero stays unpublished, including after the socket is
+/// given an ephemeral port, so tests that need an unpublished listener do
+/// not use this.
+fn loopback() -> (NativeConfig, std::net::TcpListener) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let listen_address = listener.local_addr().unwrap();
+    (
+        NativeConfig {
+            listen_address,
+            relay: None,
+            advertised_address: None,
+        },
+        listener,
+    )
+}
+
+/// Port zero. Nothing is published, and no port is reserved.
+fn unpublished() -> NativeConfig {
     NativeConfig {
-        listen_address,
+        listen_address: "127.0.0.1:0".parse().unwrap(),
         relay: None,
         advertised_address: None,
     }
+}
+
+/// Hand `listener` to `prepared` so `bind` accepts on it instead of binding
+/// the address again.
+fn adopt(prepared: PreparedNative, listener: std::net::TcpListener) -> PreparedNative {
+    listener.set_nonblocking(true).unwrap();
+    prepared.keep_bound_socket(tokio::net::TcpListener::from_std(listener).unwrap())
+}
+
+async fn prepared_loopback(
+    inputs: NativeInputs,
+) -> (
+    PreparedNative,
+    PairingOwnerCommands,
+    std::sync::Arc<PeerCommands>,
+) {
+    let (config, listener) = loopback();
+    let (prepared, commands, peers) = prepare(&config, inputs).await.unwrap();
+    (adopt(prepared, listener), commands, peers)
 }
 
 /// Row S4: a missing key with enrollment history is refused, never regenerated,
@@ -172,9 +204,10 @@ async fn native_startup_history_without_key_refuses_before_bind() {
         let namespace = Namespace::new();
         let session = namespace.bootstrap().await;
         let registry = namespace.registry();
-        let (prepared, commands, peers) = prepare(&loopback(), namespace.inputs(registry.clone()))
-            .await
-            .unwrap();
+        let (prepared, commands, peers) =
+            prepare(&unpublished(), namespace.inputs(registry.clone()))
+                .await
+                .unwrap();
         // A first start publishes the key; an invitation is enrollment history.
         assert!(namespace.key_file().exists());
         let created = commands
@@ -190,7 +223,7 @@ async fn native_startup_history_without_key_refuses_before_bind() {
             std::fs::remove_file(namespace.key_file()).unwrap();
         }
         let registry = namespace.registry();
-        let refused = prepare(&loopback(), namespace.inputs(registry.clone())).await;
+        let refused = prepare(&unpublished(), namespace.inputs(registry.clone())).await;
         let refused = refused.err();
         assert!(
             if whole_directory {
@@ -266,9 +299,7 @@ async fn native_bind_failure_preserves_key_and_history() {
     drop(registry);
     drop(taken);
     let registry = namespace.registry();
-    let (prepared, _commands, _peers) = prepare(&loopback(), namespace.inputs(registry.clone()))
-        .await
-        .unwrap();
+    let (prepared, _commands, _peers) = prepared_loopback(namespace.inputs(registry.clone())).await;
     bind(
         prepared,
         RuntimeDependencies::default().clock,
@@ -286,9 +317,7 @@ async fn native_shutdown_joins_a_held_peer() {
     let namespace = Namespace::new();
     let session = namespace.bootstrap().await;
     let registry = namespace.registry();
-    let (prepared, commands, _peers) = prepare(&loopback(), namespace.inputs(registry.clone()))
-        .await
-        .unwrap();
+    let (prepared, commands, _peers) = prepared_loopback(namespace.inputs(registry.clone())).await;
     let bound = bind(
         prepared,
         RuntimeDependencies::default().clock,
@@ -332,9 +361,7 @@ async fn faulted_listener_join_reports_the_fault_without_reconciling() {
     let namespace = Namespace::new();
     namespace.bootstrap().await;
     let registry = namespace.registry();
-    let (prepared, _commands, _peers) = prepare(&loopback(), namespace.inputs(registry.clone()))
-        .await
-        .unwrap();
+    let (prepared, _commands, _peers) = prepared_loopback(namespace.inputs(registry.clone())).await;
     let bound = bind(
         prepared,
         RuntimeDependencies::default().clock,

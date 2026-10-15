@@ -41,7 +41,7 @@ async fn phone_authorization_corrupted_signed_fields_refuse_without_registry_eff
     let token = credential(&registry);
     let inputs = namespace.inputs(registry.clone());
     let receivers = inputs.receivers.clone();
-    let (prepared, commands, _peers) = prepare(&loopback(), inputs).await.unwrap();
+    let (prepared, commands, _peers) = prepared_loopback(inputs).await;
     let commands = Arc::new(commands);
     let state = product(registry.clone()).with_pairing(commands);
     let bound = bind(
@@ -117,9 +117,7 @@ async fn phone_authorization_valid_signature_cannot_replace_actual_discovery_des
     let namespace = Namespace::new();
     let registry = namespace.registry();
     let token = credential(&registry);
-    let (prepared, commands, _peers) = prepare(&loopback(), namespace.inputs(registry.clone()))
-        .await
-        .unwrap();
+    let (prepared, commands, _peers) = prepared_loopback(namespace.inputs(registry.clone())).await;
     let commands = Arc::new(commands);
     let state = product(registry.clone()).with_pairing(commands);
     let bound = bind(
@@ -194,9 +192,7 @@ async fn phone_existing_socket_revocation_cannot_commit_a_saved_signed_original(
     let namespace = Namespace::new();
     let registry = namespace.registry();
     let token = credential(&registry);
-    let (prepared, commands, _peers) = prepare(&loopback(), namespace.inputs(registry.clone()))
-        .await
-        .unwrap();
+    let (prepared, commands, _peers) = prepared_loopback(namespace.inputs(registry.clone())).await;
     let commands = Arc::new(commands);
     let state = product(registry.clone()).with_pairing(commands);
     let bound = bind(
@@ -247,7 +243,7 @@ async fn phone_status_keeps_original_revocation_after_actual_rebind_back() {
     let token = credential(&registry);
     let inputs = namespace.inputs(registry.clone());
     let receivers = inputs.receivers.clone();
-    let (prepared, commands, _peers) = prepare(&loopback(), inputs).await.unwrap();
+    let (prepared, commands, _peers) = prepared_loopback(inputs).await;
     let commands = Arc::new(commands);
     let state = product(registry.clone()).with_pairing(commands);
     let bound = bind(

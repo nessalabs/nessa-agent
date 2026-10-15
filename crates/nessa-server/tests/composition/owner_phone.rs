@@ -83,9 +83,7 @@ async fn signed_setup_from_empty_ledger_activates_once_and_reads_exact_original(
     let namespace = Namespace::new();
     let registry = namespace.registry();
     let token = credential(&registry);
-    let (prepared, commands, _peers) = prepare(&loopback(), namespace.inputs(registry.clone()))
-        .await
-        .unwrap();
+    let (prepared, commands, _peers) = prepared_loopback(namespace.inputs(registry.clone())).await;
     let commands = Arc::new(commands);
     let state = product(registry.clone()).with_pairing(commands);
     let bound = bind(
@@ -189,9 +187,7 @@ async fn exact_replay_returns_the_stored_original_when_entropy_is_unavailable() 
     let namespace = Namespace::new();
     let registry = namespace.registry();
     let token = credential(&registry);
-    let (prepared, commands, _peers) = prepare(&loopback(), namespace.inputs(registry.clone()))
-        .await
-        .unwrap();
+    let (prepared, commands, _peers) = prepared_loopback(namespace.inputs(registry.clone())).await;
     let draws = Arc::new(AtomicUsize::new(0));
     let calls = Arc::new(AtomicUsize::new(0));
     let commands = commands.with_entropy({

@@ -111,6 +111,10 @@ pub(super) struct PreparedNative {
     relay: Option<RelayAddress>,
     /// Host a wildcard bind is published as. The port is the listener's.
     advertised_address: Option<IpAddr>,
+    /// A listener already bound to `address`. Production leaves this empty
+    /// and `bind` binds `address`. A test that reserved the port hands the
+    /// listener here so the port stays owned until accept.
+    bound_socket: Option<TcpListener>,
 }
 
 impl PreparedNative {
@@ -124,6 +128,12 @@ impl PreparedNative {
     /// Serve `openEnvironment` with `environments`.
     pub(super) fn with_environments(mut self, environments: Arc<dyn EnvironmentPeers>) -> Self {
         self.environments = Some(environments);
+        self
+    }
+
+    /// Keep `socket` until `bind`. It must already be bound to `address`.
+    fn keep_bound_socket(mut self, socket: TcpListener) -> Self {
+        self.bound_socket = Some(socket);
         self
     }
 }
@@ -221,6 +231,7 @@ pub(super) async fn prepare(
             environments: None,
             relay: config.relay.clone(),
             advertised_address: config.advertised_address,
+            bound_socket: None,
         },
         commands,
         peers,
@@ -286,9 +297,23 @@ pub(super) async fn bind(
         environments,
         relay,
         advertised_address,
+        bound_socket,
     } = prepared;
     let bind_failed = |source| RunError::Native(NativeFailure::Bind { address, source });
-    let socket = TcpEnrollmentAccept::new(TcpListener::bind(address).await.map_err(bind_failed)?);
+    let listener = match bound_socket {
+        Some(socket) => {
+            let bound = socket.local_addr().map_err(bind_failed)?;
+            if bound != address {
+                return Err(bind_failed(std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "prebound listener is not the configured address",
+                )));
+            }
+            socket
+        }
+        None => TcpListener::bind(address).await.map_err(bind_failed)?,
+    };
+    let socket = TcpEnrollmentAccept::new(listener);
     let bound = socket.local_address().map_err(bind_failed)?;
     // The configured port is the one a phone can keep. Binding port zero
     // assigns an ephemeral port that the next start will not repeat, so that
