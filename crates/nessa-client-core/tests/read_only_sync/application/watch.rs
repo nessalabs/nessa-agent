@@ -1,6 +1,8 @@
 //! The watch loop against scripted substitutes, one test per row W3–W14 and W17.
 use super::*;
-use nessa_protocol::product_contract::generated::{ChangeWatchErrorCode, RecordReadErrorCode};
+use nessa_protocol::product_contract::generated::{
+    ChangeWatchErrorCode, RecordReadErrorCode, SessionCloseReason,
+};
 use std::collections::VecDeque;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -295,23 +297,29 @@ fn watch_ended_stops_after_the_running_pass() {
 }
 
 /// Row W11: a closed connection, while waiting or during a pass, ends
-/// `connectionClosed` with a cause that asks for no status recheck.
+/// `connectionClosed` whether or not the close carries a reason. Plain EOF
+/// asks for no status recheck. A terminal revoke stays `connectionClosed`
+/// and does ask, so the composition reports that recheck on the ended line.
 #[test]
-fn connection_close_ends_without_recheck() {
-    let closed = GatewayError::Closed(None);
-    let mut waiting = Script::new([PassResult::Complete], [Err(closed)]);
-    let mut passing = Script::new([PassResult::Failed(Some(closed))], []);
-    for script in [&mut waiting, &mut passing] {
-        let (end, _) = run(script, 5);
-        assert_eq!(
-            end,
-            End {
-                reason: EndReason::ConnectionClosed,
-                cause: Some(closed)
-            }
-        );
-        assert!(!asks_status(closed));
+fn connection_close_stays_connection_closed() {
+    let plain = GatewayError::Closed(None);
+    let revoked = GatewayError::Closed(Some(SessionCloseReason::AuthorizationLost));
+    for cause in [plain, revoked] {
+        let mut waiting = Script::new([PassResult::Complete], [Err(cause)]);
+        let mut passing = Script::new([PassResult::Failed(Some(cause))], []);
+        for script in [&mut waiting, &mut passing] {
+            let (end, _) = run(script, 5);
+            assert_eq!(
+                end,
+                End {
+                    reason: EndReason::ConnectionClosed,
+                    cause: Some(cause)
+                }
+            );
+        }
     }
+    assert!(!asks_status(plain));
+    assert!(asks_status(revoked));
 }
 
 /// Row W12: a wait that reaches its deadline with nothing read ends cleanly.

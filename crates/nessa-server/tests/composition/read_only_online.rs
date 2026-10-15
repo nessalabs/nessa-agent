@@ -1021,8 +1021,11 @@ fn online_two_devices_follow_live_hints_and_converge() {
     assert_eq!(view_a, view_b);
     assert_eq!(view_a, show(&fresh, &setup.receiver));
 
-    // Step 8 (W11, A2): revoking B's receiver closes B's connection with no
-    // hint and refuses its next command; A goes on to its pass budget.
+    // Step 8 (W11, A2): revoking B's receiver closes B with
+    // `authorization_lost` and no hint. The end stays `connectionClosed`,
+    // and that terminal revoke asks pinned status once. The receiver no
+    // longer holds the pairing, so the status is refused and nothing is
+    // purged. A goes on to its pass budget.
     let mut a = watch(&profile_a, "2");
     let mut b = watch(&profile_b, "5");
     let watch_a = watch_registered(&mut a);
@@ -1034,7 +1037,19 @@ fn online_two_devices_follow_live_hints_and_converge() {
     watch_hint(&mut a, &watch_a, false);
     watch_pass(&mut a, "hint", 15);
     assert!(watch_end(a, "passesExhausted"));
-    assert!(!watch_end(b, "connectionClosed"));
+    let (ended, _) = watch_line(&mut b, "ended");
+    assert_eq!(ended["reason"], "connectionClosed", "{ended}");
+    assert_eq!(ended["cause"]["code"], "closed", "{ended}");
+    assert_eq!(
+        ended["cause"]["productCode"], "authorization_lost",
+        "{ended}"
+    );
+    assert_eq!(
+        ended["recheck"]["enrollmentFailure"]["code"], "refused",
+        "{ended}"
+    );
+    assert!(ended["recheck"]["purge"].is_null(), "{ended}");
+    assert!(!b.succeeded());
     let (ok, denied) = command(
         vec![
             "sync-records".into(),

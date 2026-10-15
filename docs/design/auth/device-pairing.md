@@ -2085,10 +2085,10 @@ an incoming announced length above `MAX_PAYLOAD_BYTES` (65536) before reading
 or allocating the body; the client refuses one above
 `MAX_RECORD_RESPONSE_BYTES` (131072). Both bounds are the existing published
 constants. The same frame reader (`frames.rs`) frames enrollment
-envelopes at 4096. There is no WebSocket close frame: the gateway closes the
-TLS connection after its last attempted write, and the client reports an
-untyped close (`Closed(None)`). A close carries no authority meaning; only the
-pinned enrollment status does.
+envelopes at 4096. There is no WebSocket close frame: the gateway writes `session.terminated`
+when it has a reason, then closes the TLS connection. The client records that
+reason, or `Closed(None)` when the stream ends with no valid termination.
+What the client does next is the lifecycle table in ADR 811.
 
 ### Ordering table
 
