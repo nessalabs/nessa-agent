@@ -43,7 +43,10 @@ fn css_px(css: &str, name: &str) -> f64 {
 }
 
 fn page_and_host_agree(root: &Path) {
-    let css = std::fs::read_to_string(root.join("../src/desktop/styles.css")).unwrap();
+    // A Windows checkout ends lines with CRLF.
+    let css = std::fs::read_to_string(root.join("../src/desktop/styles.css"))
+        .unwrap()
+        .replace("\r\n", "\n");
     // `--desktop-titlebar-height: calc(2 * var(--desktop-control-edge) + var(--desktop-control-size))`,
     // with the edge the gutter plus the control's inset.
     assert!(
@@ -125,29 +128,17 @@ mod on_a_real_window {
         spin();
         expect_on_row(&window, "after a resize", &before);
 
-        probe(&window, "before the title changed");
         unsafe {
             let _: () = msg_send![&window, setTitle: &*NSString::from_str("Nessa")];
         }
         spin();
-        probe(&window, "after setTitle");
+        expect_on_row(&window, "after the title changed", &before);
         unsafe {
             let _: () = msg_send![&window, setTitleVisibility: 0isize];
-        }
-        probe(&window, "right after the title shows");
-        spin();
-        probe(&window, "after the title shows");
-        unsafe {
             let _: () = msg_send![&window, setTitleVisibility: HIDDEN_TITLE];
         }
-        probe(&window, "right after the title hides");
         spin();
-        probe(&window, "after the title hides");
-        if let Some(main) = MainThreadMarker::new() {
-            let placed = super::traffic_lights::place(&window, main);
-            probe(&window, &format!("after placing by hand ({placed:?})"));
-        }
-        expect_on_row(&window, "after the title changed", &before);
+        expect_on_row(&window, "after the title showed and hid", &before);
 
         for name in ["NSAppearanceNameAqua", "NSAppearanceNameDarkAqua"] {
             unsafe {
@@ -185,37 +176,6 @@ mod on_a_real_window {
         );
 
         window.close();
-    }
-
-    /// Temporary: what AppKit did to the titlebar's views, for the runner's log.
-    fn probe(window: &NSWindow, when: &str) {
-        let line = buttons(window)
-            .first()
-            .map(|close| unsafe {
-                let row: Option<Retained<objc2_app_kit::NSView>> = close.superview();
-                let container = row.as_ref().and_then(|row| row.superview());
-                let theme = container.as_ref().and_then(|c| c.superview());
-                format!(
-                    "close {:p} {:?} | row {:?} {:?} | container {:?} {:?} | frame view {:?} {}",
-                    &**close,
-                    close.frame(),
-                    row.as_ref().map(|v| &**v as *const _),
-                    row.as_ref().map(|v| v.frame()),
-                    container.as_ref().map(|v| &**v as *const _),
-                    container.as_ref().map(|v| v.frame()),
-                    theme.as_ref().map(|v| &**v as *const _),
-                    theme
-                        .as_ref()
-                        .map(|v| AnyObject::class(v).name().to_string_lossy().into_owned())
-                        .unwrap_or_default(),
-                )
-            })
-            .unwrap_or_default();
-        eprintln!(
-            "probe {when}: {:?} layouts {} | {line}",
-            measure(window),
-            LAYOUTS.load(Ordering::Relaxed)
-        );
     }
 
     /// Lets AppKit post and lay out, and the main queue run what it was handed.
