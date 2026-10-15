@@ -2351,11 +2351,12 @@ mod tests {
         BrowserSessionOrigin, BrowserSessionState,
     };
     use crate::conversation::application::{
-        CatalogueReadFuture, CatalogueReadOperation, CatalogueReadSource, ConversationError,
-        ConversationFuture, ConversationRepository, HeldGrant, PermissionRuleCatalog,
-        ReceiverAuthority, ReceiverBinding, RecordReadError, RecordReadFuture, RecordReadOperation,
-        RecordReadResponse, RecordReadSource, RevisionHold, RulePrincipal, ShareGrantChange,
-        ShareGrantList, ShareGrantReceipt, ShareGrants,
+        AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessSubject, CatalogueReadFuture,
+        CatalogueReadOperation, CatalogueReadSource, ConversationAccessPolicyEvaluator,
+        ConversationError, ConversationFuture, ConversationRepository, HeldGrant,
+        PermissionRuleCatalog, ReceiverAuthority, ReceiverBinding, RecordReadError,
+        RecordReadFuture, RecordReadOperation, RecordReadResponse, RecordReadSource, RevisionHold,
+        RulePrincipal, ShareGrantChange, ShareGrantList, ShareGrantReceipt, ShareGrants,
     };
     use crate::conversation::domain::{Capabilities, Conversation, ToolPolicy};
     use crate::conversation::infrastructure::{LocalConversationStore, NessaRecordReadSource};
@@ -2925,6 +2926,80 @@ mod tests {
         assert_eq!(owns_one.reviews[0].tool, "Bash");
     }
 
+    #[tokio::test]
+    async fn an_admin_review_notice_obeys_policy_refusals_and_current_membership() {
+        struct Refuse(AccessDenial);
+        impl ConversationAccessPolicyEvaluator for Refuse {
+            fn evaluate(&self, ask: &AccessAsk<'_>) -> AccessDecision {
+                assert_eq!(ask.action, AccessAction::ReviewNotice);
+                assert!(matches!(
+                    ask.subject,
+                    AccessSubject::ReviewRecipient {
+                        membership: MembershipRole::Admin,
+                        ..
+                    }
+                ));
+                AccessDecision::Deny(self.0.clone())
+            }
+        }
+        let (_directory, board) = open_rules();
+        let id = "00000000-0000-4000-8000-00000000000a";
+        board.waiting(&ReviewNotice {
+            conversation_id: id.into(),
+            execution_id: ExecutionId::new("turn").unwrap(),
+            permission_id: PermissionId::new("permission").unwrap(),
+            tool: "Bash".into(),
+        });
+        let repository = repository_of(vec![owned_conversation(id, "owner")]);
+        for refusal in [
+            AccessDenial::Unavailable,
+            AccessDenial::NotPermitted,
+            AccessDenial::Forbidden {
+                policies: vec!["test.refusal".into()],
+            },
+        ] {
+            let (state, _) = fixture(MembershipRole::Admin);
+            let state = state.with_passive_read(
+                Arc::new(UnpairedBinding),
+                repository.clone(),
+                Arc::new(GrantedConversation(id.into())),
+                Arc::new(Refuse(refusal)),
+            );
+            let session = authenticate(&state).await;
+            assert!(notice_snapshot(board.clone(), state, session)
+                .await
+                .reviews
+                .is_empty());
+        }
+        let (state, authority) = fixture(MembershipRole::Admin);
+        let state = state.with_passive_read(
+            Arc::new(UnpairedBinding),
+            repository,
+            Arc::new(GrantedConversation(id.into())),
+            conversation_support::access_policy(),
+        );
+        let session = authenticate(&state).await;
+        assert_eq!(
+            notice_snapshot(board.clone(), state.clone(), session.clone())
+                .await
+                .reviews
+                .len(),
+            1
+        );
+        *authority.snapshot.lock().unwrap() = snapshot_with(
+            MembershipRole::Member,
+            MembershipStatus::Active,
+            &["server.read"],
+        );
+        assert!(
+            notice_snapshot(board, state, session)
+                .await
+                .reviews
+                .is_empty(),
+            "the original admin session supplies current membership, not its old role"
+        );
+    }
+
     /// A repository reply is outside data. Its identity is correlated before
     /// either Cedar or the notice publisher consumes its ownership metadata.
     #[tokio::test]
@@ -2938,32 +3013,32 @@ mod tests {
             permission_id: PermissionId::new("perm-a").unwrap(),
             tool: "Bash".into(),
         });
-        let repository = repository_of(vec![owned_conversation(id_a, "principal")]);
-        *repository.mode_loaded_reply.lock().unwrap() = Some(owned_conversation(id_b, "principal"));
-        let policy = Arc::new(conversation_support::ObservedPolicy::default());
-        let (state, authority) = fixture(MembershipRole::Member);
-        *authority.snapshot.lock().unwrap() = snapshot_with(
-            MembershipRole::Member,
-            MembershipStatus::Active,
-            &["conversation.write"],
-        );
-        let state = state.with_passive_read(
-            Arc::new(UnpairedBinding),
-            repository,
-            Arc::new(GrantedConversation(id_a.into())),
-            policy.clone(),
-        );
-        let session = authenticate(&state).await;
+        for role in [MembershipRole::Admin, MembershipRole::Member] {
+            let repository = repository_of(vec![owned_conversation(id_a, "principal")]);
+            *repository.mode_loaded_reply.lock().unwrap() =
+                Some(owned_conversation(id_b, "principal"));
+            let policy = Arc::new(conversation_support::ObservedPolicy::default());
+            let (state, authority) = fixture(role);
+            *authority.snapshot.lock().unwrap() =
+                snapshot_with(role, MembershipStatus::Active, &["conversation.write"]);
+            let state = state.with_passive_read(
+                Arc::new(UnpairedBinding),
+                repository,
+                Arc::new(GrantedConversation(id_a.into())),
+                policy.clone(),
+            );
+            let session = authenticate(&state).await;
 
-        let refused = notice_snapshot(board.clone(), state.clone(), session.clone()).await;
-        assert!(refused.reviews.is_empty());
-        assert_eq!(policy.asked(), 0, "mismatched metadata reaches no policy");
+            let refused = notice_snapshot(board.clone(), state.clone(), session.clone()).await;
+            assert!(refused.reviews.is_empty());
+            assert_eq!(policy.asked(), 0, "mismatched metadata reaches no policy");
 
-        let accepted = notice_snapshot(board, state, session).await;
-        assert_eq!(accepted.reviews.len(), 1);
-        assert_eq!(accepted.reviews[0].conversation_id, id_a);
-        assert_eq!(accepted.reviews[0].tool, "Bash");
-        assert!(policy.asked() > 0, "the correlated counterpart asks Cedar");
+            let accepted = notice_snapshot(board.clone(), state, session).await;
+            assert_eq!(accepted.reviews.len(), 1);
+            assert_eq!(accepted.reviews[0].conversation_id, id_a);
+            assert_eq!(accepted.reviews[0].tool, "Bash");
+            assert!(policy.asked() > 0, "the correlated counterpart asks Cedar");
+        }
     }
 
     /// A paired grant that goes away while the review is still waiting drops

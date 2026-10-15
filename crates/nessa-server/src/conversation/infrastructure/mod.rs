@@ -64,7 +64,7 @@
 //! MCP App reach a server, call a tool on it).
 //! `CedarConversationAccessPolicy` answers `ConversationAccessPolicyEvaluator`
 //! (`access_policy/cedar/`): who may locate, act on, read, comment in, drive
-//! or share a conversation, and watch a catalogue. The store asks it inside
+//! or share a conversation, receive its review notices, and watch a catalogue. The store asks it inside
 //! the transaction that writes a share grant.
 //! `DurableDriveToolAudit` keeps each of the tool policy's decisions on the
 //! gateway's own tools for a Drive turn, one immutable file per conversation,

@@ -171,7 +171,7 @@ pub use crate::conversation::domain::ReceiverBinding;
 pub use access_policy::{
     AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
     ConversationAccessPolicyEvaluator, OwnerAccess, PairedAccess, PairedParty, PairedRefusal,
-    RequestShape, ShareTarget,
+    RequestShape, ReviewNoticeAccess, ShareTarget,
 };
 pub use catalogue::{
     CatalogueDescriptor, CatalogueEntryAccess, CatalogueEntryAdmission, CatalogueEntryAnswer,

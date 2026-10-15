@@ -681,7 +681,9 @@ numbers are the caller's: the gateway takes them from the selected model's
 Review notices receive an application-owned `ConversationMetadataReader` from
 product-route composition. Its private repository delegates to the checked
 metadata loader, so returned identity is correlated before ownership policy
-or publication consumes the record (#918).
+or publication consumes the record (#918). Unpaired review recipients supply
+current membership facts to Cedar's `review.notice` action; paired recipients
+retain their conversation-grant admission (#920).
 
 
 Client permission controls capture related IDs through

@@ -25,7 +25,8 @@
 //! ```
 //!
 //! Arrows are calls. The facts are what is true: who asks (an owner's own
-//! surface, a paired reader with the owner its binding names, or a grant
+//! surface, an authenticated review recipient, a paired reader with the owner
+//! its binding names, or a grant
 //! holder), the conversation's organization, owner and whether it was
 //! deleted, the role a grant holds, what a request carries, and what a share
 //! target holds. The answer is the policy's: no role ordering, ownership
@@ -38,7 +39,7 @@
 //! question and the write.
 use super::ConversationCaller;
 use crate::conversation::domain::{Capabilities, Conversation, ConversationRefusal};
-use nessa_auth::domain::{Grant, OrganizationId, PrincipalId, Resource};
+use nessa_auth::domain::{Grant, MembershipRole, OrganizationId, PrincipalId, Resource};
 use std::collections::HashMap;
 
 /// Who is asking.
@@ -49,6 +50,13 @@ pub enum AccessSubject<'a> {
     Person {
         organization: &'a OrganizationId,
         principal: &'a PrincipalId,
+    },
+    /// An unpaired authenticated review recipient, with its current role.
+    /// Cedar decides whether that membership may reveal the conversation.
+    ReviewRecipient {
+        organization: &'a OrganizationId,
+        principal: &'a PrincipalId,
+        membership: MembershipRole,
     },
     /// A paired party reading through its receiver binding: a device signs
     /// in as `binding_owner`, a peer gateway as itself.
@@ -103,11 +111,13 @@ pub enum AccessAction {
     ArtifactRead,
     /// Deliver a note a grant holder left.
     NoteDeliver,
+    /// Receive a waiting-review notice for the conversation.
+    ReviewNotice,
 }
 
 impl AccessAction {
     /// Every action, in declaration order.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::Locate,
         Self::Act,
         Self::List,
@@ -122,6 +132,7 @@ impl AccessAction {
         Self::CatalogueWatch,
         Self::ArtifactRead,
         Self::NoteDeliver,
+        Self::ReviewNotice,
     ];
 
     /// The action's name, as the policy spells it.
@@ -141,7 +152,48 @@ impl AccessAction {
             Self::CatalogueWatch => "catalogue.watch",
             Self::ArtifactRead => "artifact.read",
             Self::NoteDeliver => "note.deliver",
+            Self::ReviewNotice => "review.notice",
         }
+    }
+}
+
+/// Whether an authenticated, unpaired surface may receive a review notice.
+#[derive(Clone, Copy)]
+pub struct ReviewNoticeAccess<'a> {
+    policy: &'a dyn ConversationAccessPolicyEvaluator,
+}
+
+impl<'a> ReviewNoticeAccess<'a> {
+    pub fn new(policy: &'a dyn ConversationAccessPolicyEvaluator) -> Self {
+        Self { policy }
+    }
+
+    pub fn admits(
+        &self,
+        conversation: &Conversation,
+        organization: &OrganizationId,
+        principal: &PrincipalId,
+        membership: MembershipRole,
+    ) -> bool {
+        let subject = AccessSubject::ReviewRecipient {
+            organization,
+            principal,
+            membership,
+        };
+        matches!(
+            answer(
+                self.policy,
+                &AccessAsk {
+                    subject,
+                    action: AccessAction::ReviewNotice,
+                    resource: AccessResource::of(conversation),
+                    held: None,
+                    request: RequestShape::default(),
+                    target: None,
+                }
+            ),
+            Answer::Allowed
+        )
     }
 }
 
