@@ -195,7 +195,7 @@ import { pathToFileURL } from 'node:url'
 const owner = await import(pathToFileURL(process.argv[2]).href)
 const root = process.argv[3]
 if (process.argv[4] === 'check') {
-  const problem = owner.checkVendor({ root })
+  const problem = owner.checkVendor({ root, requireOwned: true })
   if (problem) { console.error(problem); process.exitCode = 1 }
 } else {
   owner.prepareVendor({ root })

@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -611,4 +612,47 @@ test("typesVersions pattern alternatives remain outside concrete-file completene
     }),
   )
   assert.equal(checkVendor({ root, git: fakeGit({ head: PIN }) }), null)
+})
+
+for (const borrowed of ["parent", "checkout"]) {
+  test(`private readiness rejects a borrowed ${borrowed} while read-only checks preserve it`, (context) => {
+    const root = makeRoot(context)
+    const vendorParent = join(root, ".vendor")
+    const vendor = join(vendorParent, "nessa_ui")
+    const target = join(root, "borrowed-ready")
+    if (borrowed === "parent") {
+      renameSync(vendorParent, target)
+      symlinkSync(target, vendorParent, "junction")
+    } else {
+      renameSync(vendor, target)
+      symlinkSync(target, vendor, "junction")
+    }
+    const git = fakeGit({ head: PIN })
+    assert.equal(checkVendor({ root, git }), null)
+    assert.match(checkVendor({ root, git, requireOwned: true }), /borrowed root/)
+    assert.equal(
+      lstatSync(borrowed === "parent" ? vendorParent : vendor).isSymbolicLink(),
+      true,
+    )
+    assert.equal(
+      readFileSync(
+        join(
+          target,
+          borrowed === "parent" ? "nessa_ui" : ".",
+          linkedWorkspacePackages[0],
+          "package.json",
+        ),
+        "utf8",
+      ),
+      JSON.stringify({ name: linkedWorkspacePackages[0] }),
+    )
+  })
+}
+
+test("private readiness accepts an owned prepared workspace", (context) => {
+  const root = makeRoot(context)
+  assert.equal(
+    checkVendor({ root, git: fakeGit({ head: PIN }), requireOwned: true }),
+    null,
+  )
 })

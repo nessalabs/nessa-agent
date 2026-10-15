@@ -158,7 +158,7 @@ else process.exit(2)
   writeFileSync(join(repository, "package.json"), '{"packageManager":"pnpm@11.9.0"}')
   writeFileSync(
     join(repository, "scripts/ensure-nessa-ui.mjs"),
-    `import{existsSync,writeFileSync}from'node:fs';import{join}from'node:path';export const checkVendor=({root})=>existsSync(join(root,'.ui-ready'))?null:'UI fixture requires preparation';export const prepareVendor=({root})=>writeFileSync(join(root,'.ui-ready'),'')`,
+    `import{existsSync,writeFileSync,rmSync}from'node:fs';import{join}from'node:path';export const checkVendor=({root,requireOwned=false})=>requireOwned&&existsSync(join(root,'.ui-borrowed'))?'Borrowed UI fixture':existsSync(join(root,'.ui-ready'))?null:'UI fixture requires preparation';export const prepareVendor=({root})=>{writeFileSync(join(root,'.ui-ready'),'');rmSync(join(root,'.ui-borrowed'),{force:true})}`,
   )
   const env = {
     ...process.env,
@@ -846,3 +846,15 @@ process.exit(result.status ?? 1)
     })
   }
 }
+
+test("cloud readiness requires private UI ownership despite ready outputs", (t) => {
+  const f = bootstrapFixture(t)
+  assert.equal(f.prepare("setup").status, 0)
+  writeFileSync(join(f.repository, ".ui-borrowed"), "borrowed ready outputs")
+  const repaired = f.prepare("maintenance")
+  assert.equal(repaired.status, 0, repaired.stderr)
+  assert.equal(f.receipt().steps.ui, "prepared")
+  assert.throws(() => readFileSync(join(f.repository, ".ui-borrowed")), {
+    code: "ENOENT",
+  })
+})

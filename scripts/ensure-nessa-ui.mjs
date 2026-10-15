@@ -61,6 +61,16 @@ export function readRevision(root) {
   return revision
 }
 
+// The read-only checker may inspect borrowed input; mutable preparation needs
+// private roots. Both consumers ask this one owner which root is borrowed.
+function borrowedVendorRoot(root) {
+  const parent = resolve(root, ".vendor")
+  if (lstatSync(parent, { throwIfNoEntry: false })?.isSymbolicLink()) return "parent"
+  if (lstatSync(resolve(parent, "nessa_ui"), { throwIfNoEntry: false })?.isSymbolicLink())
+    return "checkout"
+  return null
+}
+
 const hasPackages = (directory) =>
   linkedWorkspacePackages.every((pkg) =>
     existsSync(resolve(directory, pkg, "package.json")),
@@ -88,12 +98,16 @@ function declaredTypeAlternatives(value) {
 
 /**
  * Compare the vendored checkout with the pin without touching the network.
- * Checks concrete declared package entry files too. Returns null when ready, otherwise
+ * Checks concrete declared package entry files too; requireOwned also rejects borrowed
+ * roots for mutable startup. Default read-only checks may inspect borrowed input.
+ * Returns null when ready, otherwise
  * one message naming the preparation remedy.
  */
-export function checkVendor({ root, git = gitQuery } = {}) {
+export function checkVendor({ root, git = gitQuery, requireOwned = false } = {}) {
   const vendor = resolve(root, ".vendor/nessa_ui")
   const revision = readRevision(root)
+  if (requireOwned && borrowedVendorRoot(root))
+    return "Vendored Nessa UI uses a borrowed root. Run `pnpm ui:types` to prepare a private checkout."
   if (!hasPackages(vendor))
     return ".vendor/nessa_ui is missing or incomplete. Run `pnpm ui:types` to fetch it."
   const head = git(["rev-parse", "HEAD"], vendor)
@@ -144,7 +158,8 @@ export function prepareVendor({ root, run = command, git = gitQuery } = {}) {
   }
 
   const vendorRoot = resolve(root, ".vendor")
-  if (lstatSync(vendorRoot, { throwIfNoEntry: false })?.isSymbolicLink())
+  const borrowedRoot = borrowedVendorRoot(root)
+  if (borrowedRoot === "parent")
     throw new Error(
       "Preserving linked .vendor directory; replace it with a directory owned " +
         "by this checkout, then run pnpm ui:types.",
@@ -152,7 +167,7 @@ export function prepareVendor({ root, run = command, git = gitQuery } = {}) {
   mkdirSync(vendorRoot, { recursive: true })
   // Build artifacts belong to this checkout. Remove only a borrowed link,
   // including a dangling one, before cloning; its target remains untouched.
-  if (lstatSync(vendor, { throwIfNoEntry: false })?.isSymbolicLink()) rmSync(vendor)
+  if (borrowedRoot === "checkout") rmSync(vendor)
   if (!hasPackages(vendor)) {
     if (existsSync(vendor)) rmSync(vendor, { recursive: true, force: true })
     run("git", ["clone", "--no-checkout", "--depth", "1", repo, vendor], root)
