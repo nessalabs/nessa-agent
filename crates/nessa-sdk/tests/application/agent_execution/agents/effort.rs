@@ -7,7 +7,15 @@ use crate::application::agent_execution::support::*;
 use nessa_sdk::application::agent_execution::executions::EffortChangeStage;
 use nessa_sdk::application::dto::ReasoningDto;
 use nessa_sdk::domain::model_metadata::value_objects::{EffortLevel, EffortLevels};
-use std::sync::atomic::AtomicBool;
+use std::{
+    future::{poll_fn, Future},
+    panic::{catch_unwind, panic_any, AssertUnwindSafe},
+    pin::Pin,
+    sync::atomic::AtomicBool,
+    task::{Context, Poll},
+    time::Duration,
+};
+use tokio::{runtime::Builder, sync::Notify};
 
 fn level(name: &str) -> EffortLevel {
     EffortLevel::new(name.into()).unwrap()
@@ -431,4 +439,165 @@ async fn a_sink_that_panics_delivering_the_settlement_has_not_recorded_it() {
         &ProviderSessionState::CleanupRequired
     );
     let _ = agent.close(close_action()).await;
+}
+
+struct FaultingEffortAudit {
+    drops: Arc<AtomicUsize>,
+    entered: Notify,
+    dropped: Arc<Notify>,
+    payload_drops: Arc<AtomicUsize>,
+}
+struct PendingEffortEvidence {
+    drops: Arc<AtomicUsize>,
+    dropped: Arc<Notify>,
+    payload_drops: Arc<AtomicUsize>,
+}
+struct AuditDropFault(Arc<AtomicUsize>);
+impl Drop for AuditDropFault {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+impl ExecutionAudit for FaultingEffortAudit {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        if matches!(record, ExecutionAuditRecord::EffortLevelChanged(_)) {
+            self.entered.notify_one();
+            Box::pin(PendingEffortEvidence {
+                drops: self.drops.clone(),
+                dropped: self.dropped.clone(),
+                payload_drops: self.payload_drops.clone(),
+            })
+        } else {
+            Box::pin(async { Ok(()) })
+        }
+    }
+}
+impl Future for PendingEffortEvidence {
+    type Output = Result<(), AgentError>;
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Pending
+    }
+}
+impl Drop for PendingEffortEvidence {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, Ordering::SeqCst);
+        self.dropped.notify_one();
+        panic_any(AuditDropFault(self.payload_drops.clone()));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn effort_audit_timeout_and_caller_loss_preserve_owned_failure_before_provider_effect() {
+    for cancel in [false, true] {
+        let backend = Arc::new(Backend {
+            negotiated: AtomicBool::new(true),
+            busy: AtomicBool::new(false),
+            sent: Mutex::new(Vec::new()),
+            capabilities: reasoning_capabilities(),
+            inner: RecordingSession {
+                prompts: AtomicUsize::new(0),
+            },
+        });
+        let drops = Arc::new(AtomicUsize::new(0));
+        let audit = Arc::new(FaultingEffortAudit {
+            drops: drops.clone(),
+            entered: Notify::new(),
+            dropped: Arc::new(Notify::new()),
+            payload_drops: Arc::new(AtomicUsize::new(0)),
+        });
+        let agent = Agent::prepare(
+            Arc::new(Provider(backend.clone())),
+            MemoryStorage::default().manager().await,
+            audit.clone(),
+        )
+        .await
+        .unwrap();
+        let authorization = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+            .unwrap();
+        agent
+            .start_attachment(authorization)
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
+        let mut change = Box::pin(agent.set_effort_level(level("low"), close_action()));
+        assert!(
+            poll_fn(|context| Poll::Ready(change.as_mut().poll(context)))
+                .await
+                .is_pending()
+        );
+        audit.entered.notified().await;
+        if cancel {
+            assert!(catch_unwind(AssertUnwindSafe(|| drop(change))).is_ok());
+            assert_eq!(drops.load(Ordering::SeqCst), 0);
+            tokio::time::advance(Duration::from_secs(30)).await;
+            audit.dropped.notified().await;
+        } else {
+            tokio::time::advance(Duration::from_secs(30)).await;
+            let failure = change.await.unwrap_err();
+            assert_eq!(failure.error(), &AgentError::AuditFailure);
+            assert_eq!(failure.session_state(), &ProviderSessionState::Usable);
+        }
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert_eq!(audit.payload_drops.load(Ordering::SeqCst), 0);
+        assert!(backend.sent.lock().unwrap().is_empty());
+        agent.close(close_action()).await.unwrap();
+    }
+}
+
+#[test]
+fn runtime_cancellation_contains_audit_capture_cleanup_without_deferred_panic_payload() {
+    let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+    let backend = Arc::new(Backend {
+        negotiated: AtomicBool::new(true),
+        busy: AtomicBool::new(false),
+        sent: Mutex::new(Vec::new()),
+        capabilities: reasoning_capabilities(),
+        inner: RecordingSession {
+            prompts: AtomicUsize::new(0),
+        },
+    });
+    let audit = Arc::new(FaultingEffortAudit {
+        drops: Arc::new(AtomicUsize::new(0)),
+        entered: Notify::new(),
+        dropped: Arc::new(Notify::new()),
+        payload_drops: Arc::new(AtomicUsize::new(0)),
+    });
+    let agent = runtime.block_on(async {
+        let agent = Agent::prepare(
+            Arc::new(Provider(backend.clone())),
+            MemoryStorage::default().manager().await,
+            audit.clone(),
+        )
+        .await
+        .unwrap();
+        let authorization = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+            .unwrap();
+        agent
+            .start_attachment(authorization)
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
+        agent
+    });
+    let caller = runtime.spawn({
+        let agent = agent.clone();
+        async move { agent.set_effort_level(level("low"), close_action()).await }
+    });
+    runtime.block_on(audit.entered.notified());
+    drop(caller);
+    let cancelled = catch_unwind(AssertUnwindSafe(|| {
+        runtime.shutdown_timeout(Duration::from_secs(5))
+    }));
+    // A surviving Agent owner can confirm cleanup on a later runtime. No provider
+    // effect was sent by the canceled effort operation.
+    let cleanup = Builder::new_current_thread().enable_all().build().unwrap();
+    cleanup.block_on(agent.close(close_action())).unwrap();
+    assert!(cancelled.is_ok());
+    assert_eq!(audit.drops.load(Ordering::SeqCst), 1);
+    assert_eq!(audit.payload_drops.load(Ordering::SeqCst), 0);
+    assert!(backend.sent.lock().unwrap().is_empty());
 }

@@ -5,6 +5,7 @@
 //! Cleanup alone does not allow a new execution while accepted work is finishing.
 #![deny(missing_docs)]
 pub(super) use super::attachment_evidence::CloseAttempt;
+use super::audit_observation::{AuditObservationFailure, AuditObserver};
 use super::lifetime::OwnedLifetime;
 use super::{
     attachment_evidence::{
@@ -14,9 +15,7 @@ use super::{
     AttachmentRequest, AttachmentStatus, AttachmentWait,
 };
 use crate::application::agent_execution::{
-    executions::{
-        AttachmentAuditCause, AttachmentAuditStage, ExecutionAudit, ExecutionAuditRecord,
-    },
+    executions::{AttachmentAuditCause, AttachmentAuditStage, ExecutionAuditRecord},
     permissions::ActionContext,
     providers::{
         CleanupReport, OperationCapabilities, ProviderOpenControl, ProviderOperationFailure,
@@ -35,7 +34,7 @@ use crate::domain::agent_execution::{
 use std::sync::mpsc::Receiver;
 use std::{
     collections::HashMap,
-    future::{poll_fn, Future},
+    future::Future,
     panic::{catch_unwind, AssertUnwindSafe},
     pin::Pin,
     sync::{
@@ -247,7 +246,7 @@ pub(super) struct SessionLifecycle {
     attachment: Arc<AttachmentLease>,
     _lease: Arc<dyn SessionStorageLease>,
     session_id: SessionId,
-    audit: Arc<dyn ExecutionAudit>,
+    audit: Arc<AuditObserver>,
     owned: OnceLock<OwnedSlot>,
 }
 struct OwnedSlot {
@@ -351,7 +350,7 @@ impl SessionLifecycle {
         lease: Arc<dyn SessionStorageLease>,
         recorded_context: bool,
         session_id: SessionId,
-        audit: Arc<dyn ExecutionAudit>,
+        audit: Arc<AuditObserver>,
     ) -> Arc<Self> {
         Arc::new(Self {
             #[cfg(test)]
@@ -748,25 +747,10 @@ impl SessionLifecycle {
             let _ = pause.entered.send(());
             let _ = pause.release.await;
         }
-        let future = catch_unwind(AssertUnwindSafe(|| self.audit.record(record)));
-        let Ok(mut future) = future else {
-            return Err(AgentError::AuditFailure);
-        };
-        let outcome = poll_fn(|context| {
-            match catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(context))) {
-                Ok(poll) => poll.map(Some),
-                Err(payload) => {
-                    std::mem::forget(payload);
-                    Poll::Ready(None)
-                }
-            }
-        })
-        .await;
-        let dropped = catch_unwind(AssertUnwindSafe(|| drop(future))).is_ok();
-        match (outcome, dropped) {
-            (Some(result), true) => result,
-            _ => Err(AgentError::AuditFailure),
-        }
+        self.audit
+            .record(record, "attachment_evidence", || {})
+            .await
+            .map_err(AuditObservationFailure::into_agent_error)
     }
     pub(super) fn attachment_current(&self, generation: u64) -> bool {
         let state = self.state.lock().expect("session lifecycle");

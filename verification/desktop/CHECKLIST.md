@@ -295,6 +295,10 @@ Experimental turns it on; the rail stands beside the workspace in
   _Check:_ `columns.mjs --only rail-corner`.
 - [ ] **Under an item's full view the workspace takes no keys**: ⌘B, ⌘0 and
   ⌥⌘S change nothing behind it. _Check:_ `columns.mjs --only rail-view-inert`.
+- [ ] **An item's view opens empty, and a slow load shows only text**: no
+  loader before 3 s; still loading at 3 s, the kit's `LoadingText` sweeps
+  "Loading Files" with no panel or border around it. _Check:_
+  `columns.mjs --only rail-loading`.
 - [ ] **The titlebar's controls never pass under the window's controls while
   the rail opens or closes**: every frame draws them between where they were
   and where they land — still, in the macOS window. _Check:_
@@ -1391,7 +1395,10 @@ says why where the conversations would be.
   of its key, marked Paired; a choice is reported by its full name and shown
   on the row, and nothing scrolls sideways. The tray is the only place a host
   is chosen; the gateway refuses a host its `config.json` does not name, and a
-  paired machine that is not connected.
+  paired machine that is not connected. The fixture owns its viewport height;
+  the same checks measure its height and bottom against the viewport (within
+  1 px), keeping the tray at its foot without scanning test utilities into the
+  production CSS (#929).
 
 ## Restored local tab lifetimes
 

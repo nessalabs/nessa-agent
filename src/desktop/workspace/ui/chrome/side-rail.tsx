@@ -3,7 +3,7 @@
  * listing the workspace and the other places beside it; choosing one gives it the whole
  * window. Each icon has its own small hover gesture (`side-rail.css`).
  */
-import { GeneratingSurface } from "@nessa-ui/react/generating-surface"
+import { LoadingText } from "@nessa-ui/react/loading-text"
 import {
   type CSSProperties,
   type ReactElement,
@@ -235,7 +235,7 @@ export function RailView({ item }: { item: RailItem }) {
   )
 }
 
-/** Nothing, then the design system's loading surface once the load runs long. */
+/** Nothing, then the kit's loading text once the load runs long. */
 function RailLoading({ name }: { name: string }) {
   const [long, setLong] = useState(false)
   useEffect(() => {
@@ -243,11 +243,5 @@ function RailLoading({ name }: { name: string }) {
     return () => window.clearTimeout(timer)
   }, [])
   if (!long) return null
-  return (
-    <GeneratingSurface
-      generating
-      label={`Loading ${name}`}
-      className="rail-view-loading"
-    />
-  )
+  return <LoadingText className="rail-view-loading">{`Loading ${name}`}</LoadingText>
 }

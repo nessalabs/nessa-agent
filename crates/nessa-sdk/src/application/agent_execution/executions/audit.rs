@@ -732,5 +732,14 @@ pub trait ExecutionAudit: Send + Sync {
     /// Errors or bounded adapter timeouts prevent successful audited acknowledgements
     /// but must not prevent necessary cleanup. Delivery observations never establish
     /// provider acknowledgement or tool execution. Record every call in order.
+    ///
+    /// Construction, polling and destruction must not block the runtime thread: caller
+    /// deadlines require cooperative asynchronous progress.
+    /// The caller may drop this observation after a deadline or cancellation.
+    /// Implementations retain ownership of physical I/O already started until it
+    /// finishes, and bound their own retained work. Dropping the returned future
+    /// does not prove that a write was cancelled or rolled back. The SDK does not
+    /// retry an unacknowledged Agent audit record automatically. An adapter must
+    /// report success only at its documented durability boundary.
     fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()>;
 }
