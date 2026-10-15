@@ -25,7 +25,9 @@
 //! SelectReviewNotice owns checked metadata -> current recipient -> Cedar ->
 //! ReviewNoticeAuditor -> ReviewNoticeAudit. Only durable acknowledgement returns
 //! an opaque AuditedReviewSelection. Product owns whole-candidate revalidation
-//! and UI admission; it does not reconstruct policy evidence.
+//! and UI admission; it does not reconstruct policy evidence. Composition closes
+//! the auditor's admission and observes its drain in ShutdownReport; that drain
+//! spans pre-policy selection and independently transferred acknowledgement.
 //! `record_read` admits each physical head or page against fresh authority
 //! before resolving SDK identity or opening a source.
 //! Service -> ConversationFileLinkAudit: a message may also point at files on

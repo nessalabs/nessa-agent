@@ -1,5 +1,7 @@
 use crate::cli::entrypoint::{Command, LocalProvisioning, HELP};
-use crate::conversation::application::{CatalogueReadError, ConversationError, RecordReadError};
+use crate::conversation::application::{
+    CatalogueReadError, ConversationError, RecordReadError, ReviewNoticeAuditor,
+};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use crate::desktop_runtime::{
     application::{restore_retirement, retire},
@@ -674,6 +676,9 @@ async fn cleanup_product(
     deadline: Duration,
 ) {
     product.close_watch_admission();
+    if let Some(auditor) = &product.review_auditor {
+        auditor.close();
+    }
     // A stored MCP server change or inspection admitted from here on would
     // outlive the drain before the servers stop; and the inspections under
     // way are stopped now, not after the conversations drain
@@ -681,6 +686,7 @@ async fn cleanup_product(
     product.close_mcp_server_admission();
     passive_cleanup(
         slot,
+        product.review_auditor.as_deref(),
         product.drain_watches(),
         record,
         catalogue,
@@ -702,6 +708,7 @@ async fn cleanup_product(
 #[allow(clippy::too_many_arguments)]
 async fn passive_cleanup(
     slot: &ReportSlot,
+    review_auditor: Option<&ReviewNoticeAuditor>,
     watches: impl Future<Output = Result<(), WatchTaskFault>>,
     record: impl Future<Output = Result<(), RecordReadError>>,
     catalogue: impl Future<Output = Result<(), CatalogueReadError>>,
@@ -711,22 +718,30 @@ async fn passive_cleanup(
     deadline: Duration,
 ) {
     *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(ShutdownReport::default());
-    tokio::pin!(record, catalogue, watches);
+    let review_audit = async {
+        match review_auditor {
+            Some(auditor) => auditor.drain().await,
+            None => Ok(()),
+        }
+    };
+    tokio::pin!(record, catalogue, watches, review_audit);
     let timeout = tokio::time::sleep(deadline);
     tokio::pin!(timeout);
     // One deadline covers every drain: it stays armed while any is pending and
     // fires once, recording evidence only against the drains still pending.
     let mut deadline_passed = false;
     loop {
-        let (record_pending, catalogue_pending, watch_pending) = read_report(slot, |report| {
-            (
-                !report.readers().record().is_known(),
-                !report.readers().catalogue().is_known(),
-                !report.watches().outcome().is_known(),
-            )
-        });
+        let (record_pending, catalogue_pending, watch_pending, audit_pending) =
+            read_report(slot, |report| {
+                (
+                    !report.readers().record().is_known(),
+                    !report.readers().catalogue().is_known(),
+                    !report.watches().outcome().is_known(),
+                    !report.review_audit().is_known(),
+                )
+            });
         let deadline_pending = !deadline_passed;
-        if !record_pending && !catalogue_pending && !watch_pending {
+        if !record_pending && !catalogue_pending && !watch_pending && !audit_pending {
             break;
         }
         // Ready completions win over a simultaneous deadline, including zero.
@@ -736,9 +751,16 @@ async fn passive_cleanup(
             result = &mut record, if record_pending => update_report(slot, |report| report.observe_record(result)),
             result = &mut catalogue, if catalogue_pending => update_report(slot, |report| report.observe_catalogue(result)),
             result = &mut watches, if watch_pending => update_report(slot, |report| report.observe_watches(result)),
+            result = &mut review_audit, if audit_pending => update_report(slot, |report| report.observe_review_audit(result)),
             _ = &mut timeout, if deadline_pending => {
                 deadline_passed = true;
-                update_report(slot, ShutdownReport::observe_drain_deadline);
+                update_report(slot, |report| {
+                    report.observe_drain_deadline();
+                    if audit_pending {
+                        let failure = review_auditor.expect("pending audit has an owner").expire();
+                        report.observe_review_audit(Err(failure));
+                    }
+                });
             }
         }
     }
@@ -882,6 +904,7 @@ mod tests {
         report.observe_record(Ok(()));
         report.observe_catalogue(Ok(()));
         report.observe_watches(Ok(()));
+        report.observe_review_audit(Ok(()));
         report.observe_conversations(conversations);
         report.observe_servers(Ok(()));
         report.observe_native(Ok(()));
@@ -907,6 +930,7 @@ mod tests {
             };
             passive_cleanup(
                 &task_report,
+                None,
                 std::future::ready(Ok(())),
                 async { Ok(()) },
                 async { Ok(()) },
@@ -1013,6 +1037,7 @@ mod tests {
                 let task = tokio::spawn(async move {
                     passive_cleanup(
                         &task_report,
+                        None,
                         std::future::ready(Ok(())),
                         async {
                             if reader_failure {
@@ -1049,6 +1074,7 @@ mod tests {
                 {
                     let stop = passive_cleanup(
                         &report,
+                        None,
                         std::future::ready(Ok(())),
                         async {
                             if reader_failure {
@@ -1127,6 +1153,7 @@ mod tests {
             async move {
                 passive_cleanup(
                     &slot,
+                    None,
                     std::future::ready(Ok(())),
                     async {
                         started.notify_one();
@@ -1183,6 +1210,7 @@ mod tests {
             serve_with_cleanup(listener, Router::new(), async {}, async move {
                 passive_cleanup(
                     &slot,
+                    None,
                     std::future::ready(Ok(())),
                     async { Ok(()) },
                     async { Ok(()) },
@@ -1297,6 +1325,7 @@ mod tests {
                     let cleaned = AtomicBool::new(false);
                     passive_cleanup(
                         &report,
+                        None,
                         std::future::ready(Ok(())),
                         std::future::ready(record),
                         std::future::ready(catalogue.clone()),
@@ -1356,6 +1385,7 @@ mod tests {
         let task = tokio::spawn(async move {
             passive_cleanup(
                 &output,
+                None,
                 std::future::ready(Ok(())),
                 std::future::ready(Err(RecordReadError::WorkerPanicked)),
                 async {
@@ -1407,6 +1437,7 @@ mod tests {
                 {
                     let stop = passive_cleanup(
                         &report,
+                        None,
                         std::future::ready(Ok(())),
                         std::future::ready(result),
                         std::future::pending(),
@@ -1455,6 +1486,7 @@ mod tests {
             {
                 let stop = passive_cleanup(
                     &report,
+                    None,
                     std::future::ready(Ok(())),
                     std::future::pending(),
                     std::future::pending(),
@@ -1497,6 +1529,7 @@ mod tests {
             {
                 let stop = passive_cleanup(
                     &report,
+                    None,
                     std::future::ready(Ok(())),
                     std::future::ready(result),
                     std::future::ready(Ok(())),
@@ -1530,6 +1563,7 @@ mod tests {
         let report = confirmed_slot();
         passive_cleanup(
             &report,
+            None,
             std::future::ready(Ok(())),
             async {
                 tokio::time::sleep(Duration::from_secs(31)).await;
@@ -1559,6 +1593,7 @@ mod tests {
         {
             let stop = passive_cleanup(
                 &report,
+                None,
                 std::future::ready(Ok(())),
                 std::future::ready(Ok(())),
                 async {
@@ -1605,6 +1640,7 @@ mod tests {
         let report = confirmed_slot();
         passive_cleanup(
             &report,
+            None,
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
@@ -1736,6 +1772,7 @@ mod tests {
         native_report.observe_record(Ok(()));
         native_report.observe_catalogue(Ok(()));
         native_report.observe_watches(Ok(()));
+        native_report.observe_review_audit(Ok(()));
         native_report.observe_conversations(Ok(()));
         native_report.observe_servers(Ok(()));
         native_report.observe_native(Err(native));
@@ -1784,6 +1821,7 @@ mod tests {
         let confirmed = Mutex::new(None);
         passive_cleanup(
             &confirmed,
+            None,
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
@@ -1798,6 +1836,7 @@ mod tests {
         let failed = confirmed_slot();
         passive_cleanup(
             &failed,
+            None,
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
@@ -1845,6 +1884,7 @@ mod tests {
             let servers_stopped = AtomicBool::new(false);
             passive_cleanup(
                 &report,
+                None,
                 std::future::ready(Ok(())),
                 std::future::ready(Ok(())),
                 std::future::ready(Ok(())),
@@ -1880,6 +1920,7 @@ mod tests {
         let report = Mutex::new(None);
         passive_cleanup(
             &report,
+            None,
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
@@ -1900,6 +1941,7 @@ mod tests {
         {
             let stop = passive_cleanup(
                 &report,
+                None,
                 std::future::ready(Ok(())),
                 std::future::ready(Ok(())),
                 std::future::ready(Ok(())),
@@ -1933,6 +1975,7 @@ mod tests {
         let report = Mutex::new(None);
         passive_cleanup(
             &report,
+            None,
             std::future::ready(Err(WatchTaskFault::Panic)),
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
@@ -2029,3 +2072,7 @@ mod watch_shutdown_tests;
 #[cfg(all(test, unix))]
 #[path = "../../tests/composition/mcp_shutdown.rs"]
 mod mcp_shutdown_tests;
+
+#[cfg(test)]
+#[path = "../../tests/composition/review_notice_shutdown.rs"]
+mod review_notice_shutdown_tests;

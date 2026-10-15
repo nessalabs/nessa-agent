@@ -125,6 +125,7 @@ pub struct ProductRouteState {
     /// Checked metadata dependency for review notices; composed with passive reads.
     pub(crate) review_metadata: Option<ConversationMetadataReader>,
     /// Admitted policy evidence outlives its publisher and precedes UI disclosure.
+    /// Host cleanup fences this shared owner and observes its admitted selections.
     pub(crate) review_auditor: Option<Arc<ReviewNoticeAuditor>>,
     /// What decides a paired party's access to a conversation or a
     /// catalogue; set with `passive_read`.

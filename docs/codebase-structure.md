@@ -728,9 +728,15 @@ platform supports it. On Windows it does not establish directory-entry
 durability or survival of arbitrary power loss; the platform boundary is owned
 by [local storage](../crates/nessa-local-storage/README.md). The worker retains the physical write
 and its admission slot when an async observer disappears; an observation timeout
-does not assert rollback or retry the write. Runtime/process shutdown can still
-interrupt delivery, and no claim of crash recovery of an unacknowledged record is
-made. Composition supplies one shared auditor and adapter for all sockets.
+does not assert rollback or retry the write. Composition closes the shared
+application auditor before polling cleanup and observes all admitted selections
+under the existing shutdown deadline. A successful audit drain requires every
+transferred decision to be acknowledged and every pre-decision admission to end.
+The first failure, a lost transferred task, or the shared deadline keeps shutdown
+unconfirmed, including when later work succeeds. Abrupt runtime/process loss can
+still interrupt delivery; no crash replay of an unacknowledged record is claimed.
+The [shutdown order table](design/authorized-record-reads.md#review-notice-audit-shutdown-ownership)
+owns those cases. Composition supplies one shared auditor and adapter for all sockets.
 Paired readers retain their existing `conversation.read` grant policy path; this
 audit boundary concerns the new unpaired `review.notice` decision.
 
@@ -2061,11 +2067,15 @@ Tests mirror those owners under `nessa-sdk/tests/infrastructure/session_storage/
 
 Watch shutdown is part of normal host cleanup in `composition/root.rs`: after native
 pairing is signalled to stop, it closes
-`ProductRouteState` watch admission before polling the reader and watch drains,
-then carries their outcomes through conversation/storage, MCP and the native join
+`ProductRouteState` watch and review-notice audit admission before polling the
+reader, watch, and review-audit drains under one shared deadline. Audit deadline
+observation records an unconfirmed result without claiming physical release;
+reader/watch drains retain their existing physical joins. Composition then
+carries their outcomes through conversation/storage, MCP and the native join
 in the same `ShutdownReport` (one `Outcome` per cleanup owner and a derived
 stage, in `core/shutdown.rs`). Interleaving tests are
-`tests/composition/watch_shutdown.rs`, using the watch fixture in
+`tests/composition/watch_shutdown.rs` and `tests/composition/review_notice_shutdown.rs`,
+using the watch fixture in
 `tests/product/socket/watches.rs`; the MCP stage through the same cleanup —
 `composition/mcp_servers.rs::stop` draining stored-server changes before the
 servers stop — in `tests/composition/mcp_shutdown.rs`. The separate-process replay-to-live tests, with

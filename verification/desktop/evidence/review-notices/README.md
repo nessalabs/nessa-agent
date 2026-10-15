@@ -60,7 +60,7 @@ final independent review are recorded on the PR against their actual source.
 
 The structural regression holds an allow acknowledgement while current authority
 or shared state changes, then requires a new coherent candidate before admission.
-Independent owned audit work outlives publisher loss; its capacity and observation
+Independently owned audit work outlives publisher loss; its capacity and observation
 deadlines do not claim to bound physical writes or an already-admitted UI response.
 A real full control queue formerly lost the fatal close: the regression failed
 before the owner supervised the publisher and passes with owner/input termination

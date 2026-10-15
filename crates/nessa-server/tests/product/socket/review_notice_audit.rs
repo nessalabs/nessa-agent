@@ -1360,3 +1360,264 @@ async fn review_notice_publisher_panic_ends_connection() {
         .unwrap();
     assert!(peer.input.is_closed());
 }
+
+#[tokio::test]
+async fn review_notice_shutdown_distinguishes_predecision_cancellation_from_transferred_work() {
+    let audit = Arc::new(RecordingReviewNoticeAudit::default());
+    let mut fixture = ReviewFixture::new(audit.clone(), Arc::new(ManualAuditClock::default()));
+    let policy = Arc::new(ObservedPolicy::default());
+    fixture.state.conversation_access = Some(policy.clone());
+    let auditor = fixture.state.review_auditor.as_ref().unwrap().clone();
+    let (entered, metadata_read) = oneshot::channel();
+    let (_release, gate) = oneshot::channel();
+    *fixture.repository.metadata_load_gate.lock().unwrap() = Some((entered, gate));
+    let (publisher, _frames, _authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
+    timeout(Duration::from_secs(2), metadata_read)
+        .await
+        .unwrap()
+        .unwrap();
+    auditor.close();
+    assert!(auditor.admit().await.is_err());
+    let mut drain = Box::pin(auditor.drain());
+    assert!(futures_util::poll!(drain.as_mut()).is_pending());
+    publisher.abort();
+    assert!(publisher.await.unwrap_err().is_cancelled());
+    assert_eq!(
+        timeout(Duration::from_secs(2), drain).await.unwrap(),
+        Ok(())
+    );
+    assert_eq!(policy.asked(), 0);
+    assert!(audit.records.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn review_notice_shutdown_joins_transferred_decisions_after_publisher_loss() {
+    for result in [Ok(()), Err(ReviewNoticeAuditFailure::Unavailable)] {
+        let (audit, acknowledge) = GatedAudit::one();
+        let fixture = ReviewFixture::new(audit.clone(), Arc::new(ManualAuditClock::default()));
+        let auditor = fixture.state.review_auditor.as_ref().unwrap().clone();
+        let (publisher, _frames, _authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
+        audit.captured().await;
+        publisher.abort();
+        assert!(publisher.await.unwrap_err().is_cancelled());
+        auditor.close();
+        let mut drain = Box::pin(auditor.drain());
+        assert!(futures_util::poll!(drain.as_mut()).is_pending());
+        acknowledge.send(result).unwrap();
+        assert_eq!(
+            timeout(Duration::from_secs(2), drain).await.unwrap(),
+            result
+        );
+        assert_eq!(auditor.drain().await, result);
+    }
+}
+
+#[tokio::test]
+async fn review_notice_shutdown_retains_lost_transferred_task() {
+    let audit = Arc::new(RecordingReviewNoticeAudit::default());
+    let fixture = ReviewFixture::new(audit.clone(), Arc::new(ManualAuditClock::default()));
+    notice_snapshot(
+        fixture.board.clone(),
+        fixture.state.clone(),
+        authenticate(&fixture.state).await,
+    )
+    .await;
+    let record = audit.records.lock().unwrap()[0].clone();
+    let auditor = Arc::new(ReviewNoticeAuditor::new(
+        audit,
+        Arc::new(ManualAuditClock::default()),
+    ));
+    let admitted = auditor.admit().await.unwrap();
+    // A runtime that is never polled drops the transferred owner before its
+    // first instruction. There is no task left that could publish its result.
+    let observer = tokio::task::spawn_blocking(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let entered = runtime.enter();
+        let observer = admitted.record(record);
+        drop(entered);
+        drop(runtime);
+        observer
+    })
+    .await
+    .unwrap();
+    assert_eq!(observer.await, Err(ReviewNoticeAuditFailure::Unavailable));
+    auditor.close();
+    assert_eq!(
+        auditor.drain().await,
+        Err(ReviewNoticeAuditFailure::Unavailable)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_notice_shutdown_joins_physical_write_and_queued_selection() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("review-audit");
+    let physical_clock = Arc::new(PhysicalClock::held());
+    let _release = ReleasePhysical(physical_clock.clone());
+    let audit = Arc::new(ObservedAdapter {
+        audit: DurableReviewNoticeAudit::new(
+            path.clone(),
+            physical_clock.clone(),
+            Uuid::from_u128(5),
+        )
+        .unwrap(),
+        started: Semaphore::new(0),
+        dropped: Arc::new(Semaphore::new(0)),
+    });
+    let fixture = ReviewFixture::new(audit.clone(), Arc::new(ManualAuditClock::default()));
+    let auditor = fixture.state.review_auditor.as_ref().unwrap().clone();
+    let (first, _first_frames, _first_authority) =
+        fixture.publish(Arc::new(Semaphore::new(1))).await;
+    timeout(Duration::from_secs(2), physical_clock.entered.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    audit.started.acquire().await.unwrap().forget();
+    let (second, _second_frames, _second_authority) =
+        fixture.publish(Arc::new(Semaphore::new(1))).await;
+    timeout(Duration::from_secs(2), audit.started.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    assert_eq!(physical_clock.calls.load(Ordering::SeqCst), 1);
+    first.abort();
+    second.abort();
+    assert!(first.await.unwrap_err().is_cancelled());
+    assert!(second.await.unwrap_err().is_cancelled());
+    auditor.close();
+    let mut drain = Box::pin(auditor.drain());
+    assert!(futures_util::poll!(drain.as_mut()).is_pending());
+    assert!(stored(&path).is_empty());
+    physical_clock.release();
+    assert_eq!(
+        timeout(Duration::from_secs(2), drain).await.unwrap(),
+        Ok(())
+    );
+    assert_eq!(stored(&path).len(), 2);
+}
+
+#[tokio::test]
+async fn review_notice_shutdown_retains_first_delivery_failure() {
+    for first_failure in [
+        ReviewNoticeAuditFailure::Unavailable,
+        ReviewNoticeAuditFailure::TimedOut,
+    ] {
+        let (audit, acknowledge) = GatedAudit::one();
+        let fixture = ReviewFixture::new(audit.clone(), Arc::new(ManualAuditClock::default()));
+        let auditor = fixture.state.review_auditor.as_ref().unwrap().clone();
+        let (first, _frames, _authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
+        audit.captured().await;
+        acknowledge.send(Err(first_failure)).unwrap();
+        assert_eq!(
+            first.await.unwrap(),
+            Err(ReviewNoticePublicationFailure::Audit(first_failure))
+        );
+        let (second, mut frames, authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
+        assert!(timeout(Duration::from_secs(2), frames.recv())
+            .await
+            .unwrap()
+            .is_some());
+        drop(authority);
+        second.await.unwrap().unwrap();
+        auditor.close();
+        assert_eq!(auditor.drain().await, Err(first_failure));
+        assert_eq!(auditor.expire(), first_failure);
+    }
+    for invocation in [true, false] {
+        let fixture = ReviewFixture::new(
+            Arc::new(PanickingAudit(invocation)),
+            Arc::new(ManualAuditClock::default()),
+        );
+        let auditor = fixture.state.review_auditor.as_ref().unwrap().clone();
+        let (publisher, _frames, _authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
+        assert_eq!(
+            publisher.await.unwrap(),
+            Err(ReviewNoticePublicationFailure::Audit(
+                ReviewNoticeAuditFailure::Panicked
+            ))
+        );
+        auditor.close();
+        assert_eq!(
+            auditor.drain().await,
+            Err(ReviewNoticeAuditFailure::Panicked)
+        );
+        assert_eq!(auditor.expire(), ReviewNoticeAuditFailure::Panicked);
+    }
+}
+
+#[tokio::test]
+async fn review_notice_shutdown_deadline_retains_first_failure() {
+    for earlier_failure in [None, Some(ReviewNoticeAuditFailure::Unavailable)] {
+        let (audit, acknowledge) = GatedAudit::one();
+        let fixture = ReviewFixture::new(audit.clone(), Arc::new(ManualAuditClock::default()));
+        let auditor = fixture.state.review_auditor.as_ref().unwrap().clone();
+        let (first, _frames, _authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
+        audit.captured().await;
+        let (last, last_acknowledgement) = if let Some(failure) = earlier_failure {
+            acknowledge.send(Err(failure)).unwrap();
+            assert_eq!(
+                first.await.unwrap(),
+                Err(ReviewNoticePublicationFailure::Audit(failure))
+            );
+            let (send, receive) = oneshot::channel();
+            audit.releases.lock().unwrap().push_back(receive);
+            let (last, _frames, _authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
+            audit.captured().await;
+            (last, send)
+        } else {
+            (first, acknowledge)
+        };
+        auditor.close();
+        let mut drain = Box::pin(auditor.drain());
+        assert!(futures_util::poll!(drain.as_mut()).is_pending());
+        let expected = earlier_failure.unwrap_or(ReviewNoticeAuditFailure::TimedOut);
+        assert_eq!(auditor.expire(), expected);
+        last_acknowledgement
+            .send(Err(ReviewNoticeAuditFailure::Panicked))
+            .unwrap();
+        assert_eq!(
+            last.await.unwrap(),
+            Err(ReviewNoticePublicationFailure::Audit(
+                ReviewNoticeAuditFailure::Panicked
+            ))
+        );
+        assert_eq!(
+            timeout(Duration::from_secs(2), drain).await.unwrap(),
+            Err(expected)
+        );
+        assert_eq!(auditor.drain().await, Err(expected));
+    }
+}
+
+#[tokio::test]
+async fn review_notice_shutdown_wakes_capacity_waiters_and_joins_admissions() {
+    let fixture = ReviewFixture::new(
+        Arc::new(RecordingReviewNoticeAudit::default()),
+        Arc::new(ManualAuditClock::default()),
+    );
+    let auditor = fixture.state.review_auditor.as_ref().unwrap();
+    let mut admissions = Vec::new();
+    for _ in 0..32 {
+        admissions.push(auditor.admit().await.unwrap());
+    }
+    let mut waiting = Box::pin(auditor.admit());
+    assert!(futures_util::poll!(waiting.as_mut()).is_pending());
+    auditor.close();
+    assert!(matches!(
+        timeout(Duration::from_secs(2), waiting)
+            .await
+            .expect("closing admission must wake a capacity waiter"),
+        Err(ReviewNoticeAuditFailure::Unavailable)
+    ));
+    let mut drain = Box::pin(auditor.drain());
+    assert!(futures_util::poll!(drain.as_mut()).is_pending());
+    drop(admissions);
+    assert_eq!(
+        timeout(Duration::from_secs(2), drain).await.unwrap(),
+        Ok(())
+    );
+}

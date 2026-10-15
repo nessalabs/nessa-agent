@@ -3,7 +3,9 @@
 //! Admission bounds owned attempts across sockets. After Cedar answers, `record`
 //! transfers the complete selection to an independent task synchronously. A
 //! publisher may disappear without cancelling that attempt. Its observer has a
-//! deadline; physical persistence remains the adapter's responsibility.
+//! deadline; physical persistence remains the adapter's responsibility. Host
+//! shutdown closes admission and observes every admitted selection, retaining the
+//! first unacknowledged failure instead of inferring success from task absence.
 use super::AccessDecision;
 use crate::conversation::domain::Conversation;
 use futures_util::FutureExt;
@@ -13,8 +15,13 @@ use nessa_auth::{
 };
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::agent_execution::{executions::ExecutionId, permissions::PermissionId};
-use std::{future::Future, panic::AssertUnwindSafe, pin::Pin, sync::Arc};
-use tokio::sync::{oneshot, OwnedSemaphorePermit, Semaphore};
+use std::{
+    future::Future,
+    panic::AssertUnwindSafe,
+    pin::Pin,
+    sync::{Arc, Mutex, PoisonError},
+};
+use tokio::sync::{oneshot, Notify, OwnedSemaphorePermit, Semaphore};
 
 /// Thirty-two admitted attempts bound retained tasks across the gateway,
 /// including lost publishers. Each publisher selects its reviews sequentially.
@@ -125,9 +132,9 @@ impl ReviewNoticeAuditRecord {
 /// prove that a physical write was absent or rolled back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReviewNoticeAuditFailure {
-    /// No adapter, closed admission, or failed persistence.
+    /// No adapter, closed admission, failed persistence, or a lost delivery task.
     Unavailable,
-    /// The injected clock's delivery budget passed.
+    /// An admission/acknowledgement budget or the shared host deadline passed.
     TimedOut,
     /// The sink or delivery clock panicked.
     Panicked,
@@ -163,6 +170,7 @@ pub struct ReviewNoticeAuditor {
     audit: Arc<dyn ReviewNoticeAudit>,
     clock: Arc<dyn ReviewNoticeClock>,
     attempts: Arc<Semaphore>,
+    pending: Arc<PendingAudits>,
 }
 
 impl ReviewNoticeAuditor {
@@ -172,6 +180,7 @@ impl ReviewNoticeAuditor {
             audit,
             clock,
             attempts: Arc::new(Semaphore::new(MAX_ATTEMPTS)),
+            pending: Arc::new(PendingAudits::default()),
         }
     }
 
@@ -186,13 +195,71 @@ impl ReviewNoticeAuditor {
                 permit = self.attempts.clone().acquire_owned() => permit.map_err(|_| ReviewNoticeAuditFailure::Unavailable)?,
                 () = self.clock.sleep_until(deadline) => return Err(ReviewNoticeAuditFailure::TimedOut),
             };
+            let mut state = self
+                .pending
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if state.closed {
+                return Err(ReviewNoticeAuditFailure::Unavailable);
+            }
+            state.active += 1;
             Ok(ReviewNoticeAuditAdmission {
                 audit: self.audit.clone(),
                 clock: self.clock.clone(),
-                permit,
+                attempt: PendingAudit {
+                    pending: self.pending.clone(),
+                    unacknowledged: false,
+                    _permit: permit,
+                },
             })
         };
         contain_failure(attempt).await
+    }
+    /// Fence new selections before composition polls any cleanup owner.
+    pub(crate) fn close(&self) {
+        self.pending
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .closed = true;
+        self.attempts.close();
+        self.pending.changed.notify_waiters();
+    }
+
+    /// Observe all admitted selections, including those still before policy.
+    /// Composition closes admission first; only acknowledged decisions and
+    /// abandoned pre-decision admissions can establish a successful drain.
+    pub(crate) async fn drain(&self) -> Result<(), ReviewNoticeAuditFailure> {
+        loop {
+            let changed = self.pending.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            {
+                let state = self
+                    .pending
+                    .state
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                if state.closed && state.active == 0 {
+                    return state.failure.map_or(Ok(()), Err);
+                }
+            }
+            changed.await;
+        }
+    }
+
+    /// The shared host deadline cannot acknowledge remaining work. Retain the
+    /// earliest failure so later task completion cannot fabricate success.
+    pub(crate) fn expire(&self) -> ReviewNoticeAuditFailure {
+        let mut state = self
+            .pending
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        *state
+            .failure
+            .get_or_insert(ReviewNoticeAuditFailure::TimedOut)
     }
 }
 
@@ -200,19 +267,21 @@ impl ReviewNoticeAuditor {
 pub(crate) struct ReviewNoticeAuditAdmission {
     audit: Arc<dyn ReviewNoticeAudit>,
     clock: Arc<dyn ReviewNoticeClock>,
-    permit: OwnedSemaphorePermit,
+    attempt: PendingAudit,
 }
 
 impl ReviewNoticeAuditAdmission {
     /// Synchronously transfer the admitted evidence before the next await. The
     /// returned future only observes the task; its cancellation cannot abort it.
     pub(crate) fn record(
-        self,
+        mut self,
         record: Arc<ReviewNoticeAuditRecord>,
     ) -> impl Future<Output = Result<(), ReviewNoticeAuditFailure>> + Send {
         let (send, receive) = oneshot::channel();
+        // Mark transfer before spawn: even a task dropped before its first poll
+        // must leave unacknowledged evidence in the gateway's drain.
+        self.attempt.unacknowledged = true;
         tokio::spawn(async move {
-            let _permit = self.permit;
             let attempt = async {
                 let deadline = self.clock.now().saturating_add(ATTEMPT_BUDGET_MS);
                 tokio::select! { biased;
@@ -221,6 +290,7 @@ impl ReviewNoticeAuditAdmission {
                 }
             };
             let result = contain_failure(attempt).await;
+            self.attempt.finish(result);
             if let Err(failure) = result {
                 tracing::error!(?failure, "review-notice policy audit was not acknowledged");
             }
@@ -232,6 +302,59 @@ impl ReviewNoticeAuditAdmission {
                 .await
                 .unwrap_or(Err(ReviewNoticeAuditFailure::Unavailable))
         }
+    }
+}
+
+#[derive(Default)]
+struct PendingAudits {
+    state: Mutex<PendingAuditState>,
+    changed: Notify,
+}
+
+#[derive(Default)]
+struct PendingAuditState {
+    closed: bool,
+    active: usize,
+    failure: Option<ReviewNoticeAuditFailure>,
+}
+
+// The admission itself owns registration until either pre-decision abandonment
+// or transferred delivery completes. A lost transferred task is a failure even
+// when no task remains to report one. No policy fact is invented before transfer.
+struct PendingAudit {
+    pending: Arc<PendingAudits>,
+    unacknowledged: bool,
+    _permit: OwnedSemaphorePermit,
+}
+impl PendingAudit {
+    fn finish(mut self, result: Result<(), ReviewNoticeAuditFailure>) {
+        if let Err(failure) = result {
+            self.pending
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .failure
+                .get_or_insert(failure);
+        }
+        self.unacknowledged = false;
+    }
+}
+impl Drop for PendingAudit {
+    fn drop(&mut self) {
+        {
+            let mut state = self
+                .pending
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if self.unacknowledged {
+                state
+                    .failure
+                    .get_or_insert(ReviewNoticeAuditFailure::Unavailable);
+            }
+            state.active -= 1;
+        }
+        self.pending.changed.notify_waiters();
     }
 }
 
