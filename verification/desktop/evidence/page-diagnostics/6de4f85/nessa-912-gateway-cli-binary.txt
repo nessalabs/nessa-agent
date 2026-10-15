@@ -1,0 +1,2 @@
+4f0b5b28e99315b1c2bef2876abfc29b085f44737f1dd141b1cca65c3fd41521  /Users/nessa/.codex/worktrees/main-app-build/nessa-agent/target/release/bundle/macos/Nessa.app/Contents/Resources/runtime/nessa
+4f0b5b28e99315b1c2bef2876abfc29b085f44737f1dd141b1cca65c3fd41521  /tmp/nessa-912-owned-bin/gateway

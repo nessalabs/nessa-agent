@@ -1,0 +1,126 @@
+{
+  "base": "6c23dfa0f289f57c870610b4c8321658c37a23db",
+  "head": "6de4f85c91ea50cf90eebb4e203d507d7ab692d9",
+  "source_clean_for_positive_runs": true,
+  "full_functional": {
+    "programs": 32,
+    "held": 1298,
+    "total": 1298,
+    "declared_message_sync_dev_only_skips": 4
+  },
+  "additional": {
+    "non_admin": 5,
+    "provider_sign_in": 21,
+    "bounded_workspace_identity": 3,
+    "restored_clock": 5,
+    "helper_tests": 193
+  },
+  "actual_console_controls": [
+    {
+      "record": "nessa-912-r2-final-console.json",
+      "injected_events": 4,
+      "reported_failures": 4,
+      "exit": 1
+    },
+    {
+      "record": "nessa-912-r2-final-identical.json",
+      "injected_events": 8,
+      "reported_failures": 8,
+      "exit": 1
+    }
+  ],
+  "probe_dirty_scope": "Captured injection diffs. Seven generated Settings PNG outputs also differed after the clean-source matrix; their binary-only diffs are retained in final-console.diff. They are output artifacts, not loaded runtime inputs. All were restored before final positive checks.",
+  "exclusions": [
+    "No performance claim",
+    "No live-agent Done-when path",
+    "Static any/unknown and arbitrary dynamic programs excluded",
+    "Existing o.lines width behavior unchanged",
+    "Independent 906/913 fix neither bundled nor negated by this green MCP batch"
+  ],
+  "files": {
+    "nessa-912-r2-functional32.json": {
+      "bytes": 1862872,
+      "sha256": "c07e1f45c21d4fcce92b3eda14780a30f0153fb2625ded6509d623c667010004"
+    },
+    "nessa-912-r2-functional32.log": {
+      "bytes": 76923,
+      "sha256": "562ced5a02856ac783254a6d3fdb71ef533dc014d7df34323fa0d34ed848c8e3"
+    },
+    "nessa-912-r2-non-admin.json": {
+      "bytes": 1791,
+      "sha256": "fa03ba7b66c1f95c77746399d863b44ae506614c61a66537d3a0a19b34c26ae4"
+    },
+    "nessa-912-r2-non-admin.log": {
+      "bytes": 330,
+      "sha256": "0adf7c44a6945a45dcfced38db7867170f00f4f7948d0c0ecd9a7b7d066175b6"
+    },
+    "nessa-912-r2-provider-sign-in.json": {
+      "bytes": 7367,
+      "sha256": "125f48a143bdd7ad446d2ee0fe1a7ce69a2b17b2b782955f194aeda645621975"
+    },
+    "nessa-912-r2-provider-sign-in.log": {
+      "bytes": 896,
+      "sha256": "6726ba23f39908c817891034904f1a1c2c572549addbe316b16abb014deccb54"
+    },
+    "nessa-912-r2-workspace-identity.json": {
+      "bytes": 3032,
+      "sha256": "50a47925500b2bd932b3f7f4158f8ad65f22735859bc5e0d14f0de78d7e11fcb"
+    },
+    "nessa-912-r2-workspace-identity.log": {
+      "bytes": 172,
+      "sha256": "645bad3a86d9589bdf907b280f701363013269d8428b4b80498a9505cb4af800"
+    },
+    "nessa-912-r2-final-console.json": {
+      "bytes": 3161,
+      "sha256": "9fcc146e708794f446ac9c479e89c67ad591aa7ebe4ae3aa30ad97aed9b0ca47"
+    },
+    "nessa-912-r2-final-console.log": {
+      "bytes": 653,
+      "sha256": "a59feda9a05897c5d43c83fe6cc9bcfe3f30ec498ef6ba43b34bee63df95dca4"
+    },
+    "nessa-912-r2-final-identical.json": {
+      "bytes": 3467,
+      "sha256": "c6b2c40fe1105de06962facc00b5d27a4f2a84be2c8ba01ed71d9a260317d7b1"
+    },
+    "nessa-912-r2-final-identical.log": {
+      "bytes": 957,
+      "sha256": "b87dfa6e65e4948ce975dcff497f24c1fbcacf63270e2871ff4af5b526ef0884"
+    },
+    "nessa-912-r2-restored-clock.json": {
+      "bytes": 2434,
+      "sha256": "784f362d429396b1bfff501d02f632e82492ac737a4df52f817e2133606b51d7"
+    },
+    "nessa-912-r2-restored-clock.log": {
+      "bytes": 257,
+      "sha256": "cb83d80b01bd2ed1d1bff77124482739beef6c44d31435d4eff358690c3ae003"
+    },
+    "nessa-912-r2-final-console.diff": {
+      "bytes": 3481,
+      "sha256": "d072bdeba4d74b5d68fd503c936ac5ef48c1ad73e392d8733e77daaf213e4acc"
+    },
+    "nessa-912-r2-final-identical.diff": {
+      "bytes": 649,
+      "sha256": "881f317ef2434b9bddd9c4c061168fb0042b819b40f81a141555cabbe6b30959"
+    },
+    "nessa-912-r2-restored-helpers.log": {
+      "bytes": 19735,
+      "sha256": "ee61d0ce13aacf43cbda913f4e0dae7081c3ba5240e7dd8fc6039294dd267187"
+    },
+    "nessa-912-r2-restored-lint.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "nessa-912-r2-restored-format.log": {
+      "bytes": 66,
+      "sha256": "17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20"
+    },
+    "nessa-912-gateway-cli-binary.txt": {
+      "bytes": 293,
+      "sha256": "3c78e21e6b70f18083fbd20955ae19464e9bc7199958bc81a490617764e0a3be"
+    },
+    "nessa-912-checks-final-stage.json": {
+      "bytes": 35621,
+      "sha256": "7cbe47baf238033f385a9d3cae87f9ef6e0606ecd64b839b6ad71312934c4af2"
+    }
+  }
+}

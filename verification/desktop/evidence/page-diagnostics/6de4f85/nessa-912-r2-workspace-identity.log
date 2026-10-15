@@ -1,0 +1,5 @@
+ok    identity [chromium columns]
+ok    console [chromium columns]
+ok    identity [webkit columns]
+wrote /tmp/nessa-912-r2-workspace-identity.json
+workspace-load: 3/3 held

@@ -1,0 +1,11 @@
+starting a dev server of its own on port 52078…
+warmed 1164 modules in 1568 ms
+ok    setup
+ok    console [chromium columns]
+ok    non-admin [chromium columns]
+ok    console [chromium columns]
+chromium: 6190 ms
+ok    non-admin [webkit columns]
+webkit: 6528 ms
+wrote /tmp/nessa-912-r2-non-admin.json
+mcp-servers-gateway: 5/5 held

@@ -1,0 +1,112 @@
+{
+  "check": "workspace-load",
+  "ok": true,
+  "started": "2026-10-15T03:24:07.831Z",
+  "finished": "2026-10-15T03:24:11.211Z",
+  "target": {
+    "url": "http://127.0.0.1:1497/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "identity",
+      "loadMs": 1212,
+      "commit": "6de4f85c91ea50cf90eebb4e203d507d7ab692d9",
+      "node": "v26.8.1",
+      "browser": "155.0.8059.41",
+      "uiRevision": "http://127.0.0.1:1497/src/desktop/seeded-window.ts",
+      "report": {
+        "generator": "seeded-workspace",
+        "algorithm": "mulberry32",
+        "seed": 590,
+        "now": 1700000000000,
+        "sessions": 100,
+        "channels": 4,
+        "longTranscripts": 1,
+        "messages": 2,
+        "maxTitleCharacters": 48,
+        "maxPreviewUtf8Bytes": 100,
+        "longPlainTextCharacters": 100,
+        "longTranscriptUtf8Bytes": 246,
+        "statusCounts": {
+          "idle": 68,
+          "running": 23,
+          "needsYou": 9
+        },
+        "largestChannelSessions": 25,
+        "channelSessions": {
+          "load-desktop": 25,
+          "load-release": 25,
+          "load-reading": 25,
+          "load-home": 25
+        },
+        "channelNames": {
+          "load-desktop": "desktop",
+          "load-release": "release",
+          "load-reading": "reading",
+          "load-home": "home"
+        }
+      },
+      "listCalls": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1497/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "identity",
+      "loadMs": 1318,
+      "commit": "6de4f85c91ea50cf90eebb4e203d507d7ab692d9",
+      "node": "v26.8.1",
+      "browser": "26.6",
+      "uiRevision": "http://127.0.0.1:1497/src/desktop/seeded-window.ts",
+      "report": {
+        "generator": "seeded-workspace",
+        "algorithm": "mulberry32",
+        "seed": 590,
+        "now": 1700000000000,
+        "sessions": 100,
+        "channels": 4,
+        "longTranscripts": 1,
+        "messages": 2,
+        "maxTitleCharacters": 48,
+        "maxPreviewUtf8Bytes": 100,
+        "longPlainTextCharacters": 100,
+        "longTranscriptUtf8Bytes": 246,
+        "statusCounts": {
+          "idle": 68,
+          "running": 23,
+          "needsYou": 9
+        },
+        "largestChannelSessions": 25,
+        "channelSessions": {
+          "load-desktop": 25,
+          "load-release": 25,
+          "load-reading": 25,
+          "load-home": 25
+        },
+        "channelNames": {
+          "load-desktop": "desktop",
+          "load-release": "release",
+          "load-reading": "reading",
+          "load-home": "home"
+        }
+      },
+      "listCalls": 0
+    }
+  ]
+}

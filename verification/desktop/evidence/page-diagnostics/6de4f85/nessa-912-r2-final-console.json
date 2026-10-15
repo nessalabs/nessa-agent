@@ -1,0 +1,133 @@
+{
+  "check": "clock-snapshots",
+  "ok": false,
+  "started": "2026-10-15T03:24:46.390Z",
+  "finished": "2026-10-15T03:24:48.242Z",
+  "target": {
+    "url": "http://127.0.0.1:1497/desktop.html",
+    "mode": "given"
+  },
+  "results": [
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:clock:consecutive-reads"
+      ],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1497/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "name": "consecutive-reads",
+      "injectedReads": [999, 1000],
+      "renderedNow": 1000
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:clock:published-tick-and-cleanup"
+      ],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "name": "published-tick-and-cleanup",
+      "injectedNow": "999 → 1000",
+      "beforeTick": {
+        "now": 999,
+        "renders": 2
+      },
+      "published": {
+        "now": 1000,
+        "renders": 4
+      },
+      "beforeUnmount": {
+        "nowReads": 4,
+        "renders": 4,
+        "timerStarts": 2,
+        "timerTicks": 1,
+        "timerStops": 1,
+        "intervals": [1000, 1000],
+        "nowValues": [999, 999, 1000, 1000]
+      },
+      "afterUnmount": {
+        "nowReads": 4,
+        "renders": 4,
+        "timerStarts": 2,
+        "timerTicks": 1,
+        "timerStops": 2,
+        "intervals": [1000, 1000],
+        "nowValues": [999, 999, 1000, 1000]
+      }
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:clock:consecutive-reads"
+      ],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "name": "consecutive-reads",
+      "injectedReads": [999, 1000],
+      "renderedNow": 1000
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:clock:published-tick-and-cleanup"
+      ],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "name": "published-tick-and-cleanup",
+      "injectedNow": "999 → 1000",
+      "beforeTick": {
+        "now": 999,
+        "renders": 2
+      },
+      "published": {
+        "now": 1000,
+        "renders": 4
+      },
+      "beforeUnmount": {
+        "nowReads": 4,
+        "renders": 4,
+        "timerStarts": 2,
+        "timerTicks": 1,
+        "timerStops": 1,
+        "intervals": [1000, 1000],
+        "nowValues": [999, 999, 1000, 1000]
+      },
+      "afterUnmount": {
+        "nowReads": 4,
+        "renders": 4,
+        "timerStarts": 2,
+        "timerTicks": 1,
+        "timerStops": 2,
+        "intervals": [1000, 1000],
+        "nowValues": [999, 999, 1000, 1000]
+      }
+    }
+  ]
+}

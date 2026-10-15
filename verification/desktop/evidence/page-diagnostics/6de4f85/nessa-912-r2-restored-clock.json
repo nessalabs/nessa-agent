@@ -1,0 +1,104 @@
+{
+  "check": "clock-snapshots",
+  "ok": true,
+  "started": "2026-10-15T03:26:54.483Z",
+  "finished": "2026-10-15T03:26:56.191Z",
+  "target": {
+    "url": "http://127.0.0.1:1497/desktop.html",
+    "mode": "given"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1497/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "name": "consecutive-reads",
+      "injectedReads": [999, 1000],
+      "renderedNow": 1000
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "name": "published-tick-and-cleanup",
+      "injectedNow": "999 → 1000",
+      "beforeTick": {
+        "now": 999,
+        "renders": 2
+      },
+      "published": {
+        "now": 1000,
+        "renders": 4
+      },
+      "beforeUnmount": {
+        "nowReads": 4,
+        "renders": 4,
+        "timerStarts": 2,
+        "timerTicks": 1,
+        "timerStops": 1,
+        "intervals": [1000, 1000],
+        "nowValues": [999, 999, 1000, 1000]
+      },
+      "afterUnmount": {
+        "nowReads": 4,
+        "renders": 4,
+        "timerStarts": 2,
+        "timerTicks": 1,
+        "timerStops": 2,
+        "intervals": [1000, 1000],
+        "nowValues": [999, 999, 1000, 1000]
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "name": "consecutive-reads",
+      "injectedReads": [999, 1000],
+      "renderedNow": 1000
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "name": "published-tick-and-cleanup",
+      "injectedNow": "999 → 1000",
+      "beforeTick": {
+        "now": 999,
+        "renders": 2
+      },
+      "published": {
+        "now": 1000,
+        "renders": 4
+      },
+      "beforeUnmount": {
+        "nowReads": 4,
+        "renders": 4,
+        "timerStarts": 2,
+        "timerTicks": 1,
+        "timerStops": 1,
+        "intervals": [1000, 1000],
+        "nowValues": [999, 999, 1000, 1000]
+      },
+      "afterUnmount": {
+        "nowReads": 4,
+        "renders": 4,
+        "timerStarts": 2,
+        "timerTicks": 1,
+        "timerStops": 2,
+        "intervals": [1000, 1000],
+        "nowValues": [999, 999, 1000, 1000]
+      }
+    }
+  ]
+}

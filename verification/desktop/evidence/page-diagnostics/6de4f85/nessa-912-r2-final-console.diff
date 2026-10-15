@@ -1,0 +1,33 @@
+diff --git a/verification/desktop/evidence/settings-native-hooks/native-hooks-failed-chromium.png b/verification/desktop/evidence/settings-native-hooks/native-hooks-failed-chromium.png
+index 53f12e929..aa0baa52a 100644
+Binary files a/verification/desktop/evidence/settings-native-hooks/native-hooks-failed-chromium.png and b/verification/desktop/evidence/settings-native-hooks/native-hooks-failed-chromium.png differ
+diff --git a/verification/desktop/evidence/settings-native-hooks/native-hooks-failed-webkit.png b/verification/desktop/evidence/settings-native-hooks/native-hooks-failed-webkit.png
+index fbb5a82cd..03483b4e8 100644
+Binary files a/verification/desktop/evidence/settings-native-hooks/native-hooks-failed-webkit.png and b/verification/desktop/evidence/settings-native-hooks/native-hooks-failed-webkit.png differ
+diff --git a/verification/desktop/evidence/settings-native-hooks/native-hooks-on-chromium.png b/verification/desktop/evidence/settings-native-hooks/native-hooks-on-chromium.png
+index 88f967bb5..86609de81 100644
+Binary files a/verification/desktop/evidence/settings-native-hooks/native-hooks-on-chromium.png and b/verification/desktop/evidence/settings-native-hooks/native-hooks-on-chromium.png differ
+diff --git a/verification/desktop/evidence/settings-native-hooks/native-hooks-on-webkit.png b/verification/desktop/evidence/settings-native-hooks/native-hooks-on-webkit.png
+index b1aed7547..401f9991f 100644
+Binary files a/verification/desktop/evidence/settings-native-hooks/native-hooks-on-webkit.png and b/verification/desktop/evidence/settings-native-hooks/native-hooks-on-webkit.png differ
+diff --git a/verification/desktop/evidence/settings-native-hooks/native-hooks-resting-chromium.png b/verification/desktop/evidence/settings-native-hooks/native-hooks-resting-chromium.png
+index 00affd32b..468362bb5 100644
+Binary files a/verification/desktop/evidence/settings-native-hooks/native-hooks-resting-chromium.png and b/verification/desktop/evidence/settings-native-hooks/native-hooks-resting-chromium.png differ
+diff --git a/verification/desktop/evidence/settings-native-hooks/native-hooks-resting-webkit.png b/verification/desktop/evidence/settings-native-hooks/native-hooks-resting-webkit.png
+index 2876137e6..7ca3cdf54 100644
+Binary files a/verification/desktop/evidence/settings-native-hooks/native-hooks-resting-webkit.png and b/verification/desktop/evidence/settings-native-hooks/native-hooks-resting-webkit.png differ
+diff --git a/verification/desktop/evidence/settings-native-hooks/native-hooks-unset-webkit.png b/verification/desktop/evidence/settings-native-hooks/native-hooks-unset-webkit.png
+index 680175b2c..6234220c7 100644
+Binary files a/verification/desktop/evidence/settings-native-hooks/native-hooks-unset-webkit.png and b/verification/desktop/evidence/settings-native-hooks/native-hooks-unset-webkit.png differ
+diff --git a/verification/desktop/scripts/clock-snapshots.mjs b/verification/desktop/scripts/clock-snapshots.mjs
+index 54f42e6cc..14ea9dd61 100644
+--- a/verification/desktop/scripts/clock-snapshots.mjs
++++ b/verification/desktop/scripts/clock-snapshots.mjs
+@@ -37,6 +37,7 @@ await main(meta, async ({ options, rep, url }) => {
+           readySelector: "#clock",
+         })
+         const { page } = opened
++        await page.evaluate((marker) => console.error(marker), `__NESSA_912_WITNESS__:clock:${scenario}`)
+         try {
+           if (scenario === "consecutive-reads") {
+             await page.waitForFunction(

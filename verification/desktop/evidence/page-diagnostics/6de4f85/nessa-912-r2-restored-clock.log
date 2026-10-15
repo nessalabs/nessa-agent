@@ -1,0 +1,7 @@
+ok    console [chromium columns]
+ok    consecutive-reads [chromium]
+ok    published-tick-and-cleanup [chromium]
+ok    consecutive-reads [webkit]
+ok    published-tick-and-cleanup [webkit]
+wrote /tmp/nessa-912-r2-restored-clock.json
+clock-snapshots: 5/5 held

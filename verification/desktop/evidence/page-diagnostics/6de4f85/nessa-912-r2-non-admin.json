@@ -1,0 +1,74 @@
+{
+  "check": "mcp-servers-gateway",
+  "ok": true,
+  "started": "2026-10-15T03:23:05.926Z",
+  "finished": "2026-10-15T03:23:21.893Z",
+  "target": {
+    "url": "http://127.0.0.1:52078/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "name": "setup",
+      "timings": {
+        "gatewayMs": 347,
+        "devServerMs": 1899
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "requestfailed: http://127.0.0.1:52078/browser/check net::ERR_ABORTED (aborted after a 204 response, #485)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "non-admin",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3757,
+      "seen": {
+        "shown": true,
+        "phase": "not-admin",
+        "connection": "connected",
+        "text": true,
+        "controls": 0,
+        "requests": ["mcpServers.list"]
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:52078/favicon.ico)",
+        "requestfailed: http://127.0.0.1:52078/browser/check net::ERR_ABORTED (aborted after a 204 response, #485)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "non-admin",
+      "engine": "webkit",
+      "layout": "columns",
+      "ms": 3932,
+      "seen": {
+        "shown": true,
+        "phase": "not-admin",
+        "connection": "connected",
+        "text": true,
+        "controls": 0,
+        "requests": ["mcpServers.list"]
+      }
+    }
+  ]
+}
