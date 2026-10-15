@@ -15,7 +15,7 @@
 //! The [phone send contract](https://github.com/nessalabs/nessa-agent/blob/b2d6a2d86d1bbe09107c123df70a6bf74960adf3/docs/design/phone-send-contract.md)
 //! owns the wire fields and the five outcomes. It is on pull request 885 until
 //! that branch lands. The ordering table is
-//! [phone outbox](../../../docs/design/phone-outbox.md).
+//! [phone outbox](../../../../docs/design/phone-outbox.md).
 //! Cedar admits the session that carries the two calls. This module does not.
 
 mod application;
