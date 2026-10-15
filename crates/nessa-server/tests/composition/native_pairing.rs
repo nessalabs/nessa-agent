@@ -150,9 +150,15 @@ fn product(registry: Arc<LocalCredentialStore>) -> ProductRouteState {
     )
 }
 
+/// A specific loopback bind on a fixed port. The lifecycle table publishes
+/// that address. A configured port of zero stays unpublished, including
+/// after the socket is given an ephemeral port, so these tests do not use one.
 fn loopback() -> NativeConfig {
+    let reserved = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let listen_address = reserved.local_addr().unwrap();
+    drop(reserved);
     NativeConfig {
-        listen_address: "127.0.0.1:0".parse().unwrap(),
+        listen_address,
         relay: None,
         advertised_address: None,
     }
