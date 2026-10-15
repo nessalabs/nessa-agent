@@ -309,7 +309,8 @@ impl SessionManager {
     /// - `storage`: Shared backend used to acquire the lease. The manager retains
     ///   only the returned lease, which must keep its backend resources alive.
     /// - `message_commit_clock`: Monotonic application timer for streaming
-    ///   output deadlines. Its wake only asks this manager to recheck pending facts.
+    ///   output and Agent scheduling-audit acknowledgement deadlines. Message-save
+    ///   wakes ask this manager to recheck pending facts.
     ///
     /// # Errors
     /// Returns [`StorageError::Busy`] if another owner holds this session, or a

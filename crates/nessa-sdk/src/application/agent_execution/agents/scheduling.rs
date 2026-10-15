@@ -42,7 +42,23 @@ use tokio::{
     time::{sleep, sleep_until, Instant},
 };
 
-const QUEUE_REORDER_AUDIT_TIMEOUT: Duration = Duration::from_secs(30);
+const SCHEDULING_AUDIT_TIMEOUT: Duration = Duration::from_secs(30);
+
+// Reorder owns panic recovery; preserve that cause separately from a sink refusal
+// so its caller runs that recovery (queue_order's panicking_reorder_audit test).
+#[derive(Debug, PartialEq, Eq)]
+enum SchedulingAuditFailure {
+    Unacknowledged(AgentError),
+    Panicked,
+}
+impl SchedulingAuditFailure {
+    fn into_agent_error(self) -> AgentError {
+        match self {
+            Self::Unacknowledged(error) => error,
+            Self::Panicked => AgentError::AuditFailure,
+        }
+    }
+}
 
 /// Result of replacing the complete pending dispatch order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -586,26 +602,26 @@ impl Agent {
                 if !unchanged {
                     let mut close = notice.clone();
                     let audit = agent
-                    .catch_scheduling_panic(async {
-                        tokio::select! { biased;
-                            _ = close.changed() => Err(AgentError::Closed),
-                            result = agent.inner.audit.record(
-                                ExecutionAuditRecord::QueueReordered(
-                                    QueueOrderRecord::caller_requested(
-                                        agent.inner.manager.id().clone(),
-                                        change.clone(),
-                                        actor.clone(),
+                        .catch_scheduling_panic(async {
+                            tokio::select! { biased;
+                                _ = close.changed() => Err(SchedulingAuditFailure::Unacknowledged(AgentError::Closed)),
+                                result = agent.record_scheduling_audit(
+                                    ExecutionAuditRecord::QueueReordered(
+                                        QueueOrderRecord::caller_requested(
+                                            agent.inner.manager.id().clone(),
+                                            change.clone(),
+                                            actor.clone(),
+                                        ),
                                     ),
-                                ),
-                            ) => result,
-                            _ = sleep(QUEUE_REORDER_AUDIT_TIMEOUT) => Err(AgentError::AuditFailure),
-                        }
-                    })
-                    .await;
+                                    "queue_reorder",
+                                ) => result,
+                            }
+                        })
+                        .await;
                     match audit {
                         Ok(Ok(())) => {}
-                        Ok(Err(error)) => return Err(error),
-                        Err(()) => {
+                        Ok(Err(SchedulingAuditFailure::Unacknowledged(error))) => return Err(error),
+                        Ok(Err(SchedulingAuditFailure::Panicked)) | Err(()) => {
                             agent.recover_scheduling_panic(None, &notice).await?;
                             return Err(AgentError::SubmissionUnresolved);
                         }
@@ -614,7 +630,7 @@ impl Agent {
                     // One budget for the whole phase that holds the scheduler, so
                     // retention and its persistence cannot compose into a longer
                     // block against dispatch, withdrawal, or teardown.
-                    let deadline = Instant::now() + QUEUE_REORDER_AUDIT_TIMEOUT;
+                    let deadline = Instant::now() + SCHEDULING_AUDIT_TIMEOUT;
                     let current = match QueueOrderChange::new(scheduler.queue.pending(), order) {
                         Ok(current) => current,
                         Err(QueueOrderError::PriorityConflict) => {
@@ -706,7 +722,7 @@ impl Agent {
                                 "queue reorder persistence interrupted by close".into(),
                             )),
                             result = agent.inner.manager.flush_observed() => result,
-                            _ = sleep(QUEUE_REORDER_AUDIT_TIMEOUT) => Err(StorageError::Io(
+                            _ = sleep(SCHEDULING_AUDIT_TIMEOUT) => Err(StorageError::Io(
                                 "queue reorder persistence timed out".into(),
                             )),
                         }
@@ -924,13 +940,11 @@ impl Agent {
             .with_approval_context(approval_mode, admission_generation)
             .with_effort_level(effort_level),
         );
-        let audit = match self
-            .catch_scheduling_panic(async { self.inner.audit.record(audit_record).await })
+        let audit = self
+            .record_scheduling_audit(audit_record, "queue_admission")
             .await
-        {
-            Ok(result) => result.err(),
-            Err(()) => Some(AgentError::AuditFailure),
-        };
+            .err()
+            .map(SchedulingAuditFailure::into_agent_error);
         let saved = self
             .catch_scheduling_panic(self.inner.manager.record_queue_admission(
                 id.clone(),
@@ -1319,6 +1333,40 @@ impl Agent {
         result
     }
 
+    // Only observe the sink here. The adapter owns physical I/O it has started,
+    // including after this bounded observer is dropped; do not grow a detached
+    // task queue to keep arbitrary pending sink futures alive.
+    async fn record_scheduling_audit(
+        &self,
+        record: ExecutionAuditRecord,
+        operation: &'static str,
+    ) -> Result<(), SchedulingAuditFailure> {
+        let observed = self
+            .catch_scheduling_panic(async {
+                let deadline = self
+                    .inner
+                    .manager
+                    .message_commit_now()
+                    .saturating_add(SCHEDULING_AUDIT_TIMEOUT);
+                tokio::select! { biased;
+                    result = self.inner.audit.record(record) => result,
+                    _ = self.inner.manager.message_commit_sleep_until(deadline) => {
+                        tracing::warn!(operation, "scheduling audit acknowledgement timed out");
+                        Err(AgentError::AuditFailure)
+                    },
+                }
+            })
+            .await;
+        let result = match observed {
+            Ok(result) => result.map_err(SchedulingAuditFailure::Unacknowledged),
+            Err(()) => Err(SchedulingAuditFailure::Panicked),
+        };
+        if let Err(error) = &result {
+            tracing::warn!(operation, ?error, "scheduling audit observation failed");
+        }
+        result
+    }
+
     async fn recover_scheduling_panic(
         &self,
         id: Option<&ExecutionId>,
@@ -1622,13 +1670,11 @@ impl Agent {
                         submitter.context.clone(),
                     ),
                 );
-                let audit = match self
-                    .catch_scheduling_panic(async { self.inner.audit.record(audit_record).await })
+                let audit = self
+                    .record_scheduling_audit(audit_record, "steering_acknowledgement")
                     .await
-                {
-                    Ok(result) => result.err(),
-                    Err(()) => Some(AgentError::AuditFailure),
-                };
+                    .err()
+                    .map(SchedulingAuditFailure::into_agent_error);
                 let saved = self
                     .catch_scheduling_panic(self.inner.manager.record_scheduling(
                         index,
@@ -1708,13 +1754,11 @@ impl Agent {
                     .with_approval_context(approval_mode, admission_generation)
                     .with_effort_level(effort_level),
                 );
-                let audit = match self
-                    .catch_scheduling_panic(async { self.inner.audit.record(audit_record).await })
+                let audit = self
+                    .record_scheduling_audit(audit_record, "steering_queue_admission")
                     .await
-                {
-                    Ok(result) => result.err(),
-                    Err(()) => Some(AgentError::AuditFailure),
-                };
+                    .err()
+                    .map(SchedulingAuditFailure::into_agent_error);
                 let saved = self
                     .catch_scheduling_panic(self.inner.manager.record_queue_admission(
                         id.clone(),
@@ -2068,9 +2112,9 @@ impl Agent {
                 .expect("admitted pending scheduling transition"),
             );
             let audit = self
-                .catch_scheduling_panic(async { self.inner.audit.record(audit_record).await })
+                .record_scheduling_audit(audit_record, "failed_queue_settlement")
                 .await
-                .unwrap_or(Err(AgentError::AuditFailure));
+                .map_err(SchedulingAuditFailure::into_agent_error);
             if let Err(error) = audit {
                 let aggregate = error.clone();
                 result = Err(AgentError::MultipleOperationFailures {
@@ -2228,9 +2272,9 @@ impl Agent {
                 .expect("admitted pending cancellation transition"),
             );
             let audit = self
-                .catch_scheduling_panic(async { self.inner.audit.record(audit_record).await })
+                .record_scheduling_audit(audit_record, "cancelled_queue_settlement")
                 .await
-                .unwrap_or(Err(AgentError::AuditFailure));
+                .map_err(SchedulingAuditFailure::into_agent_error);
             if let Err(error) = &audit {
                 failure = Some(match failure.take() {
                     Some(first) => AgentError::MultipleOperationFailures {

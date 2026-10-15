@@ -80,6 +80,37 @@ that uncertainty. A confirmed absent input can be retried; an input found in
 storage, or whose presence cannot be checked, remains observed and returns
 `SubmissionUnresolved` on an identical retry. Later saves preserve that evidence.
 
+### Bounded scheduling audit observations (#919)
+
+Scheduling audit observations use the manager's injected `MessageCommitClock`
+with a fresh 30-second deadline per record. The scheduler owns the observation;
+the audit adapter owns physical I/O it has already started. Deadline expiry drops
+the asynchronous observation and returns `AuditFailure`, without retry or a
+claim that storage rolled back. The supplied `DurableExecutionAudit` retains its
+blocking write independently. A custom audit adapter must preserve the same
+physical ownership on observer loss; arbitrary pending adapter futures are not
+kept alive in detached SDK tasks.
+
+Completed or timed-out observations release their sink futures, as checked by
+`stalled_audit_observers_release_their_payloads_after_each_timeout`. There is no
+additional SDK audit task queue or retained payload copy. Existing scheduler
+admission ownership stays in place. Physical I/O retained inside an adapter is
+subject to that adapter's own admission/resource limits; storage waits outside
+audit remain outside this contract. Timeout/failure diagnostics use tracing
+independently of the failing sink.
+
+| Audit/event order | Observer result and retained evidence | Cleanup / next record | Regression |
+| --- | --- | --- | --- |
+| Acknowledgement before deadline | Preserve the sink result | Continue ordinary admission/settlement | Existing scheduling and settlement suites |
+| Acknowledgement and deadline ready in one poll | Prefer the acknowledged result | Continue ordinary flow | `audit_acknowledgement_wins_when_deadline_is_also_ready` |
+| Admission stays pending through deadline; concurrent close | Retain typed admission audit failure; no provider dispatch | Lifecycle starts physical cleanup independently; queue and close settle | `pending_admission_audit_fails_and_close_completes_after_physical_cleanup_starts`; public provider regression `scheduling_audit_deadlines::pending_queue_audit_does_not_delay_attached_provider_cleanup_or_dispatch_input` |
+| First bulk settlement stays pending through deadline | Preserve the original transition plus audit failure for that item | Give later records their own full attempt/deadline and settle their receipts | `stalled_first_bulk_settlement_does_not_suppress_later_audit_or_receipt`, `stalled_first_close_cancellation_does_not_suppress_later_audit_or_receipt`, `each_bulk_settlement_gets_its_full_audit_observation_bound` |
+| Observer deadline before independently owned physical completion | Retain `AuditFailure`; do not retry or relabel late completion as acknowledged | Adapter finishes physical write independently | `timed_out_observer_leaves_late_physical_audit_write_owned_without_retry` |
+| Caller drops after admission starts | Admission supervisor continues and retains its result | Audit deadline still ends the observer | `dropped_admission_caller_does_not_lose_timeout_evidence` |
+| Sink or injected clock panics during observation | Shared observer retains a distinct `Panicked` failure; admission/steering/settlement map it to `AuditFailure` | Panic containment fences control admission and protects settlement of the tail | `scheduling_audit_panics_are_typed_and_observer_is_dropped`, `scheduling_audit_clock_panic_remains_distinct_from_a_sink_failure` |
+| Reorder audit panics | Reorder consumes `Panicked` through its existing scheduler recovery and returns the retained scheduling-panic error | Queue receipts settle, physical cleanup is joined, and the proposed order is not applied | `conformance::queue_order::panicking_reorder_audit_fences_and_recovers_without_applying_order` |
+| Repeated stalled observations | Each observation drops its sink future at its own deadline | No detached SDK task/payload queue grows | `stalled_audit_observers_release_their_payloads_after_each_timeout` |
+
 ## The queue runner and direct invocation
 
 Queued work and direct `invoke` share one invocation slot. `invoke` takes it

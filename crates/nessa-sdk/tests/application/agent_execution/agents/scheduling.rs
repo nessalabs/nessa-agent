@@ -7,8 +7,9 @@ use crate::application::agent_execution::{
         AgentProvider, ProviderIdentity, ProviderOpenError, ProviderOpenFuture, ProviderOpenRequest,
     },
     sessions::{
-        SessionLoad, SessionManager, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
-        SessionSnapshot, SessionStorage, SessionStorageLease, StorageFuture,
+        MessageCommitClock, MessageCommitSleep, SessionLoad, SessionManager, SessionSaveGeneration,
+        SessionSaveReceipt, SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease,
+        StorageFuture,
     },
 };
 use crate::application::dto::{ModalitiesDto, ModelMetadataDto};
@@ -24,12 +25,18 @@ use crate::domain::{
         value_objects::{Modalities, ModelFeatures},
     },
 };
-use crate::infrastructure::session_storage::InMemoryStorage;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex, OnceLock,
+use crate::infrastructure::session_storage::{InMemoryStorage, RuntimeMessageCommitClock};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex, OnceLock,
+    },
+    task::{Context, Poll},
+    time::Duration,
 };
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
 #[derive(Default)]
 struct SettlementPanickingAudit {
@@ -40,6 +47,150 @@ struct SettlementPanickingAudit {
 struct PausingSettlementAudit {
     settlements: Mutex<Vec<QueueSettlementRecord>>,
     gate: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
+}
+
+struct PendingAdmissionAudit {
+    entered: Mutex<Option<oneshot::Sender<()>>>,
+}
+
+struct FirstSettlementStalls {
+    entered: Mutex<Option<oneshot::Sender<()>>>,
+    attempts: Mutex<Vec<ExecutionId>>,
+    stalls: usize,
+}
+
+struct LateAdmissionWrite {
+    entered: Mutex<Option<oneshot::Sender<()>>>,
+    release: Mutex<Option<oneshot::Receiver<()>>>,
+    completed: Mutex<Option<oneshot::Sender<()>>>,
+    attempts: AtomicUsize,
+}
+
+// A clock independent of Tokio time proves scheduling uses the supplied timer.
+struct AuditClock(watch::Sender<Duration>);
+impl AuditClock {
+    fn new() -> Self {
+        Self(watch::channel(Duration::ZERO).0)
+    }
+    fn advance(&self, by: Duration) {
+        self.0.send_modify(|now| *now += by);
+    }
+}
+impl MessageCommitClock for AuditClock {
+    fn now(&self) -> Duration {
+        *self.0.borrow()
+    }
+    fn sleep_until(&self, deadline: Duration) -> MessageCommitSleep {
+        let mut changed = self.0.subscribe();
+        Box::pin(async move {
+            loop {
+                if *changed.borrow() >= deadline {
+                    return;
+                }
+                changed.changed().await.unwrap();
+            }
+        })
+    }
+    fn unix_milliseconds(&self) -> u64 {
+        0
+    }
+}
+
+struct DroppingAudit {
+    live: Arc<AtomicUsize>,
+    attempts: AtomicUsize,
+}
+struct PendingObservation {
+    live: Arc<AtomicUsize>,
+    _record: ExecutionAuditRecord,
+}
+impl Future for PendingObservation {
+    type Output = Result<(), AgentError>;
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Pending
+    }
+}
+impl Drop for PendingObservation {
+    fn drop(&mut self) {
+        self.live.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+impl ExecutionAudit for DroppingAudit {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        self.attempts.fetch_add(1, Ordering::SeqCst);
+        self.live.fetch_add(1, Ordering::SeqCst);
+        Box::pin(PendingObservation {
+            live: self.live.clone(),
+            _record: record,
+        })
+    }
+}
+
+struct GatedAudit {
+    entered: Mutex<Option<oneshot::Sender<()>>>,
+    release: Mutex<Option<oneshot::Receiver<()>>>,
+}
+impl ExecutionAudit for GatedAudit {
+    fn record(&self, _: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async move {
+            let release = self.release.lock().unwrap().take().unwrap();
+            self.entered
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap()
+                .send(())
+                .unwrap();
+            release.await.unwrap();
+            Ok(())
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AuditPanic {
+    Creation,
+    Poll,
+    Drop,
+}
+struct PanickingObservation(AuditPanic);
+impl Future for PanickingObservation {
+    type Output = Result<(), AgentError>;
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+        if matches!(self.0, AuditPanic::Poll) {
+            panic!("audit poll");
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+impl Drop for PanickingObservation {
+    fn drop(&mut self) {
+        if matches!(self.0, AuditPanic::Drop) {
+            panic!("audit drop");
+        }
+    }
+}
+impl ExecutionAudit for AuditPanic {
+    fn record(&self, _: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        if matches!(self, AuditPanic::Creation) {
+            panic!("audit creation");
+        }
+        Box::pin(PanickingObservation(*self))
+    }
+}
+
+struct CountingProvider(Arc<AtomicUsize>);
+impl AgentProvider for CountingProvider {
+    fn identity(&self) -> ProviderIdentity {
+        TestProvider.identity()
+    }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities()
+    }
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Err(ProviderOpenError::no_resources(AgentError::Closed)) })
+    }
 }
 
 struct TestProvider;
@@ -125,6 +276,75 @@ impl ExecutionAudit for SettlementPanickingAudit {
     }
 }
 
+impl ExecutionAudit for PendingAdmissionAudit {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async move {
+            if matches!(record, ExecutionAuditRecord::QueueAdmitted(_)) {
+                if let Some(entered) = self.entered.lock().unwrap().take() {
+                    entered.send(()).unwrap();
+                }
+                return std::future::pending().await;
+            }
+            Ok(())
+        })
+    }
+}
+
+impl ExecutionAudit for FirstSettlementStalls {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async move {
+            if let ExecutionAuditRecord::QueueSettled(record) = record {
+                let attempt = {
+                    let mut attempts = self.attempts.lock().unwrap();
+                    attempts.push(record.execution_id().clone());
+                    attempts.len()
+                };
+                if attempt == 1 {
+                    self.entered
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .unwrap()
+                        .send(())
+                        .unwrap();
+                }
+                if attempt <= self.stalls {
+                    return std::future::pending().await;
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
+impl ExecutionAudit for LateAdmissionWrite {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async move {
+            if matches!(record, ExecutionAuditRecord::QueueAdmitted(_)) {
+                self.attempts.fetch_add(1, Ordering::SeqCst);
+                self.entered
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .unwrap()
+                    .send(())
+                    .unwrap();
+                let release = self.release.lock().unwrap().take().unwrap();
+                // Match the durable adapter's independently owned physical I/O:
+                // losing its async observer does not abort the started write.
+                let completed = self.completed.lock().unwrap().take().unwrap();
+                tokio::spawn(async move {
+                    release.await.unwrap();
+                    completed.send(()).unwrap();
+                })
+                .await
+                .unwrap();
+            }
+            Ok(())
+        })
+    }
+}
+
 struct PanickingQueueStorage {
     inner: InMemoryStorage,
     mutation: Arc<Mutex<Option<QueueMutation>>>,
@@ -180,18 +400,401 @@ impl SessionStorageLease for PanickingQueueLease {
 }
 
 async fn prepared(storage: Arc<dyn SessionStorage>, audit: Arc<dyn ExecutionAudit>) -> Agent {
-    let manager = SessionManager::open(
-        None,
-        storage,
-        std::sync::Arc::new(
-            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
-        ),
-    )
-    .await
-    .unwrap();
+    let manager = SessionManager::open(None, storage, Arc::new(RuntimeMessageCommitClock::new()))
+        .await
+        .unwrap();
     Agent::prepare(Arc::new(TestProvider), manager, audit)
         .await
         .unwrap()
+}
+
+#[tokio::test(start_paused = true)]
+async fn pending_admission_audit_fails_and_close_completes_after_physical_cleanup_starts() {
+    let (audit_entered, audit_waiting) = oneshot::channel();
+    let audit = Arc::new(PendingAdmissionAudit {
+        entered: Mutex::new(Some(audit_entered)),
+    });
+    let clock = Arc::new(AuditClock::new());
+    let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()), clock.clone())
+        .await
+        .unwrap();
+    let provider_opens = Arc::new(AtomicUsize::new(0));
+    let agent = Agent::prepare(
+        Arc::new(CountingProvider(provider_opens.clone())),
+        manager,
+        audit,
+    )
+    .await
+    .unwrap();
+    let (cleanup_entered, cleanup_started) = oneshot::channel();
+    agent
+        .inner
+        .lifecycle
+        .notify_next_cleanup_start(cleanup_entered);
+
+    let admission = tokio::spawn({
+        let agent = agent.clone();
+        async move {
+            agent
+                .enqueue(request("pending-admission"), Submitter::owner(actor()))
+                .await
+        }
+    });
+    audit_waiting.await.unwrap();
+    let close = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.close(actor()).await }
+    });
+
+    cleanup_started.await.unwrap();
+    assert!(!close.is_finished());
+    // Runtime time alone cannot expire this separately injected clock.
+    tokio::time::advance(SCHEDULING_AUDIT_TIMEOUT).await;
+    assert!(!admission.is_finished());
+    clock.advance(SCHEDULING_AUDIT_TIMEOUT);
+    let admission = tokio::time::timeout(Duration::from_secs(1), admission)
+        .await
+        .expect("the injected audit deadline must release admission")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        admission.evidence(),
+        &AdmissionEvidence::Failed(
+            AdmissionEvidenceFailure::new(Some(AgentError::AuditFailure), None).unwrap()
+        )
+    );
+    assert_eq!(admission.wait().await, Err(AgentError::Closed));
+    assert!(close.await.unwrap().is_ok());
+    assert_eq!(provider_opens.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn stalled_first_bulk_settlement_does_not_suppress_later_audit_or_receipt() {
+    let (first_entered, first_waiting) = oneshot::channel();
+    let audit = Arc::new(FirstSettlementStalls {
+        entered: Mutex::new(Some(first_entered)),
+        attempts: Mutex::new(Vec::new()),
+        stalls: 1,
+    });
+    let agent = prepared(Arc::new(InMemoryStorage::new()), audit.clone()).await;
+    let _invocation = agent.inner.invocation.lock().await;
+    let first = agent
+        .enqueue(request("bulk-stalled-first"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let second = agent
+        .enqueue(request("bulk-attempted-second"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let settlement = tokio::spawn({
+        let agent = agent.clone();
+        async move {
+            let mut scheduler = agent.inner.scheduler.lock().await;
+            agent
+                .settle_failed_pending(
+                    &mut scheduler,
+                    AgentError::Protocol("attachment failed".into()),
+                )
+                .await
+        }
+    });
+    first_waiting.await.unwrap();
+    tokio::time::advance(SCHEDULING_AUDIT_TIMEOUT).await;
+
+    assert!(matches!(
+        settlement.await.unwrap(),
+        Err(AgentError::AuditFailure)
+    ));
+    assert_eq!(
+        audit.attempts.lock().unwrap().as_slice(),
+        &[
+            ExecutionId::new("bulk-stalled-first").unwrap(),
+            ExecutionId::new("bulk-attempted-second").unwrap(),
+        ]
+    );
+    assert!(matches!(
+        first.wait().await,
+        Err(AgentError::MultipleOperationFailures { .. })
+    ));
+    assert_eq!(
+        second.wait().await,
+        Err(AgentError::Protocol("attachment failed".into()))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn timed_out_observer_leaves_late_physical_audit_write_owned_without_retry() {
+    let (entered, waiting) = oneshot::channel();
+    let (release, released) = oneshot::channel();
+    let (completed, completion) = oneshot::channel();
+    let audit = Arc::new(LateAdmissionWrite {
+        entered: Mutex::new(Some(entered)),
+        release: Mutex::new(Some(released)),
+        completed: Mutex::new(Some(completed)),
+        attempts: AtomicUsize::new(0),
+    });
+    let agent = prepared(Arc::new(InMemoryStorage::new()), audit.clone()).await;
+    let observer = tokio::spawn({
+        let agent = agent.clone();
+        async move {
+            agent
+                .record_scheduling_audit(
+                    ExecutionAuditRecord::QueueAdmitted(QueueAdmissionRecord::submitted(
+                        agent.inner.manager.id().clone(),
+                        ExecutionId::new("late-audit-write").unwrap(),
+                        SubmissionMode::Queued,
+                        actor(),
+                    )),
+                    "late_audit_write_test",
+                )
+                .await
+        }
+    });
+    waiting.await.unwrap();
+    tokio::time::advance(SCHEDULING_AUDIT_TIMEOUT).await;
+    assert_eq!(
+        observer.await.unwrap(),
+        Err(SchedulingAuditFailure::Unacknowledged(
+            AgentError::AuditFailure
+        ))
+    );
+
+    release.send(()).unwrap();
+    completion.await.unwrap();
+    assert_eq!(audit.attempts.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn stalled_first_close_cancellation_does_not_suppress_later_audit_or_receipt() {
+    let (entered, waiting) = oneshot::channel();
+    let audit = Arc::new(FirstSettlementStalls {
+        entered: Mutex::new(Some(entered)),
+        attempts: Mutex::new(Vec::new()),
+        stalls: 1,
+    });
+    let agent = prepared(Arc::new(InMemoryStorage::new()), audit.clone()).await;
+    let _invocation = agent.inner.invocation.lock().await;
+    let first = agent
+        .enqueue(request("close-first"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let second = agent
+        .enqueue(request("close-second"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let close = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.close(actor()).await }
+    });
+    waiting.await.unwrap();
+    drop(_invocation);
+    tokio::time::advance(SCHEDULING_AUDIT_TIMEOUT).await;
+    assert!(close.await.unwrap().is_err());
+    assert_eq!(audit.attempts.lock().unwrap().len(), 2);
+    assert!(first.wait().await.is_err());
+    assert_eq!(second.wait().await, Err(AgentError::Closed));
+}
+
+#[tokio::test(start_paused = true)]
+async fn stalled_audit_observers_release_their_payloads_after_each_timeout() {
+    let live = Arc::new(AtomicUsize::new(0));
+    let audit = Arc::new(DroppingAudit {
+        live: live.clone(),
+        attempts: AtomicUsize::new(0),
+    });
+    let agent = prepared(Arc::new(InMemoryStorage::new()), audit.clone()).await;
+    for _ in 0..4 {
+        let observer = tokio::spawn({
+            let agent = agent.clone();
+            async move {
+                agent
+                    .record_scheduling_audit(test_admission(&agent), "retention_test")
+                    .await
+            }
+        });
+        while live.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::advance(SCHEDULING_AUDIT_TIMEOUT).await;
+        assert_eq!(
+            observer.await.unwrap(),
+            Err(SchedulingAuditFailure::Unacknowledged(
+                AgentError::AuditFailure
+            ))
+        );
+        assert_eq!(live.load(Ordering::SeqCst), 0);
+    }
+    assert_eq!(audit.attempts.load(Ordering::SeqCst), 4);
+}
+
+#[tokio::test(start_paused = true)]
+async fn each_bulk_settlement_gets_its_full_audit_observation_bound() {
+    let (entered, waiting) = oneshot::channel();
+    let audit = Arc::new(FirstSettlementStalls {
+        entered: Mutex::new(Some(entered)),
+        attempts: Mutex::new(Vec::new()),
+        stalls: 2,
+    });
+    let agent = prepared(Arc::new(InMemoryStorage::new()), audit.clone()).await;
+    let _invocation = agent.inner.invocation.lock().await;
+    let first = agent
+        .enqueue(request("full-bound-first"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let second = agent
+        .enqueue(request("full-bound-second"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let settlement = tokio::spawn({
+        let agent = agent.clone();
+        async move {
+            let mut scheduler = agent.inner.scheduler.lock().await;
+            agent
+                .settle_failed_pending(
+                    &mut scheduler,
+                    AgentError::Protocol("failed attachment".into()),
+                )
+                .await
+        }
+    });
+    waiting.await.unwrap();
+    tokio::time::advance(SCHEDULING_AUDIT_TIMEOUT).await;
+    while audit.attempts.lock().unwrap().len() < 2 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!settlement.is_finished());
+    tokio::time::advance(SCHEDULING_AUDIT_TIMEOUT - Duration::from_secs(1)).await;
+    assert!(!settlement.is_finished());
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert!(settlement.await.unwrap().is_err());
+    for receipt in [first, second] {
+        assert!(
+            matches!(receipt.wait().await, Err(AgentError::MultipleOperationFailures {
+            subsequent_error, ..
+        }) if *subsequent_error == AgentError::AuditFailure)
+        );
+    }
+}
+
+fn test_admission(agent: &Agent) -> ExecutionAuditRecord {
+    ExecutionAuditRecord::QueueAdmitted(QueueAdmissionRecord::submitted(
+        agent.inner.manager.id().clone(),
+        ExecutionId::new("audit-observer").unwrap(),
+        SubmissionMode::Queued,
+        actor(),
+    ))
+}
+
+#[tokio::test(start_paused = true)]
+async fn dropped_admission_caller_does_not_lose_timeout_evidence() {
+    let (entered, waiting) = oneshot::channel();
+    let audit = Arc::new(PendingAdmissionAudit {
+        entered: Mutex::new(Some(entered)),
+    });
+    let agent = prepared(Arc::new(InMemoryStorage::new()), audit).await;
+    let caller = tokio::spawn({
+        let agent = agent.clone();
+        async move {
+            agent
+                .enqueue(request("lost-caller"), Submitter::owner(actor()))
+                .await
+        }
+    });
+    waiting.await.unwrap();
+    caller.abort();
+    assert!(matches!(caller.await, Err(error) if error.is_cancelled()));
+    tokio::time::advance(SCHEDULING_AUDIT_TIMEOUT).await;
+    let recovered = agent
+        .enqueue(request("lost-caller"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    assert!(
+        matches!(recovered.evidence(), AdmissionEvidence::Failed(failure)
+        if failure.audit() == Some(&AgentError::AuditFailure))
+    );
+    assert_eq!(recovered.wait().await, Err(AgentError::Closed));
+}
+
+#[tokio::test(start_paused = true)]
+async fn audit_acknowledgement_wins_when_deadline_is_also_ready() {
+    let (entered, waiting) = oneshot::channel();
+    let (release, released) = oneshot::channel();
+    let clock = Arc::new(AuditClock::new());
+    let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()), clock.clone())
+        .await
+        .unwrap();
+    let agent = Agent::prepare(
+        Arc::new(TestProvider),
+        manager,
+        Arc::new(GatedAudit {
+            entered: Mutex::new(Some(entered)),
+            release: Mutex::new(Some(released)),
+        }),
+    )
+    .await
+    .unwrap();
+    let observer = tokio::spawn({
+        let agent = agent.clone();
+        async move {
+            agent
+                .record_scheduling_audit(test_admission(&agent), "simultaneous_test")
+                .await
+        }
+    });
+    waiting.await.unwrap();
+    // Neither wake yields the test task, so both branches are ready next poll.
+    release.send(()).unwrap();
+    clock.advance(SCHEDULING_AUDIT_TIMEOUT);
+    assert_eq!(observer.await.unwrap(), Ok(()));
+}
+
+#[tokio::test]
+async fn scheduling_audit_panics_are_typed_and_observer_is_dropped() {
+    for point in [AuditPanic::Creation, AuditPanic::Poll, AuditPanic::Drop] {
+        let agent = prepared(Arc::new(InMemoryStorage::new()), Arc::new(point)).await;
+        assert_eq!(
+            agent
+                .record_scheduling_audit(test_admission(&agent), "panic_test")
+                .await,
+            Err(SchedulingAuditFailure::Panicked)
+        );
+    }
+}
+
+#[tokio::test]
+async fn scheduling_audit_clock_panic_remains_distinct_from_a_sink_failure() {
+    struct PanickingClock;
+    impl MessageCommitClock for PanickingClock {
+        fn now(&self) -> Duration {
+            panic!("audit clock read");
+        }
+        fn sleep_until(&self, _: Duration) -> MessageCommitSleep {
+            Box::pin(std::future::pending())
+        }
+        fn unix_milliseconds(&self) -> u64 {
+            0
+        }
+    }
+    let manager = SessionManager::open(
+        None,
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(PanickingClock),
+    )
+    .await
+    .unwrap();
+    let agent = Agent::prepare(
+        Arc::new(TestProvider),
+        manager,
+        Arc::new(SettlementPanickingAudit::default()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        agent
+            .record_scheduling_audit(test_admission(&agent), "clock_panic_test")
+            .await,
+        Err(SchedulingAuditFailure::Panicked)
+    );
 }
 
 fn request(id: &str) -> ExecutionRequest {
@@ -342,11 +945,8 @@ async fn explicit_close_precedes_unclaimed_automatic_failure_settlement() {
 // Setting `running` first, as `start_runner` would, keeps admission from
 // spawning a second runner. Hand-over of the invocation slot relies on Tokio's
 // `Mutex` granting waiters in the order they called `lock`, which it documents.
-async fn poll_once<F: std::future::Future + Unpin>(future: &mut F) -> std::task::Poll<F::Output> {
-    std::future::poll_fn(|context| {
-        std::task::Poll::Ready(std::pin::Pin::new(&mut *future).poll(context))
-    })
-    .await
+async fn poll_once<F: Future + Unpin>(future: &mut F) -> Poll<F::Output> {
+    std::future::poll_fn(|context| Poll::Ready(Pin::new(&mut *future).poll(context))).await
 }
 
 // Row one of the orderings table in docs/agent_execution/scheduling.md. An
@@ -361,7 +961,7 @@ async fn an_idle_queue_runner_leaves_the_invocation_slot_to_a_direct_invoke() {
     // No queued input reaches settlement here, so this audit never panics.
     let audit = Arc::new(SettlementPanickingAudit::default());
     let agent = prepared(Arc::new(InMemoryStorage::new()), audit).await;
-    let bound = std::time::Duration::from_secs(5);
+    let bound = Duration::from_secs(5);
     let mut scheduler = agent.inner.scheduler.lock().await;
     scheduler.running = true;
     let mut runner = Box::pin(agent.run_queue());
@@ -401,7 +1001,7 @@ async fn an_admission_while_no_runner_is_running_starts_one() {
     let _direct = agent.inner.invocation.clone().lock_owned().await;
     assert!(!agent.inner.scheduler.lock().await.running);
     tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        Duration::from_secs(5),
         agent.enqueue(
             request("admitted-with-no-runner"),
             Submitter::owner(actor()),
@@ -429,7 +1029,7 @@ async fn a_runner_whose_queue_empties_while_it_waits_releases_the_slot_and_stops
         gate: Mutex::new(None),
     });
     let agent = prepared(Arc::new(InMemoryStorage::new()), audit).await;
-    let bound = std::time::Duration::from_secs(5);
+    let bound = Duration::from_secs(5);
     let direct = agent.inner.invocation.clone().lock_owned().await;
     agent.inner.scheduler.lock().await.running = true;
     let removed_id = ExecutionId::new("removed-while-the-runner-waits").unwrap();
@@ -501,7 +1101,7 @@ async fn a_runner_settles_a_stopped_owner_that_is_no_longer_queued() {
         gate: Mutex::new(None),
     });
     let agent = prepared(Arc::new(InMemoryStorage::new()), audit).await;
-    let bound = std::time::Duration::from_secs(5);
+    let bound = Duration::from_secs(5);
     let direct = agent.inner.invocation.clone().lock_owned().await;
     agent.inner.scheduler.lock().await.running = true;
     let stranded_id = ExecutionId::new("owner-without-a-queue-entry").unwrap();
@@ -632,7 +1232,7 @@ async fn close_while_a_runner_waits_leaves_it_nothing_to_run_and_both_finish() {
         gate: Mutex::new(None),
     });
     let agent = prepared(Arc::new(InMemoryStorage::new()), audit).await;
-    let bound = std::time::Duration::from_secs(5);
+    let bound = Duration::from_secs(5);
     let direct = agent.inner.invocation.clone().lock_owned().await;
     agent.inner.scheduler.lock().await.running = true;
     let closed = tokio::time::timeout(
