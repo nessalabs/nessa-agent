@@ -289,6 +289,7 @@ async fn gateway_child() {
         &NativeConfig {
             listen_address: address,
             relay,
+            advertised_address: None,
         },
         NativeInputs {
             namespace: root.to_path_buf(),

@@ -31,9 +31,9 @@ The gateway must publish authenticated actual native discovery and support exact
 ## Current integration and verification boundaries
 
 `phone.endpoint` returns the authenticated source and a routable numeric native
-endpoint/public pin. A wildcard `native.listenAddress` is published as the host's
-route address on the actual bound port. An absent listener or port zero discloses
-nothing. `phone.authorize` and `phone.status` consume the complete
+endpoint/public pin. A wildcard `native.listenAddress` is published as
+`native.advertisedAddress` on the actual bound port. An absent listener, port
+zero, or a wildcard with no advertised address discloses nothing. `phone.authorize` and `phone.status` consume the complete
 original signed request through the canonical Auth ledger; original TLS recovery
 uses the saved UUID/digest and actual device proof without restoring a PAKE
 attempt. Mutating resume owns expiry and late receiver Pair/fence settlement;

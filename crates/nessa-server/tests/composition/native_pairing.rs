@@ -154,6 +154,7 @@ fn loopback() -> NativeConfig {
     NativeConfig {
         listen_address: "127.0.0.1:0".parse().unwrap(),
         relay: None,
+        advertised_address: None,
     }
 }
 
@@ -224,6 +225,7 @@ async fn native_bind_failure_preserves_key_and_history() {
         &NativeConfig {
             listen_address: address,
             relay: None,
+            advertised_address: None,
         },
         namespace.inputs(registry.clone()),
     )
@@ -410,6 +412,7 @@ async fn a_gateway_with_a_relay_answers_a_reader_that_reaches_only_the_relay() {
     let config = NativeConfig {
         listen_address: "127.0.0.1:0".parse().unwrap(),
         relay: Some(RelayAddress::try_from(relay_address.to_string()).unwrap()),
+        advertised_address: None,
     };
     let (prepared, _commands, _peers) = prepare(&config, namespace.inputs(registry.clone()))
         .await
@@ -474,6 +477,7 @@ async fn a_relay_that_cannot_be_reached_leaves_direct_readers_served() {
     let config = NativeConfig {
         listen_address: "127.0.0.1:0".parse().unwrap(),
         relay: Some(RelayAddress::try_from(nowhere.to_string()).unwrap()),
+        advertised_address: None,
     };
     let (prepared, _commands, _peers) = prepare(&config, namespace.inputs(registry.clone()))
         .await

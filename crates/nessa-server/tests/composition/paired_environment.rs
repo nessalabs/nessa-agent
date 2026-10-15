@@ -136,6 +136,7 @@ impl Gateway {
             &NativeConfig {
                 listen_address: "127.0.0.1:0".parse().unwrap(),
                 relay,
+                advertised_address: None,
             },
             inputs(root, &auth, receivers, &gateway, &organization),
         )

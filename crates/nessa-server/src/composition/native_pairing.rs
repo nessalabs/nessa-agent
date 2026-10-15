@@ -57,7 +57,7 @@ use nessa_auth::{
 use nessa_protocol::clock::Clock as MonotonicClock;
 use std::{
     io::{ErrorKind, Result as IoResult},
-    net::{IpAddr, Ipv6Addr, SocketAddr, UdpSocket},
+    net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -109,6 +109,8 @@ pub(super) struct PreparedNative {
     environments: Option<Arc<dyn EnvironmentPeers>>,
     /// The relay to serve through as well, if any.
     relay: Option<RelayAddress>,
+    /// Host a wildcard bind is published as. The port is the listener's.
+    advertised_address: Option<IpAddr>,
 }
 
 impl PreparedNative {
@@ -218,6 +220,7 @@ pub(super) async fn prepare(
             clock: wall,
             environments: None,
             relay: config.relay.clone(),
+            advertised_address: config.advertised_address,
         },
         commands,
         peers,
@@ -282,17 +285,18 @@ pub(super) async fn bind(
         clock: wall,
         environments,
         relay,
+        advertised_address,
     } = prepared;
     let bind_failed = |source| RunError::Native(NativeFailure::Bind { address, source });
     let socket = TcpEnrollmentAccept::new(TcpListener::bind(address).await.map_err(bind_failed)?);
     let bound = socket.local_address().map_err(bind_failed)?;
     // A wildcard listener has a real port after bind and no host of its own.
-    // Publish the route address on that port. Port zero and a missing route
-    // stay unpublished, so discovery refuses them.
+    // Publish the configured address on that port. Port zero and a wildcard
+    // with no configured address stay unpublished.
     let route = bound
         .ip()
         .is_unspecified()
-        .then(|| host_route(bound))
+        .then_some(advertised_address)
         .flatten();
     if let Some(endpoint) = advertised_endpoint(bound, route) {
         gateway
@@ -474,12 +478,12 @@ impl RunningNative {
 }
 
 /// The address discovery may publish. A named bind is that address. A wildcard
-/// bind is `route` on the bound port. Port zero, a missing route, loopback, or
-/// the other IP family stays unpublished; `OwnerPhoneRequest::validate_endpoint`
-/// is the owner of what may be disclosed.
-fn advertised_endpoint(bound: SocketAddr, route: Option<IpAddr>) -> Option<SocketAddr> {
+/// bind is the configured `advertised` host on the bound port. Port zero, no
+/// configured host, loopback, or the other IP family stays unpublished;
+/// `OwnerPhoneRequest::validate_endpoint` is the owner of what may be disclosed.
+fn advertised_endpoint(bound: SocketAddr, advertised: Option<IpAddr>) -> Option<SocketAddr> {
     let endpoint = if bound.ip().is_unspecified() {
-        let ip = route.filter(|ip| {
+        let ip = advertised.filter(|ip| {
             !ip.is_unspecified()
                 && !ip.is_loopback()
                 && !ip.is_multicast()
@@ -491,26 +495,6 @@ fn advertised_endpoint(bound: SocketAddr, route: Option<IpAddr>) -> Option<Socke
     };
     OwnerPhoneRequest::validate_endpoint(endpoint).ok()?;
     Some(endpoint)
-}
-
-/// The host address the operating system would use to reach another network,
-/// in `bound`'s family. The probe is a documentation address; connecting a UDP
-/// socket asks the route table and sends nothing.
-fn host_route(bound: SocketAddr) -> Option<IpAddr> {
-    let (local, probe) = if bound.is_ipv4() {
-        (
-            SocketAddr::from(([0, 0, 0, 0], 0)),
-            SocketAddr::from(([192, 0, 2, 1], 9)),
-        )
-    } else {
-        (
-            SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)),
-            SocketAddr::from((Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1), 9)),
-        )
-    };
-    let socket = UdpSocket::bind(local).ok()?;
-    socket.connect(probe).ok()?;
-    Some(socket.local_addr().ok()?.ip())
 }
 
 #[cfg(test)]

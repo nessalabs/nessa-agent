@@ -183,12 +183,14 @@ async fn endpoint_refuses_absent_and_unbound_native_destinations() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn endpoint_publishes_the_host_route_for_a_wildcard_bind() {
+async fn endpoint_publishes_the_configured_address_for_a_wildcard_bind() {
     let namespace = Namespace::new();
     let registry = namespace.registry();
     let credential = token(&registry, true);
+    let advertised = "192.0.2.10".parse().unwrap();
     let mut config = loopback();
     config.listen_address = "0.0.0.0:0".parse().unwrap();
+    config.advertised_address = Some(advertised);
     let (prepared, commands, _peers) = prepare(&config, namespace.inputs(registry.clone()))
         .await
         .unwrap();
@@ -204,11 +206,10 @@ async fn endpoint_publishes_the_host_route_for_a_wildcard_bind() {
     let listener = bound.local_address();
     assert!(listener.ip().is_unspecified());
     assert_ne!(listener.port(), 0);
-    let route = super::super::host_route(listener).expect("the host has a route address");
     let expected = commands.native_endpoint().unwrap();
     assert_eq!(
         expected.0,
-        std::net::SocketAddr::new(route, listener.port())
+        std::net::SocketAddr::new(advertised, listener.port())
     );
     assert!(!expected.0.ip().is_unspecified());
     assert!(!expected.0.ip().is_loopback());

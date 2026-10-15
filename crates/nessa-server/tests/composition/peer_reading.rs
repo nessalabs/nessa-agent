@@ -208,6 +208,7 @@ impl Peer {
             &NativeConfig {
                 listen_address: "127.0.0.1:0".parse().unwrap(),
                 relay,
+                advertised_address: None,
             },
             inputs(root, &auth, receivers.clone(), &gateway, &organization),
         )
@@ -642,6 +643,7 @@ impl Reader {
             &NativeConfig {
                 listen_address: "127.0.0.1:0".parse().unwrap(),
                 relay: None,
+                advertised_address: None,
             },
             inputs(root, &auth, receivers, &gateway, &organization),
         )
