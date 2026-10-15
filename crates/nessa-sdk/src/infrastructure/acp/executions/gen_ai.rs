@@ -168,13 +168,22 @@ fn result_text(update: &ToolCallUpdate) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{observe_event, permission_decider, tool_fact};
+    use crate::application::agent_execution::executions::{ExecutionEvent, ExecutionUpdate};
     use crate::application::agent_execution::permissions::{
         ActionContext, ApprovalBasis, ApprovalModeSnapshot, ApprovalRuleReference, HookRefusal,
     };
+    use crate::application::agent_execution::tools::ToolReviewInput;
     use crate::application::agent_execution::traces::{
         ContentCapture, FinishReason, GenAiSpan, LocalTraceStore, TraceRecorder, TurnIdentity,
     };
-    use crate::domain::agent_execution::tools::{ToolCallId, ToolCallUpdate, ToolKind, ToolStatus};
+    use crate::domain::agent_execution::executions::ExecutionId;
+    use crate::domain::agent_execution::permissions::{
+        PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy,
+        PermissionOption, PermissionOptionId, PermissionOptions, PermissionScope,
+    };
+    use crate::domain::agent_execution::tools::{
+        McpTool, ToolCallId, ToolCallUpdate, ToolKind, ToolObservation, ToolStatus,
+    };
     use std::time::Duration;
 
     fn update(title: Option<&str>, kind: Option<ToolKind>) -> ToolCallUpdate {
@@ -321,15 +330,6 @@ mod tests {
 
     #[test]
     fn a_permission_observation_that_names_an_mcp_tool_opens_an_extension_span() {
-        use crate::application::agent_execution::executions::{ExecutionEvent, ExecutionUpdate};
-        use crate::application::agent_execution::tools::ToolReviewInput;
-        use crate::domain::agent_execution::executions::ExecutionId;
-        use crate::domain::agent_execution::permissions::{
-            PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy,
-            PermissionOption, PermissionOptionId, PermissionOptions, PermissionScope,
-        };
-        use crate::domain::agent_execution::tools::{McpTool, ToolObservation};
-
         let store = LocalTraceStore::new();
         let mut recorder = TraceRecorder::new(store.clone(), ContentCapture::off());
         recorder.begin_turn(
@@ -390,8 +390,6 @@ mod tests {
 
     #[test]
     fn a_later_mcp_update_upgrades_the_tool_type() {
-        use crate::domain::agent_execution::tools::McpTool;
-
         let store = LocalTraceStore::new();
         let mut recorder = TraceRecorder::new(store.clone(), ContentCapture::off());
         recorder.begin_turn(
