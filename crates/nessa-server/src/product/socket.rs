@@ -2410,6 +2410,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tokio::io::DuplexStream;
     use tokio::runtime::Handle;
+    use tokio::sync::oneshot;
     use tokio_tungstenite::tungstenite::{protocol::Role, Message as Frame};
     use tokio_tungstenite::WebSocketStream;
     use uuid::Uuid;
@@ -2998,6 +2999,61 @@ mod tests {
                 .is_empty(),
             "the original admin session supplies current membership, not its old role"
         );
+    }
+
+    #[tokio::test]
+    async fn review_admission_reads_membership_after_metadata_returns() {
+        let (_directory, board) = open_rules();
+        let id = "00000000-0000-4000-8000-00000000000a";
+        board.waiting(&ReviewNotice {
+            conversation_id: id.into(),
+            execution_id: ExecutionId::new("turn").unwrap(),
+            permission_id: PermissionId::new("permission").unwrap(),
+            tool: "Bash".into(),
+        });
+        for (role, status, visible) in [
+            (MembershipRole::Admin, MembershipStatus::Active, true),
+            (MembershipRole::Member, MembershipStatus::Active, false),
+            (MembershipRole::Admin, MembershipStatus::Disabled, false),
+        ] {
+            let repository = repository_of(vec![owned_conversation(id, "owner")]);
+            let (entered, waiting) = oneshot::channel();
+            let (release, released) = oneshot::channel();
+            *repository.metadata_load_gate.lock().unwrap() = Some((entered, released));
+            let policy = Arc::new(conversation_support::ObservedPolicy::default());
+            let (state, authority) = fixture(MembershipRole::Admin);
+            let state = state.with_passive_read(
+                Arc::new(UnpairedBinding),
+                repository,
+                Arc::new(GrantedConversation(id.into())),
+                policy.clone(),
+            );
+            let session = authenticate(&state).await;
+            let task = tokio::spawn(notice_snapshot(board.clone(), state, session));
+            timeout(Duration::from_secs(2), waiting)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(policy.asked(), 0, "metadata has not reached review policy");
+            *authority.snapshot.lock().unwrap() = snapshot_with(role, status, &["server.read"]);
+            release.send(()).unwrap();
+            let snapshot = timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                !snapshot.reviews.is_empty(),
+                visible,
+                "{role:?}, {status:?}"
+            );
+            if status == MembershipStatus::Disabled {
+                assert_eq!(
+                    policy.asked(),
+                    0,
+                    "disabled membership never reaches policy"
+                );
+            }
+        }
     }
 
     /// A repository reply is outside data. Its identity is correlated before

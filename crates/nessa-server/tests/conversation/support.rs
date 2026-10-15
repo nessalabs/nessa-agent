@@ -188,6 +188,8 @@ pub(crate) struct MemoryRepository {
     pub(crate) mode_application_change: Mutex<Option<ModeRecordChange>>,
     pub(crate) mode_lookup_reply: Mutex<Option<ConversationModeRequest>>,
     pub(crate) mode_loaded_reply: Mutex<Option<Conversation>>,
+    /// Pauses a metadata reply after reading it, before its caller's policy admission.
+    pub(crate) metadata_load_gate: Mutex<Option<(oneshot::Sender<()>, Receiver<()>)>>,
     /// Override one create acknowledgement after its proposed target is stored.
     pub(crate) creation_reply: Mutex<Option<ConversationCreation>>,
     /// A concurrent creator establishes this row after the initial load, before create.
@@ -510,7 +512,14 @@ impl ConversationRepository for MemoryRepository {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
         let value = self.records.lock().unwrap().get(id).cloned();
         let value = self.mode_loaded_reply.lock().unwrap().take().or(value);
-        Box::pin(async move { Ok(value) })
+        let gate = self.metadata_load_gate.lock().unwrap().take();
+        Box::pin(async move {
+            if let Some((entered, release)) = gate {
+                let _ = entered.send(());
+                let _ = release.await;
+            }
+            Ok(value)
+        })
     }
     fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
         let mut conversations: Vec<ConversationId> = self

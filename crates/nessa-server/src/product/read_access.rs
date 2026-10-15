@@ -110,15 +110,6 @@ async fn unpaired_may_see_review(
     session: &AuthenticatedSession,
     conversation: &str,
 ) -> bool {
-    let Ok(snapshot) = (ReadCurrentSession {
-        access: state.access.as_ref(),
-        clock: state.clock.as_ref(),
-    })
-    .execute(session)
-    .await
-    else {
-        return false;
-    };
     let (Some(conversations), Some(policy), Ok(id)) = (
         state.review_metadata.as_ref(),
         state.conversation_access.as_deref(),
@@ -127,6 +118,15 @@ async fn unpaired_may_see_review(
         return false;
     };
     let Ok(Some(conversation)) = conversations.load(&id).await else {
+        return false;
+    };
+    let Ok(snapshot) = (ReadCurrentSession {
+        access: state.access.as_ref(),
+        clock: state.clock.as_ref(),
+    })
+    .execute(session)
+    .await
+    else {
         return false;
     };
     ReviewNoticeAccess::new(policy).admits(

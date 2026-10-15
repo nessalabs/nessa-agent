@@ -683,8 +683,17 @@ product-route composition. Its private repository delegates to the checked
 metadata loader, so returned identity is correlated before ownership policy
 or publication consumes the record (#918). Unpaired review recipients supply
 current membership facts to Cedar's `review.notice` action; paired recipients
-retain their conversation-grant admission (#920).
+retain their conversation-grant admission (#920). Metadata is loaded and
+correlated first, then current membership is read immediately before the
+synchronous policy decision. A membership read before the metadata await could
+retain an admin role after a concurrent demotion.
 
+| Metadata result | Membership when policy is about to run | Review outcome | Regression |
+| --- | --- | --- | --- |
+| Another identity | Any | Refused before policy | `a_review_notice_refuses_mismatched_metadata_before_policy_or_publication` |
+| Correlated live conversation in the same organization | Admin unchanged during the metadata read | Permitted | `review_admission_reads_membership_after_metadata_returns` |
+| Correlated conversation owned by someone else | Admin demoted to Member during the metadata read | Refused | `review_admission_reads_membership_after_metadata_returns` |
+| Correlated conversation | Membership disabled during the metadata read | Refused before policy | `review_admission_reads_membership_after_metadata_returns` |
 
 Client permission controls capture related IDs through
 `packages/nessa-client/src/application/permission-target.ts` and consume those
