@@ -208,7 +208,7 @@ policy engine, a new crate, or a grant-by-list.
 | `policy_revision` | Stays, under the name grant epoch. |
 | `paired.peer_gateway` | Deleted. `grant.comment` and `grant.drive` require the capability and, until the peer-write slice, a principal signed in as the binding owner. One condition, on the permit. |
 | A stored Drive role that a peer cannot use | `conversation.share` asks those permits before it writes. A denial writes nothing and returns the policy ids. The use case does not match a gateway principal on its own. The same permits deny a hand-built row at admission. |
-| `share_grants` key `(receiver_id, conversation_id)` | Becomes `(subject_kind, subject_id, resource_kind, resource_id)` in the refactor, one metadata version bump. A paired device or gateway uses subject kind `receiver` and its receiver id, so two devices of one owner stay two rows. An integration or a later agent uses subject kind `principal`. One integration principal has one active webhook registration. The same-person link is not the subject. The directory slice does not change the key. |
+| `share_grants` key `(receiver_id, conversation_id)` | Becomes `(subject_kind, subject_id, resource_kind, resource_id)` in the refactor, one metadata version bump. A paired device or gateway uses subject kind `receiver` and its receiver id, so two devices of one owner stay two rows. An integration or a later agent uses subject kind `principal`. One integration principal has one active webhook registration. The same-person link is not the subject. The directory slice does not change the key. A directory resource and its marker are minted once, and later subject grants reuse that resource id. |
 | Credential `conversation.read`, `conversation.write`, `environment.serve` | Stay. They say whether this credential may read, may be the conversation authority, or may serve. They do not name a conversation or a directory. `hold.peer` stays as written. |
 | `grants.json` on the environment | Stays on that machine, so the gateway cannot widen it. The same capability and constraint words. `domain::unwritten` stays the default facts (an absent ssh entry is the host's own set; an absent dialed gateway is empty). |
 | Gateway `denyPrograms` / `allowPrograms` | Stay the host's own program list in `commands.cedar`. A grant's command rules are a further constraint, deny wins. |
@@ -250,24 +250,32 @@ hooks are not allowed to answer first.
 The resource is one canonical directory in an environment the grantor
 enforces. The environment is this gateway's own machine, a remote
 environment it already leases over SSH or a paired connection, or a cloud
-environment a later agent slice will run. Share mints a resource id for
-the directory. The id is not the path. The decision is a minted marker.
-The row stores the environment, the canonical path, and a directory
-binding beside that id. The binding is 32 random bytes minted at share.
-Share writes those bytes into a file named `.nessa-binding` at the
-directory root, through a directory handle, then commits the grant row.
-If that commit fails, share removes the marker and writes no grant. The
-first open takes a directory handle on the stored path and reads
-`.nessa-binding` through that handle. A missing root, a missing marker,
-or different bytes refuse the use and revoke the grant. A directory
-created later at the same path has no marker, so it does not receive the
-grant. That holds when the filesystem reuses the device and inode numbers
-of the deleted directory. Copying `.nessa-binding` into another directory
-is a copy of the binding. The reuse test creates a new directory at the
-same path, on a filesystem that reuses device and inode numbers, and does
-not copy the marker. The open is refused and the grant is revoked. The
-no-follow walk starts from the handle whose marker matched. `read` lists
-and reads named paths under that directory.
+environment a later agent slice will run. The decision is one directory
+resource, minted once, with one marker. The resource id is not the path.
+The resource row stores the environment, the canonical path, and a
+directory binding. The binding is 32 random bytes. Share reads
+`.nessa-binding` through a directory handle on the path. When the file
+is present, those bytes are the binding. Share stores the resource if
+none is stored for that binding, then attaches the subject grant to that
+resource id. Share writes the file only when it is absent, with a create
+that leaves an existing file unchanged, then commits the resource row,
+then the grant. A later share of the same directory finds the file and
+leaves it unchanged. If the resource commit fails, share removes the
+marker only when this attempt created the file and no committed resource
+stores that binding. A failed grant commit leaves the marker and every
+grant already stored. A second subject on the same directory gets another
+grant row for the same resource id. The first subject's grant stays, and
+the marker bytes stay. The first open reads `.nessa-binding` through a
+directory handle on the stored path. A missing root, a missing marker, or
+different bytes refuse the use and revoke the grants for that resource.
+A directory created later at the same path has no marker, so it does not
+receive those grants. That holds when the filesystem reuses the device
+and inode numbers of the deleted directory. Copying `.nessa-binding`
+into another directory is a copy of the binding. The reuse test creates
+a new directory at the same path, on a filesystem that reuses device and
+inode numbers, and does not copy the marker. The open is refused and the
+grants are revoked. The no-follow walk starts from the handle whose
+marker matched. `read` lists and reads named paths under that directory.
 `write` creates and edits named paths under it. The open is the check.
 The environment walks from a directory handle on the granted directory,
 and opens each component no-follow against the parent handle: publish, a
@@ -490,8 +498,9 @@ source. Restart, before it admits work, reads each granted conversation
 from its cursor, or from the start when the cursor is unset, and inserts
 a `queued` row for every checkpoint that does not have one. A checkpoint
 that already has a row keeps that delivery id. A crash while the attempt
-is waiting leaves the `queued` row. Restart admits each `queued` row that
-has no terminal outcome, in checkpoint order.
+is waiting leaves the `queued` row. Restart admits each `queued` row, and
+each `retry scheduled` row whose `due_at` has arrived, in checkpoint
+order.
 
 Revoke and a delivery attempt share one permit for that registration, the
 same shape as `hold_revision` on a share grant. The attempt that holds the
@@ -511,16 +520,20 @@ turn's rule: admitted work finishes, and the next command is refused.
   was current. That write commits first. If it fails, the POST is not
   written, the outcome is `not sent` with cause audit unavailable, and the
   permit drops. After `sending` commits, the attempt writes the POST.
-- The terminal outcome is a second durable record. It does not replace
-  `sending`. It names `sent`, `retry scheduled`, `timed out`, or `not
-  sent`, the response that was observed, and the cause. If that write
-  fails after the response, or the process stops before it commits, the
-  `sending` row stays. Restart finds `sending` with no terminal record and
-  does not POST that delivery id again. It appends a reconciliation
-  record: outcome unknown, cause audit unavailable after send, the same
-  delivery id, target, and epoch. The effect is not relabeled `sent` and
-  the `sending` row is not removed. A later admission of that delivery id
-  is refused. A new event is a new delivery id.
+- The decision is that `retry scheduled` is a non-terminal outbox state
+  with `due_at`. A retryable response writes that state and the due time
+  on the same row, in one write, and keeps the delivery id. The due time
+  is the row. Restart admits the row when `due_at` has arrived and
+  repeats that delivery id. A row whose `due_at` is still ahead waits
+  until then. `sent`, `timed out`, and `not sent` are the terminal
+  records. They do not replace `sending`. A later admission of those
+  delivery ids is refused. If the outcome write fails after the response,
+  or the process stops before it commits, the `sending` row stays.
+  Restart finds `sending` with no later record and does not POST that
+  delivery id again. It appends a reconciliation record: outcome unknown,
+  cause audit unavailable after send, the same delivery id, target, and
+  epoch. The effect is not relabeled `sent` and the `sending` row is not
+  removed. A new event is a new delivery id.
 - Revoke takes the same permit. When an attempt holds it, revoke waits
   until that attempt records its outcome and drops the permit, and no
   longer than `webhook.post_deadline`. Revoke does not cancel a write that
@@ -552,7 +565,8 @@ turn's rule: admitted work finishes, and the next command is refused.
 One POST that already holds the permit can still reach the receiver. No
 later attempt is sent. Each attempt records the target, the delivery id,
 the grant epoch it read, the outcome of that attempt (sent, retry
-scheduled, timed out, or not sent), and the cause. An attempt is one observation of
+scheduled, timed out, or not sent), and the cause. `retry scheduled`
+names the due time stored on the outbox row. An attempt is one observation of
 a POST.
 
 ## LAN announcement
@@ -678,11 +692,13 @@ registration. A second `credential.issue` while that registration is
 active is refused and writes nothing. The subject stays the principal.
 This slice writes resource kind `conversation` and
 the conversation id. The directory slice writes kind `directory` and a
-resource id minted for that directory. The path and the minted directory
-binding are stored beside the id and are not the key. Replacing the
-directory does not keep the grant. It
+resource id minted once for that directory. The path and the binding live
+on that one resource. Each subject grant points at the resource id. A
+later share of the same directory reuses the resource and leaves the
+marker unchanged. Replacing the directory does not keep the grant. It
 does not change the primary key and does not mint a conversation id for
-a directory. One subject may hold many directory rows. Webhook and agent
+a directory. One subject may hold many directory rows. One directory
+resource may have many subject grants. Webhook and agent
 slices insert into this key. They do not migrate identity again.
 
 The capability set is `read`, and for a principal Cedar permits, `comment`
@@ -806,19 +822,27 @@ this gateway's machine, a remote environment it already leases, or a cloud
 environment a later agent uses. The grant names the environment and the
 directory. The row uses the refactor's key
 `(subject_kind, subject_id, resource_kind, resource_id)` with resource
-kind `directory`. A paired subject is the receiver. Share mints the
-resource id. It is not the path. The decision is a minted marker. The row
-stores the environment, the canonical path, and a directory binding beside
-the id. The binding is 32 random bytes minted at share. Share writes those
-bytes into `.nessa-binding` at the directory root, through a directory
-handle, then commits the grant row. If that commit fails, share removes
-the marker and writes no grant. The first open takes a directory handle
-and reads `.nessa-binding` through that handle. A missing root, a missing
-marker, or different bytes refuse the use and revoke the grant. A
-directory later created at the same path does not receive the grant,
-including when the filesystem reuses the device and inode numbers of the
-deleted directory. Copying `.nessa-binding` into another directory is a
-copy of the binding. This slice does not change the key and does not mint a
+kind `directory`. A paired subject is the receiver. The decision is one
+directory resource, minted once, with one marker. The resource id is not
+the path. The resource row stores the environment, the canonical path,
+and a directory binding. The binding is 32 random bytes. Share reads
+`.nessa-binding` through a directory handle. When the file is present,
+those bytes are the binding. Share stores the resource if none is stored
+for that binding, then attaches the subject grant to that resource id.
+Share writes the file only when it is absent, with a create that leaves
+an existing file unchanged, then commits the resource row, then the
+grant. A later share finds the file and leaves it unchanged. If the
+resource commit fails, share removes the marker only when this attempt
+created the file and no committed resource stores that binding. A failed
+grant commit leaves the marker and every grant already stored. A second
+subject gets another grant row for the same resource id. The first
+subject's grant stays, and the marker bytes stay. The first open reads
+`.nessa-binding` through the directory handle. A missing root, a missing
+marker, or different bytes refuse the use and revoke the grants for that
+resource. A directory later created at the same path does not receive
+those grants, including when the filesystem reuses the device and inode
+numbers of the deleted directory. Copying `.nessa-binding` into another
+directory is a copy of the binding. This slice does not change the key and does not mint a
 conversation id. Capabilities are
 `read`, `write`, and `exec`. `read` and
 `write` open a named path by walking from a directory handle on the
@@ -869,8 +893,10 @@ encoding would not fit in one grant frame is refused and the row is
 unchanged. The grant subscription stays open. Deleting the directory
 and creating another at the same path does not keep the grant. The reuse
 test does that on a filesystem that reuses device and inode numbers and
-does not copy `.nessa-binding`. The open is refused and the grant is
-revoked.
+does not copy `.nessa-binding`. The open is refused and the grants are
+revoked. Sharing the same directory with a second subject leaves the
+first grant in place and leaves the marker bytes unchanged. A second
+share whose grant commit fails leaves the marker and the first grant.
 
 An opted-in Claude or Codex harness still runs its own hooks. The gateway
 cannot write a wider `grants.json` than the machine's owner wrote. A
@@ -1084,8 +1110,12 @@ behind the source. Restart, before it admits work, reads each granted
 conversation from its cursor, or from the start when the cursor is unset,
 and inserts a `queued` row for every checkpoint that does not have one.
 A checkpoint that already has a row keeps that delivery id. A crash while
-waiting leaves the `queued` row. Restart admits each such row in
-checkpoint order.
+waiting leaves the `queued` row. The decision is that `retry scheduled`
+is a non-terminal outbox state with `due_at`. A retryable response writes
+that state and the due time on the same row, in one write, and keeps the
+delivery id. Restart admits each `queued` row, and each `retry scheduled`
+row whose `due_at` has arrived, in checkpoint order, and repeats that
+delivery id. A row whose `due_at` is still ahead waits until then.
 
 The sender does not follow redirects. A 3xx is not a delivery. The attempt
 records `not sent` or `retry scheduled`, and the next POST, when the epoch
@@ -1103,9 +1133,11 @@ written, the attempt durably records `sending` with the target, the
 delivery id, the epoch, and that the credential was current. If that
 write fails, the POST is not written and the outcome is `not sent` with
 cause audit unavailable. After `sending` commits, the attempt writes the
-POST. The terminal outcome is a second durable record and does not
-replace `sending`. If that write fails after the response, or the process
-stops before it commits, restart finds `sending` with no terminal record,
+POST. `sent`, `timed out`, and `not sent` are the terminal records. They
+do not replace `sending`. `retry scheduled` is the outbox state above,
+with `due_at`, and does not close the delivery. If the terminal write
+fails after the response, or the process
+stops before it commits, restart finds `sending` with no later record,
 does not POST that delivery id again, and appends outcome unknown with
 cause audit unavailable after send. The `sending` row stays. The effect
 is not relabeled `sent`.
@@ -1129,6 +1161,7 @@ and is not sent after either revoke. An
 attempt that has not taken the permit when revoke commits is not sent.
 Each attempt records the target, the delivery id, the epoch it read, the
 outcome (sent, retry scheduled, timed out, or not sent), and the cause.
+`retry scheduled` names the due time stored on the outbox row.
 
 ## Gate
 
@@ -1153,7 +1186,9 @@ nothing. A crash while an event waits for the permit leaves its `queued`
 outbox row, and restart delivers that delivery id. A crash after the
 conversation commit and before the outbox write is recovered from the
 replay cursor: restart inserts the missing `queued` row, and a checkpoint
-that already has a row keeps its delivery id. A second `credential.issue`
+that already has a row keeps its delivery id. A crash after `retry
+scheduled` and its `due_at` are written leaves that row. Restart admits
+the same delivery id once `due_at` has arrived. A second `credential.issue`
 while a registration is active is refused and writes nothing. After that
 credential is revoked, a new issue creates one registration, and delivery
 goes to the new URL only. A receiver recomputes
