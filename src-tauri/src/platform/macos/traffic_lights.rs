@@ -47,9 +47,12 @@ use objc2_foundation::{
     NSPoint, NSRect, NSSize,
 };
 
+include!(concat!(env!("OUT_DIR"), "/titlebar.rs"));
+
 /// The titlebar row's centre, in points below the window's top edge: half of
-/// `--desktop-titlebar-height` (`tests/traffic_lights.rs` holds the two equal).
-pub const ROW_CENTRE: f64 = 24.0;
+/// the page's `--desktop-titlebar-height`, which the build script reads from
+/// the stylesheet (`titlebar_geometry.rs`).
+pub const ROW_CENTRE: f64 = TITLEBAR_HEIGHT / 2.0;
 /// The close button's left edge, in points from the window's left edge. The
 /// page leaves the buttons room up to `--desktop-window-controls-inset`.
 pub const LEFT: f64 = 16.0;

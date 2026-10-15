@@ -368,10 +368,16 @@ const body = {
             `rail ${rail ? "open" : "closed"}, ${step}: no titlebar control measured`,
           )
         runs.push({ rail, step, frames: frames.length })
-        // 24px is the native row centre too (`ROW_CENTRE` in traffic_lights.rs).
+        // 24px is the native row centre too: the host reads the same height
+        // from styles.css (`src-tauri/titlebar_geometry.rs`).
         for (const frame of frames) {
           if (frame.half !== 24)
-            failures.push(`${step}: the titlebar is ${frame.half * 2}px tall, not 48`)
+            failures.push(
+              `rail ${rail ? "open" : "closed"}, ${step}: ` +
+                (frame.half === null
+                  ? "no titlebar"
+                  : `the titlebar is ${frame.half * 2}px tall, not 48`),
+            )
           for (const { name, y } of frame.centres)
             if (Math.abs(y - 24) > 0.5)
               failures.push(
