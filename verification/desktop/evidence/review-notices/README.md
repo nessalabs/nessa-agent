@@ -1,0 +1,95 @@
+# Review-notice verification (#918, #920)
+
+Semantic source: `8f2fd076ea1608bd925375584e2235a73cb9c79c`.
+Environment: local macOS, Vite development mode, bundled Chromium and WebKit,
+columns layout. The gateway was rebuilt from that source; `MCP_LIVE_NESSA`
+selected the built executable. These captures are cropped and resized versions
+of the scripted fixture's screenshots, saved as small JPEGs.
+
+The run used `pnpm test:e2e:scripted -- --channel bundled --evidence <directory>`.
+The script's three checks passed in both engines. Counts below are combined
+across engines, including shared setup where the check has it.
+
+| Check | Chromium | WebKit | Assertions |
+| --- | --- | --- | --- |
+| MCP Apps through the gateway | pass | pass | 16/16 |
+| Gateway window | pass | pass | 13/13 |
+| Permission, allow, failure and cancel scenarios | pass | pass | 8/8 |
+
+```text
+mcp-apps-gateway: 16/16 held
+gateway-window: 13/13 held
+ok    permission [chromium columns]
+ok    permission [webkit columns]
+scripted-scenarios: 8/8 held
+Verdict: pass
+```
+
+The sole labelled harmless console line was a Chromium `/browser/check`
+`net::ERR_ABORTED` after a 204 response, the existing #485 case. No performance
+budget claim is made by this functional run.
+
+## Permission notices
+
+These show the permitted fixture recipient's waiting notice and review card.
+Metadata correlation, policy refusal, and membership changes are exercised by
+the Rust regressions and source reversals below.
+
+![Waiting review in Chromium](permission-review-chromium.jpg)
+
+![Waiting review in WebKit](permission-review-webkit.jpg)
+
+## Gateway conversations
+
+![Gateway conversation in Chromium](gateway-live-chromium.jpg)
+
+![Gateway conversation in WebKit](gateway-live-webkit.jpg)
+
+## Regression and reversal evidence
+
+The fixed source passed `cargo test -p nessa-server --lib review`: 66 tests.
+The complete Cedar access-policy suite passed 26 tests. The complete socket
+suite passed 291 tests, with its existing multi-minute latency measurement
+ignored. These suites overlap.
+
+Each reversal below was applied separately to an isolated export of the exact
+semantic source, with the applied hunk and SHA256 printed before execution.
+Each produced a test assertion failure, rather than a compilation failure.
+After each run the source was restored and given a fresh modification time.
+The original checkout and the running browser gateway were not mutated.
+
+| Rule reversed | Applied change | Observed assertion |
+| --- | --- | --- |
+| Metadata identity | Reader calls the raw repository instead of the checked loader | `refused.reviews.is_empty()` fails |
+| Membership freshness | Read membership before awaiting metadata | `Member, Active`: actual `true`, expected `false` |
+| Policy refusal | Add a Rust admin shortcut before the evaluator | Refused-policy snapshot unexpectedly contains a review |
+| Owner identity | Invert Cedar's owner equality | Non-owner member is allowed |
+| Admin membership | Change Cedar's admin role to member | Non-owner admin is refused |
+| Organization boundary | Remove organization equality from the review permits | Foreign-organization admin is allowed |
+| Live conversation | Remove deletion refusal from the review permits | Deleted conversation is allowed |
+
+Short failure lines from the actual runs:
+
+```text
+metadata-identity: assertion failed: refused.reviews.is_empty()
+membership-ordering: assertion `left == right` failed: Member, Active
+policy-refusal: assertion failed: notice_snapshot(board.clone(), state, session).await.reviews.is_empty()
+owner-identity: assertion `left == right` failed: Member, same org=true, owns=false, deleted=false
+admin-membership: assertion `left == right` failed: Admin, same org=true, owns=false, deleted=false
+same-organization: assertion `left == right` failed: Admin, same org=false, owns=false, deleted=false
+live-conversation: assertion `left == right` failed: Admin, same org=true, owns=false, deleted=true
+restored source: test result: ok. 65 passed; 0 failed
+```
+
+The repeated exported baseline and restored runs excluded only
+`app_reviews_never_cost_the_agents_own_however_the_view_is_filled`, which had
+already passed in the original 66-test run. No review-notice regression was
+excluded.
+
+## Main integration
+
+Main `cad51811ab7049138c00ac2109b8c6f044bac991` added only method-classification
+design documentation after review base `9812c3c`. A conflict-free merge-tree
+integration produced `a00c5731a02b4c8f300c80b2be83741ce55c7ac6`; runtime, UI,
+protocol, scripts, manifests, lockfiles and workflow blobs are identical to the
+semantic source above.
