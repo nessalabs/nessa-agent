@@ -697,7 +697,10 @@ fn first_physical_timeout_survives_stop_while_socket_cleanup_is_held() {
         }),
         Arc::new(fixtures::Time(Instant::now())),
         Arc::new(ThreadProductWake::default()),
-        ProductLimits::new(1, 1, MAX_PROTECTED_RESPONSE_BYTES, 5, 40, 2_000, 500).unwrap(),
+        // Long enough for the worker to be scheduled and record dispatch, and
+        // short of the peer's three-second read. A 40ms budget loses that
+        // race on a loaded Windows runner, so the request is never sent.
+        ProductLimits::new(1, 1, MAX_PROTECTED_RESPONSE_BYTES, 5, 1_000, 2_000, 500).unwrap(),
     );
     session.start().unwrap();
     session.wait_ready().unwrap();
