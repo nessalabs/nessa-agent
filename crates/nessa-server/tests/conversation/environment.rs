@@ -49,6 +49,45 @@ fn binding() -> Arc<dyn AgentProvider> {
     Arc::new(Provider::new(Arc::new(ProviderFactory::default())))
 }
 
+struct Traced(
+    Arc<dyn AgentProvider>,
+    Arc<nessa_sdk::application::agent_execution::traces::LocalTraceStore>,
+);
+
+impl AgentProvider for Traced {
+    fn approval_mode(&self) -> Option<ApprovalMode> {
+        self.0.approval_mode()
+    }
+    fn effort_level(&self) -> Option<EffortLevel> {
+        self.0.effort_level()
+    }
+    fn identity(&self) -> ProviderIdentity {
+        self.0.identity()
+    }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        self.0.capabilities()
+    }
+    fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
+        self.0.open(request)
+    }
+    fn traces(
+        &self,
+    ) -> Option<Arc<nessa_sdk::application::agent_execution::traces::LocalTraceStore>> {
+        Some(self.1.clone())
+    }
+}
+
+#[test]
+fn the_lease_fence_reads_the_provider_trace_store() {
+    let store = nessa_sdk::application::agent_execution::traces::LocalTraceStore::new();
+    let fence = LeaseFence::new(
+        LeaseId::new("lease").unwrap(),
+        Arc::new(Traced(binding(), store.clone())),
+        FencePhase::Live,
+    );
+    assert!(Arc::ptr_eq(&store, &fence.traces().unwrap()));
+}
+
 fn events(fence: &LeaseFence, turns: &[&str]) -> FencedEvents {
     FencedEvents {
         inner: Box::new(Script(turns.iter().map(|turn| event(turn)).collect())),
