@@ -13,14 +13,14 @@
 //!
 //! So this module is the one owner of their placement, and it places them by
 //! their centre, measured from the buttons themselves: whatever size and
-//! offset a release gives them, their middle is put on the row's. It never
-//! moves a button inside the view that holds the three. AppKit moves them back
-//! to its own spot in that view whenever it likes (a title change does, with
-//! no layout and no frame-change notice), so a button moved there does not
-//! stay. It moves that view instead, by the distance from AppKit's spot to the
-//! row's, and AppKit's spot then lands on the row. It places them again when
-//! the titlebar's views change frame and after the window events that relayout
-//! follows.
+//! offset a release gives them, their middle is put on the row's. AppKit
+//! moves them back to its own spot whenever it lays the titlebar out, and
+//! sometimes says nothing (a title change moves them with no layout and no
+//! frame-change notice). So rather than wait to be told, it checks them each
+//! time the main run loop is about to sleep, after AppKit's work for that turn
+//! and before the screen is drawn, and moves only a button that is off the
+//! row. The titlebar's frame changes and the window events relayout follows
+//! place them at once too.
 //! `tauri.conf.json` names no `trafficLightPosition`, so nothing else moves
 //! them.
 //!
@@ -38,6 +38,9 @@ use objc2_app_kit::{
     NSWindowDidChangeScreenNotification, NSWindowDidDeminiaturizeNotification,
     NSWindowDidEndLiveResizeNotification, NSWindowDidExitFullScreenNotification,
     NSWindowDidResignKeyNotification, NSWindowDidResizeNotification,
+};
+use objc2_core_foundation::{
+    kCFRunLoopCommonModes, CFRunLoop, CFRunLoopActivity, CFRunLoopObserver,
 };
 use objc2_foundation::{
     MainThreadMarker, NSNotification, NSNotificationCenter, NSNotificationName, NSOperationQueue,
@@ -59,10 +62,21 @@ const FULL_SCREEN: usize = 1 << 14;
 /// Below this, two frames are the same frame. Writing a frame AppKit already
 /// has would post a frame change and place the buttons again for nothing.
 const SAME: f64 = 0.01;
+
+/// Where the check runs among the main run loop's other work before it
+/// sleeps: after AppKit's own layout and display, just before Core Animation
+/// commits the frame (2000000), so a button AppKit moved is back before the
+/// screen shows it.
+const BEFORE_COMMIT: isize = 1_999_999;
+
 thread_local! {
     /// Set while the buttons are being placed: the frame changes that placing
     /// posts are this placement's own, not AppKit's.
     static PLACING: Cell<bool> = const { Cell::new(false) };
+    /// AppKit's own distance from one button to the next, read before the
+    /// buttons are first moved: read again later, it can catch AppKit halfway
+    /// through moving the three.
+    static SPACING: Cell<Option<f64>> = const { Cell::new(None) };
 }
 
 /// The window's three buttons, close first.
@@ -90,7 +104,7 @@ fn place_now(window: &NSWindow) -> Result<(), String> {
         return Ok(());
     }
     let buttons = buttons(window);
-    let Some(close) = buttons.first() else {
+    let [close, minimize, _] = buttons.as_slice() else {
         return Err(String::from("the window has no traffic lights"));
     };
     let (row, container) = titlebar_views(close)?;
@@ -108,31 +122,46 @@ fn place_now(window: &NSWindow) -> Result<(), String> {
         ),
     );
 
-    // The buttons stay where AppKit puts them inside their own view, so
-    // AppKit laying them out again (a title change does, without a word) puts
-    // them back on the same spot. That view moves instead, by however far
-    // AppKit's spot is from the row's: measured, whatever a release draws.
-    let size = container.bounds().size;
-    let now = row.frame();
-    set_frame(&row, NSRect::new(now.origin, size));
-    let close_in_container = container.convertRect_fromView(close.bounds(), Some(close));
-    let top = if container.isFlipped() {
-        close_in_container.origin.y
+    // The row's centre, in the container, then in the buttons' own view:
+    // wherever AppKit put that view, and whichever way each counts its y.
+    let centre_y = if container.isFlipped() {
+        ROW_CENTRE
     } else {
-        height - (close_in_container.origin.y + close_in_container.size.height)
+        height - ROW_CENTRE
     };
-    let low = top + close_in_container.size.height / 2.0 - ROW_CENTRE;
-    let right = LEFT - close_in_container.origin.x;
-    let now = row.frame();
-    let y = if container.isFlipped() {
-        now.origin.y - low
-    } else {
-        now.origin.y + low
+    let centre_in_row = || row.convertPoint_fromView(NSPoint::new(0.0, centre_y), Some(&container));
+    let tallest = buttons
+        .iter()
+        .map(|button| button.frame().size.height)
+        .fold(0.0, f64::max);
+    let centre = centre_in_row();
+    let bounds = row.bounds();
+    if centre.y - tallest / 2.0 < bounds.origin.y
+        || centre.y + tallest / 2.0 > bounds.origin.y + bounds.size.height
+    {
+        // The buttons' view would clip them on the row: it spans the container.
+        set_frame(&row, container.bounds());
+    }
+    let centre = centre_in_row();
+
+    let spacing = match SPACING.get() {
+        Some(spacing) => spacing,
+        None => {
+            let spacing = minimize.frame().origin.x - close.frame().origin.x;
+            SPACING.set(Some(spacing));
+            spacing
+        }
     };
-    set_frame(
-        &row,
-        NSRect::new(NSPoint::new(now.origin.x + right, y), now.size),
-    );
+    for (index, button) in buttons.iter().enumerate() {
+        let origin = NSPoint::new(
+            LEFT + index as f64 * spacing,
+            centre.y - button.frame().size.height / 2.0,
+        );
+        let now = button.frame().origin;
+        if (now.x - origin.x).abs() > SAME || (now.y - origin.y).abs() > SAME {
+            button.setFrameOrigin(origin);
+        }
+    }
     Ok(())
 }
 
@@ -159,11 +188,14 @@ fn set_frame(view: &NSView, frame: NSRect) {
     }
 }
 
-/// Keeps the buttons placed for the window's life: again whenever one of the
-/// titlebar's views changes frame, and after each window event that relayout follows, once at once and once on the next turn
-/// of the main queue, since AppKit can finish its layout after posting.
+/// Keeps the buttons placed for the window's life: each time the main run loop
+/// is about to sleep, whenever one of the titlebar's views changes frame, and
+/// after each window event that relayout follows, once at once and once on
+/// the next turn of the main queue, since AppKit can finish its layout after
+/// posting.
 pub fn watch(window: Retained<NSWindow>, main: MainThreadMarker) -> Result<(), String> {
     place(&window, main)?;
+    check_before_each_sleep(window.clone(), main)?;
     let buttons = buttons(&window);
     let close = buttons
         .first()
@@ -203,6 +235,34 @@ pub fn watch(window: Retained<NSWindow>, main: MainThreadMarker) -> Result<(), S
             unsafe { NSOperationQueue::mainQueue().addOperationWithBlock(&again) };
         });
     }
+    Ok(())
+}
+
+/// Places the buttons each time the main run loop is about to sleep, in every
+/// mode (live resize and menu tracking included). Placing moves nothing when
+/// the buttons are already on the row, so a quiet turn costs a few frame reads.
+fn check_before_each_sleep(
+    window: Retained<NSWindow>,
+    main: MainThreadMarker,
+) -> Result<(), String> {
+    let check = block2::RcBlock::new(move |_: *mut CFRunLoopObserver, _: CFRunLoopActivity| {
+        report(place(&window, main));
+    });
+    // SAFETY: the default allocator, and a block that lives as long as the
+    // observer holds it.
+    let observer = unsafe {
+        CFRunLoopObserver::with_handler(
+            None,
+            CFRunLoopActivity::BeforeWaiting.0,
+            true,
+            BEFORE_COMMIT,
+            Some(&check),
+        )
+    }
+    .ok_or_else(|| String::from("the run loop observer could not be made"))?;
+    let run_loop = CFRunLoop::main().ok_or_else(|| String::from("there is no main run loop"))?;
+    // The run loop keeps the observer for the app's life.
+    run_loop.add_observer(Some(&observer), unsafe { kCFRunLoopCommonModes });
     Ok(())
 }
 
