@@ -208,7 +208,7 @@ policy engine, a new crate, or a grant-by-list.
 | `policy_revision` | Stays, under the name grant epoch. |
 | `paired.peer_gateway` | Deleted. `grant.comment` and `grant.drive` require the capability and, until the peer-write slice, a principal signed in as the binding owner. One condition, on the permit. |
 | A stored Drive role that a peer cannot use | `conversation.share` asks those permits before it writes. A denial writes nothing and returns the policy ids. The use case does not match a gateway principal on its own. The same permits deny a hand-built row at admission. |
-| `share_grants` key `(receiver_id, conversation_id)` | Becomes `(subject_kind, subject_id, resource_kind, resource_id)` in the refactor, one metadata version bump. A paired device or gateway uses subject kind `receiver` and its receiver id, so two devices of one owner stay two rows. An integration or a later agent uses subject kind `principal`. The same-person link is not the subject. The directory slice does not change the key. |
+| `share_grants` key `(receiver_id, conversation_id)` | Becomes `(subject_kind, subject_id, resource_kind, resource_id)` in the refactor, one metadata version bump. A paired device or gateway uses subject kind `receiver` and its receiver id, so two devices of one owner stay two rows. An integration or a later agent uses subject kind `principal`. One integration principal has one active webhook registration. The same-person link is not the subject. The directory slice does not change the key. |
 | Credential `conversation.read`, `conversation.write`, `environment.serve` | Stay. They say whether this credential may read, may be the conversation authority, or may serve. They do not name a conversation or a directory. `hold.peer` stays as written. |
 | `grants.json` on the environment | Stays on that machine, so the gateway cannot widen it. The same capability and constraint words. `domain::unwritten` stays the default facts (an absent ssh entry is the host's own set; an absent dialed gateway is empty). |
 | Gateway `denyPrograms` / `allowPrograms` | Stay the host's own program list in `commands.cedar`. A grant's command rules are a further constraint, deny wins. |
@@ -251,13 +251,23 @@ The resource is one canonical directory in an environment the grantor
 enforces. The environment is this gateway's own machine, a remote
 environment it already leases over SSH or a paired connection, or a cloud
 environment a later agent slice will run. Share mints a resource id for
-the directory. The id is not the path. The row stores the environment and
-the canonical path beside that id. The first open takes a directory
-handle on the path and compares it to the file identity captured when the
-id was minted. If the root is gone, or the identity differs, the use is
-refused and the grant is revoked. A directory later created at the same
-path does not receive the grant. The no-follow walk starts from the
-handle that matched. `read` lists and reads named paths under that directory.
+the directory. The id is not the path. The decision is a minted marker.
+The row stores the environment, the canonical path, and a directory
+binding beside that id. The binding is 32 random bytes minted at share.
+Share writes those bytes into a file named `.nessa-binding` at the
+directory root, through a directory handle, then commits the grant row.
+If that commit fails, share removes the marker and writes no grant. The
+first open takes a directory handle on the stored path and reads
+`.nessa-binding` through that handle. A missing root, a missing marker,
+or different bytes refuse the use and revoke the grant. A directory
+created later at the same path has no marker, so it does not receive the
+grant. That holds when the filesystem reuses the device and inode numbers
+of the deleted directory. Copying `.nessa-binding` into another directory
+is a copy of the binding. The reuse test creates a new directory at the
+same path, on a filesystem that reuses device and inode numbers, and does
+not copy the marker. The open is refused and the grant is revoked. The
+no-follow walk starts from the handle whose marker matched. `read` lists
+and reads named paths under that directory.
 `write` creates and edits named paths under it. The open is the check.
 The environment walks from a directory handle on the granted directory,
 and opens each component no-follow against the parent handle: publish, a
@@ -426,9 +436,18 @@ session that presented one would be admitted as a paired reader.
 `conversation.share` is still the one share command. This slice teaches it a
 second target, the integration credential, beside a paired receiver. The
 grant row is the same fact, subject kind `principal` and the
-conversation resource, with no receiver. Delivery reads those
-grants. The gateway POSTs events for those conversations only. The payload
-is what a reader with that capability set may see.
+conversation resource, with no receiver. The decision is one active
+registration per integration principal. `credential.issue` only adds a
+credential on that principal
+([local registry](../../crates/nessa-auth/src/adapters/local/registry.rs)),
+so a second registration would POST to a URL the owner did not register
+for the first. While a registration is active, another `credential.issue`
+for that principal is refused and writes no credential and no
+registration. Revoking the credential stops that registration. A later
+issue creates one new registration, with a new URL and mac key. Delivery
+reads the grant and POSTs with that one registration. The gateway POSTs
+events for those conversations only. The payload is what a reader with
+that capability set may see.
 
 The body is signed with HMAC-SHA256, the mac
 [backup manifests](../../crates/nessa-server/src/backup/application/ports.rs)
@@ -457,13 +476,22 @@ the next POST, when the epoch still allows it, goes to the registered URL
 only. The signature headers are written on that POST and are not sent to
 another origin. A redirect to HTTPS is still not followed.
 
-An event for a granted conversation is written to that registration's
-outbox before the attempt waits for the permit. The row is a new delivery
-id, the registration, and the source checkpoint (conversation id,
-incarnation, position), in state `queued`. That write commits first. A
-crash while the attempt is waiting leaves the row. Restart admits each
-`queued` row that has no terminal outcome, in checkpoint order, and does
-not mint a new delivery id for it.
+The conversation record stream is the source of truth. The decision is a
+durable replay cursor, one per registration and conversation: the last
+checkpoint of that conversation whose outbox row committed. The cursor
+starts unset. An event for a granted conversation is written to that
+registration's outbox before the attempt waits for the permit. The row
+is a delivery id, the registration, and the source checkpoint
+(conversation id, incarnation, position), in state `queued`. That write
+also sets the cursor to the same checkpoint, and the two commit together.
+The conversation commit stays in the conversation store. A crash after
+that commit and before the outbox write leaves the cursor behind the
+source. Restart, before it admits work, reads each granted conversation
+from its cursor, or from the start when the cursor is unset, and inserts
+a `queued` row for every checkpoint that does not have one. A checkpoint
+that already has a row keeps that delivery id. A crash while the attempt
+is waiting leaves the `queued` row. Restart admits each `queued` row that
+has no terminal outcome, in checkpoint order.
 
 Revoke and a delivery attempt share one permit for that registration, the
 same shape as `hold_revision` on a share grant. The attempt that holds the
@@ -645,10 +673,14 @@ authenticate as that owner
 gateway credential still names `gateway:<key>`. The same-person link is
 not the subject and does not merge two receivers' grants. An integration
 or a later agent, which has no receiver, uses subject kind `principal`
-and the principal id. This slice writes resource kind `conversation` and
+and the principal id. One integration principal has one active webhook
+registration. A second `credential.issue` while that registration is
+active is refused and writes nothing. The subject stays the principal.
+This slice writes resource kind `conversation` and
 the conversation id. The directory slice writes kind `directory` and a
-resource id minted for that directory. The path is stored beside the id
-and is not the key. Replacing the directory does not keep the grant. It
+resource id minted for that directory. The path and the minted directory
+binding are stored beside the id and are not the key. Replacing the
+directory does not keep the grant. It
 does not change the primary key and does not mint a conversation id for
 a directory. One subject may hold many directory rows. Webhook and agent
 slices insert into this key. They do not migrate identity again.
@@ -775,12 +807,18 @@ environment a later agent uses. The grant names the environment and the
 directory. The row uses the refactor's key
 `(subject_kind, subject_id, resource_kind, resource_id)` with resource
 kind `directory`. A paired subject is the receiver. Share mints the
-resource id. It is not the path. The row stores the environment and the
-canonical path beside the id. The first open takes a directory handle and
-compares it to the file identity captured when the id was minted. If the
-root is gone, or the identity differs, the use is refused and the grant
-is revoked. A directory later created at the same path does not receive
-the grant. This slice does not change the key and does not mint a
+resource id. It is not the path. The decision is a minted marker. The row
+stores the environment, the canonical path, and a directory binding beside
+the id. The binding is 32 random bytes minted at share. Share writes those
+bytes into `.nessa-binding` at the directory root, through a directory
+handle, then commits the grant row. If that commit fails, share removes
+the marker and writes no grant. The first open takes a directory handle
+and reads `.nessa-binding` through that handle. A missing root, a missing
+marker, or different bytes refuse the use and revoke the grant. A
+directory later created at the same path does not receive the grant,
+including when the filesystem reuses the device and inode numbers of the
+deleted directory. Copying `.nessa-binding` into another directory is a
+copy of the binding. This slice does not change the key and does not mint a
 conversation id. Capabilities are
 `read`, `write`, and `exec`. `read` and
 `write` open a named path by walking from a directory handle on the
@@ -829,7 +867,10 @@ a path outside that profile's roots is refused. A denied program is
 refused and the audit names the matcher. A command-rule list whose
 encoding would not fit in one grant frame is refused and the row is
 unchanged. The grant subscription stays open. Deleting the directory
-and creating another at the same path does not keep the grant.
+and creating another at the same path does not keep the grant. The reuse
+test does that on a filesystem that reuses device and inode numbers and
+does not copy `.nessa-binding`. The open is refused and the grant is
+revoked.
 
 An opted-in Claude or Codex harness still runs its own hooks. The gateway
 cannot write a wider `grants.json` than the machine's owner wrote. A
@@ -1009,7 +1050,14 @@ is not admitted as a paired reader.
 
 `conversation.share` gains that credential as a target beside a paired
 receiver. The grant row is the same fact, keyed by the integration
-principal, with no receiver. The gateway POSTs events for
+principal, with no receiver. The decision is one active registration per
+integration principal. `credential.issue` only adds a credential, so a
+second registration would POST to a URL the owner did not register for
+the first. While a registration is active, another `credential.issue`
+for that principal is refused and writes no credential and no
+registration. Revoking the credential stops that registration. A later
+issue creates one new registration, with a new URL and mac key. Delivery
+uses that registration. The gateway POSTs events for
 the granted conversation only. The payload is what that capability set
 may see.
 
@@ -1023,11 +1071,21 @@ fields. The key stays out of the body. The receiver verifies from those
 headers and the raw body. Retry with bounded backoff and the same
 delivery id while that attempt's epoch still allows delivery.
 
-An event is written to the registration's outbox before the attempt waits
-for the permit: delivery id, registration, and source checkpoint
-(conversation id, incarnation, position), state `queued`. A crash while
-waiting leaves that row. Restart admits it in checkpoint order and does
-not mint a new delivery id.
+The conversation record stream is the source of truth. The decision is a
+durable replay cursor, one per registration and conversation: the last
+checkpoint of that conversation whose outbox row committed. The cursor
+starts unset. An event is written to the registration's outbox before the
+attempt waits for the permit: delivery id, registration, and source
+checkpoint (conversation id, incarnation, position), state `queued`. That
+write also sets the cursor to the same checkpoint, and the two commit
+together. The conversation commit stays in the conversation store. A
+crash after that commit and before the outbox write leaves the cursor
+behind the source. Restart, before it admits work, reads each granted
+conversation from its cursor, or from the start when the cursor is unset,
+and inserts a `queued` row for every checkpoint that does not have one.
+A checkpoint that already has a row keeps that delivery id. A crash while
+waiting leaves the `queued` row. Restart admits each such row in
+checkpoint order.
 
 The sender does not follow redirects. A 3xx is not a delivery. The attempt
 records `not sent` or `retry scheduled`, and the next POST, when the epoch
@@ -1092,7 +1150,13 @@ success and whose terminal audit write fails leaves `sending` in place,
 sends no second POST of that delivery id, and records outcome unknown.
 Restart from that row does the same. A failed pre-send write sends
 nothing. A crash while an event waits for the permit leaves its `queued`
-outbox row, and restart delivers that delivery id. A receiver recomputes
+outbox row, and restart delivers that delivery id. A crash after the
+conversation commit and before the outbox write is recovered from the
+replay cursor: restart inserts the missing `queued` row, and a checkpoint
+that already has a row keeps its delivery id. A second `credential.issue`
+while a registration is active is refused and writes nothing. After that
+credential is revoked, a new issue creates one registration, and delivery
+goes to the new URL only. A receiver recomputes
 the MAC from `Nessa-Webhook-Timestamp`, `Nessa-Webhook-Id`, and the raw
 body, and rejects a body that was re-encoded.
 
