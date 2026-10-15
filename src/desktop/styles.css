@@ -1,11 +1,7 @@
-@import "@nessa-ui/react/app.css";
-@source "./";
-/* The conversation vertical's cards the window draws too: the files an agent published. */
-@source "../conversation/ui/published-files.tsx";
-@source "../conversation/ui/send-failure.tsx";
-@source "../onboarding/ui/selected-agent-setup.tsx";
-@source "../onboarding/ui/agent-api-key-form.tsx";
-@source "../onboarding/ui/agent-api-key-save.tsx";
+@import "@nessa-ui/react/app.css" source(none);
+/* Frontend sources, including the conversation cards shared with the panel.
+   scripts/tailwind-sources.test.mjs covers the backend/UI watch boundary. */
+@source "../";
 
 html,
 body,
