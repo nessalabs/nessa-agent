@@ -295,6 +295,10 @@ Experimental turns it on; the rail stands beside the workspace in
   _Check:_ `columns.mjs --only rail-corner`.
 - [ ] **Under an item's full view the workspace takes no keys**: ⌘B, ⌘0 and
   ⌥⌘S change nothing behind it. _Check:_ `columns.mjs --only rail-view-inert`.
+- [ ] **An item's view opens empty, and a slow load shows only text**: no
+  loader before 3 s; still loading at 3 s, the kit's `LoadingText` sweeps
+  "Loading Files" with no panel or border around it. _Check:_
+  `columns.mjs --only rail-loading`.
 - [ ] **The titlebar's controls never pass under the window's controls while
   the rail opens or closes**: every frame draws them between where they were
   and where they land — still, in the macOS window. _Check:_
