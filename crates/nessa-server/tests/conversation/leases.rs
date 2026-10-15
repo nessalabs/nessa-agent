@@ -186,6 +186,7 @@ struct Records {
     stall_input: InputStall,
     /// Every lease record handed to a save, in order.
     saved: SavedRecords,
+    saved_changed: Arc<Notify>,
 }
 
 /// Every lease record a store was handed to save.
@@ -203,6 +204,7 @@ impl SessionStorage for Records {
         let stall_once = self.stall_once.clone();
         let stall_input = self.stall_input.clone();
         let saved = self.saved.clone();
+        let saved_changed = self.saved_changed.clone();
         Box::pin(async move {
             let inner = self.inner.open(id).await?;
             Ok(Box::new(RecordsLease {
@@ -212,6 +214,7 @@ impl SessionStorage for Records {
                 stall_once,
                 stall_input,
                 saved,
+                saved_changed,
             }) as Box<dyn SessionStorageLease>)
         })
     }
@@ -224,6 +227,7 @@ impl SessionStorage for Records {
         let stall_once = self.stall_once.clone();
         let stall_input = self.stall_input.clone();
         let saved = self.saved.clone();
+        let saved_changed = self.saved_changed.clone();
         Box::pin(async move {
             Ok(self.inner.open_existing(id).await?.map(|inner| {
                 Box::new(RecordsLease {
@@ -233,6 +237,7 @@ impl SessionStorage for Records {
                     stall_once,
                     stall_input,
                     saved,
+                    saved_changed,
                 }) as Box<dyn SessionStorageLease>
             }))
         })
@@ -245,6 +250,7 @@ pub(super) struct RecordsLease {
     stall_once: FailingRecords,
     stall_input: InputStall,
     saved: SavedRecords,
+    saved_changed: Arc<Notify>,
 }
 impl RecordsLease {
     /// `inner`, refusing every save holding a record `failing` names while
@@ -257,6 +263,7 @@ impl RecordsLease {
             stall_once: FailingRecords::default(),
             stall_input: InputStall::default(),
             saved: SavedRecords::default(),
+            saved_changed: Arc::default(),
         }
     }
 }
@@ -314,6 +321,7 @@ impl SessionStorageLease for RecordsLease {
                     _ => None,
                 }),
         );
+        self.saved_changed.notify_one();
         let input_stall = {
             let mut stall = self.stall_input.lock().unwrap();
             let matched = stall.is_some()
@@ -415,6 +423,7 @@ fn harness_working_in(
         stall_once: Arc::new(Mutex::new(None)),
         stall_input: InputStall::default(),
         saved: SavedRecords::default(),
+        saved_changed: Arc::default(),
     });
     let metadata_store = Arc::clone(&metadata);
     let service = ConversationService::new(
@@ -923,26 +932,28 @@ async fn l8_a_turn_running_past_the_cleanup_deadline_settles_and_the_lease_is_ac
     let service = harness.service.clone();
     let id = harness.id.clone();
     let close = tokio::spawn(async move { service.close(id, caller("close")).await });
-    // Past the deadline, with the turn still running, the lease is
-    // interrupted; the Agent still settles the turn it is stopping. The
-    // deadline is counted once the close has reached the agent, not from the
-    // spawn, which a slow runner may not have started yet.
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while harness.provider.cancel_calls.load(Ordering::SeqCst) == 0
-            && harness.provider.close_calls.load(Ordering::SeqCst) == 0
+    // Observe the semantic deadline result with the provider still held.
+    // The save observer records the handed-off fact before physical I/O;
+    // the final snapshot below proves its durable history. Neither this
+    // handshake nor close assumes storage finishes within five seconds (#935).
+    loop {
+        let changed = harness.storage.saved_changed.notified();
+        if harness
+            .storage
+            .saved
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|record| matches!(record, LeaseRecord::Interrupted { .. }))
         {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            break;
         }
-    })
-    .await
-    .expect("the close reaches the agent");
-    tokio::time::sleep(Duration::from_millis(150)).await;
+        changed.await;
+    }
     go.send(()).unwrap();
-    tokio::time::timeout(Duration::from_secs(5), close)
-        .await
-        .expect("the close finishes once the turn settles")
-        .unwrap()
-        .unwrap();
+    // The existing bounded CI test step catches a stuck close; its valid
+    // settlement and durable writes have no separate throughput contract.
+    close.await.unwrap().unwrap();
     let snapshot = harness.snapshot().await;
     assert!(snapshot
         .invocations

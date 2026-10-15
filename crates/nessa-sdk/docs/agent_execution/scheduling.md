@@ -80,6 +80,104 @@ that uncertainty. A confirmed absent input can be retried; an input found in
 storage, or whose presence cannot be checked, remains observed and returns
 `SubmissionUnresolved` on an identical retry. Later saves preserve that evidence.
 
+### Bounded scheduling audit observations (#919)
+
+Scheduling audit observations use the manager's injected `MessageCommitClock`
+with a fresh 30-second deadline per record. The scheduler owns the observation;
+the audit adapter owns physical I/O it has already started. Deadline expiry drops
+the asynchronous observation and returns `AuditFailure`, without retry or a
+claim that storage rolled back. The supplied `DurableExecutionAudit` retains its
+blocking write independently. A custom audit adapter must preserve the same
+physical ownership on observer loss; arbitrary pending adapter futures are not
+kept alive in detached SDK tasks.
+
+Completed or timed-out observations release their sink futures, as checked by
+`stalled_audit_observers_release_their_payloads_after_each_timeout`. There is no
+additional SDK audit task queue or retained payload copy. Existing scheduler
+admission ownership stays in place. Physical I/O retained inside an adapter is
+subject to that adapter's own admission/resource limits; storage waits outside
+audit remain outside this contract. Timeout/failure diagnostics use tracing
+independently of the failing sink.
+
+| Audit/event order | Observer result and retained evidence | Cleanup / next record | Regression |
+| --- | --- | --- | --- |
+| Acknowledgement before deadline | Preserve the sink result | Continue ordinary admission/settlement | Existing scheduling and settlement suites |
+| Acknowledgement and deadline ready in one poll | Prefer the acknowledged result | Continue ordinary flow | `audit_acknowledgement_wins_when_deadline_is_also_ready` |
+| Admission stays pending through deadline; concurrent close | Retain typed admission audit failure; no provider dispatch | Lifecycle starts physical cleanup independently; queue and close settle | `pending_admission_audit_fails_and_close_completes_after_physical_cleanup_starts`; public provider regression `scheduling_audit_deadlines::pending_queue_audit_does_not_delay_attached_provider_cleanup_or_dispatch_input` |
+| First bulk settlement stays pending through deadline | Preserve the original transition plus audit failure for that item | Give later records their own full attempt/deadline and settle their receipts | `stalled_first_bulk_settlement_does_not_suppress_later_audit_or_receipt`, `stalled_first_close_cancellation_does_not_suppress_later_audit_or_receipt`, `each_bulk_settlement_gets_its_full_audit_observation_bound` |
+| Observer deadline before independently owned physical completion | Retain `AuditFailure`; do not retry or relabel late completion as acknowledged | Adapter finishes physical write independently | `timed_out_observer_leaves_late_physical_audit_write_owned_without_retry` |
+| Caller drops after admission starts | Admission supervisor continues and retains its result | Audit deadline still ends the observer | `dropped_admission_caller_does_not_lose_timeout_evidence` |
+| Sink or injected clock panics during observation | Shared observer retains a distinct `Panicked` failure; admission/steering/settlement map it to `AuditFailure` | Panic containment fences control admission and protects settlement of the tail | `scheduling_audit_panics_are_typed_and_observer_is_dropped`, `scheduling_audit_clock_panic_remains_distinct_from_a_sink_failure` |
+| Reorder audit panics | Reorder consumes `Panicked` through its existing scheduler recovery and returns the retained scheduling-panic error | Queue receipts settle, physical cleanup is joined, and the proposed order is not applied | `conformance::queue_order::panicking_reorder_audit_fences_and_recovers_without_applying_order` |
+| Repeated stalled observations | Each observation drops its sink future at its own deadline | No detached SDK task/payload queue grows | `stalled_audit_observers_release_their_payloads_after_each_timeout` |
+
+### Supplied audit adapter physical admission
+
+The server's `DurableExecutionAudit` owns one independent
+`nessa_local_storage::physical_operation::Worker`. It waits for admission before
+allocating JSON or cloning its physical state. The admitted job owns the record,
+file writer, and slot through physical I/O and captured cleanup; dropping its
+observer cannot free that slot. At capacity, later calls wait asynchronously;
+the SDK's existing per-record deadline drops those waiters without submission.
+A replacement adapter instance has an independent slot, not a path-wide lock.
+`ExecutionAuditFileWriter` is the synchronous injected file boundary; the real
+implementation persists and syncs the private record and directory before success.
+
+This is the structural correction after review comment
+[4281000397](https://github.com/nessalabs/nessa-agent/pull/928#discussion_r4281000397):
+the SDK observer bound alone did not bound retained physical adapter work.
+The existing shared physical worker now owns that lifetime rather than adding
+an SDK queue or a second admission mechanism.
+
+| Physical/event order | Required result | Regression |
+| --- | --- | --- |
+| First record is writing; observer drops; repeated later observers expire or drop while awaiting admission | One physical job and retained physical payload; later waiters submit no work | `dropped_audit_observers_do_not_grow_physical_work` |
+| First job is queued behind an occupied blocking pool; observer drops | Slot remains with queued job; later calls cannot submit until physical completion | `queued_audit_keeps_admission_after_observer_drop` |
+| First physical writer returns after observer loss; next record arrives | Capacity releases after physical completion and the next record commits once | `dropped_audit_observers_do_not_grow_physical_work` |
+| Writer returns error or panics; injected observation clock panics | Typed `AuditFailure`; later record can acquire capacity | `physical_audit_faults_are_typed_and_release_capacity` |
+| Never-polled record future drops; waiter drops before admission | No writer invocation or metadata allocation for those records | `dropped_audit_observers_do_not_grow_physical_work` |
+| First poll has no runtime | Typed pre-effect `AuditFailure`; no clock sample or write | `audit_without_a_runtime_is_a_typed_pre_effect_failure` |
+| One adapter remains blocked; independent adapter records | Independent adapter succeeds | `independent_audit_instances_do_not_share_admission` |
+
+### Shared Agent audit observations and attachment cleanup
+
+Scheduling and attachment lifecycle evidence use one `AuditObserver` with the
+manager's injected `MessageCommitClock`. Each record gets a fresh 30-second
+observation deadline before sink construction, polling or physical admission.
+The observer contains clock/sink construction, poll and drop faults, including
+returned-future cleanup on cancellation. On a scheduling poll fault, the observer
+fences control admission before the SDK explicitly drops the returned future and
+preserves `Panicked` for reorder recovery. Cleanup inside a port's own unwinding
+remains the port's responsibility. Attachment evidence maps observation faults to
+its existing `AuditFailure` ledger; it does not change original generation, actor
+or cause.
+
+This extends the ownership design after
+[4285761838](https://github.com/nessalabs/nessa-agent/pull/928#discussion_r4285761838):
+a one-slot physical adapter also serializes its producers. Every Agent producer
+must bound its asynchronous observation so physical serialization cannot turn
+completed provider cleanup into an unbounded evidence wait. Physical ownership
+and its one-write bound remain in the adapter, independently of observation loss.
+
+| Producer / order | Observation and cleanup contract | Regression |
+| --- | --- | --- |
+| Queue admission holds physical slot; authorization is still Authorized; explicit close issues Closed | Closed observation expires with typed audit failure; completed physical cleanup and cancelled queue receipt remain reachable | `attachment_close_evidence_times_out_behind_a_stalled_physical_audit` |
+| Same physical stall; attachment enters Starting and Started waits for admission; concurrent close issues Closed | Each evidence observation has its own deadline; no provider open/dispatch, original start and close actors/generation retained; close returns audit failure without waiting for stalled physical write | `starting_attachment_close_evidence_times_out_behind_a_stalled_physical_audit` |
+| Authorization dropped while slot is held; AuthorizationAbandoned waits | Spawned abandonment completes its evidence failure; later close joins bounded ledger result without fake acknowledgement | `abandoned_authorization_evidence_times_out_behind_a_stalled_physical_audit` |
+| Started, ContextPublished or Failed evidence stalls without caller | Existing attachment owner retains completion; shared deadline publishes typed evidence failure and existing failure/recovery path runs | Existing attachment initialization/panic suites plus shared-observer fault regressions |
+| ContextPublished physical write stalls while the opening/publication guard is held; close arrives | Guard releases at that record's deadline; actual provider cleanup then runs once, independently of late physical audit completion; existing Attached cleanup joins publication evidence without inventing a Closed transition | `publication_audit_deadline_releases_the_resource_guard_before_physical_cleanup` |
+| Effort requested/settled evidence shares attachment observation | Preserve existing provider-control ordering and typed failures; each audit attempt has a fresh bound | `effort_audit_timeout_and_caller_loss_preserve_owned_failure_before_provider_effect` and existing effort-level suite |
+| Scheduling/reorder observer poll panics | Fence before the SDK explicitly drops the returned faulted future; distinguish Panicked for existing reorder recovery | `scheduling_audit_poll_fault_fences_admission_before_capture_cleanup`, existing scheduling panic identity and queue-order conformance regressions |
+| An audit adapter returns sensitive diagnostic text | General tracing records only the static operation and fixed failure category; the scheduling caller retains the exact typed error and diagnostic | `audit_error_diagnostics_stay_with_the_caller_and_out_of_tracing` |
+| Ordinary write completes before its deadline while another producer waits | Admit and acknowledge normally after physical capacity release; no fail-fast busy refusal | `dropped_audit_observers_do_not_grow_physical_work` |
+
+ACP execution-worker audit producers already use their injected provider clock
+and configured per-record shutdown grace; their own caller-specific failure and
+settlement ownership stays there. The subagent coordinator's audit port is a
+separate contract. Neither path is replaced by the Agent observer. ContextPublished
+evidence remains inside the existing opening/publication resource guard; physical
+cleanup joins that transaction after its bounded observation releases the guard.
+
 ## The queue runner and direct invocation
 
 Queued work and direct `invoke` share one invocation slot. `invoke` takes it

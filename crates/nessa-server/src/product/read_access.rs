@@ -28,13 +28,15 @@ use super::{
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    binding_of, error_code, paired_facts, AccessAction, ConversationAccessPolicyEvaluator,
-    ConversationError, OwnerAccess, PairedAccess, PairedParty, PairedRefusal, ReceiverBinding,
-    RequestShape, ShareConversation, ShareGrant, MAX_POLICY_REVISION,
+    binding_of, error_code, paired_facts, AccessAction, AuditedReviewSelection,
+    ConversationAccessPolicyEvaluator, ConversationError, PairedAccess, PairedParty, PairedRefusal,
+    ReceiverBinding, RequestShape, ReviewNoticeAuditCause, ReviewNoticeAuditFailure,
+    SelectReviewNotice, ShareConversation, ShareGrant, MAX_POLICY_REVISION,
 };
 use crate::conversation::domain::{CommandHosts, ToolChoice, ToolPolicy, ToolPreset, ToolRules};
-use nessa_auth::application::session::{AuthenticatedSession, ReadCurrentSession};
-use nessa_auth::domain::{CredentialId, MembershipRole};
+use crate::conversation::infrastructure::PublishedReview;
+use nessa_auth::application::session::AuthenticatedSession;
+use nessa_auth::domain::CredentialId;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
 use nessa_protocol::product::generated::{
@@ -45,7 +47,10 @@ use nessa_protocol::product::generated::{
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
-use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
+use nessa_sdk::domain::agent_execution::{
+    executions::{ExecutionId, GrantInitiator, Initiation},
+    permissions::PermissionId,
+};
 
 /// The paired party `session` is now, by its receiver binding: `None` for
 /// the owner's own surface, or when this gateway keeps no receiver bindings.
@@ -82,69 +87,78 @@ fn party<'a>(binding: &'a ReceiverBinding, session: &'a AuthenticatedSession) ->
     }
 }
 
-/// Whether `session` may be told that a review is waiting in `conversation_id`.
-///
-/// A paired session is asked the conversation access policy for that
-/// conversation, so a grant on one conversation learns nothing about the
-/// others. An unpaired admin is an owner surface: the policy names the
-/// owner principal, and a surface is a different principal, so the board is
-/// that surface's. An unpaired member is asked the same policy as that
-/// principal, which refuses a conversation they do not own.
+/// Paired grant admission stays on its existing policy path. An unpaired
+/// result carries the application-owned proof of actual audit acknowledgement.
+pub(super) enum ReviewNoticeVisibility {
+    Hidden,
+    Paired,
+    Audited(AuditedReviewSelection),
+}
+
+/// Resolve the recipient path; the application owns the complete unpaired
+/// checked-metadata/current-authority/Cedar/audit transition.
 pub(super) async fn may_see_review(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
-    conversation: &str,
-) -> bool {
+    review: &PublishedReview,
+) -> Result<ReviewNoticeVisibility, ReviewNoticeAuditFailure> {
     match paired_binding(state, session).await {
         Ok(Some(_)) => {
-            let Ok(id) = conversation_id(conversation) else {
-                return false;
+            let Ok(id) = conversation_id(&review.conversation_id) else {
+                return Ok(ReviewNoticeVisibility::Hidden);
             };
-            admit_conversation(state, session, &id).await.is_ok()
+            Ok(if admit_conversation(state, session, &id).await.is_ok() {
+                ReviewNoticeVisibility::Paired
+            } else {
+                ReviewNoticeVisibility::Hidden
+            })
         }
-        Ok(None) => match owner_surface(state, session).await {
-            Some(true) => true,
-            Some(false) => person_may_read(state, session, conversation).await,
-            None => false,
-        },
-        Err(_) => false,
+        Ok(None) => unpaired_may_see_review(state, session, review).await,
+        Err(_) => Ok(ReviewNoticeVisibility::Hidden),
     }
 }
 
-async fn owner_surface(state: &ProductRouteState, session: &AuthenticatedSession) -> Option<bool> {
-    let snapshot = ReadCurrentSession {
-        access: state.access.as_ref(),
-        clock: state.clock.as_ref(),
-    }
-    .execute(session)
-    .await
-    .ok()?;
-    Some(snapshot.membership.role() == MembershipRole::Admin)
-}
-
-async fn person_may_read(
+async fn unpaired_may_see_review(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
-    conversation: &str,
-) -> bool {
-    let (Some((_, conversations, _)), Some(policy), Ok(id)) = (
-        state.passive_read.as_ref(),
+    review: &PublishedReview,
+) -> Result<ReviewNoticeVisibility, ReviewNoticeAuditFailure> {
+    let (Some(conversations), Some(policy), Ok(id)) = (
+        state.review_metadata.as_ref(),
         state.conversation_access.as_deref(),
-        conversation_id(conversation),
+        conversation_id(&review.conversation_id),
     ) else {
-        return false;
+        return Ok(ReviewNoticeVisibility::Hidden);
     };
-    let Ok(Some(conversation)) = conversations.load(&id).await else {
-        return false;
+    let auditor = state
+        .review_auditor
+        .as_ref()
+        .ok_or(ReviewNoticeAuditFailure::Unavailable)?;
+    let (Ok(execution), Ok(permission)) = (
+        ExecutionId::new(&review.execution_id),
+        PermissionId::new(&review.permission_id),
+    ) else {
+        return Ok(ReviewNoticeVisibility::Hidden);
     };
-    OwnerAccess::new(policy)
-        .admit_to(
-            AccessAction::Read,
-            &conversation,
-            session.context().organization_id(),
-            session.context().principal_id(),
-        )
-        .is_ok()
+    let selection = SelectReviewNotice::new(
+        conversations,
+        state.access.as_ref(),
+        state.clock.as_ref(),
+        policy,
+        auditor,
+    )
+    .execute(
+        session,
+        &id,
+        execution,
+        permission,
+        ReviewNoticeAuditCause::SnapshotRefresh,
+    )
+    .await?;
+    Ok(match selection {
+        Some(selection) => ReviewNoticeVisibility::Audited(selection),
+        None => ReviewNoticeVisibility::Hidden,
+    })
 }
 
 /// Whether a paired `session` may open or stop one view subscription on

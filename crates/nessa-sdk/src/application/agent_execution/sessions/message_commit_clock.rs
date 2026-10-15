@@ -1,4 +1,4 @@
-//! Monotonic wake source for the session's streaming-message save owner, and
+//! Monotonic wake source for session saves and Agent audit observations, and
 //! the wall clock a conversation dates what it accepts by.
 #![deny(missing_docs)]
 
@@ -7,7 +7,7 @@ use std::{future::Future, pin::Pin, time::Duration};
 /// A wake that resolves after one deadline on its clock's timeline.
 pub type MessageCommitSleep = Pin<Box<dyn Future<Output = ()> + Send>>;
 
-/// Monotonic time and deadline wakes required by streaming message commits,
+/// Monotonic time and deadline wakes for session saves and Agent audits,
 /// and the wall-clock time a conversation dates a note by.
 ///
 /// Its `Duration` values measure time since that clock's origin. A manager

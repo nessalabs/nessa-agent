@@ -313,11 +313,12 @@ scanning on large history under continuous writes in acceptance tests.
 `core/shutdown.rs` owns the report; `composition/root.rs::passive_cleanup` is
 its only writer. Each cleanup owner has one `Outcome`: `Unknown`, `Ok`, or
 `Failed` with its typed cause (`RecordReadError`, `CatalogueReadError`,
-`WatchTaskFault`, `ConversationError`, `Unfinished`, `NativeShutdownFailure`;
+`WatchTaskFault`, `ReviewNoticeAuditFailure`, `ConversationError`, `Unfinished`, `NativeShutdownFailure`;
 MCP stop, `composition/mcp_servers.rs::stop`, is `Failed(Unfinished)` when
 its drain of admitted MCP server changes and inspections ran out of time,
 though the servers stop all the same). The order is fixed: watch admission
-closed, readers and the watch drain polled together under one deadline, then
+and review-notice audit admission closed, readers and the watch/audit drains
+polled together under one deadline, then
 conversations, MCP stop, and the native join. `ShutdownReport::stage()` is the
 first stage in that order with an `Unknown` outcome (`Drains`, `Conversations`,
 `Servers`, `Native`, or `Complete`); it is the only place that derives the
@@ -333,8 +334,8 @@ owner never published a report.
 | Row | State / event / ordering | Result | Test |
 |---|---|---|---|
 | SR1 | Cleanup starts: the report is published with every outcome `Unknown` | Stage `Drains`; not confirmed; later stages read `not started` | `root::cancelled_before_either_reader_outcome_retains_unknown_drain_and_deadline`; `shutdown::only_a_complete_report_with_every_outcome_ok_confirms` |
-| SR2 | Record, catalogue and watch results observed in any order | Each recorded once (a second observation panics); stage stays `Drains` until all three are known; later stages do not start | `host::ordinary_host_closes_admission_before_cleanup_and_reaps_both_original_release_orders`; `root::gated_second_reader_retains_first_fault_deadline_and_eventual_both_causes`; `shutdown::an_outcome_is_observed_once` |
-| SR3 | The deadline passes while some drain is `Unknown`; a result arrives later | Deadline evidence only on the drains `Unknown` at that moment; a drain that already returned is not relabelled; the late result is still recorded and the report stays unconfirmed | `root::reader_deadline_retains_eventual_successful_drain`; `host::completed_reader_drain_is_not_relabelled_as_timeout_while_original_watch_is_held`; `root::ready_readers_at_zero_deadline_are_not_labeled_timeout` |
+| SR2 | Record, catalogue, watch and review-audit results observed in any order | Each recorded once (a second observation panics); stage stays `Drains` until all four are known; later stages do not start | `host::ordinary_host_closes_admission_before_cleanup_and_reaps_both_original_release_orders`; `root::gated_second_reader_retains_first_fault_deadline_and_eventual_both_causes`; `shutdown::an_outcome_is_observed_once` |
+| SR3 | A record, catalogue or watch drain is `Unknown` at its deadline and returns later; review-audit expiry follows RA6 instead | Deadline evidence stays on those drains that were `Unknown`; an already returned drain is not relabelled; the late record/catalogue/watch result is recorded and the report stays unconfirmed | `root::reader_deadline_retains_eventual_successful_drain`; `host::completed_reader_drain_is_not_relabelled_as_timeout_while_original_watch_is_held`; `root::ready_readers_at_zero_deadline_are_not_labeled_timeout` |
 | SR4 | All drains known; conversations awaited; they return `Ok`, `Err`, or are absent | Stage `Conversations` until they return; absent is `Ok` (successful no-work evidence); then stage `Servers` | `root::mcp_drain_is_joined_without_conversations`; `root::conversation_failure_waits_for_mcp_drain_before_publication` |
 | SR5 | MCP stop returns, its drain finished | MCP outcome `Ok`; stage `Native` | `root::mcp_drain_is_joined_without_conversations`; `root::unreported_native_drain_is_not_confirmed`; `mcp::the_mcp_stop_drains_admitted_writes_before_the_servers_stop` |
 | SR5a | MCP stop returns after its drain ran out of time | MCP outcome `Failed(Unfinished { running })`; stage `Native`; cleanup goes on; never confirmed | `mcp::an_unfinished_drain_is_an_unconfirmed_shutdown` |
@@ -344,7 +345,29 @@ owner never published a report.
 | SR9 | A confirmed report read twice; an unconfirmed report read twice | Confirmed: `Ok` both times, including after the owner panics once it has published. Unconfirmed: the failure once, then `Shutdown(None)`, never `Ok` | `root::a_shutdown_that_finishes_records_which_way_it_went`; `root::a_completed_serve_still_fails_when_shutdown_did_not_confirm_cleanup`; `root::the_process_result_carries_both_serving_and_what_shutdown_reported`; `root::cleanup_owner_panic_is_returned_to_process_composition` |
 | SR10 | Display of an unconfirmed report at each stage | One line naming every owner in cleanup order; `pending` only at the stage reached, `not started` after it; deadline evidence only where recorded | `shutdown::display_names_every_subsystem_and_the_stage_reached` |
 | SR11 | Exit code and restart policy for `Shutdown(_)` | `"shutdown"` and `Restart::Worthwhile` for every report, whatever its stage; nothing branches on a stage or owner | `core/exit_code.rs` and `core/restart.rs` tests |
-| SR12 | Watch admission closes before any drain is polled; conversations and MCP do not start until every drain returns | Unchanged ordering | `host::ordinary_host_closes_admission_before_cleanup_and_reaps_both_original_release_orders`; `root::shutdown_stops_connection_admission_before_a_blocked_reader_drains` |
+| SR12 | Watch and review-audit admission close before any drain is polled; conversations and MCP wait for reader/watch joins and a known review-audit outcome | Audit deadline establishes failure, never acknowledgement or physical release | `host::ordinary_host_closes_admission_before_cleanup_and_reaps_both_original_release_orders`; `root::shutdown_stops_connection_admission_before_a_blocked_reader_drains` |
+
+### Review-notice audit shutdown ownership
+
+The application `ReviewNoticeAuditor` owns admission through metadata/current
+reads and the transfer of each complete Cedar decision. Composition closes its
+admission before polling drains, then observes it alongside readers and watches
+under their existing shared deadline. A successful drain means no admitted
+selection remains and every transferred decision received durable acknowledgement.
+The physical worker remains the adapter's owner; timeout never claims its work
+was absent, cancelled, or released.
+
+| Row | Event / ordering | Result | Regression |
+|---|---|---|---|
+| RA1 | Shutdown closes admission while an admitted selection waits before Cedar | New admissions refuse; drain waits until that selection is abandoned or its decision is acknowledged | `review_audit_admission_is_fenced_and_pending_metadata_prevents_confirmation`; `review_notice_shutdown_wakes_capacity_waiters_and_joins_admissions` |
+| RA2 | A pre-decision caller disappears | Its admission ends without fabricated policy evidence; no other admitted selection is forgotten | `review_notice_shutdown_distinguishes_predecision_cancellation_from_transferred_work` |
+| RA3 | Caller/UI observer disappears after synchronous decision transfer | Owned delivery and drain continue; acknowledgement permits success | `review_notice_shutdown_joins_transferred_decisions_after_publisher_loss` |
+| RA4 | Sink rejects, panics, or the acknowledgement budget expires | First typed failure is sticky; completion of later work cannot turn the drain into success | `review_notice_shutdown_retains_first_delivery_failure` |
+| RA5 | Transferred task is lost before publishing its result | Its guard records `Unavailable`; zero active tasks cannot fabricate success | `review_notice_shutdown_retains_lost_transferred_task` |
+| RA6 | Shared cleanup deadline passes with admissions or acknowledgements pending | Audit result becomes the first known failure or `TimedOut`; ordered cleanup continues unconfirmed; later failures cannot replace the first cause | `review_audit_admission_is_fenced_and_pending_metadata_prevents_confirmation`; `review_notice_shutdown_deadline_retains_first_failure`; `review_audit_host_deadline_preserves_first_delivery_failure` |
+| RA7 | Completion and deadline are ready together, including zero | Ready acknowledgement/no-work result wins before deadline observation | `review_audit_ready_at_zero_deadline_confirms`; `review_audit_ready_completion_wins_expired_deadline` |
+| RA8 | One physical write is held and a second selection waits for that worker | Shutdown cannot confirm either selection; release acknowledges both before success; uncertain timeout remains failed | `review_notice_shutdown_joins_physical_write_and_queued_selection`; `review_audit_host_shutdown_joins_physical_write_and_queued_selection` |
+| RA9 | Cleanup observer is cancelled before audit result observation | Published report retains audit `Unknown` and known peer outcomes; later task completion cannot retroactively confirm that report | `review_audit_cancelled_cleanup_retains_unknown_outcome` |
 
 ## Receiver durability and gate-15 order table
 
