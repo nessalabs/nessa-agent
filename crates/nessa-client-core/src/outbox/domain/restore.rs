@@ -1,40 +1,113 @@
-//! Whether a stored row is one this outbox could have written.
+//! Whether a stored row is one this outbox could have written, and which
+//! answer wins when two of them meet.
 //!
 //! Restoration rejects a snapshot whose audit rows do not reach it
 //! (`a_done_row_whose_history_stops_at_departure_is_corrupt`). It does not
-//! repair the row.
+//! repair the row. Precedence is the table in `docs/design/phone-outbox.md`:
+//! a direct answer beats any lookup, and inside one source a higher outcome
+//! beats a lower one (`every_transition_and_precedence_pair`).
 
 use super::{
-    Cause, IntentEvent, PhoneFailure, PhoneIntent, PhoneOutcome, PhoneRecord, UnknownCause,
+    Cause, Initiator, IntentEvent, PhoneFailure, PhoneIntent, PhoneOutcome, PhoneRecord,
+    UnknownCause,
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 
-/// `candidate` is evidence the committed row does not yet have.
+/// Where an outcome came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Evidence {
+    /// `conversation.send` returned this outcome.
+    Direct,
+    /// A lookup, a departure, or another row that has not stored a direct answer.
+    Lookup,
+}
+
+/// Whether `incoming` should replace `stored`.
 ///
-/// A queued, injected, or settled receipt outranks a lookup that failed or
-/// found nothing (`a_queued_receipt_replaces_a_weaker_lookup_failure`).
-/// A committed done or failed row is not replaced by an earlier receipt.
-pub(crate) fn outranks(candidate: PhoneOutcome, committed: PhoneOutcome) -> bool {
-    rank(candidate) > rank(committed)
+/// A direct answer replaces any lookup result. A lookup never replaces a
+/// stored direct answer. Inside one source, the higher outcome replaces the
+/// lower one (`every_transition_and_precedence_pair`).
+pub(crate) fn replaces(
+    incoming: PhoneOutcome,
+    incoming_evidence: Evidence,
+    stored: PhoneOutcome,
+    stored_evidence: Evidence,
+) -> bool {
+    match (incoming_evidence, stored_evidence) {
+        (Evidence::Direct, Evidence::Lookup) => true,
+        (Evidence::Lookup, Evidence::Direct) => false,
+        (Evidence::Direct, Evidence::Direct) | (Evidence::Lookup, Evidence::Lookup) => {
+            rank(incoming) > rank(stored)
+        }
+    }
+}
+
+/// The evidence of the row these events reach. An empty history is not a
+/// direct answer.
+pub(crate) fn stored_evidence(events: &[IntentEvent]) -> Evidence {
+    let Some(last) = events.last() else {
+        return Evidence::Lookup;
+    };
+    match last.cause {
+        Cause::SendAnswered | Cause::ForegroundSend => Evidence::Direct,
+        Cause::ExplicitRetry
+            if !matches!(
+                last.outcome,
+                PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+            ) =>
+        {
+            Evidence::Direct
+        }
+        Cause::ReturnedToDraft => {
+            let lookup_answer = events.len() >= 2
+                && events[events.len() - 2].cause == Cause::Lookup
+                && events[events.len() - 2].outcome == last.outcome;
+            if lookup_answer {
+                Evidence::Lookup
+            } else {
+                Evidence::Direct
+            }
+        }
+        Cause::Held
+        | Cause::Departed
+        | Cause::SendLost
+        | Cause::Unreadable
+        | Cause::Lookup
+        | Cause::ExplicitRetry
+        | Cause::Bound => Evidence::Lookup,
+    }
 }
 
 /// The events are a legal path from the held draft to `record`'s outcome.
-pub(crate) fn history_reaches(record: &PhoneRecord, events: &[IntentEvent]) -> bool {
+///
+/// `recovery_hold` is true only for a draft this recovery minted. The root
+/// command's hold is the person's.
+pub(crate) fn history_reaches(
+    record: &PhoneRecord,
+    events: &[IntentEvent],
+    recovery_hold: bool,
+) -> bool {
     let Some((first, rest)) = events.split_first() else {
         return false;
     };
     if first.cause != Cause::Held || first.outcome != PhoneOutcome::Draft {
         return false;
     }
+    if !hold_initiator(first.initiator, recovery_hold) {
+        return false;
+    }
     if record.outcome() != events[events.len() - 1].outcome {
         return false;
     }
     let mut state = first.outcome;
+    let mut previous = first.cause;
     for event in rest {
-        if !step_allowed(state, event.cause, event.outcome) {
+        if !initiator_allowed(event.cause, event.initiator) || !step_allowed(state, event, previous)
+        {
             return false;
         }
         state = event.outcome;
+        previous = event.cause;
     }
     successor_follows(record, events)
 }
@@ -46,24 +119,40 @@ pub(crate) fn same_prompt(failed: &PhoneIntent, draft: &PhoneIntent) -> bool {
         && failed.images() == draft.images()
 }
 
+fn hold_initiator(initiator: Initiator, recovery_hold: bool) -> bool {
+    match initiator {
+        Initiator::Person => true,
+        Initiator::Recovery => recovery_hold,
+    }
+}
+
+fn initiator_allowed(cause: Cause, initiator: Initiator) -> bool {
+    match cause {
+        Cause::Departed
+        | Cause::SendAnswered
+        | Cause::SendLost
+        | Cause::Unreadable
+        | Cause::ForegroundSend
+        | Cause::ExplicitRetry
+        | Cause::Bound => initiator == Initiator::Person,
+        Cause::Lookup | Cause::ReturnedToDraft | Cause::Held => true,
+    }
+}
+
 fn successor_follows(record: &PhoneRecord, events: &[IntentEvent]) -> bool {
     let returned = events
         .last()
         .is_some_and(|event| event.cause == Cause::ReturnedToDraft);
-    match (returned, record.successor().is_some()) {
-        (true, true) => matches!(
-            record.outcome(),
-            PhoneOutcome::Failed(PhoneFailure::Conversation(
-                ConversationErrorCode::TurnRunning
-            ))
-        ),
-        (false, false) => true,
-        _ => false,
-    }
+    let running = turn_running_outcome(record.outcome());
+    matches!(
+        (returned, record.successor().is_some(), running),
+        (true, true, true) | (false, false, false)
+    )
 }
 
-fn step_allowed(from: PhoneOutcome, cause: Cause, to: PhoneOutcome) -> bool {
-    match cause {
+fn step_allowed(from: PhoneOutcome, event: &IntentEvent, previous: Cause) -> bool {
+    let to = event.outcome;
+    match event.cause {
         Cause::Held => false,
         Cause::Departed => {
             from == PhoneOutcome::Draft && to == PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
@@ -80,13 +169,8 @@ fn step_allowed(from: PhoneOutcome, cause: Cause, to: PhoneOutcome) -> bool {
         }
         Cause::Lookup => open_unknown(from) && lookup_outcome(to),
         Cause::ReturnedToDraft => {
-            open_unknown(from)
-                && matches!(
-                    to,
-                    PhoneOutcome::Failed(PhoneFailure::Conversation(
-                        ConversationErrorCode::TurnRunning
-                    ))
-                )
+            let failed = turn_running_outcome(to);
+            (open_unknown(from) && failed) || (from == to && failed && previous == Cause::Lookup)
         }
     }
 }
@@ -110,11 +194,11 @@ fn send_outcome(outcome: PhoneOutcome) -> bool {
 }
 
 fn lookup_outcome(outcome: PhoneOutcome) -> bool {
-    match outcome {
-        PhoneOutcome::Draft => false,
-        PhoneOutcome::Failed(failure) if turn_running(failure) => false,
-        _ => true,
-    }
+    !matches!(outcome, PhoneOutcome::Draft)
+}
+
+fn turn_running_outcome(outcome: PhoneOutcome) -> bool {
+    matches!(outcome, PhoneOutcome::Failed(failure) if turn_running(failure))
 }
 
 fn turn_running(failure: PhoneFailure) -> bool {
@@ -124,14 +208,18 @@ fn turn_running(failure: PhoneFailure) -> bool {
     )
 }
 
+/// Highest first: done, running, accepted, failed, unresolved, attempted,
+/// lookup failed, not admitted, draft.
 fn rank(outcome: PhoneOutcome) -> u8 {
     match outcome {
+        PhoneOutcome::Done => 8,
+        PhoneOutcome::Running => 7,
+        PhoneOutcome::Accepted => 6,
+        PhoneOutcome::Failed(_) => 5,
+        PhoneOutcome::Unknown(UnknownCause::Unresolved) => 4,
+        PhoneOutcome::Unknown(UnknownCause::Attempted) => 3,
+        PhoneOutcome::Unknown(UnknownCause::LookupFailed) => 2,
+        PhoneOutcome::Unknown(UnknownCause::NotAdmitted) => 1,
         PhoneOutcome::Draft => 0,
-        PhoneOutcome::Unknown(UnknownCause::NotAdmitted | UnknownCause::LookupFailed) => 1,
-        PhoneOutcome::Unknown(UnknownCause::Attempted) => 2,
-        PhoneOutcome::Unknown(UnknownCause::Unresolved) => 3,
-        PhoneOutcome::Accepted => 4,
-        PhoneOutcome::Running => 5,
-        PhoneOutcome::Done | PhoneOutcome::Failed(_) => 6,
     }
 }

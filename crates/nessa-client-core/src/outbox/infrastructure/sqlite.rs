@@ -92,12 +92,14 @@ impl IntentStore for SqliteIntents {
         previous: &PhoneRecord,
         next: &PhoneRecord,
         draft: &PhoneRecord,
-        event: IntentEvent,
+        events: &[IntentEvent],
         draft_event: IntentEvent,
     ) -> Result<(), StoreError> {
         self.transaction(|tx| {
             update_record(tx, previous, next)?;
-            append_event(tx, next.intent().command().as_str(), &event)?;
+            for event in events {
+                append_event(tx, next.intent().command().as_str(), event)?;
+            }
             insert_record(tx, draft)?;
             append_event(tx, draft.intent().command().as_str(), &draft_event)
         })
@@ -109,6 +111,10 @@ impl IntentStore for SqliteIntents {
             confirm(&self.connection, record, &mut BTreeSet::new())?;
         }
         Ok(records)
+    }
+
+    fn events(&mut self, id: &PhoneCommandId) -> Result<Vec<IntentEvent>, StoreError> {
+        read_events(&self.connection, id.as_str())
     }
 
     fn begin_exclusive(&mut self) -> Result<(), StoreError> {
@@ -320,7 +326,15 @@ fn confirm(
         return Err(StoreError::Corrupt);
     }
     let events = read_events(connection, id)?;
-    if !history_reaches(record, &events) {
+    // A recovery hold is legal only on the draft some other row names.
+    let recovery_hold: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM phone_intent WHERE successor = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .map_err(unavailable)?;
+    if !history_reaches(record, &events, recovery_hold > 0) {
         return Err(StoreError::Corrupt);
     }
     let Some(successor) = record.successor() else {

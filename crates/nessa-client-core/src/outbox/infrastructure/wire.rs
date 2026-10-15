@@ -1,7 +1,8 @@
 //! Product frames for one saved phone send. The outbox owns when they are asked.
 
 use crate::outbox::domain::{
-    Delivery, LookupAnswer, PhoneFailure, PhoneIntent, ReceiptEffect, ReceiptStage, SendAnswer,
+    submit_outcome, Delivery, LookupAnswer, PhoneFailure, PhoneIntent, ReceiptEffect, ReceiptStage,
+    SendAnswer,
 };
 use nessa_protocol::product::generated::{
     ConversationCommandOperation, ConversationCommandOutcome, ConversationCommandStage,
@@ -74,8 +75,9 @@ pub fn lookup_answer(
     let stage = match result.stage {
         Some(ConversationCommandStage::Accepted) => ReceiptStage::Accepted,
         Some(ConversationCommandStage::Attempted) => ReceiptStage::Attempted,
-        Some(ConversationCommandStage::Ready) | None => return Err(()),
+        Some(ConversationCommandStage::Ready) => ReceiptStage::Ready,
         Some(ConversationCommandStage::Settled) => ReceiptStage::Settled,
+        None => return Err(()),
     };
     let effect = match result.outcome {
         None => None,
@@ -89,25 +91,10 @@ pub fn lookup_answer(
             Some(ReceiptEffect::UnavailableAfterSave)
         }
     };
-    if stage != ReceiptStage::Settled && effect.is_some() {
-        return Err(());
-    }
-    if stage == ReceiptStage::Settled && !submit_effect(effect) {
+    if submit_outcome(stage, effect).is_none() {
         return Err(());
     }
     Ok(LookupAnswer::Found { stage, effect })
-}
-
-fn submit_effect(effect: Option<ReceiptEffect>) -> bool {
-    matches!(
-        effect,
-        Some(
-            ReceiptEffect::Dispatched
-                | ReceiptEffect::NoEffect
-                | ReceiptEffect::RefusedAfterSave
-                | ReceiptEffect::UnavailableAfterSave
-        )
-    )
 }
 
 /// A refusal code this client was taught. Anything else is not guessed.

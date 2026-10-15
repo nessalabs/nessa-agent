@@ -87,6 +87,7 @@ impl PhoneGateway for Scripted {
 
 struct Memory {
     rows: BTreeMap<String, PhoneRecord>,
+    events: BTreeMap<String, Vec<IntentEvent>>,
     uncertain_depart: bool,
     fail_answer: Option<StoreError>,
 }
@@ -94,18 +95,17 @@ impl IntentStore for Memory {
     fn load(&mut self, id: &PhoneCommandId) -> Result<Option<PhoneRecord>, StoreError> {
         Ok(self.rows.get(id.as_str()).cloned())
     }
-    fn insert(&mut self, record: &PhoneRecord, _event: IntentEvent) -> Result<(), StoreError> {
-        self.rows.insert(
-            record.intent().command().as_str().to_owned(),
-            record.clone(),
-        );
+    fn insert(&mut self, record: &PhoneRecord, event: IntentEvent) -> Result<(), StoreError> {
+        let id = record.intent().command().as_str().to_owned();
+        self.events.entry(id.clone()).or_default().push(event);
+        self.rows.insert(id, record.clone());
         Ok(())
     }
     fn replace(
         &mut self,
         previous: &PhoneRecord,
         next: &PhoneRecord,
-        _event: IntentEvent,
+        event: IntentEvent,
     ) -> Result<(), StoreError> {
         if self.uncertain_depart && !previous.departed() && next.departed() {
             return Err(StoreError::Uncertain);
@@ -115,8 +115,9 @@ impl IntentStore for Memory {
                 return Err(error);
             }
         }
-        self.rows
-            .insert(next.intent().command().as_str().to_owned(), next.clone());
+        let id = next.intent().command().as_str().to_owned();
+        self.events.entry(id.clone()).or_default().push(event);
+        self.rows.insert(id, next.clone());
         Ok(())
     }
     fn replace_and_insert(
@@ -124,14 +125,24 @@ impl IntentStore for Memory {
         previous: &PhoneRecord,
         next: &PhoneRecord,
         draft: &PhoneRecord,
-        event: IntentEvent,
+        events: &[IntentEvent],
         draft_event: IntentEvent,
     ) -> Result<(), StoreError> {
-        self.replace(previous, next, event)?;
-        self.insert(draft, draft_event)
+        let id = next.intent().command().as_str().to_owned();
+        self.events
+            .entry(id.clone())
+            .or_default()
+            .extend(events.iter().copied());
+        self.rows.insert(id, next.clone());
+        self.insert(draft, draft_event)?;
+        let _ = previous;
+        Ok(())
     }
     fn list(&mut self) -> Result<Vec<PhoneRecord>, StoreError> {
         Ok(self.rows.values().cloned().collect())
+    }
+    fn events(&mut self, id: &PhoneCommandId) -> Result<Vec<IntentEvent>, StoreError> {
+        Ok(self.events.get(id.as_str()).cloned().unwrap_or_default())
     }
     fn begin_exclusive(&mut self) -> Result<(), StoreError> {
         Ok(())
@@ -224,6 +235,10 @@ fn depart(path: &Path, intent: PhoneIntent) {
 
 fn failure(code: ConversationErrorCode) -> SendAnswer {
     SendAnswer::Refused(PhoneFailure::Conversation(code))
+}
+
+fn failure_lookup(code: ConversationErrorCode) -> LookupAnswer {
+    LookupAnswer::Refused(PhoneFailure::Conversation(code))
 }
 
 fn settled(effect: ReceiptEffect) -> LookupAnswer {
@@ -354,6 +369,7 @@ fn an_uncertain_departure_does_not_send() {
     let mut outbox = PhoneOutbox::new(
         Memory {
             rows: BTreeMap::new(),
+            events: BTreeMap::new(),
             uncertain_depart: true,
             fail_answer: None,
         },
@@ -381,6 +397,7 @@ fn a_failed_save_after_a_send_keeps_possible_delivery() {
         let mut outbox = PhoneOutbox::new(
             Memory {
                 rows: BTreeMap::new(),
+                events: BTreeMap::new(),
                 uncertain_depart: false,
                 fail_answer: Some(store_error),
             },
@@ -413,90 +430,162 @@ fn a_failed_save_after_a_send_keeps_possible_delivery() {
 }
 
 #[test]
-fn a_reconciled_row_is_kept_when_the_send_save_loses() {
-    let dir = directory();
-    let path = path_in(&dir);
-    struct Race {
-        path: PathBuf,
-    }
-    impl PhoneGateway for Race {
-        fn send(&mut self, _: &PhoneIntent) -> SendAnswer {
-            let mut other = open(
-                &self.path,
-                Scripted::new(Vec::new(), vec![settled(ReceiptEffect::Dispatched)]),
-                SeqIds::default(),
-                clock(),
-            )
-            .unwrap();
-            let recovered = other.recover().unwrap();
-            assert_eq!(recovered[0].outcome(), PhoneOutcome::Done);
-            SendAnswer::Receipt(Delivery::Queued)
-        }
-        fn lookup(&mut self, _: &PhoneIntent) -> LookupAnswer {
-            panic!("the in-flight send does not look the receipt up");
-        }
-    }
-    let mut outbox = open(
-        &path,
-        Race { path: path.clone() },
+fn a_direct_answer_beats_a_lookup() {
+    let intent = text_intent("command-1", "hello");
+    let planted = intent_record(&intent, PhoneOutcome::Done);
+    let mut outbox = PhoneOutbox::new(
+        PlantOn {
+            rows: BTreeMap::new(),
+            events: BTreeMap::new(),
+            when: PhoneOutcome::Accepted,
+            planted: Some(Planted {
+                record: planted,
+                events: vec![audit(Cause::Lookup, PhoneOutcome::Done)],
+            }),
+        },
+        Scripted::new(vec![SendAnswer::Receipt(Delivery::Queued)], Vec::new()),
         SeqIds::default(),
         clock(),
-    )
-    .unwrap();
-    person_hold(&mut outbox, text_intent("command-1", "hello"));
-    let view = outbox.send(&command("command-1")).unwrap();
-    assert_eq!(view.outcome(), PhoneOutcome::Done);
-    assert!(view.claims_submission());
-    assert_eq!(view.intent().command().as_str(), "command-1");
-    assert_eq!(view.intent().text(), "hello");
-    let again = outbox.send(&command("command-1")).unwrap();
-    assert_eq!(again.outcome(), PhoneOutcome::Done);
-    assert_eq!(outbox.list().unwrap().len(), 1);
-}
-
-#[test]
-fn a_queued_receipt_replaces_a_weaker_lookup_failure() {
-    let dir = directory();
-    let path = path_in(&dir);
-    struct Race {
-        path: PathBuf,
-    }
-    impl PhoneGateway for Race {
-        fn send(&mut self, _: &PhoneIntent) -> SendAnswer {
-            let mut other = open(
-                &self.path,
-                Scripted::new(Vec::new(), vec![LookupAnswer::Lost]),
-                SeqIds::default(),
-                clock(),
-            )
-            .unwrap();
-            let recovered = other.recover().unwrap();
-            assert_eq!(
-                recovered[0].outcome(),
-                PhoneOutcome::Unknown(UnknownCause::LookupFailed)
-            );
-            SendAnswer::Receipt(Delivery::Queued)
-        }
-        fn lookup(&mut self, _: &PhoneIntent) -> LookupAnswer {
-            panic!("the saved receipt is not looked up again");
-        }
-    }
-    let mut outbox = open(
-        &path,
-        Race { path: path.clone() },
-        SeqIds::default(),
-        clock(),
-    )
-    .unwrap();
-    person_hold(&mut outbox, text_intent("command-1", "hello"));
+    );
+    person_hold(&mut outbox, intent);
     let view = outbox.send(&command("command-1")).unwrap();
     assert_eq!(view.outcome(), PhoneOutcome::Accepted);
     assert!(view.claims_submission());
-    assert_eq!(view.intent().command().as_str(), "command-1");
     assert_eq!(view.intent().text(), "hello");
     let again = outbox.send(&command("command-1")).unwrap();
     assert_eq!(again.outcome(), PhoneOutcome::Accepted);
-    assert_eq!(outbox.list().unwrap().len(), 1);
+}
+
+#[test]
+fn a_lookup_does_not_replace_a_direct_answer() {
+    let intent = text_intent("command-1", "hello");
+    let departed = intent_record(&intent, PhoneOutcome::Unknown(UnknownCause::NotAdmitted));
+    let mut rows = BTreeMap::new();
+    rows.insert("command-1".to_owned(), departed);
+    let mut events = BTreeMap::new();
+    events.insert(
+        "command-1".to_owned(),
+        vec![
+            audit(Cause::Held, PhoneOutcome::Draft),
+            audit(
+                Cause::Departed,
+                PhoneOutcome::Unknown(UnknownCause::NotAdmitted),
+            ),
+        ],
+    );
+    let mut outbox = PhoneOutbox::new(
+        PlantOn {
+            rows,
+            events,
+            when: PhoneOutcome::Done,
+            planted: Some(Planted {
+                record: intent_record(&intent, PhoneOutcome::Accepted),
+                events: vec![audit(Cause::SendAnswered, PhoneOutcome::Accepted)],
+            }),
+        },
+        Scripted::new(Vec::new(), vec![settled(ReceiptEffect::Dispatched)]),
+        SeqIds::default(),
+        clock(),
+    );
+    let recovered = outbox.recover().unwrap();
+    assert_eq!(recovered[0].outcome(), PhoneOutcome::Accepted);
+    assert!(recovered[0].claims_submission());
+    assert_eq!(recovered[0].intent().text(), "hello");
+    let again = outbox.recover().unwrap();
+    assert!(again.is_empty());
+}
+
+fn intent_record(intent: &PhoneIntent, outcome: PhoneOutcome) -> PhoneRecord {
+    PhoneRecord::held(intent.clone())
+        .depart()
+        .unwrap()
+        .with_sends(1)
+        .with_outcome(outcome)
+}
+
+fn audit(cause: Cause, outcome: PhoneOutcome) -> IntentEvent {
+    IntentEvent {
+        cause,
+        outcome,
+        initiator: Initiator::Person,
+        observed_at_ms: 1,
+    }
+}
+
+/// The first replace that would store `when` instead leaves `planted` committed
+/// and reports a conflict, as another connection's save would.
+struct PlantOn {
+    rows: BTreeMap<String, PhoneRecord>,
+    events: BTreeMap<String, Vec<IntentEvent>>,
+    when: PhoneOutcome,
+    planted: Option<Planted>,
+}
+
+struct Planted {
+    record: PhoneRecord,
+    events: Vec<IntentEvent>,
+}
+
+impl IntentStore for PlantOn {
+    fn load(&mut self, id: &PhoneCommandId) -> Result<Option<PhoneRecord>, StoreError> {
+        Ok(self.rows.get(id.as_str()).cloned())
+    }
+    fn insert(&mut self, record: &PhoneRecord, event: IntentEvent) -> Result<(), StoreError> {
+        let id = record.intent().command().as_str().to_owned();
+        self.events.entry(id.clone()).or_default().push(event);
+        self.rows.insert(id, record.clone());
+        Ok(())
+    }
+    fn replace(
+        &mut self,
+        previous: &PhoneRecord,
+        next: &PhoneRecord,
+        event: IntentEvent,
+    ) -> Result<(), StoreError> {
+        if next.outcome() == self.when {
+            if let Some(planted) = self.planted.take() {
+                let id = planted.record.intent().command().as_str().to_owned();
+                self.events.insert(id.clone(), planted.events);
+                self.rows.insert(id, planted.record);
+                return Err(StoreError::Conflict);
+            }
+        }
+        let id = next.intent().command().as_str().to_owned();
+        self.events.entry(id.clone()).or_default().push(event);
+        self.rows.insert(id, next.clone());
+        let _ = previous;
+        Ok(())
+    }
+    fn replace_and_insert(
+        &mut self,
+        previous: &PhoneRecord,
+        next: &PhoneRecord,
+        draft: &PhoneRecord,
+        events: &[IntentEvent],
+        draft_event: IntentEvent,
+    ) -> Result<(), StoreError> {
+        self.replace(previous, next, events[0])?;
+        for event in events.iter().skip(1) {
+            self.events
+                .entry(next.intent().command().as_str().to_owned())
+                .or_default()
+                .push(*event);
+        }
+        self.insert(draft, draft_event)
+    }
+    fn list(&mut self) -> Result<Vec<PhoneRecord>, StoreError> {
+        Ok(self.rows.values().cloned().collect())
+    }
+    fn events(&mut self, id: &PhoneCommandId) -> Result<Vec<IntentEvent>, StoreError> {
+        Ok(self.events.get(id.as_str()).cloned().unwrap_or_default())
+    }
+    fn begin_exclusive(&mut self) -> Result<(), StoreError> {
+        Ok(())
+    }
+    fn end_exclusive(&mut self) -> Result<(), StoreError> {
+        Ok(())
+    }
+    fn abort_exclusive(&mut self) {}
 }
 
 fn accepted_send(delivery: Delivery, outcome: PhoneOutcome) {
@@ -585,6 +674,63 @@ fn turn_running_returns_the_text_to_a_new_draft() {
     assert!(!draft.claims_submission());
     outbox.retry(&command("command-1")).unwrap();
     assert_eq!(seen.body().sent.len(), 1);
+    drop(outbox);
+    let mut store = SqliteIntents::open(&path_in(&dir)).unwrap();
+    let events = store.events("command-1").unwrap();
+    let causes: Vec<_> = events.iter().map(|event| event.cause).collect();
+    assert_eq!(
+        causes,
+        [Cause::Held, Cause::Departed, Cause::ReturnedToDraft]
+    );
+    assert!(events
+        .iter()
+        .all(|event| event.initiator == Initiator::Person));
+    let draft_events = store.events(&successor).unwrap();
+    assert_eq!(draft_events[0].cause, Cause::Held);
+    assert_eq!(draft_events[0].initiator, Initiator::Person);
+}
+
+#[test]
+fn a_lookup_turn_running_stays_a_lookup_result() {
+    let dir = directory();
+    let path = path_in(&dir);
+    depart(&path, text_intent("command-1", "keep this"));
+    let gateway = Scripted::new(
+        Vec::new(),
+        vec![failure_lookup(ConversationErrorCode::TurnRunning)],
+    );
+    let mut outbox = opened(&path, gateway);
+    let recovered = outbox.recover().unwrap();
+    assert_eq!(
+        recovered[0].outcome(),
+        PhoneOutcome::Failed(PhoneFailure::Conversation(
+            ConversationErrorCode::TurnRunning
+        ))
+    );
+    let successor = recovered[0].successor().unwrap().as_str().to_owned();
+    drop(outbox);
+    let mut store = SqliteIntents::open(&path).unwrap();
+    let events = store.events("command-1").unwrap();
+    let causes: Vec<_> = events.iter().map(|event| event.cause).collect();
+    assert_eq!(
+        causes,
+        [
+            Cause::Held,
+            Cause::Departed,
+            Cause::Lookup,
+            Cause::ReturnedToDraft,
+        ]
+    );
+    assert_eq!(events[2].initiator, Initiator::Recovery);
+    assert_eq!(events[3].initiator, Initiator::Recovery);
+    assert_eq!(events[2].outcome, events[3].outcome);
+    let draft_events = store.events(&successor).unwrap();
+    assert_eq!(draft_events.len(), 1);
+    assert_eq!(draft_events[0].cause, Cause::Held);
+    assert_eq!(draft_events[0].initiator, Initiator::Recovery);
+    assert_eq!(draft_events[0].outcome, PhoneOutcome::Draft);
+    let mut check = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+    assert_eq!(check.list().unwrap().len(), 2);
 }
 
 #[test]
@@ -1066,22 +1212,20 @@ fn a_lost_departure_does_not_send_again() {
             flag = cv.wait(flag).unwrap();
         }
     }
-    let loser = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(done_rx.recv_timeout(Duration::from_millis(400)).is_err());
     {
         let (lock, cv) = &*release;
         let mut flag = lock.lock().unwrap();
         *flag = true;
         cv.notify_all();
     }
-    let winner = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let left = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let right = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     first.join().unwrap();
     second.join().unwrap();
     assert_eq!(sends.load(Ordering::SeqCst), 1);
-    assert_eq!(winner, PhoneOutcome::Accepted);
-    assert!(
-        loser == PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
-            || loser == PhoneOutcome::Accepted
-    );
+    assert_eq!(left, PhoneOutcome::Accepted);
+    assert_eq!(right, PhoneOutcome::Accepted);
     let mut check = opened(&path, Scripted::new(Vec::new(), Vec::new()));
     let rows = check.list().unwrap();
     assert_eq!(rows.len(), 1);
@@ -1246,6 +1390,73 @@ fn a_done_row_whose_history_stops_at_departure_is_corrupt() {
         )
         .unwrap();
     assert_eq!(outcome, "done");
+
+    let dir = directory();
+    let path = path_in(&dir);
+    depart(&path, text_intent("command-2", "hello"));
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE phone_intent_event SET initiator = 'recovery' WHERE cause = 'departed'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+    assert_eq!(
+        outbox.send(&command("command-2")).unwrap_err(),
+        OutboxError::Corrupt
+    );
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let initiator: String = connection
+        .query_row(
+            "SELECT initiator FROM phone_intent_event WHERE cause = 'departed'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(initiator, "recovery");
+}
+
+#[test]
+fn an_impossible_receipt_leaves_the_row() {
+    let answers = [
+        LookupAnswer::Found {
+            stage: ReceiptStage::Ready,
+            effect: None,
+        },
+        LookupAnswer::Found {
+            stage: ReceiptStage::Settled,
+            effect: None,
+        },
+        LookupAnswer::Found {
+            stage: ReceiptStage::Settled,
+            effect: Some(ReceiptEffect::Withdrawn),
+        },
+        LookupAnswer::Found {
+            stage: ReceiptStage::Settled,
+            effect: Some(ReceiptEffect::Cancelled),
+        },
+        LookupAnswer::Found {
+            stage: ReceiptStage::Settled,
+            effect: Some(ReceiptEffect::AlreadyFinal),
+        },
+    ];
+    for answer in answers {
+        let dir = directory();
+        let gateway = Scripted::new(vec![SendAnswer::Lost], vec![answer]);
+        let mut outbox = opened(&path_in(&dir), gateway);
+        person_hold(&mut outbox, text_intent("command-1", "hello"));
+        let view = outbox.send(&command("command-1")).unwrap();
+        assert_eq!(
+            view.outcome(),
+            PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+        );
+        assert_ne!(
+            view.outcome(),
+            PhoneOutcome::Unknown(UnknownCause::Attempted)
+        );
+    }
 }
 
 #[test]

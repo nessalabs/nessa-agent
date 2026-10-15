@@ -110,32 +110,40 @@ pub(crate) fn after_lookup(record: PhoneRecord, answer: LookupAnswer, allow_send
         LookupAnswer::Refused(failure) => {
             Step::Done(record.with_outcome(PhoneOutcome::Failed(failure)))
         }
-        LookupAnswer::Found { stage, effect } => {
-            Step::Done(record.with_outcome(from_receipt(stage, effect)))
-        }
+        LookupAnswer::Found { stage, effect } => match submit_outcome(stage, effect) {
+            Some(outcome) => Step::Done(record.with_outcome(outcome)),
+            None => Step::Done(record),
+        },
     }
 }
 
-fn from_receipt(stage: ReceiptStage, effect: Option<ReceiptEffect>) -> PhoneOutcome {
+/// The outcome a submit receipt stores.
+///
+/// `None` is not an outcome: stage `ready`, an effect on a stage that has not
+/// settled, a settled receipt that omits its effect, or a settled stop effect
+/// (`withdrawn`, `cancelled`, `already_final`). The row stays. `no_effect` is
+/// failed (`a_settled_receipt_becomes_done_or_the_matching_refusal`).
+pub(crate) fn submit_outcome(
+    stage: ReceiptStage,
+    effect: Option<ReceiptEffect>,
+) -> Option<PhoneOutcome> {
     match stage {
-        ReceiptStage::Accepted => PhoneOutcome::Accepted,
-        ReceiptStage::Attempted | ReceiptStage::Ready => {
-            PhoneOutcome::Unknown(UnknownCause::Attempted)
+        ReceiptStage::Accepted if effect.is_none() => Some(PhoneOutcome::Accepted),
+        ReceiptStage::Attempted if effect.is_none() => {
+            Some(PhoneOutcome::Unknown(UnknownCause::Attempted))
         }
         ReceiptStage::Settled => match effect {
-            Some(ReceiptEffect::Dispatched) => PhoneOutcome::Done,
-            Some(ReceiptEffect::NoEffect) => failed(ConversationErrorCode::Revoked),
+            Some(ReceiptEffect::Dispatched) => Some(PhoneOutcome::Done),
+            Some(ReceiptEffect::NoEffect) => Some(failed(ConversationErrorCode::Revoked)),
             Some(ReceiptEffect::RefusedAfterSave) => {
-                failed(ConversationErrorCode::RevokedAfterSave)
+                Some(failed(ConversationErrorCode::RevokedAfterSave))
             }
             Some(ReceiptEffect::UnavailableAfterSave) => {
-                failed(ConversationErrorCode::UnavailableAfterSave)
+                Some(failed(ConversationErrorCode::UnavailableAfterSave))
             }
-            Some(
-                ReceiptEffect::Withdrawn | ReceiptEffect::Cancelled | ReceiptEffect::AlreadyFinal,
-            )
-            | None => PhoneOutcome::Unknown(UnknownCause::Attempted),
+            _ => None,
         },
+        ReceiptStage::Accepted | ReceiptStage::Attempted | ReceiptStage::Ready => None,
     }
 }
 

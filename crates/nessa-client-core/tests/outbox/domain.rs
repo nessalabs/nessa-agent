@@ -1,8 +1,9 @@
 //! Canonical bytes and the outcome a gateway answer becomes.
 use super::{
-    after_lookup, after_send, history_reaches, outranks, Cause, Delivery, Initiator, IntentError,
-    IntentEvent, LookupAnswer, PhoneCommandId, PhoneFailure, PhoneImage, PhoneIntent, PhoneOutcome,
-    PhoneRecord, ReceiptEffect, ReceiptStage, SendAnswer, UnknownCause, FOREGROUND_SENDS,
+    after_lookup, after_send, history_reaches, replaces, stored_evidence, submit_outcome, Cause,
+    Delivery, Evidence, Initiator, IntentError, IntentEvent, LookupAnswer, PhoneCommandId,
+    PhoneFailure, PhoneImage, PhoneIntent, PhoneOutcome, PhoneRecord, ReceiptEffect, ReceiptStage,
+    SendAnswer, UnknownCause, FOREGROUND_SENDS,
 };
 use nessa_protocol::product_contract::generated::{ConversationErrorCode, MAX_MCP_MESSAGE_BYTES};
 use nessa_sdk::domain::agent_execution::executions::ExecutionId;
@@ -212,7 +213,7 @@ fn a_history_that_stops_before_the_row_does_not_reach_it() {
             PhoneOutcome::Unknown(UnknownCause::NotAdmitted),
         ),
     ];
-    assert!(!history_reaches(&done, &stopped));
+    assert!(!history_reaches(&done, &stopped, false));
     let accepted = departed("hello")
         .with_sends(1)
         .with_outcome(PhoneOutcome::Accepted);
@@ -224,19 +225,281 @@ fn a_history_that_stops_before_the_row_does_not_reach_it() {
         ),
         audit(Cause::SendAnswered, PhoneOutcome::Accepted),
     ];
-    assert!(history_reaches(&accepted, &reached));
-    assert!(outranks(
+    assert!(history_reaches(&accepted, &reached, false));
+    assert!(replaces(
         PhoneOutcome::Accepted,
-        PhoneOutcome::Unknown(UnknownCause::LookupFailed)
+        Evidence::Direct,
+        PhoneOutcome::Unknown(UnknownCause::LookupFailed),
+        Evidence::Lookup,
     ));
-    assert!(!outranks(PhoneOutcome::Accepted, PhoneOutcome::Done));
+    assert!(!replaces(
+        PhoneOutcome::Accepted,
+        Evidence::Direct,
+        PhoneOutcome::Done,
+        Evidence::Direct,
+    ));
+}
+
+#[test]
+fn every_transition_and_precedence_pair() {
+    let done = PhoneOutcome::Done;
+    let running = PhoneOutcome::Running;
+    let accepted = PhoneOutcome::Accepted;
+    let failed = PhoneOutcome::Failed(PhoneFailure::Forbidden);
+    let unresolved = PhoneOutcome::Unknown(UnknownCause::Unresolved);
+    let attempted = PhoneOutcome::Unknown(UnknownCause::Attempted);
+    let lookup_failed = PhoneOutcome::Unknown(UnknownCause::LookupFailed);
+    let not_admitted = PhoneOutcome::Unknown(UnknownCause::NotAdmitted);
+    let draft = PhoneOutcome::Draft;
+    let order = [
+        done,
+        running,
+        accepted,
+        failed,
+        unresolved,
+        attempted,
+        lookup_failed,
+        not_admitted,
+        draft,
+    ];
+    for (incoming_at, incoming) in order.iter().enumerate() {
+        for (stored_at, stored) in order.iter().enumerate() {
+            assert_eq!(
+                replaces(*incoming, Evidence::Direct, *stored, Evidence::Direct),
+                incoming_at < stored_at,
+                "direct {incoming:?} vs direct {stored:?}"
+            );
+            assert_eq!(
+                replaces(*incoming, Evidence::Lookup, *stored, Evidence::Lookup),
+                incoming_at < stored_at,
+                "lookup {incoming:?} vs lookup {stored:?}"
+            );
+        }
+    }
+    let direct_answers = [done, running, accepted, failed, unresolved];
+    for incoming in direct_answers {
+        for stored in order {
+            assert!(
+                replaces(incoming, Evidence::Direct, stored, Evidence::Lookup),
+                "direct {incoming:?} must replace lookup {stored:?}"
+            );
+            assert!(
+                !replaces(incoming, Evidence::Lookup, stored, Evidence::Direct),
+                "lookup {incoming:?} must not replace direct {stored:?}"
+            );
+        }
+    }
+
+    let record = departed("hello");
+    for answer in [
+        LookupAnswer::Found {
+            stage: ReceiptStage::Ready,
+            effect: None,
+        },
+        LookupAnswer::Found {
+            stage: ReceiptStage::Settled,
+            effect: None,
+        },
+        LookupAnswer::Found {
+            stage: ReceiptStage::Settled,
+            effect: Some(ReceiptEffect::Withdrawn),
+        },
+        LookupAnswer::Found {
+            stage: ReceiptStage::Settled,
+            effect: Some(ReceiptEffect::Cancelled),
+        },
+        LookupAnswer::Found {
+            stage: ReceiptStage::Settled,
+            effect: Some(ReceiptEffect::AlreadyFinal),
+        },
+        LookupAnswer::Found {
+            stage: ReceiptStage::Accepted,
+            effect: Some(ReceiptEffect::Dispatched),
+        },
+    ] {
+        let step = after_lookup(record.clone(), answer, false);
+        assert!(
+            matches!(step, super::Step::Done(ref saved) if saved == &record),
+            "impossible receipt changed the row: {answer:?} -> {step:?}"
+        );
+    }
+    assert!(submit_outcome(ReceiptStage::Ready, None).is_none());
+    assert_eq!(
+        submit_outcome(ReceiptStage::Settled, Some(ReceiptEffect::NoEffect)),
+        Some(PhoneOutcome::Failed(PhoneFailure::Conversation(
+            ConversationErrorCode::Revoked
+        )))
+    );
+    assert_eq!(
+        submit_outcome(ReceiptStage::Attempted, None),
+        Some(PhoneOutcome::Unknown(UnknownCause::Attempted))
+    );
+
+    let not_admitted_row = record.clone();
+    let direct = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::SendAnswered, accepted),
+    ];
+    assert!(history_reaches(
+        &not_admitted_row
+            .clone()
+            .with_sends(1)
+            .with_outcome(accepted),
+        &direct,
+        false
+    ));
+    assert_eq!(stored_evidence(&direct), Evidence::Direct);
+
+    let lookup_done = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit_by(Cause::Lookup, done, Initiator::Recovery),
+    ];
+    assert!(history_reaches(
+        &not_admitted_row.clone().with_outcome(done),
+        &lookup_done,
+        false
+    ));
+    assert_eq!(stored_evidence(&lookup_done), Evidence::Lookup);
+
+    let resend = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::SendLost, not_admitted),
+        audit(Cause::Lookup, not_admitted),
+        audit(Cause::ForegroundSend, accepted),
+    ];
+    assert!(history_reaches(
+        &not_admitted_row
+            .clone()
+            .with_sends(2)
+            .with_outcome(accepted),
+        &resend,
+        false
+    ));
+
+    let explicit = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::Lookup, not_admitted),
+        audit(Cause::ExplicitRetry, not_admitted),
+        audit(Cause::ExplicitRetry, accepted),
+    ];
+    assert!(history_reaches(
+        &not_admitted_row
+            .clone()
+            .with_sends(1)
+            .with_outcome(accepted),
+        &explicit,
+        false
+    ));
+    assert_eq!(stored_evidence(&explicit), Evidence::Direct);
+    assert_eq!(
+        stored_evidence(&explicit[..4]),
+        Evidence::Lookup,
+        "the reset is not a direct answer"
+    );
+
+    let running_failure = PhoneOutcome::Failed(PhoneFailure::Conversation(
+        ConversationErrorCode::TurnRunning,
+    ));
+    let successor = command("command-2");
+    let direct_return = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::ReturnedToDraft, running_failure),
+    ];
+    assert!(history_reaches(
+        &not_admitted_row
+            .clone()
+            .with_outcome(running_failure)
+            .with_successor(successor.clone()),
+        &direct_return,
+        false
+    ));
+    assert_eq!(stored_evidence(&direct_return), Evidence::Direct);
+
+    let lookup_return = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit_by(Cause::Lookup, running_failure, Initiator::Recovery),
+        audit_by(Cause::ReturnedToDraft, running_failure, Initiator::Recovery),
+    ];
+    assert!(history_reaches(
+        &not_admitted_row
+            .clone()
+            .with_outcome(running_failure)
+            .with_successor(successor),
+        &lookup_return,
+        false
+    ));
+    assert_eq!(stored_evidence(&lookup_return), Evidence::Lookup);
+    let minted = PhoneRecord::held(intent("hello"));
+    assert!(history_reaches(
+        &minted,
+        &[audit_by(Cause::Held, draft, Initiator::Recovery)],
+        true
+    ));
+    assert!(!history_reaches(
+        &minted,
+        &[audit_by(Cause::Held, draft, Initiator::Recovery)],
+        false
+    ));
+
+    let skipped = [
+        audit(Cause::Held, draft),
+        audit(Cause::SendAnswered, accepted),
+    ];
+    assert!(!history_reaches(
+        &not_admitted_row.clone().with_outcome(accepted),
+        &skipped,
+        false
+    ));
+    for cause in [
+        Cause::Departed,
+        Cause::SendAnswered,
+        Cause::SendLost,
+        Cause::Unreadable,
+        Cause::ForegroundSend,
+        Cause::ExplicitRetry,
+        Cause::Bound,
+    ] {
+        let outcome = if cause == Cause::Departed
+            || cause == Cause::Bound
+            || cause == Cause::SendLost
+            || cause == Cause::Unreadable
+        {
+            not_admitted
+        } else {
+            accepted
+        };
+        let mut events = vec![
+            audit(Cause::Held, draft),
+            audit(Cause::Departed, not_admitted),
+        ];
+        if cause != Cause::Departed {
+            events.push(audit_by(cause, outcome, Initiator::Recovery));
+        } else {
+            events[1].initiator = Initiator::Recovery;
+        }
+        let row = not_admitted_row.clone().with_outcome(outcome);
+        assert!(
+            !history_reaches(&row, &events, false),
+            "recovery must not record {cause:?}"
+        );
+    }
 }
 
 fn audit(cause: Cause, outcome: PhoneOutcome) -> IntentEvent {
+    audit_by(cause, outcome, Initiator::Person)
+}
+
+fn audit_by(cause: Cause, outcome: PhoneOutcome, initiator: Initiator) -> IntentEvent {
     IntentEvent {
         cause,
         outcome,
-        initiator: Initiator::Person,
+        initiator,
         observed_at_ms: 1,
     }
 }

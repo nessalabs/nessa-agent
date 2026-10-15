@@ -1,9 +1,13 @@
 //! The phone outbox. A draft never claims it was submitted.
+//!
+//! The ordering is `docs/design/phone-outbox.md`. Departure commits before the
+//! writer lease. The lease is held across `conversation.send` and the save of
+//! that answer. A lost save after departure reloads the row.
 
 use super::super::domain::{
-    after_lookup, after_send, outranks, Cause, Initiator, IntentEvent, LookupAnswer,
-    PhoneCommandId, PhoneIntent, PhoneOutcome, PhoneRecord, PhoneView, Step, UnknownCause,
-    FOREGROUND_SENDS,
+    after_lookup, after_send, replaces, stored_evidence, Cause, Evidence, Initiator, IntentEvent,
+    LookupAnswer, PhoneCommandId, PhoneIntent, PhoneOutcome, PhoneRecord, PhoneView, Step,
+    UnknownCause, FOREGROUND_SENDS,
 };
 use super::ports::{CommandIds, IntentStore, OutboxError, PhoneGateway, StoreError};
 use nessa_auth::application::ports::Clock;
@@ -74,10 +78,13 @@ where
 
     /// Send a saved draft, or read the receipt of a command that already left.
     ///
-    /// A draft is marked departed before `conversation.send`. A command that
-    /// already left is only looked up: this call does not send it again.
-    /// An accepted, running, done, failed, or unresolved command is returned
-    /// as saved. An attempted command is read again and is not sent.
+    /// A draft is marked departed, and that commit finishes, before the writer
+    /// lease. The lease is then held across `conversation.send` and the save
+    /// of the answer (`departure_is_durable_before_the_gateway_is_asked`).
+    /// A second send waits and reloads
+    /// (`a_lost_departure_does_not_send_again`). It sends the same id only
+    /// when the stored row is still unknown. If the wait ends without the
+    /// lease, the reloaded row is returned.
     ///
     /// The audit initiator is [`Initiator::Person`].
     pub fn send(&mut self, id: &PhoneCommandId) -> Result<PhoneView, OutboxError> {
@@ -91,16 +98,15 @@ where
         }
         let departed = record.clone().depart().ok_or(OutboxError::Conflict)?;
         match self.persist(&record, &departed, Cause::Departed, by) {
-            Ok(()) => self.foreground(departed, by, Cause::SendAnswered),
-            // The other sender already marked this draft departed. Do not
-            // send it again (`a_lost_departure_does_not_send_again`).
+            Ok(()) => self.with_lease(id, |outbox| {
+                outbox.foreground(departed, by, Cause::SendAnswered)
+            }),
             Err(OutboxError::Conflict) => {
                 let current = self.committed_record(record.intent().command())?;
-                if current.intent().same_bytes(record.intent()) {
-                    self.reconcile(current, by, false)
-                } else {
-                    Err(OutboxError::Conflict)
+                if !current.intent().same_bytes(record.intent()) {
+                    return Err(OutboxError::Conflict);
                 }
+                self.with_lease(id, |outbox| outbox.follow(current, by))
             }
             Err(error) => Err(error),
         }
@@ -108,9 +114,11 @@ where
 
     /// Look up every command that may have left and has no confirmed answer.
     ///
-    /// This does not send (`recovery_does_not_send_when_the_receipt_is_absent`).
-    /// An attempted receipt is read again, so a later settled receipt is
-    /// adopted (`recovery_adopts_a_settled_receipt_after_attempted`).
+    /// This does not send and does not take the lease
+    /// (`recovery_does_not_send_when_the_receipt_is_absent`). Its write waits
+    /// if a send holds the lease, and then precedence applies. An attempted
+    /// receipt is read again, so a later settled receipt is adopted
+    /// (`recovery_adopts_a_settled_receipt_after_attempted`).
     /// The audit initiator is [`Initiator::Recovery`], which `hold`, `send`,
     /// and `retry` do not record.
     pub fn recover(&mut self) -> Result<Vec<PhoneView>, OutboxError> {
@@ -132,11 +140,12 @@ where
     ///
     /// Unresolved, attempted, failed, and finished commands are not sent
     /// (`an_explicit_retry_does_not_send_an_uncertain_or_finished_command`).
-    ///
-    /// The audit initiator is [`Initiator::Person`]. A lookup that finds
-    /// nothing takes the store's writer lease before `conversation.send`, so
-    /// a second retry of the same row waits and does not send
+    /// A lookup that finds nothing takes the writer lease before
+    /// `conversation.send`, so a second retry, or a retry that overlaps the
+    /// first send, waits and reloads
     /// (`a_concurrent_retry_sends_the_departure_once`).
+    ///
+    /// The audit initiator is [`Initiator::Person`].
     pub fn retry(&mut self, id: &PhoneCommandId) -> Result<PhoneView, OutboxError> {
         self.retry_as(id, Initiator::Person)
     }
@@ -151,9 +160,17 @@ where
         }
         let answer = self.gateway.lookup(record.intent());
         if !matches!(answer, LookupAnswer::NotFound) {
-            return self.apply_lookup(record, answer, by, false);
+            return self
+                .apply_lookup(record, answer, by, false)
+                .map(|body| body.view);
         }
-        self.exclusive(|outbox| outbox.send_after_not_found(record, by))
+        let command = record.intent().command().clone();
+        self.with_lease(&command, |outbox| outbox.send_after_not_found(record, by))
+    }
+
+    /// Every saved command, drafts included.
+    pub fn list(&mut self) -> Result<Vec<PhoneView>, OutboxError> {
+        Ok(self.store.list()?.iter().map(PhoneRecord::view).collect())
     }
 
     /// The lease is already held. Send only when the row is still the one
@@ -162,49 +179,73 @@ where
         &mut self,
         original: PhoneRecord,
         by: Initiator,
-    ) -> Result<PhoneView, OutboxError> {
+    ) -> Result<LeaseBody, OutboxError> {
         let record = self
             .store
             .load(original.intent().command())?
             .ok_or(OutboxError::NotHeld)?;
         if record != original {
-            return Ok(record.view());
+            return Ok(kept_body(record.view()));
         }
         let looked = record
             .clone()
             .with_outcome(PhoneOutcome::Unknown(UnknownCause::NotAdmitted));
-        if let Some(kept) = self.asked_or_kept(&record, &looked, Cause::Lookup, by)? {
-            return Ok(kept);
+        let marked = self.asked_or_kept(&record, &looked, Cause::Lookup, by, Evidence::Lookup)?;
+        if marked.resave.is_none() {
+            return Ok(marked);
         }
         let reset = looked.clone().with_sends(0);
-        if let Some(kept) = self.asked_or_kept(&looked, &reset, Cause::ExplicitRetry, by)? {
-            return Ok(kept);
+        let marked =
+            self.asked_or_kept(&looked, &reset, Cause::ExplicitRetry, by, Evidence::Lookup)?;
+        if marked.resave.is_none() {
+            return Ok(marked);
         }
         self.foreground(reset, by, Cause::ExplicitRetry)
     }
 
-    fn exclusive<T>(
+    /// Wait for the writer lease, run `body`, and commit it.
+    ///
+    /// The wait ending without the lease reloads the row. It does not report
+    /// [`OutboxError::Unavailable`] (`a_lost_departure_does_not_send_again`).
+    fn with_lease(
         &mut self,
-        body: impl FnOnce(&mut Self) -> Result<T, OutboxError>,
-    ) -> Result<T, OutboxError> {
-        self.store
-            .begin_exclusive()
-            .map_err(|error| asked(OutboxError::from(error)))?;
-        let result = body(self);
-        if result.is_ok() {
-            match self.store.end_exclusive() {
-                Ok(()) => result,
-                Err(error) => Err(asked(OutboxError::from(error))),
+        id: &PhoneCommandId,
+        body: impl FnOnce(&mut Self) -> Result<LeaseBody, OutboxError>,
+    ) -> Result<PhoneView, OutboxError> {
+        if self.store.begin_exclusive().is_err() {
+            return self.row_or_unsaved(id);
+        }
+        match body(self) {
+            Ok(done) => match self.store.end_exclusive() {
+                Ok(()) => Ok(done.view),
+                Err(_) => self.replay(done),
+            },
+            Err(error) => {
+                self.store.abort_exclusive();
+                Err(error)
             }
-        } else {
-            self.store.abort_exclusive();
-            result
         }
     }
 
-    /// Every saved command, drafts included.
-    pub fn list(&mut self) -> Result<Vec<PhoneView>, OutboxError> {
-        Ok(self.store.list()?.iter().map(PhoneRecord::view).collect())
+    /// The other sender already departed this draft. The lease is held.
+    fn follow(&mut self, fallen: PhoneRecord, by: Initiator) -> Result<LeaseBody, OutboxError> {
+        let current = self
+            .store
+            .load(fallen.intent().command())?
+            .ok_or(OutboxError::NotHeld)?;
+        if !current.intent().same_bytes(fallen.intent()) {
+            return Err(OutboxError::Conflict);
+        }
+        if matches!(
+            current.outcome(),
+            PhoneOutcome::Unknown(UnknownCause::NotAdmitted | UnknownCause::LookupFailed)
+        ) {
+            self.foreground(current, by, Cause::SendAnswered)
+        } else if open_outcome(&current) {
+            self.reconcile_body(current, by, false)
+        } else {
+            Ok(kept_body(current.view()))
+        }
     }
 
     fn reconcile(
@@ -213,8 +254,17 @@ where
         by: Initiator,
         allow_send: bool,
     ) -> Result<PhoneView, OutboxError> {
+        Ok(self.reconcile_body(record, by, allow_send)?.view)
+    }
+
+    fn reconcile_body(
+        &mut self,
+        record: PhoneRecord,
+        by: Initiator,
+        allow_send: bool,
+    ) -> Result<LeaseBody, OutboxError> {
         if !open_outcome(&record) {
-            return Ok(record.view());
+            return Ok(kept_body(record.view()));
         }
         let answer = self.gateway.lookup(record.intent());
         self.apply_lookup(record, answer, by, allow_send)
@@ -225,25 +275,26 @@ where
         mut record: PhoneRecord,
         by: Initiator,
         mut cause: Cause,
-    ) -> Result<PhoneView, OutboxError> {
+    ) -> Result<LeaseBody, OutboxError> {
         loop {
             if record.sends() >= FOREGROUND_SENDS {
                 let next = record
                     .clone()
                     .with_outcome(PhoneOutcome::Unknown(UnknownCause::NotAdmitted));
-                if let Some(kept) = self.asked_or_kept(&record, &next, Cause::Bound, by)? {
-                    return Ok(kept);
-                }
                 tracing::warn!(
                     limit = "client.foreground_sends",
                     "product session hit an operational limit"
                 );
-                return Ok(next.view());
+                return self.asked_or_kept(&record, &next, Cause::Bound, by, Evidence::Lookup);
             }
             let answer = self.gateway.send(record.intent());
             match after_send(record.clone(), answer) {
-                Step::Done(next) => return self.asked_view(&record, &next, cause, by),
-                Step::ReturnToDraft(next) => return self.return_to_draft(&record, next, by),
+                Step::Done(next) => {
+                    return self.asked_or_kept(&record, &next, cause, by, Evidence::Direct)
+                }
+                Step::ReturnToDraft(next) => {
+                    return self.return_to_draft(&record, next, by, Evidence::Direct)
+                }
                 Step::Lookup {
                     record: bumped,
                     resend,
@@ -253,8 +304,10 @@ where
                     } else {
                         Cause::Unreadable
                     };
-                    if let Some(kept) = self.asked_or_kept(&record, &bumped, lost, by)? {
-                        return Ok(kept);
+                    let marked =
+                        self.asked_or_kept(&record, &bumped, lost, by, Evidence::Lookup)?;
+                    if marked.resave.is_none() {
+                        return Ok(marked);
                     }
                     let looked = self.gateway.lookup(bumped.intent());
                     match after_lookup(bumped.clone(), looked, resend) {
@@ -265,10 +318,16 @@ where
                                     "product session hit an operational limit"
                                 );
                             }
-                            return self.asked_view(&bumped, &next, Cause::Lookup, by);
+                            return self.asked_or_kept(
+                                &bumped,
+                                &next,
+                                Cause::Lookup,
+                                by,
+                                Evidence::Lookup,
+                            );
                         }
                         Step::ReturnToDraft(next) => {
-                            return self.return_to_draft(&bumped, next, by)
+                            return self.return_to_draft(&bumped, next, by, Evidence::Lookup)
                         }
                         Step::Send(next) => {
                             // The resend is recorded with its answer, after
@@ -292,14 +351,18 @@ where
         answer: LookupAnswer,
         by: Initiator,
         allow_send: bool,
-    ) -> Result<PhoneView, OutboxError> {
+    ) -> Result<LeaseBody, OutboxError> {
         match after_lookup(record.clone(), answer, allow_send) {
-            Step::Done(next) if next == record => Ok(record.view()),
-            Step::Done(next) => self.asked_view(&record, &next, Cause::Lookup, by),
-            Step::ReturnToDraft(next) => self.return_to_draft(&record, next, by),
+            Step::Done(next) if next == record => Ok(kept_body(record.view())),
+            Step::Done(next) => {
+                self.asked_or_kept(&record, &next, Cause::Lookup, by, Evidence::Lookup)
+            }
+            Step::ReturnToDraft(next) => self.return_to_draft(&record, next, by, Evidence::Lookup),
             Step::Send(next) => {
-                if let Some(kept) = self.asked_or_kept(&record, &next, Cause::Lookup, by)? {
-                    return Ok(kept);
+                let marked =
+                    self.asked_or_kept(&record, &next, Cause::Lookup, by, Evidence::Lookup)?;
+                if marked.resave.is_none() {
+                    return Ok(marked);
                 }
                 self.foreground(next, by, Cause::ForegroundSend)
             }
@@ -312,10 +375,12 @@ where
         previous: &PhoneRecord,
         failed: PhoneRecord,
         by: Initiator,
-    ) -> Result<PhoneView, OutboxError> {
+        evidence: Evidence,
+    ) -> Result<LeaseBody, OutboxError> {
         if failed.successor().is_some() {
-            return self.asked_view(previous, &failed, Cause::ReturnedToDraft, by);
+            return self.asked_or_kept(previous, &failed, Cause::ReturnedToDraft, by, evidence);
         }
+        let intended = failed.clone();
         let (command, turn) = self.ids.mint()?;
         let draft = PhoneRecord::held(
             failed
@@ -324,46 +389,130 @@ where
                 .map_err(OutboxError::Id)?,
         );
         let failed = failed.with_successor(command);
-        let failed_event = self.event(Cause::ReturnedToDraft, failed.outcome(), by);
+        let events = self.draft_events(failed.outcome(), by, evidence);
         let draft_event = self.event(Cause::Held, draft.outcome(), by);
         match self
             .store
-            .replace_and_insert(previous, &failed, &draft, failed_event, draft_event)
+            .replace_and_insert(previous, &failed, &draft, &events, draft_event)
         {
-            Ok(()) => Ok(failed.view()),
-            Err(StoreError::Conflict) => self.retry_return(failed, draft, by),
+            Ok(()) => Ok(LeaseBody {
+                view: failed.view(),
+                resave: Some(Resave::Draft {
+                    failed: intended,
+                    evidence,
+                    by,
+                }),
+            }),
+            Err(StoreError::Conflict) => self.retry_return(intended, evidence, by),
             Err(error) => Err(asked(OutboxError::from(error))),
         }
     }
 
     /// The other connection committed while this `turn_running` answer was
-    /// being saved. A weaker row is replaced. An equal or stronger row stands.
+    /// being saved. Precedence decides whether this refusal replaces it.
     fn retry_return(
         &mut self,
         failed: PhoneRecord,
-        draft: PhoneRecord,
+        evidence: Evidence,
         by: Initiator,
-    ) -> Result<PhoneView, OutboxError> {
+    ) -> Result<LeaseBody, OutboxError> {
         for _ in 0..SAVE_ATTEMPTS {
             let saved = self.committed_record(failed.intent().command())?;
-            if !saved.intent().same_bytes(failed.intent())
-                || !outranks(failed.outcome(), saved.outcome())
-            {
-                return Ok(saved.view());
+            if !saved.intent().same_bytes(failed.intent()) {
+                return Err(OutboxError::Conflict);
             }
-            let next = overlay(&saved, &failed);
-            let failed_event = self.event(Cause::ReturnedToDraft, next.outcome(), by);
+            let stored = self.evidence_of(saved.intent().command())?;
+            if !replaces(failed.outcome(), evidence, saved.outcome(), stored) {
+                return Ok(kept_body(saved.view()));
+            }
+            if saved.outcome() == failed.outcome() && saved.successor().is_some() {
+                return Ok(kept_body(saved.view()));
+            }
+            let (command, turn) = self.ids.mint()?;
+            let draft = PhoneRecord::held(
+                failed
+                    .intent()
+                    .again(command.clone(), turn)
+                    .map_err(OutboxError::Id)?,
+            );
+            let next = overlay(&saved, &failed).with_successor(command);
+            let events = self.draft_events(next.outcome(), by, evidence);
             let draft_event = self.event(Cause::Held, draft.outcome(), by);
             match self
                 .store
-                .replace_and_insert(&saved, &next, &draft, failed_event, draft_event)
+                .replace_and_insert(&saved, &next, &draft, &events, draft_event)
             {
-                Ok(()) => return Ok(next.view()),
+                Ok(()) => {
+                    return Ok(LeaseBody {
+                        view: next.view(),
+                        resave: Some(Resave::Draft {
+                            failed: failed.clone(),
+                            evidence,
+                            by,
+                        }),
+                    })
+                }
                 Err(StoreError::Conflict) => continue,
                 Err(error) => return Err(asked(OutboxError::from(error))),
             }
         }
         Err(OutboxError::Unsaved)
+    }
+
+    fn replay(&mut self, done: LeaseBody) -> Result<PhoneView, OutboxError> {
+        match done.resave {
+            None => {
+                let id = done.view.intent().command().clone();
+                self.row_or_unsaved(&id)
+            }
+            Some(Resave::Outcome {
+                next,
+                cause,
+                evidence,
+                by,
+            }) => self
+                .prefer(&next, cause, evidence, by)
+                .map(|body| body.view),
+            Some(Resave::Draft {
+                failed,
+                evidence,
+                by,
+            }) => self.replay_draft(failed, evidence, by),
+        }
+    }
+
+    fn replay_draft(
+        &mut self,
+        failed: PhoneRecord,
+        evidence: Evidence,
+        by: Initiator,
+    ) -> Result<PhoneView, OutboxError> {
+        let saved = self.committed_record(failed.intent().command())?;
+        if saved.outcome() == failed.outcome() && saved.successor().is_some() {
+            return Ok(saved.view());
+        }
+        if !saved.intent().same_bytes(failed.intent()) {
+            return Err(OutboxError::Conflict);
+        }
+        let stored = self.evidence_of(saved.intent().command())?;
+        if !replaces(failed.outcome(), evidence, saved.outcome(), stored) {
+            return Ok(saved.view());
+        }
+        self.return_to_draft(&saved, failed.clear_successor(), by, evidence)
+            .map(|body| body.view)
+    }
+
+    fn draft_events(
+        &self,
+        outcome: PhoneOutcome,
+        by: Initiator,
+        evidence: Evidence,
+    ) -> Vec<IntentEvent> {
+        let returned = self.event(Cause::ReturnedToDraft, outcome, by);
+        match evidence {
+            Evidence::Lookup => vec![self.event(Cause::Lookup, outcome, by), returned],
+            Evidence::Direct => vec![returned],
+        }
     }
 
     fn persist(
@@ -378,43 +527,43 @@ where
         Ok(())
     }
 
-    /// The gateway has already been asked. A failed save must not be reported
-    /// as [`OutboxError::Unavailable`] or [`OutboxError::Conflict`]: the first
-    /// means nothing was sent, and the second means the command id stores
-    /// different bytes. A lost compare-and-swap keeps a committed row that is
-    /// at least as strong (`a_reconciled_row_is_kept_when_the_send_save_loses`)
-    /// and writes this answer over a weaker one
-    /// (`a_queued_receipt_replaces_a_weaker_lookup_failure`).
+    /// A lost compare-and-swap keeps the row precedence selects
+    /// (`a_direct_answer_beats_a_lookup`,
+    /// `a_lookup_does_not_replace_a_direct_answer`).
     fn asked_or_kept(
         &mut self,
         previous: &PhoneRecord,
         next: &PhoneRecord,
         cause: Cause,
         by: Initiator,
-    ) -> Result<Option<PhoneView>, OutboxError> {
+        evidence: Evidence,
+    ) -> Result<LeaseBody, OutboxError> {
         match self.persist(previous, next, cause, by) {
-            Ok(()) => Ok(None),
-            Err(OutboxError::Conflict) => Ok(Some(self.prefer_stronger(next, cause, by)?)),
+            Ok(()) => Ok(saved_body(next.clone(), cause, evidence, by)),
+            Err(OutboxError::Conflict) => self.prefer(next, cause, evidence, by),
             Err(error) => Err(asked(error)),
         }
     }
 
-    fn prefer_stronger(
+    fn prefer(
         &mut self,
         next: &PhoneRecord,
         cause: Cause,
+        evidence: Evidence,
         by: Initiator,
-    ) -> Result<PhoneView, OutboxError> {
+    ) -> Result<LeaseBody, OutboxError> {
         for _ in 0..SAVE_ATTEMPTS {
             let saved = self.committed_record(next.intent().command())?;
-            if !saved.intent().same_bytes(next.intent())
-                || !outranks(next.outcome(), saved.outcome())
-            {
-                return Ok(saved.view());
+            if !saved.intent().same_bytes(next.intent()) {
+                return Err(OutboxError::Conflict);
+            }
+            let stored = self.evidence_of(saved.intent().command())?;
+            if !replaces(next.outcome(), evidence, saved.outcome(), stored) {
+                return Ok(kept_body(saved.view()));
             }
             let stronger = overlay(&saved, next);
             match self.persist(&saved, &stronger, cause, by) {
-                Ok(()) => return Ok(stronger.view()),
+                Ok(()) => return Ok(saved_body(stronger, cause, evidence, by)),
                 Err(OutboxError::Conflict) => continue,
                 Err(error) => return Err(asked(error)),
             }
@@ -422,21 +571,23 @@ where
         Err(OutboxError::Unsaved)
     }
 
-    fn asked_view(
-        &mut self,
-        previous: &PhoneRecord,
-        next: &PhoneRecord,
-        cause: Cause,
-        by: Initiator,
-    ) -> Result<PhoneView, OutboxError> {
-        Ok(self
-            .asked_or_kept(previous, next, cause, by)?
-            .unwrap_or_else(|| next.view()))
+    fn evidence_of(&mut self, id: &PhoneCommandId) -> Result<Evidence, OutboxError> {
+        Ok(stored_evidence(&self.store.events(id)?))
     }
 
     fn committed_record(&mut self, id: &PhoneCommandId) -> Result<PhoneRecord, OutboxError> {
         match self.store.load(id) {
             Ok(Some(saved)) => Ok(saved),
+            Ok(None) | Err(StoreError::Unavailable | StoreError::Uncertain) => {
+                Err(OutboxError::Unsaved)
+            }
+            Err(error) => Err(OutboxError::from(error)),
+        }
+    }
+
+    fn row_or_unsaved(&mut self, id: &PhoneCommandId) -> Result<PhoneView, OutboxError> {
+        match self.store.load(id) {
+            Ok(Some(saved)) => Ok(saved.view()),
             Ok(None) | Err(StoreError::Unavailable | StoreError::Uncertain) => {
                 Err(OutboxError::Unsaved)
             }
@@ -452,6 +603,43 @@ where
             observed_at_ms: self.clock.unix_milliseconds(),
         }
     }
+}
+
+/// What the lease's transaction was going to make durable.
+struct LeaseBody {
+    view: PhoneView,
+    resave: Option<Resave>,
+}
+
+enum Resave {
+    Outcome {
+        next: PhoneRecord,
+        cause: Cause,
+        evidence: Evidence,
+        by: Initiator,
+    },
+    /// `failed` has no successor yet. A replay mints the draft again.
+    Draft {
+        failed: PhoneRecord,
+        evidence: Evidence,
+        by: Initiator,
+    },
+}
+
+fn saved_body(next: PhoneRecord, cause: Cause, evidence: Evidence, by: Initiator) -> LeaseBody {
+    LeaseBody {
+        view: next.view(),
+        resave: Some(Resave::Outcome {
+            next,
+            cause,
+            evidence,
+            by,
+        }),
+    }
+}
+
+fn kept_body(view: PhoneView) -> LeaseBody {
+    LeaseBody { view, resave: None }
 }
 
 fn retryable(record: &PhoneRecord) -> bool {

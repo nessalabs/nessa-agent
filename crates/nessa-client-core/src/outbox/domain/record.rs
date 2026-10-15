@@ -70,6 +70,13 @@ impl PhoneRecord {
             ..self
         }
     }
+    /// Drop a successor that was not committed, so a replay can mint again.
+    pub(crate) fn clear_successor(self) -> Self {
+        Self {
+            successor: None,
+            ..self
+        }
+    }
     /// The rendered view, including the typed text.
     pub fn view(&self) -> PhoneView {
         PhoneView {

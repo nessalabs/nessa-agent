@@ -81,17 +81,20 @@ pub trait IntentStore {
         next: &PhoneRecord,
         event: IntentEvent,
     ) -> Result<(), StoreError>;
-    /// Replace `previous` with `next` and insert `draft` in the same commit.
+    /// Replace `previous` with `next`, append `events` on that command, and
+    /// insert `draft` in the same commit.
     fn replace_and_insert(
         &mut self,
         previous: &PhoneRecord,
         next: &PhoneRecord,
         draft: &PhoneRecord,
-        event: IntentEvent,
+        events: &[IntentEvent],
         draft_event: IntentEvent,
     ) -> Result<(), StoreError>;
     /// Every saved command.
     fn list(&mut self) -> Result<Vec<PhoneRecord>, StoreError>;
+    /// Audit rows for `id`, oldest first.
+    fn events(&mut self, id: &PhoneCommandId) -> Result<Vec<IntentEvent>, StoreError>;
     /// Take the writer lease. Replaces until [`Self::end_exclusive`] stay in it.
     ///
     /// A second lease on the same file waits. The wait ending without the lease

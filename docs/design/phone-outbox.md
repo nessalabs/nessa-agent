@@ -3,18 +3,145 @@
 Issue: [#269](https://github.com/nessalabs/nessa-agent/issues/269).
 The send id, the receipt lookup, the five rendered outcomes, and replay are
 the [phone send contract](https://github.com/nessalabs/nessa-agent/blob/cursor/owner-phone-authorization-5058/docs/design/phone-send-contract.md)
-(pull request 885). This page is the device
-ordering around that contract. The contract is not restated here and is not
-edited by this work.
+(pull request 885). This page is the device ordering around that contract.
+The contract is not restated here and is not edited by this work.
 
-The outbox lives in `nessa-client-core`. It saves the typed message and its
-command id before the first `conversation.send`. A draft has not been
-submitted. After a send may have left the device, a restart or a later call
-reads `conversation.receipt` and does not send. Only the call that is still
-in the foreground, and an explicit retry after that lookup found nothing,
-may send again, and only up to `FOREGROUND_SENDS`.
+The outbox lives in `nessa-client-core`. Cedar admits the session. This
+outbox does not decide who may send.
 
-Cedar admits the session. This outbox does not decide who may send.
+## At least once
+
+The client guarantee is at least once, not exactly once. One command id is
+minted when the draft is held and is never replaced because a save was lost
+or two callers raced. The server dedupes `conversation.send` on that id: the
+same bytes return the original receipt and do not enqueue a second turn
+(the contract's Replay section). The client may send those bytes again.
+
+Exactly once on the device was rejected. The client cannot see the server's
+commit while it is inside `conversation.send`. Four review rounds tried to
+close that gap with compare-and-swap, outcome ranks, and a lease that covered
+only retry. Each round found another interleaving, and the loser was reported
+as `Conflict` (different bytes) or `Unavailable` (nothing was sent). Both tell
+the caller to mint a new id and duplicate the message. The server already
+dedupes. Exactly once belongs there.
+
+Holding one SQLite transaction from departure through the network was
+rejected. A crash would roll the departure back, and the next open would show
+a draft for a send that may have left. Departure is its own commit, before
+the lease.
+
+After departure, a lost or conflicting save reloads the row and reports that
+outcome. Unknown means maybe sent. It does not mean not sent. `Unavailable`
+and `Uncertain` are returned only when departure itself did not commit, so
+`conversation.send` was not asked. `Conflict` is returned only when the same
+command id stores different bytes. Same bytes are never `Conflict`.
+
+## States
+
+Unknown does not claim submission. It does mean the send may have left.
+
+| State | What it means | Same id sent again |
+| --- | --- | --- |
+| Draft | Saved. Not departed | The first send |
+| Unknown, not admitted | Departed. No receipt | Yes, after a lookup found nothing, under the lease |
+| Unknown, lookup failed | The lookup did not finish | Yes, same rule |
+| Unknown, attempted | The server has an attempted receipt | No. A later lookup may adopt a settled receipt |
+| Unknown, unresolved | `submission_unresolved` | No |
+| Accepted, running, done | A queued, injected, or settled dispatched receipt | No |
+| Failed | A typed refusal, including forbidden and unauthorized | No |
+
+`turn_running` is failed on the original id. Its text is a new draft under
+new ids. The original id is not sent again.
+
+## One lease, and the transitions
+
+There is one writer lease per command. The first send takes it, and so does
+an explicit retry. Departure commits first. The lease is then held across
+`conversation.send` and the save of that answer, including a `turn_running`
+save and its new draft, in that same commit. A second send or retry waits
+and reloads. It does not call `conversation.send` when a direct answer is
+already stored. If the wait ends without the lease, it reloads and returns
+that row. It does not return `Unavailable`, `Uncertain`, or `Conflict`.
+Unknown still means maybe sent. The gap between the departure commit and
+taking the lease can admit another `conversation.send` of the same id. That
+is at least once. The server dedupes it. Recovery does not send and does not
+take the lease. Its write waits if a send holds the lease, then precedence
+applies.
+
+`hold`, `send`, and `retry` record the person. `recover` records recovery.
+A history reaches the row only by folding this table, so a history that
+skips departure is corrupt. Restoration also rejects `Initiator::Recovery`
+on `Departed`, `SendAnswered`, `SendLost`, `Unreadable`, `ForegroundSend`,
+`ExplicitRetry`, and `Bound`. Recovery may record `Lookup`,
+`ReturnedToDraft`, and `Held` on the successor draft it mints: that hold is
+recovery creating a draft, not a person typing, and recovery does not send.
+The row is not repaired
+(`a_done_row_whose_history_stops_at_departure_is_corrupt`).
+A lookup that returns `turn_running` records `Lookup` and then
+`ReturnedToDraft` in that same commit, so restoration can tell that refusal
+from a direct send. A direct `turn_running` records only `ReturnedToDraft`.
+Departure's unknown is not a direct answer.
+
+| From | Event | To | Who | Lease |
+| --- | --- | --- | --- | --- |
+| — | hold | Draft | Person, cause Held | No |
+| Draft | hold, same bytes | Draft, the same row | Person | No |
+| Draft | hold, different bytes | Refused. `Conflict`. Nothing is sent | Person | No |
+| Draft | depart | Unknown, not admitted | Person, cause Departed | No. This commit finishes before the send |
+| Unknown, not admitted | direct send answer | The answer's state | Person, cause SendAnswered | Yes, the first send, already held |
+| Unknown, not admitted | send answer lost, lookup finds nothing, budget remains | Stays unknown, not admitted, then the same bytes are sent again | Person, cause SendLost, then ForegroundSend with the later answer | Yes, the same hold |
+| Unknown, not admitted | that budget is spent | Stays unknown, not admitted | Person, cause Bound | Yes |
+| Unknown, not admitted or lookup failed | explicit retry after lookup found nothing | Stays unknown, not admitted, then the same bytes are sent again | Person, cause Lookup, then ExplicitRetry | Yes. The waiter reloads |
+| Unknown, attempted | lookup finds a settled submit receipt | Done or failed, per the receipt | Person or Recovery, cause Lookup | No |
+| Any unknown | lookup lost, broken, or not a submit receipt | The row unchanged | Person or Recovery | No |
+| Any unknown | lookup returns `submission_unresolved` | Unknown, unresolved | Person or Recovery, cause Lookup | No |
+| Accepted, running, done, failed, unresolved | retry or recover | The row unchanged. No send | Person or Recovery | No |
+| Failed, `turn_running` | — | That failed row, plus a new Draft, one commit | The send path: Person, inside the lease already held. Recovery: Recovery on both ReturnedToDraft and the new Held | Send path: the lease already held. Recovery: no |
+
+A direct answer is `conversation.send` returning queued, injected, settled,
+a typed refusal, or `submission_unresolved`. Lost and unreadable are not
+direct answers. They look the receipt up. An unreadable answer is not sent
+again in that call.
+
+A submit receipt is stage `accepted`, `attempted`, or `settled` with
+`dispatched`, `no_effect`, `refused_after_save`, or `unavailable_after_save`.
+Stage `ready`, and a settled receipt that omits its effect or carries
+`withdrawn`, `cancelled`, or `already_final`, are not outcomes. `no_effect`
+is a submit effect and is failed, as row L4. The domain refuses the others.
+The row stays. They are never stored as attempted. The wire decoder asks
+that same rule and closes the session. A custom gateway cannot store them
+as attempted.
+
+## Precedence
+
+One order. A direct `conversation.send` answer beats any lookup result,
+including a lookup of done and a lookup refusal. A forbidden or failed
+lookup never replaces accepted, running, or done.
+
+| Incoming | Stored | Result |
+| --- | --- | --- |
+| Direct answer | Any lookup result, or any unknown | The direct answer is saved |
+| Direct answer | A direct answer of equal or higher outcome | The stored answer stays. Done stays above running, accepted, and failed |
+| Lookup, including done and forbidden | A stored direct answer | The stored direct answer stays. Lookup done does not replace direct accepted or a direct refusal |
+| Lookup receipt | Unknown, or a lower lookup outcome. No direct answer was stored | The lookup is saved. Rows L3 and R2 are this case |
+| Lookup of done | Lookup of accepted, running, failed, or unknown | Done |
+| Lookup refusal, including forbidden | Accepted, running, or done, from either source | The stored row stays |
+| Lookup of `submission_unresolved` | Unknown, or attempted | Unknown, unresolved. Same as a direct answer. Not failed |
+| Lookup refusal | Unknown, or attempted | Failed, with that code |
+| Save loses, and the reload returns a row | — | That row, unless the incoming direct answer beats it |
+| Save loses, and the reload fails | — | Nothing is written. `Unsaved`. Maybe sent. Never not sent |
+
+Outcome order inside one source, highest first: done, running, accepted,
+failed, unresolved, attempted, lookup failed, not admitted, draft.
+
+The owner of this order is the domain. The table-driven test
+`every_transition_and_precedence_pair` checks every transition above and
+every cell of this table.
+
+## Scenario index
+
+The rows below name the regression for each ordering. They do not add a
+second rule.
 
 | Row | Ordering | Result | Test |
 | --- | --- | --- | --- |
@@ -25,34 +152,34 @@ Cedar admits the session. This outbox does not decide who may send.
 | H5 | Two holders save the same bytes at once | One draft. Both calls return it | `a_concurrent_hold_of_the_same_bytes_keeps_one_draft` |
 | S1 | Send starts | Departed is durable before `conversation.send` is asked | `departure_is_durable_before_the_gateway_is_asked` |
 | S2 | That save's commit is uncertain | `conversation.send` is not asked | `an_uncertain_departure_does_not_send` |
-| S12 | Two sends depart the same draft | One `conversation.send`. The loser reads the receipt and does not send | `a_lost_departure_does_not_send_again` |
-| S3 | Send returns queued, injected, or settled | Accepted, running, or done. The text stays | `a_queued_send_is_accepted`, `an_injected_send_is_running`, `a_settled_send_is_done` |
-| S4 | Send returns a conversation refusal other than `submission_unresolved` | Failed, with that code. The same id is not sent again | `a_refusal_is_failed_and_not_sent_again` |
-| S5 | Send returns `turn_running` | Failed with that code. The typed text is a new draft under new ids. The original id is not sent again | `turn_running_returns_the_text_to_a_new_draft` |
-| S6 | Send returns `forbidden` or `drive_policy_unenforceable` | Failed with that code, text still readable, same id not sent again | `a_lowered_grant_stays_failed`, `an_unenforceable_drive_policy_stays_failed` |
-| S7 | Send returns `conversation_deleted` | Failed with that code. The typed text remains readable | `a_deleted_conversation_keeps_the_typed_text` |
-| S8 | Send returns `submission_unresolved` | Unknown, cause unresolved. The same id is not sent again | `submission_unresolved_is_not_sent_again` |
-| S9 | Send answer is not a receipt or a known refusal | The receipt is read. The same bytes are not sent again in that call | `an_unreadable_send_answer_is_not_sent_again` |
-| S10 | The send is answered and saving that answer fails | The error says the message may have been delivered. The saved row stays unknown and does not claim submission. A later send reads the receipt | `a_failed_save_after_a_send_keeps_possible_delivery` |
-| S11 | Another connection commits an outcome while `conversation.send` is in flight | This call returns that outcome when it is at least as strong as this receipt. The command id stays | `a_reconciled_row_is_kept_when_the_send_save_loses` |
-| S13 | That committed outcome is a weaker unknown, and this send returned a receipt | The receipt is saved. The command is not left retryable | `a_queued_receipt_replaces_a_weaker_lookup_failure` |
+| S12 | Two sends of one draft overlap | The waiter blocks on the lease and reloads. It sends the same id only when the stored row is still unknown | `a_lost_departure_does_not_send_again` |
+| S3 | Send returns queued, injected, or settled | Accepted, running, or done | `a_queued_send_is_accepted`, `an_injected_send_is_running`, `a_settled_send_is_done` |
+| S4 | Send returns a conversation refusal other than `submission_unresolved` | Failed. The same id is not sent again | `a_refusal_is_failed_and_not_sent_again` |
+| S5 | Send returns `turn_running` | Failed. The text is a new draft under new ids | `turn_running_returns_the_text_to_a_new_draft` |
+| S6 | Send returns `forbidden` or `drive_policy_unenforceable` | Failed. The same id is not sent again | `a_lowered_grant_stays_failed`, `an_unenforceable_drive_policy_stays_failed` |
+| S7 | Send returns `conversation_deleted` | Failed. The text stays readable | `a_deleted_conversation_keeps_the_typed_text` |
+| S8 | Send returns `submission_unresolved` | Unknown, unresolved. The same id is not sent again | `submission_unresolved_is_not_sent_again` |
+| S9 | Send answer is not a receipt or a known refusal | The receipt is read. No further send in that call | `an_unreadable_send_answer_is_not_sent_again` |
+| S10 | Saving the answer fails | Maybe sent. The caller does not hear not sent | `a_failed_save_after_a_send_keeps_possible_delivery` |
+| S11 | A direct answer arrives against a stored lookup, including forbidden and done | The direct answer is saved | `a_direct_answer_beats_a_lookup` |
+| S14 | A lookup arrives after a direct answer was stored | The direct answer stays. This is the order the lease produces | `a_lookup_does_not_replace_a_direct_answer` |
 | L1 | Send answer lost, lookup finds `accepted` | Accepted. No further send | `a_lost_answer_with_an_accepted_receipt_is_not_sent_again` |
-| L2 | Send answer lost, lookup finds `attempted` | Unknown, cause attempted. No further send | `an_attempted_receipt_is_unknown_and_not_sent_again` |
+| L2 | Send answer lost, lookup finds `attempted` | Unknown, attempted. No further send | `an_attempted_receipt_is_unknown_and_not_sent_again` |
 | L3 | Send answer lost, lookup finds settled `dispatched` | Done | `a_dispatched_receipt_is_done` |
 | L4 | Lookup finds settled `no_effect`, `refused_after_save`, or `unavailable_after_save` | Failed with `revoked`, `revoked_after_save`, or `unavailable_after_save` | `a_settled_refusal_is_failed` |
-| L5 | Send answer lost, lookup finds nothing, foreground budget remains | The same canonical bytes are sent again. The resend is recorded with its answer | `a_lost_answer_retransmits_the_same_bytes_until_the_bound` |
-| L6 | That budget is spent | Unknown, cause not admitted. No further send in that call | `foreground_send_stops_at_the_bound` |
-| L7 | Send answer lost and the lookup itself fails | Unknown, cause lookup failed. No further send | `a_lookup_that_cannot_be_asked_stays_unknown` |
-| L8 | Lookup returns `submission_conflict` | Failed with that code. `found` is not treated as a receipt | `a_conflicting_lookup_is_failed` |
-| R1 | Restart after departure, lookup finds nothing | Unknown. `conversation.send` is not asked | `recovery_does_not_send_when_the_receipt_is_absent` |
-| R2 | Restart after departure, lookup finds settled `dispatched` | Done. `conversation.send` is not asked | `recovery_adopts_a_dispatched_receipt_without_sending` |
-| R6 | Restart after an attempted receipt, lookup finds settled `dispatched` | Done. `conversation.send` is not asked | `recovery_adopts_a_settled_receipt_after_attempted` |
-| R3 | Explicit retry after a lookup that found nothing | The lookup is recorded as unknown, not admitted, then one new foreground budget of the same bytes. The writer lease is held across that send | `an_explicit_retry_looks_up_before_it_sends` |
-| R5 | Two retries of one departed command share the file | One send. The waiter reads the committed outcome | `a_concurrent_retry_sends_the_departure_once` |
+| L5 | Send answer lost, lookup finds nothing, foreground budget remains | The same bytes are sent again. The resend is recorded with its answer | `a_lost_answer_retransmits_the_same_bytes_until_the_bound` |
+| L6 | That budget is spent | Unknown, not admitted. No further send in that call | `foreground_send_stops_at_the_bound` |
+| L7 | Send answer lost and the lookup itself fails | Unknown, lookup failed | `a_lookup_that_cannot_be_asked_stays_unknown` |
+| L8 | Lookup returns `submission_conflict` | Failed. `found` is not a receipt | `a_conflicting_lookup_is_failed` |
+| R1 | Restart after departure, lookup finds nothing | Unknown. No send | `recovery_does_not_send_when_the_receipt_is_absent` |
+| R2 | Restart after departure, lookup finds settled `dispatched` | Done. No send | `recovery_adopts_a_dispatched_receipt_without_sending` |
+| R6 | Restart after attempted, lookup finds settled `dispatched` | Done. No send | `recovery_adopts_a_settled_receipt_after_attempted` |
+| R3 | Explicit retry after a lookup that found nothing | Same bytes, under the lease | `an_explicit_retry_looks_up_before_it_sends` |
+| R5 | Two retries share the file | One send. The waiter reloads | `a_concurrent_retry_sends_the_departure_once` |
 | R4 | Explicit retry of unresolved, attempted, failed, or done | No send | `an_explicit_retry_does_not_send_an_uncertain_or_finished_command` |
 | C1 | Stored canonical bytes do not decode | Corrupt. The row is not rewritten | `corrupt_canonical_bytes_are_left_in_place` |
-| C3 | A done row whose events stop at departure | Corrupt. The row is not rewritten | `a_done_row_whose_history_stops_at_departure_is_corrupt` |
-| C2 | Each transition | The event records the command, the outcome, the cause, and the initiator. `hold`, `send`, and `retry` record the person. `recover` records recovery | `a_transition_keeps_its_cause_and_initiator`, `recovery_adopts_a_dispatched_receipt_without_sending` |
+| C3 | Events do not reach the row, or a send cause is marked recovery | Corrupt. The row is not rewritten | `a_done_row_whose_history_stops_at_departure_is_corrupt` |
+| C2 | Each transition | Command, outcome, cause, and initiator | `a_transition_keeps_its_cause_and_initiator` |
 
 `FOREGROUND_SENDS` in `crates/nessa-client-core/src/outbox/domain/decide.rs`
 is the foreground budget, the first send included. The limits catalogue names
@@ -72,12 +199,15 @@ fixed here so a review can see them without editing the contract:
 - `turn_running` is `failed`, and the typed text is copied onto a new draft
   under new ids. The original id is not sent again.
 - A typed lookup refusal, including a deleted conversation, is `failed`.
-  `unknown` is a lost send whose lookup found nothing, a lookup that did not
-  finish, an `attempted` stage, an unreadable answer, or
-  `submission_unresolved`. A settled submit receipt that omits its outcome,
-  or that carries `withdrawn`, `cancelled`, or `already_final`, is a protocol
-  failure. Settled `no_effect`, `refused_after_save`, and
-  `unavailable_after_save` are failed, as row L4 says.
+  `unknown` is maybe sent: a lost send, a lookup that did not finish, an
+  `attempted` stage, an unreadable answer, or `submission_unresolved`
+  from either the send or the lookup. It is not a report that nothing was
+  sent.
+- A settled submit receipt that omits its effect, or that carries
+  `withdrawn`, `cancelled`, or `already_final`, is not a submit receipt.
+  The domain leaves the row unchanged. Settled `no_effect`,
+  `refused_after_save`, and `unavailable_after_save` are failed, as row L4
+  says.
 - Every other conversation code, including `temporarily_unavailable`, stays
   `failed` and is not retried under the same id.
 - `conversation.send` and `conversation.receipt` are product calls on the
