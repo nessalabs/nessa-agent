@@ -1,16 +1,18 @@
 # Review-notice verification (#918, #920)
 
-Current behavioral source: `3f98e63c1d5643afad7beb05a9e411a43ae21a45`.
-Follow-up `5ffa33cb6576f5aaf6fa85883e04ab00994e6aef` strengthens regressions and qualifies platform durability.
-Commit `f24f4d1473bdd7b62784fc1eb48ab7dea00f2680` refreshes these captures.
-Neither changes runtime behavior.
+Current behavioral source: `83d0730dc18b67b19e55ed55e701955ed7664b3a`, including
+the graceful review-audit shutdown correction. Test-only follow-up
+`4ecdf3e1af3a386fe0f15b161fe0b46ee7ac9484` removes a needless borrow; its
+production files are byte-identical. This capture refresh changes no runtime behavior.
 
 The gateway was rebuilt from assembly
-`b00a3cee0dd351949e93e9032951f9aa80059d5d`, tree
-`980894a0d6412cc422f34f707dce22ca0cea5702`. It combines that notice source,
-main `76d2f7317cdca2b050988da281697e9231d2b335`, and final audit source
-`4864b1aa7a482ef541de962ddaef9c3bc28ed04c` from #928. Both integrations were
-conflict-free. The current-main UI pin was already prepared and passed `ui:check`.
+`f4bc82cc4aaccb524dcb37ba1eec82c442ed790e`, tree
+`23bfb1e54e6dcec64ad961a7c1150465275e52f2`. It combines that notice source,
+main `cc7bacc5ed343b17f8a778446776e45a34037c43` (including merged #928),
+Windows test-control repair `27f74b4b1f51c729fe34ad97227e68e7c0a55d6b` from #936,
+and cloud bootstrap `ba628d0030a32f9a5231c1d92f9032d52efa3de3` from #933.
+All integrations were conflict-free. Offline frozen pnpm preparation and the
+current-main UI pin passed `ui:check` before the rebuilt run.
 
 Environment: local macOS, Vite development mode, bundled Chromium and WebKit,
 columns layout. `MCP_LIVE_NESSA` selected the newly built gateway.
@@ -52,11 +54,22 @@ changes, audit failure and connection teardown rather than screenshots alone.
 
 ## Current behavioral checks and limits
 
-The exact behavioral source passed 96 affected review tests, 26 Cedar policy tests,
-and 317 socket tests with one existing latency measurement ignored. These suites
-overlap. The exact seven-package CI selection passed all-target Clippy with
-`-D warnings`; formatting and architecture checks passed. Reversal results and
-final independent review are recorded on the PR against their actual source.
+Frozen audit source `4ecdf3e1af3a386fe0f15b161fe0b46ee7ac9484` passed 109 affected
+review tests, 41 composition tests, four report tests, and the exact seven-package
+all-target Clippy selection with `-D warnings` under Rust 1.99.0 on local macOS.
+Its eight prior owner and fourteen shutdown reversals each produced an intended
+test assertion failure. Restored 109/41/4 suites passed; all 35 changed-file hashes
+matched the frozen source and restored export. The earlier 28 reversals remain
+qualified to `f24f4d147`, rather than this later shutdown source. Final integration
+and independent review are recorded separately on the PR; screenshots do not
+establish these Rust guarantees. Suites overlap.
+
+The auditor now fences new admission during graceful cleanup, retains admitted
+pre-policy operations and transferred decisions, and reports its typed drain
+outcome beside the existing drains. Its first failed acknowledgement remains
+failed; a deadline or lost task cannot fabricate success. Runtime/process loss
+may still interrupt unacknowledged work, and an unconfirmed shutdown does not
+claim physical release.
 
 The structural regression holds an allow acknowledgement while current authority
 or shared state changes, then requires a new coherent candidate before admission.
@@ -72,6 +85,18 @@ that inherited boundary is tracked in [#934](https://github.com/nessalabs/nessa-
 platform contract: file sync and create-only publication, with directory sync where
 supported; Windows does not promise directory-entry durability on power loss.
 Current-head CI and external review remain separate merge gates.
+
+## Earlier audit/admission and publisher-owner evidence (historical)
+
+The previous integrated captures were refreshed at `f24f4d147` from behavioral
+source `3f98e63c1d5643afad7beb05a9e411a43ae21a45`, assembly
+`b00a3cee0dd351949e93e9032951f9aa80059d5d`, tree
+`980894a0d6412cc422f34f707dce22ca0cea5702`, with main `76d2f7317` and #928
+source `4864b1aa7`. Chromium/WebKit passed 16/16 MCP, 13/13 gateway-window and
+8/8 scenario checks. That source passed 96 review, 26 Cedar and 317 socket tests
+(one existing measurement ignored), with package Clippy, format and architecture
+checks. Later f24 evidence qualified all 28 applied/restored reversals and
+baseline/restored 96 passes. Those checks precede the graceful-shutdown fix.
 
 ## Earlier integrated evidence (historical)
 
