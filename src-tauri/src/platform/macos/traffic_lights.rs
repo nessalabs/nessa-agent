@@ -207,27 +207,10 @@ fn set_frame(view: &NSView, frame: NSRect) {
 /// the next turn of the main queue, since AppKit can finish its layout after
 /// posting.
 pub fn watch(window: Retained<NSWindow>, main: MainThreadMarker) -> Result<(), String> {
-    place(&window, main)?;
-    let buttons = buttons(&window);
-    let close = buttons
-        .first()
-        .ok_or_else(|| String::from("the window has no traffic lights"))?;
-    // Found before anything is observed, so a failure here leaves nothing
-    // registered for the next attempt to register again.
-    let (row, container) = titlebar_views(close)?;
+    // First, and the one step that can fail: once the run loop checks the
+    // buttons, nothing below needs to succeed for them to reach the row, even
+    // if AppKit has not attached the titlebar's views yet.
     check_before_each_sleep(window.clone(), main)?;
-
-    let views: [&NSView; 3] = [&container, &row, close];
-    for view in views {
-        view.setPostsFrameChangedNotifications(true);
-        let target = window.clone();
-        observe(
-            unsafe { NSViewFrameDidChangeNotification },
-            view,
-            move || report(place(&target, main)),
-        );
-    }
-
     let events = unsafe {
         [
             NSWindowDidResizeNotification,
@@ -249,6 +232,26 @@ pub fn watch(window: Retained<NSWindow>, main: MainThreadMarker) -> Result<(), S
             let again = block2::RcBlock::new(move || report(place(&later, main)));
             unsafe { NSOperationQueue::mainQueue().addOperationWithBlock(&again) };
         });
+    }
+    report(place(&window, main));
+
+    // The titlebar's views may not exist yet; the run loop check covers them
+    // until they do.
+    let buttons = buttons(&window);
+    if let Some((close, (row, container))) = buttons
+        .first()
+        .and_then(|close| titlebar_views(close).ok().map(|views| (close, views)))
+    {
+        let views: [&NSView; 3] = [&container, &row, close];
+        for view in views {
+            view.setPostsFrameChangedNotifications(true);
+            let target = window.clone();
+            observe(
+                unsafe { NSViewFrameDidChangeNotification },
+                view,
+                move || report(place(&target, main)),
+            );
+        }
     }
     Ok(())
 }

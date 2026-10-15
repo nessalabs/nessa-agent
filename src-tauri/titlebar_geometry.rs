@@ -17,8 +17,9 @@ const HEIGHT: &str = "--desktop-titlebar-height: calc(\n    2 * var(--desktop-co
 /// The titlebar's height in px: two control edges (gutter and inset) and a
 /// control.
 pub fn titlebar_height(css: &str) -> Result<f64, String> {
-    // A Windows checkout ends lines with CRLF.
-    let css = css.replace("\r\n", "\n");
+    // A Windows checkout ends lines with CRLF; a commented-out declaration
+    // is not the page's.
+    let css = without_comments(&css.replace("\r\n", "\n"));
     if !css.contains(EDGE) || !css.contains(HEIGHT) {
         return Err(String::from(
             "--desktop-titlebar-height is no longer two control edges and a control; \
@@ -27,6 +28,21 @@ pub fn titlebar_height(css: &str) -> Result<f64, String> {
     }
     let edge = px(&css, "--desktop-gutter")? + px(&css, "--desktop-control-inset")?;
     Ok(2.0 * edge + px(&css, "--desktop-control-size")?)
+}
+
+/// `css` with each `/* ... */` comment removed.
+fn without_comments(css: &str) -> String {
+    let mut live = String::with_capacity(css.len());
+    let mut rest = css;
+    while let Some(start) = rest.find("/*") {
+        live.push_str(&rest[..start]);
+        rest = match rest[start + 2..].find("*/") {
+            Some(end) => &rest[start + 2 + end + 2..],
+            None => "",
+        };
+    }
+    live.push_str(rest);
+    live
 }
 
 /// A `--name: 8px;` declaration's number, from the first place it is set.

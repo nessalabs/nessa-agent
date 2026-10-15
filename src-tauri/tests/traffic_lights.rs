@@ -51,6 +51,12 @@ fn the_host_reads_the_page(root: &Path) {
         "var(--desktop-control-edge) + var(--desktop-control-size)",
     );
     assert!(titlebar_geometry::titlebar_height(&changed).is_err());
+    // Nor is the old formula read from a comment beside a new live one.
+    let commented = changed.replace(
+        "--desktop-titlebar-height: calc(",
+        "/* --desktop-titlebar-height: calc(\n    2 * var(--desktop-control-edge) + var(--desktop-control-size)\n  ); */\n  --desktop-titlebar-height: calc(",
+    );
+    assert!(titlebar_geometry::titlebar_height(&commented).is_err());
 }
 
 fn nothing_else_places_the_buttons(root: &Path) {
