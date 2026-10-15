@@ -945,26 +945,15 @@ where
     // A waiting review is a snapshot on the ordinary lane. Abort this before
     // the lane's sender is dropped: the task holds one, and the writer
     // finishes only when every sender is gone.
-    let notice_task = state.permission_rules.clone().map(|board| {
-        let send = ordinary_send.clone();
-        let slots = Arc::clone(&ordinary_slots);
-        let state = state.clone();
-        let session = session.clone();
-        let control = control_send.clone();
-        tokio::spawn(async move {
-            if let Err(failure) =
-                forward_review_notices(board, send, slots, state, session, authority_updates).await
-            {
-                tracing::error!(
-                    ?failure,
-                    "review snapshot withheld because its audit was not acknowledged"
-                );
-                let _ = rejected_lane(
-                    "socket.control_lane",
-                    control.try_send(ControlOutput::Close(failure.close_reason())),
-                );
-            }
-        })
+    let mut notice_task = state.permission_rules.clone().map(|board| {
+        tokio::spawn(forward_review_notices(
+            board,
+            ordinary_send.clone(),
+            Arc::clone(&ordinary_slots),
+            state.clone(),
+            session.clone(),
+            authority_updates,
+        ))
     });
     let record_slots = Arc::new(Semaphore::new(RECORD_SLOT));
     let app_slots = Arc::new(Semaphore::new(limits.app_calls_per_socket()));
@@ -1038,6 +1027,27 @@ where
             tokio::select! {
             _ = &mut writer => {
                 writer_finished = true;
+                break;
+            }
+            outcome = async { notice_task.as_mut().expect("notice task selected while present").await }, if notice_task.is_some() => {
+                // Fatal publication belongs to this connection owner. A full
+                // control lane may reject its close frame; it cannot discard
+                // the only signal that ends the connection (full-lane regression).
+                notice_task = None;
+                let reason = match outcome {
+                    Ok(Err(failure)) => {
+                        tracing::error!(?failure, "review snapshot publication failed");
+                        failure.close_reason()
+                    }
+                    Ok(Ok(())) | Err(_) => {
+                        tracing::error!("review snapshot publisher ended unexpectedly");
+                        SessionCloseReason::TemporaryUnavailable
+                    }
+                };
+                let _ = rejected_lane(
+                    "socket.control_lane",
+                    control_send.try_send(ControlOutput::Close(reason)),
+                );
                 break;
             }
             _ = state.change_watches.closed() => {

@@ -1253,3 +1253,83 @@ async fn review_notice_durable_audit_failure_prevents_publication_and_preserves_
         "a failed attempt must not reuse its storage identity"
     );
 }
+
+#[tokio::test]
+async fn review_notice_audit_failure_with_full_control_lane_ends_connection() {
+    let (captured, _logging) = limit_log();
+    let (audit, acknowledge) = GatedAudit::one();
+    let fixture = ReviewFixture::new(audit.clone(), Arc::new(MonotonicReviewNoticeClock::new()));
+    let session = authenticate(&fixture.state).await;
+    let (release, gate) = oneshot::channel();
+    let (socket, mut peer) = test_socket(Some(gate));
+    let task = tokio::spawn(run_authenticated(socket, fixture.state.clone(), session));
+    audit.captured().await;
+    // Hold an ordinary physical send, leaving every control slot available.
+    admit(&peer, "server.health", "held-ordinary").await;
+    timeout(Duration::from_secs(2), peer.writing.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    for index in 0..fixture.state.limits.control_lane() {
+        admit(&peer, "conversation.cancel", &format!("control-{index}")).await;
+    }
+    acknowledge
+        .send(Err(ReviewNoticeAuditFailure::Unavailable))
+        .unwrap();
+    // This event is emitted only after the real close enqueue observes Full.
+    // Requiring it proves the regression actually filled the control lane.
+    timeout(Duration::from_secs(2), async {
+        while !limit_text(&captured).contains("socket.control_lane") {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("fatal audit close must encounter the full control lane");
+    assert!(
+        !peer.input.is_closed(),
+        "the peer input remains live during the held physical write"
+    );
+    release.send(()).unwrap();
+    timeout(Duration::from_secs(2), task)
+        .await
+        .expect("the connection owner must terminate despite a rejected close enqueue")
+        .unwrap();
+    assert!(
+        peer.input.is_closed(),
+        "the owner must stop receiving while the peer still owns its sender"
+    );
+    while peer.output.recv().await.is_some() {}
+}
+
+struct PanickingReviewPolicy;
+impl ConversationAccessPolicyEvaluator for PanickingReviewPolicy {
+    fn evaluate(&self, _: &AccessAsk<'_>) -> AccessDecision {
+        panic!("publisher policy fault")
+    }
+}
+
+#[tokio::test]
+async fn review_notice_publisher_panic_ends_connection() {
+    let mut fixture = ReviewFixture::new(
+        Arc::new(RecordingReviewNoticeAudit::default()),
+        Arc::new(MonotonicReviewNoticeClock::new()),
+    );
+    fixture.state.conversation_access = Some(Arc::new(PanickingReviewPolicy));
+    let session = authenticate(&fixture.state).await;
+    let (socket, mut peer) = test_socket(None);
+    let task = tokio::spawn(run_authenticated(socket, fixture.state, session));
+    let Message::Close(Some(frame)) = timeout(Duration::from_secs(2), peer.output.recv())
+        .await
+        .expect("unexpected publisher completion must close the live connection")
+        .unwrap()
+    else {
+        panic!("publisher failure must close before any review is published")
+    };
+    let close: SessionTermination = serde_json::from_str(&frame.reason).unwrap();
+    assert_eq!(close.code, SessionCloseReason::TemporaryUnavailable);
+    timeout(Duration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(peer.input.is_closed());
+}
