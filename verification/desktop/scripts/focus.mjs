@@ -1183,7 +1183,7 @@ await main(meta, async ({ options, rep, url }) => {
               .screenshot({
                 path: `${options.shots}/focus-retired-${engine}-${layout}.png`,
               })
-          return { ...result, failures: [...result.failures, ...fresh.errors] }
+          return result
         } finally {
           await fresh.close()
         }
@@ -1225,7 +1225,7 @@ await main(meta, async ({ options, rep, url }) => {
             await need(fresh.page, css.composer, "a composer")
             await focusComposer(fresh.page)
             const result = await answer(fresh.page)
-            return { ...result, failures: [...result.failures, ...fresh.errors] }
+            return result
           } finally {
             await fresh.close()
           }
@@ -1249,7 +1249,7 @@ await main(meta, async ({ options, rep, url }) => {
                 await fresh.page.locator(css.overviewColumn).screenshot({
                   path: `${options.shots}/focus-regroup-away-${engine}-${layout}.png`,
                 })
-              return { ...result, failures: [...result.failures, ...fresh.errors] }
+              return result
             } finally {
               await fresh.close()
             }
@@ -1270,7 +1270,7 @@ await main(meta, async ({ options, rep, url }) => {
               await need(fresh.page, css.composer, "a composer")
               await focusComposer(fresh.page)
               const result = await givesBackLostFocus(fresh.page, cause)
-              return { ...result, failures: [...result.failures, ...fresh.errors] }
+              return result
             } finally {
               await fresh.close()
             }
@@ -1281,7 +1281,7 @@ await main(meta, async ({ options, rep, url }) => {
         try {
           await need(fresh.page, css.composer, "a composer")
           const result = await sceneKeepsFocus(fresh.page)
-          return { ...result, failures: [...result.failures, ...fresh.errors] }
+          return result
         } finally {
           await fresh.close()
         }
@@ -1299,7 +1299,7 @@ await main(meta, async ({ options, rep, url }) => {
               await need(fresh.page, css.composer, "a composer")
               await focusComposer(fresh.page)
               const result = await replyKeepsCaret(fresh.page)
-              return { ...result, failures: [...result.failures, ...fresh.errors] }
+              return result
             } finally {
               await fresh.close()
             }

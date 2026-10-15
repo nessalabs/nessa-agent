@@ -24,14 +24,14 @@ impl ShareGrants for Scripted {
         self.0.lock().unwrap().push(receiver_id.to_owned());
         let held = |role| {
             Ok(Some(HeldGrant {
-                role,
+                capabilities: role,
                 policy_revision: 9,
             }))
         };
         let answer = match receiver_id {
-            "commenter" => held(ShareRole::Comment),
-            "driver" => held(ShareRole::Drive),
-            "reader" => held(ShareRole::Read),
+            "commenter" => held(Capabilities::comment()),
+            "driver" => held(Capabilities::drive()),
+            "reader" => held(Capabilities::read()),
             "unreadable" => Err(ConversationError::Unavailable),
             _ => Ok(None),
         };
@@ -263,7 +263,10 @@ async fn paired_facts_are_unavailable_while_the_grant_store_fails() {
         .await
         .unwrap();
     assert_eq!(found.id(), &id());
-    assert_eq!(held.map(|held| held.role), Some(ShareRole::Comment));
+    assert_eq!(
+        held.map(|held| held.capabilities),
+        Some(Capabilities::comment())
+    );
     assert_eq!(
         paired_facts(&MemoryRepository::default(), &grants, "commenter", &id())
             .await

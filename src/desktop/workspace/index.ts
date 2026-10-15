@@ -52,6 +52,11 @@
  * in `model/overview/`, its state in the slice, its views in `ui/overview/`,
  * answering and reading through the same commands and effects as a pane.
  *
+ * User inputs retain image and linked-file references through gateway-views
+ * into transcript attachment parts. Message reuses conversation MessageImages
+ * as metadata placeholders without requesting bytes; agent-published files
+ * keep their separate PublishedFiles read/save behavior.
+ *
  * `store.dispatch` is the agent entry point: every command here works
  * without a renderer.
  */

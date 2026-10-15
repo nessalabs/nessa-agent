@@ -35,6 +35,7 @@ import {
   type AgentsApi,
   type AuthApi,
   type ConversationApi,
+  type ConversationCapability,
   type ConversationShare,
   type ConversationSharesCursor,
   type ConversationToolPolicy,
@@ -45,6 +46,7 @@ import { SharingError, type SharingSource } from "../../application/ports"
 import type {
   ShareGrant,
   ShareRequest,
+  ShareRole,
   SharingChoices,
   SharingFailure,
   ToolPolicy,
@@ -67,6 +69,9 @@ export interface SharingClient {
 /** Every conversation code, as what it means to sharing. */
 const conversationFailure: Record<ConversationErrorCode, SharingFailure> = {
   [ConversationErrorCode.ShareTargetNotPaired]: "not-paired",
+  // Cedar denied the capabilities this share would write. Nothing was
+  // written. The dialog has no sentence of its own for which set was refused.
+  [ConversationErrorCode.CapabilitiesRefused]: "other",
   [ConversationErrorCode.ShareGrantChanged]: "changed",
   [ConversationErrorCode.InvalidRequest]: "invalid",
   [ConversationErrorCode.ConversationDeleted]: "deleted",
@@ -194,10 +199,37 @@ export function wirePolicy(policy: ToolPolicy): ConversationToolPolicy {
     : { allow: [...policy.allow], deny: [...policy.deny], ...hosts }
 }
 
+/** The wire set for one of the three choices the dialog offers. */
+function capabilitiesOf(role: ShareRole): ConversationCapability[] {
+  switch (role) {
+    case "read":
+      return ["read"]
+    case "comment":
+      return ["read", "comment"]
+    case "drive":
+      return ["read", "comment", "drive"]
+  }
+}
+
+/** The dialog's choice for a wire set. Any other set is not a grant this build reads. */
+function roleOf(capabilities: readonly string[]): ShareRole {
+  const names = [...capabilities].sort().join("+")
+  switch (names) {
+    case "read":
+      return "read"
+    case "comment+read":
+      return "comment"
+    case "comment+drive+read":
+      return "drive"
+    default:
+      throw new Error("Invalid conversation share capabilities")
+  }
+}
+
 function grantOf(share: ConversationShare): ShareGrant {
   return {
     credentialId: share.credentialId,
-    role: share.role,
+    role: roleOf(share.capabilities),
     ...(share.policy ? { policy: policyOf(share.policy) } : {}),
     policyRevision: share.policyRevision,
     grantedAtMs: share.grantedAtMs,
@@ -292,7 +324,7 @@ export function sharingGateway(options: {
         (await connected()).conversation.share(
           sessionId,
           request.credentialId,
-          request.role,
+          capabilitiesOf(request.role),
           request.policy ? wirePolicy(request.policy) : undefined,
           { requestId, expectedPolicyRevision: request.expectedPolicyRevision },
         ),

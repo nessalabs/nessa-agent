@@ -43,7 +43,7 @@ use nessa_server::{
         RecordReadFuture, RecordReadLease, RecordReadOperation, RecordReadResponse,
         RecordReadSource, ShareConversation, ShareGrants,
     },
-    conversation::domain::{Conversation, ShareRole},
+    conversation::domain::{Capabilities, Conversation},
     conversation::infrastructure::{
         CedarConversationAccessPolicy, LocalConversationStore, NessaCatalogueReadSource,
     },
@@ -692,7 +692,7 @@ async fn an_environment_is_paired_but_never_shared_with() {
                 caller,
                 id.clone(),
                 credential,
-                ShareRole::Read,
+                Capabilities::read(),
                 None,
                 None,
                 110
@@ -764,7 +764,7 @@ async fn k3_a_worker_reads_nothing_on_the_gateway_it_serves() {
                 caller,
                 id.clone(),
                 CredentialId::new(device.credential.clone()).unwrap(),
-                ShareRole::Read,
+                Capabilities::read(),
                 None,
                 None,
                 110
@@ -922,7 +922,7 @@ async fn a_peer_reads_only_what_it_was_granted() {
                     caller(request),
                     id.clone(),
                     peer_credential.clone(),
-                    ShareRole::Read,
+                    Capabilities::read(),
                     None,
                     None,
                     110,
@@ -948,7 +948,7 @@ async fn a_peer_reads_only_what_it_was_granted() {
                 caller("share-peer"),
                 id.clone(),
                 peer_credential.clone(),
-                ShareRole::Read,
+                Capabilities::read(),
                 None,
                 None,
                 110
@@ -1045,7 +1045,7 @@ async fn a_peer_reads_only_what_it_was_granted() {
                 caller("share-device"),
                 ungranted.clone(),
                 CredentialId::new(device.credential.clone()).unwrap(),
-                ShareRole::Read,
+                Capabilities::read(),
                 None,
                 None,
                 110,

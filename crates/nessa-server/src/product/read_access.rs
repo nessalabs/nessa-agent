@@ -24,7 +24,7 @@
 //! ```
 use super::{
     conversation::{caller, conversation_id},
-    socket::{admit_grant, failure, success},
+    socket::{admit_grant, failure, failure_with_details, success},
     state::ProductRouteState,
 };
 use crate::conversation::application::{
@@ -32,16 +32,14 @@ use crate::conversation::application::{
     ConversationError, OwnerAccess, PairedAccess, PairedParty, PairedRefusal, Reader,
     ReceiverBinding, RequestShape, ShareConversation, ShareGrant, MAX_POLICY_REVISION,
 };
-use crate::conversation::domain::{
-    CommandHosts, ShareRole, ToolChoice, ToolPolicy, ToolPreset, ToolRules,
-};
+use crate::conversation::domain::{CommandHosts, ToolChoice, ToolPolicy, ToolPreset, ToolRules};
 use nessa_auth::application::session::{AuthenticatedSession, ReadCurrentSession};
 use nessa_auth::domain::{CredentialId, MembershipRole};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
 use nessa_protocol::product::generated::{
-    action_for_method, ConversationMutationResult, ConversationShare, ConversationShareParams,
-    ConversationShareResult, ConversationShareRole, ConversationSharesCursor,
+    action_for_method, ConversationCapability, ConversationMutationResult, ConversationShare,
+    ConversationShareParams, ConversationShareResult, ConversationSharesCursor,
     ConversationSharesParams, ConversationSharesResult, ConversationToolPolicy,
     ConversationToolPreset, ConversationUnshareParams, MAX_SHARE_PAGE,
 };
@@ -237,7 +235,7 @@ pub(super) async fn admit_conversation(
         .admit(
             AccessAction::Read,
             &conversation,
-            held.map(|held| held.role),
+            held.map(|held| held.capabilities),
             RequestShape::default(),
         )
         .map_err(paired_code)
@@ -458,7 +456,7 @@ pub(super) async fn admit_request(
         .admit(
             action,
             &conversation,
-            held.map(|held| held.role),
+            held.map(|held| held.capabilities),
             request_shape(frame),
         )
         .map_err(paired_code)?;
@@ -593,7 +591,7 @@ pub(super) async fn dispatch_share(
                         caller,
                         id,
                         credential,
-                        role(params.role),
+                        capabilities(&params.capabilities)?,
                         policy,
                         expected_revision(params.expected_policy_revision)?,
                         now,
@@ -670,7 +668,14 @@ pub(super) async fn dispatch_share(
         }
     }
     .await;
-    result.unwrap_or_else(|error| failure(&frame.id, error_code(&error).as_str()))
+    result.unwrap_or_else(|error| match &error {
+        ConversationError::CapabilitiesRefused { policies } => failure_with_details(
+            &frame.id,
+            error_code(&error).as_str(),
+            serde_json::json!({ "policies": policies }),
+        ),
+        _ => failure(&frame.id, error_code(&error).as_str()),
+    })
 }
 
 /// A share that landed can change which waiting reviews a socket may see.
@@ -718,26 +723,30 @@ async fn paired_share(
     else {
         return Err("forbidden");
     };
-    match access.allows(action, &conversation, held.map(|held| held.role)) {
+    match access.allows(action, &conversation, held.map(|held| held.capabilities)) {
         Ok(true) => Ok(()),
         Ok(false) | Err(_) => Err("forbidden"),
     }
 }
 
-fn role(role: ConversationShareRole) -> ShareRole {
-    match role {
-        ConversationShareRole::Read => ShareRole::Read,
-        ConversationShareRole::Comment => ShareRole::Comment,
-        ConversationShareRole::Drive => ShareRole::Drive,
-    }
+fn capabilities(
+    names: &[ConversationCapability],
+) -> Result<crate::conversation::domain::Capabilities, ConversationError> {
+    crate::conversation::domain::Capabilities::from_names(names.iter().map(|name| name.as_str()))
+        .map_err(|_| ConversationError::InvalidInput)
 }
 
-fn wire_role(role: ShareRole) -> ConversationShareRole {
-    match role {
-        ShareRole::Read => ConversationShareRole::Read,
-        ShareRole::Comment => ConversationShareRole::Comment,
-        ShareRole::Drive => ConversationShareRole::Drive,
-    }
+fn wire_capabilities(
+    capabilities: crate::conversation::domain::Capabilities,
+) -> Vec<ConversationCapability> {
+    capabilities
+        .names()
+        .map(|name| match name {
+            "comment" => ConversationCapability::Comment,
+            "drive" => ConversationCapability::Drive,
+            _ => ConversationCapability::Read,
+        })
+        .collect()
 }
 
 fn preset(preset: ConversationToolPreset) -> ToolPreset {
@@ -849,7 +858,7 @@ fn share_page(
 fn listed(grant: &ShareGrant) -> ConversationShare {
     ConversationShare {
         credential_id: grant.credential_id.as_str().to_owned(),
-        role: wire_role(grant.access.role()),
+        capabilities: wire_capabilities(grant.access.capabilities()),
         policy: grant.access.policy().map(wire_policy),
         policy_revision: grant.policy_revision,
         granted_at_ms: grant.granted_at_ms,

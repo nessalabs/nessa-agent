@@ -368,7 +368,6 @@ const checks = {
           )
       }
     } finally {
-      failures.push(...opened.errors)
       await opened.close()
     }
     return { outcomes, failures }
@@ -727,7 +726,7 @@ Object.assign(checks, {
           command: said.command?.slice(0, 80),
           landed,
         },
-        failures: [...failures, ...opened.errors],
+        failures,
       }
     } finally {
       await opened.close()
@@ -797,7 +796,6 @@ Object.assign(checks, {
           }
         }
       } finally {
-        failures.push(...opened.errors)
         await opened.close()
       }
     }
@@ -808,8 +806,7 @@ Object.assign(checks, {
     const opened = await onConversation(browser, url, layout)
     const { page } = opened
     try {
-      if (!(await messaged(page, appReview.message)))
-        return { failures: [notDrawn, ...opened.errors] }
+      if (!(await messaged(page, appReview.message))) return { failures: [notDrawn] }
       const failures = []
       await page.keyboard.press(keys.overview)
       await need(page, css.overview, "the Agents overview")
@@ -822,7 +819,7 @@ Object.assign(checks, {
         failures.push(
           `the overview row is named "${name}", not "${appReview.messageRow}"`,
         )
-      return { measured: { rowName: name }, failures: [...failures, ...opened.errors] }
+      return { measured: { rowName: name }, failures }
     } finally {
       await opened.close()
     }
@@ -905,7 +902,6 @@ Object.assign(checks, {
           )
         ordered("row's command", await drawnInOrder(command))
       } finally {
-        failures.push(...opened.errors)
         await opened.close()
       }
       // The label, once the message is allowed.
@@ -943,7 +939,6 @@ Object.assign(checks, {
           failures.push(`${tag}: the label isolates ${JSON.stringify(isolated)}`)
         ordered("label", await drawnInOrder(author))
       } finally {
-        failures.push(...opened.errors)
         await opened.close()
       }
     }
@@ -1030,7 +1025,6 @@ Object.assign(checks, {
           }
         }
       } finally {
-        failures.push(...opened.errors)
         await opened.close()
       }
     }

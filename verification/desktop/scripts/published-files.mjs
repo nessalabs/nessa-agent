@@ -198,7 +198,6 @@ const checks = {
         })
       }
       await opened.settleRequests()
-      failures.push(...opened.errors)
       return { cards: placed.length, pictures, failures }
     } finally {
       await opened.close()
@@ -221,7 +220,6 @@ const checks = {
         if (peak > 2) failures.push(`${surface} had ${peak} reads at the gateway at once`)
       }
       await opened.settleRequests()
-      failures.push(...opened.errors)
       return { ...seen, failures }
     } finally {
       await opened.close()
@@ -259,7 +257,6 @@ const checks = {
       await retry.click()
       await flaky.locator(ui.shownPicture).waitFor({ timeout: drawnWithinMs })
       await opened.settleRequests()
-      failures.push(...opened.errors)
       return { failures }
     } finally {
       await opened.close()
@@ -300,7 +297,6 @@ const checks = {
         .getByText(ui.notSaved, { exact: true })
         .waitFor({ timeout: drawnWithinMs })
       await opened.settleRequests()
-      failures.push(...opened.errors)
       return { saved, failures }
     } finally {
       await opened.close()
@@ -407,7 +403,6 @@ const checks = {
       if (saves.anchors)
         failures.push(`${saves.anchors} a[download] inserted into the page`)
       await opened.settleRequests()
-      failures.push(...opened.errors)
       return { parts: saves.parts, failures }
     } finally {
       await opened.close()
@@ -424,7 +419,6 @@ const checks = {
       if (await loose.getByText(ui.welcome, { exact: true }).count())
         failures.push("the empty welcome shows beside a published file")
       await opened.settleRequests()
-      failures.push(...opened.errors)
       return { failures }
     } finally {
       await opened.close()

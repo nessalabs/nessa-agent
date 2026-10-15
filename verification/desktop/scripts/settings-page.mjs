@@ -85,7 +85,7 @@ async function openNativeHooksState(page, url, state) {
   await page.goto(fixture)
   await need(page, css.settings, "Settings")
   await settled(page)
-  await show(page, "Privacy & Permissions", "Access")
+  await show(page, "Privacy & Permissions", "Native hooks")
 }
 
 async function shotNativeHooks(page, row, name) {
@@ -384,12 +384,21 @@ const checks = {
   },
 
   /**
-   * Privacy & Permissions › Access, with no gateway: Claude and Codex hook
+   * Privacy & Permissions › Native hooks, with no gateway: Claude and Codex hook
    * rows rest, and the page says hooks can approve, deny, or change a tool call.
    */
   "native-hooks": async (page, { engine }) => {
     const failures = []
     await show(page, "Privacy & Permissions", "Access")
+    if (
+      await page
+        .locator(
+          '[data-setting="claude-native-hooks"], [data-setting="codex-native-hooks"]',
+        )
+        .count()
+    )
+      failures.push("native hooks are still on the common Access tab")
+    await show(page, "Privacy & Permissions", "Native hooks")
     const read = await page.$$eval("[data-setting]", (rows) =>
       rows
         .filter((row) =>
@@ -426,12 +435,46 @@ const checks = {
       has: page.locator('[data-setting="claude-native-hooks"]'),
     })
     await group.scrollIntoViewIfNeeded()
-    await group.screenshot({ path: join(shot, `access-resting-${engine}.png`) })
-    return { read, failures }
+    await group.screenshot({ path: join(shot, `native-hooks-resting-${engine}.png`) })
+    const routing = []
+    for (const [id, label] of [
+      ["claude-native-hooks", "Claude Code hooks"],
+      ["codex-native-hooks", "Codex hooks"],
+    ]) {
+      await show(page, "General")
+      const field = page.locator(css.settingsSearch)
+      await field.fill(label)
+      await page.keyboard.press("Enter")
+      await need(page, `[data-setting="${id}"]`, label)
+      await settled(page)
+      const measured = await page.evaluate(
+        ({ id, selectors }) => {
+          const row = document
+            .querySelector(`[data-setting="${id}"]`)
+            .getBoundingClientRect()
+          const scroll = document.querySelector(selectors.scroll).getBoundingClientRect()
+          return {
+            tab: document.querySelector(`${selectors.tab}[aria-selected="true"]`)
+              ?.textContent,
+            top: Math.round(row.top),
+            bottom: Math.round(row.bottom),
+            inView: row.top >= scroll.top && row.bottom <= scroll.bottom,
+          }
+        },
+        { id, selectors: { scroll: css.settingsScroll, tab: css.settingsTab } },
+      )
+      routing.push({ id, ...measured })
+      if (measured.tab !== "Native hooks" || !measured.inView)
+        failures.push(
+          `${id} search did not land in view on Native hooks: ${JSON.stringify(measured)}`,
+        )
+      await field.fill("")
+    }
+    return { read, routing, failures }
   },
 
   /**
-   * The same Access group with a gateway connected and Claude's choice on:
+   * The same Native hooks group with a gateway connected and Claude's choice on:
    * the switch is on, and the row says the repo's settings apply and that a
    * change waits for the next start.
    */
@@ -444,7 +487,7 @@ const checks = {
     await page.goto(fixture)
     await need(page, css.settings, "Settings")
     await settled(page)
-    await show(page, "Privacy & Permissions", "Access")
+    await show(page, "Privacy & Permissions", "Native hooks")
     const row = page.locator('[data-setting="claude-native-hooks"]')
     const text = (await row.textContent()) ?? ""
     const checked = await row.locator('[role="switch"]').getAttribute("aria-checked")
@@ -467,7 +510,7 @@ const checks = {
     mkdirSync(shot, { recursive: true })
     const group = page.locator(".settings-group", { has: row })
     await group.scrollIntoViewIfNeeded()
-    await group.screenshot({ path: join(shot, `access-on-${engine}.png`) })
+    await group.screenshot({ path: join(shot, `native-hooks-on-${engine}.png`) })
     return { checked, failures }
   },
 
@@ -484,7 +527,7 @@ const checks = {
       failures.push("the unset row does not say the agent isn't set up")
     if (!text.includes("turn it on only for projects you trust"))
       failures.push("the unset row does not keep the trust warning")
-    await shotNativeHooks(page, row, `access-unset-${engine}.png`)
+    await shotNativeHooks(page, row, `native-hooks-unset-${engine}.png`)
     return { failures }
   },
 
@@ -503,7 +546,7 @@ const checks = {
       failures.push("the failed row does not say the change failed")
     if (checked !== "true")
       failures.push(`the failed change did not keep Claude's stored choice: ${checked}`)
-    await shotNativeHooks(page, row, `access-failed-${engine}.png`)
+    await shotNativeHooks(page, row, `native-hooks-failed-${engine}.png`)
     return { failures }
   },
 
@@ -567,7 +610,7 @@ Per engine:
   focus-ring  a tab and a switch show the window's focus ring
   review-notices  Access offers Allow and does not ask before that press
   remembered-rules  Access rests the remembered-rules row without a gateway
-  native-hooks  Access rests Claude and Codex hook rows without a gateway, and
+  native-hooks  Native hooks rests Claude and Codex hook rows without a gateway, and
                  says a hook can deny or change a tool call
   native-hooks-on  with a gateway, Claude's switch on shows the trust warning
                  and that the choice applies at the next start

@@ -136,6 +136,7 @@ export const devServerOnlyChecks = [
   "published-files",
   "transcript-notes",
   "transcript-unreadable",
+  "user-attachments",
   "turn-outcomes",
   "clock-snapshots",
   // The sandbox proxy is provided by the dev server, not vite preview.

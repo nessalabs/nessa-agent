@@ -4,7 +4,7 @@
 //! ```text
 //! paired catalogue read ──▶ ConversationCatalogue::page | resolve
 //!                             rows narrowed in SQL to the receiver's
-//!                             grants: an index, each row with the role held
+//!                             grants: an index, each row with the capabilities held
 //!                       ──▶ CatalogueEntryAdmission::admits(descriptor)
 //!                             ──▶ ConversationAccessPolicyEvaluator
 //!                                 (catalogue.entry, a PairedReader)
@@ -18,7 +18,7 @@ use super::{
     AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
     ConversationAccessPolicyEvaluator, ConversationFuture, Reader, RequestShape,
 };
-use crate::conversation::domain::{Conversation, ShareRole};
+use crate::conversation::domain::{Capabilities, Conversation};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::{ConversationId, ConversationSummary};
 use nessa_sync::replication::catalogue::ManifestRequest;
@@ -42,9 +42,9 @@ pub struct CatalogueDescriptor {
     pub key: CatalogueKey,
     pub revision: u64,
     pub deleted: bool,
-    /// The role of the share grant the reader holds on the conversation,
+    /// The capabilities of the share grant the reader holds on the conversation,
     /// read with the row; `None` for the owner, who holds none.
-    pub held: Option<ShareRole>,
+    pub held: Option<Capabilities>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -158,7 +158,7 @@ pub enum CatalogueEntryAnswer {
 ///
 /// Within one read the reader, the organization and the owner are fixed:
 /// the rows are the owner's, as the store checks each record. An ask varies
-/// by entry only in whether it was deleted and the role held, so each
+/// by entry only in whether it was deleted and the capabilities held, so each
 /// distinct pair is asked once and the answer reused: a page costs at most
 /// a handful of evaluations however many entries it has.
 pub struct CatalogueEntryAdmission<'a> {
@@ -167,7 +167,7 @@ pub struct CatalogueEntryAdmission<'a> {
     owner: &'a PrincipalId,
     receiver: &'a str,
     reader: &'a Reader,
-    decided: HashMap<(bool, Option<ShareRole>), CatalogueEntryAnswer>,
+    decided: HashMap<(bool, Option<Capabilities>), CatalogueEntryAnswer>,
 }
 
 impl CatalogueEntryAdmission<'_> {

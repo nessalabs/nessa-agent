@@ -62,6 +62,7 @@ const functional = [
   "published-files",
   "transcript-notes",
   "transcript-unreadable",
+  "user-attachments",
   "turn-outcomes",
 ]
 

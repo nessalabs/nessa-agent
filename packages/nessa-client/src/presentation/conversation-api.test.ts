@@ -1771,14 +1771,16 @@ it("grants, changes and revokes a share under a stable request id", async () => 
   }))
   const api = createConversationApi({ request }, () => "action")
   const policy = { preset: "read_only_tools" as const, commandHosts: ["devbox"] }
-  expect(await api.share(conversationId, credentialId, "drive", policy)).toEqual({
+  expect(
+    await api.share(conversationId, credentialId, ["read", "comment", "drive"], policy),
+  ).toEqual({
     requestId: "action",
     applied: true,
     policyRevision: 7,
   })
   // Changing the caller's own object after the call changes nothing sent.
   policy.commandHosts.push("other")
-  await api.share(conversationId, credentialId, "read", undefined, {
+  await api.share(conversationId, credentialId, ["read"], undefined, {
     expectedPolicyRevision: 7,
   })
   await api.unshare(conversationId, credentialId, { requestId: "revoke" })
@@ -1793,7 +1795,7 @@ it("grants, changes and revokes a share under a stable request id", async () => 
         conversationId,
         requestId: "action",
         credentialId,
-        role: "drive",
+        capabilities: ["read", "comment", "drive"],
         policy: drivePolicy,
       },
     ],
@@ -1803,7 +1805,7 @@ it("grants, changes and revokes a share under a stable request id", async () => 
         conversationId,
         requestId: "action",
         credentialId,
-        role: "read",
+        capabilities: ["read"],
         expectedPolicyRevision: 7,
       },
     ],
@@ -1823,16 +1825,16 @@ it("grants, changes and revokes a share under a stable request id", async () => 
 it("refuses a malformed share before anything is sent", async () => {
   const request = vi.fn()
   const api = createConversationApi({ request }, () => "action")
-  expect(() => api.share("not-a-uuid", credentialId, "read")).toThrow(TypeError)
-  expect(() => api.share(conversationId, " ", "read")).toThrow(TypeError)
-  expect(() => api.share(conversationId, "c".repeat(257), "read")).toThrow(TypeError)
+  expect(() => api.share("not-a-uuid", credentialId, ["read"])).toThrow(TypeError)
+  expect(() => api.share(conversationId, " ", ["read"])).toThrow(TypeError)
+  expect(() => api.share(conversationId, "c".repeat(257), ["read"])).toThrow(TypeError)
   expect(() => api.unshare(conversationId, "")).toThrow(TypeError)
   expect(() =>
-    api.share(conversationId, credentialId, "read", undefined, { requestId: "" }),
+    api.share(conversationId, credentialId, ["read"], undefined, { requestId: "" }),
   ).toThrow(TypeError)
   for (const expectedPolicyRevision of [-1, 1.5, Number.NaN, 2 ** 53]) {
     expect(() =>
-      api.share(conversationId, credentialId, "read", undefined, {
+      api.share(conversationId, credentialId, ["read"], undefined, {
         expectedPolicyRevision,
       }),
     ).toThrow(TypeError)
@@ -1852,7 +1854,7 @@ it("keeps a share's typed refusal and retries it as the same grant", async () =>
     .mockResolvedValueOnce({ requestId: "action", applied: false, policyRevision: 3 })
   const api = createConversationApi({ request }, () => "action")
   const refused = await api
-    .share(conversationId, credentialId, "drive", drivePolicy)
+    .share(conversationId, credentialId, ["read", "comment", "drive"], drivePolicy)
     .catch((error: unknown) => error)
   expect(refused).toBeInstanceOf(NessaConversationMutationError)
   const error = refused as NessaConversationMutationError<unknown>
@@ -1873,7 +1875,7 @@ it("keeps a refusal for a grant changed since its revision as its own code", asy
   const api = createConversationApi({ request }, () => "action")
   for (const call of [
     () =>
-      api.share(conversationId, credentialId, "read", undefined, {
+      api.share(conversationId, credentialId, ["read"], undefined, {
         expectedPolicyRevision: 2,
       }),
     () => api.unshare(conversationId, credentialId, { expectedPolicyRevision: 2 }),
@@ -1905,7 +1907,7 @@ it.each([
     { request: vi.fn().mockResolvedValue(answer) },
     () => "action",
   )
-  await expect(api.share(conversationId, credentialId, "read")).rejects.toThrow(
+  await expect(api.share(conversationId, credentialId, ["read"])).rejects.toThrow(
     NessaConversationMutationError,
   )
 })
@@ -1922,7 +1924,7 @@ it("rejects an unshare answer for another request", async () => {
 
 const grant = {
   credentialId,
-  role: "drive",
+  capabilities: ["read", "comment", "drive"] as const,
   policy: { allow: ["Read"], deny: [], commandHosts: ["devbox"] },
   policyRevision: 2,
   grantedAtMs: 1_700_000_000_000,
@@ -1935,7 +1937,12 @@ it("lists one page of a conversation's grants within the published bounds", asyn
     changeRevision: 1,
     items: [
       grant,
-      { credentialId: "phone", role: "read", policyRevision: 1, grantedAtMs: 1 },
+      {
+        credentialId: "phone",
+        capabilities: ["read"],
+        policyRevision: 1,
+        grantedAtMs: 1,
+      },
     ],
   })
   const api = createConversationApi({ request }, () => "action")
@@ -1978,7 +1985,12 @@ it("refuses a shares answer larger than the page size it asked for", async () =>
     changeRevision: 1,
     items: [
       grant,
-      { credentialId: "phone", role: "read", policyRevision: 1, grantedAtMs: 1 },
+      {
+        credentialId: "phone",
+        capabilities: ["read"],
+        policyRevision: 1,
+        grantedAtMs: 1,
+      },
     ],
   })
   const api = createConversationApi({ request }, () => "action")
@@ -2003,8 +2015,12 @@ it.each([
     { items: [{ ...grant, policyRevision: 0 }] },
   ],
   ["a drive grant without a policy", { items: [{ ...grant, policy: undefined }] }],
-  ["a read grant with a policy", { items: [{ ...grant, role: "read" }] }],
-  ["an unknown role", { items: [{ ...grant, role: "owner" }] }],
+  ["a read grant with a policy", { items: [{ ...grant, capabilities: ["read"] }] }],
+  [
+    "a set that is not one of the three",
+    { items: [{ ...grant, capabilities: ["read", "drive"] }] },
+  ],
+  ["an unknown capability", { items: [{ ...grant, capabilities: ["owner"] }] }],
   [
     "a preset beside patterns",
     { items: [{ ...grant, policy: { preset: "all", allow: ["Read"] } }] },
@@ -2040,7 +2056,7 @@ it.each([
     {
       items: Array.from({ length: bounds.maxSharePage + 1 }, (_, n) => ({
         credentialId: `c${n}`,
-        role: "read",
+        capabilities: ["read"],
         policyRevision: 1,
         grantedAtMs: n,
       })),

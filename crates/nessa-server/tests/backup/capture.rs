@@ -17,8 +17,8 @@ use crate::backup::domain::{DeletionFence, DeletionLog};
 use crate::backup::infrastructure::{CedarInventoryPolicy, CommittedInventory};
 use crate::conversation::application::{
     AccessAsk, AccessDecision, ConversationAccessPolicyEvaluator, ConversationCaller,
-    ConversationRepository, FenceCapture, ReceiverAuthority, ShareConversation, ShareGrantChange,
-    ShareGrantTransition, ShareGrants,
+    ConversationRepository, FenceCapture, FenceCaptureError, ReceiverAuthority, ShareConversation,
+    ShareGrantChange, ShareGrantTransition, ShareGrants,
 };
 use crate::conversation::domain::{Conversation, ReceiverBinding, ShareAccess};
 use crate::conversation::infrastructure::LocalConversationStore;
@@ -349,6 +349,66 @@ async fn an_unshare_reconciles_the_revoked_grant() {
     assert!(log.contains("read-party"), "{log}");
 }
 
+struct FailingCapture;
+
+#[async_trait]
+impl FenceCapture for FailingCapture {
+    async fn capture(&self) -> Result<(), FenceCaptureError> {
+        Err(FenceCaptureError::NotStored)
+    }
+}
+
+/// A capture that cannot store the log does not undo the revoke. The grant
+/// stays gone and `unshare` still answers that it applied.
+#[tokio::test]
+async fn a_failed_inventory_capture_leaves_the_revoke() {
+    use crate::conversation::application::ShareGrants;
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let private = root.join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let store = LocalConversationStore::open(&private.join("metadata.sqlite3"))
+        .unwrap()
+        .with_access_policy(crate::conversation_test_support::access_policy());
+    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    store.create(owned(&id)).await.unwrap();
+    assert!(
+        store
+            .change(grant_change(
+                &id,
+                ShareGrantTransition::Grant(ShareAccess::read()),
+                Some("read-party"),
+                "grant",
+            ))
+            .await
+            .unwrap()
+            .applied
+    );
+    let failing = FailingCapture;
+    let unused = Unused;
+    let gateway = resource();
+    let shares = ShareConversation {
+        conversations: &store,
+        receivers: &unused,
+        grants: &store,
+        access: &unused,
+        gateway: &gateway,
+        policy: &unused,
+        inventory: Some(&failing),
+    };
+    assert!(shares
+        .unshare(
+            caller("unshare"),
+            id.clone(),
+            CredentialId::new("read-party-credential").unwrap(),
+            None,
+            20,
+        )
+        .await
+        .unwrap());
+    assert!(store.grants(&id).await.unwrap().grants.is_empty());
+}
+
 struct Refuse;
 
 impl InventoryCapturePolicyEvaluator for Refuse {
@@ -594,6 +654,7 @@ fn grant_change(
     ShareGrantChange {
         transition,
         conversation_id: id.clone(),
+        principal_id: receiver.map(|id| PrincipalId::new(format!("grantee-{id}")).unwrap()),
         receiver_id: receiver.map(str::to_owned),
         credential_id: CredentialId::new("read-party-credential").unwrap(),
         expected_policy_revision: None,

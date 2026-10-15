@@ -79,8 +79,11 @@
       "Ask": {
         "type": "Record",
         "attributes": {
-          "role": {
-            "type": "String",
+          "capabilities": {
+            "type": "Set",
+            "element": {
+              "type": "String"
+            },
             "required": false
           },
           "request": {

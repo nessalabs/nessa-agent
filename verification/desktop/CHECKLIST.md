@@ -561,6 +561,12 @@ registers (`src/desktop/widgets/app/fixture/`), on its session "An MCP App,
 in its sandbox". Every row of the bridge's design table is a jsdom test
 (`app/application/bridge.test.ts`, `app/ui/app-view.test.tsx`).
 
+- [ ] **Actions in a discovered app wait for current finite host motion.**
+  A same-origin nested-frame geometry control moves its transformed ancestor
+  during mousemove; discovery remains available before motion finishes, and
+  settlement on those same handles makes Close receive exactly one trusted
+  click. This checks the demonstrated automation gap in #906, not the unproved
+  cause of its original teardown failure. _Check:_ `mcp-apps.mjs --only moving-frame`.
 - [ ] **It renders in all three places, told its mode and its call** — the
   card's app live, told `inline`, its call's input and result, its frame as
   tall as the app says; its fullscreen request opens a pane beside the
@@ -894,10 +900,12 @@ phone's scanner is not this screen.
   remembered-rules row, disabled, and says it is not available in this
   window. _Check:_ `settings-page.mjs --only remembered-rules`; unit test
   `permission-rule-rows.test.tsx`.
-- [ ] **Claude and Codex native hooks rest without a gateway.** Access shows
+- [ ] **Claude and Codex native hooks have their own tab and rest without a gateway.**
+  Access keeps the common controls above the fold; Native hooks shows
   both rows disabled, with no switch, and says hooks can approve, deny, or
   change a tool call and its result without Nessa asking, and can run
-  commands when the agent starts. OpenCode has no row. With a gateway
+  commands when the agent starts. Search for either hook lands on its row
+  in view on Native hooks. OpenCode has no row. With a gateway
   and Claude's choice on, that row's switch is on and says to turn it on
   only for projects you trust, and that the choice applies the next time
   each conversation's agent starts. Claude on but missing from the catalog
@@ -1781,3 +1789,7 @@ surfaces use.
   `data-unreadable-report`, and contains no button. The empty welcome, the
   whole-chat unread sentence, and the omitted-history sentence are absent.
   The screenshots show both transcripts.
+
+## User attachments in desktop reads — #682
+
+`user-attachments.mjs` drives the production gateway projection and desktop message renderer at 360, 600 and 1440 pixels in Chromium and WebKit. Committed, pending and serialized/reopened image-only, linked-file-only and mixed inputs retain the exact image encoding/size and linked path, a labelled attachment list and adjacent text. The reference placeholders show no preview or action when bytes are unavailable and fit the surface within 1 pixel of overflow. Reloading the fixture preserves the same metadata. The mapper and browser regressions hold this contract; agent-published file reads/saves remain covered separately by `published-files.mjs`.

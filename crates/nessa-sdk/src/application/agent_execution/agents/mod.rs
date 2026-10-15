@@ -12,7 +12,7 @@
 //!       |                        |-> pending wait interrupted by shared stop
 //!       |-> SessionLifecycle -> work permits / work generations
 //!                              |-> attachment generation / active dispatch
-//!                              |-> attachment evidence ledger
+//!                              |-> owner-issued attachment audit records + evidence ledger
 //!                              |-> shared stop -> cleanup attempts / retained lease
 //!                              |-> optional owned-lifetime seal read before admission
 //!       |-> event subscribers
@@ -37,7 +37,7 @@ mod error;
 mod error_limits;
 pub(crate) use error_limits::DiagnosticTreeLimits;
 mod initialization;
-mod lifecycle;
+pub(crate) mod lifecycle;
 mod lifetime;
 mod scheduling;
 mod submissions;

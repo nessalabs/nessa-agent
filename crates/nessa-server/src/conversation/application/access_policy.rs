@@ -37,7 +37,7 @@
 //! that writes a share grant, where a delete cannot land between the
 //! question and the write.
 use super::ConversationCaller;
-use crate::conversation::domain::{Conversation, ConversationRefusal, ShareRole};
+use crate::conversation::domain::{Capabilities, Conversation, ConversationRefusal};
 use nessa_auth::domain::{Grant, OrganizationId, PrincipalId, Resource};
 use std::collections::HashMap;
 
@@ -208,9 +208,9 @@ pub struct AccessAsk<'a> {
     pub subject: AccessSubject<'a>,
     pub action: AccessAction,
     pub resource: AccessResource<'a>,
-    /// The role of the share grant the subject holds on the resource, read
-    /// now; `None` when it holds none.
-    pub held: Option<ShareRole>,
+    /// The capabilities of the share grant the subject holds on the resource,
+    /// read now; `None` when it holds none.
+    pub held: Option<Capabilities>,
     pub request: RequestShape<'a>,
     /// For a share, the party it grants to.
     pub target: Option<ShareTarget<'a>>,
@@ -472,7 +472,7 @@ impl<'a> PairedAccess<'a> {
         &'b self,
         action: AccessAction,
         resource: AccessResource<'b>,
-        held: Option<ShareRole>,
+        held: Option<Capabilities>,
         request: RequestShape<'b>,
     ) -> AccessAsk<'b> {
         AccessAsk {
@@ -499,7 +499,7 @@ impl<'a> PairedAccess<'a> {
         &self,
         action: AccessAction,
         conversation: &Conversation,
-        held: Option<ShareRole>,
+        held: Option<Capabilities>,
         request: RequestShape<'_>,
     ) -> Result<(), PairedRefusal> {
         let resource = AccessResource::of(conversation);
@@ -534,7 +534,7 @@ impl<'a> PairedAccess<'a> {
         &self,
         action: AccessAction,
         conversation: &Conversation,
-        held: Option<ShareRole>,
+        held: Option<Capabilities>,
     ) -> Result<bool, PairedRefusal> {
         match answer(
             self.policy,

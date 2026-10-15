@@ -100,6 +100,24 @@ describe("the settings catalogue", () => {
     expect(namesItsTab("icon-family")).toBe(false)
   })
 
+  it("keeps Access first and routes hook settings to their own privacy tab", () => {
+    expect(firstTabOf("privacy")).toBe("access")
+    expect(settingsTab("native-hooks")).toMatchObject({
+      category: "privacy",
+      label: "Native hooks",
+    })
+    for (const id of ["claude-native-hooks", "codex-native-hooks"] as const) {
+      const entry = setting(id)
+      expect(entry.tab).toBe("native-hooks")
+      expect(searchSettings(entry.label)[0]).toMatchObject({
+        category: "privacy",
+        tab: "native-hooks",
+        setting: id,
+        trail: "Privacy & Permissions › Native hooks",
+      })
+    }
+  })
+
   it("names every category by its label", () => {
     expect(settingsCategory("privacy").label).toBe("Privacy & Permissions")
   })

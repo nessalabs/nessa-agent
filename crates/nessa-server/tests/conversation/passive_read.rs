@@ -1284,6 +1284,7 @@ impl GrantFixture {
                 .change(crate::conversation::application::ShareGrantChange {
                     transition,
                     conversation_id: self.id.clone(),
+                    principal_id: Some(PrincipalId::new("grantee-receiver").unwrap()),
                     receiver_id: Some("receiver".into()),
                     credential_id: CredentialId::new("credential").unwrap(),
                     expected_policy_revision: None,

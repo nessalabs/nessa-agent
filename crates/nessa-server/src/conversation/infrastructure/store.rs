@@ -316,13 +316,15 @@ fn admit_catalogue_target(
 }
 
 /// A paired reader's head: the latest revision among the owner's rows granted
-/// to `receiver`, and among `receiver`'s grants and revokes. A change of role
-/// or policy is neither: it leaves what the receiver reads as it was, and
-/// takes no revision of its own (`docs/design/read-grants.md`, row J4).
-/// A revoke stamps the row it takes away with a new revision and journals
-/// that revision, so in steady state the head moves forward on a revoke and
-/// never back: the journal only grows and conversation rows are never
-/// removed. Zero when the receiver was never granted anything.
+/// to `receiver`, among `receiver`'s grants and revokes, and among later
+/// journal rows that replaced this receiver or its credential. A change of
+/// capabilities or constraints, with the same receiver and credential, is
+/// none of those: it leaves what the receiver reads as it was, and takes no
+/// revision of its own (`docs/design/read-grants.md`, row J4). A revoke, and
+/// a switch of the grant onto another receiver, stamps a new revision, so
+/// the head moves forward and never back: the journal only grows and
+/// conversation rows are never removed. Zero when the receiver was never
+/// granted anything.
 fn granted_head(
     connection: &Connection,
     organization: &OrganizationId,
@@ -336,11 +338,25 @@ fn granted_head(
                      COALESCE((SELECT MAX(c.change_revision) FROM conversations AS c
                                WHERE c.organization = ?1 AND c.owner = ?2 AND {}), 0),
                      COALESCE((SELECT MAX(j.revision) FROM share_grant_changes AS j
-                               JOIN conversations AS c ON c.id = j.conversation_id
+                               JOIN conversations AS c ON c.id = j.resource_id
                                WHERE c.organization = ?1 AND c.owner = ?2
+                                 AND j.resource_kind = '{kind}'
                                  AND j.receiver_id = ?3
-                                 AND (j.before = 'none') <> (j.after = 'none')), 0))",
-                share_grants::granted("c.id", "?3")
+                                 AND (j.before = 'none') <> (j.after = 'none')), 0),
+                     COALESCE((SELECT MAX(later.revision) FROM share_grant_changes AS later
+                               JOIN share_grant_changes AS j
+                                 ON j.resource_kind = later.resource_kind
+                                AND j.resource_id = later.resource_id
+                                AND j.principal_id = later.principal_id
+                                AND j.sequence < later.sequence
+                                AND j.receiver_id = ?3
+                                AND (later.receiver_id IS NOT j.receiver_id
+                                     OR later.credential_id <> j.credential_id)
+                               JOIN conversations AS c ON c.id = later.resource_id
+                               WHERE c.organization = ?1 AND c.owner = ?2
+                                 AND later.resource_kind = '{kind}'), 0))",
+                share_grants::granted("c.id", "?3"),
+                kind = share_grants::CONVERSATION,
             ),
             params![organization.as_str(), owner.as_str(), receiver],
             |row| row.get(0),
@@ -729,7 +745,7 @@ fn checked_descriptor(
     owner: &PrincipalId,
 ) -> Result<CatalogueDescriptor, ConversationError> {
     let id = stored.id.clone();
-    let held = share_grants::stored_role(held, &id)?;
+    let held = share_grants::stored_capabilities(held, &id)?;
     let conversation = stored
         .read()
         .ok_or_else(|| unreadable("conversations", &id))?;
@@ -1633,7 +1649,7 @@ impl ConversationCatalogue for LocalConversationStore {
                    AND (?8 IS NULL OR {})
                  ORDER BY creation_revision, id LIMIT ?7",
                 acquisition::conversation(""),
-                share_grants::held_role("conversations.id", "?8"),
+                share_grants::held_capabilities("conversations.id", "?8"),
                 share_grants::granted("conversations.id", "?8"),
             )).map_err(failed)?;
             let mut rows = statement.query(params![
@@ -1681,7 +1697,7 @@ impl ConversationCatalogue for LocalConversationStore {
                         {}
                  FROM conversations WHERE id = ?1 AND organization = ?2 AND owner = ?3
                    AND (?4 IS NULL OR {})",
-                        share_grants::held_role("conversations.id", "?4"),
+                        share_grants::held_capabilities("conversations.id", "?4"),
                         share_grants::granted("conversations.id", "?4")
                     ),
                     params![
@@ -1704,7 +1720,7 @@ impl ConversationCatalogue for LocalConversationStore {
             let Some((creation, revision, deleted, held)) = row else {
                 return Ok(None);
             };
-            let held = share_grants::stored_role(held, &id.to_string())?;
+            let held = share_grants::stored_capabilities(held, &id.to_string())?;
             let conversation = read(&transaction, &id)?
                 .ok_or_else(|| unreadable("conversations", &id.to_string()))?;
             // Record integrity, not access: the row was selected by these

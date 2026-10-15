@@ -315,7 +315,7 @@
     "items": [
       {
         "credentialId": "phone",
-        "role": "drive",
+        "capabilities": ["read", "comment", "drive"],
         "policy": {
           "preset": "read_only_tools",
           "commandHosts": ["devbox"]

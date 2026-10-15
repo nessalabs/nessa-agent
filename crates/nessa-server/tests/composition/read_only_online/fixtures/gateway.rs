@@ -747,6 +747,7 @@ pub(super) async fn share_with_devices(
                     crate::conversation::domain::ShareAccess::read(),
                 ),
                 conversation_id: id.clone(),
+                principal_id: Some(PrincipalId::new(format!("grantee-{receiver}")).unwrap()),
                 receiver_id: Some(receiver),
                 credential_id: nessa_auth::domain::CredentialId::new(credential).unwrap(),
                 expected_policy_revision: None,

@@ -88,7 +88,7 @@ struct Paired<'a> {
     org: &'a str,
     signed_in_as: &'a str,
     binding_owner: &'a str,
-    held: Option<ShareRole>,
+    held: Option<Capabilities>,
     request: RequestShape<'a>,
 }
 
@@ -99,7 +99,7 @@ impl Default for Paired<'_> {
             org: "org",
             signed_in_as: "owner",
             binding_owner: "owner",
-            held: Some(ShareRole::Read),
+            held: Some(Capabilities::read()),
             request: RequestShape::default(),
         }
     }
@@ -463,13 +463,20 @@ fn grant_catalogue_entry_shows_a_granted_tombstone() {
     )));
 }
 
+/// A device signed in as the binding owner, holding only read, is denied
+/// comment and drive. Removing `capabilities.contains` from those permits
+/// would allow them: the other conditions of the permit already hold.
 #[test]
-fn grant_comment_and_drive_need_their_role() {
+fn grant_comment_and_drive_need_their_capability() {
     let policy = policy();
     let live = conversation("org", "owner", false);
     for (action, role, id) in [
-        (AccessAction::Comment, ShareRole::Comment, "grant.comment"),
-        (AccessAction::Drive, ShareRole::Drive, "grant.drive"),
+        (
+            AccessAction::Comment,
+            Capabilities::comment(),
+            "grant.comment",
+        ),
+        (AccessAction::Drive, Capabilities::drive(), "grant.drive"),
     ] {
         assert_eq!(
             allowed_by(&paired(
@@ -496,7 +503,7 @@ fn paired_peer_gateway_never_comments_or_drives() {
     let live = conversation("org", "owner", false);
     for action in [AccessAction::Comment, AccessAction::Drive] {
         let device = Paired {
-            held: Some(ShareRole::Drive),
+            held: Some(Capabilities::drive()),
             ..Paired::default()
         };
         assert!(allowed(&paired(&policy, action, on(&live), &device)));
@@ -510,9 +517,7 @@ fn paired_peer_gateway_never_comments_or_drives() {
                     ..device
                 }
             ),
-            AccessDecision::Deny(AccessDenial::Forbidden {
-                policies: vec!["paired.peer_gateway".into()]
-            })
+            AccessDecision::Deny(AccessDenial::NotPermitted)
         );
     }
     // A peer still reads what it was granted.
@@ -532,7 +537,7 @@ fn drive_text_only_refuses_what_a_driver_could_name_unshared() {
     let policy = policy();
     let live = conversation("org", "owner", false);
     let driver = Paired {
-        held: Some(ShareRole::Drive),
+        held: Some(Capabilities::drive()),
         ..Paired::default()
     };
     assert!(allowed(&paired(
@@ -591,7 +596,7 @@ fn grant_catalogue_watch_is_a_devices_and_never_a_peers() {
 #[test]
 fn grant_note_deliver_needs_comment_or_drive_on_a_live_conversation() {
     let policy = policy();
-    let deliver = |held: Option<ShareRole>, deleted: bool| {
+    let deliver = |held: Option<Capabilities>, deleted: bool| {
         policy.evaluate(&AccessAsk {
             subject: AccessSubject::GrantHolder {
                 receiver: "receiver-1",
@@ -604,11 +609,11 @@ fn grant_note_deliver_needs_comment_or_drive_on_a_live_conversation() {
         })
     };
     assert_eq!(
-        allowed_by(&deliver(Some(ShareRole::Comment), false)),
+        allowed_by(&deliver(Some(Capabilities::comment()), false)),
         Some(&["grant.note_deliver".to_owned()][..])
     );
-    assert!(!allowed(&deliver(Some(ShareRole::Read), false)));
-    assert!(!allowed(&deliver(Some(ShareRole::Drive), true)));
+    assert!(!allowed(&deliver(Some(Capabilities::read()), false)));
+    assert!(!allowed(&deliver(Some(Capabilities::drive()), true)));
     assert!(!allowed(&deliver(None, false)));
 }
 
@@ -625,7 +630,7 @@ fn a_paired_reader_writes_nothing_else() {
                 owner: &owner,
             },
             &Paired {
-                held: Some(ShareRole::Drive),
+                held: Some(Capabilities::drive()),
                 ..Paired::default()
             }
         ),
@@ -710,11 +715,11 @@ fn an_evaluation_error_fails_closed() {
 // gave it.
 
 const PEOPLE: [(&str, &str); 3] = [("org", "owner"), ("org", "other"), ("elsewhere", "owner")];
-const ROLES: [Option<ShareRole>; 4] = [
+const ROLES: [Option<Capabilities>; 4] = [
     None,
-    Some(ShareRole::Read),
-    Some(ShareRole::Comment),
-    Some(ShareRole::Drive),
+    Some(Capabilities::read()),
+    Some(Capabilities::comment()),
+    Some(Capabilities::drive()),
 ];
 
 /// `OwnerAccess::admit_to` (act, then locate on a refusal) for every caller
@@ -810,9 +815,9 @@ fn paired_access_answers_its_truth_table() {
                     for (action, roles) in [
                         (
                             AccessAction::Comment,
-                            &[ShareRole::Comment, ShareRole::Drive][..],
+                            &[Capabilities::comment(), Capabilities::drive()][..],
                         ),
-                        (AccessAction::Drive, &[ShareRole::Drive][..]),
+                        (AccessAction::Drive, &[Capabilities::drive()][..]),
                     ] {
                         assert_eq!(
                             allowed(&paired(&policy, action, on(&record), &facts)),
@@ -887,7 +892,7 @@ fn drive_text_only_answers_its_truth_table() {
                     AccessAction::Drive,
                     on(&live),
                     &Paired {
-                        held: Some(ShareRole::Drive),
+                        held: Some(Capabilities::drive()),
                         request: RequestShape {
                             attachments,
                             files,
@@ -907,7 +912,7 @@ fn drive_text_only_answers_its_truth_table() {
                     AccessAction::Comment,
                     on(&live),
                     &Paired {
-                        held: Some(ShareRole::Comment),
+                        held: Some(Capabilities::comment()),
                         request: RequestShape {
                             attachments,
                             files,
@@ -987,7 +992,6 @@ fn owner_share_answers_its_truth_table() {
 #[test]
 fn paired_access_tells_each_refusal_as_its_table_says() {
     use PairedRefusal::{Deleted, Forbidden, NotFound};
-    use ShareRole::{Comment, Drive, Read};
     let policy = policy();
     let (org, owner, peer) = (
         organization("org"),
@@ -1002,7 +1006,7 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
     type Row<'a> = (
         bool,
         AccessAction,
-        Option<ShareRole>,
+        Option<Capabilities>,
         bool,
         RequestShape<'a>,
         Result<(), PairedRefusal>,
@@ -1010,13 +1014,27 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
     // (peer, action, held, deleted, request, told)
     let table: [Row<'_>; 32] = [
         (false, AccessAction::Read, None, false, text, Err(NotFound)),
-        (false, AccessAction::Read, Some(Read), false, text, Ok(())),
-        (false, AccessAction::Read, Some(Drive), false, text, Ok(())),
+        (
+            false,
+            AccessAction::Read,
+            Some(Capabilities::read()),
+            false,
+            text,
+            Ok(()),
+        ),
+        (
+            false,
+            AccessAction::Read,
+            Some(Capabilities::drive()),
+            false,
+            text,
+            Ok(()),
+        ),
         (false, AccessAction::Read, None, true, text, Err(NotFound)),
         (
             false,
             AccessAction::Read,
-            Some(Read),
+            Some(Capabilities::read()),
             true,
             text,
             Err(Deleted),
@@ -1032,7 +1050,7 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
         (
             false,
             AccessAction::Comment,
-            Some(Read),
+            Some(Capabilities::read()),
             false,
             text,
             Err(Forbidden),
@@ -1040,7 +1058,7 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
         (
             false,
             AccessAction::Comment,
-            Some(Comment),
+            Some(Capabilities::comment()),
             false,
             text,
             Ok(()),
@@ -1048,7 +1066,7 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
         (
             false,
             AccessAction::Comment,
-            Some(Drive),
+            Some(Capabilities::drive()),
             false,
             text,
             Ok(()),
@@ -1056,7 +1074,7 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
         (
             false,
             AccessAction::Comment,
-            Some(Comment),
+            Some(Capabilities::comment()),
             false,
             attachments,
             Ok(()),
@@ -1064,7 +1082,7 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
         (
             false,
             AccessAction::Comment,
-            Some(Comment),
+            Some(Capabilities::comment()),
             true,
             text,
             Err(Deleted),
@@ -1081,7 +1099,7 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
         (
             false,
             AccessAction::Drive,
-            Some(Read),
+            Some(Capabilities::read()),
             false,
             text,
             Err(Forbidden),
@@ -1089,16 +1107,23 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
         (
             false,
             AccessAction::Drive,
-            Some(Comment),
+            Some(Capabilities::comment()),
             false,
             text,
             Err(Forbidden),
         ),
-        (false, AccessAction::Drive, Some(Drive), false, text, Ok(())),
         (
             false,
             AccessAction::Drive,
-            Some(Drive),
+            Some(Capabilities::drive()),
+            false,
+            text,
+            Ok(()),
+        ),
+        (
+            false,
+            AccessAction::Drive,
+            Some(Capabilities::drive()),
             false,
             attachments,
             Err(Forbidden),
@@ -1114,7 +1139,7 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
         (
             false,
             AccessAction::Drive,
-            Some(Drive),
+            Some(Capabilities::drive()),
             true,
             text,
             Err(Deleted),
@@ -1124,20 +1149,27 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
         (
             false,
             AccessAction::Drive,
-            Some(Read),
+            Some(Capabilities::read()),
             true,
             text,
             Err(Deleted),
         ),
         (false, AccessAction::Drive, None, true, text, Err(NotFound)),
-        (true, AccessAction::Read, Some(Read), false, text, Ok(())),
+        (
+            true,
+            AccessAction::Read,
+            Some(Capabilities::read()),
+            false,
+            text,
+            Ok(()),
+        ),
         (true, AccessAction::Read, None, false, text, Err(NotFound)),
         // A peer's own principal owns nothing, so it is never told of a
         // deletion.
         (
             true,
             AccessAction::Read,
-            Some(Read),
+            Some(Capabilities::read()),
             true,
             text,
             Err(NotFound),
@@ -1145,7 +1177,7 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
         (
             true,
             AccessAction::Comment,
-            Some(Comment),
+            Some(Capabilities::comment()),
             false,
             text,
             Err(Forbidden),
@@ -1161,7 +1193,7 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
         (
             true,
             AccessAction::Drive,
-            Some(Drive),
+            Some(Capabilities::drive()),
             false,
             text,
             Err(Forbidden),
@@ -1170,7 +1202,7 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
         (
             true,
             AccessAction::Drive,
-            Some(Drive),
+            Some(Capabilities::drive()),
             true,
             text,
             Err(NotFound),
@@ -1178,7 +1210,7 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
         (
             true,
             AccessAction::Drive,
-            Some(Drive),
+            Some(Capabilities::drive()),
             false,
             attachments,
             Err(Forbidden),
@@ -1187,7 +1219,7 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
         (
             true,
             AccessAction::Comment,
-            Some(Comment),
+            Some(Capabilities::comment()),
             true,
             text,
             Err(NotFound),
@@ -1246,7 +1278,7 @@ fn paired_access_lists_and_shares_nothing_and_fails_closed() {
         AccessAction::Shares,
     ] {
         assert_eq!(
-            access.allows(action, &record, Some(ShareRole::Drive)),
+            access.allows(action, &record, Some(Capabilities::drive())),
             Ok(false)
         );
     }
@@ -1255,7 +1287,7 @@ fn paired_access_lists_and_shares_nothing_and_fails_closed() {
         undecided.admit(
             AccessAction::Read,
             &record,
-            Some(ShareRole::Read),
+            Some(Capabilities::read()),
             RequestShape::default()
         ),
         Err(PairedRefusal::Unavailable)

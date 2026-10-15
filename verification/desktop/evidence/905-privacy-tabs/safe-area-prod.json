@@ -1,0 +1,198 @@
+{
+  "check": "safe-area",
+  "ok": true,
+  "started": "2026-10-14T23:31:25.552Z",
+  "finished": "2026-10-14T23:31:39.501Z",
+  "target": {
+    "url": "http://127.0.0.1:1496/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1496/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "sampler-control",
+      "engine": "chromium",
+      "safe": 205,
+      "bar": 48
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "sampler-control",
+      "engine": "webkit",
+      "safe": 205,
+      "bar": 48
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "settings-sidebar-return",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1000x700",
+      "frames": 37,
+      "violations": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "settings-sidebar-return",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1440x900",
+      "frames": 34,
+      "violations": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "settings",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1000x700",
+      "frames": 123,
+      "violations": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "settings",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1440x900",
+      "frames": 125,
+      "violations": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "settings-sidebar-return",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1440x900",
+      "frames": 34,
+      "violations": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "settings",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1440x900",
+      "frames": 131,
+      "violations": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "settings-sidebar-return",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1000x700",
+      "frames": 35,
+      "violations": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "settings",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "width": "1000x700",
+      "frames": 124,
+      "violations": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "settings",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1440x900",
+      "frames": 118,
+      "violations": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "settings-sidebar-return",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1440x900",
+      "frames": 38,
+      "violations": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "settings",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1000x700",
+      "frames": 119,
+      "violations": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "settings-sidebar-return",
+      "engine": "webkit",
+      "layout": "columns",
+      "width": "1000x700",
+      "frames": 37,
+      "violations": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "settings-sidebar-return",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1440x900",
+      "frames": 37,
+      "violations": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "settings-sidebar-return",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1000x700",
+      "frames": 38,
+      "violations": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "settings",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1440x900",
+      "frames": 120,
+      "violations": 0
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "settings",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "width": "1000x700",
+      "frames": 119,
+      "violations": 0
+    }
+  ]
+}

@@ -5,8 +5,8 @@ use crate::conversation::application::{
     ShareGrant, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_POLICY_REVISION,
     MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
-use crate::conversation::domain::{CommandHosts, ShareAccess, ShareRole, ToolPolicy, ToolRules};
-use nessa_auth::domain::{CredentialId, MAX_IDENTIFIER_BYTES};
+use crate::conversation::domain::{Capabilities, CommandHosts, ShareAccess, ToolPolicy, ToolRules};
+use nessa_auth::domain::{CredentialId, PrincipalId, MAX_IDENTIFIER_BYTES};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::product::generated::{
     ConversationSharesCursor, ConversationSharesResult, MAX_PAYLOAD_BYTES, MAX_SHARE_PAGE,
@@ -21,7 +21,8 @@ fn grant(n: i64, access: ShareAccess) -> ShareGrant {
     let id = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
     ShareGrant {
         conversation_id: id,
-        receiver_id: format!("receiver-{n}"),
+        principal_id: PrincipalId::new(format!("grantee-{n}")).unwrap(),
+        receiver_id: Some(format!("receiver-{n}")),
         credential_id: CredentialId::new(longest(MAX_IDENTIFIER_BYTES, n)).unwrap(),
         access,
         policy_revision: u64::MAX >> 11,
@@ -53,7 +54,7 @@ fn largest_policy() -> ToolPolicy {
 /// conversation may hold.
 #[test]
 fn a_full_page_of_largest_grants_fits_one_frame() {
-    let drive = ShareAccess::new(ShareRole::Drive, Some(largest_policy())).unwrap();
+    let drive = ShareAccess::new(Capabilities::drive(), Some(largest_policy())).unwrap();
     // One past the page, so the answer carries a cursor: the largest frame.
     let grants: Vec<_> = (0..=MAX_SHARE_PAGE as i64)
         .map(|n| grant(n, drive.clone()))
@@ -90,7 +91,7 @@ fn a_full_page_of_largest_grants_fits_one_frame() {
 /// a position: the grants after that position are the page.
 #[test]
 fn a_shares_page_resumes_after_its_cursor() {
-    let comment = ShareAccess::new(ShareRole::Comment, None).unwrap();
+    let comment = ShareAccess::new(Capabilities::comment(), None).unwrap();
     let mut grants: Vec<_> = (0..5).map(|n| grant(n, comment.clone())).collect();
     // Two share a time, so the credential orders them. `grant` stamps every
     // time at the maximum; set them apart except for that pair.

@@ -3,7 +3,8 @@
 
 use super::record::Fingerprint;
 
-/// The role a revoked share grant held. The journal's `before` column.
+/// The capabilities a revoked share grant held, the journal's `before`
+/// column as [`crate::conversation::domain::Capabilities::as_str`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GrantRole {
     Read,
@@ -15,16 +16,16 @@ impl GrantRole {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Read => "read",
-            Self::Comment => "comment",
-            Self::Drive => "drive",
+            Self::Comment => "read+comment",
+            Self::Drive => "read+comment+drive",
         }
     }
 
     pub fn parse(token: &str) -> Option<Self> {
         match token {
             "read" => Some(Self::Read),
-            "comment" => Some(Self::Comment),
-            "drive" => Some(Self::Drive),
+            "read+comment" => Some(Self::Comment),
+            "read+comment+drive" => Some(Self::Drive),
             _ => None,
         }
     }

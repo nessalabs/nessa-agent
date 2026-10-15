@@ -4,7 +4,7 @@ use crate::conversation::application::{
     AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
     ConversationAccessPolicyEvaluator, RequestShape, ShareTarget,
 };
-use crate::conversation::domain::ShareRole;
+use crate::conversation::domain::Capabilities;
 use cedar_policy::{
     Authorizer, Context, Decision, Entities, Entity, EntityId, EntityTypeName, EntityUid, PolicyId,
     PolicySet, Request, RestrictedExpression, Schema, ValidationMode, Validator,
@@ -247,13 +247,10 @@ fn resource(resource: &AccessResource<'_>) -> Result<Entity, Unavailable> {
     }
 }
 
-/// The role's spelling in the policy.
-fn role_name(role: ShareRole) -> &'static str {
-    match role {
-        ShareRole::Read => "read",
-        ShareRole::Comment => "comment",
-        ShareRole::Drive => "drive",
-    }
+/// The capability set as the policy reads it.
+fn capability_set(capabilities: Capabilities) -> Result<RestrictedExpression, Unavailable> {
+    let names = capabilities.names().map(string).collect::<Vec<_>>();
+    Ok(RestrictedExpression::new_set(names))
 }
 
 fn record(
@@ -311,12 +308,12 @@ fn share_target(target: &ShareTarget<'_>) -> Result<RestrictedExpression, Unavai
     ])
 }
 
-/// The schema's `Ask` context: the role held, the request's shape, and a
-/// share's target, each only as present.
+/// The schema's `Ask` context: the capabilities held, the request's shape,
+/// and a share's target, each only as present.
 fn context(ask: &AccessAsk<'_>) -> Result<Vec<(String, RestrictedExpression)>, Unavailable> {
     let mut pairs = vec![("request".to_owned(), request_shape(&ask.request)?)];
-    if let Some(role) = ask.held {
-        pairs.push(("role".to_owned(), string(role_name(role))));
+    if let Some(capabilities) = ask.held {
+        pairs.push(("capabilities".to_owned(), capability_set(capabilities)?));
     }
     if let Some(target) = &ask.target {
         pairs.push(("target".to_owned(), share_target(target)?));

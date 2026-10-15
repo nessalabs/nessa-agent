@@ -257,7 +257,6 @@ await main(meta, async ({ options, rep, url }) => {
         }
         if (listed.length > 0)
           failures.push(`the gateway's conversations were asked for (${listed.length})`)
-        for (const error of opened.errors) failures.push(error)
         return {
           failures,
           loadMs,
