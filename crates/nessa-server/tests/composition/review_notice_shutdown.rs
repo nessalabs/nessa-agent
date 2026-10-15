@@ -185,7 +185,7 @@ async fn review_audit_host_shutdown_joins_physical_write_and_queued_selection() 
                 &session,
                 &id,
                 ExecutionId::new("turn").unwrap(),
-                PermissionId::new(&format!("permission-{index}")).unwrap(),
+                PermissionId::new(format!("permission-{index}")).unwrap(),
                 ReviewNoticeAuditCause::SnapshotRefresh,
             )
             .await
