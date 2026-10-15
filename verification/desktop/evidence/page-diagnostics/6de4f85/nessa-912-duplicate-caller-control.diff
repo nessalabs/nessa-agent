@@ -1,0 +1,54 @@
+diff --git a/verification/desktop/scripts/clock-snapshots.mjs b/verification/desktop/scripts/clock-snapshots.mjs
+index 54f42e6cc..932c8a8d4 100644
+--- a/verification/desktop/scripts/clock-snapshots.mjs
++++ b/verification/desktop/scripts/clock-snapshots.mjs
+@@ -37,6 +37,7 @@ await main(meta, async ({ options, rep, url }) => {
+           readySelector: "#clock",
+         })
+         const { page } = opened
++        await page.evaluate((marker) => console.error(marker), `__NESSA_912_WITNESS__:clock:${scenario}`)
+         try {
+           if (scenario === "consecutive-reads") {
+             await page.waitForFunction(
+@@ -59,9 +60,12 @@ await main(meta, async ({ options, rep, url }) => {
+               failures.push(
+                 `the rendered clock was ${readCrossing.renderedNow}, expected 1000`,
+               )
++            if (opened.errors.length)
++              failures.push(`browser reported errors: ${opened.errors.join("; ")}`)
+             return {
+               injectedReads: readCrossing.nowValues.slice(0, 2),
+               renderedNow: readCrossing.renderedNow,
++              browserErrors: opened.errors,
+               failures,
+             }
+           }
+@@ -133,12 +137,15 @@ await main(meta, async ({ options, rep, url }) => {
+             afterUnmount.timerStops !== afterUnmount.timerStarts
+           )
+             failures.push(`timer cleanup was incomplete: ${JSON.stringify(afterUnmount)}`)
++          if (opened.errors.length)
++            failures.push(`browser reported errors: ${opened.errors.join("; ")}`)
+           return {
+             injectedNow: "999 → 1000",
+             beforeTick,
+             published,
+             beforeUnmount,
+             afterUnmount,
++            browserErrors: opened.errors,
+             failures,
+           }
+         } finally {
+diff --git a/verification/desktop/scripts/lib/browser.mjs b/verification/desktop/scripts/lib/browser.mjs
+index 15bbd10d5..1c9e4ee67 100644
+--- a/verification/desktop/scripts/lib/browser.mjs
++++ b/verification/desktop/scripts/lib/browser.mjs
+@@ -227,6 +227,8 @@ export async function openPage(browser, o) {
+   const opened = {
+     context,
+     page,
++    errors: lines.errors,
++    harmless: lines.harmless,
+     get heldErrorCount() {
+       return lines.errors.length
+     },

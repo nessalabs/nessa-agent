@@ -1,0 +1,35 @@
+✖ page consumers and wrappers do not access private queues through any handle name (687.935ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 947.629875
+
+✖ failing tests:
+
+test at verification/desktop/scripts/lib/page-lines.test.mjs:317:1
+✖ page consumers and wrappers do not access private queues through any handle name (687.935ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + [
+  +   '/Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/focus.mjs:1314: errors: retained',
+  +   '/Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/focus.mjs:1315: pageHandle["harmless"]'
+  + ]
+  - []
+  
+      at TestContext.<anonymous> (file:///Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/lib/page-lines.test.mjs:376:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ '/Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/focus.mjs:1314: errors: retained', '/Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/focus.mjs:1315: pageHandle["harmless"]' ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

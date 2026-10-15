@@ -1,0 +1,328 @@
+$ node --test verification/desktop/scripts/lib/*.test.mjs
+✔ builds an ASCII long message of the asked length (0.414417ms)
+✔ builds a session-row selector only from a conversation id (0.25475ms)
+✔ accepts a complete list whose long read is the seeded text (0.8605ms)
+✔ refuses an incomplete list before a page would be opened (0.145167ms)
+✔ refuses a list that dropped a seeded conversation (0.135541ms)
+✔ refuses a clipped or short long read (0.381042ms)
+✔ holds a filled cap whose extra split arrived and added nothing (0.059542ms)
+✔ requires every seeded conversation on the session list (0.097417ms)
+✔ requires the open session's seeded bubbles, on screen, and a scroll that moved (0.200584ms)
+✔ the stress scenario answers a later long prompt (0.176958ms)
+✔ run-all does not run alpha-perf (0.25425ms)
+▶ oneMount
+  ✔ accepts exactly one inline frame (0.63525ms)
+  ✔ fails a call with no frame (0.318041ms)
+  ✔ fails a call drawn more than once, naming the count (0.094416ms)
+✔ oneMount (3.276416ms)
+▶ oneCard
+  ✔ accepts exactly one step (0.206959ms)
+  ✔ fails a call with no step (0.079708ms)
+  ✔ fails a call drawn as more than one step, naming the count (0.065542ms)
+✔ oneCard (0.710084ms)
+▶ exactly
+  ✔ W5: matches the text and nothing else, case and all (0.212625ms)
+  ✔ W5: takes the text's characters literally (0.107625ms)
+✔ exactly (0.508541ms)
+▶ approvalCardFor
+  ✔ W5: is the first shown card an app asked for whose head names the tool (0.446792ms)
+  ✔ W5: a part of a tool's name is not the tool (0.087709ms)
+✔ approvalCardFor (0.584416ms)
+▶ approvalShown
+  ✔ W5: waits for the card by the same locator (0.144917ms)
+✔ approvalShown (0.180666ms)
+▶ approvalGone
+  ✔ W1: a card already gone has gone (13.536ms)
+  ✔ W2: a card still shown at the start is waited out, not sampled (21.204ms)
+  ✔ W3: a card still shown at the bound has not gone (31.099083ms)
+  ✔ W4: an error other than the timeout is not the card's state (0.444916ms)
+  ✔ W5: waits on the same locator as approvalShown (1.552458ms)
+✔ approvalGone (68.158625ms)
+▶ recordFailedRequest
+  ✔ a 200 whose content-length was fully delivered is harmless only (#473) (1.4295ms)
+  ✔ a 200 is an error when the body is short, or the size was not reported (0.157667ms)
+  ✔ a later size report moves that same line to harmless, and a short body does not (0.0935ms)
+  ✔ a later size report does not excuse another origin or another error (0.064833ms)
+  ✔ only an unlabelled same-origin /mcp-resources abort is the mount-went-live case (0.183958ms)
+  ✔ #647: the live mount pattern is literal origin and exact endpoint (1.163042ms)
+  ✔ F1′: the window's /browser/check, aborted after a 204 (its body never read), is harmless only (0.746625ms)
+  ✔ a 2xx other than a full 200 or an empty 204 is an error (0.364667ms)
+  ✔ F2: a response never received (aborted before headers) is an error only (0.1015ms)
+  ✔ F3: a response outside 2xx is an error only, at both bounds (3.237458ms)
+  ✔ F4: another origin is an error only (0.116125ms)
+  ✔ F4: any other error text is an error only (0.059375ms)
+  ✔ F4: a page with no origin (about:blank) leaves every failure an error (0.046958ms)
+  ✔ records nothing for the fresh browser's /favicon.ico, as before (0.055083ms)
+✔ recordFailedRequest (8.773959ms)
+▶ settleSizeReports
+  ✔ lets a full-body report leave errors before the caller reads them (0.174833ms)
+  ✔ leaves the line an error when the size report does not arrive (31.337917ms)
+  ✔ a late full body does not excuse a later identical line (32.961417ms)
+  ✔ leaves the line an error when the body is short (0.302458ms)
+✔ settleSizeReports (65.011375ms)
+▶ runAndClose
+  ✔ keeps the body's error when close also rejects (0.3325ms)
+  ✔ reports a browser close failure when the body succeeded (0.064375ms)
+✔ runAndClose (0.436916ms)
+▶ withCleanup
+  ✔ preserves Error, non-Error, and undefined rejections while logging close failure (0.106916ms)
+  ✔ reports close failure when a successful body returns undefined (0.046708ms)
+✔ withCleanup (0.182125ms)
+FAIL  drag-drop
+        - longest frame 66.69999999999982 ms > 50 ms (runs: 67)
+wrote /var/folders/1w/wp9n0wwd22qgrf0zkhb2fk6r0000gn/T/nessa-json-gbtfNC/perf-budget.json
+perf-budget: 0/1 held
+FAIL  drag-drop
+        - longest frame 66.69999999999982 ms > 50 ms (runs: 67)
+wrote /var/folders/1w/wp9n0wwd22qgrf0zkhb2fk6r0000gn/T/nessa-json-bcy1A9/perf-budget.json
+perf-budget: 0/1 held
+▶ parseOptions
+  ✔ takes the check's defaults, and lists split on commas (1.705625ms)
+  ✔ narrows to the first of each list with --quick, unless one was asked for by name (0.636791ms)
+  ✔ drops the -- that pnpm forwards (0.184791ms)
+  ✔ refuses what the check was not written for, as could-not-run (0.774333ms)
+  ✔ says when help was asked for (0.187ms)
+✔ parseOptions (7.307458ms)
+▶ chosen
+  ✔ is every check without --only, and the named ones with it, in order (0.26825ms)
+  ✔ refuses a name it does not have rather than skipping it (0.227375ms)
+✔ chosen (0.626541ms)
+▶ statusOf
+  ✔ is 0 when everything held (0.107083ms)
+  ✔ is 1 when any contract broke — a failure, or an error that is not could-not-run (0.102875ms)
+  ✔ stays 1 when something else could not run: a product failure is never exit 2 (0.121958ms)
+  ✔ is 2 only when nothing broke and something could not run, or nothing ran (0.086375ms)
+  ✔ does not count a dev-server step a production run left out (0.089666ms)
+✔ statusOf (0.751416ms)
+▶ attempt
+  ✔ turns a timeout waiting on the product into a failure, not could-not-run (0.61775ms)
+  ✔ keeps could-not-run for what the step needs to begin (0.126208ms)
+  ✔ stops the check when recovery leaves its browser page unsafe to reuse (0.187833ms)
+  ✔ adds what the step returned (0.116584ms)
+  ✔ reads an error that is not an Error (0.077333ms)
+✔ attempt (1.29475ms)
+▶ resultOfThrown
+  ✔ writes a fault's stack to stderr, as the result keeps only its first line (0.147375ms)
+  ✔ includes the original operation error in fatal recovery diagnostics (0.117416ms)
+  ✔ retains a non-Error operation cause in the fatal result (0.04975ms)
+  ✔ writes nothing for could-not-run, which is not a fault (0.1495ms)
+  ✔ writes the message of a thrown object that has no stack (0.098792ms)
+✔ resultOfThrown (0.729417ms)
+▶ run-all's sum
+  ✔ recognizes the clock check by --only name and leaves it out of production previews (4.771375ms)
+  ✔ passes an explicit production URL to committed-transcript (0.090541ms)
+  ✔ reads each check's exit code (0.033417ms)
+  ✔ exits 1 when any check failed, whatever else could not run; 2 only when none failed (0.038375ms)
+  ✔ does not count a dev-server check a production run left out (0.04925ms)
+  ✔ records a dev-server step as left out only under prod (2.142375ms)
+✔ run-all's sum (7.284583ms)
+▶ report
+  ✔ writes --out JSON that prettier accepts (210.302042ms)
+✔ report (210.378917ms)
+▶ report
+  ✔ writes --out JSON that prettier accepts (142.591ms)
+✔ report (142.642416ms)
+✔ a tool launch is the recorded agent, and a scenario launch is not (0.716125ms)
+✔ evidence wraps the agent and the MCP server with the recorder (0.688084ms)
+✔ a missing panel credential closes the stack before it escapes (32.024917ms)
+✔ a panel credential is returned and the stack stays open (1.287083ms)
+✔ a throw while building the target closes the stack (32.42775ms)
+▶ admitOnce
+  ✔ A1: allows the first call of the app tool, and names the call (0.539541ms)
+  ✔ A2: leaves a permission it already answered alone (0.29175ms)
+  ✔ A2b: allows another permission of the admitted call: it is the same one call (0.054875ms)
+  ✔ A3: a second call of the app tool, once one is admitted, is not allowed but reported (0.053958ms)
+  ✔ A4: another tool's permission, an app's review, or one with no allow option is left alone (0.056ms)
+✔ admitOnce (1.528791ms)
+▶ callsOf
+  ✔ A5: counts distinct calls of the tool, however often the view lists each (0.233166ms)
+  ✔ keeps each call as the view first lists it (0.093834ms)
+✔ callsOf (0.491791ms)
+▶ setupOutcome
+  ✔ A5: more than one distinct call is repeated, whatever their state (0.229625ms)
+  ✔ A6: one completed call naming its resourceUri, in a completed turn, is ready (0.085042ms)
+  ✔ A6: anything less is unusable — no call, a failed call, no resourceUri, a failed turn (0.120959ms)
+✔ setupOutcome (0.593625ms)
+▶ newReview
+  ✔ R1–R3: picks the review not in the baseline taken before the action (0.154958ms)
+  ✔ R4: a stale review, pending before the action, is never picked (0.055166ms)
+  ✔ R5: no review at all is none (0.067417ms)
+  ✔ the review is gone when its own key is, whatever else is pending (0.060792ms)
+✔ newReview (0.434583ms)
+▶ the app review a step waits for (#474)
+  ✔ the bound is the client's call deadline (0.157042ms)
+  ✔ R6: a review listed while the call is still pending is the one to answer (0.127542ms)
+  ✔ R6: a review that arrives after 15s is taken when the deadline is the client's (0.959333ms)
+  ✔ R6: the same review at 16s is missed when the deadline is 15s (0.657042ms)
+  ✔ R7: the call leaving pending, with no new review, is answered (0.221208ms)
+  ✔ R7: a review in the same read as an output that left pending is still the review (0.055042ms)
+  ✔ R8: still pending at the deadline is absent, and the samples name the transcript (0.122417ms)
+  ✔ an output that stays empty stops at the unstarted bound, not the call deadline (0.38175ms)
+  ✔ empty, then pending, still waits out a review that arrives after 15s (0.37ms)
+  ✔ needs a deadline (0.324375ms)
+✔ the app review a step waits for (#474) (3.635916ms)
+▶ lastTurn
+  ✔ reads the last turn's text-only reply, its text parts joined and folded (0.512375ms)
+  ✔ a reply with a tool or a local notice in it is not text-only: could not run (0.180333ms)
+  ✔ a thought part is left out, as the window does not draw it (0.08625ms)
+  ✔ text the window draws otherwise — code, strong, anything not plain — could not run (0.765833ms)
+  ✔ an empty reply, a turn not yet answered, or no turn: could not run (0.123833ms)
+✔ lastTurn (1.793875ms)
+▶ messagesArrived
+  ✔ a second engine's send is the executionId the first did not have (0.12775ms)
+  ✔ an earlier message with the same text is not this send (0.024042ms)
+  ✔ two new executionIds are both this send, so the caller cannot keep the first (0.031708ms)
+  ✔ a queue entry is this send, and the turn wins when both list its executionId (0.031583ms)
+  ✔ a new executionId saying something else is not this send (0.020084ms)
+✔ messagesArrived (0.287834ms)
+✔ mode and observation metadata do not imply semantic output (0.639083ms)
+✔ every remaining field participates, including future published fields (0.731333ms)
+✔ content comparison preserves its input (0.914833ms)
+secondary overview keyboard cleanup fault: observer disarm failed
+secondary overview keyboard cleanup fault: observer disarm failed
+secondary overview keyboard cleanup fault: page close failed
+secondary overview keyboard cleanup fault: observer disarm failed
+secondary overview keyboard cleanup fault: null
+secondary overview keyboard cleanup fault: observer disarm failed
+secondary overview keyboard cleanup fault: undefined
+secondary overview keyboard cleanup fault: observer disarm failed
+secondary overview keyboard cleanup fault: 
+secondary overview keyboard cleanup fault: observer disarm failed
+secondary overview keyboard cleanup fault: page close acknowledgement failed
+secondary overview keyboard cleanup fault: observer disarm failed
+secondary overview keyboard cleanup fault: page closed during disarm
+✔ acts on the observed partial prefix before a later render completes (1.971834ms)
+✔ reports a genuinely absent partial prefix without inventing measurements (2.39375ms)
+✔ reports a completed list when no row is focused (0.719ms)
+✔ reports a completed list when focus is outside its column (0.662959ms)
+✔ preserves an opening-key failure (0.541375ms)
+✔ stops observing when an opening key is delivered but its RPC rejects (0.586458ms)
+✔ retires a live page when disarm fails after a delivered opening key (0.500084ms)
+✔ does not continue the driver when observer disarm and page retirement both fail (0.377959ms)
+✔ preserves fatal observer failure through context and browser cleanup into the result (0.803417ms)
+✔ treats nullish and empty page-close rejections as unsafe while the page is live (0.937583ms)
+✔ keeps fatal retirement diagnostics safe for errors with throwing coercion (0.348042ms)
+✔ preserves the opening error when retirement reports failure after closing the page (0.314958ms)
+secondary overview keyboard cleanup fault: could not dispose browser result
+secondary overview keyboard cleanup fault: could not dispose browser result
+✔ preserves an opening error when disarm fails and observes the later waiter error (6.151583ms)
+✔ preserves a JSON read error when disposing its handle also fails (0.6505ms)
+✔ reports a cleanup failure after successful browser verification (0.416709ms)
+✔ does not act before its own rows and focus are mounted (0.997333ms)
+✔ preserves a browser observation fault instead of reporting unavailable rendering (1.798042ms)
+ok    apps
+FAIL  console [chromium]
+        - requestfailed: http://127.0.0.1:1439/mcp-resources net::ERR_ABORTED
+        - requestfailed: http://127.0.0.1:1438/other/mcp-resources net::ERR_ABORTED
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_FAILED
+        - console.error: real
+FAIL  apps
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  console
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  apps
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  console
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  apps
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  console
+        - requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED
+FAIL  step
+        - an assertion
+        - console.error: during the step
+FAIL  next
+        - console.error: between steps
+FAIL  console [chromium columns]
+        - console.error: after the last step
+ERROR open
+        ! could not run
+ERROR later
+        ! not run: the page did not open
+FAIL  console [webkit]
+        - console.error: while opening
+FAIL  console [chromium]
+        - pageerror: boom
+FAIL  step
+        - console.error: real
+FAIL  release
+        - console.error: real
+FAIL  chromium
+        - console.error: chromium
+FAIL  webkit
+        - console.error: webkit
+FAIL  console [chromium columns 600]
+        - console.error: same fault
+        - console.error: same fault
+FAIL  console [webkit 360]
+        - pageerror: held before close
+✔ #647: live mount proof classifies a late abort before close, keeping rejected neighbors (1.080625ms)
+✔ #647: an absent live mount proof leaves held and late aborts as failures (0.199ms)
+✔ a page's lines are reported once, on the result that follows them (0.47075ms)
+✔ openPage publishes counts and classification actions without diagnostic queues (0.578542ms)
+✔ close reports held diagnostics even when context retirement fails (0.302917ms)
+✔ page consumers and wrappers do not access private queues through any handle name (661.899208ms)
+✔ samples callback execution rather than delayed nominal frame timestamps (1.235ms)
+✔ retains a first frame whose execution clock starts at zero (0.267041ms)
+✔ keeps median precision and averages the middle pair of an even series (0.598125ms)
+▶ frame budget
+  ✔ fails a 50.1 ms frame whose presented maximum rounds to the budget (0.192542ms)
+  ✔ accepts an exact 50 ms frame (0.05325ms)
+  ✔ accepts a 49.6 ms frame that presentation rounds up to the budget (0.043625ms)
+  ✔ could not run when the sample recorded no frame (0.161167ms)
+  ✔ keeps a missing frame sample as a gap and rethrows anything else (0.0675ms)
+✔ frame budget (1.05825ms)
+▶ long animation frame clock
+  ✔ shifts style and layout with the frame, so the duration stays positive (0.149791ms)
+  ✔ reports no style and layout when the phase sentinel is zero (0.068666ms)
+  ✔ keeps a phase that begins at the sample origin as a real zero (0.0495ms)
+✔ long animation frame clock (0.350042ms)
+✔ attributes a sampled frame to work that began before the sample origin (0.043708ms)
+✔ retains attribution in the pre-origin part of the first sampled gap (0.047ms)
+✔ the verdict line is one JSON object naming the evidence and the summary (0.705875ms)
+✔ a failed check wins, and a skipped dev-only check is not could-not-run (0.077625ms)
+✔ engines and page lines come from the check's own results (0.175667ms)
+✔ the summary names the verdict, each engine, and the lines (0.105084ms)
+✔ writeView stores the view as JSON under the evidence directory (0.697333ms)
+✔ a bundled Chromium channel is forwarded on the child check's argv (0.07275ms)
+✔ the scripted command accepts --channel bundled (95.010083ms)
+✔ an engine the document does not name is not the process status (0.79675ms)
+✔ the workspace-load query is the dry run (0.664959ms)
+✔ the page parser accepts that query (39.072083ms)
+✔ run-all does not run workspace-load (0.120375ms)
+✔ can pass the complete CSS selector table to a browser evaluation (1.506375ms)
+✔ reads the split-beside chord from the Playwright string (0.213583ms)
+✔ stopping a preview waits for the process and removes its directory (198.042625ms)
+building production into /var/folders/1w/wp9n0wwd22qgrf0zkhb2fk6r0000gn/T/nessa-desktop-verify-UGuWwC…
+✔ stopping a signal-killed preview again does not wait (1.078167ms)
+✔ stopping a preview that never started still removes its directory (0.485167ms)
+✔ a failed production build removes its directory (223.109292ms)
+✔ the functional production preview inlines the ci stage on both halves (0.591583ms)
+✔ an explicit --url keeps a named dev or prod mode and otherwise stays given (0.09175ms)
+✔ records one frame per flush when a recorder is stopped and started again inside that frame (1.2835ms)
+▶ startup sample
+  ✔ subtracts the navigation start from the phase timestamps (0.426125ms)
+  ✔ treats a zero load-event timestamp as the event not having fired (0.121541ms)
+  ✔ returns null when the document has no navigation entry (0.053875ms)
+  ✔ keeps the two paint names and ignores the rest (0.7355ms)
+  ✔ keeps allowlisted CDP metrics and drops names it does not own (0.166542ms)
+  ✔ does not read a CDP name inherited from Object.prototype (0.156459ms)
+  ✔ keeps gauges and subtracts counters from the sample baseline (0.627792ms)
+  ✔ omits a counter that moved backwards (0.118083ms)
+  ✔ computes frames per second from the rAF gaps (0.222541ms)
+  ✔ summarizes long tasks by count and longest duration (0.3575ms)
+  ✔ times the first endpoint ask from the navigation start (0.066417ms)
+  ✔ prefers the CDP heap and falls back to performance.memory (0.132667ms)
+  ✔ rounds a series for the table and leaves an empty series blank (0.091208ms)
+✔ startup sample (4.411833ms)
+✔ accepts a moved pane after the carried copy is gone (0.38975ms)
+✔ rejects a no-op even when no carried copy remains (0.052083ms)
+✔ rejects a moved pane while its carried copy remains (0.040833ms)
+ℹ tests 193
+ℹ suites 28
+ℹ pass 193
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1129.255833

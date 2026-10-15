@@ -1,0 +1,18 @@
+FAIL  console [chromium columns]
+        - console.error: __NESSA_912_WITNESS__:clock:consecutive-reads
+FAIL  consecutive-reads [chromium]
+        - browser reported errors: console.error: __NESSA_912_WITNESS__:clock:consecutive-reads
+FAIL  console [chromium columns]
+        - console.error: __NESSA_912_WITNESS__:clock:published-tick-and-cleanup
+FAIL  published-tick-and-cleanup [chromium]
+        - browser reported errors: console.error: __NESSA_912_WITNESS__:clock:published-tick-and-cleanup
+FAIL  console [webkit columns]
+        - console.error: __NESSA_912_WITNESS__:clock:consecutive-reads
+FAIL  consecutive-reads [webkit]
+        - browser reported errors: console.error: __NESSA_912_WITNESS__:clock:consecutive-reads
+FAIL  console [webkit columns]
+        - console.error: __NESSA_912_WITNESS__:clock:published-tick-and-cleanup
+FAIL  published-tick-and-cleanup [webkit]
+        - browser reported errors: console.error: __NESSA_912_WITNESS__:clock:published-tick-and-cleanup
+wrote /tmp/nessa-912-baseline-clock.json
+clock-snapshots: 0/8 held

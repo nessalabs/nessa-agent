@@ -1,0 +1,20 @@
+diff --git a/verification/desktop/scripts/lease-details.mjs b/verification/desktop/scripts/lease-details.mjs
+index e42037cab..82ced7145 100644
+--- a/verification/desktop/scripts/lease-details.mjs
++++ b/verification/desktop/scripts/lease-details.mjs
+@@ -96,6 +96,7 @@ async function runOn(browser, rep, url, engine, width) {
+       width,
+       mac: false,
+     })
++    await opened.page.evaluate((marker) => console.error(marker), `__NESSA_912_WITNESS__:run-on:${name}:width:${width}`)
+     try {
+       await attempt(rep, { engine, width, name: `run-on-${name}` }, async () => {
+         const { page } = opened
+@@ -189,6 +190,7 @@ await main(
+             width,
+             mac: false,
+           })
++          await opened.page.evaluate((marker) => console.error(marker), `__NESSA_912_WITNESS__:lease:${name}:width:${width}`)
+           try {
+             await attempt(rep, { engine, width, name }, async () => {
+               const { page } = opened

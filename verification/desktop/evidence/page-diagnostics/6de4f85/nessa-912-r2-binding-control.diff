@@ -1,0 +1,179 @@
+diff --git a/verification/desktop/scripts/focus.mjs b/verification/desktop/scripts/focus.mjs
+index e27436d16..40dfe69c7 100644
+--- a/verification/desktop/scripts/focus.mjs
++++ b/verification/desktop/scripts/focus.mjs
+@@ -1183,7 +1183,7 @@ await main(meta, async ({ options, rep, url }) => {
+               .screenshot({
+                 path: `${options.shots}/focus-retired-${engine}-${layout}.png`,
+               })
+-          return { ...result, failures: [...result.failures, ...fresh.errors] }
++          return result
+         } finally {
+           await fresh.close()
+         }
+@@ -1225,7 +1225,7 @@ await main(meta, async ({ options, rep, url }) => {
+             await need(fresh.page, css.composer, "a composer")
+             await focusComposer(fresh.page)
+             const result = await answer(fresh.page)
+-            return { ...result, failures: [...result.failures, ...fresh.errors] }
++            return result
+           } finally {
+             await fresh.close()
+           }
+@@ -1249,7 +1249,7 @@ await main(meta, async ({ options, rep, url }) => {
+                 await fresh.page.locator(css.overviewColumn).screenshot({
+                   path: `${options.shots}/focus-regroup-away-${engine}-${layout}.png`,
+                 })
+-              return { ...result, failures: [...result.failures, ...fresh.errors] }
++              return result
+             } finally {
+               await fresh.close()
+             }
+@@ -1270,7 +1270,7 @@ await main(meta, async ({ options, rep, url }) => {
+               await need(fresh.page, css.composer, "a composer")
+               await focusComposer(fresh.page)
+               const result = await givesBackLostFocus(fresh.page, cause)
+-              return { ...result, failures: [...result.failures, ...fresh.errors] }
++              return result
+             } finally {
+               await fresh.close()
+             }
+@@ -1281,7 +1281,7 @@ await main(meta, async ({ options, rep, url }) => {
+         try {
+           await need(fresh.page, css.composer, "a composer")
+           const result = await sceneKeepsFocus(fresh.page)
+-          return { ...result, failures: [...result.failures, ...fresh.errors] }
++          return result
+         } finally {
+           await fresh.close()
+         }
+@@ -1299,7 +1299,7 @@ await main(meta, async ({ options, rep, url }) => {
+               await need(fresh.page, css.composer, "a composer")
+               await focusComposer(fresh.page)
+               const result = await replyKeepsCaret(fresh.page)
+-              return { ...result, failures: [...result.failures, ...fresh.errors] }
++              return result
+             } finally {
+               await fresh.close()
+             }
+@@ -1308,3 +1308,9 @@ await main(meta, async ({ options, rep, url }) => {
+     }
+   })
+ })
++
++async function privateQueueProbe(browser) {
++  const pageHandle = await openPage(browser, { url: "http://unused/" })
++  const { errors: retained } = pageHandle
++  return [retained, pageHandle["harmless"]]
++}
+diff --git a/verification/desktop/scripts/lib/page-lines.test.mjs b/verification/desktop/scripts/lib/page-lines.test.mjs
+index 21daab221..eb0ca8e77 100644
+--- a/verification/desktop/scripts/lib/page-lines.test.mjs
++++ b/verification/desktop/scripts/lib/page-lines.test.mjs
+@@ -1,8 +1,9 @@
+ import assert from "node:assert/strict"
+-import { readdirSync, readFileSync, statSync } from "node:fs"
++import { readdirSync, statSync } from "node:fs"
+ import { dirname, join } from "node:path"
+ import { test } from "node:test"
+ import { fileURLToPath } from "node:url"
++import ts from "typescript"
+ 
+ import { report } from "./cli.mjs"
+ import { noteLiveMountResourceAbort, openPage } from "./browser.mjs"
+@@ -313,7 +314,7 @@ test("close reports held diagnostics even when context retirement fails", async
+   assert.equal(rep.results[0].width, 360)
+ })
+ 
+-test("scripts do not copy or splice the private page queues", () => {
++test("page consumers and wrappers do not access private queues through any handle name", () => {
+   const root = join(here, "..")
+   const files = []
+   const walk = (directory) => {
+@@ -324,17 +325,53 @@ test("scripts do not copy or splice the private page queues", () => {
+     }
+   }
+   walk(root)
++  const program = ts.createProgram(files, {
++    allowJs: true,
++    checkJs: true,
++    noEmit: true,
++    module: ts.ModuleKind.NodeNext,
++    moduleResolution: ts.ModuleResolutionKind.NodeNext,
++    target: ts.ScriptTarget.ESNext,
++  })
++  const checker = program.getTypeChecker()
++  const browser = program.getSourceFile(join(here, "browser.mjs"))
++  const declaration = browser.statements.find(
++    (node) => ts.isFunctionDeclaration(node) && node.name?.text === "openPage",
++  )
++  const pageType = checker.getAwaitedType(
++    checker.getReturnTypeOfSignature(checker.getSignatureFromDeclaration(declaration)),
++  )
+   const offenders = []
+   for (const path of files) {
+-    if (path.endsWith(`${join("lib", "page-lines.mjs")}`)) continue
+     if (path.endsWith(".test.mjs")) continue
+-    const source = readFileSync(path, "utf8")
+-    if (
+-      /\bopened\.(?:errors|harmless)\b/.test(source) ||
+-      source.includes(".errors.splice") ||
+-      source.includes(".harmless.splice")
+-    )
+-      offenders.push(path)
++    const source = program.getSourceFile(path)
++    const visit = (node) => {
++      const binding = ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent)
++      const key = binding ? (node.propertyName ?? node.name) : null
++      const property =
++        key && (ts.isIdentifier(key) || ts.isStringLiteral(key))
++          ? key.text
++          : ts.isPropertyAccessExpression(node)
++            ? node.name.text
++            : ts.isElementAccessExpression(node) &&
++                ts.isStringLiteral(node.argumentExpression)
++              ? node.argumentExpression.text
++              : null
++      if (property === "errors" || property === "harmless") {
++        const receiver = checker.getNonNullableType(
++          checker.getTypeAtLocation(binding ? node.parent : node.expression),
++        )
++        if (
++          !(receiver.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) &&
++          checker.isTypeAssignableTo(receiver, pageType)
++        ) {
++          const { line } = source.getLineAndCharacterOfPosition(node.getStart())
++          offenders.push(`${path}:${line + 1}: ${node.getText(source)}`)
++        }
++      }
++      ts.forEachChild(node, visit)
++    }
++    visit(source)
+   }
+   assert.deepEqual(offenders, [])
+ })
+diff --git a/verification/desktop/scripts/mcp-servers-gateway.mjs b/verification/desktop/scripts/mcp-servers-gateway.mjs
+index b6fbc68be..c3925f6b5 100644
+--- a/verification/desktop/scripts/mcp-servers-gateway.mjs
++++ b/verification/desktop/scripts/mcp-servers-gateway.mjs
+@@ -1731,7 +1731,7 @@ const checks = {
+         failures.push(
+           `requests ${JSON.stringify(seen.requests)}, expected one list alone`,
+         )
+-      return { seen, failures: [...failures, ...reader.errors] }
++      return { seen, failures }
+     } finally {
+       await reader.close()
+     }
+diff --git a/verification/desktop/scripts/responsive.mjs b/verification/desktop/scripts/responsive.mjs
+index ec28a6b18..3d8a83ff6 100644
+--- a/verification/desktop/scripts/responsive.mjs
++++ b/verification/desktop/scripts/responsive.mjs
+@@ -1324,7 +1324,6 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
+       if (leaving.some((opacity) => opacity !== "0"))
+         failures.push(`reduced motion: ${key} left the old words drawn (${leaving})`)
+     }
+-    failures.push(...reduced.errors)
+   } finally {
+     await reduced.close()
+   }

@@ -1,0 +1,12 @@
+diff --git a/verification/desktop/scripts/clock-snapshots.mjs b/verification/desktop/scripts/clock-snapshots.mjs
+index 15aa3d197..932c8a8d4 100644
+--- a/verification/desktop/scripts/clock-snapshots.mjs
++++ b/verification/desktop/scripts/clock-snapshots.mjs
+@@ -37,6 +37,7 @@ await main(meta, async ({ options, rep, url }) => {
+           readySelector: "#clock",
+         })
+         const { page } = opened
++        await page.evaluate((marker) => console.error(marker), `__NESSA_912_WITNESS__:clock:${scenario}`)
+         try {
+           if (scenario === "consecutive-reads") {
+             await page.waitForFunction(

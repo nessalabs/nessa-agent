@@ -1,0 +1,41 @@
+✖ page consumers and wrappers do not access private queues through any handle name (725.338666ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 991.639708
+
+✖ failing tests:
+
+test at verification/desktop/scripts/lib/page-lines.test.mjs:317:1
+✖ page consumers and wrappers do not access private queues through any handle name (725.338666ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + [
+  +   '/Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/focus.mjs:1186: fresh.errors',
+  +   '/Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/focus.mjs:1228: fresh.errors',
+  +   '/Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/focus.mjs:1252: fresh.errors',
+  +   '/Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/focus.mjs:1273: fresh.errors',
+  +   '/Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/focus.mjs:1284: fresh.errors',
+  +   '/Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/focus.mjs:1302: fresh.errors',
+  +   '/Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/mcp-servers-gateway.mjs:1734: reader.errors',
+  +   '/Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/responsive.mjs:1327: reduced.errors'
+  + ]
+  - []
+  
+      at TestContext.<anonymous> (file:///Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/lib/page-lines.test.mjs:376:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ '/Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/focus.mjs:1186: fresh.errors', '/Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/focus.mjs:1228: fresh.errors', '/Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/focus.mjs:1252: fresh.errors', '/Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/focus.mjs:1273: fresh.errors', '/Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/focus.mjs:1284: fresh.errors', '/Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/focus.mjs:1302: fresh.errors', '/Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/mcp-servers-gateway.mjs:1734: reader.errors', '/Users/nessa/.codex/worktrees/912-page-diagnostic-owner/nessa-agent/verification/desktop/scripts/responsive.mjs:1327: reduced.errors' ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

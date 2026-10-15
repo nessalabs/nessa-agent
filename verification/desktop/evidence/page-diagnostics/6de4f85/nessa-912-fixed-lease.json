@@ -1,0 +1,1051 @@
+{
+  "check": "lease-details",
+  "ok": false,
+  "started": "2026-10-15T02:03:20.806Z",
+  "finished": "2026-10-15T02:03:45.449Z",
+  "target": {
+    "url": "http://127.0.0.1:1497/desktop.html",
+    "mode": "given"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "none",
+      "sections": 0
+    },
+    {
+      "ok": false,
+      "failures": ["console.error: __NESSA_912_WITNESS__:lease:none:width:360"],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1497/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "__proto__",
+      "sections": 0
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:__proto__:width:360"
+      ],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "constructor",
+      "sections": 0
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:constructor:width:360"
+      ],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "live",
+      "rows": [
+        {
+          "label": "Computer",
+          "value": "This computer",
+          "truncated": false
+        },
+        {
+          "label": "Sandbox",
+          "value": "The agent's own",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Allowed to run",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": ["console.error: __NESSA_912_WITNESS__:lease:live:width:360"],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "ending",
+      "rows": [
+        {
+          "label": "Computer",
+          "value": "This computer",
+          "truncated": false
+        },
+        {
+          "label": "Sandbox",
+          "value": "The agent's own",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Stopping",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:ending:width:360"
+      ],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "ended",
+      "rows": [
+        {
+          "label": "Computer",
+          "value": "This computer",
+          "truncated": false
+        },
+        {
+          "label": "Sandbox",
+          "value": "The agent's own",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Ended when Nessa restarted",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:ended:width:360"
+      ],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "interrupted",
+      "rows": [
+        {
+          "label": "Computer",
+          "value": "This computer",
+          "truncated": false
+        },
+        {
+          "label": "Sandbox",
+          "value": "The agent's own",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Cleanup not confirmed",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:interrupted:width:360"
+      ],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "refused",
+      "rows": [
+        {
+          "label": "Status",
+          "value": "Couldn't start: sandbox not available",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:refused:width:360"
+      ],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "unreadable",
+      "rows": [
+        {
+          "label": "Computer",
+          "value": "Not known",
+          "truncated": false
+        },
+        {
+          "label": "Sandbox",
+          "value": "Not known",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Not known",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:unreadable:width:360"
+      ],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "ssh-live",
+      "rows": [
+        {
+          "label": "SSH host",
+          "value": "me@build-01.internal.example.com",
+          "truncated": false
+        },
+        {
+          "label": "Sandbox",
+          "value": "The agent's own",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Allowed to run",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:ssh-live:width:360"
+      ],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "ssh-lost",
+      "rows": [
+        {
+          "label": "SSH host",
+          "value": "devbox",
+          "truncated": false
+        },
+        {
+          "label": "Sandbox",
+          "value": "The agent's own",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Ended when the connection to its host was lost",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:ssh-lost:width:360"
+      ],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "ssh-refused",
+      "rows": [
+        {
+          "label": "SSH host",
+          "value": "devbox",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Couldn't start: host not reachable",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:ssh-refused:width:360"
+      ],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "peer-live",
+      "rows": [
+        {
+          "label": "Machine",
+          "value": "Paired machine abababab",
+          "truncated": false
+        },
+        {
+          "label": "Sandbox",
+          "value": "The agent's own",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Allowed to run",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:peer-live:width:360"
+      ],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "peer-lost",
+      "rows": [
+        {
+          "label": "Machine",
+          "value": "Paired machine 0f0f0f0f",
+          "truncated": false
+        },
+        {
+          "label": "Sandbox",
+          "value": "The agent's own",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Ended when the connection to its host was lost",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:peer-lost:width:360"
+      ],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "peer-refused",
+      "rows": [
+        {
+          "label": "Machine",
+          "value": "Paired machine 0f0f0f0f",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Couldn't start: host not reachable",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:peer-refused:width:360"
+      ],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "run-on-none",
+      "rows": 0
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:run-on:none:width:360"
+      ],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "run-on-hosts",
+      "texts": [
+        "This computer",
+        "devboxSSH",
+        "me@build-01.internal.example.comSSH"
+      ],
+      "chosen": "me@build-01.internal.example.com",
+      "after": "Run onme@build-01.internal.example.com"
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:run-on:hosts:width:360"
+      ],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "width": 360,
+      "name": "run-on-paired",
+      "texts": ["This computer", "devboxSSH", "Paired machine ababababPaired"],
+      "chosen": "peer:abababababababababababababababababababababababababababababababab",
+      "after": "Run onPaired machine abababab"
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:run-on:paired:width:360"
+      ],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "none",
+      "sections": 0
+    },
+    {
+      "ok": false,
+      "failures": ["console.error: __NESSA_912_WITNESS__:lease:none:width:360"],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "__proto__",
+      "sections": 0
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:__proto__:width:360"
+      ],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "constructor",
+      "sections": 0
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:constructor:width:360"
+      ],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "live",
+      "rows": [
+        {
+          "label": "Computer",
+          "value": "This computer",
+          "truncated": false
+        },
+        {
+          "label": "Sandbox",
+          "value": "The agent's own",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Allowed to run",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": ["console.error: __NESSA_912_WITNESS__:lease:live:width:360"],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "ending",
+      "rows": [
+        {
+          "label": "Computer",
+          "value": "This computer",
+          "truncated": false
+        },
+        {
+          "label": "Sandbox",
+          "value": "The agent's own",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Stopping",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:ending:width:360"
+      ],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "ended",
+      "rows": [
+        {
+          "label": "Computer",
+          "value": "This computer",
+          "truncated": false
+        },
+        {
+          "label": "Sandbox",
+          "value": "The agent's own",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Ended when Nessa restarted",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:ended:width:360"
+      ],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "interrupted",
+      "rows": [
+        {
+          "label": "Computer",
+          "value": "This computer",
+          "truncated": false
+        },
+        {
+          "label": "Sandbox",
+          "value": "The agent's own",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Cleanup not confirmed",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:interrupted:width:360"
+      ],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "refused",
+      "rows": [
+        {
+          "label": "Status",
+          "value": "Couldn't start: sandbox not available",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:refused:width:360"
+      ],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "unreadable",
+      "rows": [
+        {
+          "label": "Computer",
+          "value": "Not known",
+          "truncated": false
+        },
+        {
+          "label": "Sandbox",
+          "value": "Not known",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Not known",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:unreadable:width:360"
+      ],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "ssh-live",
+      "rows": [
+        {
+          "label": "SSH host",
+          "value": "me@build-01.internal.example.com",
+          "truncated": false
+        },
+        {
+          "label": "Sandbox",
+          "value": "The agent's own",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Allowed to run",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:ssh-live:width:360"
+      ],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "ssh-lost",
+      "rows": [
+        {
+          "label": "SSH host",
+          "value": "devbox",
+          "truncated": false
+        },
+        {
+          "label": "Sandbox",
+          "value": "The agent's own",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Ended when the connection to its host was lost",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:ssh-lost:width:360"
+      ],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "ssh-refused",
+      "rows": [
+        {
+          "label": "SSH host",
+          "value": "devbox",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Couldn't start: host not reachable",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:ssh-refused:width:360"
+      ],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "peer-live",
+      "rows": [
+        {
+          "label": "Machine",
+          "value": "Paired machine abababab",
+          "truncated": false
+        },
+        {
+          "label": "Sandbox",
+          "value": "The agent's own",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Allowed to run",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:peer-live:width:360"
+      ],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "peer-lost",
+      "rows": [
+        {
+          "label": "Machine",
+          "value": "Paired machine 0f0f0f0f",
+          "truncated": false
+        },
+        {
+          "label": "Sandbox",
+          "value": "The agent's own",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Ended when the connection to its host was lost",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:peer-lost:width:360"
+      ],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "peer-refused",
+      "rows": [
+        {
+          "label": "Machine",
+          "value": "Paired machine 0f0f0f0f",
+          "truncated": false
+        },
+        {
+          "label": "Status",
+          "value": "Couldn't start: host not reachable",
+          "truncated": false
+        }
+      ],
+      "right": 324,
+      "viewport": 360,
+      "overflow": false
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:lease:peer-refused:width:360"
+      ],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "run-on-none",
+      "rows": 0
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:run-on:none:width:360"
+      ],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "run-on-hosts",
+      "texts": [
+        "This computer",
+        "devboxSSH",
+        "me@build-01.internal.example.comSSH"
+      ],
+      "chosen": "me@build-01.internal.example.com",
+      "after": "Run onme@build-01.internal.example.com"
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:run-on:hosts:width:360"
+      ],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "width": 360,
+      "name": "run-on-paired",
+      "texts": ["This computer", "devboxSSH", "Paired machine ababababPaired"],
+      "chosen": "peer:abababababababababababababababababababababababababababababababab",
+      "after": "Run onPaired machine abababab"
+    },
+    {
+      "ok": false,
+      "failures": [
+        "console.error: __NESSA_912_WITNESS__:run-on:paired:width:360"
+      ],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "console"
+    }
+  ]
+}

@@ -1,0 +1,128 @@
+{
+  "issue": 912,
+  "base": "6c23dfa0f289f57c870610b4c8321658c37a23db",
+  "fixed_head": "102670ddf9618420371db250899b3178edcf001b",
+  "product_changes": false,
+  "records": [
+    {
+      "case": "baseline-clock",
+      "source": "6c23dfa0f289f57c870610b4c8321658c37a23db",
+      "transient_diff": "/tmp/nessa-912-baseline-clock.diff",
+      "diff_sha256": "096112c1bf0a534cb89a8079a9b89a95a65bfc096dac303fde12b8f95e0788d7",
+      "raw_result": "/tmp/nessa-912-baseline-clock.json",
+      "result_sha256": "741d066a965f789ed6b036d2ab5916a16a757142fbb1b5b981747bc40b30c295",
+      "cli_exit": 1,
+      "ok": false,
+      "engines": [
+        "chromium",
+        "webkit"
+      ],
+      "distinct_engine_and_marker_pairs": 4,
+      "failure_entries_per_pair": 2,
+      "total_failure_entries": 8,
+      "legacy_close_width": "omitted; unchanged. Clock selected default1440; lease --quick selected360. Engine/layout retained.",
+      "retained_browserErrors_fields": 4
+    },
+    {
+      "case": "baseline-lease",
+      "source": "6c23dfa0f289f57c870610b4c8321658c37a23db",
+      "transient_diff": "/tmp/nessa-912-baseline-lease.diff",
+      "diff_sha256": "54b1226d1cf2d870a64ed9c0fbb99315ddd02ede98c0ea3f86e06321920e3b58",
+      "raw_result": "/tmp/nessa-912-baseline-lease.json",
+      "result_sha256": "15fe6cdc7da5f1f90355fb1e8a960d54bc1e24df075fcdfd304ce6fd870cda7e",
+      "cli_exit": 1,
+      "ok": false,
+      "engines": [
+        "chromium",
+        "webkit"
+      ],
+      "distinct_engine_and_marker_pairs": 36,
+      "failure_entries_per_pair": 2,
+      "total_failure_entries": 72,
+      "legacy_close_width": "omitted; unchanged. Clock selected default1440; lease --quick selected360. Engine/layout retained.",
+      "retained_browserErrors_fields": 0
+    },
+    {
+      "case": "fixed-clock",
+      "source": "102670ddf9618420371db250899b3178edcf001b",
+      "transient_diff": "/tmp/nessa-912-fixed-clock.diff",
+      "diff_sha256": "9ae5cdaf52c46d14824dfc53c94f05f36af95115d0f15801070652b2520c10ee",
+      "raw_result": "/tmp/nessa-912-fixed-clock.json",
+      "result_sha256": "efc6114ca89759c2f2767e8ebeac1034e550ddd726e9c304c99d73cac9fb58b2",
+      "cli_exit": 1,
+      "ok": false,
+      "engines": [
+        "chromium",
+        "webkit"
+      ],
+      "distinct_engine_and_marker_pairs": 4,
+      "failure_entries_per_pair": 1,
+      "total_failure_entries": 4,
+      "legacy_close_width": "omitted; unchanged. Clock selected default1440; lease --quick selected360. Engine/layout retained.",
+      "retained_browserErrors_fields": 0
+    },
+    {
+      "case": "fixed-lease",
+      "source": "102670ddf9618420371db250899b3178edcf001b",
+      "transient_diff": "/tmp/nessa-912-fixed-lease.diff",
+      "diff_sha256": "7104c816893baa4523f8e963c5879aceb21129d9cf9517a707d0b9cbaeca22cf",
+      "raw_result": "/tmp/nessa-912-fixed-lease.json",
+      "result_sha256": "928864480730c85e0601448c3c1916b8edd3292d85e6c70d4062a21b65e1cd5e",
+      "cli_exit": 1,
+      "ok": false,
+      "engines": [
+        "chromium",
+        "webkit"
+      ],
+      "distinct_engine_and_marker_pairs": 36,
+      "failure_entries_per_pair": 1,
+      "total_failure_entries": 36,
+      "legacy_close_width": "omitted; unchanged. Clock selected default1440; lease --quick selected360. Engine/layout retained.",
+      "retained_browserErrors_fields": 0
+    },
+    {
+      "case": "identical-clock",
+      "source": "102670ddf9618420371db250899b3178edcf001b",
+      "transient_diff": "/tmp/nessa-912-identical-clock.diff",
+      "diff_sha256": "881f317ef2434b9bddd9c4c061168fb0042b819b40f81a141555cabbe6b30959",
+      "raw_result": "/tmp/nessa-912-identical-clock.json",
+      "result_sha256": "d8968b2b6a8adf7dba18bce8bdd6432c20be4ba0c717cbd40686f6646ea698da",
+      "cli_exit": 1,
+      "ok": false,
+      "engines": [
+        "chromium",
+        "webkit"
+      ],
+      "distinct_engine_and_marker_pairs": 4,
+      "failure_entries_per_pair": 2,
+      "total_failure_entries": 8,
+      "legacy_close_width": "omitted; unchanged. Clock selected default1440; lease --quick selected360. Engine/layout retained.",
+      "retained_browserErrors_fields": 0
+    },
+    {
+      "case": "duplicate-caller-control",
+      "source": "102670ddf9618420371db250899b3178edcf001b",
+      "transient_diff": "/tmp/nessa-912-duplicate-caller-control.diff",
+      "diff_sha256": "6c29d344488060637d9943ed82b54aee3783332968d849a0e94695bb2af8aaf2",
+      "raw_result": "/tmp/nessa-912-duplicate-caller-control.json",
+      "result_sha256": "ee35574b8281876d4684732f54bf138bb06ba56195269fa8ab521f427737604c",
+      "cli_exit": 1,
+      "ok": false,
+      "engines": [
+        "chromium",
+        "webkit"
+      ],
+      "distinct_engine_and_marker_pairs": 4,
+      "failure_entries_per_pair": 2,
+      "total_failure_entries": 8,
+      "legacy_close_width": "omitted; unchanged. Clock selected default1440; lease --quick selected360. Engine/layout retained.",
+      "retained_browserErrors_fields": 4
+    }
+  ],
+  "api_reexposure_control": {
+    "raw_log": "/tmp/nessa-912-api-control.log",
+    "expected_failure": "public openPage API must not expose errors/harmless queues",
+    "actual_failure": "Object.hasOwn(opened, errors): true !== false"
+  },
+  "note": "identical-clock emits two actual identical events per engine/case; multiplicity2 preserves both, rather than deduplicating text. Other probes emit one event per pair. All transient changes restored before final affected checks. No prod data or installed service used."
+}

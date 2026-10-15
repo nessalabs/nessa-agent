@@ -1,0 +1,146 @@
+FAIL  none [chromium 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:none:width:360
+FAIL  console [chromium columns]
+        - console.error: __NESSA_912_WITNESS__:lease:none:width:360
+FAIL  __proto__ [chromium 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:__proto__:width:360
+FAIL  console [chromium columns]
+        - console.error: __NESSA_912_WITNESS__:lease:__proto__:width:360
+FAIL  constructor [chromium 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:constructor:width:360
+FAIL  console [chromium columns]
+        - console.error: __NESSA_912_WITNESS__:lease:constructor:width:360
+FAIL  live [chromium 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:live:width:360
+FAIL  console [chromium columns]
+        - console.error: __NESSA_912_WITNESS__:lease:live:width:360
+FAIL  ending [chromium 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:ending:width:360
+FAIL  console [chromium columns]
+        - console.error: __NESSA_912_WITNESS__:lease:ending:width:360
+FAIL  ended [chromium 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:ended:width:360
+FAIL  console [chromium columns]
+        - console.error: __NESSA_912_WITNESS__:lease:ended:width:360
+FAIL  interrupted [chromium 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:interrupted:width:360
+FAIL  console [chromium columns]
+        - console.error: __NESSA_912_WITNESS__:lease:interrupted:width:360
+FAIL  refused [chromium 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:refused:width:360
+FAIL  console [chromium columns]
+        - console.error: __NESSA_912_WITNESS__:lease:refused:width:360
+FAIL  unreadable [chromium 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:unreadable:width:360
+FAIL  console [chromium columns]
+        - console.error: __NESSA_912_WITNESS__:lease:unreadable:width:360
+FAIL  ssh-live [chromium 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:ssh-live:width:360
+FAIL  console [chromium columns]
+        - console.error: __NESSA_912_WITNESS__:lease:ssh-live:width:360
+FAIL  ssh-lost [chromium 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:ssh-lost:width:360
+FAIL  console [chromium columns]
+        - console.error: __NESSA_912_WITNESS__:lease:ssh-lost:width:360
+FAIL  ssh-refused [chromium 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:ssh-refused:width:360
+FAIL  console [chromium columns]
+        - console.error: __NESSA_912_WITNESS__:lease:ssh-refused:width:360
+FAIL  peer-live [chromium 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:peer-live:width:360
+FAIL  console [chromium columns]
+        - console.error: __NESSA_912_WITNESS__:lease:peer-live:width:360
+FAIL  peer-lost [chromium 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:peer-lost:width:360
+FAIL  console [chromium columns]
+        - console.error: __NESSA_912_WITNESS__:lease:peer-lost:width:360
+FAIL  peer-refused [chromium 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:peer-refused:width:360
+FAIL  console [chromium columns]
+        - console.error: __NESSA_912_WITNESS__:lease:peer-refused:width:360
+FAIL  run-on-none [chromium 360]
+        - page error: console.error: __NESSA_912_WITNESS__:run-on:none:width:360
+FAIL  console [chromium columns]
+        - console.error: __NESSA_912_WITNESS__:run-on:none:width:360
+FAIL  run-on-hosts [chromium 360]
+        - page error: console.error: __NESSA_912_WITNESS__:run-on:hosts:width:360
+FAIL  console [chromium columns]
+        - console.error: __NESSA_912_WITNESS__:run-on:hosts:width:360
+FAIL  run-on-paired [chromium 360]
+        - page error: console.error: __NESSA_912_WITNESS__:run-on:paired:width:360
+FAIL  console [chromium columns]
+        - console.error: __NESSA_912_WITNESS__:run-on:paired:width:360
+FAIL  none [webkit 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:none:width:360
+FAIL  console [webkit columns]
+        - console.error: __NESSA_912_WITNESS__:lease:none:width:360
+FAIL  __proto__ [webkit 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:__proto__:width:360
+FAIL  console [webkit columns]
+        - console.error: __NESSA_912_WITNESS__:lease:__proto__:width:360
+FAIL  constructor [webkit 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:constructor:width:360
+FAIL  console [webkit columns]
+        - console.error: __NESSA_912_WITNESS__:lease:constructor:width:360
+FAIL  live [webkit 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:live:width:360
+FAIL  console [webkit columns]
+        - console.error: __NESSA_912_WITNESS__:lease:live:width:360
+FAIL  ending [webkit 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:ending:width:360
+FAIL  console [webkit columns]
+        - console.error: __NESSA_912_WITNESS__:lease:ending:width:360
+FAIL  ended [webkit 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:ended:width:360
+FAIL  console [webkit columns]
+        - console.error: __NESSA_912_WITNESS__:lease:ended:width:360
+FAIL  interrupted [webkit 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:interrupted:width:360
+FAIL  console [webkit columns]
+        - console.error: __NESSA_912_WITNESS__:lease:interrupted:width:360
+FAIL  refused [webkit 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:refused:width:360
+FAIL  console [webkit columns]
+        - console.error: __NESSA_912_WITNESS__:lease:refused:width:360
+FAIL  unreadable [webkit 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:unreadable:width:360
+FAIL  console [webkit columns]
+        - console.error: __NESSA_912_WITNESS__:lease:unreadable:width:360
+FAIL  ssh-live [webkit 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:ssh-live:width:360
+FAIL  console [webkit columns]
+        - console.error: __NESSA_912_WITNESS__:lease:ssh-live:width:360
+FAIL  ssh-lost [webkit 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:ssh-lost:width:360
+FAIL  console [webkit columns]
+        - console.error: __NESSA_912_WITNESS__:lease:ssh-lost:width:360
+FAIL  ssh-refused [webkit 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:ssh-refused:width:360
+FAIL  console [webkit columns]
+        - console.error: __NESSA_912_WITNESS__:lease:ssh-refused:width:360
+FAIL  peer-live [webkit 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:peer-live:width:360
+FAIL  console [webkit columns]
+        - console.error: __NESSA_912_WITNESS__:lease:peer-live:width:360
+FAIL  peer-lost [webkit 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:peer-lost:width:360
+FAIL  console [webkit columns]
+        - console.error: __NESSA_912_WITNESS__:lease:peer-lost:width:360
+FAIL  peer-refused [webkit 360]
+        - page error: console.error: __NESSA_912_WITNESS__:lease:peer-refused:width:360
+FAIL  console [webkit columns]
+        - console.error: __NESSA_912_WITNESS__:lease:peer-refused:width:360
+FAIL  run-on-none [webkit 360]
+        - page error: console.error: __NESSA_912_WITNESS__:run-on:none:width:360
+FAIL  console [webkit columns]
+        - console.error: __NESSA_912_WITNESS__:run-on:none:width:360
+FAIL  run-on-hosts [webkit 360]
+        - page error: console.error: __NESSA_912_WITNESS__:run-on:hosts:width:360
+FAIL  console [webkit columns]
+        - console.error: __NESSA_912_WITNESS__:run-on:hosts:width:360
+FAIL  run-on-paired [webkit 360]
+        - page error: console.error: __NESSA_912_WITNESS__:run-on:paired:width:360
+FAIL  console [webkit columns]
+        - console.error: __NESSA_912_WITNESS__:run-on:paired:width:360
+wrote /tmp/nessa-912-baseline-lease.json
+lease-details: 0/72 held
