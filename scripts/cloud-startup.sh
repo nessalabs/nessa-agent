@@ -64,13 +64,15 @@ else:
 PY
 # Version output alone does not load npm's install-only dependencies. Probe the
 # capability pnpm repair needs, offline and without scripts or dependency writes.
+# Probe fixture creation exits this shell on error; only capability failures return
+# to a repair caller. Allocation/write regressions cover all three probe owners.
 node_ready() {
   [ -x "$cloud_root/node/bin/node" ] &&
     [[ "$("$cloud_root/node/bin/node" --version)" == "v${node_major}."* ]] || return 1
   local PATH="$cloud_root/node/bin:$PATH"
   local probe
-  probe=$(mktemp -d) || return 1
-  printf '{"private":true}\n' > "$probe/package.json" || { rm -rf "$probe"; return 1; }
+  probe=$(mktemp -d) || exit 2
+  printf '{"private":true}\n' > "$probe/package.json" || { rm -rf "$probe"; exit 2; }
   local args=(--dry-run --offline --ignore-scripts --package-lock=false --global=false --prefix "$probe" --cache "$probe/cache")
   local result=0
   "$cloud_root/node/bin/npm" install "${args[@]}" >/dev/null 2>&1 &&
@@ -127,8 +129,8 @@ pnpm_ready() {
   [ -x "$cloud_root/node/bin/pnpm" ] &&
     [ "$("$cloud_root/node/bin/pnpm" --version)" = "$wanted" ] || return 1
   local probe
-  probe=$(mktemp -d) || return 1
-  python3 - "$probe" <<'PY_PNPM' || { rm -rf "$probe"; return 1; }
+  probe=$(mktemp -d) || exit 2
+  python3 - "$probe" <<'PY_PNPM' || { rm -rf "$probe"; exit 2; }
 import io, json, pathlib, sys, tarfile
 root = pathlib.Path(sys.argv[1])
 package = {'name': 'nessa-cloud-readiness', 'version': '1.0.0', 'main': 'index.cjs'}
@@ -163,10 +165,10 @@ bash "$cloud_root/native-build-deps.sh" webkit2gtk-driver xvfb gh
 # formatter and Clippy on private source, without dependencies or shared targets.
 rust_ready() {
   local probe
-  probe=$(mktemp -d) || return 1
+  probe=$(mktemp -d) || exit 2
   mkdir "$probe/src" &&
     printf '[package]\nname = "nessa-cloud-readiness"\nversion = "0.0.0"\nedition = "2024"\n[workspace]\n' > "$probe/Cargo.toml" &&
-    printf 'pub fn ready() -> bool {\n    true\n}\n' > "$probe/src/lib.rs" || { rm -rf "$probe"; return 1; }
+    printf 'pub fn ready() -> bool {\n    true\n}\n' > "$probe/src/lib.rs" || { rm -rf "$probe"; exit 2; }
   local result=0
   (
     cd "$probe" &&

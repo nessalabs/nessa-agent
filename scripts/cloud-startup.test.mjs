@@ -780,3 +780,69 @@ test("pnpm capability probe ignores a containing workspace", (t) => {
     code: "ENOENT",
   })
 })
+
+for (const [owner, allocation] of [
+  ["npm", 1],
+  ["pnpm", 2],
+  ["Rust", 3],
+]) {
+  for (const failure of ["allocation", "fixture-write"]) {
+    test(`${owner} probe ${failure} failure preserves cached tools and prior preparation`, (t) => {
+      const f = bootstrapFixture(t)
+      assert.equal(f.prepare("setup").status, 0)
+      const receipt = join(f.env.NESSA_CLOUD_ROOT, "preparation.json")
+      const previous = readFileSync(receipt, "utf8")
+      const realMktemp = execFileSync("sh", ["-c", "command -v mktemp"], {
+        encoding: "utf8",
+      }).trim()
+      const wrapper = join(f.bin, "mktemp")
+      writeFileSync(
+        wrapper,
+        `#!${process.execPath}\n` +
+          `
+import fs from 'node:fs'
+import { spawnSync } from 'node:child_process'
+const args = process.argv.slice(2)
+const counter = ${JSON.stringify(join(f.root, "probe-count"))}
+let selected = false
+if (args.includes('-d')) {
+  const count = fs.existsSync(counter) ? Number(fs.readFileSync(counter, 'utf8')) + 1 : 1
+  fs.writeFileSync(counter, String(count))
+  selected = count === ${allocation}
+}
+if (selected && ${JSON.stringify(failure)} === 'allocation') {
+  console.error('private probe allocation unavailable'); process.exit(1)
+}
+const result = spawnSync(${JSON.stringify(realMktemp)}, args, {encoding: 'utf8'})
+if (selected && result.status === 0) {
+  const root = result.stdout.trim()
+  if (${allocation} === 1) fs.mkdirSync(root + '/package.json')
+  else if (${allocation} === 2) fs.mkdirSync(root + '/dependency.tgz')
+  else fs.writeFileSync(root + '/src', 'blocking file')
+}
+process.stdout.write(result.stdout ?? '')
+process.stderr.write(result.stderr ?? '')
+process.exit(result.status ?? 1)
+`,
+      )
+      chmodSync(wrapper, 0o755)
+      const offset = f.calls().length
+      const failed = f.prepare("maintenance")
+      assert.equal(failed.status, 2, failed.stderr)
+      assert.equal(readFileSync(receipt, "utf8"), previous)
+      assert.deepEqual(
+        f
+          .calls()
+          .slice(offset)
+          .filter(
+            ({ tool, args }) =>
+              tool === "curl" ||
+              (tool === "npm" && !args.includes("--dry-run")) ||
+              (tool === "rustup" && args[0] === "toolchain"),
+          ),
+        [],
+        "probe environment failure must not replace a cached tool",
+      )
+    })
+  }
+}
