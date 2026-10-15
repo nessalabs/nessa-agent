@@ -200,6 +200,22 @@ pub(in crate::infrastructure::claude_acp) fn retained_tool_arguments(
         .map(str::to_owned)
 }
 
+/// Arguments this frame itself supplies, when they fit the retention budget.
+///
+/// A finished call clears the review cache inside [`tool_call`]. The trace
+/// still records input this frame carried. An omitted or unusable value is
+/// `None`, so the caller does not invent arguments from the cache.
+pub(in crate::infrastructure::claude_acp) fn frame_trace_arguments(
+    value: &Value,
+    names: &HashMap<String, ObservedTool>,
+) -> Option<Box<str>> {
+    let id = identifier(value, "toolCallId").ok()?;
+    match cache_input(names, id, supplied_input(value)) {
+        CachedInput::Replace(encoded) => Some(encoded),
+        CachedInput::Cleared | CachedInput::Unchanged => None,
+    }
+}
+
 pub(in crate::infrastructure::claude_acp) fn tool_call(
     value: &Value,
     names: &mut HashMap<String, ObservedTool>,

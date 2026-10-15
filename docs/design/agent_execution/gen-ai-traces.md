@@ -97,7 +97,8 @@ is that empty result, whether the tool is still running or already complete.
 An update that omits content leaves the earlier result. Arguments follow the
 same rule: an update that supplies them writes them, including when they are
 empty, and an update that omits them leaves the arguments already seen. A
-permission request
+finished Claude call drops its input from the review cache, and the trace
+still records arguments that frame itself supplied. A permission request
 that carries arguments writes them onto the tool span, including when the
 answer was recorded first and opened the span. A token or context count
 that does not fit in a signed 64-bit integer is left off the span.
