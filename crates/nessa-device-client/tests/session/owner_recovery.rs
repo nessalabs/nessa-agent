@@ -1,9 +1,9 @@
 //! Actual original private state, pinned TLS and typed consumer/foreign outcomes.
 use super::*;
+#[cfg(unix)]
+use crate::native_owner_recovery::NativeOwnerAdoptionPhase;
 use crate::{
-    native_owner_recovery::{
-        NativeOwnerAdoptionPhase, NativeOwnerSettlementFailureKind, NativeOwnerStatus,
-    },
+    native_owner_recovery::{NativeOwnerSettlementFailureKind, NativeOwnerStatus},
     test_support::PrivateFixture,
 };
 use nessa_auth::{
