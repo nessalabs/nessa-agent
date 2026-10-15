@@ -108,7 +108,7 @@ These additional Nessa-specific invariants must stay true:
    are not read from outside the process and have nothing to substitute.
 3. The panel frame is reapplied on every show. Nothing caches a frame across
    shows — that is the bug the design exists to prevent.
-4. Every host call goes through `src/host/window.ts` and no-ops outside Tauri.
+4. Native host calls go through `src/host/window.ts`. Browser previews use explicit fallbacks; unavailable capabilities do not report success.
 5. A settings file missing keys still launches; every new key has a default.
 6. Edge failures — blur, sizing, tray, viewport — are reported and survivable,
    never fatal. The panel opening unblurred, or without a tray, beats the panel
@@ -387,7 +387,6 @@ against a private scripted gateway.
   `src/desktop/split-panes/` (its map is `index.ts`) owns the pane layout, its
   sizing, drops and the drag's phases (`model/`, pure), the port a host
   implements (`application/ports.ts`, `SplitPanesSource`), the drag, FLIP and
-  their shared cancellable body restoration (`adapters/dom/staged-reveal.ts`),
   Tab order and the names a host may see of the page (`adapters/dom/`,
   `marks.ts`), and the grid and its stylesheet (`ui/`). A host supplies one
   source that reads its layout and carries out every change through its own
@@ -1689,6 +1688,16 @@ doubles, the real store on a real filesystem, audit records, the adapters, the
 HTTP boundary, the wire mapping, the socket and router, and the facts this
 context and the published protocol schema must agree on (`agreement.rs`).
 
+## Copying send diagnostics
+
+`src/conversation/ui/send-failure.tsx` receives clipboard writing from composition
+through `ClipboardProvider`. `src/host/window.ts` selects the official Tauri
+clipboard plugin in native windows and the browser Clipboard API in previews.
+The native capabilities grant only text writing to `main`, `setup` and `desktop`;
+`scripts/desktop/clipboard-permission.test.mjs` checks the local window scope
+and excludes clipboard reading. The shared control retains the full diagnostic
+for an explicit Copy action and reports write failure without claiming success.
+
 ## Installing an agent runtime
 
 `crates/nessa-server/src/agent_install/` installs pinned native runtimes into the
@@ -1699,6 +1708,14 @@ adapters; Claude, Codex and OpenCode native programs are downloaded explicitly.
 and packaged gateway. `product/agent_install.rs` owns wire mapping and worker
 admission. `src/onboarding/application/agent-installations.ts`, its gateway
 adapter and `ui/agent-downloads.tsx` supply setup and panel download controls.
+`ui/selected-agent-setup.tsx` supplies native panel/desktop first-use hints and
+refusal recovery through one provider. `ui/agent-api-key-save.tsx` keeps the
+existing API-key save audit warning visible after a successful save retires its
+form, shared with onboarding. It reuses readiness and the download hook;
+install, sign-in and Retry are explicit and never replay a message. Its steps
+sit in the same `provider-authentication/ui/agent-action-card.tsx` card as
+sign-in recovery, so download and sign-in prompts look alike. Native
+readiness resolves the host-assigned gateway endpoint within its bounded read.
 
 `composition/managed_adapter.rs` joins a verified native snapshot to the bundled
 Node adapter and its environment override. `CurrentAgentResolver` refreshes the

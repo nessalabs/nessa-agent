@@ -23,6 +23,7 @@ export {
   type Receipt,
   type Turn,
   type UserTurn,
+  type SubmissionDiagnostic,
 } from "./types"
 
 export {

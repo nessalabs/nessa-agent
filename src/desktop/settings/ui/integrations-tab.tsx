@@ -585,10 +585,12 @@ function ServerRow({
       data-mcp-server={server.name}
       data-managed={server.managed || undefined}
       onKeyDown={confirmEscape(confirming, state, dispatch)}
-      label={<span id={nameId}>{server.name}</span>}
+      label={<span id={nameId}>{server.managed ? "Nessa" : server.name}</span>}
       detail={
         <>
-          <code className="settings-server-command">{command}</code>
+          {server.managed ? null : (
+            <code className="settings-server-command">{command}</code>
+          )}
           <small>
             {server.managed
               ? sentences.managed

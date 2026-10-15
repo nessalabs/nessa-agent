@@ -14,6 +14,7 @@ const copy: Record<WorkspaceFailureReason, string> = {
   unavailable: "Nessa couldn’t confirm this just now.",
   "unknown-session": "This session is no longer there.",
   "not-waiting": "This was already answered.",
+  "agent-not-configured": "This agent needs setup.",
   "not-supported": "This isn’t available for this session.",
   "signed-out": "This window isn’t signed in to the local server.",
   "not-started": startupRefusalSentence("not-provisioned"),

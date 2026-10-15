@@ -167,8 +167,15 @@ export class SubmissionRefusedError extends Error {
   constructor(
     readonly reason: CommandFailure,
     cause?: unknown,
+    readonly code?: string,
+    readonly agent?: string,
   ) {
-    super(`The gateway refused this message (${reason}).`, { cause })
+    super(
+      cause instanceof Error
+        ? cause.message
+        : `The gateway refused this message (${reason}).`,
+      { cause },
+    )
     this.name = "SubmissionRefusedError"
   }
 }

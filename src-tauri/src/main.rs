@@ -72,6 +72,7 @@ fn main() {
     let observed = loads.clone();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(diagnostics::init())
         // Before any window exists, so it covers the panel `tauri.conf.json`

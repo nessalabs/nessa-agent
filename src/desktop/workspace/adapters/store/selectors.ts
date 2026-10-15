@@ -43,6 +43,7 @@ import type { Draft } from "../../model/session-lifecycle"
 import type { Message, Transcript } from "../../model/transcript"
 import {
   channelOf,
+  canChooseModel,
   drawnColumns,
   entry,
   modelForNextTurn,
@@ -149,6 +150,9 @@ export const selectComposerText = (state: Root, sessionId: string): string =>
 /** The model a session's next message is sent with: chosen in its composer, else its own. */
 export const selectNextModel = (state: Root, sessionId: string): ModelRef | undefined =>
   modelForNextTurn(state.workspace, sessionId)
+
+export const selectCanChooseModel = (state: Root, sessionId: string): boolean =>
+  canChooseModel(state.workspace, sessionId)
 
 /** Whether a message the person sent to a session is still on its way. */
 export const selectSending = (state: Root, sessionId: string): boolean =>
@@ -366,3 +370,13 @@ export const selectGlance = createSelector(
   (sessions, filter, group, looking, held, now): AgentsGlance =>
     agentsGlance(sessions, held, { filter, group, now, looking }),
 )
+
+/** Latest refused message, retained by identity for composer recovery actions. */
+export const selectFailedMessage = (state: Root, sessionId: string) => {
+  const outbox = selectOutbox(state, sessionId)
+  for (let i = outbox.length - 1; i >= 0; i--) {
+    const message = outbox[i]
+    if (message.delivery?.state === "failed") return message
+  }
+  return undefined
+}

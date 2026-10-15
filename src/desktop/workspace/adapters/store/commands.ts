@@ -22,6 +22,7 @@ import { messageText, type Message, type QuestionChoice } from "../../model/tran
 import { differentFlight } from "../../application/question-flights"
 import {
   failureReason,
+  WorkspaceSourceError,
   failureStages,
   type ApprovalScope,
   type Initiator,
@@ -442,7 +443,23 @@ function deliver(
       return "sent"
     } catch (error) {
       const reason = failureReason(error)
-      dispatch(sendFailed({ sessionId, messageId: message.id, reason }))
+      dispatch(
+        sendFailed({
+          sessionId,
+          messageId: message.id,
+          reason,
+          model,
+          diagnostic:
+            error instanceof WorkspaceSourceError
+              ? error.diagnostic
+              : {
+                  message:
+                    error instanceof Error
+                      ? error.message
+                      : "The gateway request failed.",
+                },
+        }),
+      )
       return outcomeOf(reason)
     }
   }

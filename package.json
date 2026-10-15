@@ -80,6 +80,7 @@
     "@nessalabs/agent-stream": "link:.vendor/nessa_ui/packages/agent-stream",
     "@reduxjs/toolkit": "^2.12.0",
     "@tauri-apps/api": "^2.9.0",
+    "@tauri-apps/plugin-clipboard-manager": "2.3.3",
     "lucide-react": "^0.468.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",

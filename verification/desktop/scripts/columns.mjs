@@ -39,10 +39,12 @@ import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { css, keys, selectorFor, storage } from "./lib/selectors.mjs"
-import { frames, settled } from "./lib/workspace.mjs"
+import { frames, settled, openPanes } from "./lib/workspace.mjs"
 
 const checks = [
   "no-overlap",
+  "content-visible",
+  "pane-level",
   "rail-corner",
   "rail-view-inert",
   "rail-loading",
@@ -68,6 +70,8 @@ Usage: node verification/desktop/scripts/columns.mjs [options]
   --sizes <list>   Window sizes (default 1440x900,1000x700,760x700; --quick: the first).
 
 Checks, per engine, layout and size:
+  pane-level      focus changes only the rim, not pane fill or elevation, in both themes
+  content-visible pane bodies and fill stay visible through sidebar/list toggles
   no-overlap       every combination of the rail, the sidebar, the session list
                    (columns layout) and the overview leaves the drawn columns in
                    order, none overlapping the next, none past the window's edges
@@ -330,6 +334,159 @@ const body = {
         failures.push(
           `${step}: ${strays.length} frame(s) drew the controls at ${strays.map(Math.round)} — outside ${Math.round(from)}…${Math.round(to)}`,
         )
+    }
+    return { runs, failures }
+  },
+
+  "pane-level": async ({ page }) => {
+    await openPanes(page, 2)
+    const failures = []
+    const runs = []
+    for (const theme of ["dark", "light"]) {
+      await page.evaluate(
+        (theme) => document.documentElement.classList.toggle("dark", theme === "dark"),
+        theme,
+      )
+      for (const focused of [0, 1]) {
+        await page.locator(css.composer).nth(focused).focus()
+        await settled(page)
+        const surfaces = await page.evaluate(
+          (selector) =>
+            [...document.querySelectorAll(selector)].map((element) => {
+              const style = getComputedStyle(element)
+              return {
+                fill: style.backgroundColor,
+                shadow: style.boxShadow
+                  .split(/,(?![^()]*\))/)
+                  .filter((part) => !part.includes("inset"))
+                  .map((part) => part.trim())
+                  .join(","),
+              }
+            }),
+          css.pane,
+        )
+        runs.push({ theme, focused, surfaces })
+        if (
+          surfaces.length !== 2 ||
+          surfaces[0].fill !== surfaces[1].fill ||
+          surfaces[0].shadow !== surfaces[1].shadow
+        )
+          failures.push(
+            `${theme}, focus ${focused}: panes have different fill or elevation`,
+          )
+      }
+    }
+    return { runs, failures }
+  },
+
+  "content-visible": async ({ page, layout }) => {
+    const runs = []
+    const failures = []
+    const actions = [keys.toggleSidebar, keys.toggleSidebar]
+    if (layout === "columns") actions.push(keys.toggleSessionList, keys.toggleSessionList)
+    for (const key of actions) {
+      await settled(page)
+      await page.evaluate(
+        ({ pane, body }) => {
+          // Each pane with the opacity of every box from its body up to it, so a
+          // partial dim fails as surely as a blackout.
+          const observed = [...document.querySelectorAll(pane)].map((element) => {
+            const chain = []
+            for (
+              let at = element.querySelector(body);
+              at && at !== element.parentElement;
+              at = at.parentElement
+            )
+              chain.push({ at, opacity: Number(getComputedStyle(at).opacity) })
+            return { element, fill: getComputedStyle(element).backgroundColor, chain }
+          })
+          const chrome = document.querySelector("[data-sidebar]")
+          window.__contentFrames = {
+            running: true,
+            frames: 0,
+            failures: [],
+            before: `${chrome?.dataset.sidebar}/${document.querySelector("[data-list]")?.dataset.list}`,
+            geometry: new Set(),
+          }
+          const sample = () => {
+            const result = window.__contentFrames
+            if (!result.running) return
+            result.frames++
+            const first = observed[0]?.element.getBoundingClientRect()
+            if (first)
+              result.geometry.add(`${first.left.toFixed(1)},${first.width.toFixed(1)}`)
+            for (const { element, fill, chain } of observed) {
+              if (!element.isConnected) {
+                result.failures.push("pane was replaced during a chrome toggle")
+                continue
+              }
+              const contents = element.querySelector(body)
+              if (!contents) {
+                result.failures.push("pane body disappeared")
+                continue
+              }
+              for (
+                let at = contents;
+                at && at !== element.parentElement;
+                at = at.parentElement
+              ) {
+                const style = getComputedStyle(at)
+                if (
+                  style.contentVisibility === "hidden" ||
+                  style.visibility === "hidden" ||
+                  style.display === "none" ||
+                  Number(style.opacity) === 0
+                )
+                  result.failures.push(
+                    `${at.className}: content hidden during transition`,
+                  )
+              }
+              for (const { at, opacity } of chain)
+                if (at.isConnected && Number(getComputedStyle(at).opacity) < opacity)
+                  result.failures.push(
+                    `${at.className}: content dimmed during transition`,
+                  )
+              if (getComputedStyle(element).backgroundColor !== fill)
+                result.failures.push("pane fill changed during transition")
+            }
+            requestAnimationFrame(sample)
+          }
+          sample()
+        },
+        { pane: css.pane, body: css.paneBody },
+      )
+      try {
+        await page.keyboard.press(key)
+        await settled(page)
+        await frames(page)
+        const result = await page.evaluate(() => {
+          const result = window.__contentFrames
+          result.running = false
+          const chrome = document.querySelector("[data-sidebar]")
+          return {
+            frames: result.frames,
+            failures: result.failures,
+            before: result.before,
+            after: `${chrome?.dataset.sidebar}/${document.querySelector("[data-list]")?.dataset.list}`,
+            positions: result.geometry.size,
+          }
+        })
+        runs.push({ key, frames: result.frames, positions: result.positions })
+        if (result.frames < 2) failures.push(`${key}: no transition frames sampled`)
+        // The toggle took effect and the pane travelled through at least one
+        // place between where it was and where it ended.
+        if (result.before === result.after)
+          failures.push(`${key}: the toggle changed nothing`)
+        else if (result.positions < 3)
+          failures.push(`${key}: the pane jumped to its new place without moving`)
+        failures.push(
+          ...[...new Set(result.failures)].map((message) => `${key}: ${message}`),
+        )
+      } finally {
+        await page.evaluate(() => {
+          window.__contentFrames.running = false
+        })
+      }
     }
     return { runs, failures }
   },

@@ -103,7 +103,7 @@ export function Composer({
    */
   model: { provider: string; modelId: string } | undefined
   /** Told when the person picks another model; the owner decides what is shown. */
-  onModelChange: (model: { provider: string; modelId: string }) => void
+  onModelChange?: (model: { provider: string; modelId: string }) => void
   /** Sends a turn; without it nothing can be sent and the send button says so. */
   onSend?: (text: string) => void
   /**
@@ -190,15 +190,21 @@ export function Composer({
                 ),
               } as CSSProperties
             }
-            {...tooltip("Model", { side: "above" })}
+            {...tooltip(
+              onModelChange
+                ? "Model"
+                : "Start a new conversation to choose another model",
+              { side: "above" },
+            )}
           >
             <ModelPicker
+              disabled={!onModelChange}
               groups={pickerGroups}
               value={shown && { providerId: shown.provider, modelId: shown.modelId }}
               onValueChange={({ providerId, modelId }) => {
                 const next = findComposerModel(providerId, modelId)
                 if (!next) return
-                onModelChange({ provider: next.provider, modelId: next.modelId })
+                onModelChange?.({ provider: next.provider, modelId: next.modelId })
               }}
               side="top"
               align="start"

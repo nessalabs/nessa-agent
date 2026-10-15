@@ -1,3 +1,5 @@
+import type { ModelRef } from "./workspace-index"
+import type { FailureDiagnostic } from "./failure"
 /**
  * A session's conversation: messages from the person and the agent, what the
  * agent is doing now, and the approval it is waiting on, if any. The agent's
@@ -68,7 +70,12 @@ export type FileGroup = { readonly kind: "files"; readonly files: FilePart[] }
  */
 export type Delivery =
   | { readonly state: "sending" }
-  | { readonly state: "failed"; readonly reason: WorkspaceFailureReason }
+  | {
+      readonly state: "failed"
+      readonly reason: WorkspaceFailureReason
+      readonly diagnostic?: FailureDiagnostic
+      readonly model?: ModelRef
+    }
 
 /**
  * How an admitted turn ended, as the gateway reported it, when it did not

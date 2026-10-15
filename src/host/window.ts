@@ -1108,3 +1108,14 @@ export async function providerLoginAvailable(): Promise<boolean> {
     return false
   }
 }
+
+/** Writes only in response to a person's Copy action. */
+export async function writeClipboardText(text: string): Promise<void> {
+  if (inTauri) {
+    const { writeText } = await import("@tauri-apps/plugin-clipboard-manager")
+    await writeText(text)
+    return
+  }
+  if (!navigator.clipboard?.writeText) throw new Error("Clipboard is unavailable.")
+  await navigator.clipboard.writeText(text)
+}

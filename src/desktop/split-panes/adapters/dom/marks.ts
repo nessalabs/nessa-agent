@@ -43,8 +43,6 @@ export const marks = {
   measuring: "data-split-measuring",
   /** On a pane whose geometry changes in the current flight. */
   flying: "data-split-flying",
-  /** On a pane whose body returns one frame at a time after a FLIP flight. */
-  restoring: "data-split-restoring",
   /** On the drag's root while a preview draws panes away from where they are laid out. */
   reflow: "data-drag-reflow",
   /**
@@ -63,8 +61,6 @@ export const marks = {
   waiting: "data-drag-waiting",
   /** On the drag's root while a drop shown would take the host's spare room (`takesSpare`). */
   takesSpare: "data-drag-takes-spare",
-  /** On a pane whose body waits out a layout, one pane a frame: the drop's commit, or the preview letting go. */
-  settling: "data-drag-settling",
 } as const
 
 /** The module's own elements a host may style or find. */

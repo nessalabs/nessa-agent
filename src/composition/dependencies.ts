@@ -14,8 +14,8 @@ import { monotonicWallClock } from "../conversation/adapters/browser/wall-clock"
 import { createSessionHandle } from "../session/adapters/client/handle"
 import { connectDevSession } from "../session/adapters/client/dev-session"
 import type { ConversationEffects } from "../conversation/application/ports"
-import { httpAgentReadiness } from "../onboarding/adapters/agents"
-import { loadChosenAgent } from "../host"
+import { assignedAgentReadiness, httpAgentReadiness } from "../onboarding/adapters/agents"
+import { loadAssignedGatewayEndpoint, loadChosenAgent } from "../host"
 import type { AgentReadinessSource } from "../onboarding/application/ports"
 import { hasNativeHost } from "../host"
 import { PreparedOperationTable } from "../conversation/adapters/store/prepared-operation-table"
@@ -141,7 +141,13 @@ export function createDependencies(
     now,
     // Setup's one pre-session question. Constructed here so the surface takes
     // it as a dependency rather than importing the transport it happens to use.
-    agents: options.agents ?? httpAgentReadiness({ baseUrl: config.gatewayBaseUrl }),
+    agents:
+      options.agents ??
+      (hasNativeHost()
+        ? assignedAgentReadiness({
+            endpoint: () => loadAssignedGatewayEndpoint(config.stage),
+          })
+        : httpAgentReadiness({ baseUrl: config.gatewayBaseUrl })),
     usesLocalSession: config.conversation.backend === "local",
     connectSession:
       options.connectSession ??

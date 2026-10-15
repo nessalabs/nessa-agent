@@ -53,6 +53,7 @@ export {
   onWindowResize,
   readAttachmentBytes,
   saveFile,
+  writeClipboardText,
   type FileNotSaved,
   type NotSavedReason,
   revealSetupWindow,

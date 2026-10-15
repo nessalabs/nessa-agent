@@ -1,3 +1,4 @@
+import { WorkspaceSendFailure } from "../send-failure"
 import {
   createContext,
   useContext,
@@ -10,12 +11,7 @@ import { DesktopIcon } from "../../../ui/icons"
 import { tooltip } from "../../../ui/tooltip"
 import { sendMessage, setComposerText } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
-import {
-  selectComposerText,
-  selectSending,
-  selectUnsent,
-} from "../../adapters/store/selectors"
-import { failureCopy } from "../failure-copy"
+import { selectComposerText, selectSending } from "../../adapters/store/selectors"
 
 /**
  * Which session's reply pill holds the caret, or is to take it (⌘R), for as
@@ -73,7 +69,6 @@ export function ReplyPill({
   const dispatch = useWorkspaceDispatch()
   const draft = useWorkspaceSelector((state) => selectComposerText(state, sessionId))
   const sending = useWorkspaceSelector((state) => selectSending(state, sessionId))
-  const unsent = useWorkspaceSelector((state) => selectUnsent(state, sessionId))
   const own = useRef<HTMLTextAreaElement>(null)
   const field = fieldRef ?? own
   const caret = useContext(ReplyCaret)
@@ -101,6 +96,7 @@ export function ReplyPill({
 
   return (
     <div className="agents-reply" data-reply-for={sessionId}>
+      <WorkspaceSendFailure sessionId={sessionId} />
       <form
         className="agents-reply-pill"
         data-sending={sending || undefined}
@@ -146,11 +142,7 @@ export function ReplyPill({
           <DesktopIcon name="send" />
         </button>
       </form>
-      {unsent ? (
-        <p className="agents-reply-note" data-tone="failure" role="status">
-          Not sent. {failureCopy(unsent)} Open the session to send it again.
-        </p>
-      ) : sending ? (
+      {sending ? (
         <p className="agents-reply-note" role="status">
           Sending…
         </p>

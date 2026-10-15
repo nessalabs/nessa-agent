@@ -40,6 +40,7 @@ tokio = { version = "1", features = ["time"] }
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = "0.3"
+tauri-plugin-clipboard-manager = "2"
 
 # The frosted surface is a native NSVisualEffectView rather than a CSS
 # `backdrop-filter`: on a transparent, undecorated macOS window the CSS filter

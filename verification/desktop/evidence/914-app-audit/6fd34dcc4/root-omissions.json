@@ -1,0 +1,17 @@
+[
+  {
+    "control": "retry-appends",
+    "exit": 1,
+    "rejected": true
+  },
+  {
+    "control": "stale-failure",
+    "exit": 1,
+    "rejected": true
+  },
+  {
+    "control": "copy-truncates",
+    "exit": 1,
+    "rejected": true
+  }
+]

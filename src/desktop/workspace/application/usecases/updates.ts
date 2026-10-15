@@ -73,24 +73,18 @@ function holdsConversation(state: WorkspaceState, transcript: Transcript): boole
  * A summary from the source, by whichever path it came — the index
  * read or the stream — listed when it is newer than the one held and not
  * outranked by a removal. Listed again after its removal, the removal is
- * history. Listed at all, no new session's home stands under its id; a model
- * chosen in that home carries over as the one for the session's next turn.
- * A model the person chose stays chosen until they choose again: no summary,
- * whichever model it names, speaks for the person.
+ * history. Once listed, its model comes from the source; draft choices do not
+ * override the model of an established conversation (`sessions.test.ts`).
  */
 function summaryHeard(state: WorkspaceState, session: SessionSummary): WorkspaceState {
   if (!fromSource(session) || removedSince(state, session)) return state
   if (!supersedes(session, sessionOf(state, session.id))) return state
-  const home = entry(state.drafts, session.id)?.model
-  const chosenModels = home
-    ? { ...state.chosenModels, [session.id]: home }
-    : state.chosenModels
   return withSession(
     {
       ...state,
       removed: forgotten(state.removed, session.id),
       drafts: without(state.drafts, session.id),
-      chosenModels,
+      chosenModels: without(state.chosenModels, session.id),
     },
     session,
   )

@@ -29,7 +29,9 @@
  * const store = makeDesktopStore(dependencies)
  * ```
  */
-import type { AttachmentApi, McpAppsApi } from "@nessa/client"
+import { gatewayAgentInstallations } from "../onboarding/adapters/agent-installations"
+import type { AgentInstallations } from "../onboarding/application/agent-installations"
+import type { AgentsApi, AttachmentApi, McpAppsApi } from "@nessa/client"
 import {
   bindWaitingReviewNotices,
   browserReviewNotifier,
@@ -98,6 +100,7 @@ import {
 } from "./workspace"
 
 export interface DesktopDependencies extends WorkspaceDependencies {
+  readonly agentInstallations: AgentInstallations | undefined
   /** The widget plugins, native ones registered here (ADR 326); provided to the tree by `main.tsx`. */
   readonly widgets: DesktopWidgetRegistry
   /** The gateway's stored MCP servers, for Settings; absent without a gateway. Provided by `main.tsx`. */
@@ -185,6 +188,14 @@ export function createDesktopDependencies(
     options.workspace ?? source ?? samples ?? inMemorySource({ now, after })
   return {
     workspace,
+    agentInstallations: source
+      ? gatewayAgentInstallations(
+          () => source.connected().then((client) => client.agents),
+          newId,
+          // Setup has an explicit refresh; transcript updates are not connection events.
+          () => () => {},
+        )
+      : undefined,
     signInToProvider: options.signInToProvider,
     providerLoginAvailable: options.providerLoginAvailable,
     mcpServers: source
@@ -231,6 +242,7 @@ type WindowGatewayClient = GatewayClient &
   NativeHooksClient &
   PermissionRulesClient &
   SharingClient & {
+    readonly agents: AgentsApi
     readonly mcpApps: McpAppsApi
     readonly attachments: AttachmentApi
   }

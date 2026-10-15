@@ -177,17 +177,6 @@
   overflow-wrap: anywhere;
 }
 
-.workspace-message-failed {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  align-items: baseline;
-  gap: 4px 10px;
-  margin: 6px 4px 0 0;
-  color: var(--desktop-needs);
-  font-size: var(--desktop-text-footnote);
-}
-
 /* How the gateway said a turn ended. The diagnostic is its own words. */
 .workspace-turn-terminal {
   display: flex;

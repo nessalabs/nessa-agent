@@ -128,7 +128,7 @@ describe("conversation notification", () => {
       { id: "turn", from: "user", content: [], receipt: "failed", error: "offline" },
     ]
     expect(conversationNotice(value)).toMatchObject({
-      title: "Message not sent",
+      title: "Error sending",
       retry: { kind: "draft" },
     })
   })
@@ -148,11 +148,10 @@ describe("conversation notification", () => {
     ]
     const notice = conversationNotice(value)
     expect(notice).toMatchObject({
-      title: "Agent was still starting",
+      title: "Error sending",
       retry: { kind: "draft" },
     })
     expect(notice?.description).toContain(value.error)
-    expect(notice?.description).toContain("Retry sends the current draft.")
   })
   it("says the same for a control that found the agent still starting", () => {
     const value = conversation("tab")

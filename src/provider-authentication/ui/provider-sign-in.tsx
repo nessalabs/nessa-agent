@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import "./provider-sign-in.css"
+import { AgentActionButton, AgentActionCard } from "./agent-action-card"
 
 /** Provider login is an external flow; launching it does not dismiss the refusal. */
 export function ProviderSignInCard({
@@ -58,18 +58,21 @@ export function ProviderSignInCard({
     }
   }
   return (
-    <div className="provider-sign-in" role="group" aria-label="Your login expired">
-      <h3>Your login expired</h3>
-      <button
-        type="button"
-        className="provider-sign-in-button"
-        disabled={pending || !available}
-        title={!available ? "Sign-in is unavailable on this host" : undefined}
-        onClick={() => void signIn()}
-      >
-        Sign in to {name}
-      </button>
+    <AgentActionCard
+      className="provider-sign-in"
+      label="Your login expired"
+      title="Your login expired"
+      actions={
+        <AgentActionButton
+          disabled={pending || !available}
+          title={!available ? "Sign-in is unavailable on this host" : undefined}
+          onClick={() => void signIn()}
+        >
+          Sign in to {name}
+        </AgentActionButton>
+      }
+    >
       {failed ? <p role="status">Could not open sign-in. Try again.</p> : null}
-    </div>
+    </AgentActionCard>
   )
 }

@@ -6,8 +6,6 @@ import {
   UnreadableOverflowLine,
   UnreadablePartLine,
 } from "../../../../conversation"
-import { discardUnsent, resendMessage } from "../../adapters/store/commands"
-import { useWorkspaceDispatch } from "../../adapters/store/hooks"
 import { useInlineWidgetHost } from "../../adapters/store/widget-hosts"
 import { InlineWidget, type WidgetRef } from "../../../widgets"
 import { paneItemKey, widgetItem } from "../../model/pane-item"
@@ -21,8 +19,6 @@ import {
 import { RichText } from "./rich-text"
 import { named, Saying, type Said } from "./said"
 import { ToolSteps } from "./tool-steps"
-import type { WorkspaceFailureReason } from "../../model/failure"
-import { failureCopy } from "../failure-copy"
 
 /**
  * Who wrote a message of the person's on their behalf: the app's tool, from
@@ -80,7 +76,6 @@ export const Message = memo(function Message({
       </div>
     )
   if (message.role === "user") {
-    const failed = message.delivery?.state === "failed" ? message.delivery.reason : null
     return (
       <div
         className="workspace-message"
@@ -107,9 +102,6 @@ export const Message = memo(function Message({
             ) : null,
           )}
         </div>
-        {failed ? (
-          <Unsent sessionId={sessionId} messageId={message.id} reason={failed} />
-        ) : null}
         {message.terminal ? <TurnTerminalMark terminal={message.terminal} /> : null}
       </div>
     )
@@ -210,35 +202,3 @@ function MessageWidget({ sessionId, widget }: { sessionId: string; widget: Widge
 }
 
 /** Why a message did not reach the agent, and the two ways on: send it again, or let it go. */
-function Unsent({
-  sessionId,
-  messageId,
-  reason,
-}: {
-  sessionId: string
-  messageId: string
-  reason: WorkspaceFailureReason
-}) {
-  const dispatch = useWorkspaceDispatch()
-  return (
-    <div className="workspace-message-failed" role="status">
-      <span>Not sent. {failureCopy(reason)}</span>
-      <button
-        type="button"
-        className="workspace-link-button"
-        onClick={() =>
-          void dispatch(resendMessage({ sessionId, messageId, initiator: "person" }))
-        }
-      >
-        Send Again
-      </button>
-      <button
-        type="button"
-        className="workspace-link-button"
-        onClick={() => dispatch(discardUnsent({ sessionId, messageId }))}
-      >
-        Discard
-      </button>
-    </div>
-  )
-}

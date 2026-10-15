@@ -588,7 +588,7 @@ card copies no transcript or composer and never changes size over a target.
 | lift from a pane or sidebar row | one compact icon/title card follows the pointer; existing pane contents remain visible |
 | enter an accepted target zone | highlight that pane's zone; leave live pane geometry and material unchanged |
 | enter a covered/refused area or the overview | remove the highlight; keep the card compact |
-| release over a target | commit the owned drop outcome; move/fade the card without stretching it; only moving panes hold and restore their bodies through the layout-flight owner |
+| release over a target | commit the owned drop outcome; move/fade the card without stretching it; live pane content stays visible at its final layout |
 | cancel, rebind or lose capture | remove owned card/highlight resources; leave the layout unchanged; late callbacks cannot affect a newer drag |
 
 The copy is drawn in a layer that begins below the titlebar row
@@ -757,12 +757,12 @@ changes rows it fades in at its new place and what is beneath it glides by
 the row, by transform and opacity; if its column is sliding at that moment,
 an inline title holds still at its place (`holdStill`) rather than ride the
 slide from where the column began. A column's titlebar-row action hides at
-once as the column folds and shows once it has slid in; a pane's header is
-hidden while its pane flies and changes size. A pane's header is its titlebar
+once as the column folds and shows once it has slid in. Pane headers keep
+rendering while their panes fly and change size (#914). A pane's header is its titlebar
 row, and what follows it begins below the titlebar's height wherever the pane
 is, so a scrolled transcript or a narrow pane's heading never passes under
 the controls; a conversation's picture band begins after them in the corner
-pane, and waits out of sight while panes travel. A frame-sampled check over
+pane. Existing pane content stays visible while panes travel. A frame-sampled check over
 every transition that moves titlebar content (⌘B, ⌥⌘S, the edge reveal, a
 resize that folds, a split, a new session, Settings, a change of layout), a
 scrolled transcript, and widths down to 560, in Chrome and WebKit at 1440 ×
@@ -793,30 +793,36 @@ replaced by nessa_ui's, not kept beside it. The composer's access shield is
 the one exception: nessa_ui's `ComposerAccessMode` has no icon slot, so its
 masked outline stays in `styles.css` until nessa_ui adds one.
 
-Motion animates transform and opacity only. Layout changes are applied at once
-and played back with FLIP. The measurement is taken in React's commit phase,
-just before the DOM changes (`FlipScope`, `getSnapshotBeforeUpdate`), so any
-dispatch — a click, a key, an agent — animates, and it plays only when the
-panes' arrangement changes, never while an edge is dragged. Blur and large
-shadows pause while panes fly. During a flight, pane bodies wait out of layout:
-the card and title move, rather than every transcript being laid out at a new
-size inside the key handler. The quiet mark is applied before FLIP reads its
-landing boxes. Once the flight ends, bodies return one per frame through the
-same staged-reveal mechanism a drag uses; each adapter owns its own marker and
-cancellation generation. A new pane's content fills in the frame after
-its shell, in a transition. Durations and curves are `--desktop-*` tokens
-defined once in `styles.css` and read by script and stylesheet alike; reduced
-motion — chosen in Settings, or the system's — sets the durations to zero
+Motion animates transform and opacity only. Workspace layout changes apply
+immediately (`--desktop-flight: 0ms`, #914): visible content must not travel
+beneath native window controls or disappear while a column changes. The shared
+`FlipScope` still owns drag-preview retirement and cancellation; its zero-duration
+path skips snapshot/counter-scaling work. Independent popup, carried-card and
+first-message motion retain their own durations. `safe-area.mjs` and
+`drag.mjs` cover visible content and protected control areas; `perf-budget.mjs`
+checks the layout cost. A timing budget must be met by simplifying motion or
+reducing work, not by blanking a conversation.
+
+The pane grid's eight numeric placement properties are registered as
+non-inheriting in its stylesheet. Only pane and resize-edge roots consume them;
+conversation content must not inherit a new placement on every drop
+(`drag.mjs --only pane-placement-local`). The resize edge's hover glow is centered
+in CSS, so pointer movement for decoration performs no geometry read
+(`resize-edge.test.tsx`); actual resize gestures keep the existing adapter.
+Durations and curves are `--desktop-*` tokens defined once in `styles.css` and
+read by script and stylesheet alike; reduced motion — chosen in Settings, or
+the system's — sets the durations to zero
 there under the root's `data-motion`, and script motion follows with no
 check of its own.
 
 | pane-motion event | owned response |
 | --- | --- |
-| shape changes with motion | snapshot old boxes; hold the quiet mark before reading landing boxes; cancel the previous flight and pending reveal |
-| flight completes | hold each body's restoration marker, release the flight mark, then restore one body per frame |
-| shape changes again during restoration | cancel the old reveal generation; keep bodies quiet until the new flight settles |
-| no new flight or reduced motion interrupts a flight | release the old flight and resume staged restoration |
-| root replaced or scope unmounts | cancel the owned flights and reveal; clear only that owner's old root and markers; reject late completions |
+| workspace shape changes | apply the final layout immediately; keep content visible and retire the owned drag preview |
+| nonzero flight requested by a shared-component host | snapshot old boxes; read landing boxes with content visible; cancel previous flights |
+| flight completes | release the owned flight marks; keep bodies visible |
+| shape changes during a flight | cancel old transforms and begin from the current boxes; reject late completions |
+| no new flight or reduced motion interrupts a flight | release the old flight immediately |
+| root replaced or scope unmounts | cancel owned flights; clear that owner's root and markers; reject late completions |
 
 ### The thinking control
 

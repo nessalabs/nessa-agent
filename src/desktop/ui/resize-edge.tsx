@@ -1,4 +1,4 @@
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react"
+import type { CSSProperties } from "react"
 import { usePointerResize } from "../adapters/pointer-resize"
 import { tooltip } from "./tooltip"
 import "./resize-edge.css"
@@ -8,7 +8,7 @@ const keyStep = 16
 
 /**
  * A boundary that resizes what is on either side of it: dragged, or moved by
- * the arrow keys when focused. A glow runs along it near the pointer, in the
+ * the arrow keys when focused. A centered glow marks hover or focus, in the
  * theme's edge light.
  */
 export function ResizeEdge({
@@ -40,11 +40,6 @@ export function ResizeEdge({
   onReset?: () => void
 }) {
   const drag = usePointerResize(axis, { onStart, onMove })
-  const glow = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const box = event.currentTarget.getBoundingClientRect()
-    const along = axis === "x" ? event.clientY - box.top : event.clientX - box.left
-    event.currentTarget.style.setProperty("--desktop-edge-glow", `${along}px`)
-  }
   const [back, forward] =
     axis === "x" ? ["ArrowLeft", "ArrowRight"] : ["ArrowUp", "ArrowDown"]
   return (
@@ -60,11 +55,6 @@ export function ResizeEdge({
       data-axis={axis}
       style={style}
       {...drag}
-      onPointerMove={(event) => {
-        glow(event)
-        drag.onPointerMove(event)
-      }}
-      onPointerEnter={glow}
       onDoubleClick={onReset}
       {...(onReset ? tooltip(`${label} · double-click to even out`) : {})}
       onKeyDown={(event) => {
