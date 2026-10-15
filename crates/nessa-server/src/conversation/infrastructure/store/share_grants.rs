@@ -585,11 +585,18 @@ impl ShareGrants for LocalConversationStore {
             let entry: Option<(String, Option<String>)> = connection
                 .query_row(
                     &format!(
-                        "SELECT after, {policy} FROM share_grant_changes
-                         WHERE sequence = ?1 AND resource_kind = '{kind}'
-                           AND resource_id = ?2 AND receiver_id = ?3",
+                        "SELECT j.after, {policy} FROM share_grant_changes AS j
+                         WHERE j.sequence = ?1 AND j.resource_kind = '{kind}'
+                           AND j.resource_id = ?2
+                           AND (j.receiver_id = ?3 OR EXISTS (
+                               SELECT 1 FROM share_grants AS g
+                               WHERE g.resource_kind = j.resource_kind
+                                 AND g.resource_id = j.resource_id
+                                 AND g.principal_id = j.principal_id
+                                 AND g.receiver_id = ?3
+                                 AND g.policy_revision = j.sequence))",
                         policy =
-                            super::acquisition::text("policy_after", MAX_POLICY_TEXT_BYTES, true),
+                            super::acquisition::text("j.policy_after", MAX_POLICY_TEXT_BYTES, true),
                         kind = CONVERSATION,
                     ),
                     params![sequence, id, receiver_id],

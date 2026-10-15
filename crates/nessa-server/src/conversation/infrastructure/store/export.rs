@@ -8,7 +8,8 @@ use crate::conversation::application::{ConversationError, ResourceKind};
 use nessa_local_database::rusqlite::{Connection, Error, OpenFlags, Row};
 use serde_json::{json, Value};
 
-/// One grant whose latest journal row took the capabilities away.
+/// One party that no longer holds its grant: a revoke, or a receiver the
+/// grant moved off. `capabilities` is what that party held.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RevocationFact {
     pub conversation_id: String,
@@ -276,18 +277,40 @@ fn revocation_rows(
 ) -> Result<Vec<RevocationFact>, ConversationError> {
     let mut statement = connection
         .prepare(&format!(
-            "SELECT j.resource_id, j.principal_id, j.receiver_id, j.credential_id, j.before,
-                        j.sequence
-                 FROM share_grant_changes AS j
-                 WHERE j.resource_kind = '{kind}'
-                   AND j.after = 'none'
-                   AND j.sequence = (
-                       SELECT MAX(j2.sequence) FROM share_grant_changes AS j2
-                       WHERE j2.resource_kind = j.resource_kind
-                         AND j2.resource_id = j.resource_id
-                         AND j2.principal_id = j.principal_id
-                   )
-                 ORDER BY j.sequence",
+            "SELECT resource_id, principal_id, receiver_id, credential_id, capabilities, sequence
+                 FROM (
+                     SELECT j.resource_id, j.principal_id, j.receiver_id, j.credential_id,
+                            j.before AS capabilities, j.sequence
+                     FROM share_grant_changes AS j
+                     WHERE j.resource_kind = '{kind}'
+                       AND j.after = 'none'
+                       AND j.sequence = (
+                           SELECT MAX(j2.sequence) FROM share_grant_changes AS j2
+                           WHERE j2.resource_kind = j.resource_kind
+                             AND j2.resource_id = j.resource_id
+                             AND j2.principal_id = j.principal_id
+                       )
+                     UNION ALL
+                     SELECT j.resource_id, j.principal_id, j.receiver_id, j.credential_id,
+                            j.after AS capabilities, j.sequence
+                     FROM share_grant_changes AS j
+                     WHERE j.resource_kind = '{kind}'
+                       AND j.receiver_id IS NOT NULL
+                       AND j.after <> 'none'
+                       AND j.sequence = (
+                           SELECT MAX(j2.sequence) FROM share_grant_changes AS j2
+                           WHERE j2.resource_kind = j.resource_kind
+                             AND j2.resource_id = j.resource_id
+                             AND j2.receiver_id = j.receiver_id
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1 FROM share_grants AS g
+                           WHERE g.resource_kind = j.resource_kind
+                             AND g.resource_id = j.resource_id
+                             AND g.receiver_id = j.receiver_id
+                       )
+                 )
+                 ORDER BY sequence",
             kind = ResourceKind::Conversation.as_str(),
         ))
         .map_err(failed)?;

@@ -398,8 +398,9 @@ pub trait ShareGrants: Send + Sync {
     /// The tool policy `receiver_id`'s grant on `id` held at
     /// `policy_revision`, as the journal entry of that revision says; `None`
     /// when that entry is no Drive grant of that party on that conversation.
-    /// An entry is never changed, so the answer for one revision is always
-    /// the same, whatever the grant holds now.
+    /// The receiver the grant moved to reads the epoch the live row still
+    /// names. An entry is never changed, so the answer for one revision is
+    /// always the same, whatever the grant holds now.
     fn policy_at<'a>(
         &'a self,
         id: &'a ConversationId,
@@ -466,8 +467,9 @@ pub struct ShareConversation<'a> {
     pub gateway: &'a Resource,
     /// The access policy, asked whether the caller may share, and with whom.
     pub policy: &'a dyn ConversationAccessPolicyEvaluator,
-    /// The deletion inventory, reconciled after an unshare commits. Absent,
-    /// the grant is still revoked and the inventory is unchanged.
+    /// The deletion inventory, reconciled after an unshare commits and after
+    /// a share that changes who holds the grant. Absent, the grant is still
+    /// written and the inventory is unchanged.
     pub inventory: Option<&'a dyn FenceCapture>,
 }
 
@@ -629,6 +631,18 @@ impl ShareConversation<'_> {
                 at_ms,
             })
             .await?;
+        // A replacement drops the previous receiver. The fence is the
+        // revocation export, same as an unshare, and a retry reconciles too.
+        if receipt.applied {
+            if let Some(inventory) = self.inventory {
+                if let Err(error) = inventory.capture().await {
+                    tracing::warn!(
+                        ?error,
+                        "the deletion inventory was not updated after a share"
+                    );
+                }
+            }
+        }
         // A grant always holds a revision once it is made; a store that
         // answers none for one has broken its own contract.
         let Some(policy_revision) = receipt.policy_revision else {

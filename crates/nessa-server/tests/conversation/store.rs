@@ -3891,6 +3891,54 @@ async fn a_named_principal_does_not_take_another_principals_grant() {
     assert_eq!(only_grant(store, &id).await, held);
 }
 
+/// Moving a drive grant onto another receiver keeps the epoch, and that
+/// receiver still reads the policy the epoch names. The receiver that lost
+/// the grant is a revocation, so a snapshot cannot give it back.
+#[tokio::test]
+async fn a_replaced_receiver_keeps_the_drive_policy_and_is_fenced() {
+    use crate::conversation::application::{ShareGrantTransition, ShareGrants};
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    let principal = PrincipalId::new("grantee-shared").unwrap();
+    let share = |receiver: &str, request: &str| {
+        let mut change = grant_change(
+            ShareGrantTransition::Grant(no_shell()),
+            &id,
+            Some(receiver),
+            &format!("{receiver}-credential"),
+            request,
+        );
+        change.principal_id = Some(principal.clone());
+        change
+    };
+    assert!(store.change(share("phone", "drive")).await.unwrap().applied);
+    let epoch = only_grant(store, &id).await.policy_revision;
+    let moved = store.change(share("tablet", "move")).await.unwrap();
+    assert!(moved.applied);
+    assert_eq!(moved.policy_revision, Some(epoch));
+    assert_eq!(
+        store
+            .policy_at(&id, "tablet", epoch)
+            .await
+            .unwrap()
+            .as_ref(),
+        no_shell().policy()
+    );
+    assert_eq!(
+        store.policy_at(&id, "phone", epoch).await.unwrap().as_ref(),
+        no_shell().policy()
+    );
+    assert_eq!(store.policy_at(&id, "laptop", epoch).await.unwrap(), None);
+    let facts = store.export_facts().await.unwrap();
+    assert_eq!(facts.revocations.len(), 1);
+    let revocation = &facts.revocations[0];
+    assert_eq!(revocation.receiver_id, "phone");
+    assert_eq!(revocation.credential_id, "phone-credential");
+    assert_eq!(revocation.capabilities, "read+comment+drive");
+}
+
 /// Row J6: a share retried with its request id answers what it answered the
 /// first time and changes nothing, even after a later change of role; the
 /// same request naming another role or another policy is refused.

@@ -174,7 +174,10 @@ revokes, and a replacement of the receiver or credential. Replacing either
 applies, keeps the grant epoch when the capabilities and constraints stay,
 and moves the catalogue revision, so the receiver that gained the grant
 pages it and the one that lost it drops it
-(`a_receiver_switch_is_applied_and_moves_the_catalogue`). The capability set
+(`a_receiver_switch_is_applied_and_moves_the_catalogue`). The receiver that
+gained a drive grant reads that epoch's policy, and the one that lost the
+grant is fenced with the revoke
+(`a_replaced_receiver_keeps_the_drive_policy_and_is_fenced`). The capability set
 is learnt from `conversation.shares` and is asked where it is enforced, never
 read from the catalogue.
 
