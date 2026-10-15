@@ -585,7 +585,13 @@ source. The live reader, and restart before it admits work, reads each
 granted conversation inside the cursor's incarnation, or from the start
 of the current incarnation when the cursor is unset, and inserts a
 `queued` row for every checkpoint of that incarnation that does not have
-one. A checkpoint that already has a row keeps that delivery id. A stream
+one, while this registration's `queued`, `retry scheduled`, and `sending`
+rows are fewer than `webhook.outbox_pending`, 1024. At that ceiling the
+insert does not commit. The cursor stays at the last checkpoint whose
+row committed. The checkpoint stays in the source and is not marked
+`not sent`. A nonterminal row is not deleted to make a slot. When a
+nonterminal row becomes terminal, the next read inserts the next
+checkpoint the cursor is behind, in order. A checkpoint that already has a row keeps that delivery id. A stream
 incarnation that is
 not the cursor's incarnation does not backfill. The cursor is marked
 reset-required and keeps the old checkpoint. `queued` and `retry scheduled`
@@ -782,7 +788,8 @@ same gap, including a registration stop, a marker unlink, and that
 unlink's audit. The next write of the owing store finishes it while the
 process stays up, and it does not wait for an unrelated row. A retained
 log has a ceiling. A terminal row is deleted only after its audit has
-committed. A record hint is sent when the cache cursor's incarnation,
+committed. A nonterminal webhook backlog has that same ceiling. At the
+ceiling the next insert does not commit and the replay cursor stays. A record hint is sent when the cache cursor's incarnation,
 schema, or epoch is not the committed head, and that mismatch is
 reset-required rather than a cursor that is behind. The conversation
 store and the outbox are not one store, so the outbox scan fills the gap
@@ -896,14 +903,17 @@ does not start a timer. A second insert does not admit an existing row.
 A `sending` row is not scanned into a new POST. Terminal rows for one
 registration are kept up to `webhook.outbox_retained`, 1024. A terminal
 row is deleted only after its audit has committed. That deletion does
-not move the replay cursor.
+not move the replay cursor. Nonterminal rows for one registration,
+counting `queued`, `retry scheduled`, and `sending`, stay within
+`webhook.outbox_pending`, 1024. At that ceiling the next insert does not
+commit and the replay cursor stays.
 
 **Invariants.**
 
 1. **W1.** One active registration per integration principal. A second `credential.issue` while one is active writes nothing. After that registration is stopped, a later issue creates one new registration. Rows: W-issue, W-issue-refuse, W-reissue.
 2. **W2.** One delivery id per checkpoint per registration. A checkpoint that already has a row keeps that id. Rows: W-queue, W-queue-exists.
 3. **W3.** One writer advances the replay cursor for a registration and conversation, in checkpoint order, only to the next contiguous checkpoint, in the same write as that row. Rows: W-queue, W-cursor-race.
-4. **W4.** Within one incarnation, the conversation source beats a cursor that is behind it. Restart fills each missing checkpoint of that incarnation in order and does not skip a hole. A different incarnation is not a hole. Rows: W-queue, C-W-gap, W-incarnation.
+4. **W4.** Within one incarnation, the conversation source beats a cursor that is behind it. Below `webhook.outbox_pending`, the next read fills each missing checkpoint of that incarnation in order. At that ceiling the insert does not commit and the cursor stays. The fill does not skip a hole. A different incarnation is not a hole. Rows: W-queue, C-W-gap, W-incarnation, W-backlog.
 5. **W5.** The `queued` row commits before the attempt waits for the permit. Rows: W-queue.
 6. **W6.** `sending` is recorded before any POST byte and is not replaced. A terminal record is appended beside it. Rows: W-send, W-sent, W-unknown.
 7. **W7.** If the `sending` write fails, no POST byte is written. The row is written `not sent`, cause audit unavailable, conditional on the row still being the state the attempt read, and that write commits before the permit drops. Rows: W-audit-fail.
@@ -921,13 +931,15 @@ not move the replay cursor.
 19. **W19.** The live sender and restart run one scan. A `queued` or `retry scheduled` row with the permit free is admitted by that scan when a read of that registration's outbox succeeds, including after the deadline drop. The scan does not wait for process exit and does not start a timer. A failed read does not admit. A second insert does not admit an existing row. A `sending` row is not scanned into a new POST. A `sending` row with the permit free is W-reconcile or W-unknown. Rows: W-rescan, W-deadline-queued, W-queue-exists, C-W-queued, W-reconcile.
 20. **W20.** A `sending` row with the permit free and no terminal record is reconciled by the live sender when the next write of that outbox succeeds. If this process holds the outcome it already decided, it writes that outcome and does not POST. If it holds no outcome, it appends `unknown` and does not POST. Restart uses that same row. `timed out` does not replace a held complete response. Rows: W-reconcile, W-unknown, W-deadline-known, W-timeout.
 21. **W21.** The outbox retains `webhook.outbox_retained` terminal rows per registration, 1024. When a new terminal commit would exceed that ceiling, the same write deletes older terminal rows whose audit has committed. It does not delete a `queued`, `retry scheduled`, or `sending` row. It does not delete a row whose audit is still owed. It does not move the replay cursor. A deleted row is not re-admitted. Rows: W-trim.
+22. **W22.** A registration holds at most `webhook.outbox_pending` nonterminal rows, 1024, counting `queued`, `retry scheduled`, and `sending`. When the next contiguous checkpoint would exceed that ceiling, the outbox write does not commit. The replay cursor stays at the last checkpoint whose row committed. The conversation checkpoint stays in the source. The checkpoint is not marked `not sent`. A nonterminal row is not deleted to make a slot. When a nonterminal row becomes terminal, the next successful read of this outbox takes W-queue for the next checkpoint the cursor is behind, in order, if the count is below the ceiling. Rows: W-backlog, W-queue, C-W-backlog.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | W-issue | registration none | `credential.issue` | No active registration for that integration principal | registration active | The owner | One registration, its URL, its mac key, and one credential | Target the principal, before none, after active, cause issue, initiator the owner |
 | W-issue-refuse | registration active | `credential.issue` | A registration for that principal is already active | registration active | The owner | Nothing. No credential and no second registration. | Refusal, cause registration active, initiator the owner |
 | W-reissue | registration stopped | `credential.issue` | The previous registration is stopped | registration active, a new URL and mac key | The owner | One new registration and one credential | Target the principal, before stopped, after active, cause issue, initiator the owner |
-| W-queue | no outbox row | The conversation checkpoint has committed, and this registration has a grant | This writer holds the cursor. The cursor is not reset-required. Either the cursor is unset and this checkpoint is the first of the conversation's current incarnation, or the cursor names the previous checkpoint of this same incarnation. No row exists for this checkpoint. | queued | The live reader, or restart | The queued row (delivery id, registration, checkpoint) and the cursor set to that same checkpoint. The conversation commit is not in this write. This commit finishes before the attempt waits for the permit. | Target the delivery id, before no row, after queued, cause source ahead of cursor, initiator the reader or restart |
+| W-queue | no outbox row | The conversation checkpoint has committed, and this registration has a grant | This writer holds the cursor. The cursor is not reset-required. Either the cursor is unset and this checkpoint is the first of the conversation's current incarnation, or the cursor names the previous checkpoint of this same incarnation. No row exists for this checkpoint. This registration's `queued`, `retry scheduled`, and `sending` rows are fewer than `webhook.outbox_pending`. At that ceiling the insert is W-backlog. | queued | The live reader, or restart | The queued row (delivery id, registration, checkpoint) and the cursor set to that same checkpoint. The conversation commit is not in this write. This commit finishes before the attempt waits for the permit. The count check is in this same write. | Target the delivery id, before no row, after queued, cause source ahead of cursor, initiator the reader or restart |
+| W-backlog | nonterminal rows at `webhook.outbox_pending`, 1024 | The next contiguous checkpoint of this incarnation has committed | Counting `queued`, `retry scheduled`, and `sending` for this registration, one more row would exceed `webhook.outbox_pending`. The cursor is not reset-required. No row exists for this checkpoint. | No new row. The cursor stays. The checkpoint stays in the conversation source. | The live reader, or restart | Nothing. The replay cursor is not moved. The checkpoint is not marked `not sent`. A `queued`, `retry scheduled`, or `sending` row is not deleted. | None. The delivery has not been admitted. |
 | W-queue-exists | a row for this checkpoint | A second insert | A row already stores this checkpoint for this registration | That row's state, same delivery id. This row does not admit it. A permit-free `queued` or `retry scheduled` row is W-rescan. | The live reader, or restart | Nothing | None |
 | W-incarnation | cursor at incarnation I | The stream incarnation is J, and J is not I | The cursor names a checkpoint of I and is not yet reset-required | reset-required, still naming I and its position. No row is queued for J. | The live reader, or restart | Mark the cursor reset-required. Write every `queued` or `retry scheduled` row for that registration, conversation, and I as `not sent`, cause incarnation replaced. A `sending` row is not cancelled. | Target the registration and conversation, before cursor at I, after reset-required holding I, cause incarnation changed, initiator the reader or restart |
 | W-reset | reset-required | The owner resets the webhook cursor | The owner asks. Restart does not. | Cursor unset for the current incarnation. Old outbox rows stay keyed by their incarnation and stay terminal. | The owner | The cursor is cleared in this commit. The next W-queue starts at the first checkpoint of the current incarnation. | Target the registration and conversation, before reset-required at I, after unset, cause owner reset, initiator the owner |
@@ -973,7 +985,8 @@ sequenceDiagram
 
 | Row | Crash point | On disk | Restart |
 | --- | --- | --- | --- |
-| C-W-gap | After the conversation commit, before W-queue commits, inside the cursor's incarnation | The checkpoint is in that incarnation. The cursor is behind it. No row for that checkpoint. | W-queue, in order, for that incarnation. A checkpoint that already has a row takes W-queue-exists. |
+| C-W-gap | After the conversation commit, before W-queue commits, inside the cursor's incarnation | The checkpoint is in that incarnation. The cursor is behind it. No row for that checkpoint. | W-queue, in order, for that incarnation, while nonterminal rows are below `webhook.outbox_pending`. At that ceiling, W-backlog. A checkpoint that already has a row takes W-queue-exists. |
+| C-W-backlog | After the conversation commit, while nonterminal rows are at `webhook.outbox_pending` | The cursor names the last checkpoint whose row committed. No row for the newer checkpoint. | When a nonterminal row becomes terminal, the next read takes W-queue in order if the count is below `webhook.outbox_pending`. Restart uses that same read. The cursor does not jump past a checkpoint with no row. |
 | C-W-incarnation | After the stream incarnation changes, before W-incarnation commits | The cursor still names incarnation I. No row has been queued for J. | W-incarnation. Restart does not queue J and does not clear the cursor. |
 | C-W-reset | After W-incarnation commits, before the owner resets | reset-required, holding I. `queued` and `retry scheduled` rows for I are `not sent`. | Leave the cursor. Restart does not reset it and does not queue J. |
 | C-W-queued | While `queued`, waiting for the permit, or after W-deadline-queued | `queued` | W-rescan. Restart uses that same scan. The live process does not wait to exit. |
@@ -991,13 +1004,14 @@ sequenceDiagram
 | W-permit-race | Two admissions of one queued row, or revoke against an admission | One permit. The waiter reloads. The holder finishes under the epoch it read, bounded by `webhook.post_deadline`. |
 | W-audit-race | A late `not sent` or `sending` write against the deadline drop, or against a newer admission | The write commits only while the row is still the state it guarded. The deadline writes no outbox state. The first conditional commit wins, and the other does not apply. |
 | W-terminal-race | Two terminal records for one `sending` row, including restart's `unknown` and a late response | The first terminal commit wins. A later write does not replace it and does not POST that id. A `timed out` write is refused once a complete response has been read. |
+| W-pending-race | Two conversations of one registration inserting while the nonterminal count is near `webhook.outbox_pending` | One insert commits, and that write checks the count. The other reloads. At the ceiling it takes W-backlog and its cursor stays. |
 
 **Precedence.**
 
 | Row | Higher | Lower | Result |
 | --- | --- | --- | --- |
 | W-prec-row | An outbox row already stored for that checkpoint | A second delivery id | The stored id stays. |
-| W-prec-source | The conversation record stream, within the cursor's incarnation | A replay cursor behind it in that incarnation | Restart fills the hole. The cursor does not jump past a checkpoint with no row. A different incarnation is W-incarnation and is not filled. |
+| W-prec-source | The conversation record stream, within the cursor's incarnation | A replay cursor behind it in that incarnation | Below `webhook.outbox_pending`, the next read fills the hole in order. At that ceiling the fill is W-backlog. The cursor does not jump past a checkpoint with no row. A different incarnation is W-incarnation and is not filled. |
 | W-prec-incarnation | The cursor's incarnation | A newer stream incarnation | W-incarnation. The old checkpoint stays. Nothing is queued for the new incarnation until W-reset. |
 | W-prec-sending | The `sending` record | A terminal outcome | `sending` stays. The outcome is appended beside it. |
 | W-prec-terminal | The first committed terminal record | A later outcome, including upgrading `unknown` to `sent` | The first record stays. |
@@ -1008,8 +1022,9 @@ sequenceDiagram
 | W-prec-response | A complete response this attempt has read | `timed out` | W-deadline-known. The deadline commits that outcome. |
 | W-prec-stamp | The timestamp stored on `sending` | A fresh clock read on retry | W-post uses the stored timestamp. |
 | W-prec-scan | A successful read of a `queued` or due row with the permit free | Waiting for process exit | W-rescan. W-queue-exists does not admit. A `sending` row is not posted again. |
+| W-prec-pending | `webhook.outbox_pending` nonterminal rows | Inserting the next checkpoint | W-backlog. The cursor stays. The source keeps the checkpoint. A terminal outcome frees one slot. `retry scheduled` does not. |
 
-**Rejected.** An in-memory retry after a terminal `retry scheduled` loses the delivery on exit. One transaction across the conversation store and the outbox is not available. A second registration for one principal would POST to a URL the first issue did not register. Replaying `sending` can deliver twice. Two cursor writers can commit checkpoint N+1 ahead of N. Backfilling a new stream incarnation from the old cursor, or clearing that cursor on restart, would deliver a stream the owner has not reset. Waiting for process exit to admit a `queued` row the live sender can already read would skip that delivery. Leaving a known outcome in memory until process exit would hide a result the next outbox write can store. A second scan beside the outbox read would be a second scheduler. Waiting for process exit to stop a registration whose credential is already revoked would leave that registration active, so a replacement issue stays refused until restart. An unbounded terminal outbox would grow after the replay cursor has passed those checkpoints. Deleting a terminal row before its audit commits, or deleting a queued or sending row to meet the ceiling, would drop a record the cursor still names or a delivery that is not finished.
+**Rejected.** An in-memory retry after a terminal `retry scheduled` loses the delivery on exit. One transaction across the conversation store and the outbox is not available. A second registration for one principal would POST to a URL the first issue did not register. Replaying `sending` can deliver twice. Two cursor writers can commit checkpoint N+1 ahead of N. Backfilling a new stream incarnation from the old cursor, or clearing that cursor on restart, would deliver a stream the owner has not reset. Waiting for process exit to admit a `queued` row the live sender can already read would skip that delivery. Leaving a known outcome in memory until process exit would hide a result the next outbox write can store. A second scan beside the outbox read would be a second scheduler. Waiting for process exit to stop a registration whose credential is already revoked would leave that registration active, so a replacement issue stays refused until restart. An unbounded terminal outbox would grow after the replay cursor has passed those checkpoints. Deleting a terminal row before its audit commits, or deleting a queued or sending row to meet the ceiling, would drop a record the cursor still names or a delivery that is not finished. An unbounded nonterminal outbox would grow while a slow endpoint holds the one permit. Deleting a queued row to make a slot, or advancing the replay cursor past a checkpoint that has no row, would drop a record the source still holds. Stopping the registration because the backlog is full would make a slow receiver look like credential revoke.
 
 ### Directory binding
 
@@ -1325,7 +1340,7 @@ not add a rule.
 **Invariant.**
 
 1. **X1.** Issues `#889` through `#897` are filed. A fence states the slice delta and the gate. A fence does not add a lifecycle state. Rows: X-filed.
-2. **X2.** Inside one store, a change a peer can observe, the cursor that names every part of it, and the audit record that transition requires commit in the same write. A cursor does not advance over a part that write did not apply. A snapshot split across frames is one part: the follower buffers every incomplete prefix and applies that whole buffer with `after` in the completing write. A non-terminal gap is the uncommitted part: a grant-store effect after a credential-store commit, or an audit record whose cleanup already committed. Every effect still owed after another store has committed is that same gap, including a registration stop, a marker unlink, and that unlink's audit. The next successful write of the owing store finishes it while the process stays up. The retry does not wait for an unrelated row and does not wait for process exit. Restart uses that same reconciler. Process exit is not the reconciler. The retry writes the original target, before, after, cause, and initiator. The retrying process is not a new initiator. A retained operational log has a ceiling. A terminal row is deleted only after its audit has committed. A peer reads the committed record the cursor names. An older grant-log position stores the grant contents of that write. A lost live hint is recovered when subscribe or reconnect compares the cache cursor to the committed head. A record hint is also sent when that cursor's incarnation, schema, or epoch is not the committed head. That mismatch is reset-required. It is not a cursor that is behind. An announcement requires a current credential. Phase Active does not replace that check. The conversation store and the outbox are not one store. The grant store and the conversation file are not one store. The credential store and the grant store are not one store. The audit sink is not the grant store. The filesystem and the audit sink are not one store. Rows: U-done, U-page, U-log, U-resume, U-hint, U-reset, G-link-retry, G-unlink-retry, D-audit-retry, D-cleanup-retry, P-revoke, P-announce, P-quiet, W-reconcile, W-rescan, W-cred-retry, W-trim.
+2. **X2.** Inside one store, a change a peer can observe, the cursor that names every part of it, and the audit record that transition requires commit in the same write. A cursor does not advance over a part that write did not apply. A snapshot split across frames is one part: the follower buffers every incomplete prefix and applies that whole buffer with `after` in the completing write. A non-terminal gap is the uncommitted part: a grant-store effect after a credential-store commit, or an audit record whose cleanup already committed. Every effect still owed after another store has committed is that same gap, including a registration stop, a marker unlink, and that unlink's audit. The next successful write of the owing store finishes it while the process stays up. The retry does not wait for an unrelated row and does not wait for process exit. Restart uses that same reconciler. Process exit is not the reconciler. The retry writes the original target, before, after, cause, and initiator. The retrying process is not a new initiator. A retained operational log has a ceiling. A terminal row is deleted only after its audit has committed. A nonterminal webhook backlog has that same ceiling. At the ceiling the next insert does not commit, and the replay cursor stays at the last checkpoint whose row committed. A peer reads the committed record the cursor names. An older grant-log position stores the grant contents of that write. A lost live hint is recovered when subscribe or reconnect compares the cache cursor to the committed head. A record hint is also sent when that cursor's incarnation, schema, or epoch is not the committed head. That mismatch is reset-required. It is not a cursor that is behind. An announcement requires a current credential. Phase Active does not replace that check. The conversation store and the outbox are not one store. The grant store and the conversation file are not one store. The credential store and the grant store are not one store. The audit sink is not the grant store. The filesystem and the audit sink are not one store. Rows: U-done, U-page, U-log, U-resume, U-hint, U-reset, G-link-retry, G-unlink-retry, D-audit-retry, D-cleanup-retry, P-revoke, P-announce, P-quiet, W-reconcile, W-rescan, W-cred-retry, W-trim, W-backlog.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -1414,6 +1429,7 @@ not add a rule.
 | 4279896541 | W-cred-retry, C-W-cred, W14 |
 | 4279896551 | D-cleanup, D-cleanup-retry, C-D-cleanup, D5 |
 | 4279896563 | W-trim, W21 |
+| 4280139029 | W-backlog, C-W-backlog, W-pending-race, W22 |
 
 ## Open questions / known limits
 
@@ -1447,6 +1463,7 @@ a procedure.
   file in place (G-refuse-old). The credential store and the link row
   are not one transaction. The live retry closes a removal (G-unlink-retry), a missing insert (G-link-retry), a missing mismatch audit (D-audit-retry), a registration stop (W-cred-retry), and a marker cleanup with its audit (D-cleanup-retry). The retry keeps the original initiator. Admission does not report the person until a true choice's link commits.
 - The webhook outbox retains `webhook.outbox_retained` terminal rows per registration (W-trim). A row is deleted only after its audit has committed. The replay cursor is not moved.
+- A registration holds at most `webhook.outbox_pending` nonterminal rows (W-backlog). At that ceiling the cursor stays, and the source keeps the checkpoint.
 - A case these tables do not settle is a test of the slice that owns it.
   It is not a new state added in review.
 
@@ -1739,7 +1756,7 @@ Part of docs/design/access-grants.md.
 ## Deliver
 
 The contract is Webhooks and the webhook outbox table. This slice adds
-`webhook.post_deadline` and `webhook.outbox_retained` to `docs/limits.md`. It does not add a delivery
+`webhook.post_deadline`, `webhook.outbox_retained`, and `webhook.outbox_pending` to `docs/limits.md`. It does not add a delivery
 state. The permit drops at `webhook.post_deadline` even when `not sent`
 has not committed. The row stays the state the attempt read.
 
@@ -1749,7 +1766,7 @@ A webhook granted one chat receives that chat's events and no other. A
 retry of an attempt that is still at its admitted epoch repeats the
 delivery id and the signature. A transport error with no response byte
 can deliver that same id twice. A receiver that applies a side effect
-deduplicates by `Nessa-Webhook-Id`. `unknown` is not posted again. A failed registration stop is retried on the next read of that registration while the process stays up, and a terminal row past `webhook.outbox_retained` is deleted only after its audit has committed. The webhook credential cannot call
+deduplicates by `Nessa-Webhook-Id`. `unknown` is not posted again. A failed registration stop is retried on the next read of that registration while the process stays up, and a terminal row past `webhook.outbox_retained` is deleted only after its audit has committed. While nonterminal rows are at `webhook.outbox_pending`, the next checkpoint is not queued and the replay cursor stays. The webhook credential cannot call
 `conversation.send`. Revoke waits for the one attempt that holds the
 permit; that attempt is recorded under the epoch it read, and the grant
 row is then removed. A retry that takes the permit after that removal is
