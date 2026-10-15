@@ -32,7 +32,7 @@ prior = json.loads(receipt.read_text()) if receipt.exists() else None
 state.write_text(json.dumps({
     'cacheIdentity': previous or {'id': str(uuid.uuid4()), 'createdAt': datetime.datetime.now(datetime.timezone.utc).isoformat()},
     'preexistingIdentity': previous is not None,
-    'previousPreparation': {key: prior[key] for key in ('mode', 'completedAt', 'sourceHead', 'prepareSha256')} if prior else None,
+    'previousPreparation': {key: prior.get(key) for key in ('mode', 'completedAt', 'sourceHead', 'prepareSha256')} if prior else None,
 }))
 PY
 

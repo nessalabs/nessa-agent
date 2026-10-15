@@ -925,6 +925,7 @@ tests hold the observed outcomes rather than inferring readiness from file prese
 | Checksum, dependency operation or readiness fails | Bootstrap exits unsuccessfully before publishing another success | Earlier receipt keeps its own timestamp; changed tool files are not claimed to be rolled back |
 | UI readiness is lost during dependency preparation | Final check calls the installed UI owner again | No new success receipt; the earlier timestamp remains |
 | Installed recipe or UI owner no longer matches setup hashes | Installed-artifact check refuses maintenance | No new preparation success; setup is the owner that can publish a replacement recipe |
+| A prior receipt lacks an observation field | Receipt projection records that field as unknown; capability checks still decide preparation | Available prior facts are retained; only verified completion publishes a new receipt |
 | Platform invokes setup again | Idempotent setup performs the same capability checks | Reused identity/assets and `mode=setup` remain distinct facts; no maintenance or platform cache claim is invented |
 
 ## MCP tools

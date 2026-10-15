@@ -552,3 +552,56 @@ test("bundled npm readiness uses owned Node before publishing the shell helper",
   assert.equal(maintained.status, 0, maintained.stderr)
   assert.equal(f.receipt().steps.node, "reused")
 })
+
+for (const mode of ["setup", "maintenance"]) {
+  for (const missing of ["mode", "completedAt", "sourceHead", "prepareSha256"]) {
+    test(`${mode} reconciles capabilities with a missing prior ${missing}`, (t) => {
+      const f = bootstrapFixture(t)
+      assert.equal(f.prepare("setup").status, 0)
+      const prior = f.receipt()
+      delete prior[missing]
+      writeFileSync(
+        join(f.env.NESSA_CLOUD_ROOT, "preparation.json"),
+        JSON.stringify(prior),
+      )
+      const reconciled = f.prepare(mode)
+      assert.equal(reconciled.status, 0, reconciled.stderr)
+      const current = f.receipt()
+      assert.deepEqual(current.cacheIdentity, prior.cacheIdentity)
+      assert.equal(current.preexistingIdentity, true)
+      assert.equal(current.mode, mode)
+      assert.deepEqual(
+        current.previousPreparation,
+        Object.fromEntries(
+          ["mode", "completedAt", "sourceHead", "prepareSha256"].map((key) => [
+            key,
+            key === missing ? null : prior[key],
+          ]),
+        ),
+      )
+      assert.equal(current.steps.node, "reused")
+      assert.equal(current.steps.dependencies, "offline")
+    })
+  }
+}
+
+test("failed repair preserves an incomplete prior receipt", (t) => {
+  const f = bootstrapFixture(t)
+  assert.equal(f.prepare("setup").status, 0)
+  const receipt = join(f.env.NESSA_CLOUD_ROOT, "preparation.json")
+  const prior = f.receipt()
+  delete prior.completedAt
+  const previous = JSON.stringify(prior)
+  writeFileSync(receipt, previous)
+  writeFileSync(join(f.root, "fail-pnpm"), "")
+  const offset = f.calls().length
+  const failed = f.prepare("maintenance")
+  assert.notEqual(failed.status, 0)
+  assert.equal(readFileSync(receipt, "utf8"), previous)
+  assert.ok(
+    f
+      .calls()
+      .slice(offset)
+      .some(({ tool, args }) => tool === "pnpm" && args.includes("--offline")),
+  )
+})
