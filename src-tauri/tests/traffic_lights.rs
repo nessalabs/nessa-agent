@@ -83,7 +83,9 @@ mod on_a_real_window {
     use objc2_app_kit::{NSApplication, NSWindow};
     use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
 
-    use super::traffic_lights::{buttons, watch, LEFT, ROW_CENTRE};
+    use std::sync::atomic::Ordering;
+
+    use super::traffic_lights::{buttons, watch, LAYOUTS, LEFT, ROW_CENTRE};
 
     // NSWindowStyleMask, as `"titleBarStyle": "Overlay"` builds the window.
     const TITLED: usize = 1;
@@ -155,6 +157,16 @@ mod on_a_real_window {
         }
         spin();
         expect_on_row(&window, "after the frame view laid out again", &before);
+
+        // Placing the buttons must not make AppKit lay the titlebar out again:
+        // left alone, the window settles.
+        let settled = LAYOUTS.load(Ordering::Relaxed);
+        spin();
+        let since = LAYOUTS.load(Ordering::Relaxed) - settled;
+        assert!(
+            since <= 1,
+            "the frame view laid out {since} times in a quarter second with nothing changing"
+        );
 
         window.close();
     }
