@@ -81,3 +81,22 @@ it("waits for the composed gateway before making the captured installation reque
   expect(await installing).toEqual({ status: "installed", cleanupPending: false })
   expect(api.install).toHaveBeenCalledExactlyOnceWith("claude", "captured-request")
 })
+
+it("reports a session that could not connect as unavailable, since nothing was sent", async () => {
+  for (const agents of [
+    () => {
+      throw new Error("no session")
+    },
+    () => Promise.reject(new Error("no session")),
+  ]) {
+    const source = gatewayAgentInstallations(
+      agents,
+      () => "request",
+      () => () => {},
+    )
+    expect(await source.install("claude")).toEqual({
+      status: "failed",
+      reason: "unavailable",
+    })
+  }
+})

@@ -19,7 +19,10 @@ export function gatewayAgentInstallations(
       return (await api.installOptions()).agents
     },
     async install(agent): Promise<InstallationOutcome> {
-      const api = await agents()
+      // No session means no request was sent, so nothing can still be running.
+      const api = await Promise.resolve()
+        .then(agents)
+        .catch(() => undefined)
       if (!api) return { status: "failed", reason: "unavailable" }
       try {
         const result = await api.install(agent, requestId())
