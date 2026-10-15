@@ -126,6 +126,12 @@ controls — text, icons, images, code, or decorative art — in any frame.
   transcript, and the Agents overview — at 1440 × 900 and 1000 × 700.
   _Check:_ `safe-area.mjs`. It first proves the sampler catches a label placed
   at (8, 8) (`sampler-control`).
+- [ ] **The titlebar's controls and the traffic lights share one row**: the
+  controls are centred 24px below the window's top in every frame of ⌘B, rail
+  open and closed, and the host centres the native buttons on that same line.
+  _Check:_ `columns.mjs --only titlebar-row` for the page;
+  `cargo test -p nessa-app --no-default-features --test traffic_lights` for the
+  buttons in a real AppKit window (macOS) and the row height the two share.
 - [ ] **Column titles sit inline after the controls when they fit, below when
   they do not**, and an inline title never overlaps a titlebar control.
   _ADR 238 › The titlebar's safe area_ (`titlePlacement`).

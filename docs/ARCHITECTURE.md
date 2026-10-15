@@ -47,7 +47,7 @@ opens it again; where there is no Dock either, closing it quits the app
 since nothing could open it again. On macOS an overlay titlebar retains the native traffic lights;
 a fixed full-width WindowTitlebar places the sidebar toggle beside them, without
 a title label or divider. The host centres the native buttons 24px below the
-window's top (`platform/macos/window_controls.rs`), on the same centre as the
+window's top (`platform/macos/traffic_lights.rs`), on the same centre as the
 titlebar's controls. It places them by their measured centre rather than a
 fixed offset, so a macOS release that redraws the buttons keeps them on the
 row, and it places them again after each AppKit event that lays the titlebar

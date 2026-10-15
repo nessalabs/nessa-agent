@@ -264,7 +264,7 @@ html:not(.dark) [data-surface] {
 /*
  * Native macOS window buttons remain host-owned and sit inside the sidebar,
  * centred on the same row as the controls: 24px from the window's top, where
- * the host puts them (`src-tauri/src/platform/macos/window_controls.rs`).
+ * the host puts them (`src-tauri/src/platform/macos/traffic_lights.rs`).
  */
 [data-host="macos"][data-surface="window"] {
   --desktop-window-controls-inset: 79px;

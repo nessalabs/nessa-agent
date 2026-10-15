@@ -132,3 +132,9 @@ custom-protocol = ["tauri/custom-protocol"]
 
 # Build profiles live in the workspace root Cargo.toml — cargo ignores
 # [profile.*] on non-root packages once a workspace is defined.
+
+# Drives a real AppKit window, so it needs the process's main thread: its own
+# `main`, not the test harness's worker threads.
+[[test]]
+name = "traffic_lights"
+harness = false

@@ -4,6 +4,7 @@
 mod live_resize;
 mod overlay;
 mod provider_login;
+mod traffic_lights;
 mod vibrancy;
 mod viewport;
 mod window_controls;
