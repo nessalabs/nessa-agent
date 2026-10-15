@@ -427,6 +427,30 @@ fn a_note_after_the_span_is_stored_replaces_that_span() {
 }
 
 #[test]
+fn a_late_note_over_the_budget_is_left_off_the_stored_span() {
+    let budget = 8 * 1024 * 1024;
+    let store = LocalTraceStore::new();
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.finish(at(2), FinishReason::Stop);
+    let huge = "c".repeat(budget + 1);
+    store.note_subagent("conversation-1", "execution-1", &huge, "parent-1");
+    store.note_grant("conversation-1", "execution-1", &huge, 3, true);
+    store.note_hook("conversation-1", "execution-1", &huge, "allow");
+    store.note_subagent("conversation-1", "execution-1", "child-ok", "parent-ok");
+    let spans = store.read("conversation-1");
+    let retained: usize = spans.iter().map(stored_text_bytes).sum();
+    assert!(retained <= budget);
+    assert!(!format!("{spans:?}").contains(&huge));
+    let agent = spans
+        .iter()
+        .find(|span| span.operation() == "invoke_agent")
+        .unwrap();
+    assert_eq!(agent.string("nessa.subagent.id"), Some("child-ok"));
+    assert_eq!(agent.string("nessa.subagent.parent"), Some("parent-ok"));
+}
+
+#[test]
 fn dropping_an_open_turn_closes_it_as_cancelled() {
     let store = LocalTraceStore::new();
     {

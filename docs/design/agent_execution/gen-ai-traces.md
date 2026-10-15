@@ -132,7 +132,8 @@ only when that fact was observed.
 A grant or hook note can arrive before the worker exports the agent span. The
 store keeps the note, keyed by conversation and execution, and applies it when
 the span closes. A note that arrives after the span is stored replaces that
-span's attributes. Unconsumed notes are capped at 2048; the oldest is dropped.
+span's attributes and is held to the same text budget. Text that does not fit
+is left off the span. Unconsumed notes are capped at 2048; the oldest is dropped.
 An invocation that ends without a span consumes its own note.
 
 Child spans stay out of `read` until the agent span closes. Two conversations

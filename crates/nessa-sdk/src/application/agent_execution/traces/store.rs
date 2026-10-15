@@ -220,11 +220,8 @@ impl LocalTraceStore {
         let mut inner = self.lock();
         let replaced =
             if let Some(span) = agent_span(&mut inner.spans, conversation_id, execution_id) {
-                let previous = retained_bytes(span);
                 let updated = grant(span.clone(), grant_id, policy_revision, tools_checked);
-                let added = retained_bytes(&updated);
-                *span = updated;
-                Some((previous, added))
+                Some(replace_fitted(span, updated))
             } else {
                 None
             };
@@ -254,11 +251,8 @@ impl LocalTraceStore {
         let mut inner = self.lock();
         let replaced =
             if let Some(span) = agent_span(&mut inner.spans, conversation_id, execution_id) {
-                let previous = retained_bytes(span);
                 let updated = hook_note(span, event, verdict, 1);
-                let added = retained_bytes(&updated);
-                *span = updated;
-                Some((previous, added))
+                Some(replace_fitted(span, updated))
             } else {
                 None
             };
@@ -293,11 +287,8 @@ impl LocalTraceStore {
         let mut inner = self.lock();
         let replaced =
             if let Some(span) = agent_span(&mut inner.spans, conversation_id, execution_id) {
-                let previous = retained_bytes(span);
                 let updated = subagent(span, child_id, parent_id);
-                let added = retained_bytes(&updated);
-                *span = updated;
-                Some((previous, added))
+                Some(replace_fitted(span, updated))
             } else {
                 None
             };
@@ -467,6 +458,14 @@ fn publish_turn(inner: &mut Inner, agent: &GenAiSpan) {
     inner.withheld = kept;
     inner.spans.extend(children);
     remember(inner, agent.clone(), false);
+}
+
+fn replace_fitted(span: &mut GenAiSpan, updated: GenAiSpan) -> (usize, usize) {
+    let previous = retained_bytes(span);
+    let updated = fit_retained(updated);
+    let added = retained_bytes(&updated);
+    *span = updated;
+    (previous, added)
 }
 
 fn remember(inner: &mut Inner, span: GenAiSpan, withheld: bool) {
