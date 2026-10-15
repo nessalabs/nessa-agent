@@ -18,7 +18,9 @@
 //! Service -> ConversationAttachments: a message may refer only to images this
 //! conversation uploaded, and closing the conversation lets them go.
 //! Passive read admission -> current auth, durable receiver binding, then
-//! metadata_target -> ownership repository. It refuses another target before
+//! metadata_target -> ownership repository. Product review notices receive its
+//! ConversationMetadataReader, which exposes checked loads without the repository.
+//! It refuses another target before
 //! ownership, grant/source or selection is consumed. It never opens an Agent.
 //! `record_read` admits each physical head or page against fresh authority
 //! before resolving SDK identity or opening a source.
@@ -153,6 +155,7 @@ mod live_changes;
 mod locks;
 mod mcp_apps;
 mod metadata_target;
+pub(crate) use metadata_target::ConversationMetadataReader;
 mod passive_read;
 mod permission_rules;
 mod placement;

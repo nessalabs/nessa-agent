@@ -678,6 +678,12 @@ numbers are the caller's: the gateway takes them from the selected model's
 
 ## Gateway conversation ownership
 
+Review notices receive an application-owned `ConversationMetadataReader` from
+product-route composition. Its private repository delegates to the checked
+metadata loader, so returned identity is correlated before ownership policy
+or publication consumes the record (#918).
+
+
 Client permission controls capture related IDs through
 `packages/nessa-client/src/application/permission-target.ts` and consume those
 opaque targets in `presentation/conversation-api.ts`. Panel effects and control

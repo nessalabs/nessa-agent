@@ -2925,6 +2925,47 @@ mod tests {
         assert_eq!(owns_one.reviews[0].tool, "Bash");
     }
 
+    /// A repository reply is outside data. Its identity is correlated before
+    /// either Cedar or the notice publisher consumes its ownership metadata.
+    #[tokio::test]
+    async fn a_review_notice_refuses_mismatched_metadata_before_policy_or_publication() {
+        let (_directory, board) = open_rules();
+        let id_a = "00000000-0000-4000-8000-00000000000a";
+        let id_b = "00000000-0000-4000-8000-00000000000b";
+        board.waiting(&ReviewNotice {
+            conversation_id: id_a.into(),
+            execution_id: ExecutionId::new("turn").unwrap(),
+            permission_id: PermissionId::new("perm-a").unwrap(),
+            tool: "Bash".into(),
+        });
+        let repository = repository_of(vec![owned_conversation(id_a, "principal")]);
+        *repository.mode_loaded_reply.lock().unwrap() = Some(owned_conversation(id_b, "principal"));
+        let policy = Arc::new(conversation_support::ObservedPolicy::default());
+        let (state, authority) = fixture(MembershipRole::Member);
+        *authority.snapshot.lock().unwrap() = snapshot_with(
+            MembershipRole::Member,
+            MembershipStatus::Active,
+            &["conversation.write"],
+        );
+        let state = state.with_passive_read(
+            Arc::new(UnpairedBinding),
+            repository,
+            Arc::new(GrantedConversation(id_a.into())),
+            policy.clone(),
+        );
+        let session = authenticate(&state).await;
+
+        let refused = notice_snapshot(board.clone(), state.clone(), session.clone()).await;
+        assert!(refused.reviews.is_empty());
+        assert_eq!(policy.asked(), 0, "mismatched metadata reaches no policy");
+
+        let accepted = notice_snapshot(board, state, session).await;
+        assert_eq!(accepted.reviews.len(), 1);
+        assert_eq!(accepted.reviews[0].conversation_id, id_a);
+        assert_eq!(accepted.reviews[0].tool, "Bash");
+        assert!(policy.asked() > 0, "the correlated counterpart asks Cedar");
+    }
+
     /// A paired grant that goes away while the review is still waiting drops
     /// that review from the next snapshot. The board generation does not move.
     #[tokio::test]

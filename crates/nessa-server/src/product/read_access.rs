@@ -127,8 +127,8 @@ async fn person_may_read(
     session: &AuthenticatedSession,
     conversation: &str,
 ) -> bool {
-    let (Some((_, conversations, _)), Some(policy), Ok(id)) = (
-        state.passive_read.as_ref(),
+    let (Some(conversations), Some(policy), Ok(id)) = (
+        state.review_metadata.as_ref(),
         state.conversation_access.as_deref(),
         conversation_id(conversation),
     ) else {
