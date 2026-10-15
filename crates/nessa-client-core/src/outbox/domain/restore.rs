@@ -194,7 +194,9 @@ fn send_outcome(outcome: PhoneOutcome) -> bool {
 }
 
 fn lookup_outcome(outcome: PhoneOutcome) -> bool {
-    !matches!(outcome, PhoneOutcome::Draft)
+    // Running is only a direct injected receipt. A lookup cannot record it
+    // (`every_transition_and_precedence_pair`).
+    !matches!(outcome, PhoneOutcome::Draft | PhoneOutcome::Running)
 }
 
 fn turn_running_outcome(outcome: PhoneOutcome) -> bool {

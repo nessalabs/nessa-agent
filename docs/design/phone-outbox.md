@@ -90,7 +90,8 @@ Departure's unknown is not a direct answer.
 | Draft | depart | Unknown, not admitted | Person, cause Departed | No. This commit finishes before the send |
 | Unknown, not admitted | direct send answer | The answer's state | Person, cause SendAnswered | Yes, the first send, already held |
 | Unknown, not admitted | send answer lost, lookup finds nothing, budget remains | Stays unknown, not admitted, then the same bytes are sent again | Person, cause SendLost, then ForegroundSend with the later answer | Yes, the same hold |
-| Unknown, not admitted | that budget is spent | Stays unknown, not admitted | Person, cause Bound | Yes |
+| Unknown, not admitted | that budget is spent | Stays unknown, not admitted | Person, cause Bound. Not Lookup | Yes |
+| Unknown, lookup failed | that budget is already spent | Stays lookup failed. No send and no Bound event | Person, the waiter | Yes. The waiter holds the lease and writes nothing |
 | Unknown, not admitted or lookup failed | explicit retry after lookup found nothing | Stays unknown, not admitted, then the same bytes are sent again | Person, cause Lookup, then ExplicitRetry | Yes. The waiter reloads |
 | Unknown, attempted | lookup finds a settled submit receipt | Done or failed, per the receipt | Person or Recovery, cause Lookup | No |
 | Any unknown | lookup lost, broken, or not a submit receipt | The row unchanged | Person or Recovery | No |
@@ -102,6 +103,10 @@ A direct answer is `conversation.send` returning queued, injected, settled,
 a typed refusal, or `submission_unresolved`. Lost and unreadable are not
 direct answers. They look the receipt up. An unreadable answer is not sent
 again in that call.
+
+A lookup does not produce running. Running is only the direct injected
+receipt. Restoration rejects a `Lookup` event whose outcome is running
+(`every_transition_and_precedence_pair`).
 
 A submit receipt is stage `accepted`, `attempted`, or `settled` with
 `dispatched`, `no_effect`, `refused_after_save`, or `unavailable_after_save`.
@@ -168,8 +173,9 @@ second rule.
 | L3 | Send answer lost, lookup finds settled `dispatched` | Done | `a_dispatched_receipt_is_done` |
 | L4 | Lookup finds settled `no_effect`, `refused_after_save`, or `unavailable_after_save` | Failed with `revoked`, `revoked_after_save`, or `unavailable_after_save` | `a_settled_refusal_is_failed` |
 | L5 | Send answer lost, lookup finds nothing, foreground budget remains | The same bytes are sent again. The resend is recorded with its answer | `a_lost_answer_retransmits_the_same_bytes_until_the_bound` |
-| L6 | That budget is spent | Unknown, not admitted. No further send in that call | `foreground_send_stops_at_the_bound` |
+| L6 | That budget is spent | Unknown, not admitted, cause Bound. No further send in that call | `foreground_send_stops_at_the_bound` |
 | L7 | Send answer lost and the lookup itself fails | Unknown, lookup failed | `a_lookup_that_cannot_be_asked_stays_unknown` |
+| L9 | A waiter reaches lookup failed after that budget is already spent | Stays lookup failed. No send and no Bound event. The row still loads | `a_spent_budget_keeps_lookup_failed` |
 | L8 | Lookup returns `submission_conflict` | Failed. `found` is not a receipt | `a_conflicting_lookup_is_failed` |
 | R1 | Restart after departure, lookup finds nothing | Unknown. No send | `recovery_does_not_send_when_the_receipt_is_absent` |
 | R2 | Restart after departure, lookup finds settled `dispatched` | Done. No send | `recovery_adopts_a_dispatched_receipt_without_sending` |
@@ -179,6 +185,7 @@ second rule.
 | R4 | Explicit retry of unresolved, attempted, failed, or done | No send | `an_explicit_retry_does_not_send_an_uncertain_or_finished_command` |
 | C1 | Stored canonical bytes do not decode | Corrupt. The row is not rewritten | `corrupt_canonical_bytes_are_left_in_place` |
 | C3 | Events do not reach the row, or a send cause is marked recovery | Corrupt. The row is not rewritten | `a_done_row_whose_history_stops_at_departure_is_corrupt` |
+| C4 | A lookup event claims running | Corrupt. The row is not rewritten | `a_lookup_cannot_restore_running` |
 | C2 | Each transition | Command, outcome, cause, and initiator | `a_transition_keeps_its_cause_and_initiator` |
 
 `FOREGROUND_SENDS` in `crates/nessa-client-core/src/outbox/domain/decide.rs`

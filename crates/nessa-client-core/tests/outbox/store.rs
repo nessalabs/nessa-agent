@@ -923,9 +923,10 @@ fn foreground_send_stops_at_the_bound() {
     let sends = vec![SendAnswer::Lost; usize::from(FOREGROUND_SENDS)];
     let lookups = vec![LookupAnswer::NotFound; usize::from(FOREGROUND_SENDS)];
     let dir = directory();
+    let path = path_in(&dir);
     let gateway = Scripted::new(sends, lookups);
     let seen = gateway.clone();
-    let mut outbox = opened(&path_in(&dir), gateway);
+    let mut outbox = opened(&path, gateway);
     let saved = text_intent("command-1", "hello");
     let canonical = saved.canonical().to_vec();
     person_hold(&mut outbox, saved);
@@ -939,6 +940,16 @@ fn foreground_send_stops_at_the_bound() {
     assert_eq!(body.sent.len(), usize::from(FOREGROUND_SENDS));
     assert!(body.sent.iter().all(|bytes| bytes == &canonical));
     assert_eq!(body.looked.len(), usize::from(FOREGROUND_SENDS));
+    drop(body);
+    drop(outbox);
+    let mut store = SqliteIntents::open(&path).unwrap();
+    let events = store.events("command-1").unwrap();
+    assert_eq!(events.last().unwrap().cause, Cause::Bound);
+    assert_eq!(
+        events.last().unwrap().outcome,
+        PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+    );
+    assert!(events.iter().all(|event| event.cause != Cause::Lookup));
 }
 
 #[test]
@@ -1233,6 +1244,131 @@ fn a_lost_departure_does_not_send_again() {
     assert_eq!(rows[0].outcome(), PhoneOutcome::Accepted);
 }
 
+#[test]
+fn a_spent_budget_keeps_lookup_failed() {
+    let dir = directory();
+    let path = path_in(&dir);
+    {
+        let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+        person_hold(&mut outbox, text_intent("command-1", "hello"));
+    }
+    let sends = Arc::new(AtomicUsize::new(0));
+    let lookups = Arc::new(AtomicUsize::new(0));
+    let entered = Arc::new((Mutex::new(false), Condvar::new()));
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let ready = Arc::new(Barrier::new(3));
+    let go = Arc::new(Barrier::new(3));
+    let (done_tx, done_rx) = mpsc::channel();
+    let spawn = |path: PathBuf| {
+        let sends = Arc::clone(&sends);
+        let lookups = Arc::clone(&lookups);
+        let entered = Arc::clone(&entered);
+        let release = Arc::clone(&release);
+        let ready = Arc::clone(&ready);
+        let go = Arc::clone(&go);
+        let done_tx = done_tx.clone();
+        thread::spawn(move || {
+            let mut outbox = open(
+                &path,
+                BudgetPause {
+                    sends,
+                    lookups,
+                    entered,
+                    release,
+                },
+                SeqIds::default(),
+                clock(),
+            )
+            .unwrap();
+            ready.wait();
+            go.wait();
+            let outcome = outbox.send(&command("command-1")).unwrap().outcome();
+            done_tx.send(outcome).unwrap();
+        })
+    };
+    let first = spawn(path.clone());
+    let second = spawn(path.clone());
+    ready.wait();
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    connection.busy_timeout(Duration::from_secs(5)).unwrap();
+    connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+    go.wait();
+    thread::sleep(Duration::from_millis(200));
+    connection.execute_batch("ROLLBACK").unwrap();
+    {
+        let (lock, cv) = &*entered;
+        let mut flag = lock.lock().unwrap();
+        while !*flag {
+            flag = cv.wait(flag).unwrap();
+        }
+    }
+    assert!(done_rx.recv_timeout(Duration::from_millis(400)).is_err());
+    {
+        let (lock, cv) = &*release;
+        let mut flag = lock.lock().unwrap();
+        *flag = true;
+        cv.notify_all();
+    }
+    let left = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let right = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    first.join().unwrap();
+    second.join().unwrap();
+    assert_eq!(sends.load(Ordering::SeqCst), usize::from(FOREGROUND_SENDS));
+    assert_eq!(
+        lookups.load(Ordering::SeqCst),
+        usize::from(FOREGROUND_SENDS)
+    );
+    assert_eq!(left, PhoneOutcome::Unknown(UnknownCause::LookupFailed));
+    assert_eq!(right, PhoneOutcome::Unknown(UnknownCause::LookupFailed));
+    let mut check = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+    let rows = check.list().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].outcome(),
+        PhoneOutcome::Unknown(UnknownCause::LookupFailed)
+    );
+    drop(check);
+    let mut store = SqliteIntents::open(&path).unwrap();
+    let record = store.load(&command("command-1")).unwrap().unwrap();
+    assert_eq!(record.sends(), FOREGROUND_SENDS);
+    let events = store.events("command-1").unwrap();
+    assert_eq!(events.last().unwrap().cause, Cause::Lookup);
+    assert!(events.iter().all(|event| event.cause != Cause::Bound));
+}
+
+struct BudgetPause {
+    sends: Arc<AtomicUsize>,
+    lookups: Arc<AtomicUsize>,
+    entered: Arc<(Mutex<bool>, Condvar)>,
+    release: Arc<(Mutex<bool>, Condvar)>,
+}
+impl PhoneGateway for BudgetPause {
+    fn send(&mut self, _: &PhoneIntent) -> SendAnswer {
+        let nth = self.sends.fetch_add(1, Ordering::SeqCst);
+        if nth == 0 {
+            let (lock, cv) = &*self.entered;
+            let mut flag = lock.lock().unwrap();
+            *flag = true;
+            cv.notify_all();
+            drop(flag);
+            let (lock, cv) = &*self.release;
+            let mut flag = lock.lock().unwrap();
+            while !*flag {
+                flag = cv.wait(flag).unwrap();
+            }
+        }
+        SendAnswer::Lost
+    }
+    fn lookup(&mut self, _: &PhoneIntent) -> LookupAnswer {
+        let nth = self.lookups.fetch_add(1, Ordering::SeqCst);
+        if nth + 1 < usize::from(FOREGROUND_SENDS) {
+            LookupAnswer::NotFound
+        } else {
+            LookupAnswer::Lost
+        }
+    }
+}
+
 struct PausingSend {
     sends: Arc<AtomicUsize>,
     entered: Arc<(Mutex<bool>, Condvar)>,
@@ -1416,6 +1552,52 @@ fn a_done_row_whose_history_stops_at_departure_is_corrupt() {
         )
         .unwrap();
     assert_eq!(initiator, "recovery");
+}
+
+#[test]
+fn a_lookup_cannot_restore_running() {
+    let dir = directory();
+    let path = path_in(&dir);
+    {
+        let gateway = Scripted::new(vec![SendAnswer::Receipt(Delivery::Injected)], Vec::new());
+        let mut outbox = opened(&path, gateway);
+        person_hold(&mut outbox, text_intent("command-1", "hello"));
+        let view = outbox.send(&command("command-1")).unwrap();
+        assert_eq!(view.outcome(), PhoneOutcome::Running);
+    }
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let changed = connection
+        .execute(
+            "UPDATE phone_intent_event SET cause = 'lookup' WHERE cause = 'send_answered'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
+    drop(connection);
+    let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+    assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
+    assert_eq!(
+        outbox.send(&command("command-1")).unwrap_err(),
+        OutboxError::Corrupt
+    );
+    drop(outbox);
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let outcome: String = connection
+        .query_row(
+            "SELECT outcome FROM phone_intent WHERE request_id = 'command-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(outcome, "running");
+    let cause: String = connection
+        .query_row(
+            "SELECT cause FROM phone_intent_event WHERE cause = 'lookup'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(cause, "lookup");
 }
 
 #[test]

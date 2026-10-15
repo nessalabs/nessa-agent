@@ -447,6 +447,73 @@ fn every_transition_and_precedence_pair() {
         false
     ));
 
+    let direct_running = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::SendAnswered, running),
+    ];
+    assert!(history_reaches(
+        &not_admitted_row.clone().with_sends(1).with_outcome(running),
+        &direct_running,
+        false
+    ));
+    let lookup_running = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::Lookup, running),
+    ];
+    assert!(
+        !history_reaches(
+            &not_admitted_row.clone().with_outcome(running),
+            &lookup_running,
+            false
+        ),
+        "a lookup cannot record running"
+    );
+
+    let spent_lookup = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::SendLost, not_admitted),
+        audit(Cause::SendLost, not_admitted),
+        audit(Cause::SendLost, not_admitted),
+        audit(Cause::Lookup, lookup_failed),
+    ];
+    assert!(history_reaches(
+        &not_admitted_row
+            .clone()
+            .with_sends(FOREGROUND_SENDS)
+            .with_outcome(lookup_failed),
+        &spent_lookup,
+        false
+    ));
+    let mut rewritten = spent_lookup.to_vec();
+    rewritten.push(audit(Cause::Bound, not_admitted));
+    assert!(
+        !history_reaches(
+            &not_admitted_row.clone().with_outcome(not_admitted),
+            &rewritten,
+            false
+        ),
+        "bound must not replace a failed lookup"
+    );
+    let bound = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::SendLost, not_admitted),
+        audit(Cause::SendLost, not_admitted),
+        audit(Cause::SendLost, not_admitted),
+        audit(Cause::Bound, not_admitted),
+    ];
+    assert!(history_reaches(
+        &not_admitted_row
+            .clone()
+            .with_sends(FOREGROUND_SENDS)
+            .with_outcome(not_admitted),
+        &bound,
+        false
+    ));
+
     let skipped = [
         audit(Cause::Held, draft),
         audit(Cause::SendAnswered, accepted),

@@ -278,13 +278,23 @@ where
     ) -> Result<LeaseBody, OutboxError> {
         loop {
             if record.sends() >= FOREGROUND_SENDS {
-                let next = record
-                    .clone()
-                    .with_outcome(PhoneOutcome::Unknown(UnknownCause::NotAdmitted));
                 tracing::warn!(
                     limit = "client.foreground_sends",
                     "product session hit an operational limit"
                 );
+                // Bound is only not-admitted staying not-admitted. A lookup
+                // that already failed stays lookup-failed. Writing Bound
+                // across that change does not restore
+                // (`a_spent_budget_keeps_lookup_failed`).
+                if !matches!(
+                    record.outcome(),
+                    PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+                ) {
+                    return Ok(kept_body(record.view()));
+                }
+                let next = record
+                    .clone()
+                    .with_outcome(PhoneOutcome::Unknown(UnknownCause::NotAdmitted));
                 return self.asked_or_kept(&record, &next, Cause::Bound, by, Evidence::Lookup);
             }
             let answer = self.gateway.send(record.intent());
@@ -312,19 +322,19 @@ where
                     let looked = self.gateway.lookup(bumped.intent());
                     match after_lookup(bumped.clone(), looked, resend) {
                         Step::Done(next) => {
-                            if resend && stopped_at_bound(&bumped, &next) {
+                            let at_bound = resend && stopped_at_bound(&bumped, &next);
+                            if at_bound {
                                 tracing::warn!(
                                     limit = "client.foreground_sends",
                                     "product session hit an operational limit"
                                 );
                             }
-                            return self.asked_or_kept(
-                                &bumped,
-                                &next,
-                                Cause::Lookup,
-                                by,
-                                Evidence::Lookup,
-                            );
+                            let cause = if at_bound {
+                                Cause::Bound
+                            } else {
+                                Cause::Lookup
+                            };
+                            return self.asked_or_kept(&bumped, &next, cause, by, Evidence::Lookup);
                         }
                         Step::ReturnToDraft(next) => {
                             return self.return_to_draft(&bumped, next, by, Evidence::Lookup)
