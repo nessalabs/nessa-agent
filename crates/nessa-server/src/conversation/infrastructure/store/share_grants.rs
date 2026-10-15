@@ -750,8 +750,8 @@ impl LocalConversationStore {
                 // a share whose reply was lost cannot, retried after a later
                 // unshare, grant again (row G16). That holds for a request that
                 // changed nothing too: it is journaled with before equal to after.
-                // The same request naming another device, other capabilities or constraints,
-                // or the other change is refused (row J6). A retry is answered
+                // The same request naming another principal, device, capabilities
+                // or constraints, or the other change is refused (row J6). A retry is answered
                 // before the expected revision is compared: its first answer may
                 // be what moved the grant past it (row J29).
                 let replayed: Option<(String, Option<String>, Held, Held, String, i64)> =
@@ -792,7 +792,22 @@ impl LocalConversationStore {
                     at,
                 )) = replayed
                 {
-                    if credential != change.credential_id.as_str() || journaled_after != after {
+                    // The request's identity is the principal, the receiver, and
+                    // the credential it first named. A retry that names another
+                    // of those, on a grant or a revoke, answers nothing and
+                    // writes nothing. Omitting the principal or the receiver
+                    // is the lost reply, and answers the first receipt.
+                    let other_principal = change
+                        .principal_id
+                        .as_ref()
+                        .is_some_and(|named| named.as_str() != granted);
+                    let other_receiver = change.receiver_id.is_some()
+                        && change.receiver_id.as_deref() != journaled_receiver.as_deref();
+                    if credential != change.credential_id.as_str()
+                        || journaled_after != after
+                        || other_principal
+                        || other_receiver
+                    {
                         return Err(ConversationError::InvalidInput);
                     }
                     // A retry answers the first receipt. A switch of receiver
@@ -1103,7 +1118,7 @@ impl LocalConversationStore {
                     receiver_after = receiver.as_deref().unwrap_or(""),
                     initiator = change.initiator.principal_id.as_str(),
                     revision,
-                    policy_revision = sequence,
+                    ?policy_revision,
                     "conversation share grant changed"
                 );
                 if reads_change {

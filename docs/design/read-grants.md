@@ -181,6 +181,28 @@ grant is fenced with the revoke
 is learnt from `conversation.shares` and is asked where it is enforced, never
 read from the catalogue.
 
+### Grant lifecycle
+
+One owner of each transition: `ShareGrants::change` writes the row and the
+journal, and `ShareConversation` asks Cedar before a comment or drive grant
+is written and asks the deletion inventory after an applied share or any
+unshare. A retry of the same owner, surface, and request id answers the first
+receipt and writes nothing. Naming another principal or receiver on that
+request is `InvalidInput`
+(`a_retried_share_that_names_another_principal_is_refused`). Naming another
+credential is the same refusal
+(`a_retried_share_replays_its_answer_and_never_undoes_a_later_unshare`), as
+is another capability set or its constraints
+(`a_retried_share_replays_its_role_and_policy_or_is_refused`).
+
+| Transition | Who causes it | Audit evidence | What subscribers see |
+| --- | --- | --- | --- |
+| Grant | The owner calls `conversation.share`. Cedar has allowed `owner.share`, and `grant.comment` and `grant.drive` when the set includes them. | One journal row: capabilities `none` then the set, the principal, receiver, and credential, and the initiator, surface, and request. The grant epoch is that row's sequence. The conversation's catalogue revision moves. | The catalogue watch fires for the owner. The new receiver's head moves and its next pass includes the conversation. `conversation.shares` lists the grant. |
+| Re-target | The owner calls `conversation.share` for another device of the same principal, with the same capability set and constraints. | One journal row: capabilities before equal after, the new receiver and credential, the same principal, and the initiator. The epoch stays. The catalogue revision moves. | The catalogue watch fires. The new receiver's pass includes the conversation. The old receiver's head moves and the conversation leaves its pages. Export fences the old receiver. The deletion inventory is reconciled after the share commits. |
+| Epoch bump | The owner calls `conversation.share` with a different capability set or constraints, for the same receiver and credential. | One journal row: capabilities and constraints before and after, the same receiver. The epoch becomes that row's sequence. The catalogue revision stays. | No catalogue watch, and device heads stay. `conversation.shares` shows the new epoch. The next drive turn is admitted at that epoch. |
+| Revoke | The owner calls `conversation.unshare`. The grant is found by credential. | One journal row: the capability set then `none`, the receiver the row held, and the initiator. The grant row is deleted. The catalogue revision moves. | The catalogue watch fires. The receiver's head moves and the conversation leaves its pages. The deletion inventory is reconciled and fences that receiver. |
+| Backup capture | After an applied share, or any unshare, `ShareConversation` asks the deletion inventory. Export reads the journal. | A revocation fact for each receiver whose latest row is a revoke, and for each receiver the grant moved off, naming the capabilities they held and that journal sequence. A capture that fails after a revoke is logged and the revoke stays (`a_failed_inventory_capture_leaves_the_revoke`). | The deletion log gains or drops those fences. A later capture that no longer names a receiver drops its fence. The catalogue watch is not this path. |
+
 A revoke removes the row from the device's pages; it is not sent as deleted
 (row G6). The sync engine refuses to bring a deleted identity back at a later
 revision, so a revoked row marked deleted could never be granted again. What a

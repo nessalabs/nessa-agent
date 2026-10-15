@@ -467,9 +467,10 @@ pub struct ShareConversation<'a> {
     pub gateway: &'a Resource,
     /// The access policy, asked whether the caller may share, and with whom.
     pub policy: &'a dyn ConversationAccessPolicyEvaluator,
-    /// The deletion inventory, reconciled after an unshare commits and after
-    /// a share that changes who holds the grant. Absent, the grant is still
-    /// written and the inventory is unchanged.
+    /// The deletion inventory, reconciled after an applied share and after
+    /// any unshare. Absent, the grant is still written and the inventory is
+    /// unchanged. A capture that fails after a revoke is logged and the
+    /// revoke stays (`a_failed_inventory_capture_leaves_the_revoke`).
     pub inventory: Option<&'a dyn FenceCapture>,
 }
 
@@ -631,8 +632,9 @@ impl ShareConversation<'_> {
                 at_ms,
             })
             .await?;
-        // A replacement drops the previous receiver. The fence is the
-        // revocation export, same as an unshare, and a retry reconciles too.
+        // The grant is already committed. Capture reconciles the deletion
+        // inventory, including a receiver the grant moved off. A failure is
+        // logged and does not undo the grant.
         if receipt.applied {
             if let Some(inventory) = self.inventory {
                 if let Err(error) = inventory.capture().await {

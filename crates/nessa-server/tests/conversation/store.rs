@@ -3891,6 +3891,95 @@ async fn a_named_principal_does_not_take_another_principals_grant() {
     assert_eq!(only_grant(store, &id).await, held);
 }
 
+/// A retry is the first request. Naming another principal, or another
+/// receiver, under that request id is refused and leaves the grant and the
+/// journal as the first write left them. The same refusal holds for a revoke.
+#[tokio::test]
+async fn a_retried_share_that_names_another_principal_is_refused() {
+    use crate::conversation::application::{ConversationError, ShareGrantTransition, ShareGrants};
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    let first = grant_change(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &id,
+        Some("phone"),
+        "phone-credential",
+        "share",
+    );
+    let granted = store.change(first.clone()).await.unwrap();
+    assert!(granted.applied);
+    assert_eq!(store.change(first).await.unwrap(), granted);
+    let held = only_grant(store, &id).await;
+    let journaled = role_journal(&opened.path).len();
+    let mut other_principal = grant_change(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &id,
+        Some("phone"),
+        "phone-credential",
+        "share",
+    );
+    other_principal.principal_id = Some(PrincipalId::new("grantee-other").unwrap());
+    assert!(matches!(
+        store.change(other_principal).await,
+        Err(ConversationError::InvalidInput)
+    ));
+    let mut other_receiver = grant_change(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &id,
+        Some("tablet"),
+        "phone-credential",
+        "share",
+    );
+    other_receiver.principal_id = Some(held.principal_id.clone());
+    assert!(matches!(
+        store.change(other_receiver).await,
+        Err(ConversationError::InvalidInput)
+    ));
+    assert_eq!(only_grant(store, &id).await, held);
+    assert_eq!(role_journal(&opened.path).len(), journaled);
+
+    let revoke = grant_change(
+        ShareGrantTransition::Revoke,
+        &id,
+        None,
+        "phone-credential",
+        "revoke",
+    );
+    let revoked = store.change(revoke.clone()).await.unwrap();
+    assert!(revoked.applied);
+    assert_eq!(store.change(revoke).await.unwrap(), revoked);
+    let journaled = role_journal(&opened.path).len();
+    let mut revoked_as_other = grant_change(
+        ShareGrantTransition::Revoke,
+        &id,
+        None,
+        "phone-credential",
+        "revoke",
+    );
+    revoked_as_other.principal_id = Some(PrincipalId::new("grantee-other").unwrap());
+    assert!(matches!(
+        store.change(revoked_as_other).await,
+        Err(ConversationError::InvalidInput)
+    ));
+    let mut revoked_for_tablet = grant_change(
+        ShareGrantTransition::Revoke,
+        &id,
+        Some("tablet"),
+        "phone-credential",
+        "revoke",
+    );
+    revoked_for_tablet.principal_id = None;
+    assert!(matches!(
+        store.change(revoked_for_tablet).await,
+        Err(ConversationError::InvalidInput)
+    ));
+    assert!(!store.is_granted(&id, "phone").await.unwrap());
+    assert!(!store.is_granted(&id, "tablet").await.unwrap());
+    assert_eq!(role_journal(&opened.path).len(), journaled);
+}
+
 /// Moving a drive grant onto another receiver keeps the epoch, and that
 /// receiver still reads the policy the epoch names. The receiver that lost
 /// the grant is a revocation, so a snapshot cannot give it back.
