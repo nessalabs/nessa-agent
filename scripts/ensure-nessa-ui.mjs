@@ -67,7 +67,8 @@ const hasPackages = (directory) =>
   )
 
 function declaredFiles(value) {
-  if (typeof value === "string") return [value]
+  // Pattern declarations describe a family of subpaths, not a concrete file.
+  if (typeof value === "string") return value.includes("*") ? [] : [value]
   if (value && typeof value === "object")
     return Object.values(value).flatMap(declaredFiles)
   return []
@@ -75,7 +76,7 @@ function declaredFiles(value) {
 
 /**
  * Compare the vendored checkout with the pin without touching the network.
- * Checks declared package entry files too. Returns null when ready, otherwise
+ * Checks concrete declared package entry files too. Returns null when ready, otherwise
  * one message naming the preparation remedy.
  */
 export function checkVendor({ root, git = gitQuery } = {}) {

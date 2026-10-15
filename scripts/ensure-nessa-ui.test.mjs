@@ -557,3 +557,29 @@ for (const field of ["main", "module", "types", "typesVersions"]) {
     )
   })
 }
+
+for (const field of ["exports", "typesVersions"]) {
+  test(`check skips patterned ${field} targets while enforcing concrete entries`, (context) => {
+    const root = makeRoot(context)
+    const pkg = join(root, ".vendor/nessa_ui", linkedWorkspacePackages[0])
+    const target = "./dist/index.js"
+    writeFileSync(
+      join(pkg, "package.json"),
+      JSON.stringify({
+        name: "fixture",
+        [field]:
+          field === "exports"
+            ? { ".": target, "./*": "./dist/*.js" }
+            : { "*": { index: [target], "*": ["./dist/*.js"] } },
+      }),
+    )
+    mkdirSync(join(pkg, "dist"))
+    writeFileSync(join(pkg, target), "built output")
+    assert.equal(checkVendor({ root, git: fakeGit({ head: PIN }) }), null)
+    rmSync(join(pkg, target))
+    assert.match(
+      checkVendor({ root, git: fakeGit({ head: PIN }) }),
+      /index.js.*pnpm ui:types/,
+    )
+  })
+}

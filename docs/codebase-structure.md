@@ -1042,7 +1042,7 @@ Maintenance runs `bash /opt/nessa-cloud/bootstrap.sh maintenance "$PWD"` against
 the task checkout; the cached executable survives a branch that predates its
 source. Installed artifact hashes are checked against their setup record.
 The recipe verifies the owned Node 24 and
-repository pnpm, stable Rust, the UI revision and declared package entries, offline
+repository pnpm, stable Rust, the UI revision and concrete declared package entries, offline
 pnpm/Cargo dependencies and installed Playwright executables before fetching missing
 capabilities. The native
 package list and installed-package check remain with
@@ -1070,8 +1070,9 @@ tests hold the observed outcomes rather than inferring readiness from file prese
 | Verified tools and dependencies already exist | Same recipe checks capabilities and uses offline dependency resolution | Same identity, a new timestamp and recorded reuse; the entry mode stays the mode actually invoked |
 | Task branch predates bootstrap source | Setup-installed, hash-checked bootstrap/native/UI owners supply maintenance; task checkout supplies its pin and manifests | Provisioning identity stays separate from the task commit |
 | One tool, dependency or browser capability is missing | Its existing owner repairs it; Playwright owns both browser executables and their Linux dependency closure | A success receipt follows the capability check, including actual browser launch and local page assertion |
-| Node 24 executes but its bundled npm is absent or cannot run after a partial extraction | Node capability check requires both owned commands, then re-extracts the verified distribution before pnpm repair | `node=installed`; a failed replacement cannot publish a new success |
+| Node 24/npm version probes succeed but npm lacks an install-only dependency | Node capability check executes an offline, script-free dry-run install in an isolated empty package before reuse and after extraction | Repair precedes pnpm replacement; failed repair preserves prior success |
 | Pinned UI checkout lacks a declared package entry file, or that file is empty/not a regular file | UI preparation owner derives required files from package manifests; its offline check refuses reuse and its existing preparation builds them | `ui=prepared` only after the final owner check passes; no arbitrary content-integrity claim |
+| A package declares wildcard exports or typesVersions targets | The concrete-file check skips patterns and still checks every concrete target | Patterns are not treated as literal files; no wildcard-output completeness claim |
 | Browser repair stalls | Bootstrap bounds the Playwright-owned repair to 45 minutes with a 30-second forced-stop grace | Timeout exits unsuccessfully and preserves the prior success receipt |
 | A warm install runs the UI preinstall hook with a missing vendored dependency | Offline configuration is inherited by nested pnpm; missing dependencies force the explicit online fallback | A fetching attempt records `dependencies=fetched`, including nested UI resolution |
 | Checksum, dependency operation or readiness fails | Bootstrap exits unsuccessfully before publishing another success | Earlier receipt keeps its own timestamp; changed tool files are not claimed to be rolled back |

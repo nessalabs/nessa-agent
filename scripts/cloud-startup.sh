@@ -62,12 +62,20 @@ else:
         if hashlib.sha256((root / name).read_bytes()).hexdigest() != record['hashes'][name]:
             raise SystemExit('Cached provisioning artifact does not match its setup receipt.')
 PY
-# Node and its bundled npm are one installation capability: an interrupted
-# extraction may leave the executable usable before npm exists.
+# Version output alone does not load npm's install-only dependencies. Probe the
+# capability pnpm repair needs, offline and without scripts or dependency writes.
 node_ready() {
   [ -x "$cloud_root/node/bin/node" ] &&
-    [[ "$("$cloud_root/node/bin/node" --version)" == "v${node_major}."* ]] &&
-    PATH="$cloud_root/node/bin:$PATH" "$cloud_root/node/bin/npm" --version >/dev/null 2>&1
+    [[ "$("$cloud_root/node/bin/node" --version)" == "v${node_major}."* ]] || return 1
+  local probe
+  probe=$(mktemp -d) || return 1
+  printf '{"private":true}\n' > "$probe/package.json" || { rm -rf "$probe"; return 1; }
+  local result=0
+  PATH="$cloud_root/node/bin:$PATH" "$cloud_root/node/bin/npm" install \
+    --dry-run --offline --ignore-scripts --package-lock=false --global=false \
+    --prefix "$probe" --cache "$probe/cache" >/dev/null 2>&1 || result=$?
+  rm -rf "$probe"
+  return "$result"
 }
 node_status=reused
 if ! node_ready; then

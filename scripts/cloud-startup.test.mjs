@@ -55,7 +55,7 @@ else if (tool === 'curl') {
   const url = args.find(arg => arg.startsWith('https://'))
   fs.copyFileSync(marker(url.endsWith('SHASUMS256.txt') ? 'SHASUMS256.txt' : 'node.tar.xz'), output)
 } else if (tool === 'npm') {
-  if (args.includes('--version')) {
+  if (args.includes('--version') || args.includes('--dry-run')) {
     const runtime=spawnSync('node',['--version'],{encoding:'utf8'})
     if (runtime.status !== 0 || !runtime.stdout.startsWith('v24.')) process.exit(9)
     console.log('11.9.0'); process.exit(0)
@@ -273,7 +273,9 @@ test("cold preparation installs owned tools; warm maintenance verifies without n
       ({ tool, args }) =>
         tool === "curl" ||
         tool === "sudo" ||
-        (tool === "npm" && args[0] === "install") ||
+        (tool === "npm" &&
+          args[0] === "install" &&
+          !(args.includes("--dry-run") && args.includes("--offline"))) ||
         (tool === "rustup" && args[0] === "toolchain") ||
         (tool === "pnpm" &&
           (args.includes("playwright") ||
@@ -604,4 +606,54 @@ test("failed repair preserves an incomplete prior receipt", (t) => {
       .slice(offset)
       .some(({ tool, args }) => tool === "pnpm" && args.includes("--offline")),
   )
+})
+
+test("npm version alone cannot hide a missing install dependency", (t) => {
+  const f = bootstrapFixture(t)
+  assert.equal(f.prepare("setup").status, 0)
+  const npm = join(f.env.NESSA_CLOUD_ROOT, "node/bin/npm")
+  rmSync(npm)
+  writeFileSync(
+    npm,
+    '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 11.19.1; exit 0; fi\necho "Cannot find module @npmcli/arborist" >&2\nexit 7\n',
+  )
+  chmodSync(npm, 0o755)
+  rmSync(join(f.env.NESSA_CLOUD_ROOT, "node/bin/pnpm"))
+  assert.equal(spawnSync(npm, ["--version"], { env: f.env }).status, 0)
+  const repaired = f.prepare("maintenance")
+  assert.equal(repaired.status, 0, repaired.stderr)
+  assert.equal(f.receipt().steps.node, "installed")
+  assert.equal(f.receipt().steps.pnpm, "installed")
+})
+
+test("failed npm install capability after extraction preserves prior preparation", (t) => {
+  const f = bootstrapFixture(t)
+  assert.equal(f.prepare("setup").status, 0)
+  const receipt = join(f.env.NESSA_CLOUD_ROOT, "preparation.json")
+  const prior = readFileSync(receipt, "utf8")
+  rmSync(join(f.env.NESSA_CLOUD_ROOT, "node/bin/npm"))
+  const archiveNpm = join(f.root, "archive/node-v24.22.0-linux-x64/bin/npm")
+  rmSync(archiveNpm)
+  writeFileSync(
+    archiveNpm,
+    '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 11.19.1; exit 0; fi\nexit 7\n',
+  )
+  chmodSync(archiveNpm, 0o755)
+  execFileSync("tar", [
+    "-cJf",
+    join(f.root, "node.tar.xz"),
+    "-C",
+    join(f.root, "archive"),
+    "node-v24.22.0-linux-x64",
+  ])
+  const checksum = createHash("sha256")
+    .update(readFileSync(join(f.root, "node.tar.xz")))
+    .digest("hex")
+  writeFileSync(
+    join(f.root, "SHASUMS256.txt"),
+    `${checksum}  node-v24.22.0-linux-x64.tar.xz\n`,
+  )
+  const failed = f.prepare("maintenance")
+  assert.notEqual(failed.status, 0)
+  assert.equal(readFileSync(receipt, "utf8"), prior)
 })
