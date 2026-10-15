@@ -10,8 +10,8 @@ use super::{
 use crate::{
     application::agent_execution::sessions::{
         records::{continuation::Continuation, FactKey, FactKind},
-        SessionLoad, SessionLoadState, SessionSaveBackend, SessionSaveGeneration,
-        SessionSaveReceipt, SessionSaveUnit, SessionSnapshot, StorageError,
+        SessionLoad, SessionLoadState, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+        SessionSnapshot, StorageError,
     },
     domain::agent_execution::sessions::{ProviderContext, SessionId},
 };
@@ -475,11 +475,9 @@ fn binding(
     base: u64,
     generation: u64,
 ) -> Result<SessionSaveGeneration, StorageError> {
-    Ok(SessionSaveGeneration::new(
-        SessionSaveBackend::Record {
-            stream: Id::new(stream.id.as_str()).map_err(|_| StorageError::IdentityMismatch)?,
-            incarnation: stream.incarnation.0,
-        },
+    Ok(SessionSaveGeneration::record(
+        Id::new(stream.id.as_str()).map_err(|_| StorageError::IdentityMismatch)?,
+        stream.incarnation.0,
         base,
         generation,
     ))

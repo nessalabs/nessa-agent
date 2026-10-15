@@ -1,6 +1,15 @@
 # Peer gateways — issue 705, slice H
 
-Status: this branch. Part of [#252](https://github.com/nessalabs/nessa-agent/issues/252)
+Status: on main. The granting side, reads behind share grants, enrollment
+and the poller are merged
+([#725](https://github.com/nessalabs/nessa-agent/pull/725),
+[#728](https://github.com/nessalabs/nessa-agent/pull/728),
+[#729](https://github.com/nessalabs/nessa-agent/pull/729),
+[#731](https://github.com/nessalabs/nessa-agent/pull/731),
+[#738](https://github.com/nessalabs/nessa-agent/pull/738)); a read goes
+direct or through the relay
+([#266](https://github.com/nessalabs/nessa-agent/issues/266)). Local
+discovery is not this slice. Part of [#252](https://github.com/nessalabs/nessa-agent/issues/252)
 (slice H of [ADR 252](../../adr/todo/252-runtime-roles-and-execution-leases.md)).
 The map's rules are in
 [Identity and trust](../runtime-architecture.md#identity-and-trust),

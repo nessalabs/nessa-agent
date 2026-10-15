@@ -1,0 +1,59 @@
+{
+  "NessaBackup": {
+    "entityTypes": {
+      "Principal": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "kind": {
+              "type": "String",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "Inventory": {
+        "shape": {
+          "type": "Record",
+          "attributes": {},
+          "additionalAttributes": false
+        }
+      }
+    },
+    "actions": {
+      "deletion.inventory.record": {
+        "appliesTo": {
+          "principalTypes": ["Principal"],
+          "resourceTypes": ["Inventory"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "cause": {
+                "type": "String",
+                "required": true
+              }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "deletion.inventory.capture": {
+        "appliesTo": {
+          "principalTypes": ["Principal"],
+          "resourceTypes": ["Inventory"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "cause": {
+                "type": "String",
+                "required": true
+              }
+            },
+            "additionalAttributes": false
+          }
+        }
+      }
+    }
+  }
+}

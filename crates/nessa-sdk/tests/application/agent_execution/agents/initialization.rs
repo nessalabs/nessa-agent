@@ -492,10 +492,18 @@ impl SessionStorageLease for ContradictoryRecordLoadLease {
     fn load(&self) -> StorageFuture<'_, SessionLoad> {
         Box::pin(async move {
             let actual = self.backing.load().await?;
+            let SessionSaveBackend::Record {
+                stream,
+                incarnation,
+            } = actual.binding().backend()
+            else {
+                panic!("record binding")
+            };
             Ok(SessionLoad::new(
                 actual.snapshot().cloned(),
-                SessionSaveGeneration::new(
-                    actual.binding().backend().clone(),
+                SessionSaveGeneration::record(
+                    stream.clone(),
+                    *incarnation,
                     self.base,
                     self.generation,
                 ),

@@ -122,7 +122,7 @@ fn create_key(directory: &Path, key_path: &Path) -> std::io::Result<MacKey> {
 /// The temporary name is this attempt's. A directory sync that fails after
 /// the rename puts the previous bytes back, or removes `path` when it was
 /// absent, before the error is returned.
-fn persist(directory: &Path, path: &Path, text: &str) -> std::io::Result<()> {
+pub(crate) fn persist(directory: &Path, path: &Path, text: &str) -> std::io::Result<()> {
     persist_with(directory, path, text, &sync_directory)
 }
 

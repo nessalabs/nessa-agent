@@ -455,6 +455,73 @@ async fn a_stale_log_is_reconciled_again() {
     assert!(keys.contains(&ours.key()));
 }
 
+/// Another capture stores a share-grant revoke as this writer loads. The
+/// fence source is empty until that store is visible. Reading fences before
+/// the load would drop the revoke; reading them after the load keeps it.
+#[tokio::test]
+async fn a_concurrent_revoke_is_not_dropped_by_a_stale_fence_snapshot() {
+    let revoke = DeletionFence::share_grant("c", "r", "cred", GrantRole::Read, 4).unwrap();
+    let source = RevokeLandsOnLoad::new(revoke.clone());
+    let recorded = capture_fences(&[&source], &source).await.unwrap();
+    let keys: Vec<&str> = recorded
+        .entries()
+        .iter()
+        .map(|entry| entry.fence().key())
+        .collect();
+    assert!(keys.contains(&revoke.key()), "{keys:?}");
+}
+
+/// The revoke is absent from the fence source until `load` has observed the
+/// log that already holds it.
+struct RevokeLandsOnLoad {
+    log: Mutex<DeletionLog>,
+    revoke: DeletionFence,
+    visible: AtomicBool,
+}
+
+impl RevokeLandsOnLoad {
+    fn new(revoke: DeletionFence) -> Self {
+        Self {
+            log: Mutex::new(DeletionLog::default()),
+            revoke,
+            visible: AtomicBool::new(false),
+        }
+    }
+}
+
+#[async_trait]
+impl FenceSource for RevokeLandsOnLoad {
+    async fn fences(&self) -> Result<Vec<DeletionFence>, ()> {
+        if self.visible.load(Ordering::SeqCst) {
+            Ok(vec![self.revoke.clone()])
+        } else {
+            Ok(vec![])
+        }
+    }
+}
+
+#[async_trait]
+impl DeletionLogStore for RevokeLandsOnLoad {
+    async fn load(&self) -> Result<DeletionLog, ()> {
+        let mut guard = self.log.lock().unwrap();
+        if guard.entries().is_empty() {
+            let (landed, _) = DeletionLog::default().append(self.revoke.clone());
+            *guard = landed;
+            self.visible.store(true, Ordering::SeqCst);
+        }
+        Ok(guard.clone())
+    }
+
+    async fn store(&self, base: &DeletionLog, next: &DeletionLog) -> Result<(), LogStoreError> {
+        let mut guard = self.log.lock().unwrap();
+        if guard.canonical() != base.canonical() {
+            return Err(LogStoreError::Stale);
+        }
+        *guard = next.clone();
+        Ok(())
+    }
+}
+
 /// The first `store` reports [`LogStoreError::Stale`] after another fence
 /// landed. The retry has to keep that fence.
 struct StaleOnce {
