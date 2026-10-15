@@ -1,18 +1,20 @@
 # Review-notice verification (#918, #920)
 
-Current behavioral source: `83d0730dc18b67b19e55ed55e701955ed7664b3a`, including
-the graceful review-audit shutdown correction. Test-only follow-up
-`4ecdf3e1af3a386fe0f15b161fe0b46ee7ac9484` removes a needless borrow; its
-production files are byte-identical. This capture refresh changes no runtime behavior.
+Current behavioral source: `1d134c1fe6f1a47184a8848534cfdf307b6a0322`, including
+the graceful review-audit shutdown ownership and typed failed-read correction.
+Metadata or current-session read failure now terminates publication with typed
+unavailability; genuine absent metadata remains a hidden notice. This capture
+refresh changes no runtime behavior.
 
 The gateway was rebuilt from assembly
-`f4bc82cc4aaccb524dcb37ba1eec82c442ed790e`, tree
-`23bfb1e54e6dcec64ad961a7c1150465275e52f2`. It combines that notice source,
-main `cc7bacc5ed343b17f8a778446776e45a34037c43` (including merged #928),
-Windows test-control repair `27f74b4b1f51c729fe34ad97227e68e7c0a55d6b` from #936,
-and cloud bootstrap `ba628d0030a32f9a5231c1d92f9032d52efa3de3` from #933.
-All integrations were conflict-free. Offline frozen pnpm preparation and the
-current-main UI pin passed `ui:check` before the rebuilt run.
+`873f30b6d686b8a87f794b424b96d9a6b8ab599b`, tree
+`3babf8b3a61657bd46026e1b15a378476bf7269e`. It combines notice source
+`1d134c1fe6f1a47184a8848534cfdf307b6a0322`, main
+`cc7bacc5ed343b17f8a778446776e45a34037c43` (including merged #928),
+Windows test repair `340b9d20e3d00da689bab3d75c2f02efb5b9ff20` from #936,
+and Cloud bootstrap `42d7117da71d78560e25b66acd8e6ad7139e6f2b` from #933.
+All integrations were conflict-free. The current-main UI pin passes `ui:check`;
+the dependency installation was already prepared before this source refresh.
 
 Environment: local macOS, Vite development mode, bundled Chromium and WebKit,
 columns layout. `MCP_LIVE_NESSA` selected the newly built gateway.
@@ -54,15 +56,29 @@ changes, audit failure and connection teardown rather than screenshots alone.
 
 ## Current behavioral checks and limits
 
-Frozen audit source `4ecdf3e1af3a386fe0f15b161fe0b46ee7ac9484` passed 109 affected
-review tests, 41 composition tests, four report tests, and the exact seven-package
-all-target Clippy selection with `-D warnings` under Rust 1.99.0 on local macOS.
-Its eight prior owner and fourteen shutdown reversals each produced an intended
-test assertion failure. Restored 109/41/4 suites passed; all 35 changed-file hashes
-matched the frozen source and restored export. The earlier 28 reversals remain
-qualified to `f24f4d147`, rather than this later shutdown source. Final integration
-and independent review are recorded separately on the PR; screenshots do not
-establish these Rust guarantees. Suites overlap.
+Current notice source `1d134c1f` passes 112 affected review tests and
+41 composition tests, `nessa-server` all-target Clippy with `-D warnings`,
+formatting and architecture under Rust 1.98.1. Three source-qualified reversals
+separately hid metadata errors, hid current-session errors, or failed genuine
+absence. Each failed its expected behavioral assertion. Exact restoration of all
+69 changed-file hashes then passed 112 review tests. Final independent review
+is recorded separately on the PR against its actual source. Suites overlap.
+
+An actual socket regression reproduces the old false empty replacement on
+metadata storage failure and requires `TemporaryUnavailable` before any new
+replacement or Cedar/audit answer. A separate actual publisher/queue regression
+reproduces transient current-session failure and requires typed unavailability
+without a queued replacement. The existing connection owner maps that failure
+to `TemporaryUnavailable`. Recovery with unchanged board/authority/share state
+and genuine absence are separate positive cases. These error injections are
+Rust wire/publication evidence; the browser captures show healthy permission
+and live-conversation flows.
+
+The shutdown owner at `4ecdf3e1` separately completed all 22 qualified reversals
+and restored 109 review, 41 composition and four report tests. Those checks
+retain their source qualification; the read-result correction does not claim to
+rerun them. The earlier rebuilt `f4bc82cc` assembly passed 16/13/8 browser checks
+and 109/41 combined Rust checks before the current metadata correction.
 
 The auditor now fences new admission during graceful cleanup, retains admitted
 pre-policy operations and transferred decisions, and reports its typed drain
