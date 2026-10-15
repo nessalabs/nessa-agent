@@ -365,6 +365,65 @@ mod tests {
     }
 
     #[test]
+    fn an_explicit_empty_running_result_clears_the_one_already_held() {
+        let store = LocalTraceStore::with_capture(ContentCapture::on());
+        let mut recorder = TraceRecorder::new(store.clone(), ContentCapture::on());
+        recorder.begin_turn(
+            Duration::from_millis(1),
+            TurnIdentity::new(
+                "conversation-1",
+                "execution-1",
+                "opencode",
+                "agent",
+                "model",
+                None,
+            ),
+            "",
+        );
+        let running = ToolCallUpdate::new(
+            ToolCallId::new("call-1").unwrap(),
+            None,
+            Some(ToolKind::Read),
+            Some(ToolStatus::Running),
+            None,
+            Some(vec![ToolContent::text("secret-marker")]),
+        );
+        let cleared = ToolCallUpdate::new(
+            ToolCallId::new("call-1").unwrap(),
+            None,
+            Some(ToolKind::Read),
+            Some(ToolStatus::Running),
+            None,
+            Some(vec![]),
+        );
+        let status_only = ToolCallUpdate::new(
+            ToolCallId::new("call-1").unwrap(),
+            None,
+            Some(ToolKind::Read),
+            Some(ToolStatus::Completed),
+            None,
+            None,
+        );
+        recorder.tool(
+            Duration::from_millis(2),
+            tool_fact(Some("Read".into()), None, &running, true),
+        );
+        recorder.tool(
+            Duration::from_millis(3),
+            tool_fact(Some("Read".into()), None, &cleared, true),
+        );
+        recorder.tool(
+            Duration::from_millis(4),
+            tool_fact(Some("Read".into()), None, &status_only, true),
+        );
+        recorder.finish(Duration::from_millis(5), FinishReason::Stop);
+        let spans = store.read("conversation-1");
+        let tool = tool_span(&spans);
+        assert_eq!(tool.string("gen_ai.tool.call.result"), Some(""));
+        assert!(!format!("{tool:?}").contains("secret-marker"));
+    }
+
+    #[test]
     fn a_kind_spelling_is_replaced_by_a_later_provider_name() {
         let store = LocalTraceStore::new();
         let mut recorder = TraceRecorder::new(store.clone(), ContentCapture::off());

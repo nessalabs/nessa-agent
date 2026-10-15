@@ -87,14 +87,16 @@ place. A tool update the turn rejects is not recorded.
 When content capture is on, `gen_ai.input.messages`, `gen_ai.output.messages`,
 `gen_ai.tool.call.arguments`, and `gen_ai.tool.call.result` carry the text.
 They are absent otherwise. A result that arrives while the tool is still
-running is kept and written when the span closes. That includes a completion
-patch that carries only a status, and a turn that ends with the tool still
-open. A completion that carries its own result uses that result, including
-when the result is empty. An update whose content is present and empty
-(`content: []`) is that empty result. An update that omits content leaves
-the earlier result. Arguments follow the same rule: a completion that
-supplies them writes them, including when they are empty, and a completion
-that omits them leaves the arguments already seen. A permission request
+running is kept and written when the span closes, including when that result
+is empty. A later completion that carries only a status exports the result
+already held, and so does a turn that ends with the tool still open. A
+completion that carries its own result uses that result, including when the
+result is empty. An update whose content is present and empty (`content: []`)
+is that empty result, whether the tool is still running or already complete.
+An update that omits content leaves the earlier result. Arguments follow the
+same rule: an update that supplies them writes them, including when they are
+empty, and an update that omits them leaves the arguments already seen. A
+permission request
 that carries arguments writes them onto the tool span, including when the
 answer was recorded first and opened the span. A token or context count
 that does not fit in a signed 64-bit integer is left off the span.

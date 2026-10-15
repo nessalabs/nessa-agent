@@ -1041,7 +1041,10 @@ fn fold_open_tool(tool: &mut OpenTool, fact: &ToolFact, capture: bool) {
     if let Some(arguments) = fact.arguments.as_deref() {
         set_str(&mut tool.span.attributes, ATTR_TOOL_ARGUMENTS, arguments);
     }
-    if let Some(result) = fact.result.as_ref().filter(|result| !result.is_empty()) {
+    // Present content, including content that renders nothing, replaces what
+    // this span is holding. A later completion that omits its result exports
+    // this value. Omitted content leaves the earlier result alone.
+    if let Some(result) = fact.result.as_ref() {
         tool.result = Some(result.clone());
     }
 }
