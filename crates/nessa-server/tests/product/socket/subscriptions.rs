@@ -985,51 +985,6 @@ async fn replay_then_live_misses_no_commit_under_concurrent_writes() {
     }
 }
 
-/// Row S8.
-#[tokio::test]
-async fn commits_while_a_frame_waits_collapse_into_one_frame() {
-    let fixture = SubscriptionFixture::new().await;
-    let mut client = fixture.connect();
-    let id = client.subscribe("subscribe", &fixture.id).await;
-    client.next().await;
-    fixture.stall(&mut client).await;
-    for turn in 1..=3 {
-        fixture.turn(&format!("turn-{turn}")).await;
-        fixture.settled_read(turn).await;
-    }
-    client.gate.open();
-    let mut frames = Vec::new();
-    loop {
-        let Some(message) = client.within(EXPECTED).await else {
-            break;
-        };
-        if message["payload"]["subscriptionId"] != id.as_str() {
-            continue;
-        }
-        let done = settled(&message, 3);
-        frames.push(message);
-        if done {
-            break;
-        }
-    }
-    // The frame offered at the first commit, then one with all of them.
-    assert!(
-        (1..=2).contains(&frames.len()),
-        "many commits, at most two frames: {}",
-        frames.len()
-    );
-    assert!(settled(frames.last().unwrap(), 3));
-    assert!(
-        client
-            .within(QUIET)
-            .await
-            .filter(|message| message["payload"]["subscriptionId"] == id.as_str())
-            .is_none(),
-        "commits while the frame waited stay in those frames"
-    );
-    client.close().await;
-}
-
 /// Row S9: a commit that changes no row of the list wakes the list
 /// subscription, and it sends nothing.
 #[tokio::test]
@@ -4414,6 +4369,7 @@ struct CatalogFixture {
     inner: SubscriptionFixture,
     connected: Arc<Mutex<Vec<String>>>,
     changes: tokio::sync::watch::Sender<u64>,
+    read: Arc<tokio::sync::Notify>,
 }
 
 impl CatalogFixture {
@@ -4422,17 +4378,24 @@ impl CatalogFixture {
         let connected = Arc::new(Mutex::new(Vec::new()));
         let changes = tokio::sync::watch::Sender::new(0);
         let names = connected.clone();
+        let read = Arc::new(tokio::sync::Notify::new());
+        let observed = read.clone();
         inner.state =
             inner
                 .state
                 .with_connected_environments(crate::product::ConnectedEnvironments {
-                    names: Arc::new(move || names.lock().unwrap().clone()),
+                    names: Arc::new(move || {
+                        let names = names.lock().unwrap().clone();
+                        observed.notify_one();
+                        names
+                    }),
                     changes: changes.subscribe(),
                 });
         Self {
             inner,
             connected,
             changes,
+            read,
         }
     }
 
@@ -4548,27 +4511,38 @@ async fn a_gateway_pairing_no_environments_sends_its_catalog_once() {
     client.close().await;
 }
 
-/// Row AC3: changes while a frame waits for the writer are read once, after
-/// it is written, as the catalog stands then: at most one more frame, never
-/// one per change.
+/// Rows S8 and AC3 exercise their shared subscription loop. Durable view
+/// replay/cursors stay covered by S7; no physical I/O races the delivery
+/// deadline while this test holds the writer (#935).
 #[tokio::test]
 async fn changes_while_a_catalog_frame_waits_collapse_into_one_frame() {
     let fixture = CatalogFixture::new().await;
     let mut client = fixture.connect();
     let (id, _) = fixture.subscribe(&mut client, "agents").await;
+    fixture.read.notified().await; // Consume the initial read's notification.
+    // All real fixture/authentication/storage setup is complete. The held
+    // phase uses synchronous catalog changes and the actual in-memory socket.
+    tokio::time::pause();
     fixture.inner.stall(&mut client).await;
     let names: Vec<String> = ["01", "02", "03", "04", "05", "06"]
         .into_iter()
         .map(peer)
         .collect();
-    for name in &names {
+    fixture.connects(&names[0]);
+    // On this current-thread runtime the synchronous read returns to the
+    // shared loop, which offers its first frame before yielding here. The
+    // writer is still held, so later updates overlap an actual pending offer.
+    fixture.read.notified().await;
+    for name in &names[1..] {
         fixture.connects(name);
     }
     client.gate.open();
     let mut expected = vec!["build.example".to_owned()];
     expected.extend(names.iter().cloned());
     let frames = client.until(&id, |frame| places(frame) == expected).await;
-    assert!(frames.len() <= 2, "{frames:?}");
+    assert_eq!(frames.len(), 2, "the held frame and one latest frame: {frames:?}");
+    assert_eq!(places(&frames[0]), ["build.example", names[0].as_str()]);
+    tokio::time::resume();
     client.quiet(&id).await;
     client.close().await;
 }

@@ -232,6 +232,13 @@ Each row has one test. Server tests are in
 `crates/nessa-server/tests/product/socket/subscriptions.rs` unless named
 otherwise.
 
+S8 separates the shared loop’s coalescing from durable view replay. Its catalog
+regression finishes filesystem setup before pausing time, observes the first
+read while the writer is held, then changes the remaining state synchronously.
+S7 retains actual committed views and monotonic cursors. A writer deliberately
+held through real durable I/O can reach S10 instead; S8 makes no storage-speed
+guarantee (#935).
+
 | Row | State and input | Result | Test |
 |---|---|---|---|
 | S1 | Subscribe to a conversation | Wake sources registered, first read, then the reply, then the first frame | `subscribe_replies_after_the_first_read_then_sends_the_view` |
@@ -241,7 +248,7 @@ otherwise.
 | S5 | A long history and an `after` inside it | Replayed in bounded reads, one frame in flight; no frame behind `after` | `a_long_history_replays_in_bounded_frames_and_never_behind_the_cursor` |
 | S6 | A commit after the first frame | One new frame | `a_commit_after_subscribe_is_delivered` |
 | S7 | Commits racing the subscription's reads | The last frame shows the last commit; cursors only move forward | `replay_then_live_misses_no_commit_under_concurrent_writes` |
-| S8 | Many commits while a frame waits for the writer | One next frame, with the latest state | `commits_while_a_frame_waits_collapse_into_one_frame` |
+| S8 | Many changes while a frame waits for the writer, before the delivery deadline | One next frame, with the latest state | `changes_while_a_catalog_frame_waits_collapse_into_one_frame` (shared subscription loop, controlled in-memory changes); `replay_then_live_misses_no_commit_under_concurrent_writes` (real-store view/cursor integration) |
 | S9 | A wake that changes nothing the client sees (the revision and `serverNowMs` alone may differ) | No frame | `a_wake_that_changes_nothing_sends_nothing`; `views_that_differ_only_in_revision_have_one_key` (unit) |
 | S10 | A frame not taken by the writer within `deliveryTimeoutMs` | Ended `lagging` with `lastDelivered`; the socket stays | `a_frame_not_taken_in_time_ends_the_subscription_as_lagging` |
 | S11 | Resubscribe after `lagging` from `lastDelivered` | Frames continue; the last equals a cold read | `a_lagging_subscriber_resumes_from_its_cursor` |
