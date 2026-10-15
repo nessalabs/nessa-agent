@@ -93,3 +93,57 @@ design documentation after review base `9812c3c`. A conflict-free merge-tree
 integration produced `a00c5731a02b4c8f300c80b2be83741ce55c7ac6`; runtime, UI,
 protocol, scripts, manifests, lockfiles and workflow blobs are identical to the
 semantic source above.
+
+## Integrated verification after the authority refresh correction
+
+The gateway was rebuilt from local assembly `2f901190325d2b420e0e21f1cb5e6fbaa9db2e48`,
+tree `8439093be5c5262ef89f9c34a93822224a23fa17`. It combines main
+`4219790db1827ee841eacfaf73c00605eec6bc07`, notice source
+`42f2c982dd3767fe11fb202ecdc6453b87e15000` (#925), and audit source
+`c11524cb6693fe50784b97ed3e8a8f898e8f7966` (#928). Both merges were conflict-free.
+The evidence-only commit that adds this section changes no executable source.
+
+`MCP_LIVE_NESSA` selected that newly built gateway, with the bundled browser
+channel in local macOS/Vite development mode. All three checks passed in both
+Chromium and WebKit. Counts are combined across engines and shared setup.
+
+```text
+mcp-apps-gateway: 16/16 held
+gateway-window: 13/13 held
+ok    permission [chromium columns]
+ok    allow [chromium columns]
+ok    fail [chromium columns]
+ok    cancel [chromium columns]
+ok    permission [webkit columns]
+ok    allow [webkit columns]
+ok    fail [webkit columns]
+ok    cancel [webkit columns]
+scripted-scenarios: 8/8 held
+Verdict: pass
+```
+
+The same assembled source passed the exact seven-package all-target CI Clippy
+selection with `-D warnings`. Its normal build and Clippy emitted the existing
+allowed long-running constant-evaluation advisory in the lease-protocol macro.
+The browser console retained only the known harmless #485 aborted 204 response.
+
+These JPEG captures at 1440 pixels wide show the permitted recipient and normal
+gateway flow. The long-lived Rust wire regression proves revocation on the same
+socket with unchanged board generation: authority revisions trigger replacement,
+a new revision with the same role wakes it, stable revisions stay quiet, and disabled
+membership closes with typed authorization loss. Fresh source review was clean.
+The source passed 67 review tests, 26 policy tests and 292 socket tests (one existing
+latency measurement ignored), plus formatting, architecture and package Clippy.
+
+Four separate executed reversals failed their assertions, then exact source was
+restored: removing authority invalidation, always invalidating a stable revision,
+observing role instead of committed revision, and discarding authentication's
+initial revision. These are distinct from the earlier seven baseline probes.
+
+![Integrated permission review in Chromium](integrated-permission-chromium.jpg)
+
+![Integrated permission review in WebKit](integrated-permission-webkit.jpg)
+
+![Integrated gateway in Chromium](integrated-gateway-chromium.jpg)
+
+![Integrated gateway in WebKit](integrated-gateway-webkit.jpg)
