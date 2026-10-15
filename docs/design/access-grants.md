@@ -337,10 +337,15 @@ in `commands.cedar`.
 
 ## Same person
 
-At gateway pairing the owner can say these two gateways are the same
-person. The credential still names `gateway:<key>` and `hold.peer` is
-unchanged. A link row says that gateway principal acts for the owner's
-person principal. Admission reports the person as who it acts for and the
+At `pairing.create` the owner can say these two gateways are the same
+person. That choice is an immutable field of the invitation. The
+`gateway:<key>` principal is not known until the peer key is claimed and
+activation runs, so the invitation stores no link row. A restart between
+create and activation reads the choice from the invitation and does not
+ask again. The Active commit writes the link when the choice is true, and
+writes no link when it is false. The credential still names `gateway:<key>`
+and `hold.peer` is unchanged. A link row says that gateway principal acts
+for the owner's person principal. Admission reports the person as who it acts for and the
 grant as what it may do. The link adds no capability, copies no
 conversation, and does not turn the peer into the owner phone. The grant
 subject stays that gateway's receiver. Two gateways linked as the same
@@ -365,7 +370,9 @@ on a new incarnation, `cursor_ahead` refused, `lagging` resumed from
 `lastDelivered`. A chat subscription keeps the view cursor
 `{incarnation, position}` from #851. The grant subscription's position is
 an opaque counter for this receiver only. It advances when that receiver's
-grants change. It is not an owner catalogue revision, so a gap from the
+grants change, in the same write as the grant. A removal is a tombstone
+in that log. The subscription task reads the log and does not invent a
+position. It is not an owner catalogue revision, so a gap from the
 owner's other work does not appear in it.
 
 - **Grants.** A grant subscription for this receiver. Each frame is a
@@ -589,12 +596,14 @@ epoch. Admitted work finishes, and the next command is refused.
   transport error the live attempt observed with no response byte.
   `sent`, `timed out`, `not sent`, and `unknown` are the terminal
   records. They do not replace `sending`. A later admission of those
-  delivery ids is refused. If the outcome write fails after the response,
-  or the process stops before it commits, the `sending` row stays.
-  Restart finds `sending` with no later record and does not POST that
-  delivery id again. It appends a reconciliation record: outcome unknown,
-  cause audit unavailable after send, the same delivery id, target, and
-  epoch. The effect is not relabeled `sent` and the `sending` row is not
+  delivery ids is refused. If the outcome write fails after the response
+  and this process still holds that response, the `sending` row stays and
+  the permit drops. The live sender writes that same outcome on the next
+  successful outbox write and does not POST. If this process holds no
+  outcome, or restart finds `sending` with no later record, the row is
+  appended `unknown`, cause audit unavailable after send, the same
+  delivery id, target, and epoch. That delivery id is not posted again.
+  The effect is not relabeled `sent` and the `sending` row is not
   removed. A new event is a new delivery id.
 - Revoke takes the same permit. When an attempt holds it, revoke waits
   until that attempt records its outcome and drops the permit, and no
@@ -621,7 +630,9 @@ epoch. Admitted work finishes, and the next command is refused.
   no terminal record has, and this attempt has not read a complete
   response, the sender closes its side of the POST, records `timed out`,
   and drops the permit. If a complete response has been read, the deadline
-  commits that outcome and does not record `timed out`. If neither the
+  commits that outcome and does not record `timed out`. If that outcome
+  write does not commit, the live sender writes it on the next successful
+  outbox write and does not POST. If neither the
   `sending` write nor the `not sent` write has committed, the deadline
   drops the permit and the row stays the state the attempt read. The next
   successful read of that outbox admits it. Revoke
@@ -650,10 +661,8 @@ paired peer that has a discovery key. The pinned key, its fingerprint, and
 any other stable gateway id stay out of the announcement. The owner name,
 the organization, conversation ids, directories, and grants stay out too.
 
-The token is HMAC-SHA256 over the canonical bytes of the current time
-window, the dial address, and the port, in that order. The window and the
-port are unsigned big-endian integers. The address is one numeric form,
-the same bytes for the same endpoint. The slice owns that encoding. A
+The token is HMAC-SHA256 of the byte string in P-announce. This section
+does not define a second encoding. A
 token copied onto a different address or port does not match. The key is the
 32-byte MAC key from the P-install derivation, shared with that one peer.
 This section does not define a second derivation. It is not in the
@@ -717,6 +726,14 @@ says the safety action proceeds when the audit sink is unavailable
 (D-audit-down) or the permit drops while the outbox row stays `queued`
 (W-deadline-queued).
 
+Inside one store, a change a peer can observe and the cursor or outcome
+that names it commit in the same write. A non-terminal in-flight row is
+reconciled by the live sender when the next read or write of that store
+succeeds. Restart uses that same reconciler. Process exit is not the
+reconciler. The conversation store and the outbox are not one store, so
+the outbox scan fills the gap between them. The snapshot pin stays
+process memory. X2 names the rows.
+
 ### Grant
 
 **Source of truth.** The grant row, keyed by `(subject_kind, subject_id,
@@ -740,20 +757,20 @@ decision.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| G-share | absent | `conversation.share` | Cedar permits. A paired subject kind is `receiver`. An integration or a later agent uses subject kind `principal`. The capabilities match G8. The encoded grant fits in one 64 KiB frame with the frame overhead. | active | The owner | Insert the one row for that key, at the epoch of this commit | Target the grant key, before absent, after active, cause share, initiator the owner |
+| G-share | absent | `conversation.share` | Cedar permits. A paired subject kind is `receiver`. An integration or a later agent uses subject kind `principal`. The capabilities match G8. The encoded grant fits in one 64 KiB frame with the frame overhead. | active | The owner | Insert the one row for that key, at the epoch of this commit. When the subject kind is `receiver`, this same write appends that receiver's grant-log record at the next position: the grant key and active at that epoch. A principal subject has no grant log. | Target the grant key, before absent, after active, cause share, initiator the owner |
 | G-deny | absent | `conversation.share` | Cedar denies | absent | The owner | Nothing | Refusal, cause Cedar denial, initiator the owner. No grant row |
 | G-same | active | `conversation.share` of the same capabilities and constraints | Cedar permits. The key matches the stored row. | active, same epoch | The owner | Nothing. The epoch stays. | None. There is no transition |
-| G-bump | active | Capabilities or constraints change | Cedar permits the new set. The set matches G8. The encoded grant still fits in one frame. | active, epoch incremented | The owner | The same row, epoch incremented by one | Target the grant key, before epoch N, after epoch N+1, cause the change, initiator the owner |
+| G-bump | active | Capabilities or constraints change | Cedar permits the new set. The set matches G8. The encoded grant still fits in one frame. | active, epoch incremented | The owner | The same row, epoch incremented by one. When the subject kind is `receiver`, this same write appends the grant-log record: the grant key and active at the new epoch. | Target the grant key, before epoch N, after epoch N+1, cause the change, initiator the owner |
 | G-bump-deny | active | Capabilities or constraints change | Cedar denies | active, same epoch | The owner | Nothing | Refusal, cause Cedar denial, initiator the owner. The row is unchanged |
 | G-caps | absent or active | Share or bump names a capability | The capability does not apply to that resource kind | The state unchanged | The owner | Nothing | Refusal, cause capability does not apply to that resource, initiator the owner |
-| G-revoke | active | Unshare or grant revoke | The registration permit is free when the subject is an integration. See W-revoke. | absent | The owner | The row is removed | Target the grant key, before active, after absent, cause unshare or revoke, initiator the owner. One commit with the removal |
+| G-revoke | active | Unshare or grant revoke | The registration permit is free when the subject is an integration. See W-revoke. | absent | The owner | The row is removed. When the subject kind is `receiver`, this same write appends a tombstone: the grant key and absent, at the next position. | Target the grant key, before active, after absent, cause unshare or revoke, initiator the owner. One commit with the removal |
 | G-admit | active | A use reads the row | The row is present | active | The use: a turn, a lease, a subscribe, a webhook attempt, or a directory open | Nothing on the grant row. The use stores the epoch it read on its own record | None on the grant row |
 | G-next | absent | The next admission after revoke | No row for that key | absent | The next use | Nothing | Refusal, cause no grant, initiator the use |
 | G-inflight | active, or already absent | Work that already read an epoch finishes | The use stored that epoch at G-admit | The use's own terminal state. The grant row stays as the later grant commit left it. | The use that read the epoch | The use's own outcome. No second grant row | The use's own audit. The epoch on that record is the epoch it read |
-| G-link | any grant state | The same-person link is recorded | The link names who the gateway acts for | Unchanged. The grant subject stays the receiver. | The owner, at pairing | The link row only. No grant row is inserted or copied. | Target the gateway principal, before no link, after the person link, cause the same-person choice, initiator the owner |
+| G-link | any grant state | Activation applies the invitation's stored choice | The invitation's choice is true. The principal is the `gateway:<key>` this activation stored. The choice was not asked again. | Unchanged. The grant subject stays the receiver. | Activation, in the P-active commit | The link row only, in that same write. No grant row is inserted or copied. | Target the gateway principal, before no link, after the person link, cause the same-person choice, initiator the owner |
 | G-unlink | link present | `credential.revoke`, credential expiry, or enrollment revoke | The link names that gateway principal | link absent. Grant rows stay. A later credential does not inherit it. | The owner, or expiry | The link row is removed. Enrollment revoke does this in the same commit as P-revoke. Credential revoke commits in the credential store first, and this removal commits next. A crash between them is C-G-unlink. | Target the gateway principal, before the person link, after no link, cause credential revoked, expired, or enrollment revoked, initiator the owner or expiry |
 | G-cred | active | `credential.revoke` or credential expiry | The credential is the one that subject uses | active, same epoch | The owner, or expiry | Nothing on the grant row | None on the grant row. W-cred records the registration stop |
-| G-marker | active | Directory open finds a missing root, a missing marker, or different bytes | The grant's resource is that directory resource | absent | The open | Every grant for that resource is removed. The cause and the audit-failure rule are D-open-bad and D-audit-down. | D12. This row does not add a second cause |
+| G-marker | active | Directory open finds a missing root, a missing marker, or different bytes | The grant's resource is that directory resource | absent | The open | Every grant for that resource is removed. Each receiver subject's grant log gets a tombstone in this same write. The cause and the audit-failure rule are D-open-bad and D-audit-down. | D12. This row does not add a second cause |
 | G-current | metadata file at this build's version | Process open | The file is this build's version | Open. The process serves that file. | Startup | Nothing. Startup does not rewrite the file. | None |
 | G-refuse-old | metadata file at another version | Process open | The version is not this build's, including the previous share shape | Refused. The process does not serve that file. | Startup | Nothing. Startup does not migrate, does not delete, and does not rewrite the file. The owner deletes it. | Refusal, target the metadata file, before the other version, after refused, cause metadata version, initiator startup |
 
@@ -830,7 +847,7 @@ A `sending` row is not scanned into a new POST.
 7. **W7.** If the `sending` write fails, no POST byte is written. The row is written `not sent`, cause audit unavailable, conditional on the row still being the state the attempt read, and that write commits before the permit drops. Rows: W-audit-fail.
 8. **W8.** If that `not sent` write does not commit, the row stays the state the attempt read, `queued` or `retry scheduled`. The permit drops at `webhook.post_deadline`, measured from when the attempt took it, even when neither write has committed. That attempt discards its uncommitted write before the drop. A late write commits only while the row is still the state it guarded. The live sender and restart admit that state by one scan when a read succeeds. The scan does not wait for process exit. Revoke can take the permit after the drop. Rows: W-deadline-queued, W-rescan, W-audit-race.
 9. **W9.** `retry scheduled` is non-terminal and stores `due_at` on the same row in that write. The delivery id stays. Restart admits the row when `due_at` has arrived and waits while `due_at` is ahead. There is no second scheduler store. Rows: W-retry, W-due, W-wait.
-10. **W10.** `sent`, `timed out`, `not sent`, and `unknown` are terminal and are not admitted again. The first terminal record to commit wins. Restart that finds `sending` with no terminal record appends `unknown` and does not POST that delivery id again. Rows: W-sent, W-timeout, W-final, W-unknown, W-terminal-race.
+10. **W10.** `sent`, `timed out`, `not sent`, and `unknown` are terminal and are not admitted again. The first terminal record to commit wins. A `sending` row with the permit free and no held outcome is appended `unknown` by the live sender or by restart, and that delivery id is not posted again. Rows: W-sent, W-timeout, W-final, W-unknown, W-terminal-race, W-reconcile.
 11. **W11.** The sender does not follow redirects. A 3xx is `not sent`. The next admitted POST goes to the registered URL only. Rows: W-3xx.
 12. **W12.** The signature is HMAC-SHA256 of three length-prefixed fields, each a big-endian unsigned 64-bit length then that many bytes: ASCII decimal Unix milliseconds with no sign and no leading zeros except `0`, the delivery id's UTF-8, and the exact body bytes. The headers are `Nessa-Webhook-Timestamp`, `Nessa-Webhook-Id`, and `Nessa-Webhook-Signature` as `v1=` plus 64 lowercase hex characters. The receiver rebuilds those fields from the headers and the raw body. Rows: W-post.
 13. **W13.** The body is `Content-Type: application/json`. It is UTF-8 JSON with keys in order `conversationId`, `incarnation`, `position`, `record`, and no insignificant whitespace. `record` is the committed record a read grant may see, the same bytes `recordsPage` returns for that checkpoint. The MAC covers those exact bytes. This table does not define the record schema. Rows: W-post.
@@ -839,7 +856,8 @@ A `sending` row is not scanned into a new POST.
 16. **W16.** The signed timestamp is written in the `sending` commit, before any POST byte. A later admission of that delivery id uses that stored timestamp and does not read the clock again. Rows: W-send, W-post.
 17. **W17.** `webhook.post_deadline` records `timed out` only while this attempt has not read a complete response. A complete response commits its own outcome, including when that commit is the deadline's write. `timed out` does not replace it. Rows: W-timeout, W-deadline-known, W-prec-response.
 18. **W18.** An incarnation change does not advance the cursor and does not backfill. The old checkpoint is retained and the cursor is marked reset-required. `queued` and `retry scheduled` rows for the old incarnation are written `not sent`. A `sending` row is not cancelled. The new incarnation is queued only after the owner resets that cursor. Restart does not reset it. Rows: W-incarnation, W-reset, C-W-incarnation, C-W-reset.
-19. **W19.** The live sender and restart run one scan. A `queued` or `retry scheduled` row with the permit free is admitted by that scan when a read of that registration's outbox succeeds, including after the deadline drop. The scan does not wait for process exit and does not start a timer. A failed read does not admit. A second insert does not admit an existing row. A `sending` row is not scanned into a new POST. Rows: W-rescan, W-deadline-queued, W-queue-exists, C-W-queued.
+19. **W19.** The live sender and restart run one scan. A `queued` or `retry scheduled` row with the permit free is admitted by that scan when a read of that registration's outbox succeeds, including after the deadline drop. The scan does not wait for process exit and does not start a timer. A failed read does not admit. A second insert does not admit an existing row. A `sending` row is not scanned into a new POST. A `sending` row with the permit free is W-reconcile or W-unknown. Rows: W-rescan, W-deadline-queued, W-queue-exists, C-W-queued, W-reconcile.
+20. **W20.** A `sending` row with the permit free and no terminal record is reconciled by the live sender when the next write of that outbox succeeds. If this process holds the outcome it already decided, it writes that outcome and does not POST. If it holds no outcome, it appends `unknown` and does not POST. Restart uses that same row. `timed out` does not replace a held complete response. Rows: W-reconcile, W-unknown, W-deadline-known, W-timeout.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -853,16 +871,17 @@ A `sending` row is not scanned into a new POST.
 | W-send | queued or retry scheduled | The attempt takes the permit | The epoch allows delivery. The credential is current. From `retry scheduled`, `due_at` has arrived. The `sending` write commits, or the `sending` record is already stored. | sending | The delivery attempt | From `queued`: `sending`, the target, the delivery id, the epoch read, credential current, and the signed timestamp. This commit finishes before any POST byte. From `retry scheduled`: the stored timestamp and delivery id stay. The clock is not read again. | Target the delivery id, before queued or retry scheduled, after sending, cause admitted, initiator the attempt, epoch the one read |
 | W-audit-fail | queued or retry scheduled | The `sending` write fails | No POST byte has been written. The `not sent` write commits, conditional on the row still being the state the attempt read. | not sent | The delivery attempt | `not sent`, same delivery id, cause audit unavailable. This commit finishes before the permit drops. | Target the delivery id, before queued or retry scheduled, after not sent, cause audit unavailable, initiator the attempt |
 | W-deadline-queued | queued or retry scheduled, permit held | `webhook.post_deadline`, measured from when this attempt took the permit | The `sending` write did not commit and the `not sent` write did not commit | That same state. The permit drops. The next successful read of this outbox takes W-rescan and does not wait for process exit. | The deadline, on that same attempt | None. The attempt discards its uncommitted write before the drop. | None. The delivery is not terminal. |
-| W-rescan | queued, or retry scheduled, permit free | The live sender or restart reads this registration's outbox | The permit is free. The read succeeds. The row is not `sending` and is not terminal. This is not a second insert. | `queued` takes W-send or W-refuse. `retry scheduled` with `due_at` arrived takes W-due. `due_at` still ahead takes W-wait. The same delivery id. The live sender does not wait for process exit. | The live sender, or restart | The admission's write when the next state admits. None when the next state is W-wait. A failed read writes nothing and starts no timer. The next successful read of this outbox is this row again. | The admission's audit when it admits. None when it waits. |
+| W-rescan | queued, or retry scheduled, permit free | The live sender or restart reads this registration's outbox | The permit is free. The read succeeds. The row is not `sending` and is not terminal. A `sending` row is W-reconcile or W-unknown. This is not a second insert. | `queued` takes W-send or W-refuse. `retry scheduled` with `due_at` arrived takes W-due. `due_at` still ahead takes W-wait. The same delivery id. The live sender does not wait for process exit. | The live sender, or restart | The admission's write when the next state admits. None when the next state is W-wait. A failed read writes nothing and starts no timer. The next successful read of this outbox is this row again. | The admission's audit when it admits. None when it waits. |
 | W-refuse | queued or retry scheduled | The attempt takes the permit | The epoch no longer allows delivery, or the credential is not current | not sent | The delivery attempt | `not sent`, the epoch read. No POST. The permit drops after this commit. | Target the delivery id, before queued or retry scheduled, after not sent, cause epoch or credential, initiator the attempt |
 | W-post | sending | The attempt writes the POST | `sending` has committed. The timestamp header is the signed timestamp stored on that row. A retry does not read the clock again. The body is `Content-Type: application/json`, UTF-8 JSON, keys in order `conversationId`, `incarnation`, `position`, `record`, no insignificant whitespace. `record` is the committed record a read grant may see, the same bytes `recordsPage` returns for that checkpoint. The record schema stays with `recordsPage`. The signature is HMAC-SHA256 of three length-prefixed fields, each a big-endian unsigned 64-bit length then that many bytes: ASCII decimal Unix milliseconds with no sign and no leading zeros except `0`, the delivery id's UTF-8, and the exact body bytes. Headers `Nessa-Webhook-Timestamp`, `Nessa-Webhook-Id`, and `Nessa-Webhook-Signature` as `v1=` plus 64 lowercase hex characters. The key is not in the body. No redirect is followed. | sending | The delivery attempt | None. `sending` already committed. The POST is not a terminal write. | None until the outcome row |
 | W-3xx | sending | The response is a 3xx | The response completed | not sent | The delivery attempt | `not sent`. The redirect is not followed. `sending` stays beside this record. The permit drops after this commit. | Target the delivery id, before sending, after not sent, cause redirect, initiator the attempt |
 | W-retry | sending | A retryable response | HTTP 408, 429, or any 5xx, or a transport error the live attempt observed with no response byte | retry scheduled | The delivery attempt | The same row, `due_at` set, same delivery id. `sending` stays beside this record. The permit drops after this commit. | Target the delivery id, before sending, after retry scheduled, cause the response or the transport error, initiator the attempt, due time the stored `due_at` |
 | W-sent | sending | The response is HTTP 2xx | The response completed | sent | The delivery attempt | `sent`. `sending` stays beside this record. The permit drops after this commit. | Target the delivery id, before sending, after sent, cause the response, initiator the attempt |
-| W-timeout | sending | `webhook.post_deadline` | The deadline is measured from when the attempt took the permit. This attempt has not read a complete response. No terminal record has committed. | timed out | The sender, at the deadline | `timed out`. The sender closes its side. The permit drops. `sending` stays. A later arrival is not recorded as `sent`. | Target the delivery id, before sending, after timed out, cause deadline, initiator the sender |
-| W-deadline-known | sending | `webhook.post_deadline` | This attempt has read a complete response. No terminal record has committed. | The outcome of that response: `sent` for HTTP 2xx, `not sent` for a 3xx or other final response, `retry scheduled` for a retryable response. Not `timed out`. | The deadline, on that same attempt | That outcome, beside `sending`, and `due_at` when the outcome is `retry scheduled`. The permit drops after this commit. If this write does not commit, the row stays `sending`, the permit still drops, and this attempt does not write `timed out`. | Target the delivery id, before sending, after the known outcome, cause the response, initiator the sender |
+| W-timeout | sending | `webhook.post_deadline` | The deadline is measured from when the attempt took the permit. This attempt has not read a complete response. No terminal record has committed. | timed out | The sender, at the deadline | `timed out`. The sender closes its side. The permit drops. `sending` stays. A later arrival is not recorded as `sent`. If this write does not commit, the row stays `sending` and the next successful write takes W-reconcile with outcome `timed out`. No POST. | Target the delivery id, before sending, after timed out, cause deadline, initiator the sender |
+| W-deadline-known | sending | `webhook.post_deadline` | This attempt has read a complete response. No terminal record has committed. | The outcome of that response: `sent` for HTTP 2xx, `not sent` for a 3xx or other final response, `retry scheduled` for a retryable response. Not `timed out`. | The deadline, on that same attempt | That outcome, beside `sending`, and `due_at` when the outcome is `retry scheduled`. The permit drops after this commit. If this write does not commit, the row stays `sending`, the permit still drops, and the next successful write takes W-reconcile. This attempt does not write `timed out` and does not POST. | Target the delivery id, before sending, after the known outcome, cause the response, initiator the sender |
+| W-reconcile | sending, permit free | The next successful write of this outbox | This process still holds the outcome it decided. No terminal record has committed. No POST is written. | That outcome. A held complete response is `sent`, `not sent`, or `retry scheduled`, and is not `timed out`. A deadline that read no complete response is `timed out`. | The live sender. Restart that no longer holds the outcome takes W-unknown. | That outcome, beside `sending`, in the same write as this audit, and `due_at` when the outcome is `retry scheduled`. A failed write leaves `sending` and starts no timer. The next successful write of this outbox is this row again. | Target the delivery id, before sending, after the known outcome, cause the response or the deadline, initiator the sender |
 | W-final | sending | Any other completed response | The response is not 2xx, 3xx, 408, 429, or 5xx | not sent | The delivery attempt | `not sent`. `sending` stays beside this record. The permit drops after this commit. | Target the delivery id, before sending, after not sent, cause the response, initiator the attempt |
-| W-unknown | sending | Restart finds no terminal record | `sending` has committed. No `sent`, `timed out`, `not sent`, or `retry scheduled` record has committed. | unknown | Restart | Append `unknown`, same delivery id, target, and epoch. `sending` stays. No POST of that id. | Target the delivery id, before sending, after unknown, cause audit unavailable after send, initiator restart |
+| W-unknown | sending, permit free | This process holds no outcome, or restart finds no terminal record | `sending` has committed. No `sent`, `timed out`, `not sent`, or `retry scheduled` record has committed. A held complete response takes W-reconcile, not this row. | unknown | The live sender, or restart | Append `unknown`, same delivery id, target, and epoch. `sending` stays. No POST of that id. The live sender does not wait for process exit. | Target the delivery id, before sending, after unknown, cause audit unavailable after send, initiator the live sender or restart |
 | W-due | retry scheduled | `due_at` has arrived | The wait reads `due_at` from this row. W-send accepts `retry scheduled`. | sending by W-send, or not sent by W-refuse, same delivery id and stored timestamp | Restart, or the live wait | The admission's write. The stored timestamp stays. | The admission's audit |
 | W-wait | retry scheduled | The clock is before `due_at` | `due_at` is ahead | retry scheduled | The live wait | None | None |
 | W-revoke-wait | permit held | Grant revoke | The attempt still holds the permit and `webhook.post_deadline` has not fired | Unchanged until the attempt's outcome, W-timeout, W-deadline-known, or W-deadline-queued | The owner waits. The attempt causes the outcome. | None by revoke while it waits. Revoke does not cancel a write that finishes inside the deadline. | None until W-revoke |
@@ -879,6 +898,7 @@ sequenceDiagram
   Outbox->>Permit: take the permit
   Outbox->>Outbox: record sending before any POST byte
   Note over Permit: the permit drops at the deadline even when no write committed
+  Note over Outbox: a held outcome is written when the next outbox write succeeds
   Note over Outbox: the next successful read admits a queued row with the permit free
   Outbox->>Outbox: retry scheduled stores due_at
   Outbox->>Outbox: sent, timed out, not sent, or unknown closes the delivery
@@ -924,7 +944,7 @@ sequenceDiagram
 | W-prec-stamp | The timestamp stored on `sending` | A fresh clock read on retry | W-post uses the stored timestamp. |
 | W-prec-scan | A successful read of a `queued` or due row with the permit free | Waiting for process exit | W-rescan. W-queue-exists does not admit. A `sending` row is not posted again. |
 
-**Rejected.** An in-memory retry after a terminal `retry scheduled` loses the delivery on exit. One transaction across the conversation store and the outbox is not available. A second registration for one principal would POST to a URL the first issue did not register. Replaying `sending` can deliver twice. Two cursor writers can commit checkpoint N+1 ahead of N. Backfilling a new stream incarnation from the old cursor, or clearing that cursor on restart, would deliver a stream the owner has not reset. Waiting for process exit to admit a `queued` row the live sender can already read would skip that delivery. A second scan beside the outbox read would be a second scheduler.
+**Rejected.** An in-memory retry after a terminal `retry scheduled` loses the delivery on exit. One transaction across the conversation store and the outbox is not available. A second registration for one principal would POST to a URL the first issue did not register. Replaying `sending` can deliver twice. Two cursor writers can commit checkpoint N+1 ahead of N. Backfilling a new stream incarnation from the old cursor, or clearing that cursor on restart, would deliver a stream the owner has not reset. Waiting for process exit to admit a `queued` row the live sender can already read would skip that delivery. Leaving a known outcome in memory until process exit would hide a result the next outbox write can store. A second scan beside the outbox read would be a second scheduler.
 
 ### Directory binding
 
@@ -963,7 +983,7 @@ are not a source. Binding bytes alone are not a source.
 | D-cleanup-keep | minted | Cleanup runs | A committed resource stores that binding | minted. The file stays. | The owner's share | Nothing | None |
 | D-lease | any | A second share of that canonical directory | A share already holds the lease for that canonical path in that environment | The second share has not read the file yet | The second share waits | None until the lease holder commits its resource or finishes D-cleanup | None until the waiter proceeds |
 | D-open-ok | minted | Open | The directory handle is the resource's stored canonical path in its environment, and that handle's `.nessa-binding` bytes equal the resource binding. A copy at another path is not an open of this resource. | minted | The grantee's use, checked by the grantor | Nothing. The no-follow walk starts from that handle. | None |
-| D-open-bad | minted | Open | The root is missing, the marker is missing, or the bytes differ. Device and inode reuse without the same marker bytes is this guard. | revoked. Every grant for that resource is removed. | The open | Remove those grant rows even when the audit write fails. See D-audit-down. | Target the resource id, before active, after absent, cause marker missing or marker bytes differ, initiator the open |
+| D-open-bad | minted | Open | The root is missing, the marker is missing, or the bytes differ. Device and inode reuse without the same marker bytes is this guard. | revoked. Every grant for that resource is removed. | The open | Remove those grant rows even when the audit write fails. G-marker writes each receiver tombstone in that removal. See D-audit-down. | Target the resource id, before active, after absent, cause marker missing or marker bytes differ, initiator the open |
 | D-open-again | revoked | A later open finds the same mismatch | A mismatch audit for that resource has already committed | revoked. Grants stay absent. | The open | Nothing | None. The first cause stays. |
 | D-audit-down | minted | Open, and the audit sink is unavailable | The same guard as D-open-bad | revoked. The use is refused. | The open | The grant rows are still removed | No audit record. The refusal says the audit was not recorded. |
 | D-name | minted | `read`, `write`, or `exec` names `.nessa-binding` | The name is that file | minted. Grants stay. | The grantee's use | Nothing | Refusal, cause marker name, initiator the use. The grantor's open remains the reader. |
@@ -1024,11 +1044,13 @@ sequenceDiagram
 ### Grant subscription stream and cursor
 
 **Source of truth.** The grant rows for this receiver are the grants. The
-stream is a projection of those rows. The follower's durable cursor is
-`after`, the last complete snapshot it applied: an opaque
-`{incarnation, position}` for this receiver, not an owner catalogue
-revision. The server's snapshot pin is process memory for that
-connection. It is not a second catalogue.
+stream is that receiver's grant log. Each record is the next position,
+committed in the same write as the grant change, and a removal is a
+tombstone `absent`. The follower's durable cursor is `after`, the last
+complete snapshot it applied: an opaque `{incarnation, position}` for
+this receiver, not an owner catalogue revision. The server's snapshot
+pin is process memory for that connection. It is not a second catalogue.
+The subscription task reads the log. It does not invent a position.
 
 **Invariants.**
 
@@ -1043,19 +1065,21 @@ connection. It is not a second catalogue.
 9. **U9.** An Active peer has no `PeerPoller` timer. Two waits remain: the status dial until Active or Revoked, and the connect backoff. Neither reads the catalogue. Rows: U-dial, U-backoff.
 10. **U10.** Reconnect resumes from the cursors last applied and does not move a cursor backwards in the same incarnation. `cursor_ahead` is refused. A grant-stream `after` whose incarnation is not the server's current incarnation is refused. The follower drops that `after` and takes a full snapshot. The server does not merge the two incarnations. A conversation view still follows #851: a new incarnation replaces the view. A follower with no `after` receives a full snapshot and replaces its local grant replica. A frame does not write a grant row. Rows: U-resume, U-ahead, U-full.
 11. **U11.** The follower's durable `after` is written only when a frame is `complete: true`. `page` and `snapshotId` are not required to be durable. Rows: U-done, U-page.
+12. **U12.** A receiver's grant change and its grant-log record commit in the same write. The record is the next position and either `active` at the new epoch or a tombstone `absent`. A follower that reconnects with an older `after` in the same incarnation receives every later record, including a tombstone. The subscription task does not publish a change that has no log record. Rows: U-log, G-share, G-revoke, U-resume.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | U-open | closed | Grant subscribe | The socket has no grant subscription. `after` is the last complete snapshot, or absent on the first subscribe. | open at that `after` | The follower | None on a grant row. The follower keeps `after`. | None |
-| U-cursor | open | A frame is built | The position is this receiver's opaque counter | open. Owner catalogue revisions are not positions in this stream. | The grantor's subscription task | None | None |
+| U-cursor | open | A frame is built | The position is this receiver's grant-log counter from U-log | open. Owner catalogue revisions are not positions in this stream. | The grantor's subscription task | None. The log record already committed with the grant. | None |
+| U-log | receiver grant log at position N | A grant for this receiver is inserted, its epoch changes, or it is removed | The grant write commits. The subject kind is `receiver`. | Position N+1. An insert or epoch change stores active at the new epoch. A removal stores a tombstone absent for that grant key. | The owner's grant write | The grant change and this log record in the same write. The subscription task is not in this commit. | The grant row's audit. This record names the position, the grant key, and active or absent. |
 | U-page | open | The next prefix would pass 64 KiB | The cut is on a grant boundary. This is the first incomplete frame of the snapshot. | paging. Stream cursor stays at `after`. | The grantor's subscription task | None. The follower's durable `after` stays. The server keeps `snapshotId` in process memory. The frame carries `complete: false`, `page`, and `snapshotId`. | None |
 | U-continue | paging | The follower sends `page` and `snapshotId` with the same `after` | The server still holds that pin | paging, or open if this prefix finishes the snapshot | The follower | When the prefix finishes, U-done. Otherwise none. | None |
-| U-change | paging | A grant row changes | A pin is held | paging. The pin is unchanged. The grant change is the next snapshot. | The owner's grant write, which is the grant table's commit | The grant table's write only. The pin is not rewritten. | The grant table's audit. None on the pin. |
+| U-change | paging | A grant row changes | A pin is held | paging. The pin is unchanged. The grant change is the next snapshot. | The owner's grant write, which is the grant table's commit | The grant write is U-log, including the log record. The pin is not rewritten. | The grant table's audit. None on the pin. |
 | U-done | paging or open | A frame is `complete: true` | The frame names every grant of this snapshot through the new cursor | open. The stream cursor advances to this snapshot. The pin is dropped. | The grantor's subscription task | The follower stores the new `after` | None on the grant row. The frame did not write a grant. |
 | U-lost | paging | The server no longer holds the pin | Restart, or the pin was dropped | open at `after`. `page` is discarded. | The follower | None. `after` stays. | None |
 | U-drop | paging | The follower disconnects | A pin is held | closed. The pin is dropped. | The connection | None. The follower's `after` stays the last complete snapshot. | None |
 | U-full | closed or open | Subscribe with no `after` | The follower has no durable cursor | open, after the full snapshot is applied. The local grant replica is replaced by that snapshot. | The follower | The follower stores `after` at U-done | None. No grant row is written. |
-| U-resume | closed | Reconnect | The follower has a grant-stream `after` for the server's current incarnation, and the record cursor it last applied. A grant-stream `after` from another incarnation is refused. The follower drops that `after` and takes U-full. The server does not merge. | open at the matching grant-stream `after`. A conversation view follows #851, which replaces the view on a new incarnation. A cursor does not move backwards in the same incarnation. | The follower | None until U-done | Refusal when the grant-stream incarnation differs, cause incarnation changed, initiator the follower. None when the incarnation matches. |
+| U-resume | closed | Reconnect | The follower has a grant-stream `after` for the server's current incarnation, and the record cursor it last applied. A grant-stream `after` from another incarnation is refused. The follower drops that `after` and takes U-full. The server does not merge. | open at the matching grant-stream `after`. The server sends each log record with position greater than `after`, including a tombstone. It does not skip a removal. A conversation view follows #851, which replaces the view on a new incarnation. A cursor does not move backwards in the same incarnation. | The follower | None until U-done | Refusal when the grant-stream incarnation differs, cause incarnation changed, initiator the follower. None when the incarnation matches. |
 | U-ahead | open | The follower presents a cursor ahead of the stream | `cursor_ahead` | open. The presented cursor is refused. | The follower | Nothing | Refusal, cause cursor ahead, initiator the follower |
 | U-cap | eight conversation subscriptions | A ninth `conversation.subscribe` | The socket already holds `socket.conversation_subscriptions` | The ninth is refused `subscription_capacity`. No existing subscription is closed. The grant subscription stays. | The server | Nothing | Refusal, cause subscription capacity, initiator the subscriber |
 | U-local-close | eight conversation subscriptions | The follower unsubscribes one chat before it subscribes another | The follower names the subscription. The least recently opened chat is the follower's choice, by its own explicit open, not by frame arrival. | That named chat is unsubscribed and stays a cold replica. The server closes only the subscription the follower named. | The follower | The follower records which chat is cold | None on a grant row |
@@ -1076,6 +1100,7 @@ sequenceDiagram
   Follower->>Stream: page and snapshotId with the same after
   Stream->>Follower: the next prefix of that pin
   Note over Pin: a grant change is the next snapshot
+  Note over Stream: the grant commit appends that receiver log record
   Stream->>Follower: complete true advances the cursor
   Note over Pin: a lost pin discards page and resumes from after
 ```
@@ -1085,7 +1110,7 @@ sequenceDiagram
 | Row | Crash point | On disk | Restart |
 | --- | --- | --- | --- |
 | C-U-follower | The follower stops while paging | `after` at the last U-done, if that write committed. `page` and `snapshotId` may be absent. | U-continue if the follower still has `page` and `snapshotId` and the server still holds the pin. Otherwise U-lost. |
-| C-U-server | The server stops while paging | Grant rows as their own commits left them. The pin is gone. | The follower takes U-lost. |
+| C-U-server | The server stops while paging, or after a grant commit and before the task publishes | Grant rows and their log records as the grant commits left them. The pin is gone. | The follower takes U-lost or U-resume. A follower with `after` receives every later log record, including a tombstone. |
 | C-U-hint | The follower stops after a hint and before `recordsPage` commits | The last committed record cursor | `recordsPage` resumes from that cursor. The hint did not advance it. |
 
 **Concurrency.**
@@ -1107,7 +1132,7 @@ sequenceDiagram
 | U-prec-open | The follower's explicit unsubscribe | A ninth subscribe, for which chat goes cold | U-local-close. The server does not rank open order. U-cap closes nothing. |
 | U-prec-grant | The grant rows | A replayed frame | The frame writes nothing. U-full replaces the local replica from the rows. |
 
-**Rejected.** Ending the subscription `too_large`, advancing `after` on `complete: false`, and keeping `PeerPoller` as the Active peer's grant path are each a second cursor. `conversation.watchRecords` stays the phone path because one record watch cannot wake every chat on this connection. The server unsubscribing a chat the follower did not name, to make room for a ninth subscribe, would close a slot the follower still holds. Merging a grant-stream `after` from another incarnation would keep a cursor the server has replaced.
+**Rejected.** Ending the subscription `too_large`, advancing `after` on `complete: false`, and keeping `PeerPoller` as the Active peer's grant path are each a second cursor. `conversation.watchRecords` stays the phone path because one record watch cannot wake every chat on this connection. The server unsubscribing a chat the follower did not name, to make room for a ninth subscribe, would close a slot the follower still holds. Merging a grant-stream `after` from another incarnation would keep a cursor the server has replaced. Publishing a grant change from the subscription task without a log record in the grant commit would drop a revocation after `PeerPoller` is gone.
 
 ### Pairing and discovery
 
@@ -1128,10 +1153,10 @@ pin. The LAN section does not add a discovery step.
 4. **P4.** One generation is in progress at a time. A retry resends the stored generation. A new generation does not start while one is unfinished. The dialer is the only side that mints a generation id. Rows: P-key, P-accept, P-retry-keyed, P-cross.
 5. **P5.** `keyed` stores the generation and this side's ephemeral private key. `offered` adds the peer's public key for that same generation. `stored` is sent only after the `offered` write commits. Rows: P-key, P-offer.
 6. **P6.** `installed` replaces `offered` in one write: the same generation and the MAC key. The ephemeral private key leaves in that write. `installed` is sent only after that write commits. Neither side derives before the other's `offered` write has been acked. Rows: P-install, P-peer-installed.
-7. **P7.** The token is HMAC-SHA256 of the time window as an unsigned big-endian integer, the dial address in one numeric form, and the port as an unsigned big-endian integer, in that order. A token copied onto a different address or port does not match. The pinned key, its fingerprint, and any other stable gateway id stay out of the announcement. Rows: P-announce.
+7. **P7.** The token is HMAC-SHA256 of the P-announce bytes, in order: the window index as 8 bytes, one family byte, 4 or 16 address bytes, and the port as 2 bytes. An IPv4-mapped IPv6 address is rewritten to family 4 before the MAC. A token copied onto a different address or port does not match. The pinned key, its fingerprint, and any other stable gateway id stay out of the announcement. Rows: P-announce.
 8. **P8.** Unlinkability is not a property of the announcement. The dial address, the port, the network source, and the token count stay visible. Rows: P-announce.
 9. **P9.** Shipped pairing and `#705` do not supply the MAC key. A peer with no discovery key stays `none`. Alpha does not invent a key. That peer is left out of the announcement. Rows: P-old.
-10. **P10.** The same-person link is not a phase and not a grant subject. Rows: P-link, G-link, G-unlink.
+10. **P10.** The same-person link is not a phase and not a grant subject. The choice is an immutable field of the invitation until activation writes the link. Rows: P-link, P-active, G-link, G-unlink.
 11. **P11.** `Revoked` beats announce. `Active` is required before `keyed`. Rows: P-quiet, P-key, P-prec-phase.
 12. **P12.** The local ephemeral private key is durable before its public half is sent. A crash before that commit publishes nothing. Rows: P-key, P-publish, P-accept, C-P-keyed.
 13. **P13.** The dialer's generation id beats any other unfinished id. If both sides have minted, the lesser 32-byte id wins. The loser persists a new private key for the winning generation before it sends that public half. Rows: P-cross, P-accept.
@@ -1139,8 +1164,8 @@ pin. The LAN section does not add a discovery step.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| P-pending | no enrollment | Enrollment starts | The one-use code | Pending. No session and no grant stream. | Pairing | The peer record at `Pending` | Target the peer, before none, after Pending, cause enrollment, initiator the owner |
-| P-active | Pending | Enrollment completes | The credential id and the receiver are stored | Active. No phase is added. Subscriptions can open. Discovery field is `none` until P-key or P-accept. | Enrollment | The phase `Active`, the credential id, and the receiver. No phase besides `Pending`, `Active`, and `Revoked`. | Target the peer, before Pending, after Active, cause enrollment complete, initiator the owner |
+| P-pending | no enrollment | Enrollment starts | The one-use code | Pending. No session and no grant stream. | Pairing | The peer record at `Pending`, and the invitation's same-person choice. The choice is true or false and does not change after this commit. No link row. The gateway principal is not known yet. | Target the invitation, before none, after Pending, cause enrollment, initiator the owner. The choice is part of that record. |
+| P-active | Pending | Enrollment completes | The credential id and the receiver are stored. The invitation's choice is the one P-pending stored. | Active. No phase is added. Subscriptions can open. Discovery field is `none` until P-key or P-accept. | Enrollment | The phase `Active`, the credential id, and the receiver, in the same write. When the choice is true, that write inserts the link row naming `gateway:<key>`, as G-link. When the choice is false, no link is written. The choice is not asked again. No phase besides `Pending`, `Active`, and `Revoked`. | Target the peer, before Pending, after Active, cause enrollment complete, initiator the owner |
 | P-revoke | Pending or Active | Enrollment revoke | The owner's revoke | Revoked. No announcement. | The owner | The phase `Revoked`. A same-person link for this peer is removed by G-unlink in this commit. | Target the peer, before Pending or Active, after Revoked, cause revoke, initiator the owner |
 | P-key | none, phase Active | The dialer mints one generation | This side is the dialer. The phase is Active. No generation is unfinished. A new generation does not start while one is unfinished. | keyed | The dialer | The generation id, 32 bytes, and this side's X25519 private key (RFC 7748), 32 bytes. The public half is the RFC 7748 32-byte little-endian encoding of that private key, and it is sent only after this commit. No peer public. No discovery byte is sent in this commit. | Target the peer, before none, after keyed, cause local key, initiator this gateway |
 | P-publish | keyed or offered | Send this side's public half | The ephemeral private key for this generation is already durable. The bytes are the RFC 7748 32-byte little-endian public encoding of that private key, and they are not 32 zero bytes. The private key is durable before its public half is sent. | The same state | This gateway | None | None |
@@ -1154,10 +1179,10 @@ pin. The LAN section does not add a discovery step.
 | P-retry-offered | offered | The session drops | The `offered` write has committed | offered | This gateway | Nothing. Resend the stored public key and `stored`. Do not mint a new one. | None |
 | P-retry-installed | installed | The session drops | The `installed` write has committed | installed | This gateway | Nothing. Resend `installed`. Do not derive again. | None |
 | P-retry-none | none | A generation arrives and this side has not stored one | This side is the granting gateway | P-accept for that generation. A new generation does not start. | The granting gateway | P-accept's write | P-accept's audit |
-| P-announce | installed, phase Active | Announce | The phase is Active and the field is `installed`. The token is HMAC-SHA256 of the time window as an unsigned big-endian integer, the dial address in one numeric form, and the port as an unsigned big-endian integer, in that order. | installed | This gateway | Nothing. The announcement is not a store. The pinned key, its fingerprint, and any other stable gateway id are absent from it. The address, the port, the network source, and the token count are visible. | None |
+| P-announce | installed, phase Active | Announce | The phase is Active and the field is `installed`. The token is HMAC-SHA256 of these bytes and no others, with no length prefix. The window index is a uint64 in big-endian, 8 bytes, Unix milliseconds divided by the window length using integer division. The family is one byte, value 4 or 6. The address is 4 bytes in network order when the family is 4, and 16 bytes in network order when the family is 6. An IPv4-mapped IPv6 address, 10 zero bytes then 0xff 0xff then 4 IPv4 bytes, is rewritten to family 4 and those 4 bytes before the MAC. The port is a uint16 in big-endian, 2 bytes. The order is window, family, address, port. The announcement carries the family, the address, and the port as these same bytes. | installed | This gateway | Nothing. The announcement is not a store. The pinned key, its fingerprint, and any other stable gateway id are absent from it. The address, the port, the network source, and the token count are visible. | None |
 | P-quiet | none, keyed, offered, Pending, or Revoked | Announce | The phase is not Active, or the field is not `installed` | Unchanged. No announcement. | This gateway | Nothing | None |
 | P-old | none, phase already Active from before this slice | Startup or announce | The record has no discovery field | none. No key is invented. | Startup | Nothing | None. The peer stays out of the announcement until it is paired again under this slice. |
-| P-link | Active | The same-person choice | The owner makes the choice on `pairing.create` | Active. The phase is unchanged. | The owner | The link row only. G-link. No discovery write. | G-link's audit |
+| P-link | Pending | The owner sets the choice on `pairing.create` | The invitation is the one P-pending commits. The principal does not exist yet. | Pending. The choice is stored and does not change. The phase is unchanged. No link row. | The owner | The choice on the invitation, in the P-pending commit. | Target the invitation, before no choice, after the stored choice, cause the same-person choice, initiator the owner |
 
 ```mermaid
 sequenceDiagram
@@ -1179,6 +1204,7 @@ sequenceDiagram
 
 | Row | Crash point | On disk | Restart |
 | --- | --- | --- | --- |
+| C-P-choice | After P-pending commits the choice, before P-active | Pending. The choice is on the invitation. No link row. | P-active applies the stored choice. Restart does not ask again. |
 | C-P-before | Before P-key or P-accept commits | `none`. No public half was sent. | The dialer may take P-key. The grantor stays `none` until a generation arrives. There is no published public key to recover. |
 | C-P-keyed | After P-key commits, before P-publish | `keyed`. The ephemeral private key is present. No peer public. | P-publish of the stored public half. Do not mint. |
 | C-P-offered | After P-offer or P-accept commits, before `stored` is acked | `offered`. The ephemeral private key is present. | P-retry-offered. Do not mint. |
@@ -1203,9 +1229,10 @@ sequenceDiagram
 | P-prec-installed | `installed` | A retry that would derive or mint again | P-retry-installed |
 | P-prec-generation | The dialer's generation id | Another unfinished id | P-cross |
 | P-prec-none | A missing discovery key | An invented key | P-old |
-| P-prec-token | The window, address, and port inside the HMAC | A token presented with a different address or port | No match |
+| P-prec-token | The window, address, and port inside the HMAC | A token presented with a different address or port | No match. The bytes are the P-announce widths. An IPv4-mapped address is family 4. |
+| P-prec-choice | The choice stored on the invitation | Asking again at activation | P-active. The link is written only when that stored choice is true. |
 
-**Rejected.** Writing the peer's public key into the same first commit as the local private key, which made the public exchange precede the only durable write. Each side minting its own generation and keeping it. A stable fingerprint in the announcement, an unlinkability claim, a MAC key taken from the enrollment PAKE or from `#705`, installing the raw X25519 shared secret as the MAC key, a new generation on a half-written install, and `PeerPoller` as the Active follow path.
+**Rejected.** Writing the peer's public key into the same first commit as the local private key, which made the public exchange precede the only durable write. Each side minting its own generation and keeping it. A stable fingerprint in the announcement, an unlinkability claim, a MAC key taken from the enrollment PAKE or from `#705`, installing the raw X25519 shared secret as the MAC key, a new generation on a half-written install, and `PeerPoller` as the Active follow path. Asking the same-person choice again at activation, or writing the link before the principal exists, would lose the choice on restart or name a principal the invitation does not have.
 
 ### Finding to row
 
@@ -1215,6 +1242,7 @@ not add a rule.
 **Invariant.**
 
 1. **X1.** Issues `#889` through `#897` are filed. A fence states the slice delta and the gate. A fence does not add a lifecycle state. Rows: X-filed.
+2. **X2.** Inside one store, a change a peer can observe and the cursor or outcome that names it commit in the same write. A non-terminal in-flight row is reconciled by the live sender when the next read or write of that store succeeds. Restart uses that same reconciler. Process exit is not the reconciler. The conversation store and the outbox are not one store. Rows: U-log, W-reconcile, W-rescan, P-active.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -1280,6 +1308,10 @@ not add a rule.
 | 4278630316 | P-install, P-reject, P-key, P14 |
 | 4278630318 | U-cap, U-local-close, U1 |
 | 4278864016 | W-rescan, W-deadline-queued, W19 |
+| 4278952340 | U-log, G-revoke, U-resume, U12 |
+| 4278952343 | P-pending, P-active, P-link, G-link, C-P-choice |
+| 4278952347 | W-reconcile, W-unknown, W-deadline-known, W20 |
+| 4278952353 | P-announce, P7 |
 
 ## Open questions / known limits
 
@@ -1495,7 +1527,10 @@ The contract is Same person, above. The delta is the choice on
 
 ## Gate
 
-Pairing with the choice records the person and the gateway principal. A
+The choice is stored on the invitation at `pairing.create`. A restart
+before activation still has it. The Active commit writes the link when
+the choice is true, and writes no link when it is false. Pairing with
+the choice records the person and the gateway principal. A
 read still requires a share grant. Two linked gateways with grants on
 the same conversation have two rows. A gateway paired without the choice has
 no person on its admission. Revoking the credential drops the link. A
@@ -1523,7 +1558,10 @@ connection. An incomplete grant frame does not advance the stream cursor.
 ## Gate
 
 A new share, a revoke, and an epoch change each arrive on the grant
-subscription with no `catalogueHead` from `peer.poll_interval`. A grant
+subscription with no `catalogueHead` from `peer.poll_interval`. A revoke
+commits a tombstone on that receiver's grant log in the same write. A
+follower that reconnects with the old `after` in the same incarnation
+receives that tombstone. A grant
 set larger than 64 KiB arrives as frames cut inside that bound. An
 incomplete frame keeps the stream cursor and resumes with `page` and
 `snapshotId`. The
@@ -1611,7 +1649,9 @@ nothing only after the row commits `not sent`. If that write does not
 commit, the row stays `queued` and the permit drops at
 `webhook.post_deadline`. The live sender admits that row when its next
 outbox read succeeds, and does not wait for a restart. A second insert
-of that checkpoint does not admit it. A crash while an event waits for the permit leaves its `queued`
+of that checkpoint does not admit it. A known outcome whose write did
+not commit is written by the live sender on the next successful outbox
+write, and that write does not POST. A crash while an event waits for the permit leaves its `queued`
 outbox row, and restart delivers that delivery id. A crash after the
 conversation commit and before the outbox write is recovered from the
 replay cursor: restart inserts the missing `queued` row, and a checkpoint
@@ -1656,7 +1696,9 @@ resends the stored public half and does not mint. Two generation ids
 resolve to the dialer's id, and both sides finish on that generation. An announcement cannot
 enroll a listener. The announcement bytes contain no key fingerprint and
 no stable gateway id. Two windows for the same peer produce two different
-tokens. A token copied onto a different address or port does not match. A
+tokens. The token input is 8 bytes of window index, one family byte, 4 or
+16 address bytes, and 2 bytes of port, as P-announce. An IPv4-mapped
+IPv6 address is family 4 before the MAC. A token copied onto a different address or port does not match. A
 paired peer matches a token to its pinned peer and is refused if the
 credential is wrong. An observer without the discovery key cannot match
 the token to a pinned key. The dial address, the port, and the token count
