@@ -3865,6 +3865,32 @@ async fn a_receiver_switch_is_applied_and_moves_the_catalogue() {
     assert_eq!(journal[1].1, "read");
 }
 
+/// A change that names a principal resolves that principal's row only. Naming
+/// another principal's credential does not rewrite that grant.
+#[tokio::test]
+async fn a_named_principal_does_not_take_another_principals_grant() {
+    use crate::conversation::application::{ConversationError, ShareGrantTransition, ShareGrants};
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    assert!(grant(store, &id, "phone").await);
+    let held = only_grant(store, &id).await;
+    let mut change = grant_change(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &id,
+        Some("tablet"),
+        "phone-credential",
+        "take",
+    );
+    change.principal_id = Some(PrincipalId::new("grantee-other").unwrap());
+    assert!(matches!(
+        store.change(change).await,
+        Err(ConversationError::Metadata)
+    ));
+    assert_eq!(only_grant(store, &id).await, held);
+}
+
 /// Row J6: a share retried with its request id answers what it answered the
 /// first time and changes nothing, even after a later change of role; the
 /// same request naming another role or another policy is refused.

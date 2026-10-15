@@ -655,8 +655,9 @@ impl LocalConversationStore {
                     &format!(
                         "SELECT principal_id FROM share_grants
                          WHERE resource_kind = '{kind}' AND resource_id = ?1
-                           AND (principal_id = ?2 OR credential_id = ?3
-                                OR (?4 IS NOT NULL AND receiver_id = ?4))",
+                           AND ((?2 IS NOT NULL AND principal_id = ?2)
+                                OR (?2 IS NULL AND (credential_id = ?3
+                                    OR (?4 IS NOT NULL AND receiver_id = ?4))))",
                         kind = CONVERSATION,
                     ),
                     params![id, named.clone(), credential, receiver],
@@ -820,6 +821,9 @@ impl LocalConversationStore {
                     .principal_id
                     .as_ref()
                     .map(|principal| principal.as_str().to_owned());
+                // A named principal resolves only its own row. Credential and
+                // receiver match when the change names no principal, which is
+                // how a revoke finds the grant.
                 let existing: Option<(String, Option<String>, String, Held, i64)> = transaction
                     .query_row(
                         &format!(
@@ -827,8 +831,9 @@ impl LocalConversationStore {
                                     policy_revision
                              FROM share_grants
                              WHERE resource_kind = '{CONVERSATION}' AND resource_id = ?1
-                               AND (principal_id = ?2 OR credential_id = ?3
-                                    OR (?4 IS NOT NULL AND receiver_id = ?4))"
+                               AND ((?2 IS NOT NULL AND principal_id = ?2)
+                                    OR (?2 IS NULL AND (credential_id = ?3
+                                        OR (?4 IS NOT NULL AND receiver_id = ?4))))"
                         ),
                         params![
                             id,
@@ -1025,7 +1030,10 @@ impl LocalConversationStore {
                 let stamped_epoch = if access_changed {
                     sequence
                 } else {
-                    stored_epoch.ok_or_else(|| unreadable("share_grants", &id))?
+                    // A no-op revoke has no row and no epoch. Nothing is
+                    // stamped; the value is unused when the change is not
+                    // applied.
+                    stored_epoch.unwrap_or(sequence)
                 };
                 if applied {
                     match (before.0.as_str(), after.0.as_str()) {
