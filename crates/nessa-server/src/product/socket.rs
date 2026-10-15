@@ -58,7 +58,7 @@ use std::sync::{Arc, Mutex};
 use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
-use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{mpsc, watch, OwnedSemaphorePermit, Semaphore};
 use tokio::time::error::Elapsed;
 use tokio::time::{interval, timeout, timeout_at, Instant, MissedTickBehavior};
 use uuid::Uuid;
@@ -936,6 +936,9 @@ where
     ));
     let control_slots = Arc::new(Semaphore::new(limits.control_slots()));
     let ordinary_slots = Arc::new(Semaphore::new(limits.ordinary_slots()));
+    // A registry revision is global, but each refresh wakes only this socket's
+    // publisher. Share changes keep their shared visibility notification.
+    let (review_authority, authority_updates) = watch::channel(session.auth_revision());
     // A waiting review is a snapshot on the ordinary lane. Abort this before
     // the lane's sender is dropped: the task holds one, and the writer
     // finishes only when every sender is gone.
@@ -944,7 +947,14 @@ where
         let slots = Arc::clone(&ordinary_slots);
         let state = state.clone();
         let session = session.clone();
-        tokio::spawn(forward_review_notices(board, send, slots, state, session))
+        tokio::spawn(forward_review_notices(
+            board,
+            send,
+            slots,
+            state,
+            session,
+            authority_updates,
+        ))
     });
     let record_slots = Arc::new(Semaphore::new(RECORD_SLOT));
     let app_slots = Arc::new(Semaphore::new(limits.app_calls_per_socket()));
@@ -986,9 +996,6 @@ where
     let mut requests = FuturesUnordered::new();
     let mut writer_finished = false;
     let mut refresh: Option<RefreshCheck<'_>> = None;
-    // Authority versions invalidate retained notices; they never admit one.
-    // AccessReader owns the revision for credential and membership changes.
-    let mut review_revision = session.auth_revision();
     let mut input_check: Option<AuthorityCheck<'_>> = None;
     let mut pending_input: Option<AuthenticatedInput> = None;
     loop {
@@ -1093,10 +1100,14 @@ where
                     // watch's session; the watches then re-ask only their
                     // passive-read admission (row A3).
                     Ok((current, snapshot)) => {
-                        if review_revision != snapshot.revision {
-                            review_revision = snapshot.revision;
-                            super::read_access::recheck_review_visibility(&state);
-                        }
+                        review_authority.send_if_modified(|revision| {
+                            if *revision != snapshot.revision {
+                                *revision = snapshot.revision;
+                                true
+                            } else {
+                                false
+                            }
+                        });
                         watches.recheck(&state, &current);
                     }
                     Err(error) => {
@@ -1415,58 +1426,54 @@ async fn forward_review_notices(
     slots: Arc<Semaphore>,
     state: ProductRouteState,
     session: AuthenticatedSession,
+    mut authority_updates: watch::Receiver<u64>,
 ) {
-    // `None` is unseen, including a generation of zero. A session that
-    // connects after a restart, or a new authentication, is sent the board
-    // as it stands — empty, when nothing is waiting — so a desktop does not
-    // keep a review the server no longer has. A share that changes who may
-    // read a conversation filters that same generation again.
-    let mut seen = None;
-    let mut visibility_seen = board.visibility();
     loop {
         let (generation, reviews) = board.current();
         let visibility = board.visibility();
-        if seen != Some(generation) || visibility_seen != visibility {
-            let mut visible = Vec::with_capacity(reviews.len());
-            for review in reviews {
-                if super::read_access::may_see_review(&state, &session, &review.conversation_id)
-                    .await
-                {
-                    visible.push(review);
-                }
+        // Observe before either await: a later authority update stays pending
+        // while this admitted snapshot filters or waits for publication capacity.
+        drop(authority_updates.borrow_and_update());
+        let mut visible = Vec::with_capacity(reviews.len());
+        for review in reviews {
+            if super::read_access::may_see_review(&state, &session, &review.conversation_id).await {
+                visible.push(review);
             }
-            let payload = PermissionReviewWaiting {
-                reviews: visible
-                    .into_iter()
-                    .map(|review| PermissionReviewNotice {
-                        conversation_id: review.conversation_id,
-                        execution_id: review.execution_id,
-                        permission_id: review.permission_id,
-                        tool: review.tool,
-                    })
-                    .collect(),
-            };
-            let Ok(permit) = slots.clone().acquire_owned().await else {
-                break;
-            };
-            let queued = QueuedResponse {
-                message: WireResponse::ReviewWaiting {
-                    payload,
-                    generation,
-                },
-                _slot: Arc::new(permit),
-                _record_work: None,
-                _mount: None,
-            };
-            if send.send(queued).await.is_err() {
-                break;
-            }
-            seen = Some(generation);
-            visibility_seen = visibility;
+        }
+        let payload = PermissionReviewWaiting {
+            reviews: visible
+                .into_iter()
+                .map(|review| PermissionReviewNotice {
+                    conversation_id: review.conversation_id,
+                    execution_id: review.execution_id,
+                    permission_id: review.permission_id,
+                    tool: review.tool,
+                })
+                .collect(),
+        };
+        let Ok(permit) = slots.clone().acquire_owned().await else {
+            break;
+        };
+        let queued = QueuedResponse {
+            message: WireResponse::ReviewWaiting {
+                payload,
+                generation,
+            },
+            _slot: Arc::new(permit),
+            _record_work: None,
+            _mount: None,
+        };
+        if send.send(queued).await.is_err() {
+            break;
         }
         tokio::select! {
             () = board.wait_after(generation) => {}
             () = board.wait_for_visibility(visibility) => {}
+            changed = authority_updates.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+            }
         }
     }
 }
@@ -2660,8 +2667,14 @@ mod tests {
         let slots = Arc::new(Semaphore::new(1));
         let (state, _) = fixture(MembershipRole::Admin);
         let session = authenticate(&state).await;
+        let (_authority, authority_updates) = watch::channel(session.auth_revision());
         let task = tokio::spawn(super::forward_review_notices(
-            board, send, slots, state, session,
+            board,
+            send,
+            slots,
+            state,
+            session,
+            authority_updates,
         ));
         let queued = tokio::time::timeout(std::time::Duration::from_secs(2), recv.recv())
             .await
@@ -2730,8 +2743,14 @@ mod tests {
     ) -> nessa_protocol::product::generated::PermissionReviewWaiting {
         let (send, mut recv) = mpsc::channel(1);
         let slots = Arc::new(Semaphore::new(1));
+        let (_authority, authority_updates) = watch::channel(session.auth_revision());
         let task = tokio::spawn(super::forward_review_notices(
-            board, send, slots, state, session,
+            board,
+            send,
+            slots,
+            state,
+            session,
+            authority_updates,
         ));
         let queued = tokio::time::timeout(std::time::Duration::from_secs(2), recv.recv())
             .await
@@ -3045,6 +3064,263 @@ mod tests {
         }
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn review_authority_refresh_wakes_only_its_connection() {
+        let (_directory, board) = open_rules();
+        let id = "00000000-0000-4000-8000-00000000000a";
+        board.waiting(&ReviewNotice {
+            conversation_id: id.into(),
+            execution_id: ExecutionId::new("turn").unwrap(),
+            permission_id: PermissionId::new("first").unwrap(),
+            tool: "Bash".into(),
+        });
+        let (base, authority) = fixture(MembershipRole::Admin);
+        let repository = repository_of(vec![owned_conversation(id, "other")]);
+        let first_policy = Arc::new(conversation_support::ObservedPolicy::default());
+        let second_policy = Arc::new(conversation_support::ObservedPolicy::default());
+        let connection = |seconds, policy: Arc<conversation_support::ObservedPolicy>| {
+            base.clone()
+                .with_permission_rules(board.clone())
+                .with_passive_read(
+                    Arc::new(UnpairedBinding),
+                    repository.clone(),
+                    Arc::new(GrantedConversation(id.into())),
+                    policy,
+                )
+                .with_settings(
+                    SessionSettings::new(
+                        Duration::from_secs(20),
+                        Duration::from_secs(5),
+                        Duration::from_secs(seconds),
+                    )
+                    .unwrap(),
+                )
+        };
+        let session = authenticate(&base).await;
+        let (first_socket, mut first) = test_socket(None);
+        let (second_socket, mut second) = test_socket(None);
+        let first_task = tokio::spawn(run_authenticated(
+            first_socket,
+            connection(10, first_policy.clone()),
+            session.clone(),
+        ));
+        let second_task = tokio::spawn(run_authenticated(
+            second_socket,
+            connection(30, second_policy.clone()),
+            session,
+        ));
+        let read = async |peer: &mut TestPeer| {
+            let Message::Text(text) = peer.message().await else {
+                panic!("review event expected")
+            };
+            let OutgoingMessage::Event(event) = serde_json::from_str(&text).unwrap() else {
+                panic!("review event expected")
+            };
+            assert_eq!(event.event, product_event::PERMISSION_REVIEW_WAITING);
+            let payload: PermissionReviewWaiting = serde_json::from_value(event.payload).unwrap();
+            (event.state_version, payload.reviews.len())
+        };
+        assert_eq!(read(&mut first).await, (1, 1));
+        assert_eq!(read(&mut second).await, (1, 1));
+        assert_eq!((first_policy.asked(), second_policy.asked()), (1, 1));
+        let visibility = board.visibility();
+        {
+            let mut current = authority.snapshot.lock().unwrap();
+            let mut next = snapshot(MembershipRole::Member, MembershipStatus::Active);
+            next.revision = current.revision + 1;
+            *current = next;
+        }
+        tokio::time::advance(Duration::from_secs(10)).await;
+        assert_eq!(read(&mut first).await, (1, 0));
+        assert!(
+            timeout(Duration::from_secs(1), second.output.recv())
+                .await
+                .is_err(),
+            "one authority refresh must not wake another connection"
+        );
+        assert_eq!((first_policy.asked(), second_policy.asked()), (2, 1));
+        assert_eq!(board.visibility(), visibility);
+        // At 21 seconds the fast connection has observed the same revision;
+        // the slow connection has not performed its first refresh yet.
+        tokio::time::advance(Duration::from_secs(10)).await;
+        assert!(timeout(Duration::from_secs(1), first.output.recv())
+            .await
+            .is_err());
+        assert_eq!((first_policy.asked(), second_policy.asked()), (2, 1));
+        tokio::time::advance(Duration::from_secs(10)).await;
+        assert_eq!(read(&mut second).await, (1, 0));
+        assert!(
+            timeout(Duration::from_secs(1), first.output.recv())
+                .await
+                .is_err(),
+            "the second refresh must not send a duplicate to the first connection"
+        );
+        assert_eq!((first_policy.asked(), second_policy.asked()), (2, 2));
+        assert_eq!(board.visibility(), visibility);
+        board.recheck_visibility();
+        assert_eq!(read(&mut first).await, (1, 0));
+        assert_eq!(read(&mut second).await, (1, 0));
+        assert_eq!((first_policy.asked(), second_policy.asked()), (3, 3));
+        board.waiting(&ReviewNotice {
+            conversation_id: id.into(),
+            execution_id: ExecutionId::new("turn").unwrap(),
+            permission_id: PermissionId::new("second").unwrap(),
+            tool: "Write".into(),
+        });
+        assert_eq!(read(&mut first).await, (2, 0));
+        assert_eq!(read(&mut second).await, (2, 0));
+        assert_eq!((first_policy.asked(), second_policy.asked()), (5, 5));
+        first_task.abort();
+        second_task.abort();
+        let _ = first_task.await;
+        let _ = second_task.await;
+    }
+
+    #[tokio::test]
+    async fn review_authority_updates_survive_initial_and_pending_metadata() {
+        for pending_metadata in [false, true] {
+            let (_directory, board) = open_rules();
+            let id = "00000000-0000-4000-8000-00000000000a";
+            board.waiting(&ReviewNotice {
+                conversation_id: id.into(),
+                execution_id: ExecutionId::new("turn").unwrap(),
+                permission_id: PermissionId::new("permission").unwrap(),
+                tool: "Bash".into(),
+            });
+            let (state, authority) = fixture(MembershipRole::Admin);
+            let repository = repository_of(vec![owned_conversation(id, "other")]);
+            let policy = Arc::new(conversation_support::ObservedPolicy::default());
+            let state = state.with_passive_read(
+                Arc::new(UnpairedBinding),
+                repository.clone(),
+                Arc::new(GrantedConversation(id.into())),
+                policy.clone(),
+            );
+            let session = authenticate(&state).await;
+            let (authority_send, authority_updates) = watch::channel(session.auth_revision());
+            let (entered, mut waiting) = tokio::sync::oneshot::channel();
+            let (release, gate) = tokio::sync::oneshot::channel();
+            if pending_metadata {
+                *repository.metadata_load_gate.lock().unwrap() = Some((entered, gate));
+            }
+            let (send, mut receive) = mpsc::channel(2);
+            let slots = Arc::new(Semaphore::new(2));
+            let mut publisher = Box::pin(super::forward_review_notices(
+                board,
+                send,
+                slots,
+                state,
+                session,
+                authority_updates,
+            ));
+            if pending_metadata {
+                assert!(futures_util::poll!(publisher.as_mut()).is_pending());
+                waiting.try_recv().expect("the metadata read is suspended");
+                assert_eq!(policy.asked(), 0);
+            }
+            *authority.snapshot.lock().unwrap() =
+                snapshot(MembershipRole::Member, MembershipStatus::Active);
+            authority.snapshot.lock().unwrap().revision = 2;
+            authority_send.send_replace(2);
+            if pending_metadata {
+                release.send(()).unwrap();
+            }
+            assert!(futures_util::poll!(publisher.as_mut()).is_pending());
+            let passes = if pending_metadata { 2 } else { 1 };
+            for _ in 0..passes {
+                let queued = receive
+                    .try_recv()
+                    .expect("the authority update is published");
+                let WireResponse::ReviewWaiting {
+                    payload,
+                    generation,
+                } = queued.message
+                else {
+                    panic!("review snapshot expected")
+                };
+                assert!(payload.reviews.is_empty());
+                assert_eq!(generation, 1);
+            }
+            assert_eq!(policy.asked(), passes);
+            assert!(receive.try_recv().is_err());
+            drop(authority_send);
+            assert!(
+                futures_util::poll!(publisher.as_mut()).is_ready(),
+                "a closed local authority channel must end the publisher"
+            );
+            assert!(receive.recv().await.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn review_authority_updates_survive_waiting_publication() {
+        let (_directory, board) = open_rules();
+        let id = "00000000-0000-4000-8000-00000000000a";
+        board.waiting(&ReviewNotice {
+            conversation_id: id.into(),
+            execution_id: ExecutionId::new("turn").unwrap(),
+            permission_id: PermissionId::new("permission").unwrap(),
+            tool: "Bash".into(),
+        });
+        let (state, authority) = fixture(MembershipRole::Admin);
+        let policy = Arc::new(conversation_support::ObservedPolicy::default());
+        let state = state.with_passive_read(
+            Arc::new(UnpairedBinding),
+            repository_of(vec![owned_conversation(id, "other")]),
+            Arc::new(GrantedConversation(id.into())),
+            policy.clone(),
+        );
+        let session = authenticate(&state).await;
+        let (authority_send, authority_updates) = watch::channel(session.auth_revision());
+        let (send, mut receive) = mpsc::channel(1);
+        let slots = Arc::new(Semaphore::new(1));
+        let mut publisher = Box::pin(super::forward_review_notices(
+            board,
+            send,
+            slots,
+            state,
+            session,
+            authority_updates,
+        ));
+        assert!(futures_util::poll!(publisher.as_mut()).is_pending());
+        let first = receive.try_recv().unwrap();
+        assert!(
+            matches!(&first.message, WireResponse::ReviewWaiting { payload, .. } if payload.reviews.len() == 1)
+        );
+        // Retaining the queued frame retains its sole publication permit.
+        *authority.snapshot.lock().unwrap() =
+            snapshot(MembershipRole::Member, MembershipStatus::Active);
+        authority.snapshot.lock().unwrap().revision = 2;
+        authority_send.send_replace(2);
+        assert!(futures_util::poll!(publisher.as_mut()).is_pending());
+        assert_eq!(policy.asked(), 2);
+        assert!(receive.try_recv().is_err());
+        *authority.snapshot.lock().unwrap() =
+            snapshot(MembershipRole::Admin, MembershipStatus::Active);
+        authority.snapshot.lock().unwrap().revision = 3;
+        authority_send.send_replace(3);
+        drop(first);
+        assert!(futures_util::poll!(publisher.as_mut()).is_pending());
+        let second = receive
+            .try_recv()
+            .expect("the admitted member snapshot completes");
+        assert!(
+            matches!(&second.message, WireResponse::ReviewWaiting { payload, .. } if payload.reviews.is_empty())
+        );
+        assert_eq!(policy.asked(), 3);
+        drop(second);
+        assert!(futures_util::poll!(publisher.as_mut()).is_pending());
+        let third = receive
+            .try_recv()
+            .expect("the newer authority update stays pending");
+        assert!(
+            matches!(&third.message, WireResponse::ReviewWaiting { payload, .. } if payload.reviews.len() == 1)
+        );
+        drop(third);
+        drop(authority_send);
+        assert!(futures_util::poll!(publisher.as_mut()).is_ready());
+    }
+
     #[tokio::test]
     async fn an_admin_review_notice_obeys_policy_refusals_and_current_membership() {
         struct Refuse(AccessDenial);
@@ -3248,12 +3524,14 @@ mod tests {
         let session = authenticate(&state).await;
         let (send, mut recv) = mpsc::channel(1);
         let slots = Arc::new(Semaphore::new(2));
+        let (_authority, authority_updates) = watch::channel(session.auth_revision());
         let task = tokio::spawn(super::forward_review_notices(
             board.clone(),
             send,
             slots,
             state,
             session,
+            authority_updates,
         ));
         let first = tokio::time::timeout(std::time::Duration::from_secs(2), recv.recv())
             .await

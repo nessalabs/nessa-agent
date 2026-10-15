@@ -704,28 +704,40 @@ retain an admin role after a concurrent demotion.
 | Correlated conversation | Membership disabled during the metadata read | Refused before policy | `review_admission_reads_membership_after_metadata_returns` |
 
 Review admission and retained visibility have separate owners. Cedar owns each
-filter decision; `PermissionMemory` owns its existing visibility generation;
-the authenticated connection owns bounded current-state refresh and tells that
-visibility owner when the committed authorization revision changes. The refresh
-keeps the coherent `AccessSnapshot` it already read instead of discarding it.
-The observed revision starts at `AuthenticatedSession::auth_revision()` and is
-only an invalidation observation, never authority for admission. The authority behind `AccessReader`
-publishes a new revision for credential and membership mutations, so
-future visibility facts in that snapshot use the same notification path without
-a second list of relevant fields. Share changes retain their existing visibility
-notification; invalid sessions follow the existing close path. No additional
-polling loop or policy cache is introduced. The missing connection-to-visibility
-notification caused the second temporal review finding after admission freshness
-was fixed.
+filter decision. `PermissionMemory` owns board generation and the shared
+visibility generation for share/unshare changes. Each authenticated connection
+owns its bounded authority refresh and a local watch carrying the observed
+committed authorization revision, seeded once from
+`AuthenticatedSession::auth_revision()`. That watch wakes only its own review
+publisher. The authority behind `AccessReader` owns committed versions, so a new
+visibility fact does not require a second list of relevant fields or a policy
+cache. A registry-wide mutation can still advance every connection's observed
+revision; each connection refilters its own notices once, rather than publishing
+another global wakeup. `review_authority_refresh_wakes_only_its_connection`
+checks the separate policy-read counts and unchanged shared visibility.
+
+The publisher emits an initial snapshot and then listens to board changes,
+shared share visibility and its local authority revision. Each loop marks the
+local watch observed before awaited filtering or publication; a version that
+arrives during either await remains pending for the next pass. The shared waits
+compare the counters captured by that pass. No second copy of a last-published
+revision is needed. Closing the local channel ends its publisher. Invalid sessions keep the existing socket-close
+path. No additional polling loop is introduced. The earlier retained-visibility
+finding exposed a missing refresh notification; its global implementation then
+exposed the wrong notification scope. Authority refresh belongs to the connection,
+while conversation sharing belongs to the shared board visibility owner.
 
 | Live connection ordering | Visibility action | Published result | Regression |
 | --- | --- | --- | --- |
-| Initial admin snapshot at revision R, demotion to R+1 before first refresh | Changed revision invalidates | Same board generation replaces foreign notices with owned notices only | `a_live_review_publisher_refilters_after_authority_refresh` |
-| Another committed revision with the same member role | Changed revision invalidates | Fresh Cedar filtering replaces the same owned notice set | `a_live_review_publisher_refilters_after_authority_refresh` |
-| Member promoted after an observed refresh | Changed revision invalidates | Foreign and owned notices are both restored by Cedar | `a_live_review_publisher_refilters_after_authority_refresh` |
-| Admin demoted after an observed refresh | Changed revision invalidates | Foreign notice removed; owned notice retained | `a_live_review_publisher_refilters_after_authority_refresh` |
-| Successful refresh at the authentication revision, or a later stable revision | No new invalidation | No replacement notice | `a_live_review_publisher_refilters_after_authority_refresh` |
-| Membership disabled after publication | Existing invalid-session close | Socket closes instead of retaining a valid session | `a_live_review_publisher_refilters_after_authority_refresh` |
+| Admin demoted before first refresh, or after an observed refresh | Local changed revision invalidates | Foreign notice removed; owned notice retained | `a_live_review_publisher_refilters_after_authority_refresh` |
+| Same role at a new committed revision, or member promoted | Local changed revision invalidates | Same owned set refiltered, or foreign notice restored by Cedar | `a_live_review_publisher_refilters_after_authority_refresh` |
+| Authentication revision or later version unchanged | No local invalidation | No replacement notice | `a_live_review_publisher_refilters_after_authority_refresh` |
+| Two sockets observe one registry revision at staggered refreshes | Each wakes only its own publisher | One filtering pass per connection; no cross-connection duplicate | `review_authority_refresh_wakes_only_its_connection` |
+| Shared visibility or board generation changes | Existing shared signal wakes both publishers | Each filters the changed shared state | `review_authority_refresh_wakes_only_its_connection` |
+| Local version preloaded before first publisher poll, or arriving during metadata await | Capture latest version; retain later pending version | Initial snapshot, then any required fresh pass | `review_authority_updates_survive_initial_and_pending_metadata` |
+| Local version arrives while publication awaits capacity | Retain the pending version | Admitted snapshot finishes, then latest facts are published | `review_authority_updates_survive_waiting_publication` |
+| Local authority sender closes | End the publisher | No closed-channel spin | `review_authority_updates_survive_initial_and_pending_metadata` |
+| Membership disabled after publication | Existing invalid-session close | Typed authorization-lost close | `a_live_review_publisher_refilters_after_authority_refresh` |
 
 Client permission controls capture related IDs through
 `packages/nessa-client/src/application/permission-target.ts` and consume those
