@@ -250,8 +250,14 @@ hooks are not allowed to answer first.
 The resource is one canonical directory in an environment the grantor
 enforces. The environment is this gateway's own machine, a remote
 environment it already leases over SSH or a paired connection, or a cloud
-environment a later agent slice will run. The grant names the environment
-and the directory. `read` lists and reads named paths under that directory.
+environment a later agent slice will run. Share mints a resource id for
+the directory. The id is not the path. The row stores the environment and
+the canonical path beside that id. The first open takes a directory
+handle on the path and compares it to the file identity captured when the
+id was minted. If the root is gone, or the identity differs, the use is
+refused and the grant is revoked. A directory later created at the same
+path does not receive the grant. The no-follow walk starts from the
+handle that matched. `read` lists and reads named paths under that directory.
 `write` creates and edits named paths under it. The open is the check.
 The environment walks from a directory handle on the granted directory,
 and opens each component no-follow against the parent handle: publish, a
@@ -270,9 +276,12 @@ sandbox
 ([the contract settled here](runtime-architecture.md#slice-c-environments_list-and-run-for-the-agent-700)).
 A command started in the directory can still open a file outside it.
 `exec` is admitted only when that environment enforces a filesystem
-boundary around the process and the boundary contains the directory. The
-profiles that can do that are the harness sandbox and a container, in the
-runtime map's [sandbox table](runtime-architecture.md#sandboxes-honestly).
+sandbox around the process and every root the sandbox exposes is inside
+the granted directory. A sandbox that also exposes `/etc`, another
+workspace, or another mount is refused `exec`, even when the granted
+directory is one of its roots. The profiles that can do that are the
+harness sandbox and a container, in the runtime map's
+[sandbox table](runtime-architecture.md#sandboxes-honestly).
 The environment says which it can enforce. A lease it can only run as
 sandbox `none` is refused `exec`, and the share says the refusal. Command
 matchers still choose which program may run inside a boundary the
@@ -421,18 +430,40 @@ conversation resource, with no receiver. Delivery reads those
 grants. The gateway POSTs events for those conversations only. The payload
 is what a reader with that capability set may see.
 
-The body is signed with HMAC-SHA256 over a canonical string of the
-timestamp, the delivery id, and the body. That is the mac
+The body is signed with HMAC-SHA256, the mac
 [backup manifests](../../crates/nessa-server/src/backup/application/ports.rs)
-already use; the webhook key is its own, stored with the registration, and
-is not written into the body. A retry repeats the same delivery id while
-the attempt's epoch still allows delivery.
+already compute. That helper does not define this message. The signed
+bytes are three length-prefixed fields, in order. Each field is a
+big-endian unsigned 64-bit length, then that many bytes. The length
+counts the field, not the prefix.
+
+1. The timestamp: ASCII decimal of Unix time in milliseconds, no sign and
+   no leading zeros except for the value `0`.
+2. The delivery id: its UTF-8 bytes.
+3. The body: the exact HTTP request body bytes.
+
+The MAC is the 32-byte HMAC-SHA256 of those bytes under the
+registration's key. The key is not written into the body. The POST
+carries three headers: `Nessa-Webhook-Timestamp` is the timestamp string,
+`Nessa-Webhook-Id` is the delivery id, and `Nessa-Webhook-Signature` is
+`v1=` plus 64 lowercase hex characters of the MAC. The receiver rebuilds
+the three fields from those headers and the raw body bytes. It does not
+re-encode JSON. A retry repeats the same delivery id while the attempt's
+epoch still allows delivery.
 
 The sender does not follow redirects. A 3xx is not a delivery. The attempt
 records `not sent` or `retry scheduled` under the same permit rules, and
 the next POST, when the epoch still allows it, goes to the registered URL
 only. The signature headers are written on that POST and are not sent to
 another origin. A redirect to HTTPS is still not followed.
+
+An event for a granted conversation is written to that registration's
+outbox before the attempt waits for the permit. The row is a new delivery
+id, the registration, and the source checkpoint (conversation id,
+incarnation, position), in state `queued`. That write commits first. A
+crash while the attempt is waiting leaves the row. Restart admits each
+`queued` row that has no terminal outcome, in checkpoint order, and does
+not mint a new delivery id for it.
 
 Revoke and a delivery attempt share one permit for that registration, the
 same shape as `hold_revision` on a share grant. The attempt that holds the
@@ -616,9 +647,10 @@ not the subject and does not merge two receivers' grants. An integration
 or a later agent, which has no receiver, uses subject kind `principal`
 and the principal id. This slice writes resource kind `conversation` and
 the conversation id. The directory slice writes kind `directory` and a
-resource id that names the environment and the directory. It does not
-change the primary key and does not mint a conversation id for a
-directory. One subject may hold many directory rows. Webhook and agent
+resource id minted for that directory. The path is stored beside the id
+and is not the key. Replacing the directory does not keep the grant. It
+does not change the primary key and does not mint a conversation id for
+a directory. One subject may hold many directory rows. Webhook and agent
 slices insert into this key. They do not migrate identity again.
 
 The capability set is `read`, and for a principal Cedar permits, `comment`
@@ -742,9 +774,14 @@ this gateway's machine, a remote environment it already leases, or a cloud
 environment a later agent uses. The grant names the environment and the
 directory. The row uses the refactor's key
 `(subject_kind, subject_id, resource_kind, resource_id)` with resource
-kind `directory`. A paired subject is the receiver. The resource id names
-the environment and the directory. This slice does not change that key
-and does not mint a conversation id. Capabilities are
+kind `directory`. A paired subject is the receiver. Share mints the
+resource id. It is not the path. The row stores the environment and the
+canonical path beside the id. The first open takes a directory handle and
+compares it to the file identity captured when the id was minted. If the
+root is gone, or the identity differs, the use is refused and the grant
+is revoked. A directory later created at the same path does not receive
+the grant. This slice does not change the key and does not mint a
+conversation id. Capabilities are
 `read`, `write`, and `exec`. `read` and
 `write` open a named path by walking from a directory handle on the
 granted directory, no-follow against each parent handle. A component that
@@ -752,7 +789,9 @@ is `..`, a symlink, or otherwise leaves the directory is refused.
 Resolving the path and then opening the resolved name is not the boundary.
 `exec` is admitted only when that
 environment enforces a filesystem sandbox around the process (the harness
-sandbox or a container) and the sandbox's roots stay inside the directory.
+sandbox or a container) and every root that sandbox exposes is inside
+the directory. A sandbox that also exposes a path outside the directory
+is refused `exec`.
 A command lease with sandbox `none`, which is what `run` and `GrantCommand`
 are today, is refused `exec`. The working directory is not that boundary.
 This slice enforces the boundary on a machine the grantor already runs.
@@ -782,12 +821,15 @@ outside it. Replacing a symlink or an ancestor while the open is in
 progress still cannot leave the directory: the opened file is inside it,
 or the open is refused. A resolve-then-open is not accepted as the check.
 A command on a sandbox-`none` host is refused `exec` even
-when its working directory is the granted directory. Where the environment
+when its working directory is the granted directory. A sandbox whose
+roots include a path outside the granted directory is refused `exec`.
+Where the environment
 enforces a filesystem sandbox, the audit names the profile it applied, and
 a path outside that profile's roots is refused. A denied program is
 refused and the audit names the matcher. A command-rule list whose
 encoding would not fit in one grant frame is refused and the row is
-unchanged. The grant subscription stays open.
+unchanged. The grant subscription stays open. Deleting the directory
+and creating another at the same path does not keep the grant.
 
 An opted-in Claude or Codex harness still runs its own hooks. The gateway
 cannot write a wider `grants.json` than the machine's owner wrote. A
@@ -971,10 +1013,21 @@ principal, with no receiver. The gateway POSTs events for
 the granted conversation only. The payload is what that capability set
 may see.
 
-Sign with HMAC-SHA256 over the timestamp, the delivery id, and the body,
-the mac algorithm backup manifests use, with this registration's key. The
-key stays out of the body. Retry with bounded backoff and the same
+Sign with HMAC-SHA256 of three length-prefixed fields, in order: the
+ASCII decimal of Unix time in milliseconds, the delivery id's UTF-8, and
+the exact HTTP body bytes. Each field is a big-endian unsigned 64-bit
+length, then that many bytes. The MAC is 32 bytes, sent as `v1=` plus 64
+lowercase hex characters in `Nessa-Webhook-Signature`.
+`Nessa-Webhook-Timestamp` and `Nessa-Webhook-Id` carry the first two
+fields. The key stays out of the body. The receiver verifies from those
+headers and the raw body. Retry with bounded backoff and the same
 delivery id while that attempt's epoch still allows delivery.
+
+An event is written to the registration's outbox before the attempt waits
+for the permit: delivery id, registration, and source checkpoint
+(conversation id, incarnation, position), state `queued`. A crash while
+waiting leaves that row. Restart admits it in checkpoint order and does
+not mint a new delivery id.
 
 The sender does not follow redirects. A 3xx is not a delivery. The attempt
 records `not sent` or `retry scheduled`, and the next POST, when the epoch
@@ -1038,7 +1091,10 @@ signature is not sent to the redirect target. A POST whose response is
 success and whose terminal audit write fails leaves `sending` in place,
 sends no second POST of that delivery id, and records outcome unknown.
 Restart from that row does the same. A failed pre-send write sends
-nothing.
+nothing. A crash while an event waits for the permit leaves its `queued`
+outbox row, and restart delivers that delivery id. A receiver recomputes
+the MAC from `Nessa-Webhook-Timestamp`, `Nessa-Webhook-Id`, and the raw
+body, and rejects a body that was re-encoded.
 
 ## Depends on
 
