@@ -452,6 +452,29 @@ fn retiring_a_note_before_the_turn_leaves_the_span_without_it() {
 }
 
 #[test]
+fn retiring_a_grant_leaves_a_hook_note_on_the_same_execution() {
+    let store = LocalTraceStore::new();
+    store.note_grant("conversation-1", "execution-1", "grant-1", 1, true);
+    store.note_hook(
+        "conversation-1",
+        "execution-1",
+        "before_permission_review",
+        "allow",
+    );
+    store.retire("conversation-1", "execution-1");
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.finish(at(2), FinishReason::Stop);
+    let agent = store
+        .read("conversation-1")
+        .into_iter()
+        .find(|span| span.operation() == "invoke_agent")
+        .unwrap();
+    assert!(agent.string("nessa.grant.id").is_none());
+    assert_eq!(agent.string("nessa.hook.verdict"), Some("allow"));
+}
+
+#[test]
 fn pending_notes_drop_the_oldest_past_capacity() {
     let store = LocalTraceStore::new();
     for index in 0..=2048 {

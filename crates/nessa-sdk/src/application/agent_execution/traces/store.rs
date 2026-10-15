@@ -255,14 +255,22 @@ impl LocalTraceStore {
         pending.subagent_parent = Some(parent_id.to_owned());
     }
 
-    /// Drop an unconsumed note for `execution_id` in `conversation_id`.
+    /// Drop an unconsumed grant note for `execution_id` in `conversation_id`.
     ///
-    /// Called when an invocation ends without an agent span consuming the note.
-    /// A note already applied to a stored span is left alone.
+    /// Called when an invocation that recorded a grant ends without an agent
+    /// span consuming it. Hook and subagent notes on the same execution stay.
+    /// A grant already applied to a stored span is left alone.
     pub fn retire(&self, conversation_id: &str, execution_id: &str) {
         let mut inner = self.lock();
         let key = NoteKey::new(conversation_id, execution_id);
-        if inner.pending.remove(&key).is_some() {
+        let Some(pending) = inner.pending.get_mut(&key) else {
+            return;
+        };
+        pending.grant_id = None;
+        pending.policy_revision = None;
+        pending.tools_checked = None;
+        if pending.hook_event.is_none() && pending.subagent_id.is_none() {
+            inner.pending.remove(&key);
             inner.pending_order.retain(|existing| existing != &key);
         }
     }

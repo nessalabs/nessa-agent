@@ -431,12 +431,12 @@ impl Agent {
     fn trace_conversation(&self) -> &str {
         self.inner.manager.id().as_str()
     }
-    fn note_grant_trace(&self, execution_id: &ExecutionId, submitter: &Submitter) {
+    fn note_grant_trace(&self, execution_id: &ExecutionId, submitter: &Submitter) -> bool {
         let Some(store) = self.inner.provider.traces() else {
-            return;
+            return false;
         };
         let Initiator::Grant(grant) = submitter.initiation.initiator() else {
-            return;
+            return false;
         };
         let checked = submitter.initiation.tools() == ToolChecking::Checked;
         store.note_grant(
@@ -446,6 +446,7 @@ impl Agent {
             grant.policy_revision(),
             checked,
         );
+        true
     }
     fn retire_grant_trace(&self, execution_id: &ExecutionId) {
         let Some(store) = self.inner.provider.traces() else {
@@ -1338,13 +1339,14 @@ impl Agent {
         work: &WorkPermit,
     ) -> Result<ExecutionOutcome, AgentError> {
         let id = input.execution_id.clone();
-        self.note_grant_trace(&id, &submitter);
-        // Dropped on every return, including a panic. A span that already
-        // closed consumed the note. A turn that never started still has it.
-        let _retire_unstarted_grant = UnstartedGrant {
-            agent: self,
-            execution_id: id.clone(),
-        };
+        // Only a grant note is retired. A hook note on a turn that was not
+        // started under a grant must survive until its agent span closes.
+        let _retire_unstarted_grant =
+            self.note_grant_trace(&id, &submitter)
+                .then(|| UnstartedGrant {
+                    agent: self,
+                    execution_id: id.clone(),
+                });
         // Close can retire the attachment after this invocation has acquired its
         // work permit. Keep panic recovery's observation owner when it is still
         // available, but never let that optional drain bypass persistence of the
