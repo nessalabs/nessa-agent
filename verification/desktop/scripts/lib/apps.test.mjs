@@ -15,8 +15,102 @@ import {
   exactly,
   oneCard,
   oneMount,
+  settleAppFrame,
 } from "./apps.mjs"
 import { css, names } from "./selectors.mjs"
+
+describe("settleAppFrame", () => {
+  const frames = () => ({
+    element: {},
+    proxy: { isDetached: () => false },
+    app: { isDetached: () => false },
+  })
+
+  it("settles the discovered handles within the supplied bound", async () => {
+    const discovered = frames()
+    const page = {
+      waitForFunction: async (_predicate, _arg, options) => {
+        assert.equal(options.timeout, 37)
+      },
+    }
+    const returned = await settleAppFrame(page, discovered, 37)
+    assert.equal(returned.proxy, discovered.proxy)
+    assert.equal(returned.app, discovered.app)
+  })
+
+  it("a caller rewriting the carrier does not replace the captured handles", async () => {
+    const captured = frames()
+    const carrier = { ...captured }
+    const page = {
+      waitForFunction: async () => {
+        // Deliberately violate the carrier's value semantics during the wait.
+        Object.assign(carrier, frames())
+      },
+    }
+    const returned = await settleAppFrame(page, carrier)
+    assert.equal(returned.element, captured.element)
+    assert.equal(returned.proxy, captured.proxy)
+    assert.equal(returned.app, captured.app)
+  })
+
+  it("a rewritten carrier cannot hide the captured app's retirement", async () => {
+    let retired = false
+    const carrier = { ...frames(), app: { isDetached: () => retired } }
+    const page = {
+      waitForFunction: async () => {
+        retired = true
+        // An otherwise live replacement is not the app this wait began for.
+        carrier.app = frames().app
+      },
+    }
+    await assert.rejects(settleAppFrame(page, carrier), {
+      name: "CannotRun",
+      message: "the app frame detached while its host settled",
+    })
+  })
+
+  it("refuses an unbounded wait before contacting the page", async () => {
+    const page = { waitForFunction: () => assert.fail("no unbounded wait") }
+    for (const timeout of [0, -1, Infinity, NaN])
+      await assert.rejects(settleAppFrame(page, frames(), timeout), {
+        name: "CannotRun",
+        message: "app host settlement needs a positive finite timeout",
+      })
+  })
+
+  it("preserves a settlement timeout or page failure", async () => {
+    for (const failure of [
+      new DOMException("motion continued", "TimeoutError"),
+      new Error("page closed"),
+    ]) {
+      const page = {
+        waitForFunction: async () => {
+          throw failure
+        },
+      }
+      await assert.rejects(settleAppFrame(page, frames()), (error) => error === failure)
+    }
+  })
+
+  for (const departing of ["proxy", "app"])
+    it(`refuses a departing ${departing} without selecting a replacement`, async () => {
+      let detached = false
+      const discovered = {
+        proxy: { isDetached: () => departing === "proxy" && detached },
+        app: { isDetached: () => departing === "app" && detached },
+      }
+      const page = {
+        $: () => assert.fail("the replacement must not be selected"),
+        waitForFunction: async () => {
+          detached = true
+        },
+      }
+      await assert.rejects(settleAppFrame(page, discovered), {
+        name: "CannotRun",
+        message: "the app frame detached while its host settled",
+      })
+    })
+})
 
 describe("oneMount", () => {
   it("accepts exactly one inline frame", () => {

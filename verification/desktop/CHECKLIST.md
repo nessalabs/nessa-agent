@@ -561,6 +561,12 @@ registers (`src/desktop/widgets/app/fixture/`), on its session "An MCP App,
 in its sandbox". Every row of the bridge's design table is a jsdom test
 (`app/application/bridge.test.ts`, `app/ui/app-view.test.tsx`).
 
+- [ ] **Actions in a discovered app wait for current finite host motion.**
+  A same-origin nested-frame geometry control moves its transformed ancestor
+  during mousemove; discovery remains available before motion finishes, and
+  settlement on those same handles makes Close receive exactly one trusted
+  click. This checks the demonstrated automation gap in #906, not the unproved
+  cause of its original teardown failure. _Check:_ `mcp-apps.mjs --only moving-frame`.
 - [ ] **It renders in all three places, told its mode and its call** — the
   card's app live, told `inline`, its call's input and result, its frame as
   tall as the app says; its fullscreen request opens a pane beside the
