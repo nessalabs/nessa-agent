@@ -8,14 +8,14 @@ import { RAIL_LOADING_DELAY_MS, RailView, railItems } from "./side-rail"
 
 beforeEach(() => {
   vi.useFakeTimers()
-  // The loading surface asks for reduced motion; jsdom has no matchMedia.
+  // The loading text asks for reduced motion; jsdom has no matchMedia.
   window.matchMedia ??= ((query: string) => ({
     matches: false,
     media: query,
     addEventListener: () => {},
     removeEventListener: () => {},
   })) as unknown as typeof window.matchMedia
-  // Nor the Web Animations the loader's smoke drifts with.
+  // Nor the Web Animations its sweep runs on.
   Element.prototype.animate ??= function () {
     return { cancel() {}, finished: Promise.resolve() } as unknown as Animation
   }
@@ -43,8 +43,11 @@ it("opens an item's view empty, and shows the loader only once a load runs past 
   expect(view?.querySelector(".rail-view-loading")).toBeNull()
 
   await act(async () => vi.advanceTimersByTime(1))
-  expect(view?.querySelector(".rail-view-loading")).not.toBeNull()
-  expect(view?.textContent).toContain("Loading Files")
+  const loader = view?.querySelector(".rail-view-loading")
+  expect(loader?.getAttribute("data-slot")).toBe("loading-text")
+  expect(loader?.textContent).toContain("Loading Files")
+  // Just the text: no panel or box drawn around it.
+  expect(view?.querySelector('[data-slot="generating-surface"]')).toBeNull()
 
   await act(async () => root.unmount())
   host.remove()
