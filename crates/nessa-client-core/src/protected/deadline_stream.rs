@@ -9,6 +9,14 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Longest one blocking wait before cancellation is asked again.
+///
+/// Shutting a cloned socket wakes a blocked receive on Unix. On Windows it
+/// does not, so a stop during opening would otherwise sit until the handshake
+/// deadline. Each slice asks again; `a_stop_during_a_long_wait_is_seen_on_the_next_slice`
+/// keeps this bound.
+pub(crate) const STOP_SLICE: Duration = Duration::from_millis(50);
+
 pub(crate) struct DeadlineStream {
     stream: Box<dyn GatewayStream>,
     clock: Arc<dyn Clock>,
@@ -152,39 +160,63 @@ impl DeadlineStream {
         self.record_failure(error);
         Error::other("gateway operation refused")
     }
+    /// One direction of the budget, taken `STOP_SLICE` at a time. A slice that
+    /// ends with no bytes is not the deadline; cancellation and the remaining
+    /// budget are asked before the next slice.
+    fn transfer<T>(
+        &mut self,
+        timeout: impl Fn(&mut dyn GatewayStream, Duration) -> IoResult<()>,
+        mut operation: impl FnMut(&mut dyn GatewayStream) -> IoResult<T>,
+    ) -> IoResult<T> {
+        let mut left = None;
+        loop {
+            let available = self.wait_budget()?;
+            let left = left.get_or_insert(available);
+            let slice = (*left).min(available).min(STOP_SLICE);
+            let prepared = timeout(&mut *self.stream, slice);
+            self.physical(prepared)?;
+            match operation(&mut *self.stream) {
+                Err(error) if slice_elapsed(&error) => {
+                    *left = left.saturating_sub(slice);
+                    if left.is_zero() {
+                        return self.physical(Err(error));
+                    }
+                }
+                other => {
+                    let value = self.physical(other)?;
+                    self.remaining().map_err(|error| self.refused(error))?;
+                    return Ok(value);
+                }
+            }
+        }
+    }
+}
+fn slice_elapsed(error: &Error) -> bool {
+    matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock)
 }
 impl Read for DeadlineStream {
     fn read(&mut self, bytes: &mut [u8]) -> IoResult<usize> {
         if bytes.is_empty() {
             return Ok(0);
         }
-        let timeout = self.wait_budget()?;
-        let result = self.stream.read_timeout(timeout);
-        self.physical(result)?;
-        let result = self.stream.read(bytes);
-        let read = self.physical(result)?;
-        self.remaining().map_err(|error| self.refused(error))?;
-        Ok(read)
+        self.transfer(
+            |stream, timeout| stream.read_timeout(timeout),
+            |stream| stream.read(bytes),
+        )
     }
 }
 impl Write for DeadlineStream {
     fn write(&mut self, bytes: &[u8]) -> IoResult<usize> {
-        let timeout = self.wait_budget()?;
-        let result = self.stream.write_timeout(timeout);
-        self.physical(result)?;
-        let result = self.stream.write(bytes);
-        let written = self.physical(result)?;
-        self.remaining().map_err(|error| self.refused(error))?;
-        Ok(written)
+        self.transfer(
+            |stream, timeout| stream.write_timeout(timeout),
+            |stream| stream.write(bytes),
+        )
     }
     fn flush(&mut self) -> IoResult<()> {
-        let timeout = self.wait_budget()?;
-        let result = self.stream.write_timeout(timeout);
-        self.physical(result)?;
-        let result = self.stream.flush();
-        self.physical(result)?;
-        self.remaining().map_err(|error| self.refused(error))?;
-        Ok(())
+        self.transfer(
+            |stream, timeout| stream.write_timeout(timeout),
+            |stream| stream.flush(),
+        )
     }
 }
 impl Drop for DeadlineStream {

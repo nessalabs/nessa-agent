@@ -2,6 +2,8 @@
 //! product polling preserves partial TLS/frame progress across idle ticks.
 mod deadline_stream;
 use crate::read_only_sync::application::GatewayError;
+#[cfg(test)]
+pub(crate) use deadline_stream::STOP_SLICE;
 pub(crate) use deadline_stream::{io_cause, DeadlineStream};
 use nessa_auth::adapters::pairing::NativeTransport;
 use nessa_protocol::pairing::{encode_frame, FrameReader, MAX_PROTECTED_REQUEST_BYTES};
