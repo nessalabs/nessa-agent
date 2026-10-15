@@ -1015,6 +1015,9 @@ stored by the gateway, evaluated by Cedar on every command and every
 subscription batch, and recorded as a semantic record with the owner as
 initiator. Nothing is granted by conversation list, by folder or by
 default; a peer with no grant on an id cannot tell it exists.
+The proposal to make this the one grant for a directory, a live subscribe,
+and a webhook is [access grants](access-grants.md). This section is what
+is built.
 
 Where it stands: grants per conversation id are built (slice G,
 [read grants](read-grants.md)), and each grant has its role and, for Drive,
