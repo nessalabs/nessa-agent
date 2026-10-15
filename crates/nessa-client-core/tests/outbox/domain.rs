@@ -422,6 +422,27 @@ fn every_transition_and_precedence_pair() {
         &counted,
         false
     ));
+    let rebased = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::SendLost, not_admitted),
+        audit(Cause::ForegroundSend, accepted),
+        audit(Cause::SendLost, not_admitted),
+        audit(Cause::ForegroundSend, done),
+    ];
+    assert!(
+        history_reaches(
+            &not_admitted_row.clone().with_sends(3).with_outcome(done),
+            &rebased,
+            false
+        ),
+        "a replayed lost send counts from the row before the weaker answer"
+    );
+    assert!(!history_reaches(
+        &not_admitted_row.clone().with_sends(2).with_outcome(done),
+        &rebased,
+        false
+    ));
     let missing_lost = [
         audit(Cause::Held, draft),
         audit(Cause::Departed, not_admitted),
@@ -574,6 +595,86 @@ fn every_transition_and_precedence_pair() {
         "a successor that names its own command does not reach"
     );
     assert_eq!(stored_evidence(&direct_return), Evidence::Direct);
+    let unminted = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::SendAnswered, running_failure),
+    ];
+    assert!(
+        history_reaches(
+            &not_admitted_row
+                .clone()
+                .with_sends(1)
+                .with_outcome(running_failure),
+            &unminted,
+            false
+        ),
+        "a turn_running send with no draft still reaches"
+    );
+    assert!(!history_reaches(
+        &not_admitted_row
+            .clone()
+            .with_sends(1)
+            .with_outcome(running_failure)
+            .with_successor(successor.clone()),
+        &unminted,
+        false
+    ));
+    assert!(!history_reaches(
+        &not_admitted_row.clone().with_outcome(running_failure),
+        &unminted,
+        false
+    ));
+    let lookup_unminted = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::SendLost, not_admitted),
+        audit(Cause::Lookup, running_failure),
+    ];
+    assert!(history_reaches(
+        &not_admitted_row
+            .clone()
+            .with_sends(1)
+            .with_outcome(running_failure),
+        &lookup_unminted,
+        false
+    ));
+    let mut counted_return = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::SendAnswered, unresolved),
+        audit(Cause::SendLost, not_admitted),
+        audit(Cause::ReturnedToDraft, running_failure),
+    ];
+    counted_return[4].successor = Some(successor.clone());
+    assert!(
+        history_reaches(
+            &not_admitted_row
+                .clone()
+                .with_sends(2)
+                .with_outcome(running_failure)
+                .with_successor(successor.clone()),
+            &counted_return,
+            false
+        ),
+        "the lost send before a returned draft is counted"
+    );
+    let mut omitted_lost = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::SendAnswered, unresolved),
+        audit(Cause::ReturnedToDraft, running_failure),
+    ];
+    omitted_lost[3].successor = Some(successor.clone());
+    assert!(!history_reaches(
+        &not_admitted_row
+            .clone()
+            .with_sends(2)
+            .with_outcome(running_failure)
+            .with_successor(successor.clone()),
+        &omitted_lost,
+        false
+    ));
 
     let mut lookup_return = [
         audit(Cause::Held, draft),

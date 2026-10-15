@@ -79,6 +79,14 @@ again, in the same order. Each answer is the compare-and-swap that saved it.
 A `turn_running` mint stays one write: the lookup, the return, and the new
 draft. Replaying only the last answer leaves a history restoration rejects
 (`an_uncertain_lease_rewrites_every_transition`).
+If that mint fails after the send or the lookup has already returned
+`turn_running`, the refusal is committed before the id error is returned,
+and the open lease is committed with it. There is no draft. A direct
+observation records the send cause (`SendAnswered`, `ForegroundSend`, or
+`ExplicitRetry`). A lookup records `Lookup`. `ReturnedToDraft` names the
+draft, so it is not written when the draft was not minted
+(`a_turn_running_refusal_is_saved_when_the_draft_id_fails`,
+`a_lookup_turn_running_is_saved_when_the_draft_id_fails`).
 
 `hold`, `send`, and `retry` record the person. `recover` records recovery.
 A history reaches the row only by folding this table, so a history that
@@ -114,6 +122,7 @@ Departure's unknown is not a direct answer.
 | Any unknown | lookup returns `submission_unresolved` | Unknown, unresolved | Person or Recovery, cause Lookup | No |
 | Accepted, running, done, failed, unresolved | retry or recover | The row unchanged. No send | Person or Recovery | No |
 | Failed, `turn_running` | — | That failed row, plus a new Draft, one commit | The send path: Person, inside the lease already held. Recovery: Recovery on both ReturnedToDraft and the new Held | Send path: the lease already held. Recovery: no |
+| Failed, `turn_running`, draft id not minted | — | That failed row. No draft. The caller hears `Id`. A later send does not ask the gateway | Person, the send cause or Lookup. Not ReturnedToDraft | The refusal is committed, including a lease the send already held |
 
 A direct answer is `conversation.send` returning queued, injected, settled,
 a typed refusal, or `submission_unresolved`. Lost and unreadable are not
@@ -164,12 +173,25 @@ A lower or equal direct answer does not replace a stored one, and a history
 that appends one does not reach.
 
 A stronger answer from the same replay may depend on a lost or unreadable
-send. That send is written in the same commit, before the answer. Restoration
-applies it to the row before the lower direct answer, then applies the
-answer, so the send count matches
-(`a_replay_writes_the_lost_send_before_the_stronger_answer`).
+send, and the answer may be a returned-to-draft. Those steps are one commit.
+The fold starts at the committed row before the direct suffix the answer
+replaces. Each step is the transition `apply_send` or `apply_lookup` would
+persist from the row before it. The send count on the rolled-back snapshot
+is not copied. Copying that count, or teaching restoration to accept it,
+leaves the snapshot behind the fold. Writing the return as its own step
+drops the lost send the fold counts
+(`a_replay_writes_the_lost_send_before_the_stronger_answer`,
+`a_replay_rebases_send_counts_onto_the_committed_history`,
+`a_replay_counts_the_lost_send_before_turn_running`).
 A lost send with no later answer that outranks the stored row is not written,
 and a history that appends one does not reach.
+
+| Committed row when replay starts | Rolled-back lease | Durable result | Send count the fold reaches |
+| --- | --- | --- | --- |
+| Direct accepted, one send | Lost send, then done | The lost send, then done. The accepted event stays | 2 |
+| Direct accepted after its own lost send | Lost send, then done | Another lost send, applied to the row before that accepted answer, then done | 3 |
+| Direct unresolved, one send | Lost send, then direct `turn_running` | The lost send, then the return and its draft | 2 |
+| Departed, not admitted | `turn_running`, and the draft id cannot be minted | The failed row. No draft. The caller hears `Id` | 1 |
 
 An intent row that is gone while its events remain is corrupt. The id is not
 held again. Listing and recovery report that corruption and do not return the
@@ -272,6 +294,9 @@ second rule.
 | S16 | An uncertain answer commit rolls back, and a lookup of done is saved before the direct answer is written again | The direct answer loads. The lookup event stays | `a_direct_answer_after_a_lookup_still_loads` |
 | S20 | That rollback lets another caller store a lower direct answer before the stronger one is written again | The stronger answer loads. The lower direct event stays | `a_stronger_direct_answer_replaces_a_weaker_one` |
 | S21 | That stronger answer was a second send after SendLost | SendLost is written in the same commit, then the stronger answer. The row loads at that send count | `a_replay_writes_the_lost_send_before_the_stronger_answer` |
+| S22 | The stored direct answer is also a second send, and the rolled-back answer is a two-send done | The replayed lost send is applied to the row before the stored answer. The row loads at 3 | `a_replay_rebases_send_counts_onto_the_committed_history` |
+| S23 | The rolled-back lease is SendLost, then direct `turn_running`, and a lower direct answer is stored first | SendLost is written in that commit, then the return. The row loads at 2 | `a_replay_counts_the_lost_send_before_turn_running` |
+| S24 | `turn_running` is observed and the draft id cannot be minted | The failed row is committed. No draft. The same id is not sent again | `a_turn_running_refusal_is_saved_when_the_draft_id_fails`, `a_lookup_turn_running_is_saved_when_the_draft_id_fails` |
 | S17 | That lookup is `turn_running` and has already minted a draft | The direct answer is saved, the successor is cleared, and the still-held draft is removed | `a_direct_answer_clears_the_turn_running_successor` |
 | S14 | A lookup arrives after a direct answer was stored | The direct answer stays. This is the order the lease produces | `a_lookup_does_not_replace_a_direct_answer` |
 | L1 | Send answer lost, lookup finds `accepted` | Accepted. No further send | `a_lost_answer_with_an_accepted_receipt_is_not_sent_again` |

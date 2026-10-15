@@ -30,6 +30,13 @@ impl Clock for FixedClock {
     }
 }
 
+struct FailMint;
+impl CommandIds for FailMint {
+    fn mint(&mut self) -> Result<(PhoneCommandId, ExecutionId), OutboxError> {
+        Err(OutboxError::Id(IntentError::EmptyId))
+    }
+}
+
 #[derive(Default)]
 struct SeqIds {
     next: u64,
@@ -2614,6 +2621,183 @@ fn a_replay_writes_the_lost_send_before_the_stronger_answer() {
 }
 
 #[test]
+fn a_replay_rebases_send_counts_onto_the_committed_history() {
+    let dir = directory();
+    let path = path_in(&dir);
+    let mut outbox = PhoneOutbox::new(
+        PlantLookup::open(&path, PlantedAnswer::TwoSendAccepted),
+        Scripted::new(
+            vec![SendAnswer::Lost, SendAnswer::Receipt(Delivery::Settled)],
+            vec![LookupAnswer::NotFound],
+        ),
+        SeqIds::default(),
+        clock(),
+    );
+    person_hold(&mut outbox, text_intent("command-1", "hello"));
+    let view = outbox.send(&command("command-1")).unwrap();
+    assert_eq!(view.outcome(), PhoneOutcome::Done);
+    let listed = outbox.list().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].outcome(), PhoneOutcome::Done);
+    drop(outbox);
+    let mut store = SqliteIntents::open(&path).unwrap();
+    let record = store.load(&command("command-1")).unwrap().unwrap();
+    assert_eq!(record.outcome(), PhoneOutcome::Done);
+    assert_eq!(record.sends(), 3);
+    let events = store.events("command-1").unwrap();
+    assert_eq!(
+        events.iter().map(|event| event.cause).collect::<Vec<_>>(),
+        [
+            Cause::Held,
+            Cause::Departed,
+            Cause::SendLost,
+            Cause::ForegroundSend,
+            Cause::SendLost,
+            Cause::ForegroundSend,
+        ]
+    );
+    assert_eq!(events[3].outcome, PhoneOutcome::Accepted);
+    assert_eq!(
+        events[4].outcome,
+        PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+    );
+    assert_eq!(events[5].outcome, PhoneOutcome::Done);
+}
+
+#[test]
+fn a_replay_counts_the_lost_send_before_turn_running() {
+    let dir = directory();
+    let path = path_in(&dir);
+    let mut outbox = PhoneOutbox::new(
+        PlantLookup::open(&path, PlantedAnswer::WeakerUnresolved),
+        Scripted::new(
+            vec![
+                SendAnswer::Lost,
+                failure(ConversationErrorCode::TurnRunning),
+            ],
+            vec![LookupAnswer::NotFound],
+        ),
+        SeqIds::default(),
+        clock(),
+    );
+    person_hold(&mut outbox, text_intent("command-1", "hello"));
+    let view = outbox.send(&command("command-1")).unwrap();
+    let running = PhoneOutcome::Failed(PhoneFailure::Conversation(
+        ConversationErrorCode::TurnRunning,
+    ));
+    assert_eq!(view.outcome(), running);
+    assert!(view.successor().is_some());
+    let listed = outbox.list().unwrap();
+    assert_eq!(listed.len(), 2);
+    drop(outbox);
+    let mut store = SqliteIntents::open(&path).unwrap();
+    let record = store.load(&command("command-1")).unwrap().unwrap();
+    assert_eq!(record.outcome(), running);
+    assert_eq!(record.sends(), 2);
+    assert!(record.successor().is_some());
+    let events = store.events("command-1").unwrap();
+    assert_eq!(
+        events.iter().map(|event| event.cause).collect::<Vec<_>>(),
+        [
+            Cause::Held,
+            Cause::Departed,
+            Cause::SendAnswered,
+            Cause::SendLost,
+            Cause::ReturnedToDraft,
+        ]
+    );
+    assert_eq!(
+        events[2].outcome,
+        PhoneOutcome::Unknown(UnknownCause::Unresolved)
+    );
+    assert_eq!(events[4].outcome, running);
+    assert_eq!(
+        events[4].successor.as_ref().map(PhoneCommandId::as_str),
+        record.successor().map(PhoneCommandId::as_str)
+    );
+}
+
+#[test]
+fn a_turn_running_refusal_is_saved_when_the_draft_id_fails() {
+    let dir = directory();
+    let path = path_in(&dir);
+    let gateway = Scripted::new(
+        vec![failure(ConversationErrorCode::TurnRunning)],
+        Vec::new(),
+    );
+    let seen = gateway.clone();
+    let mut outbox = open(&path, gateway, FailMint, clock()).unwrap();
+    person_hold(&mut outbox, text_intent("command-1", "keep this"));
+    assert_eq!(
+        outbox.send(&command("command-1")).unwrap_err(),
+        OutboxError::Id(IntentError::EmptyId)
+    );
+    let running = PhoneOutcome::Failed(PhoneFailure::Conversation(
+        ConversationErrorCode::TurnRunning,
+    ));
+    let again = outbox.send(&command("command-1")).unwrap();
+    assert_eq!(again.outcome(), running);
+    assert!(again.successor().is_none());
+    assert_eq!(seen.body().order, ["send"]);
+    let listed = outbox.list().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].outcome(), running);
+    drop(outbox);
+    let mut store = SqliteIntents::open(&path).unwrap();
+    let record = store.load(&command("command-1")).unwrap().unwrap();
+    assert_eq!(record.outcome(), running);
+    assert_eq!(record.sends(), 1);
+    assert!(record.successor().is_none());
+    let events = store.events("command-1").unwrap();
+    assert_eq!(
+        events.iter().map(|event| event.cause).collect::<Vec<_>>(),
+        [Cause::Held, Cause::Departed, Cause::SendAnswered]
+    );
+    assert_eq!(events[2].outcome, running);
+    assert!(events[2].successor.is_none());
+    assert_eq!(events[2].initiator, Initiator::Person);
+}
+
+#[test]
+fn a_lookup_turn_running_is_saved_when_the_draft_id_fails() {
+    let dir = directory();
+    let path = path_in(&dir);
+    let gateway = Scripted::new(
+        vec![SendAnswer::Lost],
+        vec![failure_lookup(ConversationErrorCode::TurnRunning)],
+    );
+    let seen = gateway.clone();
+    let mut outbox = open(&path, gateway, FailMint, clock()).unwrap();
+    person_hold(&mut outbox, text_intent("command-1", "keep this"));
+    assert_eq!(
+        outbox.send(&command("command-1")).unwrap_err(),
+        OutboxError::Id(IntentError::EmptyId)
+    );
+    let running = PhoneOutcome::Failed(PhoneFailure::Conversation(
+        ConversationErrorCode::TurnRunning,
+    ));
+    let again = outbox.send(&command("command-1")).unwrap();
+    assert_eq!(again.outcome(), running);
+    assert_eq!(seen.body().order, ["send", "lookup"]);
+    let listed = outbox.list().unwrap();
+    assert_eq!(listed.len(), 1);
+    drop(outbox);
+    let mut store = SqliteIntents::open(&path).unwrap();
+    let record = store.load(&command("command-1")).unwrap().unwrap();
+    assert_eq!(record.outcome(), running);
+    assert_eq!(record.sends(), 1);
+    assert!(record.successor().is_none());
+    let events = store.events("command-1").unwrap();
+    assert_eq!(
+        events.iter().map(|event| event.cause).collect::<Vec<_>>(),
+        [Cause::Held, Cause::Departed, Cause::SendLost, Cause::Lookup,]
+    );
+    assert_eq!(events[3].outcome, running);
+    assert_eq!(events[3].initiator, Initiator::Person);
+    assert!(events[3].successor.is_none());
+}
+
+#[test]
 fn a_direct_answer_clears_the_turn_running_successor() {
     let dir = directory();
     let path = path_in(&dir);
@@ -2886,6 +3070,10 @@ enum PlantedAnswer {
     DepartedDraft,
     /// A lower-ranked direct answer is committed before the stronger one is replayed.
     WeakerDirect,
+    /// That direct answer is itself the second send.
+    TwoSendAccepted,
+    /// A direct unresolved answer, which `turn_running` outranks.
+    WeakerUnresolved,
 }
 
 struct PlantLookup {
@@ -3007,16 +3195,34 @@ fn plant_committed_answer(
                 },
             )
         }
-        PlantedAnswer::WeakerDirect => {
-            let next = saved
-                .clone()
-                .with_sends(1)
-                .with_outcome(PhoneOutcome::Accepted);
+        PlantedAnswer::WeakerDirect => direct_answer(store, &saved, PhoneOutcome::Accepted),
+        PlantedAnswer::WeakerUnresolved => direct_answer(
+            store,
+            &saved,
+            PhoneOutcome::Unknown(UnknownCause::Unresolved),
+        ),
+        PlantedAnswer::TwoSendAccepted => {
+            let lost = saved.clone().with_sends(1);
             store.replace(
                 &saved,
-                &next,
+                &lost,
                 IntentEvent {
-                    cause: Cause::SendAnswered,
+                    cause: Cause::SendLost,
+                    outcome: lost.outcome(),
+                    initiator: Initiator::Person,
+                    observed_at_ms: 1,
+                    successor: None,
+                },
+            )?;
+            let accepted = lost
+                .clone()
+                .with_sends(2)
+                .with_outcome(PhoneOutcome::Accepted);
+            store.replace(
+                &lost,
+                &accepted,
+                IntentEvent {
+                    cause: Cause::ForegroundSend,
                     outcome: PhoneOutcome::Accepted,
                     initiator: Initiator::Person,
                     observed_at_ms: 1,
@@ -3025,6 +3231,25 @@ fn plant_committed_answer(
             )
         }
     }
+}
+
+fn direct_answer(
+    store: &mut SqliteIntents,
+    saved: &PhoneRecord,
+    outcome: PhoneOutcome,
+) -> Result<(), StoreError> {
+    let next = saved.clone().with_sends(1).with_outcome(outcome);
+    store.replace(
+        saved,
+        &next,
+        IntentEvent {
+            cause: Cause::SendAnswered,
+            outcome,
+            initiator: Initiator::Person,
+            observed_at_ms: 1,
+            successor: None,
+        },
+    )
 }
 
 fn plant_turn_running(store: &mut SqliteIntents) -> Result<PhoneCommandId, StoreError> {

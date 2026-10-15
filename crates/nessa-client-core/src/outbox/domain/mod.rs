@@ -27,7 +27,10 @@ pub use outcome::{
     ReceiptStage, SendAnswer, UnknownCause,
 };
 pub use record::{IntentEvent, PhoneRecord, PhoneView};
-pub(crate) use restore::{history_reaches, replaces, same_prompt, stored_evidence};
+pub(crate) use restore::{
+    before_replaced_direct, counted_return, counted_step, history_reaches, replaces, same_prompt,
+    stored_evidence,
+};
 
 #[cfg(test)]
 #[path = "../../../tests/outbox/domain.rs"]

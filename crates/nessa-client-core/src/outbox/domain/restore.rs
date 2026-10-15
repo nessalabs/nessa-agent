@@ -83,37 +83,146 @@ pub(crate) fn history_reaches(
     events: &[IntentEvent],
     recovery_hold: bool,
 ) -> bool {
-    let Some((first, rest)) = events.split_first() else {
+    let Some(reached) = fold_reached(record, events, recovery_hold) else {
         return false;
     };
-    if first.cause != Cause::Held || first.outcome != PhoneOutcome::Draft {
+    let Some(state) = reached.last() else {
         return false;
+    };
+    state.outcome() == record.outcome()
+        && state.sends() == record.sends()
+        && state.departed() == record.departed()
+        && successor_follows(record, events)
+}
+
+/// `reached[i]` is the row after `events[i]`.
+fn fold_reached(
+    record: &PhoneRecord,
+    events: &[IntentEvent],
+    recovery_hold: bool,
+) -> Option<Vec<PhoneRecord>> {
+    let (first, rest) = events.split_first()?;
+    if first.cause != Cause::Held || first.outcome != PhoneOutcome::Draft {
+        return None;
     }
     if !hold_initiator(first.initiator, recovery_hold) {
-        return false;
+        return None;
     }
     let mut state = PhoneRecord::held(record.intent().clone());
     let mut older = first.cause;
     let mut previous = first;
-    // `reached[i]` is the row after `events[i]`. A direct answer that cannot
-    // move the stored row is applied to the row before the suffix it replaces.
     let mut reached = vec![state.clone()];
     for (offset, event) in rest.iter().enumerate() {
-        let Some(next) = advance(&state, event, previous, older)
+        let next = advance(&state, event, previous, older)
             .or_else(|| direct_over_replaced(events, &reached, event))
-            .or_else(|| counted_send_before_replaced(events, &reached, offset + 1, event))
-        else {
-            return false;
-        };
+            .or_else(|| counted_send_before_replaced(events, &reached, offset + 1, event))?;
         state = next;
         older = previous.cause;
         previous = event;
         reached.push(state.clone());
     }
-    state.outcome() == record.outcome()
-        && state.sends() == record.sends()
-        && state.departed() == record.departed()
-        && successor_follows(record, events)
+    Some(reached)
+}
+
+/// The committed row before the direct answers `winner` replaces.
+///
+/// Counted replay applies its steps from here, which is the row
+/// [`counted_send_before_replaced`] uses for a prerequisite send
+/// (`a_replay_rebases_send_counts_onto_the_committed_history`).
+pub(crate) fn before_replaced_direct(
+    record: &PhoneRecord,
+    events: &[IntentEvent],
+    winner: PhoneOutcome,
+) -> Option<PhoneRecord> {
+    let recovery_hold = events
+        .first()
+        .is_some_and(|event| event.cause == Cause::Held && event.initiator == Initiator::Recovery);
+    let reached = fold_reached(record, events, recovery_hold)?;
+    let cut = direct_suffix_cut(events, reached.len(), winner);
+    if cut == 0 || cut == reached.len() {
+        return None;
+    }
+    Some(reached[cut - 1].clone())
+}
+
+/// The record `cause` persists when it is applied to `before`.
+///
+/// Lost and unreadable marks keep `before`'s outcome and increment its send
+/// count. A terminal answer uses `outcome`. The rolled-back snapshot's count
+/// is not an input.
+pub(crate) fn counted_step(
+    before: &PhoneRecord,
+    cause: Cause,
+    outcome: PhoneOutcome,
+) -> Option<PhoneRecord> {
+    let event = IntentEvent {
+        cause,
+        outcome,
+        initiator: Initiator::Person,
+        observed_at_ms: 0,
+        successor: None,
+    };
+    let record = match cause {
+        Cause::SendLost => marked(before, SendAnswer::Lost, &event)?,
+        Cause::Unreadable => marked(before, SendAnswer::Broken, &event)?,
+        Cause::SendAnswered | Cause::ForegroundSend | Cause::ExplicitRetry => {
+            terminal(before, &event, cause)
+                .or_else(|| observed_turn_running(before, &event, cause))?
+        }
+        Cause::Lookup => lookup_witnesses(outcome).into_iter().find_map(|answer| {
+            lookup_applied(before, answer, false, outcome)
+                .or_else(|| lookup_applied(before, answer, true, outcome))
+        })?,
+        Cause::Held | Cause::Departed | Cause::Bound | Cause::ReturnedToDraft => return None,
+    };
+    Some(record.clear_successor())
+}
+
+/// The failed row a `turn_running` answer persists before its draft is minted.
+pub(crate) fn counted_return(before: &PhoneRecord, evidence: Evidence) -> Option<PhoneRecord> {
+    let failure = PhoneFailure::Conversation(ConversationErrorCode::TurnRunning);
+    let record = match evidence {
+        Evidence::Direct => {
+            match apply_send(
+                before.clone(),
+                SendAnswer::Refused(failure),
+                Cause::SendAnswered,
+            ) {
+                Applied::Return {
+                    record,
+                    lookup: false,
+                } => record,
+                _ => return None,
+            }
+        }
+        Evidence::Lookup => {
+            match apply_lookup(before.clone(), LookupAnswer::Refused(failure), true) {
+                Applied::Return {
+                    record,
+                    lookup: true,
+                } => record,
+                _ => return None,
+            }
+        }
+    };
+    Some(record.clear_successor())
+}
+
+/// How far the trailing direct answers that `winner` outranks extend.
+fn direct_suffix_cut(events: &[IntentEvent], len: usize, winner: PhoneOutcome) -> usize {
+    let mut cut = len;
+    while cut > 0
+        && direct_answer_event(&events[cut - 1])
+        && replaces(
+            winner,
+            Evidence::Direct,
+            events[cut - 1].outcome,
+            Evidence::Direct,
+        )
+    {
+        cut -= 1;
+    }
+    cut
 }
 
 /// The next row, when `event` is one [`apply_send`], [`apply_lookup`],
@@ -136,7 +245,8 @@ fn advance(
         }
         Cause::SendLost => marked(before, SendAnswer::Lost, event),
         Cause::Unreadable => marked(before, SendAnswer::Broken, event),
-        Cause::SendAnswered => terminal(before, event, Cause::SendAnswered),
+        Cause::SendAnswered => observed_turn_running(before, event, Cause::SendAnswered)
+            .or_else(|| terminal(before, event, Cause::SendAnswered)),
         Cause::ForegroundSend => {
             // The same call's next send. Not found that leaves the outcome
             // writes no lookup, so the predecessor is SendLost. Not found
@@ -151,7 +261,8 @@ fn advance(
             if !after_lost {
                 return None;
             }
-            terminal(before, event, Cause::ForegroundSend)
+            observed_turn_running(before, event, Cause::ForegroundSend)
+                .or_else(|| terminal(before, event, Cause::ForegroundSend))
         }
         Cause::ExplicitRetry => explicit(before, event, previous.cause),
         Cause::Lookup => lookup_event(before, event, previous.cause),
@@ -187,9 +298,34 @@ fn explicit(before: &PhoneRecord, event: &IntentEvent, previous: Cause) -> Optio
         return (reset.reset.outcome() == event.outcome).then_some(reset.reset);
     }
     if previous == Cause::ExplicitRetry {
-        return terminal(before, event, Cause::ExplicitRetry);
+        return observed_turn_running(before, event, Cause::ExplicitRetry)
+            .or_else(|| terminal(before, event, Cause::ExplicitRetry));
     }
     None
+}
+
+/// `turn_running` observed when the replacement draft was not minted.
+///
+/// The event keeps the send or retry cause. It has no successor
+/// (`a_turn_running_refusal_is_saved_when_the_draft_id_fails`).
+fn observed_turn_running(
+    before: &PhoneRecord,
+    event: &IntentEvent,
+    cause: Cause,
+) -> Option<PhoneRecord> {
+    if !turn_running_outcome(event.outcome) || event.successor.is_some() {
+        return None;
+    }
+    let answer = SendAnswer::Refused(PhoneFailure::Conversation(
+        ConversationErrorCode::TurnRunning,
+    ));
+    match apply_send(before.clone(), answer, cause) {
+        Applied::Return {
+            record,
+            lookup: false,
+        } if record.outcome() == event.outcome => Some(record),
+        _ => None,
+    }
 }
 
 fn lookup_event(before: &PhoneRecord, event: &IntentEvent, previous: Cause) -> Option<PhoneRecord> {
@@ -389,10 +525,10 @@ fn successor_follows(record: &PhoneRecord, events: &[IntentEvent]) -> bool {
     {
         return false;
     }
-    if events
-        .iter()
-        .any(|event| (event.cause == Cause::ReturnedToDraft) != event.successor.is_some())
-    {
+    if events.iter().any(|event| {
+        event.cause != Cause::ReturnedToDraft && event.successor.is_some()
+            || event.cause == Cause::ReturnedToDraft && event.successor.is_none()
+    }) {
         return false;
     }
     let Some(last) = events.last() else {
@@ -402,7 +538,15 @@ fn successor_follows(record: &PhoneRecord, events: &[IntentEvent]) -> bool {
         return turn_running_outcome(record.outcome())
             && last.successor.as_ref() == record.successor();
     }
-    !turn_running_outcome(record.outcome()) && record.successor().is_none()
+    if turn_running_outcome(record.outcome()) {
+        return record.successor().is_none()
+            && turn_running_outcome(last.outcome)
+            && matches!(
+                last.cause,
+                Cause::SendAnswered | Cause::ForegroundSend | Cause::ExplicitRetry | Cause::Lookup
+            );
+    }
+    record.successor().is_none()
 }
 
 /// A direct answer appended after the stored answer it replaces.
@@ -513,18 +657,7 @@ fn counted_send_before_replaced(
         .get(index + 1..)?
         .iter()
         .find(|candidate| direct_answer_event(candidate))?;
-    let mut cut = reached.len();
-    while cut > 0
-        && direct_answer_event(&events[cut - 1])
-        && replaces(
-            later.outcome,
-            Evidence::Direct,
-            events[cut - 1].outcome,
-            Evidence::Direct,
-        )
-    {
-        cut -= 1;
-    }
+    let cut = direct_suffix_cut(events, reached.len(), later.outcome);
     if cut == reached.len() || cut == 0 {
         return None;
     }

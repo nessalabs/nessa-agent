@@ -5,9 +5,10 @@
 //! that answer. A lost save after departure reloads the row.
 
 use super::super::domain::{
-    apply_lookup as commit_lookup, apply_retry, apply_send as commit_send, budget, replaces,
-    retryable, stored_evidence, Applied, Budget, Cause, Evidence, Initiator, IntentEvent,
-    LookupAnswer, PhoneCommandId, PhoneIntent, PhoneOutcome, PhoneRecord, PhoneView, UnknownCause,
+    apply_lookup as commit_lookup, apply_retry, apply_send as commit_send, before_replaced_direct,
+    budget, counted_return, counted_step, replaces, retryable, stored_evidence, Applied, Budget,
+    Cause, Evidence, Initiator, IntentEvent, LookupAnswer, PhoneCommandId, PhoneIntent,
+    PhoneOutcome, PhoneRecord, PhoneView, UnknownCause,
 };
 use super::ports::{CommandIds, IntentStore, OutboxError, PhoneGateway, StoreError};
 use nessa_auth::application::ports::Clock;
@@ -318,7 +319,7 @@ where
                     record: next,
                     lookup: false,
                 } => {
-                    let step = self.return_to_draft(&record, next, by, Evidence::Direct)?;
+                    let step = self.return_to_draft(&record, next, by, Evidence::Direct, cause)?;
                     return Ok(carry(chain, step));
                 }
                 Applied::Mark {
@@ -352,7 +353,13 @@ where
                             record: next,
                             lookup: true,
                         } => {
-                            let step = self.return_to_draft(&bumped, next, by, Evidence::Lookup)?;
+                            let step = self.return_to_draft(
+                                &bumped,
+                                next,
+                                by,
+                                Evidence::Lookup,
+                                Cause::Lookup,
+                            )?;
                             return Ok(carry(chain, step));
                         }
                         Applied::Resend { record: next } => {
@@ -408,7 +415,7 @@ where
             Applied::Return {
                 record: next,
                 lookup: true,
-            } => self.return_to_draft(&record, next, by, Evidence::Lookup),
+            } => self.return_to_draft(&record, next, by, Evidence::Lookup, Cause::Lookup),
             Applied::Resend { record: next } => {
                 let mut chain = kept_body(record.view());
                 if next.outcome() != record.outcome() {
@@ -434,12 +441,24 @@ where
         failed: PhoneRecord,
         by: Initiator,
         evidence: Evidence,
+        observed: Cause,
     ) -> Result<LeaseBody, OutboxError> {
         if failed.successor().is_some() {
             return self.asked_or_kept(previous, &failed, Cause::ReturnedToDraft, by, evidence);
         }
         let intended = failed.clone();
-        let (command, turn) = self.ids.mint()?;
+        let (command, turn) = match self.ids.mint() {
+            Ok(minted) => minted,
+            Err(error) => {
+                self.refuse_without_draft(
+                    previous,
+                    &failed,
+                    by,
+                    observation_cause(evidence, observed),
+                )?;
+                return Err(error);
+            }
+        };
         let draft = PhoneRecord::held(
             failed
                 .intent()
@@ -460,7 +479,7 @@ where
                 evidence,
                 by,
             )),
-            Err(StoreError::Conflict) => self.retry_return(intended, evidence, by),
+            Err(StoreError::Conflict) => self.retry_return(intended, evidence, by, observed),
             Err(error) => Err(asked(OutboxError::from(error))),
         }
     }
@@ -472,6 +491,7 @@ where
         failed: PhoneRecord,
         evidence: Evidence,
         by: Initiator,
+        observed: Cause,
     ) -> Result<LeaseBody, OutboxError> {
         for _ in 0..SAVE_ATTEMPTS {
             let saved = self.committed_record(failed.intent().command())?;
@@ -485,7 +505,21 @@ where
             if saved.outcome() == failed.outcome() && saved.successor().is_some() {
                 return Ok(kept_body(saved.view()));
             }
-            let (command, turn) = self.ids.mint()?;
+            let (command, turn) = match self.ids.mint() {
+                Ok(minted) => minted,
+                Err(error) => {
+                    let Some(next) = counted_return(&saved, evidence) else {
+                        return Err(error);
+                    };
+                    self.refuse_without_draft(
+                        &saved,
+                        &next,
+                        by,
+                        observation_cause(evidence, observed),
+                    )?;
+                    return Err(error);
+                }
+            };
             let draft = PhoneRecord::held(
                 failed
                     .intent()
@@ -555,10 +589,12 @@ where
         Ok(view)
     }
 
-    /// The kept prefix changes the send count. The later answer outranks the
-    /// stored row. Both are one commit, so the row never shows the lost send
-    /// as its outcome
-    /// (`a_replay_writes_the_lost_send_before_the_stronger_answer`).
+    /// The kept prefix and the later answer are one commit. The answer may be
+    /// a returned-to-draft. Send counts are applied from the row before the
+    /// direct suffix that answer replaces
+    /// (`a_replay_writes_the_lost_send_before_the_stronger_answer`,
+    /// `a_replay_rebases_send_counts_onto_the_committed_history`,
+    /// `a_replay_counts_the_lost_send_before_turn_running`).
     fn replay_counted(&mut self, steps: &[Written]) -> Result<PhoneView, OutboxError> {
         let Some(id) = answer_command(steps.first()) else {
             return Err(OutboxError::Unsaved);
@@ -589,21 +625,11 @@ where
                     return Err(error);
                 }
             };
-            let Some(Written::Answer {
-                next: winning,
-                evidence,
-                ..
-            }) = steps.last()
-            else {
+            let Some((winning, evidence)) = counted_winner(steps.last()) else {
                 self.store.abort_exclusive();
                 return Err(OutboxError::Unsaved);
             };
-            if !replaces(
-                winning.outcome(),
-                *evidence,
-                saved.outcome(),
-                stored_evidence,
-            ) {
+            if !replaces(winning, evidence, saved.outcome(), stored_evidence) {
                 self.store.abort_exclusive();
                 return Ok(saved.view());
             }
@@ -621,29 +647,78 @@ where
         saved: &PhoneRecord,
         steps: &[Written],
     ) -> Result<PhoneView, OutboxError> {
-        let mut cursor = saved.clone();
+        let Some((winner, _)) = counted_winner(steps.last()) else {
+            self.store.abort_exclusive();
+            return Err(OutboxError::Unsaved);
+        };
+        let events = match self.store.events(saved.intent().command()) {
+            Ok(events) => events,
+            Err(error) => {
+                self.store.abort_exclusive();
+                return Err(OutboxError::from(error));
+            }
+        };
+        let Some(base) = before_replaced_direct(saved, &events, winner) else {
+            self.store.abort_exclusive();
+            return Err(OutboxError::Unsaved);
+        };
+        let mut previous = saved.clone();
+        let mut cursor = base;
+        let mut view = saved.view();
         let last = steps.len() - 1;
         for (offset, step) in steps.iter().enumerate() {
-            let Written::Answer {
-                next, cause, by, ..
-            } = step
-            else {
-                self.store.abort_exclusive();
-                return Err(OutboxError::Unsaved);
-            };
-            let record = if offset == last {
-                overlay(saved, next)
-            } else {
-                next.clone()
-            };
-            if let Err(error) = self.persist(&cursor, &record, *cause, *by) {
-                self.store.abort_exclusive();
-                return Err(asked(error));
+            match step {
+                Written::Answer {
+                    next, cause, by, ..
+                } => {
+                    let Some(record) = counted_step(&cursor, *cause, next.outcome()) else {
+                        self.store.abort_exclusive();
+                        return Err(OutboxError::Unsaved);
+                    };
+                    if let Err(error) = self.persist(&previous, &record, *cause, *by) {
+                        self.store.abort_exclusive();
+                        return Err(asked(error));
+                    }
+                    previous = record.clone();
+                    cursor = record;
+                    view = previous.view();
+                }
+                Written::Draft {
+                    failed,
+                    evidence,
+                    by,
+                    ..
+                } if offset == last => {
+                    let Some(record) = counted_return(&cursor, *evidence) else {
+                        self.store.abort_exclusive();
+                        return Err(OutboxError::Unsaved);
+                    };
+                    if record.outcome() != failed.outcome() {
+                        self.store.abort_exclusive();
+                        return Err(OutboxError::Unsaved);
+                    }
+                    match self.return_to_draft(
+                        &previous,
+                        record,
+                        *by,
+                        *evidence,
+                        observation_cause(*evidence, Cause::SendAnswered),
+                    ) {
+                        Ok(body) => view = body.view,
+                        Err(error) => {
+                            self.store.abort_exclusive();
+                            return Err(error);
+                        }
+                    }
+                }
+                Written::Draft { .. } => {
+                    self.store.abort_exclusive();
+                    return Err(OutboxError::Unsaved);
+                }
             }
-            cursor = record;
         }
         match self.store.end_exclusive() {
-            Ok(()) => Ok(cursor.view()),
+            Ok(()) => Ok(view),
             Err(_) => Err(OutboxError::Unsaved),
         }
     }
@@ -667,8 +742,14 @@ where
             return Ok(saved.view());
         }
         let base = if saved == previous { previous } else { saved };
-        self.return_to_draft(&base, failed.clear_successor(), by, evidence)
-            .map(|body| body.view)
+        self.return_to_draft(
+            &base,
+            failed.clear_successor(),
+            by,
+            evidence,
+            observation_cause(evidence, Cause::SendAnswered),
+        )
+        .map(|body| body.view)
     }
 
     fn draft_events(
@@ -696,6 +777,30 @@ where
         self.store
             .replace(previous, next, self.event(cause, next.outcome(), by))?;
         Ok(())
+    }
+
+    /// The refusal is durable before the id error leaves. An open lease is
+    /// committed with it, so aborting that error does not drop the row
+    /// (`a_turn_running_refusal_is_saved_when_the_draft_id_fails`).
+    fn refuse_without_draft(
+        &mut self,
+        previous: &PhoneRecord,
+        failed: &PhoneRecord,
+        by: Initiator,
+        observed: Cause,
+    ) -> Result<(), OutboxError> {
+        let failed = failed.clone().clear_successor();
+        self.persist(previous, &failed, observed, by)?;
+        self.commit_open_lease()
+    }
+
+    fn commit_open_lease(&mut self) -> Result<(), OutboxError> {
+        match self.store.end_exclusive() {
+            Ok(()) => Ok(()),
+            Err(StoreError::Unavailable) => Ok(()),
+            Err(StoreError::Uncertain) => Err(OutboxError::Unsaved),
+            Err(error) => Err(OutboxError::from(error)),
+        }
     }
 
     /// A lost compare-and-swap keeps the row precedence selects
@@ -878,6 +983,23 @@ fn open_outcome(record: &PhoneRecord) -> bool {
         )
 }
 
+/// The cause a `turn_running` refusal keeps when its draft id was not minted.
+fn observation_cause(evidence: Evidence, observed: Cause) -> Cause {
+    match evidence {
+        Evidence::Lookup => Cause::Lookup,
+        Evidence::Direct => match observed {
+            Cause::SendAnswered | Cause::ForegroundSend | Cause::ExplicitRetry => observed,
+            Cause::Held
+            | Cause::Departed
+            | Cause::SendLost
+            | Cause::Unreadable
+            | Cause::Lookup
+            | Cause::Bound
+            | Cause::ReturnedToDraft => Cause::SendAnswered,
+        },
+    }
+}
+
 fn asked(error: OutboxError) -> OutboxError {
     match error {
         OutboxError::Unavailable | OutboxError::Uncertain => OutboxError::Unsaved,
@@ -888,7 +1010,7 @@ fn asked(error: OutboxError) -> OutboxError {
 /// How many times a lost compare-and-swap reloads the row before giving up.
 const SAVE_ATTEMPTS: usize = 4;
 
-/// The first later answer that outranks `stored`. A draft ends the scan.
+/// The first later step that outranks `stored`, including a returned-to-draft.
 fn winning_answer(
     steps: &[Written],
     kept: usize,
@@ -896,16 +1018,27 @@ fn winning_answer(
     stored_evidence: Evidence,
 ) -> Option<usize> {
     for (offset, step) in steps.iter().enumerate().skip(kept + 1) {
-        match step {
-            Written::Draft { .. } => return None,
-            Written::Answer { next, evidence, .. } => {
-                if replaces(next.outcome(), *evidence, stored.outcome(), stored_evidence) {
-                    return Some(offset);
-                }
-            }
+        let Some((outcome, evidence)) = counted_winner(Some(step)) else {
+            continue;
+        };
+        if replaces(outcome, evidence, stored.outcome(), stored_evidence) {
+            return Some(offset);
+        }
+        if matches!(step, Written::Draft { .. }) {
+            return None;
         }
     }
     None
+}
+
+fn counted_winner(step: Option<&Written>) -> Option<(PhoneOutcome, Evidence)> {
+    match step {
+        Some(Written::Answer { next, evidence, .. }) => Some((next.outcome(), *evidence)),
+        Some(Written::Draft {
+            failed, evidence, ..
+        }) => Some((failed.outcome(), *evidence)),
+        None => None,
+    }
 }
 
 fn answer_command(step: Option<&Written>) -> Option<PhoneCommandId> {
