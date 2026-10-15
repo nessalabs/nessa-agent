@@ -607,6 +607,37 @@ mod tests {
                 assert_eq!(*memory.generation.borrow(), generation);
             });
         }
+        let (_directory, memory) = open();
+        thread::scope(|scope| {
+            let memory = &memory;
+            // A held visibility projection cannot delay the authoritative
+            // mutation, its public read, or validation of the earlier token.
+            let projection = memory.visibility.borrow();
+            let writer = scope.spawn(|| memory.recheck_visibility());
+            let (send, receive) = thread_channel::sync_channel(1);
+            let reader = scope.spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while memory.is_current(0, 0) {
+                    assert!(
+                        Instant::now() < deadline,
+                        "the visibility source must progress"
+                    );
+                    thread::yield_now();
+                }
+                send.send(memory.visibility()).unwrap();
+            });
+            let observed = receive.recv_timeout(Duration::from_secs(3));
+            drop(projection);
+            writer.join().unwrap();
+            reader.join().unwrap();
+            assert_eq!(
+                observed.expect("visibility reads must not wait for wake projection"),
+                1,
+                "the public visibility version must read committed source state"
+            );
+            assert!(memory.is_current(0, 1));
+            assert_eq!(*memory.visibility.borrow(), 1);
+        });
     }
 
     #[test]

@@ -67,8 +67,10 @@
 //! or share a conversation, receive its review notices, and watch a catalogue. The store asks it inside
 //! the transaction that writes a share grant.
 //! `DurableReviewNoticeAudit` acknowledges private immutable selection records
-//! after file and directory sync. Its one physical worker retains submitted
-//! writes when async observers disappear; UI queues never own that evidence.
+//! after file sync and create-only publication, with directory sync where
+//! supported (the adapter module documents platform durability). Its one physical
+//! worker retains submitted writes when async observers disappear; UI queues
+//! never own that evidence.
 //! `DurableDriveToolAudit` keeps each of the tool policy's decisions on the
 //! gateway's own tools for a Drive turn, one immutable file per conversation,
 //! call, tool and outcome.

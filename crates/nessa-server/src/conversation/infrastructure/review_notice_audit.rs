@@ -1,6 +1,8 @@
-//! Private immutable review-policy selections, acknowledged after file and
-//! directory sync. Each adapter has one shared physical worker: loss of an async
-//! observer leaves a submitted write and its admission with that worker.
+//! Private immutable review-policy selections, acknowledged after file sync and
+//! create-only publication, with directory sync where the platform supports it.
+//! Windows provides no directory-entry or arbitrary power-loss durability here.
+//! Each adapter has one shared physical worker: loss of an async observer leaves
+//! a submitted write and its admission with that worker.
 //!
 //! Composition supplies the directory, writer namespace and observation clock.
 //! A failed/uncertain write is not retried or removed. Records describe audited

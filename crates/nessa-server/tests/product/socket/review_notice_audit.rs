@@ -815,7 +815,7 @@ impl AuditClock for PanickingAuditClock {
 
 #[tokio::test]
 async fn review_notice_audit_clock_panic_closes_without_disclosure() {
-    for fail_on in [0, 1] {
+    let clock_fixture = |fail_on| {
         let audit = Arc::new(RecordingReviewNoticeAudit::default());
         let mut fixture = ReviewFixture::new(
             audit.clone(),
@@ -826,6 +826,33 @@ async fn review_notice_audit_clock_panic_closes_without_disclosure() {
         );
         let policy = Arc::new(ObservedPolicy::default());
         fixture.state.conversation_access = Some(policy.clone());
+        (fixture, audit, policy)
+    };
+    for fail_on in [0, 1] {
+        let (typed_fixture, typed_audit, typed_policy) = clock_fixture(fail_on);
+        let typed_session = authenticate(&typed_fixture.state).await;
+        let (_authority, updates) = watch::channel(typed_session.auth_revision());
+        let (send, mut receive) = mpsc::channel(1);
+        assert_eq!(
+            forward_review_notices(
+                typed_fixture.board.clone(),
+                send,
+                Arc::new(Semaphore::new(1)),
+                typed_fixture.state,
+                typed_session,
+                updates,
+            )
+            .await,
+            Err(ReviewNoticePublicationFailure::Audit(
+                ReviewNoticeAuditFailure::Panicked
+            )),
+            "the original clock panic must remain typed, before or after policy"
+        );
+        assert!(receive.recv().await.is_none());
+        assert_eq!(typed_policy.asked(), usize::try_from(fail_on).unwrap());
+        assert!(typed_audit.records.lock().unwrap().is_empty());
+
+        let (fixture, audit, policy) = clock_fixture(fail_on);
         let session = authenticate(&fixture.state).await;
         let (socket, mut peer) = test_socket(None);
         let task = tokio::spawn(run_authenticated(socket, fixture.state.clone(), session));

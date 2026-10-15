@@ -134,8 +134,9 @@ pub enum ReviewNoticeAuditFailure {
 }
 
 /// Controlled storage for complete unpaired review-policy evidence.
-/// A successful return acknowledges durable delivery, independently of UI
-/// availability. Dropping the future must retain already-submitted physical work.
+/// A successful return acknowledges delivery within the adapter's documented
+/// storage guarantees, independently of UI availability. Dropping the future must
+/// retain already-submitted physical work.
 pub trait ReviewNoticeAudit: Send + Sync {
     /// Deliver one immutable selection. No retry is inferred from an uncertain
     /// acknowledgement; the supplied adapter documents its durability boundary.

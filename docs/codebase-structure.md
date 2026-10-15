@@ -723,7 +723,10 @@ retains policy IDs in controlled storage, never in the UI notice.
 SDK infrastructure into the application.
 `infrastructure/review_notice_audit.rs` implements it with one shared physical
 worker, private immutable files, and injected observation time. Acknowledgement
-means the file and directory were synced. The worker retains the physical write
+follows file sync and create-only publication, with directory sync where the
+platform supports it. On Windows it does not establish directory-entry
+durability or survival of arbitrary power loss; the platform boundary is owned
+by [local storage](../crates/nessa-local-storage/README.md). The worker retains the physical write
 and its admission slot when an async observer disappears; an observation timeout
 does not assert rollback or retry the write. Runtime/process shutdown can still
 interrupt delivery, and no claim of crash recovery of an unacknowledged record is
@@ -780,6 +783,7 @@ versions cannot validate an audited candidate.
 | Board ordering | State/projection result | Regression |
 | --- | --- | --- |
 | Waiting/clear commits while a watch reader blocks notification | Contents and authoritative generation remain coherent; earlier token is invalid; projection catches up after release | `review_board_snapshot_owns_versions_before_notification` |
+| Visibility changes while a watch reader blocks notification | Visibility reads and candidate validation observe the authoritative version before wake projection catches up | `review_board_snapshot_owns_versions_before_notification` |
 | Concurrent waiting and visibility updates | Each actual mutation advances its authoritative version; final projection agrees | `review_board_concurrent_mutations_keep_monotonic_versions` |
 | Older notification arrives after a newer one | Watch remains at the newer version; a waiter on that version remains pending | `review_board_late_projection_cannot_regress_waiters` |
 | Source version is ahead of its wake projection | Waiters check authoritative state and use the projection only to wake; a waiter on the current source version does not spin | `review_board_late_projection_cannot_regress_waiters` |
