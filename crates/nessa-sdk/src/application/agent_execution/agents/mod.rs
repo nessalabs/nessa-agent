@@ -7,12 +7,15 @@
 //!       |-> AgentProvider -> provider session + event reader
 //!       |-> saved submission identity -> shared retry receipt
 //!       |-> supervised direct invocation / bounded queue -> invocation hooks
-//!       |-> queue settlement -> original work retirement -> receipt publication
+//!       |-> queue settlement -> bounded audit observation -> original work retirement
+//!                                                        |-> receipt publication
 //!       |-> control admission -> provider acknowledgement -> local validation / saved receipt
 //!       |                        |-> pending wait interrupted by shared stop
 //!       |-> SessionLifecycle -> work permits / work generations
 //!                              |-> attachment generation / active dispatch
 //!                              |-> owner-issued attachment audit records + evidence ledger
+//!                              |                   |-> shared bounded AuditObserver
+//!                              |-> cleanup joins physical result + bounded evidence slots
 //!                              |-> shared stop -> cleanup attempts / retained lease
 //!                              |-> optional owned-lifetime seal read before admission
 //!       |-> event subscribers
@@ -32,6 +35,7 @@
 mod agent;
 mod attachment;
 mod attachment_evidence;
+mod audit_observation;
 mod coordination;
 mod error;
 mod error_limits;
