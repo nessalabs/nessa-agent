@@ -78,7 +78,7 @@ sequenceDiagram
   Admit->>Cedar: those facts and the action
   Cedar-->>Admit: permit or refuse, with the policy ids
   Admit->>Effect: on permit, stamped with the epoch just read
-  Note over Admit,Effect: a later revoke advances the epoch; the next action reads it again
+  Note over Admit,Effect: a later revoke advances the epoch, and the next action reads it again
 ```
 
 ## What is already built
