@@ -59,9 +59,10 @@ impl<'a> SelectReviewNotice<'a> {
         }
     }
 
-    /// Missing/mismatched metadata or unverifiable current membership produces
-    /// no policy answer. Every actual Cedar answer, including deny/Unavailable,
-    /// is acknowledged before its sealed selection is returned.
+    /// Genuine metadata absence produces a hidden selection. Failed metadata
+    /// or current-session reads return Unavailable before any policy answer.
+    /// Every actual Cedar answer, including deny/Unavailable, is acknowledged
+    /// before its sealed selection is returned.
     pub(crate) async fn execute(
         &self,
         session: &AuthenticatedSession,
@@ -71,18 +72,21 @@ impl<'a> SelectReviewNotice<'a> {
         cause: ReviewNoticeAuditCause,
     ) -> Result<Option<AuditedReviewSelection>, ReviewNoticeAuditFailure> {
         let admitted = self.auditor.admit().await?;
-        let Ok(Some(conversation)) = self.metadata.load(conversation_id).await else {
+        let Some(conversation) = self
+            .metadata
+            .load(conversation_id)
+            .await
+            .map_err(|_| ReviewNoticeAuditFailure::Unavailable)?
+        else {
             return Ok(None);
         };
-        let Ok(current) = (ReadCurrentSession {
+        let current = (ReadCurrentSession {
             access: self.access,
             clock: self.clock,
         })
         .execute(session)
         .await
-        else {
-            return Ok(None);
-        };
+        .map_err(|_| ReviewNoticeAuditFailure::Unavailable)?;
         let recipient = session.context();
         let decision = self.policy.evaluate(&AccessAsk {
             subject: AccessSubject::ReviewRecipient {

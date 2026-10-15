@@ -3527,7 +3527,16 @@ mod tests {
                 policy.clone(),
             );
             let session = authenticate(&state).await;
-            let task = tokio::spawn(notice_snapshot(board.clone(), state, session));
+            let (authority_updates, updates) = watch::channel(session.auth_revision());
+            let (send, mut receive) = mpsc::channel(1);
+            let task = tokio::spawn(forward_review_notices(
+                board.clone(),
+                send,
+                Arc::new(Semaphore::new(1)),
+                state,
+                session,
+                updates,
+            ));
             timeout(Duration::from_secs(2), waiting)
                 .await
                 .unwrap()
@@ -3535,20 +3544,45 @@ mod tests {
             assert_eq!(policy.asked(), 0, "metadata has not reached review policy");
             *authority.snapshot.lock().unwrap() = snapshot_with(role, status, &["server.read"]);
             release.send(()).unwrap();
-            let snapshot = timeout(Duration::from_secs(2), task)
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(
-                !snapshot.reviews.is_empty(),
-                visible,
-                "{role:?}, {status:?}"
-            );
             if status == MembershipStatus::Disabled {
+                assert_eq!(
+                    timeout(Duration::from_secs(2), task)
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                    Err(ReviewNoticePublicationFailure::Audit(
+                        ReviewNoticeAuditFailure::Unavailable
+                    ))
+                );
+                assert!(receive.recv().await.is_none());
                 assert_eq!(
                     policy.asked(),
                     0,
                     "disabled membership never reaches policy"
+                );
+            } else {
+                let queued = timeout(Duration::from_secs(2), receive.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let WireResponse::ReviewWaiting {
+                    payload: snapshot, ..
+                } = queued.message
+                else {
+                    panic!("expected review snapshot")
+                };
+                assert_eq!(
+                    !snapshot.reviews.is_empty(),
+                    visible,
+                    "{role:?}, {status:?}"
+                );
+                drop(authority_updates);
+                assert_eq!(
+                    timeout(Duration::from_secs(2), task)
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                    Ok(())
                 );
             }
         }
@@ -3583,8 +3617,24 @@ mod tests {
             );
             let session = authenticate(&state).await;
 
-            let refused = notice_snapshot(board.clone(), state.clone(), session.clone()).await;
-            assert!(refused.reviews.is_empty());
+            let (_authority_updates, updates) = watch::channel(session.auth_revision());
+            let (send, mut receive) = mpsc::channel(1);
+            let refused = forward_review_notices(
+                board.clone(),
+                send,
+                Arc::new(Semaphore::new(1)),
+                state.clone(),
+                session.clone(),
+                updates,
+            )
+            .await;
+            assert_eq!(
+                refused,
+                Err(ReviewNoticePublicationFailure::Audit(
+                    ReviewNoticeAuditFailure::Unavailable
+                ))
+            );
+            assert!(receive.recv().await.is_none());
             assert_eq!(policy.asked(), 0, "mismatched metadata reaches no policy");
 
             let accepted = notice_snapshot(board.clone(), state, session).await;

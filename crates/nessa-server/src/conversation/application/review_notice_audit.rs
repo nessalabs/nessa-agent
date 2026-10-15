@@ -128,11 +128,13 @@ impl ReviewNoticeAuditRecord {
     }
 }
 
-/// An audit attempt did not establish durable acknowledgement. This does not
-/// prove that a physical write was absent or rolled back.
+/// A review selection or audit attempt could not establish trusted inputs or
+/// durable acknowledgement. This does not prove that a physical write was absent
+/// or rolled back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReviewNoticeAuditFailure {
-    /// No adapter, closed admission, failed persistence, or a lost delivery task.
+    /// Unavailable selection facts, no adapter, closed admission, failed
+    /// persistence, or a lost delivery task.
     Unavailable,
     /// An admission/acknowledgement budget or the shared host deadline passed.
     TimedOut,

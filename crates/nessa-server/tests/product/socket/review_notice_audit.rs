@@ -1,10 +1,11 @@
 use super::*;
 use crate::conversation::application::{
-    ReviewNoticeAudit, ReviewNoticeAuditCause, ReviewNoticeAuditRecord,
+    ConversationError, ReviewNoticeAudit, ReviewNoticeAuditCause, ReviewNoticeAuditRecord,
     ReviewNoticeClock as AuditClock, ReviewNoticeSleep,
 };
 use crate::conversation::infrastructure::{DurableReviewNoticeAudit, PermissionMemory};
 use crate::conversation_test_support::{ObservedPolicy, RecordingReviewNoticeAudit};
+use nessa_sdk::application::agent_execution::sessions::StorageError;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -959,8 +960,29 @@ async fn review_notice_refused_facts_do_not_fabricate_policy_audit() {
             }
             _ => unreachable!(),
         }
-        let payload = notice_snapshot(fixture.board, fixture.state, session).await;
-        assert!(payload.reviews.is_empty());
+        if refusal == 0 {
+            let payload = notice_snapshot(fixture.board, fixture.state, session).await;
+            assert!(payload.reviews.is_empty());
+        } else {
+            let (_authority, updates) = watch::channel(session.auth_revision());
+            let (send, mut receive) = mpsc::channel(1);
+            let result = forward_review_notices(
+                fixture.board,
+                send,
+                Arc::new(Semaphore::new(1)),
+                fixture.state,
+                session,
+                updates,
+            )
+            .await;
+            assert_eq!(
+                result,
+                Err(ReviewNoticePublicationFailure::Audit(
+                    ReviewNoticeAuditFailure::Unavailable
+                ))
+            );
+            assert!(receive.recv().await.is_none());
+        }
         assert_eq!(
             policy.asked(),
             0,
@@ -1618,4 +1640,127 @@ async fn review_notice_shutdown_wakes_capacity_waiters_and_joins_admissions() {
         timeout(Duration::from_secs(2), drain).await.unwrap(),
         Ok(())
     );
+}
+
+#[tokio::test]
+async fn review_notice_metadata_read_failure_closes_before_false_empty_snapshot() {
+    let audit = Arc::new(RecordingReviewNoticeAudit::default());
+    let mut fixture = ReviewFixture::new(audit.clone(), Arc::new(ManualAuditClock::default()));
+    let policy = Arc::new(ObservedPolicy::default());
+    fixture.state.conversation_access = Some(policy.clone());
+    *fixture.repository.metadata_load_failure.lock().unwrap() = Some(ConversationError::Storage(
+        StorageError::Io("injected metadata read failure".into()),
+    ));
+    let session = authenticate(&fixture.state).await;
+    let (socket, mut peer) = test_socket(None);
+    let task = tokio::spawn(run_authenticated(socket, fixture.state.clone(), session));
+    let message = timeout(Duration::from_secs(2), peer.output.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let Message::Close(Some(frame)) = message else {
+        panic!("metadata failure must close before a false empty replacement: {message:?}")
+    };
+    let close: SessionTermination = serde_json::from_str(&frame.reason).unwrap();
+    assert_eq!(close.code, SessionCloseReason::TemporaryUnavailable);
+    timeout(Duration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(peer.output.recv().await.is_none());
+    assert_eq!(policy.asked(), 0);
+    assert!(audit.records.lock().unwrap().is_empty());
+    // No board, share or authentication revision changes: only the read recovers.
+    let recovered = notice_snapshot(
+        fixture.board.clone(),
+        fixture.state.clone(),
+        authenticate(&fixture.state).await,
+    )
+    .await;
+    assert_eq!(recovered.reviews.len(), 1);
+    assert_eq!(recovered.reviews[0].conversation_id, TARGET);
+    assert_eq!(policy.asked(), 1);
+    assert_eq!(audit.records.lock().unwrap().len(), 1);
+}
+
+struct FailNextCurrentRead {
+    authority: Arc<Authority>,
+    fail: AtomicBool,
+}
+
+impl AccessReader for FailNextCurrentRead {
+    fn read<'a>(&'a self, credential: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
+        if self.fail.swap(false, Ordering::SeqCst) {
+            Box::pin(async { Err(AccessError::Unavailable) })
+        } else {
+            self.authority.read(credential)
+        }
+    }
+}
+
+#[tokio::test]
+async fn review_notice_current_read_failure_prevents_false_empty_snapshot() {
+    let audit = Arc::new(RecordingReviewNoticeAudit::default());
+    let mut fixture = ReviewFixture::new(audit.clone(), Arc::new(ManualAuditClock::default()));
+    let policy = Arc::new(ObservedPolicy::default());
+    fixture.state.conversation_access = Some(policy.clone());
+    let reader = Arc::new(FailNextCurrentRead {
+        authority: fixture.authority.clone(),
+        fail: AtomicBool::new(false),
+    });
+    fixture.state.access = reader.clone();
+    let session = authenticate(&fixture.state).await;
+    reader.fail.store(true, Ordering::SeqCst);
+    let (_authority, updates) = watch::channel(session.auth_revision());
+    let (send, mut receive) = mpsc::channel(1);
+    let task = tokio::spawn(forward_review_notices(
+        fixture.board.clone(),
+        send,
+        Arc::new(Semaphore::new(1)),
+        fixture.state.clone(),
+        session,
+        updates,
+    ));
+    let queued = timeout(Duration::from_secs(2), receive.recv())
+        .await
+        .unwrap();
+    assert!(
+        queued.is_none(),
+        "current-read failure published a false empty replacement"
+    );
+    assert_eq!(
+        task.await.unwrap(),
+        Err(ReviewNoticePublicationFailure::Audit(
+            ReviewNoticeAuditFailure::Unavailable
+        ))
+    );
+    assert_eq!(policy.asked(), 0);
+    assert!(audit.records.lock().unwrap().is_empty());
+    let recovered = notice_snapshot(
+        fixture.board.clone(),
+        fixture.state.clone(),
+        authenticate(&fixture.state).await,
+    )
+    .await;
+    assert_eq!(recovered.reviews.len(), 1);
+    assert_eq!(policy.asked(), 1);
+    assert_eq!(audit.records.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn review_notice_missing_metadata_is_a_successful_hidden_selection() {
+    let audit = Arc::new(RecordingReviewNoticeAudit::default());
+    let mut fixture = ReviewFixture::new(audit.clone(), Arc::new(ManualAuditClock::default()));
+    let policy = Arc::new(ObservedPolicy::default());
+    fixture.state.conversation_access = Some(policy.clone());
+    fixture.repository.records.lock().unwrap().clear();
+    let hidden = notice_snapshot(
+        fixture.board.clone(),
+        fixture.state.clone(),
+        authenticate(&fixture.state).await,
+    )
+    .await;
+    assert!(hidden.reviews.is_empty());
+    assert_eq!(policy.asked(), 0);
+    assert!(audit.records.lock().unwrap().is_empty());
 }
