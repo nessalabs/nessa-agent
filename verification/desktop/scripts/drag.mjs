@@ -36,6 +36,7 @@
  *   stationary-drag-target  chats keep their geometry and material; only the target highlights
  *   stationary-layout-flight  closing one pane never suppresses stationary chats
  *   stationary-drop-commit    a committed swap never suppresses untouched chats
+ *   pane-placement-local      placement values stay on pane roots, outside conversation content
  *
  * `--shots <dir>` saves, from compact-drag-card, the copy below a wide
  * pane, beside it, and over its own place.
@@ -449,6 +450,47 @@ async function stationaryThrough(page, { focus, count, change }) {
 }
 
 const checks = {
+  "pane-placement-local": async (page, layout) => {
+    await fourPanes(page, layout)
+    const values = await page.locator(css.pane).evaluateAll(
+      (panes, body) =>
+        panes.map((pane) => {
+          const root = getComputedStyle(pane)
+          const child = getComputedStyle(pane.querySelector(body))
+          const names = ["cx", "cw", "ci", "cn", "ry", "rh", "ri", "rn"]
+          return {
+            key: pane.getAttribute("data-pane-key"),
+            root: Object.fromEntries(
+              names.map((name) => [name, root.getPropertyValue(`--${name}`).trim()]),
+            ),
+            child: Object.fromEntries(
+              names.map((name) => [name, child.getPropertyValue(`--${name}`).trim()]),
+            ),
+          }
+        }),
+      css.paneBody,
+    )
+    const failures = []
+    if (values.length !== 4) failures.push(`expected four panes, got ${values.length}`)
+    if (!values.some((pane) => Number(pane.root.cx) > 0))
+      failures.push("no placed pane exercises a nonzero column offset")
+    for (const pane of values)
+      for (const [name, initial] of Object.entries({
+        cx: 0,
+        cw: 1,
+        ci: 0,
+        cn: 1,
+        ry: 0,
+        rh: 1,
+        ri: 0,
+        rn: 1,
+      }))
+        if (pane.child[name] !== String(initial))
+          failures.push(
+            `pane ${pane.key} content inherited --${name}: ${pane.child[name]}`,
+          )
+    return { values, failures }
+  },
   "sweep-across-zones": async (page, layout) => {
     const list = await fourPanes(page, layout)
     const grid = await page.locator(css.paneGrid).first().boundingBox()

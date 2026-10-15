@@ -1184,7 +1184,6 @@ export function useSplitPanesDrag(
           .querySelectorAll(`[${marks.lifted}]`)
           .forEach((pane) => pane.removeAttribute(marks.lifted))
         // Blur and shadows come back; a flight of the drop's own holds them itself.
-        // Bodies were held out of the preview and come back one a frame.
         releaseReflow()
         holdGlass(false)
         announcer.textContent = ""

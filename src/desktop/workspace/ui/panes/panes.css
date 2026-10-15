@@ -4,7 +4,8 @@
  * layout's fractions, so one keeps its identity when it moves, and a change
  * of layout lands at once, each pane then travelling from where it was by
  * transform alone (`split-panes/adapters/dom/flip.tsx`), so no frame of the
- * motion reflows text. What a pane looks like is here.
+ * motion reflows text. The workspace uses zero-duration layout flights (#914).
+ * What a pane looks like is here.
  */
 .workspace-chat {
   display: flex;

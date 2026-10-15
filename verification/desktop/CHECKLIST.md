@@ -1815,3 +1815,11 @@ engines exercise download → sign-in → ready on first use; successful setup r
 the ordinary hint, while independent audit failures remain visible.
 The fixture’s `?clipboard=native` path uses the real host writer for isolated
 native window Copy verification rather than the browser test capture.
+
+## Pane placement ownership (#914)
+
+`drag.mjs --only pane-placement-local` checks four real panes in both engines
+and layouts: a nonzero column offset remains on its pane root, while all eight
+placement properties have their independent initial values in conversation
+content. Existing drag checks verify the resulting geometry and identities;
+`perf-budget.mjs` measures the actual drop at 4× CPU.
