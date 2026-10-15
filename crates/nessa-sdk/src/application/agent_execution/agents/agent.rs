@@ -8,6 +8,7 @@ use super::{
     attachment_evidence::{
         AttachmentAttemptFailure, AttachmentEvidenceTransition, AttachmentFailureSource,
     },
+    audit_observation::AuditObserver,
     lifecycle::{SessionLifecycle, WorkPermit},
     scheduling::{ActiveInvocation, Scheduler},
 };
@@ -396,7 +397,7 @@ pub(super) struct Inner {
     pub(super) live_effort_level: RwLock<Option<(u64, EffortLevel)>>,
     pub(super) provider: Arc<dyn AgentProvider>,
     capabilities: EffectiveCapabilities,
-    pub(super) audit: Arc<dyn ExecutionAudit>,
+    pub(super) audit: Arc<AuditObserver>,
     pub(super) manager: SessionManager,
     pub(super) invocation: Arc<Mutex<()>>,
     hooks: RwLock<Vec<Arc<dyn InvocationHook>>>,
@@ -960,6 +961,10 @@ impl Agent {
             .await
             .map_err(|cause| AgentInitializationError::new(cause, None))?;
         let capabilities = provider.capabilities().clone();
+        let audit = Arc::new(AuditObserver::new(
+            audit,
+            session_manager.message_commit_clock(),
+        ));
         let lifecycle = SessionLifecycle::new(
             session_manager.attachment(),
             session_manager.protective_storage_lease(),
@@ -1029,6 +1034,8 @@ impl Agent {
 
     /// Authorize one attachment attempt for the current lifecycle generation.
     /// Dropping the returned token abandons only that exact authorization.
+    /// The lifecycle owner observes abandonment evidence under the shared
+    /// per-record 30-second audit bound and retains any evidence failure.
     pub fn authorize_attachment(
         &self,
         request: AttachmentRequest,
@@ -1040,6 +1047,9 @@ impl Agent {
     ///
     /// The returned wait handle observes settlement; dropping it does not cancel
     /// provider startup, durable publication, or cleanup.
+    /// Each mandatory audit observation receives a fresh 30-second deadline on
+    /// the injected session clock. Expiry retains [`AgentError::AuditFailure`];
+    /// an already-started physical write remains owned by its audit adapter.
     pub fn start_attachment(
         &self,
         authorization: AttachmentAuthorization,
@@ -2689,6 +2699,9 @@ impl Agent {
     /// Once polled, close continues even if its caller stops waiting. Retries and
     /// final handle drop preserve the attachment's first shutdown cause and known
     /// initiator until cleanup is confirmed; a resumed attachment owns a new cause.
+    /// Scheduling and attachment audit observations have separate per-record
+    /// 30-second deadlines. Expiry retains [`AgentError::AuditFailure`]. This is
+    /// an evidence bound; provider cleanup and storage keep their own contracts.
     ///
     /// The caller's `Waker` is woken when the operation's own task finishes;
     /// a panic from it is logged and does not affect the operation. See

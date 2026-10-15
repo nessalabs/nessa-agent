@@ -309,7 +309,8 @@ impl SessionManager {
     /// - `storage`: Shared backend used to acquire the lease. The manager retains
     ///   only the returned lease, which must keep its backend resources alive.
     /// - `message_commit_clock`: Monotonic application timer for streaming
-    ///   output deadlines. Its wake only asks this manager to recheck pending facts.
+    ///   output and Agent scheduling-audit acknowledgement deadlines. Message-save
+    ///   wakes ask this manager to recheck pending facts.
     ///
     /// # Errors
     /// Returns [`StorageError::Busy`] if another owner holds this session, or a
@@ -379,6 +380,11 @@ impl SessionManager {
     pub(crate) async fn wait_for_message_deadline(&self, deadline: Duration) {
         self.message_commit_clock.sleep_until(deadline).await;
     }
+    /// Share the injected clock with Agent audit observation owners.
+    pub(crate) fn message_commit_clock(&self) -> Arc<dyn MessageCommitClock> {
+        self.message_commit_clock.clone()
+    }
+
     /// Elapsed time on the injected message-commit clock.
     pub(crate) fn message_commit_now(&self) -> Duration {
         self.message_commit_clock.now()

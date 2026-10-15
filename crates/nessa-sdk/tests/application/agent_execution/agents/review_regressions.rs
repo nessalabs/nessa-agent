@@ -13,6 +13,7 @@ mod receipt_readiness;
 mod rejection_observations;
 mod retained_error_limits;
 mod scheduled_panics;
+mod scheduling_audit_deadlines;
 mod settlement_causes;
 mod terminal_settlement;
 mod undispatched_cancellation;

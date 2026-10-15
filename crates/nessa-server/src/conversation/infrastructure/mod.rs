@@ -42,6 +42,9 @@
 //! summary is removed, and its deletion record joins the other audit records,
 //! which nothing removes. `BindingSessionEraser` carries an agent binding's
 //! answer about its own record of a session into the deletion, unchanged.
+//! `DurableExecutionAudit` serializes admitted physical writes through the shared
+//! local-storage Worker; its injected `ExecutionAuditFileWriter` owns private-file
+//! commit/sync. Observer loss retains the physical slot through input cleanup.
 //! `DurableConversationModeAudit` keeps application and recovery evidence in
 //! separate immutable files keyed by the conversation, request and phase.
 //! `DurableMcpAppAudit` does the same for each step of an MCP App's call, keyed
@@ -155,7 +158,7 @@ pub use deletion_audit::DurableConversationDeletionAudit;
 
 mod audit;
 mod audit_mapping;
-pub use audit::DurableExecutionAudit;
+pub use audit::{DurableExecutionAudit, ExecutionAuditFileWriter};
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/store.rs"]
