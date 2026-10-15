@@ -343,15 +343,9 @@ impl NativeProductSession {
         &self,
         timeout_ms: u64,
     ) -> Result<Arc<NativeProductEventBatch>, NativeProductCallError> {
-        let deadline = self
-            .value
-            .clock
-            .elapsed_ms()
-            .checked_add(timeout_ms)
-            .ok_or(ProductFailure::InvalidLimits)?;
         self.value
             .value
-            .events(deadline)
+            .events_for(timeout_ms)
             .map(|value| Arc::new(NativeProductEventBatch { value }))
             .map_err(Into::into)
     }

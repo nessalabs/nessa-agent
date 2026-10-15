@@ -759,10 +759,10 @@ impl Drop for Driver {
     }
 }
 
-/// Physical product child and its injected clock, with no parent ownership.
+/// Physical product child, with no parent ownership. Its clock is read only
+/// through the child.
 pub struct SessionProduct {
     pub(crate) value: ProductSession,
-    pub(crate) clock: Arc<dyn Clock>,
 }
 impl SessionProduct {
     /// Borrow the independently owned core child; this does not retain its parent.
@@ -1136,10 +1136,7 @@ impl NativeSession {
             gate.product = Some(child.clone());
         }
         child.start().map_err(SessionFailure::Product)?;
-        Ok(SessionProduct {
-            value: child,
-            clock: driver.clock.clone(),
-        })
+        Ok(SessionProduct { value: child })
     }
     /// Saved selection derives receiver from the issued record and origin/stream
     /// from actual retained scope; address metadata is not used as scope.

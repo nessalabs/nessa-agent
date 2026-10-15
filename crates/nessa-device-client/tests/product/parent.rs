@@ -755,11 +755,10 @@ fn foreign_relative_event_timeout_uses_one_original_native_deadline_and_checks_o
                 "issued".into(),
                 "phone-instance".into(),
                 Arc::new(RefusingProduct),
-                overflow_clock.clone(),
+                overflow_clock,
                 Arc::new(ThreadProductWake::default()),
                 ProductLimits::default(),
             ),
-            clock: overflow_clock,
         },
     };
     assert_eq!(

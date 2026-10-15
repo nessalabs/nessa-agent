@@ -193,10 +193,11 @@ impl Owner {
         }
         self.notify();
     }
-    /// The injected wake port. `revision`, `wait`, and `wake` share this
-    /// boundary. A panic records `WorkerPanicked` unless a decoded failure is
-    /// already stored, marks the session closing, and does not unwind. It does
-    /// not call the port again.
+    /// The injected wake port and the injected clock. A panic records
+    /// `WorkerPanicked` unless a decoded failure is already stored, marks the
+    /// session closing, and does not unwind. It does not call the port again.
+    /// Callers read the clock here before taking `state`, so a panic cannot
+    /// hold that mutex.
     fn observe<T>(&self, operation: impl FnOnce() -> T) -> Result<T, ProductFailure> {
         match catch_unwind(AssertUnwindSafe(operation)) {
             Ok(value) => Ok(value),
@@ -215,6 +216,9 @@ impl Owner {
     }
     fn wait_revision(&self, revision: u64, timeout: Duration) -> Result<(), ProductFailure> {
         self.observe(|| self.wake.wait(revision, timeout))
+    }
+    fn now(&self) -> Result<u64, ProductFailure> {
+        self.observe(|| self.clock.elapsed_ms())
     }
     pub(super) fn notify(&self) {
         let _ = self.observe(|| self.wake.wake());
@@ -420,6 +424,7 @@ impl ProductSession {
         params_json: &str,
     ) -> Result<ProductTicket, ProductFailure> {
         let owner = &self.handle.owner;
+        let now = owner.now()?;
         let mut state = lock(&owner.state);
         if state.closing {
             return Err(state.failure.unwrap_or(ProductFailure::Cancelled));
@@ -447,9 +452,7 @@ impl ProductSession {
         }
         // Consume the protocol's unique-key/value-budget decoder as outer owner.
         RequestFrame::decode(&text).map_err(|_| ProductFailure::InvalidRequest)?;
-        let deadline = owner
-            .clock
-            .elapsed_ms()
+        let deadline = now
             .checked_add(owner.limits.request_ms)
             .ok_or(ProductFailure::TimedOut)?;
         let ticket = Arc::new(Ticket {
@@ -502,7 +505,8 @@ impl ProductSession {
                     return Err(ProductFailure::Cancelled);
                 }
             }
-            let left = deadline_ms.saturating_sub(owner.clock.elapsed_ms());
+            let now = owner.now()?;
+            let left = deadline_ms.saturating_sub(now);
             if left == 0 {
                 return Ok(ProductEventBatch {
                     inner: Arc::new(EventBatch {
@@ -517,6 +521,18 @@ impl ProductSession {
                 Duration::from_millis(left.min(owner.limits.poll_ms)),
             )?;
         }
+    }
+    /// Wait at most `timeout_ms` on this session's clock. Zero returns events
+    /// already queued. The clock read is the owner's, so a panic is
+    /// `WorkerPanicked` and an unrepresentable deadline is `InvalidLimits`.
+    pub fn events_for(&self, timeout_ms: u64) -> Result<ProductEventBatch, ProductFailure> {
+        let deadline = self
+            .handle
+            .owner
+            .now()?
+            .checked_add(timeout_ms)
+            .ok_or(ProductFailure::InvalidLimits)?;
+        self.events(deadline)
     }
     /// Fence admission and independently interrupt blocked native I/O.
     pub fn request_close(&self) {

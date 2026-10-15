@@ -1125,6 +1125,63 @@ fn injected_wake_wait_panic_settles_the_ticket_and_events() {
 }
 
 #[test]
+fn injected_clock_panic_is_worker_panicked_and_admits_nothing() {
+    struct PanicClock {
+        armed: Arc<AtomicBool>,
+        inner: fixtures::Time,
+    }
+    impl Clock for PanicClock {
+        fn elapsed_ms(&self) -> u64 {
+            if self.armed.load(Ordering::SeqCst) {
+                panic!("injected clock");
+            }
+            self.inner.elapsed_ms()
+        }
+    }
+    let armed = Arc::new(AtomicBool::new(false));
+    let (release, held) = signal();
+    let (endpoint, peer) = peer(move |_wire| receive(&held));
+    let session = ProductSession::prepare(
+        endpoint.address,
+        endpoint.identity,
+        endpoint.pin,
+        "credential".into(),
+        "phone-instance".into(),
+        Arc::new(LocalProductConnector),
+        Arc::new(PanicClock {
+            armed: armed.clone(),
+            inner: fixtures::Time(Instant::now()),
+        }),
+        Arc::new(ThreadProductWake::default()),
+        limits(1),
+    );
+    session.start().unwrap();
+    session.wait_ready().unwrap();
+    armed.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            session.request("conversation.list", "{}")
+        }))
+        .expect("clock panic must not escape request"),
+        Err(ProductFailure::WorkerPanicked)
+    ));
+    assert!(matches!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| session.events(u64::MAX)))
+            .expect("clock panic must not escape events"),
+        Err(ProductFailure::WorkerPanicked)
+    ));
+    assert!(matches!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| session.events_for(50)))
+            .expect("clock panic must not escape events_for"),
+        Err(ProductFailure::WorkerPanicked)
+    ));
+    assert_eq!(session.failure(), Some(ProductFailure::WorkerPanicked));
+    release.send(()).unwrap();
+    assert_eq!(session.close(), Err(ProductFailure::WorkerPanicked));
+    peer.join();
+}
+
+#[test]
 fn injected_interrupt_panic_stays_inside_stop_and_close_still_joins() {
     struct PanicInterrupt;
     impl ProductInterrupt for PanicInterrupt {
