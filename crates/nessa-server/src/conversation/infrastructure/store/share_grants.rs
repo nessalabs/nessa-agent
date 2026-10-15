@@ -746,45 +746,73 @@ impl LocalConversationStore {
                 // or the other change is refused (row J6). A retry is answered
                 // before the expected revision is compared: its first answer may
                 // be what moved the grant past it (row J29).
-                let replayed: Option<(String, Held, Held, String, i64)> = transaction
-                    .query_row(
-                        &format!(
-                            "SELECT credential_id, before, policy_before, after, policy_after,
-                                principal_id, sequence
+                let replayed: Option<(String, Option<String>, Held, Held, String, i64)> =
+                    transaction
+                        .query_row(
+                            &format!(
+                                "SELECT credential_id, receiver_id, before, policy_before, after,
+                                policy_after, principal_id, sequence
                              FROM share_grant_changes
                              WHERE resource_kind = '{CONVERSATION}' AND resource_id = ?1
                                AND initiator = ?2 AND surface = ?3 AND request = ?4"
-                        ),
-                        params![
-                            id,
-                            principal.as_str(),
-                            change.initiator.surface_id,
-                            change.initiator.action_id
-                        ],
-                        |row| {
-                            Ok((
-                                row.get(0)?,
-                                (row.get(1)?, row.get(2)?),
-                                (row.get(3)?, row.get(4)?),
-                                row.get(5)?,
-                                row.get(6)?,
-                            ))
-                        },
-                    )
-                    .optional()
-                    .map_err(failed)?;
-                if let Some((credential, journaled_before, journaled_after, granted, at)) = replayed
+                            ),
+                            params![
+                                id,
+                                principal.as_str(),
+                                change.initiator.surface_id,
+                                change.initiator.action_id
+                            ],
+                            |row| {
+                                Ok((
+                                    row.get(0)?,
+                                    row.get(1)?,
+                                    (row.get(2)?, row.get(3)?),
+                                    (row.get(4)?, row.get(5)?),
+                                    row.get(6)?,
+                                    row.get(7)?,
+                                ))
+                            },
+                        )
+                        .optional()
+                        .map_err(failed)?;
+                if let Some((
+                    credential,
+                    journaled_receiver,
+                    journaled_before,
+                    journaled_after,
+                    granted,
+                    at,
+                )) = replayed
                 {
                     if credential != change.credential_id.as_str() || journaled_after != after {
                         return Err(ConversationError::InvalidInput);
                     }
+                    // A retry answers the first receipt. A switch of receiver
+                    // or credential applies even when the capability set does
+                    // not change, so the receipt is not that comparison alone.
+                    let replaced: Option<(Option<String>, String)> = transaction
+                        .query_row(
+                            &format!(
+                                "SELECT receiver_id, credential_id FROM share_grant_changes
+                                 WHERE resource_kind = '{CONVERSATION}' AND resource_id = ?1
+                                   AND principal_id = ?2 AND sequence < ?3
+                                 ORDER BY sequence DESC LIMIT 1"
+                            ),
+                            params![id, granted, at],
+                            |row| Ok((row.get(0)?, row.get(1)?)),
+                        )
+                        .optional()
+                        .map_err(failed)?;
+                    let party_changed = replaced.is_some_and(|(receiver, previous)| {
+                        receiver != journaled_receiver || previous != credential
+                    });
                     let policy_revision = if journaled_after.0 == NONE {
                         None
                     } else {
                         Some(revision_after(&transaction, &id, &granted, at)?)
                     };
                     return Ok(ChangeAttempt::Applied(ShareGrantReceipt {
-                        applied: journaled_before != journaled_after,
+                        applied: journaled_before != journaled_after || party_changed,
                         policy_revision,
                     }));
                 }
@@ -792,10 +820,11 @@ impl LocalConversationStore {
                     .principal_id
                     .as_ref()
                     .map(|principal| principal.as_str().to_owned());
-                let existing: Option<(String, Option<String>, Held, i64)> = transaction
+                let existing: Option<(String, Option<String>, String, Held, i64)> = transaction
                     .query_row(
                         &format!(
-                            "SELECT principal_id, receiver_id, capabilities, policy, policy_revision
+                            "SELECT principal_id, receiver_id, credential_id, capabilities, policy,
+                                    policy_revision
                              FROM share_grants
                              WHERE resource_kind = '{CONVERSATION}' AND resource_id = ?1
                                AND (principal_id = ?2 OR credential_id = ?3
@@ -811,8 +840,9 @@ impl LocalConversationStore {
                             Ok((
                                 row.get(0)?,
                                 row.get(1)?,
-                                (row.get(2)?, row.get(3)?),
-                                row.get(4)?,
+                                row.get(2)?,
+                                (row.get(3)?, row.get(4)?),
+                                row.get(5)?,
                             ))
                         },
                     )
@@ -821,33 +851,42 @@ impl LocalConversationStore {
                 let row_present = existing.is_some();
                 let held_revision = existing
                     .as_ref()
-                    .map(|(_, _, _, stored)| {
+                    .map(|(_, _, _, _, stored)| {
                         sequence(*stored).ok_or_else(|| unreadable("share_grants", &id))
                     })
                     .transpose()?;
-                let (principal, stored_receiver, before) = match existing {
-                    Some((principal, receiver, held, _)) => (principal, receiver, held),
-                    None => match &change.transition {
-                        ShareGrantTransition::Grant(_) => (
-                            named_principal.ok_or(ConversationError::InvalidInput)?,
-                            None,
-                            (NONE.to_owned(), None),
-                        ),
-                        ShareGrantTransition::Revoke => (
-                            named_principal.unwrap_or_default(),
-                            None,
-                            (NONE.to_owned(), None),
-                        ),
-                    },
-                };
+                let (principal, stored_receiver, stored_credential, before, stored_epoch) =
+                    match existing {
+                        Some((principal, receiver, credential, held, epoch)) => {
+                            (principal, receiver, Some(credential), held, Some(epoch))
+                        }
+                        None => match &change.transition {
+                            ShareGrantTransition::Grant(_) => (
+                                named_principal.ok_or(ConversationError::InvalidInput)?,
+                                None,
+                                None,
+                                (NONE.to_owned(), None),
+                                None,
+                            ),
+                            ShareGrantTransition::Revoke => (
+                                named_principal.unwrap_or_default(),
+                                None,
+                                None,
+                                (NONE.to_owned(), None),
+                                None,
+                            ),
+                        },
+                    };
                 // A grant stores the receiver it names, or keeps the one the
                 // row already has when this change names none. A revoke
                 // journals the receiver the row held.
                 let receiver = match &change.transition {
                     ShareGrantTransition::Grant(_) => {
-                        change.receiver_id.clone().or(stored_receiver)
+                        change.receiver_id.clone().or(stored_receiver.clone())
                     }
-                    ShareGrantTransition::Revoke => stored_receiver.or(change.receiver_id.clone()),
+                    ShareGrantTransition::Revoke => {
+                        stored_receiver.clone().or(change.receiver_id.clone())
+                    }
                 };
                 // The permit the caller holds is for `expected`. A row that names
                 // another principal, or one that appeared after a revoke looked
@@ -873,7 +912,17 @@ impl LocalConversationStore {
                         return Err(ConversationError::ShareGrantChanged);
                     }
                 }
-                let applied = before != after;
+                // Capabilities and constraints are one change. Replacing the
+                // receiver or the credential is another: the row has to name
+                // the party that now holds it, and both catalogues have to
+                // move. The grant epoch stays when the set and the
+                // constraints do not.
+                let access_changed = before != after;
+                let party_changed = stored_credential.is_some()
+                    && matches!(change.transition, ShareGrantTransition::Grant(_))
+                    && (stored_receiver.as_deref() != receiver.as_deref()
+                        || stored_credential.as_deref() != Some(change.credential_id.as_str()));
+                let applied = access_changed || party_changed;
                 // The bounds a new grant, and a change to Drive, must fit (rows
                 // G17 and J9), checked before anything is written.
                 if applied && before.0 == NONE && after.0 != NONE {
@@ -904,13 +953,14 @@ impl LocalConversationStore {
                         return Err(ConversationError::InvalidInput);
                     }
                 }
-                // A grant or a revoke is a catalogue change: the device's next
-                // pass starts past what it completed, so a newly granted row must
-                // carry a revision past it (row G5). A change of capabilities or constraints
-                // leaves what the device reads as it was, so it keeps the
-                // revision it found, as a request that changed nothing does (rows
-                // G9, J4).
-                let reads_change = (before.0 == NONE) != (after.0 == NONE);
+                // A grant, a revoke, or a replacement of the receiver or
+                // credential is a catalogue change: the device's next pass
+                // starts past what it completed, so a newly granted row must
+                // carry a revision past it (row G5). A change of capabilities
+                // or constraints, for the same party, leaves what the device
+                // reads as it was, so it keeps the revision it found, as a
+                // request that changed nothing does (rows G9, J4).
+                let reads_change = (before.0 == NONE) != (after.0 == NONE) || party_changed;
                 let revision = if reads_change {
                     let revision = next_revision(&transaction, &conversation, false)?;
                     transaction
@@ -959,13 +1009,23 @@ impl LocalConversationStore {
                 // row that set them, so a later change moves its policy revision
                 // and a request that changed nothing leaves it (rows J4, J5).
                 let sequence = transaction.last_insert_rowid();
-                let policy_revision = match (after.0.as_str(), applied) {
-                    (NONE, _) => None,
-                    (_, true) => Some(
+                let policy_revision = if after.0 == NONE {
+                    None
+                } else if access_changed {
+                    Some(
                         self::sequence(sequence)
                             .ok_or_else(|| unreadable("share_grant_changes", &id))?,
-                    ),
-                    (_, false) => held_revision,
+                    )
+                } else {
+                    held_revision
+                };
+                // The epoch moves only with the capabilities or the
+                // constraints. A party switch stamps the epoch the row
+                // already held.
+                let stamped_epoch = if access_changed {
+                    sequence
+                } else {
+                    stored_epoch.ok_or_else(|| unreadable("share_grants", &id))?
                 };
                 if applied {
                     match (before.0.as_str(), after.0.as_str()) {
@@ -987,7 +1047,7 @@ impl LocalConversationStore {
                                 change.credential_id.as_str(),
                                 after.0,
                                 after.1,
-                                sequence,
+                                stamped_epoch,
                                 at
                             ],
                         ),
@@ -1004,7 +1064,7 @@ impl LocalConversationStore {
                                 change.credential_id.as_str(),
                                 after.0,
                                 after.1,
-                                sequence
+                                stamped_epoch
                             ],
                         ),
                     }
@@ -1024,6 +1084,8 @@ impl LocalConversationStore {
                     change = change.transition.as_str(),
                     capabilities_before = before.0.as_str(),
                     capabilities_after = after.0.as_str(),
+                    receiver_before = stored_receiver.as_deref().unwrap_or(""),
+                    receiver_after = receiver.as_deref().unwrap_or(""),
                     initiator = change.initiator.principal_id.as_str(),
                     revision,
                     policy_revision = sequence,

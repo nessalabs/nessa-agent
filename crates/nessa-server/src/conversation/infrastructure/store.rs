@@ -297,13 +297,15 @@ fn granted_to(reader: &Reader) -> Option<String> {
 }
 
 /// A paired reader's head: the latest revision among the owner's rows granted
-/// to `receiver`, and among `receiver`'s grants and revokes. A change of role
-/// or policy is neither: it leaves what the receiver reads as it was, and
-/// takes no revision of its own (`docs/design/read-grants.md`, row J4).
-/// A revoke stamps the row it takes away with a new revision and journals
-/// that revision, so in steady state the head moves forward on a revoke and
-/// never back: the journal only grows and conversation rows are never
-/// removed. Zero when the receiver was never granted anything.
+/// to `receiver`, among `receiver`'s grants and revokes, and among later
+/// journal rows that replaced this receiver or its credential. A change of
+/// capabilities or constraints, with the same receiver and credential, is
+/// none of those: it leaves what the receiver reads as it was, and takes no
+/// revision of its own (`docs/design/read-grants.md`, row J4). A revoke, and
+/// a switch of the grant onto another receiver, stamps a new revision, so
+/// the head moves forward and never back: the journal only grows and
+/// conversation rows are never removed. Zero when the receiver was never
+/// granted anything.
 fn granted_head(
     connection: &Connection,
     organization: &OrganizationId,
@@ -321,7 +323,19 @@ fn granted_head(
                                WHERE c.organization = ?1 AND c.owner = ?2
                                  AND j.resource_kind = '{kind}'
                                  AND j.receiver_id = ?3
-                                 AND (j.before = 'none') <> (j.after = 'none')), 0))",
+                                 AND (j.before = 'none') <> (j.after = 'none')), 0),
+                     COALESCE((SELECT MAX(later.revision) FROM share_grant_changes AS later
+                               JOIN share_grant_changes AS j
+                                 ON j.resource_kind = later.resource_kind
+                                AND j.resource_id = later.resource_id
+                                AND j.principal_id = later.principal_id
+                                AND j.sequence < later.sequence
+                                AND j.receiver_id = ?3
+                                AND (later.receiver_id IS NOT j.receiver_id
+                                     OR later.credential_id <> j.credential_id)
+                               JOIN conversations AS c ON c.id = later.resource_id
+                               WHERE c.organization = ?1 AND c.owner = ?2
+                                 AND later.resource_kind = '{kind}'), 0))",
                 share_grants::granted("c.id", "?3"),
                 kind = share_grants::CONVERSATION,
             ),

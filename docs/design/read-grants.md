@@ -165,12 +165,17 @@ the transaction that writes the grant (row G5). Every reader of that owner's
 catalogue sees the row changed; the owner's own list sends the same row again,
 which costs one frame.
 
-A change of role or policy on a grant the device already holds takes no
-catalogue revision (row J4). The catalogue says which conversations a device
-can read, and that has not changed; moving the row would make every reader
-of the owner's catalogue page it again for nothing. The device's head does
-not move either: it moves with grants and revokes only. The role is learnt
-from `conversation.shares` today and is asked where it is enforced, never
+A change of capabilities or constraints on a grant the same receiver and
+credential already hold takes no catalogue revision (row J4). The catalogue
+says which conversations a device can read, and that has not changed; moving
+the row would make every reader of the owner's catalogue page it again for
+nothing. The device's head does not move either: it moves with grants,
+revokes, and a replacement of the receiver or credential. Replacing either
+applies, keeps the grant epoch when the capabilities and constraints stay,
+and moves the catalogue revision, so the receiver that gained the grant
+pages it and the one that lost it drops it
+(`a_receiver_switch_is_applied_and_moves_the_catalogue`). The capability set
+is learnt from `conversation.shares` and is asked where it is enforced, never
 read from the catalogue.
 
 A revoke removes the row from the device's pages; it is not sent as deleted

@@ -263,9 +263,11 @@ pub struct ShareGrant {
 }
 
 /// The grants on one conversation, and the catalogue revision they were read
-/// with. A grant or a revoke moves `change_revision`; a change of
-/// capabilities or constraints does not. `conversation.shares` names it on every page, so a later
-/// page belongs to the same read only when it names the same revision.
+/// with. A grant, a revoke, or a replacement of the receiver or credential
+/// moves `change_revision`. A change of capabilities or constraints, for the
+/// same receiver and credential, does not. `conversation.shares` names it on
+/// every page, so a later page belongs to the same read only when it names
+/// the same revision.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShareGrantList {
     pub grants: Vec<ShareGrant>,

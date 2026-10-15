@@ -3797,6 +3797,74 @@ async fn an_identical_share_changes_nothing_and_keeps_the_policy_revision() {
     assert_eq!(after, "read+comment+drive");
 }
 
+/// Two paired credentials of one principal are one grant. Sharing the same
+/// capabilities through the other receiver applies, keeps the grant epoch,
+/// and moves the catalogue: the receiver that gained the grant pages the
+/// conversation, and the one that lost it drops it. A retry of that request
+/// answers the same receipt.
+#[tokio::test]
+async fn a_receiver_switch_is_applied_and_moves_the_catalogue() {
+    use crate::conversation::application::{ShareGrantTransition, ShareGrants};
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    let principal = PrincipalId::new("grantee-shared").unwrap();
+    let share = |receiver: &str, request: &str| {
+        let mut change = grant_change(
+            ShareGrantTransition::Grant(ShareAccess::read()),
+            &id,
+            Some(receiver),
+            &format!("{receiver}-credential"),
+            request,
+        );
+        change.principal_id = Some(principal.clone());
+        change
+    };
+    let first = store.change(share("phone", "share")).await.unwrap();
+    assert!(first.applied);
+    let epoch = only_grant(store, &id).await.policy_revision;
+    assert_eq!(first.policy_revision, Some(epoch));
+    let phone_head = store
+        .head(&org(), &alice(), &device("phone"))
+        .await
+        .unwrap()
+        .revision;
+    let catalogue = store.grants(&id).await.unwrap().change_revision;
+    let switched = store.change(share("tablet", "switch")).await.unwrap();
+    assert!(switched.applied);
+    assert_eq!(switched.policy_revision, Some(epoch));
+    let grant = only_grant(store, &id).await;
+    assert_eq!(grant.principal_id, principal);
+    assert_eq!(grant.receiver_id.as_deref(), Some("tablet"));
+    assert_eq!(grant.credential_id.as_str(), "tablet-credential");
+    assert_eq!(grant.policy_revision, epoch);
+    assert!(store.grants(&id).await.unwrap().change_revision > catalogue);
+    assert!(!store.is_granted(&id, "phone").await.unwrap());
+    assert!(store.is_granted(&id, "tablet").await.unwrap());
+    let phone_after = store
+        .head(&org(), &alice(), &device("phone"))
+        .await
+        .unwrap()
+        .revision;
+    assert!(phone_after > phone_head);
+    assert!(device_pass(store, device("phone"), phone_head)
+        .await
+        .is_empty());
+    assert_eq!(
+        device_pass(store, device("tablet"), phone_head).await,
+        vec![(id.clone(), phone_after)]
+    );
+    assert_eq!(
+        store.change(share("tablet", "switch")).await.unwrap(),
+        switched
+    );
+    let journal = role_journal(&opened.path);
+    assert_eq!(journal.len(), 2);
+    assert_eq!(journal[1].0, "read");
+    assert_eq!(journal[1].1, "read");
+}
+
 /// Row J6: a share retried with its request id answers what it answered the
 /// first time and changes nothing, even after a later change of role; the
 /// same request naming another role or another policy is refused.

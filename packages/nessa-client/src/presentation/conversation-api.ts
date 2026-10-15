@@ -310,11 +310,14 @@ export type ConversationApi = {
    * those three and a policy past the schema's bounds (published in
    * `bounds`: `maxToolPolicyPatterns`, `maxToolPatternBytes`,
    * `maxCommandHosts`, `maxCommandHostBytes`). Comment and drive for a
-   * gateway principal are refused `invalid_request` and write nothing. A
-   * grant that names no `commandHosts` runs commands nowhere. The answer
-   * names the grant's `policyRevision`, the grant epoch, once the share is
-   * made; `applied` is false when the grant already held those capabilities
-   * and constraints, and its epoch was kept.
+   * gateway principal are refused `capabilities_refused`. `details.policies`
+   * names the Cedar policy ids, and is empty when no permit matched. Nothing
+   * is written. A grant that names no `commandHosts` runs commands nowhere.
+   * The answer names the grant's `policyRevision`, the grant epoch, once the
+   * share is made. `applied` is false when that same receiver and credential
+   * already held those capabilities and constraints, and the epoch is kept.
+   * Replacing the receiver or the credential applies and moves the catalogue
+   * revision. The epoch stays when the capabilities and constraints do.
    * With `expectedPolicyRevision`, a grant no longer at that revision is
    * refused `share_grant_changed`. The same `requestId` answers what it
    * answered first, its revision included, so a failure's `retry()` grants at
