@@ -226,11 +226,29 @@ pub struct HeldGrant {
     pub policy_revision: u64,
 }
 
+/// The resource a grant names. This slice writes [`Self::Conversation`] and
+/// the conversation id. A directory grant uses [`Self::Directory`] under the
+/// same primary key; this slice does not write one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResourceKind {
+    Conversation,
+    Directory,
+}
+
+impl ResourceKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Conversation => "conversation",
+            Self::Directory => "directory",
+        }
+    }
+}
+
 /// One grant as the owner sees it in `conversation.shares`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShareGrant {
     pub conversation_id: ConversationId,
-    /// The grantee. The row's key, with the conversation.
+    /// The grantee. The row's key, with the resource kind and resource id.
     pub principal_id: PrincipalId,
     /// The receiver a paired device or gateway is bound to. Absent for an
     /// integration, and for a later agent, which store no receiver.

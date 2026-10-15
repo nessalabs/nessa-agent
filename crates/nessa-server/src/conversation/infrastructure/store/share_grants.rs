@@ -17,9 +17,9 @@ use super::{
     cells, failed, next_revision, read, stored_time, time, unreadable, LocalConversationStore,
 };
 use crate::conversation::application::{
-    AccessAction, ConversationError, ConversationFuture, HeldGrant, OwnerAccess, RevisionHold,
-    ShareGrant, ShareGrantChange, ShareGrantList, ShareGrantReceipt, ShareGrantTransition,
-    ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_POLICY_REVISION,
+    AccessAction, ConversationError, ConversationFuture, HeldGrant, OwnerAccess, ResourceKind,
+    RevisionHold, ShareGrant, ShareGrantChange, ShareGrantList, ShareGrantReceipt,
+    ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_POLICY_REVISION,
     MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 use crate::conversation::domain::{
@@ -38,10 +38,14 @@ use std::task::{Context, Poll};
 /// One admission mutex, shared by every permit for that grant.
 type GrantGate = Arc<tokio::sync::Mutex<()>>;
 
-/// `(conversation, principal)` as the map stores it.
-type GrantKey = (String, String);
+/// This slice's resource kind. A directory grant uses the other kind under
+/// the same `(principal, kind, resource)` lock.
+pub(super) const CONVERSATION: &str = ResourceKind::Conversation.as_str();
 
-/// Per-grant admission. The map holds one mutex per `(conversation, principal)`
+/// `(resource kind, resource id, principal)` as the map stores it.
+type GrantKey = (String, String, String);
+
+/// Per-grant admission. The map holds one mutex per `(kind, resource, principal)`
 /// that a hold or a change is using. The entry is removed when the last permit
 /// drops, and when a wait cancelled before it acquired the lock was the last
 /// clone of that gate.
@@ -68,15 +72,20 @@ impl GrantGates {
         })
     }
 
-    /// Lock `(conversation, principal)`. A caller that already holds the
-    /// metadata connection must not call this: the connection is taken only
-    /// after the permit, inside `run`.
+    /// Lock `(resource kind, resource id, principal)`. A caller that already
+    /// holds the metadata connection must not call this: the connection is
+    /// taken only after the permit, inside `run`.
     ///
     /// A wait cancelled before the permit is built removes the map entry when
     /// it was the last clone of that gate. The lock future is dropped before
     /// that count, so its `Arc` is not mistaken for another waiter.
-    async fn lock(self: &Arc<Self>, conversation: String, principal: String) -> GrantPermit {
-        let key = (conversation, principal);
+    async fn lock(
+        self: &Arc<Self>,
+        kind: String,
+        resource: String,
+        principal: String,
+    ) -> GrantPermit {
+        let key = (kind, resource, principal);
         let gate = {
             let mut gates = self.gates.lock().unwrap_or_else(PoisonError::into_inner);
             if let Some(existing) = gates.get(&key) {
@@ -211,7 +220,9 @@ enum ChangeAttempt {
 fn grant_row(conversation: &str, receiver: &str) -> String {
     format!(
         "share_grants AS g
-         WHERE g.conversation_id = {conversation} AND g.receiver_id = {receiver}"
+         WHERE g.resource_kind = '{kind}' AND g.resource_id = {conversation}
+           AND g.receiver_id = {receiver}",
+        kind = CONVERSATION,
     )
 }
 
@@ -364,9 +375,13 @@ fn revision_after(
 ) -> Result<u64, ConversationError> {
     let stamped: Option<i64> = transaction
         .query_row(
-            "SELECT MAX(sequence) FROM share_grant_changes
-             WHERE conversation_id = ?1 AND principal_id = ?2 AND sequence <= ?3
-               AND NOT (before = after AND policy_before IS policy_after)",
+            &format!(
+                "SELECT MAX(sequence) FROM share_grant_changes
+                 WHERE resource_kind = '{kind}' AND resource_id = ?1
+                   AND principal_id = ?2 AND sequence <= ?3
+                   AND NOT (before = after AND policy_before IS policy_after)",
+                kind = CONVERSATION,
+            ),
             params![id, principal, at],
             |row| row.get(0),
         )
@@ -425,7 +440,11 @@ impl ShareGrants for LocalConversationStore {
                 let permit = match &key {
                     Some(principal) => Some(
                         self.grant_gates
-                            .lock(change.conversation_id.to_string(), principal.clone())
+                            .lock(
+                                CONVERSATION.to_owned(),
+                                change.conversation_id.to_string(),
+                                principal.clone(),
+                            )
                             .await,
                     ),
                     None => None,
@@ -456,7 +475,9 @@ impl ShareGrants for LocalConversationStore {
             let Some(principal) = principal.await? else {
                 return Err(ConversationError::Revoked);
             };
-            let permit = gates.lock(conversation, principal).await;
+            let permit = gates
+                .lock(CONVERSATION.to_owned(), conversation, principal)
+                .await;
             match read.await? {
                 Some(live) if live == policy_revision => Ok(RevisionHold::held(permit)),
                 _ => Err(ConversationError::Revoked),
@@ -487,9 +508,11 @@ impl ShareGrants for LocalConversationStore {
                     .prepare(&format!(
                         "SELECT principal_id, receiver_id, {}, capabilities, {}, policy_revision, granted_at_ms
                          FROM share_grants
-                         WHERE conversation_id = ?1 ORDER BY granted_at_ms, credential_id",
+                         WHERE resource_kind = '{kind}' AND resource_id = ?1
+                         ORDER BY granted_at_ms, credential_id",
                         super::acquisition::text("credential_id", MAX_IDENTIFIER_BYTES, false),
                         super::acquisition::text("policy", MAX_POLICY_TEXT_BYTES, true),
+                        kind = CONVERSATION,
                     ))
                     .map_err(failed)?;
                 let mut rows = statement.query([id.to_string()]).map_err(failed)?;
@@ -562,9 +585,12 @@ impl ShareGrants for LocalConversationStore {
             let entry: Option<(String, Option<String>)> = connection
                 .query_row(
                     &format!(
-                        "SELECT after, {} FROM share_grant_changes
-                         WHERE sequence = ?1 AND conversation_id = ?2 AND receiver_id = ?3",
-                        super::acquisition::text("policy_after", MAX_POLICY_TEXT_BYTES, true),
+                        "SELECT after, {policy} FROM share_grant_changes
+                         WHERE sequence = ?1 AND resource_kind = '{kind}'
+                           AND resource_id = ?2 AND receiver_id = ?3",
+                        policy =
+                            super::acquisition::text("policy_after", MAX_POLICY_TEXT_BYTES, true),
+                        kind = CONVERSATION,
                     ),
                     params![sequence, id, receiver_id],
                     |row| Ok((row.get(0)?, row.get(1)?)),
@@ -595,8 +621,12 @@ impl LocalConversationStore {
         self.run(move |connection| {
             connection
                 .query_row(
-                    "SELECT principal_id FROM share_grants
-                     WHERE conversation_id = ?1 AND receiver_id = ?2",
+                    &format!(
+                        "SELECT principal_id FROM share_grants
+                         WHERE resource_kind = '{kind}' AND resource_id = ?1
+                           AND receiver_id = ?2",
+                        kind = CONVERSATION,
+                    ),
                     params![id, receiver_id],
                     |row| row.get(0),
                 )
@@ -622,10 +652,13 @@ impl LocalConversationStore {
         self.run(move |connection| {
             let found: Option<String> = connection
                 .query_row(
-                    "SELECT principal_id FROM share_grants
-                     WHERE conversation_id = ?1
-                       AND (principal_id = ?2 OR credential_id = ?3
-                            OR (?4 IS NOT NULL AND receiver_id = ?4))",
+                    &format!(
+                        "SELECT principal_id FROM share_grants
+                         WHERE resource_kind = '{kind}' AND resource_id = ?1
+                           AND (principal_id = ?2 OR credential_id = ?3
+                                OR (?4 IS NOT NULL AND receiver_id = ?4))",
+                        kind = CONVERSATION,
+                    ),
                     params![id, named.clone(), credential, receiver],
                     |row| row.get(0),
                 )
@@ -715,11 +748,13 @@ impl LocalConversationStore {
                 // be what moved the grant past it (row J29).
                 let replayed: Option<(String, Held, Held, String, i64)> = transaction
                     .query_row(
-                        "SELECT credential_id, before, policy_before, after, policy_after,
-                            principal_id, sequence
-                     FROM share_grant_changes
-                     WHERE conversation_id = ?1 AND initiator = ?2 AND surface = ?3
-                       AND request = ?4",
+                        &format!(
+                            "SELECT credential_id, before, policy_before, after, policy_after,
+                                principal_id, sequence
+                             FROM share_grant_changes
+                             WHERE resource_kind = '{CONVERSATION}' AND resource_id = ?1
+                               AND initiator = ?2 AND surface = ?3 AND request = ?4"
+                        ),
                         params![
                             id,
                             principal.as_str(),
@@ -738,8 +773,7 @@ impl LocalConversationStore {
                     )
                     .optional()
                     .map_err(failed)?;
-                if let Some((credential, journaled_before, journaled_after, granted, at)) =
-                    replayed
+                if let Some((credential, journaled_before, journaled_after, granted, at)) = replayed
                 {
                     if credential != change.credential_id.as_str() || journaled_after != after {
                         return Err(ConversationError::InvalidInput);
@@ -760,11 +794,13 @@ impl LocalConversationStore {
                     .map(|principal| principal.as_str().to_owned());
                 let existing: Option<(String, Option<String>, Held, i64)> = transaction
                     .query_row(
-                        "SELECT principal_id, receiver_id, capabilities, policy, policy_revision
-                         FROM share_grants
-                     WHERE conversation_id = ?1
-                       AND (principal_id = ?2 OR credential_id = ?3
-                            OR (?4 IS NOT NULL AND receiver_id = ?4))",
+                        &format!(
+                            "SELECT principal_id, receiver_id, capabilities, policy, policy_revision
+                             FROM share_grants
+                             WHERE resource_kind = '{CONVERSATION}' AND resource_id = ?1
+                               AND (principal_id = ?2 OR credential_id = ?3
+                                    OR (?4 IS NOT NULL AND receiver_id = ?4))"
+                        ),
                         params![
                             id,
                             named_principal,
@@ -843,7 +879,10 @@ impl LocalConversationStore {
                 if applied && before.0 == NONE && after.0 != NONE {
                     let held = count(
                         &transaction,
-                        "SELECT COUNT(*) FROM share_grants WHERE conversation_id = ?1",
+                        &format!(
+                            "SELECT COUNT(*) FROM share_grants
+                             WHERE resource_kind = '{CONVERSATION}' AND resource_id = ?1"
+                        ),
                         &id,
                     )?;
                     if held >= MAX_SHARE_GRANTS_PER_CONVERSATION {
@@ -856,7 +895,8 @@ impl LocalConversationStore {
                         &transaction,
                         &format!(
                             "SELECT COUNT(*) FROM share_grants
-                         WHERE conversation_id = ?1 AND capabilities = '{drive}'"
+                             WHERE resource_kind = '{CONVERSATION}' AND resource_id = ?1
+                               AND capabilities = '{drive}'"
                         ),
                         &id,
                     )?;
@@ -893,11 +933,12 @@ impl LocalConversationStore {
                 transaction
                     .execute(
                         "INSERT INTO share_grant_changes
-                         (conversation_id, principal_id, receiver_id, credential_id, before, after,
-                          policy_before, policy_after, initiator, surface, request,
+                         (resource_kind, resource_id, principal_id, receiver_id, credential_id,
+                          before, after, policy_before, policy_after, initiator, surface, request,
                           changed_at_ms, revision)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                         params![
+                            CONVERSATION,
                             id,
                             principal,
                             receiver,
@@ -928,43 +969,46 @@ impl LocalConversationStore {
                 };
                 if applied {
                     match (before.0.as_str(), after.0.as_str()) {
-                    (_, NONE) => transaction.execute(
-                        "DELETE FROM share_grants WHERE conversation_id = ?1 AND principal_id = ?2",
-                        params![id, principal],
-                    ),
-                    (NONE, _) => transaction.execute(
-                        "INSERT INTO share_grants
-                             (conversation_id, principal_id, receiver_id, credential_id, capabilities, policy,
-                              policy_revision, granted_at_ms)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                        params![
-                            id,
-                            principal,
-                            receiver,
-                            change.credential_id.as_str(),
-                            after.0,
-                            after.1,
-                            sequence,
-                            at
-                        ],
-                    ),
-                    _ => transaction.execute(
-                        "UPDATE share_grants
-                         SET receiver_id = ?3, credential_id = ?4, capabilities = ?5, policy = ?6,
-                             policy_revision = ?7
-                         WHERE conversation_id = ?1 AND principal_id = ?2",
-                        params![
-                            id,
-                            principal,
-                            receiver,
-                            change.credential_id.as_str(),
-                            after.0,
-                            after.1,
-                            sequence
-                        ],
-                    ),
-                }
-                .map_err(failed)?;
+                        (_, NONE) => transaction.execute(
+                            "DELETE FROM share_grants
+                         WHERE resource_kind = ?1 AND resource_id = ?2 AND principal_id = ?3",
+                            params![CONVERSATION, id, principal],
+                        ),
+                        (NONE, _) => transaction.execute(
+                            "INSERT INTO share_grants
+                             (principal_id, resource_kind, resource_id, receiver_id, credential_id,
+                              capabilities, policy, policy_revision, granted_at_ms)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                            params![
+                                principal,
+                                CONVERSATION,
+                                id,
+                                receiver,
+                                change.credential_id.as_str(),
+                                after.0,
+                                after.1,
+                                sequence,
+                                at
+                            ],
+                        ),
+                        _ => transaction.execute(
+                            "UPDATE share_grants
+                         SET receiver_id = ?4, credential_id = ?5, capabilities = ?6, policy = ?7,
+                             policy_revision = ?8
+                         WHERE resource_kind = ?1 AND resource_id = ?2 AND principal_id = ?3",
+                            params![
+                                CONVERSATION,
+                                id,
+                                principal,
+                                receiver,
+                                change.credential_id.as_str(),
+                                after.0,
+                                after.1,
+                                sequence
+                            ],
+                        ),
+                    }
+                    .map_err(failed)?;
                 }
                 transaction.commit().map_err(failed)?;
                 let receipt = ShareGrantReceipt {
@@ -1012,8 +1056,11 @@ impl LocalConversationStore {
         self.run(move |connection| {
             match connection
                 .query_row(
-                    "SELECT policy_revision FROM share_grants
-                     WHERE conversation_id = ?1 AND receiver_id = ?2",
+                    &format!(
+                        "SELECT policy_revision FROM share_grants
+                         WHERE resource_kind = '{CONVERSATION}' AND resource_id = ?1
+                           AND receiver_id = ?2"
+                    ),
                     params![id, receiver_id],
                     |row| row.get::<_, i64>(0),
                 )
@@ -1043,13 +1090,20 @@ mod cancelled_wait {
     #[tokio::test]
     async fn a_cancelled_contended_wait_leaves_the_map_empty_once_the_holder_drops() {
         let gates = GrantGates::new();
-        let key = ("conversation".to_owned(), "phone".to_owned());
-        let holder = gates.lock(key.0.clone(), key.1.clone()).await;
+        let key = (
+            "conversation".to_owned(),
+            "chat".to_owned(),
+            "phone".to_owned(),
+        );
+        let holder = gates
+            .lock(key.0.clone(), key.1.clone(), key.2.clone())
+            .await;
         let gates_for_wait = Arc::clone(&gates);
-        let conversation = key.0.clone();
-        let receiver = key.1.clone();
+        let kind = key.0.clone();
+        let resource = key.1.clone();
+        let principal = key.2.clone();
         let waiter = tokio::spawn(async move {
-            let _permit = gates_for_wait.lock(conversation, receiver).await;
+            let _permit = gates_for_wait.lock(kind, resource, principal).await;
         });
         let entered = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
@@ -1087,7 +1141,11 @@ mod cancelled_wait {
     #[test]
     fn a_permit_and_a_cancelled_wait_that_release_together_leave_the_map_empty() {
         let gates = GrantGates::new();
-        let key = ("conversation".to_owned(), "phone".to_owned());
+        let key = (
+            "conversation".to_owned(),
+            "chat".to_owned(),
+            "phone".to_owned(),
+        );
         let gate = Arc::new(tokio::sync::Mutex::new(()));
         {
             let mut map = gates.gates.lock().unwrap_or_else(PoisonError::into_inner);

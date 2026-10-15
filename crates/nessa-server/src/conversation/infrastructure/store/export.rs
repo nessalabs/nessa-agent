@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use super::failed;
-use crate::conversation::application::ConversationError;
+use crate::conversation::application::{ConversationError, ResourceKind};
 use nessa_local_database::rusqlite::{Connection, Error, OpenFlags, Row};
 use serde_json::{json, Value};
 
@@ -148,9 +148,13 @@ pub(super) fn read(connection: &Connection) -> Result<ExportFacts, ConversationE
     let tombstones = tombstones(connection, &mut skipped)?;
     let grants = json_rows(
         connection,
-        "SELECT conversation_id, principal_id, receiver_id, credential_id, capabilities, policy,
-                policy_revision
-         FROM share_grants ORDER BY conversation_id, principal_id",
+        &format!(
+            "SELECT resource_id, principal_id, receiver_id, credential_id, capabilities, policy,
+                    policy_revision
+             FROM share_grants WHERE resource_kind = '{kind}'
+             ORDER BY resource_id, principal_id",
+            kind = ResourceKind::Conversation.as_str(),
+        ),
         &mut skipped,
         grant_skip,
         grant_row,
@@ -219,6 +223,7 @@ fn grant_row(row: &Row<'_>) -> Result<Value, Error> {
     }
     let mut value = json!({
         "conversationId": row.get::<_, String>(0)?,
+        "resourceKind": ResourceKind::Conversation.as_str(),
         "principalId": row.get::<_, String>(1)?,
         "credentialId": row.get::<_, String>(3)?,
         "capabilities": capabilities,
@@ -270,18 +275,21 @@ fn revocation_rows(
     skipped: &mut Vec<ExportSkip>,
 ) -> Result<Vec<RevocationFact>, ConversationError> {
     let mut statement = connection
-        .prepare(
-            "SELECT j.conversation_id, j.principal_id, j.receiver_id, j.credential_id, j.before,
-                    j.sequence
-             FROM share_grant_changes AS j
-             WHERE j.after = 'none'
-               AND j.sequence = (
-                   SELECT MAX(j2.sequence) FROM share_grant_changes AS j2
-                   WHERE j2.conversation_id = j.conversation_id
-                     AND j2.principal_id = j.principal_id
-               )
-             ORDER BY j.sequence",
-        )
+        .prepare(&format!(
+            "SELECT j.resource_id, j.principal_id, j.receiver_id, j.credential_id, j.before,
+                        j.sequence
+                 FROM share_grant_changes AS j
+                 WHERE j.resource_kind = '{kind}'
+                   AND j.after = 'none'
+                   AND j.sequence = (
+                       SELECT MAX(j2.sequence) FROM share_grant_changes AS j2
+                       WHERE j2.resource_kind = j.resource_kind
+                         AND j2.resource_id = j.resource_id
+                         AND j2.principal_id = j.principal_id
+                   )
+                 ORDER BY j.sequence",
+            kind = ResourceKind::Conversation.as_str(),
+        ))
         .map_err(failed)?;
     let mut query = statement.query([]).map_err(failed)?;
     let mut found = Vec::new();

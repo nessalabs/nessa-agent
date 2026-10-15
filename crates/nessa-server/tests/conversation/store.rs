@@ -2988,13 +2988,17 @@ async fn a_hand_built_comment_grant_for_a_gateway_is_denied_by_cedar() {
     );
 }
 
-/// A grant is keyed by principal and conversation. One may name no receiver,
-/// and is not found by a receiver lookup. A paired grant is still found by
-/// its receiver. A second row for the same principal and conversation cannot
-/// be stored: a later change of that principal replaces the row it has.
+/// A grant is keyed by principal, resource kind, and resource id. This slice
+/// writes kind `conversation`. One may name no receiver, and is not found by
+/// a receiver lookup. A paired grant is still found by its receiver. A second
+/// row for the same principal, kind, and resource id cannot be stored: a later
+/// change of that principal replaces the row it has. The same principal and
+/// resource id with kind `directory` is a different row.
 #[tokio::test]
 async fn a_grant_is_keyed_by_principal_and_may_name_no_receiver() {
-    use crate::conversation::application::{ShareGrantChange, ShareGrantTransition, ShareGrants};
+    use crate::conversation::application::{
+        ResourceKind, ShareGrantChange, ShareGrantTransition, ShareGrants,
+    };
     use nessa_auth::domain::CredentialId;
     let opened = opened();
     let id = new_id();
@@ -3076,12 +3080,20 @@ async fn a_grant_is_keyed_by_principal_and_may_name_no_receiver() {
         .await
         .unwrap()
         .is_some());
+    let kind: String = raw(&opened.path)
+        .query_row(
+            "SELECT resource_kind FROM share_grants WHERE principal_id = 'webhook:one'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(kind, ResourceKind::Conversation.as_str());
     let duplicated = raw(&opened.path).execute(
         "INSERT INTO share_grants
-            (conversation_id, principal_id, receiver_id, credential_id, capabilities, policy,
-             policy_revision, granted_at_ms)
-         SELECT conversation_id, principal_id, 'other', 'other-credential', capabilities, policy,
-                policy_revision, granted_at_ms
+            (principal_id, resource_kind, resource_id, receiver_id, credential_id, capabilities,
+             policy, policy_revision, granted_at_ms)
+         SELECT principal_id, resource_kind, resource_id, 'other', 'other-credential',
+                capabilities, policy, policy_revision, granted_at_ms
          FROM share_grants WHERE principal_id = 'grantee-phone'",
         [],
     );
@@ -3090,7 +3102,40 @@ async fn a_grant_is_keyed_by_principal_and_may_name_no_receiver() {
         .to_string();
     assert!(
         error.contains("UNIQUE"),
-        "the primary key refuses a second row for one principal: {error}"
+        "the primary key refuses a second row for one principal and resource: {error}"
+    );
+    let directory = ResourceKind::Directory.as_str();
+    raw(&opened.path)
+        .execute(
+            "INSERT INTO share_grants
+                (principal_id, resource_kind, resource_id, receiver_id, credential_id, capabilities,
+                 policy, policy_revision, granted_at_ms)
+             SELECT principal_id, ?1, resource_id, NULL, 'dir-credential', capabilities, policy,
+                    policy_revision, granted_at_ms
+             FROM share_grants WHERE principal_id = 'grantee-phone'",
+            [directory],
+        )
+        .expect("a different resource kind is a different grant");
+    assert_eq!(
+        opened.store.grants(&id).await.unwrap().grants.len(),
+        2,
+        "a directory row is not a conversation grant"
+    );
+    let again = raw(&opened.path).execute(
+        "INSERT INTO share_grants
+            (principal_id, resource_kind, resource_id, receiver_id, credential_id, capabilities,
+             policy, policy_revision, granted_at_ms)
+         SELECT principal_id, resource_kind, resource_id, NULL, 'dir-credential-2', capabilities,
+                policy, policy_revision, granted_at_ms
+         FROM share_grants WHERE resource_kind = 'directory'",
+        [],
+    );
+    let error = again
+        .expect_err("the primary key refuses a second directory row")
+        .to_string();
+    assert!(
+        error.contains("UNIQUE"),
+        "the primary key refuses a second row for one principal, kind, and resource: {error}"
     );
 }
 
@@ -3447,7 +3492,7 @@ async fn every_grant_change_is_journaled_with_its_initiator() {
     let connection = raw(&opened.path);
     let mut statement = connection
         .prepare(
-            "SELECT conversation_id, receiver_id, credential_id, before, after, initiator,
+            "SELECT resource_id, receiver_id, credential_id, before, after, initiator,
                     surface, request, changed_at_ms, revision
              FROM share_grant_changes ORDER BY sequence",
         )
@@ -4478,7 +4523,8 @@ async fn a_turn_is_saved_only_while_its_grant_stays_at_the_admitted_revision() {
         .unwrap();
     connection
         .execute(
-            "UPDATE share_grants SET policy_revision = 0 WHERE conversation_id = ?1",
+            "UPDATE share_grants SET policy_revision = 0
+             WHERE resource_kind = 'conversation' AND resource_id = ?1",
             params![again.to_string()],
         )
         .unwrap();

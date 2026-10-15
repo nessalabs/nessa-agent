@@ -317,11 +317,13 @@ fn granted_head(
                      COALESCE((SELECT MAX(c.change_revision) FROM conversations AS c
                                WHERE c.organization = ?1 AND c.owner = ?2 AND {}), 0),
                      COALESCE((SELECT MAX(j.revision) FROM share_grant_changes AS j
-                               JOIN conversations AS c ON c.id = j.conversation_id
+                               JOIN conversations AS c ON c.id = j.resource_id
                                WHERE c.organization = ?1 AND c.owner = ?2
+                                 AND j.resource_kind = '{kind}'
                                  AND j.receiver_id = ?3
                                  AND (j.before = 'none') <> (j.after = 'none')), 0))",
-                share_grants::granted("c.id", "?3")
+                share_grants::granted("c.id", "?3"),
+                kind = share_grants::CONVERSATION,
             ),
             params![organization.as_str(), owner.as_str(), receiver],
             |row| row.get(0),
