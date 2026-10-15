@@ -2688,9 +2688,7 @@
     },
     {
       "ok": false,
-      "failures": [
-        "longest frame 53.699999928474426 ms > 50 ms (runs: 39 54 41)"
-      ],
+      "failures": ["longest frame 53.699999928474426 ms > 50 ms (runs: 39 54 41)"],
       "name": "drag-cancel",
       "engine": "chromium",
       "layout": "columns",
@@ -3962,9 +3960,7 @@
     },
     {
       "ok": false,
-      "failures": [
-        "longest frame 68.79999995231628 ms > 50 ms (runs: 66 69 65)"
-      ],
+      "failures": ["longest frame 68.79999995231628 ms > 50 ms (runs: 66 69 65)"],
       "name": "overview-answer",
       "engine": "chromium",
       "layout": "columns",
@@ -8167,9 +8163,7 @@
     },
     {
       "ok": false,
-      "failures": [
-        "longest frame 84.39999997615814 ms > 50 ms (runs: 84 71 71)"
-      ],
+      "failures": ["longest frame 84.39999997615814 ms > 50 ms (runs: 84 71 71)"],
       "name": "overview-answer",
       "engine": "chromium",
       "layout": "sidebar",
