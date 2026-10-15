@@ -3,12 +3,15 @@
  * listing the workspace and the other places beside it; choosing one gives it the whole
  * window. Each icon has its own small hover gesture (`side-rail.css`).
  */
+import { GeneratingSurface } from "@nessa-ui/react/generating-surface"
 import {
   type CSSProperties,
   type ReactElement,
   type ReactNode,
+  useEffect,
   useLayoutEffect,
   useRef,
+  useState,
 } from "react"
 import { IconButton } from "../../../ui/icon-button"
 import { IdentityFooter } from "./identity-footer"
@@ -204,18 +207,47 @@ export function SideRailButton({
   )
 }
 
-/** An item's full-window view; the prototype's stand-in for its content. */
+/**
+ * How long an item's view may stay empty while its content loads before a
+ * loading animation says it is still coming. Most loads finish well inside
+ * it, and a loader that flashes for a moment reads as jitter.
+ */
+export const RAIL_LOADING_DELAY_MS = 3000
+
+/**
+ * An item's full-window view. It covers the workspace from its first frame —
+ * no fade that lets the panes show through — and stays empty while the item
+ * loads; only a load still going after `RAIL_LOADING_DELAY_MS` shows the
+ * loading animation. The items have no content yet, so for now that is what
+ * each one shows.
+ */
 export function RailView({ item }: { item: RailItem }) {
   return (
     <section key={item.id} className="rail-view" aria-label={item.name}>
       <div className="rail-view-drag" data-tauri-drag-region aria-hidden="true" />
-      <div className="rail-view-mark">{item.icon}</div>
-      <h1>{item.name}</h1>
+      <RailLoading name={item.name} />
       {item.studio === false ? null : (
         <div className="rail-view-foot">
           <IdentityFooter />
         </div>
       )}
     </section>
+  )
+}
+
+/** Nothing, then the design system's loading surface once the load runs long. */
+function RailLoading({ name }: { name: string }) {
+  const [long, setLong] = useState(false)
+  useEffect(() => {
+    const timer = window.setTimeout(() => setLong(true), RAIL_LOADING_DELAY_MS)
+    return () => window.clearTimeout(timer)
+  }, [])
+  if (!long) return null
+  return (
+    <GeneratingSurface
+      generating
+      label={`Loading ${name}`}
+      className="rail-view-loading"
+    />
   )
 }

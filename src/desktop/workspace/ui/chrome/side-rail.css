@@ -307,7 +307,7 @@
     0px,
     calc(var(--desktop-window-controls-inset) - var(--rail-width))
   );
-  animation: rail-arrive 320ms var(--desktop-ease) both;
+  /* Opaque from its first frame: a fade in would show the panes under it. */
 }
 
 .workspace-window[data-rail="open"] .rail-view {
@@ -330,39 +330,9 @@
   height: var(--desktop-titlebar-height);
 }
 
-.rail-view h1 {
-  margin: 8px 0 0;
-  font-size: 17px;
-  font-weight: 600;
-  letter-spacing: -0.015em;
-}
-
-.rail-view-mark {
-  display: grid;
-  width: 52px;
-  height: 52px;
-  place-items: center;
-  border-radius: var(--desktop-radius);
-  background: var(--desktop-selected);
-  animation: rail-mark 620ms var(--rail-spring) 80ms both;
-}
-
-.rail-view-mark svg {
-  width: 24px;
-  height: 24px;
-}
-
-@keyframes rail-arrive {
-  from {
-    opacity: 0;
-  }
-}
-
-@keyframes rail-mark {
-  from {
-    opacity: 0;
-    transform: translateY(6px) scale(0.8);
-  }
+/* The loading surface, once a load runs past RAIL_LOADING_DELAY_MS. */
+.rail-view-loading {
+  width: min(360px, calc(100% - 4 * var(--desktop-gutter)));
 }
 
 :root[data-motion="reduced"] :is(.side-rail, .side-rail-toggle, .rail-view),
