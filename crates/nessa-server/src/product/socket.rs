@@ -2,6 +2,7 @@ use super::change_watch::{
     ConnectionWatches, WatchAcknowledgement, WatchDeliveries, WatchFrame, WatchOutcome, WatchReply,
 };
 use super::passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT};
+use super::read_access::ReviewNoticeVisibility;
 use super::record_read::refusal_code;
 use super::state::{note_limit, ProductRouteState};
 use super::subscription::{ConnectionSubscriptions, SubscriptionDeliveries, SubscriptionFrame};
@@ -10,7 +11,9 @@ use crate::browser_session::application::{
     invalidation_reason, BrowserSessionVerifier, ReadBrowserSession,
 };
 use crate::browser_session::domain::value_objects::RemovalReason;
-use crate::conversation::application::{access_refusal, RecordReadLease};
+use crate::conversation::application::{
+    access_refusal, AccessDecision, RecordReadLease, ReviewNoticeAuditFailure,
+};
 #[cfg(test)]
 use crate::conversation_test_support as conversation_support;
 use axum::extract::ws::{CloseFrame, Message};
@@ -947,14 +950,21 @@ where
         let slots = Arc::clone(&ordinary_slots);
         let state = state.clone();
         let session = session.clone();
-        tokio::spawn(forward_review_notices(
-            board,
-            send,
-            slots,
-            state,
-            session,
-            authority_updates,
-        ))
+        let control = control_send.clone();
+        tokio::spawn(async move {
+            if let Err(failure) =
+                forward_review_notices(board, send, slots, state, session, authority_updates).await
+            {
+                tracing::error!(
+                    ?failure,
+                    "review snapshot withheld because its audit was not acknowledged"
+                );
+                let _ = rejected_lane(
+                    "socket.control_lane",
+                    control.try_send(ControlOutput::Close(failure.close_reason())),
+                );
+            }
+        })
     });
     let record_slots = Arc::new(Semaphore::new(RECORD_SLOT));
     let app_slots = Arc::new(Semaphore::new(limits.app_calls_per_socket()));
@@ -1420,6 +1430,22 @@ where
 /// Each frame is the whole set, so a missed one is repaired by the next and
 /// a surface that connects while a review is up sees it. The writer takes
 /// the frame's sequence number as it sends, with the socket's other events.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReviewNoticePublicationFailure {
+    Audit(ReviewNoticeAuditFailure),
+    Authority(AccessError),
+    Unstable,
+}
+
+impl ReviewNoticePublicationFailure {
+    fn close_reason(self) -> SessionCloseReason {
+        match self {
+            Self::Authority(error) => close_reason(error),
+            Self::Audit(_) | Self::Unstable => SessionCloseReason::TemporaryUnavailable,
+        }
+    }
+}
+
 async fn forward_review_notices(
     board: Arc<crate::conversation::infrastructure::PermissionMemory>,
     send: mpsc::Sender<QueuedResponse>,
@@ -1427,19 +1453,55 @@ async fn forward_review_notices(
     state: ProductRouteState,
     session: AuthenticatedSession,
     mut authority_updates: watch::Receiver<u64>,
-) {
-    loop {
+) -> Result<(), ReviewNoticePublicationFailure> {
+    const MAX_SELECTION_PASSES: usize = 3;
+    let mut selection_passes = 0;
+    'snapshots: loop {
+        if selection_passes == MAX_SELECTION_PASSES {
+            return Err(ReviewNoticePublicationFailure::Unstable);
+        }
+        selection_passes += 1;
         let (generation, reviews) = board.current();
         let visibility = board.visibility();
         // Observe before either await: a later authority update stays pending
         // while this admitted snapshot filters or waits for publication capacity.
         drop(authority_updates.borrow_and_update());
         let mut visible = Vec::with_capacity(reviews.len());
+        let mut selected_revision = None;
         for review in reviews {
-            if super::read_access::may_see_review(&state, &session, &review.conversation_id).await {
-                visible.push(review);
+            let selection = super::read_access::may_see_review(&state, &session, &review)
+                .await
+                .map_err(ReviewNoticePublicationFailure::Audit)?;
+            match selection {
+                ReviewNoticeVisibility::Hidden => {}
+                ReviewNoticeVisibility::Paired => visible.push(review),
+                ReviewNoticeVisibility::Audited(selection) => {
+                    let revision = selection.authority_revision();
+                    if selected_revision.is_some_and(|earlier| earlier != revision) {
+                        continue 'snapshots;
+                    }
+                    selected_revision = Some(revision);
+                    if matches!(selection.decision(), AccessDecision::Allow { .. }) {
+                        visible.push(review);
+                    }
+                }
             }
         }
+        if let Some(revision) = selected_revision {
+            let current = (ReadCurrentSession {
+                access: state.access.as_ref(),
+                clock: state.clock.as_ref(),
+            })
+            .execute(&session)
+            .await
+            .map_err(ReviewNoticePublicationFailure::Authority)?;
+            if current.revision != revision || !board.is_current(generation, visibility) {
+                continue 'snapshots;
+            }
+        }
+        // Stable audited selection admits this candidate. As with other gateway
+        // responses, its subsequent UI-capacity wait may finish after revocation;
+        // an authority update stays pending for the next replacement.
         let payload = PermissionReviewWaiting {
             reviews: visible
                 .into_iter()
@@ -1466,6 +1528,7 @@ async fn forward_review_notices(
         if send.send(queued).await.is_err() {
             break;
         }
+        selection_passes = 0;
         tokio::select! {
             () = board.wait_after(generation) => {}
             () = board.wait_for_visibility(visibility) => {}
@@ -1476,6 +1539,7 @@ async fn forward_review_notices(
             }
         }
     }
+    Ok(())
 }
 
 /// Give a waiting-review snapshot the next event number. Any other message
@@ -2366,10 +2430,12 @@ mod tests {
         CatalogueReadOperation, CatalogueReadSource, ConversationAccessPolicyEvaluator,
         ConversationError, ConversationFuture, ConversationRepository, HeldGrant,
         PermissionRuleCatalog, ReceiverAuthority, ReceiverBinding, RecordReadError,
-        RecordReadFuture, RecordReadOperation, RecordReadResponse, RecordReadSource, RevisionHold,
-        RulePrincipal, ShareGrantChange, ShareGrantList, ShareGrantReceipt, ShareGrants,
+        RecordReadFuture, RecordReadOperation, RecordReadResponse, RecordReadSource,
+        ReviewNoticeAuditor, RevisionHold, RulePrincipal, ShareGrantChange, ShareGrantList,
+        ShareGrantReceipt, ShareGrants,
     };
     use crate::conversation::domain::{Capabilities, Conversation, ToolPolicy};
+    use crate::conversation::infrastructure::MonotonicReviewNoticeClock;
     use crate::conversation::infrastructure::{LocalConversationStore, NessaRecordReadSource};
     use crate::product::ProductDependencies;
     use base64::engine::general_purpose::STANDARD;
@@ -2579,6 +2645,9 @@ mod tests {
     mod writer {
         include!("../../tests/product/socket/writer.rs");
     }
+    mod review_notice_audit {
+        include!("../../tests/product/socket/review_notice_audit.rs");
+    }
     pub(super) mod watches {
         include!("../../tests/product/socket/watches.rs");
     }
@@ -2763,6 +2832,20 @@ mod tests {
             WireResponse::ReviewWaiting { payload, .. } => payload,
             _ => panic!("expected the board"),
         }
+    }
+
+    async fn drive_review_publication(
+        publisher: Pin<&mut impl Future<Output = Result<(), ReviewNoticePublicationFailure>>>,
+        receive: &mut mpsc::Receiver<QueuedResponse>,
+    ) -> QueuedResponse {
+        timeout(Duration::from_secs(2), async {
+            tokio::select! {
+                queued = receive.recv() => queued.expect("the authority update is published"),
+                result = publisher => panic!("publisher ended before its snapshot: {result:?}"),
+            }
+        })
+        .await
+        .expect("the admitted snapshot is published")
     }
 
     fn code_of(message: OutgoingMessage) -> String {
@@ -3228,9 +3311,7 @@ mod tests {
             assert!(futures_util::poll!(publisher.as_mut()).is_pending());
             let passes = if pending_metadata { 2 } else { 1 };
             for _ in 0..passes {
-                let queued = receive
-                    .try_recv()
-                    .expect("the authority update is published");
+                let queued = drive_review_publication(publisher.as_mut(), &mut receive).await;
                 let WireResponse::ReviewWaiting {
                     payload,
                     generation,
@@ -3264,12 +3345,17 @@ mod tests {
         });
         let (state, authority) = fixture(MembershipRole::Admin);
         let policy = Arc::new(conversation_support::ObservedPolicy::default());
+        let audit = Arc::new(conversation_support::RecordingReviewNoticeAudit::default());
         let state = state.with_passive_read(
             Arc::new(UnpairedBinding),
             repository_of(vec![owned_conversation(id, "other")]),
             Arc::new(GrantedConversation(id.into())),
             policy.clone(),
         );
+        let state = state.with_review_notice_auditor(Arc::new(ReviewNoticeAuditor::new(
+            audit.clone(),
+            Arc::new(MonotonicReviewNoticeClock::new()),
+        )));
         let session = authenticate(&state).await;
         let (authority_send, authority_updates) = watch::channel(session.auth_revision());
         let (send, mut receive) = mpsc::channel(1);
@@ -3283,7 +3369,7 @@ mod tests {
             authority_updates,
         ));
         assert!(futures_util::poll!(publisher.as_mut()).is_pending());
-        let first = receive.try_recv().unwrap();
+        let first = drive_review_publication(publisher.as_mut(), &mut receive).await;
         assert!(
             matches!(&first.message, WireResponse::ReviewWaiting { payload, .. } if payload.reviews.len() == 1)
         );
@@ -3295,24 +3381,31 @@ mod tests {
         assert!(futures_util::poll!(publisher.as_mut()).is_pending());
         assert_eq!(policy.asked(), 2);
         assert!(receive.try_recv().is_err());
+        // The Ready test sink captures and acknowledges in the same task poll.
+        // Poll through final version validation into the held UI permit before
+        // promotion: this pins admitted in-flight publication, not selection.
+        timeout(Duration::from_secs(2), async {
+            while audit.records.lock().unwrap().len() < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(futures_util::poll!(publisher.as_mut()).is_pending());
         *authority.snapshot.lock().unwrap() =
             snapshot(MembershipRole::Admin, MembershipStatus::Active);
         authority.snapshot.lock().unwrap().revision = 3;
         authority_send.send_replace(3);
         drop(first);
         assert!(futures_util::poll!(publisher.as_mut()).is_pending());
-        let second = receive
-            .try_recv()
-            .expect("the admitted member snapshot completes");
+        let second = drive_review_publication(publisher.as_mut(), &mut receive).await;
         assert!(
             matches!(&second.message, WireResponse::ReviewWaiting { payload, .. } if payload.reviews.is_empty())
         );
         assert_eq!(policy.asked(), 3);
         drop(second);
         assert!(futures_util::poll!(publisher.as_mut()).is_pending());
-        let third = receive
-            .try_recv()
-            .expect("the newer authority update stays pending");
+        let third = drive_review_publication(publisher.as_mut(), &mut receive).await;
         assert!(
             matches!(&third.message, WireResponse::ReviewWaiting { payload, .. } if payload.reviews.len() == 1)
         );
@@ -3900,7 +3993,11 @@ mod tests {
                 uptime_clock: authority.clone(),
                 agent_probe: Arc::new(StubAgentProbe::answering(false, false)),
             },
-        );
+        )
+        .with_review_notice_auditor(Arc::new(ReviewNoticeAuditor::new(
+            Arc::new(conversation_support::RecordingReviewNoticeAudit::default()),
+            Arc::new(MonotonicReviewNoticeClock::new()),
+        )));
         (state, authority)
     }
 

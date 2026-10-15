@@ -157,46 +157,6 @@ impl AccessAction {
     }
 }
 
-/// Whether an authenticated, unpaired surface may receive a review notice.
-#[derive(Clone, Copy)]
-pub struct ReviewNoticeAccess<'a> {
-    policy: &'a dyn ConversationAccessPolicyEvaluator,
-}
-
-impl<'a> ReviewNoticeAccess<'a> {
-    pub fn new(policy: &'a dyn ConversationAccessPolicyEvaluator) -> Self {
-        Self { policy }
-    }
-
-    pub fn admits(
-        &self,
-        conversation: &Conversation,
-        organization: &OrganizationId,
-        principal: &PrincipalId,
-        membership: MembershipRole,
-    ) -> bool {
-        let subject = AccessSubject::ReviewRecipient {
-            organization,
-            principal,
-            membership,
-        };
-        matches!(
-            answer(
-                self.policy,
-                &AccessAsk {
-                    subject,
-                    action: AccessAction::ReviewNotice,
-                    resource: AccessResource::of(conversation),
-                    held: None,
-                    request: RequestShape::default(),
-                    target: None,
-                }
-            ),
-            Answer::Allowed
-        )
-    }
-}
-
 /// What the subject asks about.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AccessResource<'a> {

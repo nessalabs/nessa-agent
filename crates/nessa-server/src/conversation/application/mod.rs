@@ -22,6 +22,10 @@
 //! ConversationMetadataReader, which exposes checked loads without the repository.
 //! It refuses another target before
 //! ownership, grant/source or selection is consumed. It never opens an Agent.
+//! SelectReviewNotice owns checked metadata -> current recipient -> Cedar ->
+//! ReviewNoticeAuditor -> ReviewNoticeAudit. Only durable acknowledgement returns
+//! an opaque AuditedReviewSelection. Product owns whole-candidate revalidation
+//! and UI admission; it does not reconstruct policy evidence.
 //! `record_read` admits each physical head or page against fresh authority
 //! before resolving SDK identity or opening a source.
 //! Service -> ConversationFileLinkAudit: a message may also point at files on
@@ -163,6 +167,13 @@ mod ports;
 mod provider_sessions;
 mod record_read;
 mod retries;
+mod review_notice_audit;
+pub use review_notice_audit::{
+    ReviewNoticeAudit, ReviewNoticeAuditCause, ReviewNoticeAuditFailure, ReviewNoticeAuditRecord,
+    ReviewNoticeAuditor, ReviewNoticeClock, ReviewNoticeSleep,
+};
+mod review_notice_selection;
+pub(crate) use review_notice_selection::{AuditedReviewSelection, SelectReviewNotice};
 mod service;
 mod session_key;
 mod share_grants;
@@ -171,7 +182,7 @@ pub use crate::conversation::domain::ReceiverBinding;
 pub use access_policy::{
     AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
     ConversationAccessPolicyEvaluator, OwnerAccess, PairedAccess, PairedParty, PairedRefusal,
-    RequestShape, ReviewNoticeAccess, ShareTarget,
+    RequestShape, ShareTarget,
 };
 pub use catalogue::{
     CatalogueDescriptor, CatalogueEntryAccess, CatalogueEntryAdmission, CatalogueEntryAnswer,

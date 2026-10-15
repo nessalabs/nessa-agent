@@ -6,6 +6,7 @@ use super::current_agent::{CurrentAgentResolver, CurrentAgentResolverInput};
 use super::opencode_profile::{EffectiveOpenCodeProfile, OpenCodeProfile};
 #[cfg(unix)]
 use super::warm_up::{CurrentOpenCodeWarmUp, PreparedRuntime};
+use crate::conversation::infrastructure::MonotonicReviewNoticeClock;
 #[cfg(unix)]
 use crate::conversation::infrastructure::NessaRecordWatches;
 #[cfg(unix)]
@@ -41,12 +42,12 @@ use crate::{
     conversation::{
         application::{
             ConversationAccessPolicyEvaluator, ConversationRepository, ConversationService,
-            FenceCapture, McpAppAudit, ReceiverAuthority, ShareGrants, WatchCatalogue,
-            WatchRecords,
+            FenceCapture, McpAppAudit, ReceiverAuthority, ReviewNoticeAuditor, ShareGrants,
+            WatchCatalogue, WatchRecords,
         },
         infrastructure::{
-            CedarConversationAccessPolicy, LocalReceiverAuthority, NessaCatalogueReadSource,
-            NessaRecordReadSource,
+            CedarConversationAccessPolicy, DurableReviewNoticeAudit, LocalReceiverAuthority,
+            NessaCatalogueReadSource, NessaRecordReadSource,
         },
     },
     core::RunError,
@@ -104,6 +105,7 @@ use std::{
 };
 #[cfg(unix)]
 use tokio::runtime::Handle;
+use uuid::Uuid;
 
 /// Wall time for authentication. Health's monotonic uptime remains a separate port.
 pub(super) struct SystemClock;
@@ -408,12 +410,22 @@ pub(super) async fn product_state(
         permission_memory,
     )) = conversations
     {
+        let review_audit = DurableReviewNoticeAudit::new(
+            directory.join("audit").join("review-notices"),
+            Arc::new(SystemClock),
+            Uuid::new_v4(),
+        )
+        .map_err(|error| RunError::Agent(format!("review-notice audit unavailable: {error:?}")))?;
         record_reader = Some(reader.clone());
         catalogue_reader = Some(catalogue.clone());
         product = product
             .with_conversations(Arc::new(service))
             .with_permission_rules(permission_memory)
             .with_passive_read(receivers, metadata, share_grants, access_policy)
+            .with_review_notice_auditor(Arc::new(ReviewNoticeAuditor::new(
+                Arc::new(review_audit),
+                Arc::new(MonotonicReviewNoticeClock::new()),
+            )))
             .with_change_watches(record_watches, catalogue_watches)
             .with_record_source(reader)
             .with_catalogue_source(catalogue)

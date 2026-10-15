@@ -10,7 +10,8 @@ use crate::conversation::application::{
     ConversationModeApplication, ConversationModeRequest, ConversationModeRequestState,
     ConversationRepository, ConversationService, ConversationSummaries, ListedConversation,
     ListedConversations, ObservationCursor, ObservedConversations, ProviderSessionEraser,
-    ProviderSessionErasers, PublishedArtifact, UnfinishedDeletions,
+    ProviderSessionErasers, PublishedArtifact, ReviewNoticeAudit, ReviewNoticeAuditFailure,
+    ReviewNoticeAuditRecord, UnfinishedDeletions,
 };
 use crate::conversation::domain::{Conversation, ConversationDeletion, ProviderSessionErasure};
 use crate::conversation::infrastructure::CedarConversationAccessPolicy;
@@ -55,6 +56,7 @@ use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::{future::Future, pin::Pin};
 use tokio::sync::oneshot::Receiver;
 use tokio::sync::{mpsc, oneshot, Notify};
 use uuid::Uuid;
@@ -65,6 +67,21 @@ impl ExecutionAudit for AcceptingAudit {
         &self,
         _record: ExecutionAuditRecord,
     ) -> nessa_sdk::application::agent_execution::agents::AgentFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct RecordingReviewNoticeAudit {
+    pub records: Mutex<Vec<Arc<ReviewNoticeAuditRecord>>>,
+}
+
+impl ReviewNoticeAudit for RecordingReviewNoticeAudit {
+    fn record(
+        &self,
+        record: Arc<ReviewNoticeAuditRecord>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReviewNoticeAuditFailure>> + Send + '_>> {
+        self.records.lock().unwrap().push(record);
         Box::pin(async { Ok(()) })
     }
 }

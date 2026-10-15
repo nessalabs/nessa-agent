@@ -688,6 +688,19 @@ mod tests {
         );
         assert!(futures_util::poll!(next.as_mut()).is_ready());
         assert_eq!(memory.current().0, 3);
+        memory.recheck_visibility();
+        memory.recheck_visibility();
+        publish_version(&memory.visibility, 1);
+        assert_eq!(*memory.visibility.borrow(), 2);
+        memory.visibility.send_replace(1);
+        let mut visibility = Box::pin(memory.wait_for_visibility(2));
+        assert!(
+            futures_util::poll!(visibility.as_mut()).is_pending(),
+            "a lagging visibility projection is not a new source version"
+        );
+        memory.recheck_visibility();
+        assert!(futures_util::poll!(visibility.as_mut()).is_ready());
+        assert_eq!(memory.visibility(), 3);
     }
 
     #[test]

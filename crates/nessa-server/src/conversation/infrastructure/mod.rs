@@ -66,6 +66,9 @@
 //! (`access_policy/cedar/`): who may locate, act on, read, comment in, drive
 //! or share a conversation, receive its review notices, and watch a catalogue. The store asks it inside
 //! the transaction that writes a share grant.
+//! `DurableReviewNoticeAudit` acknowledges private immutable selection records
+//! after file and directory sync. Its one physical worker retains submitted
+//! writes when async observers disappear; UI queues never own that evidence.
 //! `DurableDriveToolAudit` keeps each of the tool policy's decisions on the
 //! gateway's own tools for a Drive turn, one immutable file per conversation,
 //! call, tool and outcome.
@@ -152,6 +155,8 @@ pub use permission_rules::{PermissionMemory, PublishedReview, RulesOpenError};
 
 mod deletion_audit;
 pub use deletion_audit::DurableConversationDeletionAudit;
+mod review_notice_audit;
+pub use review_notice_audit::{DurableReviewNoticeAudit, MonotonicReviewNoticeClock};
 
 mod audit;
 mod audit_mapping;
