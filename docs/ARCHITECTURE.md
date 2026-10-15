@@ -997,6 +997,18 @@ and responses may finish after revocation; later operations read the latest
 committed state. Only auth mutations serialize; network writes share no admission mutex. The HTTP `/health` probe returns
 only liveness, without product state.
 
+Unpaired waiting-review visibility uses the conversation context's
+`review.notice` Cedar action. Its complete decision is delivered through
+`SelectReviewNotice` and `ReviewNoticeAudit` before an opaque acknowledged
+selection is returned. Product owns whole-snapshot validation/admission and its
+UI lifetime. The application-owned
+`ReviewNoticeAuditor` bounds and retains admitted attempts independently of UI
+or socket lifetime; `DurableReviewNoticeAudit` owns private synced selection
+records through one physical worker. Composition injects the sink, clocks and
+writer namespace once. Audited selections, admitted replacements and actual
+wire delivery are distinct facts; the ordering and failure cases are in the
+[conversation ownership map](codebase-structure.md#gateway-conversation-ownership).
+
 Currently the manifest generates method names and requested grants, while the
 gateway independently matches strings for handler routing, response lanes, execution capacity and
 paired-admission shape. [ADR 921](adr/todo/921-close-product-method-classification.md)

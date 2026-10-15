@@ -115,6 +115,26 @@
           "additionalAttributes": false
         }
       },
+      "ReviewRecipient": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "organization": {
+              "type": "String",
+              "required": true
+            },
+            "id": {
+              "type": "String",
+              "required": true
+            },
+            "membership": {
+              "type": "String",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      },
       "Reader": {
         "shape": {
           "type": "Record",
@@ -370,6 +390,19 @@
         "appliesTo": {
           "principalTypes": [
             "GrantHolder"
+          ],
+          "resourceTypes": [
+            "Conversation"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "review.notice": {
+        "appliesTo": {
+          "principalTypes": [
+            "ReviewRecipient"
           ],
           "resourceTypes": [
             "Conversation"

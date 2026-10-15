@@ -9,6 +9,7 @@ use cedar_policy::{
     Authorizer, Context, Decision, Entities, Entity, EntityId, EntityTypeName, EntityUid, PolicyId,
     PolicySet, Request, RestrictedExpression, Schema, ValidationMode, Validator,
 };
+use nessa_auth::domain::MembershipRole;
 use std::{
     collections::{HashMap, HashSet},
     str::FromStr,
@@ -173,7 +174,7 @@ fn entity(
     .map_err(|error| Unavailable::at(entity_type, error))
 }
 
-/// Who asks, as the schema's `Person`, `Reader` or `GrantHolder`.
+/// Who asks, as the schema's person, review recipient, reader or grant holder.
 fn subject(subject: &AccessSubject<'_>) -> Result<Entity, Unavailable> {
     match *subject {
         AccessSubject::Person {
@@ -185,6 +186,25 @@ fn subject(subject: &AccessSubject<'_>) -> Result<Entity, Unavailable> {
             [
                 ("organization", string(organization.as_str())),
                 ("id", string(principal.as_str())),
+            ],
+        ),
+        AccessSubject::ReviewRecipient {
+            organization,
+            principal,
+            membership,
+        } => entity(
+            "NessaConversation::ReviewRecipient",
+            principal.as_str(),
+            [
+                ("organization", string(organization.as_str())),
+                ("id", string(principal.as_str())),
+                (
+                    "membership",
+                    string(match membership {
+                        MembershipRole::Admin => "admin",
+                        MembershipRole::Member => "member",
+                    }),
+                ),
             ],
         ),
         AccessSubject::PairedReader {

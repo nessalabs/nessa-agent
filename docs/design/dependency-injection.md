@@ -191,6 +191,16 @@ does not mount the legacy `AppState` shared-token handler. `composition/local_au
 local adapter and moves its durable writes off socket workers. Tests inject ports
 without removing authentication or policy enforcement.
 
+When conversations are composed, the same product state also receives one
+`ReviewNoticeAuditor`, whose typed audit port is implemented by
+`DurableReviewNoticeAudit`. The sink's writer namespace and observation clock,
+and the application's monotonic acknowledgement clock, are constructor inputs.
+The application owns `ReviewNoticeClock`; the infrastructure adapter
+`MonotonicReviewNoticeClock` translates the existing runtime clock into that port.
+Cloned routes share that owner and its physical writer rather than constructing
+an audit worker per socket or record. Test sinks can delay, fail or panic while
+the actual publisher's disclosure and teardown paths remain in use.
+
 Each operation authorizes against an owned committed snapshot. Its successful
 snapshot read orders admission relative to mutation publication; admitted work and
 responses may finish after revocation. The store serializes mutations through

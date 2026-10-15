@@ -5,6 +5,7 @@ use super::{ConversationError, ConversationRepository};
 use crate::conversation::domain::Conversation;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::sessions::StorageError;
+use std::sync::Arc;
 
 /// Loads and create acknowledgements share this target relationship.
 /// Existing creation actor/action/time remain historical, not this caller's
@@ -31,4 +32,25 @@ pub(crate) async fn load_conversation(
         validate_target(id, record)?;
     }
     Ok(record)
+}
+
+/// Metadata read dependency whose replies retain the requested identity.
+/// The repository stays private so product review notices cannot bypass
+/// `load_conversation` (`a_review_notice_refuses_mismatched_metadata_before_policy_or_publication`).
+#[derive(Clone)]
+pub(crate) struct ConversationMetadataReader {
+    repository: Arc<dyn ConversationRepository>,
+}
+
+impl ConversationMetadataReader {
+    pub(crate) fn new(repository: Arc<dyn ConversationRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub(crate) async fn load(
+        &self,
+        id: &ConversationId,
+    ) -> Result<Option<Conversation>, ConversationError> {
+        load_conversation(self.repository.as_ref(), id).await
+    }
 }
