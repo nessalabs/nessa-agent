@@ -46,9 +46,25 @@ where
         match self.store.load(intent.command())? {
             None => {
                 let record = PhoneRecord::held(intent);
-                self.store
-                    .insert(&record, self.event(Cause::Held, record.outcome(), by))?;
-                Ok(record.view())
+                match self
+                    .store
+                    .insert(&record, self.event(Cause::Held, record.outcome(), by))
+                {
+                    Ok(()) => Ok(record.view()),
+                    // Another holder saved this command between the load and
+                    // the insert. The same bytes are the saved draft
+                    // (`a_concurrent_hold_of_the_same_bytes_keeps_one_draft`).
+                    Err(StoreError::Conflict) => {
+                        match self.store.load(record.intent().command())? {
+                            Some(existing) if existing.intent().same_bytes(record.intent()) => {
+                                Ok(existing.view())
+                            }
+                            Some(_) => Err(OutboxError::Conflict),
+                            None => Err(OutboxError::Unsaved),
+                        }
+                    }
+                    Err(error) => Err(OutboxError::from(error)),
+                }
             }
             Some(existing) if existing.intent().same_bytes(&intent) => Ok(existing.view()),
             Some(_) => Err(OutboxError::Conflict),
@@ -59,8 +75,8 @@ where
     ///
     /// A draft is marked departed before `conversation.send`. A command that
     /// already left is only looked up: this call does not send it again.
-    /// An accepted, running, done, failed, attempted, or unresolved command
-    /// is returned as saved.
+    /// An accepted, running, done, failed, or unresolved command is returned
+    /// as saved. An attempted command is read again and is not sent.
     ///
     /// The audit initiator is [`Initiator::Person`].
     pub fn send(&mut self, id: &PhoneCommandId) -> Result<PhoneView, OutboxError> {
@@ -73,13 +89,27 @@ where
             return self.reconcile(record, by, false);
         }
         let departed = record.clone().depart().ok_or(OutboxError::Conflict)?;
-        self.persist(&record, &departed, Cause::Departed, by)?;
-        self.foreground(departed, by, Cause::SendAnswered)
+        match self.persist(&record, &departed, Cause::Departed, by) {
+            Ok(()) => self.foreground(departed, by, Cause::SendAnswered),
+            // The other sender already marked this draft departed. Do not
+            // send it again (`a_lost_departure_does_not_send_again`).
+            Err(OutboxError::Conflict) => {
+                let current = self.committed_record(record.intent().command())?;
+                if current.intent().same_bytes(record.intent()) {
+                    self.reconcile(current, by, false)
+                } else {
+                    Err(OutboxError::Conflict)
+                }
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Look up every command that may have left and has no confirmed answer.
     ///
     /// This does not send (`recovery_does_not_send_when_the_receipt_is_absent`).
+    /// An attempted receipt is read again, so a later settled receipt is
+    /// adopted (`recovery_adopts_a_settled_receipt_after_attempted`).
     /// The audit initiator is [`Initiator::Recovery`], which `hold`, `send`,
     /// and `retry` do not record.
     pub fn recover(&mut self) -> Result<Vec<PhoneView>, OutboxError> {
@@ -87,7 +117,7 @@ where
             .store
             .list()?
             .into_iter()
-            .filter(|record| record.departed() && retryable(record))
+            .filter(|record| record.departed() && open_outcome(record))
             .collect();
         let mut views = Vec::with_capacity(pending.len());
         for record in pending {
@@ -182,10 +212,7 @@ where
         by: Initiator,
         allow_send: bool,
     ) -> Result<PhoneView, OutboxError> {
-        if !matches!(
-            record.outcome(),
-            PhoneOutcome::Unknown(UnknownCause::NotAdmitted | UnknownCause::LookupFailed)
-        ) {
+        if !open_outcome(&record) {
             return Ok(record.view());
         }
         let answer = self.gateway.lookup(record.intent());
@@ -243,11 +270,10 @@ where
                             return self.return_to_draft(&bumped, next, by)
                         }
                         Step::Send(next) => {
-                            if let Some(kept) =
-                                self.asked_or_kept(&bumped, &next, Cause::ForegroundSend, by)?
-                            {
-                                return Ok(kept);
-                            }
+                            // The resend is recorded with its answer, after
+                            // `conversation.send`. A crash before that call
+                            // leaves no ForegroundSend event
+                            // (`a_lost_answer_retransmits_the_same_bytes_until_the_bound`).
                             record = next;
                             cause = Cause::ForegroundSend;
                         }
@@ -267,6 +293,7 @@ where
         allow_send: bool,
     ) -> Result<PhoneView, OutboxError> {
         match after_lookup(record.clone(), answer, allow_send) {
+            Step::Done(next) if next == record => Ok(record.view()),
             Step::Done(next) => self.asked_view(&record, &next, Cause::Lookup, by),
             Step::ReturnToDraft(next) => self.return_to_draft(&record, next, by),
             Step::Send(next) => {
@@ -353,8 +380,13 @@ where
     }
 
     fn committed(&mut self, previous: &PhoneRecord) -> Result<PhoneView, OutboxError> {
-        match self.store.load(previous.intent().command()) {
-            Ok(Some(saved)) => Ok(saved.view()),
+        self.committed_record(previous.intent().command())
+            .map(|saved| saved.view())
+    }
+
+    fn committed_record(&mut self, id: &PhoneCommandId) -> Result<PhoneRecord, OutboxError> {
+        match self.store.load(id) {
+            Ok(Some(saved)) => Ok(saved),
             Ok(None) | Err(StoreError::Unavailable | StoreError::Uncertain) => {
                 Err(OutboxError::Unsaved)
             }
@@ -377,6 +409,16 @@ fn retryable(record: &PhoneRecord) -> bool {
         record.outcome(),
         PhoneOutcome::Unknown(UnknownCause::NotAdmitted | UnknownCause::LookupFailed)
     )
+}
+
+/// A departed command whose receipt may still change. Attempted is included
+/// so recovery can adopt a later settled receipt. It is not retried.
+fn open_outcome(record: &PhoneRecord) -> bool {
+    retryable(record)
+        || matches!(
+            record.outcome(),
+            PhoneOutcome::Unknown(UnknownCause::Attempted)
+        )
 }
 
 fn asked(error: OutboxError) -> OutboxError {

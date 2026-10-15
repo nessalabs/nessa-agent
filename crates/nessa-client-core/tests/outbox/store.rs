@@ -15,8 +15,10 @@ use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::mpsc;
+use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::thread;
+use std::time::Duration;
 
 const CONVERSATION: &str = "01234567-89ab-4cde-8f01-23456789abcd";
 
@@ -682,12 +684,13 @@ fn a_settled_refusal_is_failed() {
 #[test]
 fn a_lost_answer_retransmits_the_same_bytes_until_the_bound() {
     let dir = directory();
+    let path = path_in(&dir);
     let gateway = Scripted::new(
         vec![SendAnswer::Lost, SendAnswer::Receipt(Delivery::Queued)],
         vec![LookupAnswer::NotFound],
     );
     let seen = gateway.clone();
-    let mut outbox = opened(&path_in(&dir), gateway);
+    let mut outbox = opened(&path, gateway);
     let saved = text_intent("command-1", "hello");
     let canonical = saved.canonical().to_vec();
     person_hold(&mut outbox, saved);
@@ -698,6 +701,17 @@ fn a_lost_answer_retransmits_the_same_bytes_until_the_bound() {
     assert_eq!(body.sent[0], canonical);
     assert_eq!(body.sent[1], canonical);
     assert_eq!(body.order, ["send", "lookup", "send"]);
+    drop(body);
+    drop(outbox);
+    let mut store = SqliteIntents::open(&path).unwrap();
+    let foreground: Vec<_> = store
+        .events("command-1")
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.cause == Cause::ForegroundSend)
+        .collect();
+    assert_eq!(foreground.len(), 1);
+    assert_eq!(foreground[0].outcome, PhoneOutcome::Accepted);
 }
 
 #[test]
@@ -907,6 +921,171 @@ impl PhoneGateway for SharedRetry {
         self.entered.wait();
         LookupAnswer::NotFound
     }
+}
+
+#[test]
+fn a_concurrent_hold_of_the_same_bytes_keeps_one_draft() {
+    let dir = directory();
+    let path = path_in(&dir);
+    drop(opened(&path, Scripted::new(Vec::new(), Vec::new())));
+    let ready = Arc::new(Barrier::new(3));
+    let go = Arc::new(Barrier::new(3));
+    let spawn = |path: PathBuf, ready: Arc<Barrier>, go: Arc<Barrier>| {
+        thread::spawn(move || {
+            let mut outbox = open(
+                &path,
+                Scripted::new(Vec::new(), Vec::new()),
+                SeqIds::default(),
+                clock(),
+            )
+            .unwrap();
+            ready.wait();
+            go.wait();
+            outbox
+                .hold(text_intent("command-1", "hello"))
+                .unwrap()
+                .outcome()
+        })
+    };
+    let left = spawn(path.clone(), Arc::clone(&ready), Arc::clone(&go));
+    let right = spawn(path.clone(), Arc::clone(&ready), Arc::clone(&go));
+    ready.wait();
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    connection.busy_timeout(Duration::from_secs(5)).unwrap();
+    connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+    go.wait();
+    thread::sleep(Duration::from_millis(200));
+    connection.execute_batch("ROLLBACK").unwrap();
+    assert_eq!(left.join().unwrap(), PhoneOutcome::Draft);
+    assert_eq!(right.join().unwrap(), PhoneOutcome::Draft);
+    let mut check = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+    let rows = check.list().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].outcome(), PhoneOutcome::Draft);
+    assert_eq!(rows[0].intent().text(), "hello");
+}
+
+#[test]
+fn a_lost_departure_does_not_send_again() {
+    let dir = directory();
+    let path = path_in(&dir);
+    {
+        let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+        person_hold(&mut outbox, text_intent("command-1", "hello"));
+    }
+    let sends = Arc::new(AtomicUsize::new(0));
+    let entered = Arc::new((Mutex::new(false), Condvar::new()));
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let (done_tx, done_rx) = mpsc::channel();
+    let spawn = |path: PathBuf| {
+        let sends = Arc::clone(&sends);
+        let entered = Arc::clone(&entered);
+        let release = Arc::clone(&release);
+        let done_tx = done_tx.clone();
+        thread::spawn(move || {
+            let mut outbox = open(
+                &path,
+                PausingSend {
+                    sends,
+                    entered,
+                    release,
+                },
+                SeqIds::default(),
+                clock(),
+            )
+            .unwrap();
+            let outcome = outbox.send(&command("command-1")).unwrap().outcome();
+            done_tx.send(outcome).unwrap();
+        })
+    };
+    let first = spawn(path.clone());
+    let second = spawn(path.clone());
+    {
+        let (lock, cv) = &*entered;
+        let mut flag = lock.lock().unwrap();
+        while !*flag {
+            flag = cv.wait(flag).unwrap();
+        }
+    }
+    let loser = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    {
+        let (lock, cv) = &*release;
+        let mut flag = lock.lock().unwrap();
+        *flag = true;
+        cv.notify_all();
+    }
+    let winner = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    first.join().unwrap();
+    second.join().unwrap();
+    assert_eq!(sends.load(Ordering::SeqCst), 1);
+    assert_eq!(winner, PhoneOutcome::Accepted);
+    assert!(
+        loser == PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+            || loser == PhoneOutcome::Accepted
+    );
+    let mut check = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+    let rows = check.list().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].intent().command().as_str(), "command-1");
+    assert_eq!(rows[0].outcome(), PhoneOutcome::Accepted);
+}
+
+struct PausingSend {
+    sends: Arc<AtomicUsize>,
+    entered: Arc<(Mutex<bool>, Condvar)>,
+    release: Arc<(Mutex<bool>, Condvar)>,
+}
+impl PhoneGateway for PausingSend {
+    fn send(&mut self, _: &PhoneIntent) -> SendAnswer {
+        self.sends.fetch_add(1, Ordering::SeqCst);
+        {
+            let (lock, cv) = &*self.entered;
+            let mut flag = lock.lock().unwrap();
+            *flag = true;
+            cv.notify_all();
+        }
+        let (lock, cv) = &*self.release;
+        let mut flag = lock.lock().unwrap();
+        while !*flag {
+            flag = cv.wait(flag).unwrap();
+        }
+        SendAnswer::Receipt(Delivery::Queued)
+    }
+    fn lookup(&mut self, _: &PhoneIntent) -> LookupAnswer {
+        LookupAnswer::NotFound
+    }
+}
+
+#[test]
+fn recovery_adopts_a_settled_receipt_after_attempted() {
+    let dir = directory();
+    let path = path_in(&dir);
+    {
+        let gateway = Scripted::new(
+            vec![SendAnswer::Lost],
+            vec![LookupAnswer::Found {
+                stage: ReceiptStage::Attempted,
+                effect: None,
+            }],
+        );
+        let mut outbox = opened(&path, gateway);
+        person_hold(&mut outbox, text_intent("command-1", "hello"));
+        let view = outbox.send(&command("command-1")).unwrap();
+        assert_eq!(
+            view.outcome(),
+            PhoneOutcome::Unknown(UnknownCause::Attempted)
+        );
+    }
+    let gateway = Scripted::new(Vec::new(), vec![settled(ReceiptEffect::Dispatched)]);
+    let seen = gateway.clone();
+    let mut outbox = opened(&path, gateway);
+    let recovered = outbox.recover().unwrap();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].outcome(), PhoneOutcome::Done);
+    assert!(recovered[0].claims_submission());
+    assert_eq!(recovered[0].intent().text(), "hello");
+    assert!(seen.body().sent.is_empty());
+    assert_eq!(seen.body().order, ["lookup"]);
 }
 
 #[test]

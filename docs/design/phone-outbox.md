@@ -21,8 +21,10 @@ Cedar admits the session. This outbox does not decide who may send.
 | H2 | Process drops after the save, then the store reopens | The same draft, still not a submission | `a_draft_survives_reopen_without_a_send` |
 | H3 | Same command id, different text or images | The original bytes stay. Nothing is sent | `a_changed_body_under_the_same_command_is_refused` |
 | H4 | Same bytes saved again | The original draft, no second row | `saving_the_same_bytes_again_keeps_one_draft` |
+| H5 | Two holders save the same bytes at once | One draft. Both calls return it | `a_concurrent_hold_of_the_same_bytes_keeps_one_draft` |
 | S1 | Send starts | Departed is durable before `conversation.send` is asked | `departure_is_durable_before_the_gateway_is_asked` |
 | S2 | That save's commit is uncertain | `conversation.send` is not asked | `an_uncertain_departure_does_not_send` |
+| S12 | Two sends depart the same draft | One `conversation.send`. The loser reads the receipt and does not send | `a_lost_departure_does_not_send_again` |
 | S3 | Send returns queued, injected, or settled | Accepted, running, or done. The text stays | `a_queued_send_is_accepted`, `an_injected_send_is_running`, `a_settled_send_is_done` |
 | S4 | Send returns a conversation refusal other than `submission_unresolved` | Failed, with that code. The same id is not sent again | `a_refusal_is_failed_and_not_sent_again` |
 | S5 | Send returns `turn_running` | Failed with that code. The typed text is a new draft under new ids. The original id is not sent again | `turn_running_returns_the_text_to_a_new_draft` |
@@ -36,12 +38,13 @@ Cedar admits the session. This outbox does not decide who may send.
 | L2 | Send answer lost, lookup finds `attempted` | Unknown, cause attempted. No further send | `an_attempted_receipt_is_unknown_and_not_sent_again` |
 | L3 | Send answer lost, lookup finds settled `dispatched` | Done | `a_dispatched_receipt_is_done` |
 | L4 | Lookup finds settled `no_effect`, `refused_after_save`, or `unavailable_after_save` | Failed with `revoked`, `revoked_after_save`, or `unavailable_after_save` | `a_settled_refusal_is_failed` |
-| L5 | Send answer lost, lookup finds nothing, foreground budget remains | The same canonical bytes are sent again | `a_lost_answer_retransmits_the_same_bytes_until_the_bound` |
+| L5 | Send answer lost, lookup finds nothing, foreground budget remains | The same canonical bytes are sent again. The resend is recorded with its answer | `a_lost_answer_retransmits_the_same_bytes_until_the_bound` |
 | L6 | That budget is spent | Unknown, cause not admitted. No further send in that call | `foreground_send_stops_at_the_bound` |
 | L7 | Send answer lost and the lookup itself fails | Unknown, cause lookup failed. No further send | `a_lookup_that_cannot_be_asked_stays_unknown` |
 | L8 | Lookup returns `submission_conflict` | Failed with that code. `found` is not treated as a receipt | `a_conflicting_lookup_is_failed` |
 | R1 | Restart after departure, lookup finds nothing | Unknown. `conversation.send` is not asked | `recovery_does_not_send_when_the_receipt_is_absent` |
 | R2 | Restart after departure, lookup finds settled `dispatched` | Done. `conversation.send` is not asked | `recovery_adopts_a_dispatched_receipt_without_sending` |
+| R6 | Restart after an attempted receipt, lookup finds settled `dispatched` | Done. `conversation.send` is not asked | `recovery_adopts_a_settled_receipt_after_attempted` |
 | R3 | Explicit retry after a lookup that found nothing | The lookup is recorded as unknown, not admitted, then one new foreground budget of the same bytes. The writer lease is held across that send | `an_explicit_retry_looks_up_before_it_sends` |
 | R5 | Two retries of one departed command share the file | One send. The waiter reads the committed outcome | `a_concurrent_retry_sends_the_departure_once` |
 | R4 | Explicit retry of unresolved, attempted, failed, or done | No send | `an_explicit_retry_does_not_send_an_uncertain_or_finished_command` |

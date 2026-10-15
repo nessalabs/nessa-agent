@@ -150,6 +150,25 @@ fn an_absent_receipt_is_not_sent_again_outside_the_foreground_call() {
         true,
     );
     assert!(matches!(spent, super::Step::Done(_)));
+    let attempted = departed("hello").with_outcome(PhoneOutcome::Unknown(UnknownCause::Attempted));
+    let kept = after_lookup(attempted.clone(), LookupAnswer::NotFound, false);
+    assert!(matches!(
+        kept,
+        super::Step::Done(ref saved)
+            if saved.outcome() == PhoneOutcome::Unknown(UnknownCause::Attempted)
+    ));
+    let settled = after_lookup(
+        attempted,
+        LookupAnswer::Found {
+            stage: ReceiptStage::Settled,
+            effect: Some(ReceiptEffect::Dispatched),
+        },
+        false,
+    );
+    assert!(matches!(
+        settled,
+        super::Step::Done(ref saved) if saved.outcome() == PhoneOutcome::Done
+    ));
 }
 
 #[test]

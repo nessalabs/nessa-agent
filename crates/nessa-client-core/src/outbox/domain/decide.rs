@@ -69,6 +69,21 @@ pub(crate) fn after_send(record: PhoneRecord, answer: SendAnswer) -> Step {
 /// and found nothing. A restart passes false, so an absent receipt stays
 /// unknown (`recovery_does_not_send_when_the_receipt_is_absent`).
 pub(crate) fn after_lookup(record: PhoneRecord, answer: LookupAnswer, allow_send: bool) -> Step {
+    // An attempted receipt is already evidence of a submit. A restart that
+    // cannot see a newer receipt leaves it attempted, so a later recovery
+    // can still adopt a settled one. It is not downgraded to not-admitted.
+    if !allow_send
+        && matches!(
+            record.outcome(),
+            PhoneOutcome::Unknown(UnknownCause::Attempted)
+        )
+        && matches!(
+            answer,
+            LookupAnswer::NotFound | LookupAnswer::Lost | LookupAnswer::Broken
+        )
+    {
+        return Step::Done(record);
+    }
     match answer {
         LookupAnswer::Lost | LookupAnswer::Broken => {
             Step::Done(record.with_outcome(PhoneOutcome::Unknown(UnknownCause::LookupFailed)))
