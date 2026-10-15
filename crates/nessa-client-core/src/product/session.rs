@@ -184,18 +184,33 @@ pub(super) struct Owner {
     pub(super) wake: Arc<dyn ProductWake>,
     pub(super) limits: ProductLimits,
 }
+/// The first failure stays. A panic after a stored cancel replaces that
+/// cancel, so `close` still reports the injected fault. A decoded failure
+/// stays ahead of both.
+fn store_failure(state: &mut State, cause: ProductFailure) {
+    state.closing = true;
+    let replaces = matches!(
+        (state.failure, cause),
+        (None, _)
+            | (
+                Some(ProductFailure::Cancelled),
+                ProductFailure::WorkerPanicked
+            )
+    );
+    if replaces {
+        state.failure = Some(cause);
+    }
+}
 impl Owner {
     pub(super) fn record(&self, cause: ProductFailure) {
         {
             let mut state = lock(&self.state);
-            state.failure.get_or_insert(cause);
-            state.closing = true;
+            store_failure(&mut state, cause);
         }
         self.notify();
     }
-    /// The injected wake port and the injected clock. A panic records
-    /// `WorkerPanicked` unless a decoded failure is already stored, marks the
-    /// session closing, and does not unwind. It does not call the port again.
+    /// An injected wake, clock, or interrupt. A panic is recorded through
+    /// `store_failure` and does not unwind. It does not call the port again.
     /// Callers read the clock here before taking `state`, so a panic cannot
     /// hold that mutex.
     fn observe<T>(&self, operation: impl FnOnce() -> T) -> Result<T, ProductFailure> {
@@ -203,10 +218,7 @@ impl Owner {
             Ok(value) => Ok(value),
             Err(_) => {
                 let mut state = lock(&self.state);
-                state.closing = true;
-                if matches!(state.failure, None | Some(ProductFailure::Cancelled)) {
-                    state.failure = Some(ProductFailure::WorkerPanicked);
-                }
+                store_failure(&mut state, ProductFailure::WorkerPanicked);
                 Err(state.failure.unwrap_or(ProductFailure::WorkerPanicked))
             }
         }
@@ -226,32 +238,26 @@ impl Owner {
     pub(super) fn stop(&self) {
         let interrupt = {
             let mut state = lock(&self.state);
-            state.closing = true;
-            state.failure.get_or_insert(ProductFailure::Cancelled);
+            store_failure(&mut state, ProductFailure::Cancelled);
             state.interrupt.clone()
         };
-        // The interrupt is injected. A panic there must not skip the wake or
-        // the join in `close`: the worker is still drained, and the failure
-        // is `WorkerPanicked` unless a decoded failure was already recorded.
         if let Some(interrupt) = interrupt {
-            let panicked = catch_unwind(AssertUnwindSafe(|| interrupt.interrupt())).is_err();
-            if panicked {
-                let mut state = lock(&self.state);
-                if matches!(state.failure, None | Some(ProductFailure::Cancelled)) {
-                    state.failure = Some(ProductFailure::WorkerPanicked);
-                }
-            }
+            self.interrupt(interrupt.as_ref());
         }
         self.notify();
+    }
+    /// The injected interrupt, including one installed after `stop` won the
+    /// race. A panic upgrades a stored cancel and does not unwind.
+    pub(super) fn interrupt(&self, interrupt: &dyn ProductInterrupt) {
+        let _ = self.observe(|| interrupt.interrupt());
     }
     pub(super) fn finish(&self, cause: ProductFailure) {
         let (queue, active, cause) = {
             let mut state = lock(&self.state);
-            state.failure.get_or_insert(cause);
-            state.closing = true;
+            store_failure(&mut state, cause);
             state.drained = true;
             state.interrupt.take();
-            let cause = *state.failure.get_or_insert(cause);
+            let cause = state.failure.unwrap_or(cause);
             (
                 state.queue.drain(..).collect::<Vec<_>>(),
                 state.active.take(),

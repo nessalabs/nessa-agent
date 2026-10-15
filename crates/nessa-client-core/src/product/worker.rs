@@ -47,8 +47,9 @@ impl GatewayConnector for Connector<'_> {
         };
         // Install the independent handle before Session starts pinned TLS. A
         // close that arrived during OS connect stops this same original socket.
+        // The interrupt is injected; the owner records a panic from it.
         if stopped {
-            connected.interrupt.interrupt();
+            self.owner.interrupt(connected.interrupt.as_ref());
         }
         Ok(Box::new(Stream {
             inner: connected.stream,
@@ -87,7 +88,7 @@ impl GatewayStream for Stream {
         guarded(&self.owner, || self.inner.write_timeout(timeout))
     }
     fn shutdown(&self) -> IoResult<()> {
-        self.inner.shutdown()
+        guarded(&self.owner, || self.inner.shutdown())
     }
 }
 pub(super) fn run(owner: Arc<Owner>, open: Open) {

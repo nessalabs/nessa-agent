@@ -1256,6 +1256,145 @@ fn injected_interrupt_panic_stays_inside_stop_and_close_still_joins() {
 }
 
 #[test]
+fn late_installed_interrupt_panic_upgrades_the_stored_cancel() {
+    struct PanicInterrupt;
+    impl ProductInterrupt for PanicInterrupt {
+        fn interrupt(&self) {
+            panic!("late interrupt");
+        }
+    }
+    struct Held {
+        started: Sender<()>,
+        held: Mutex<Receiver<()>>,
+    }
+    impl ProductConnector for Held {
+        fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<ConnectedProduct> {
+            self.started.send(()).unwrap();
+            receive(&self.held.lock().unwrap());
+            let connected = LocalProductConnector.connect(address, timeout)?;
+            Ok(ConnectedProduct {
+                stream: connected.stream,
+                interrupt: Arc::new(PanicInterrupt),
+            })
+        }
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let reader = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        drop(stream);
+    });
+    let (started, seen) = signal();
+    let (release, held) = signal();
+    let identity = Arc::new(NativeIdentity::generate(&mut OsEntropy).unwrap());
+    let session = ProductSession::prepare(
+        address,
+        identity.clone(),
+        identity.public_spki(),
+        "credential".into(),
+        "phone-instance".into(),
+        Arc::new(Held {
+            started,
+            held: Mutex::new(held),
+        }),
+        Arc::new(fixtures::Time(Instant::now())),
+        Arc::new(ThreadProductWake::default()),
+        limits(1),
+    );
+    session.start().unwrap();
+    receive(&seen);
+    session.request_close();
+    let other = session.clone();
+    let (closed, closed_rx) = signal();
+    let closing = thread::spawn(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| other.close()));
+        closed.send(()).unwrap();
+        result
+    });
+    assert!(matches!(
+        closed_rx.recv_timeout(Duration::from_millis(50)),
+        Err(RecvTimeoutError::Timeout)
+    ));
+    release.send(()).unwrap();
+    receive(&closed_rx);
+    assert_eq!(
+        closing
+            .join()
+            .expect("close joins")
+            .expect("late interrupt panic must not escape close"),
+        Err(ProductFailure::WorkerPanicked)
+    );
+    assert_eq!(session.failure(), Some(ProductFailure::WorkerPanicked));
+    reader.join().unwrap();
+}
+
+#[test]
+fn injected_shutdown_panic_upgrades_the_stored_cancel() {
+    struct Stream {
+        inner: Box<dyn ProductStream>,
+    }
+    impl Read for Stream {
+        fn read(&mut self, bytes: &mut [u8]) -> IoResult<usize> {
+            self.inner.read(bytes)
+        }
+    }
+    impl Write for Stream {
+        fn write(&mut self, bytes: &[u8]) -> IoResult<usize> {
+            self.inner.write(bytes)
+        }
+        fn flush(&mut self) -> IoResult<()> {
+            self.inner.flush()
+        }
+    }
+    impl ProductStream for Stream {
+        fn read_timeout(&self, timeout: Duration) -> IoResult<()> {
+            self.inner.read_timeout(timeout)
+        }
+        fn write_timeout(&self, timeout: Duration) -> IoResult<()> {
+            self.inner.write_timeout(timeout)
+        }
+        fn shutdown(&self) -> IoResult<()> {
+            panic!("injected shutdown");
+        }
+    }
+    struct Connector;
+    impl ProductConnector for Connector {
+        fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<ConnectedProduct> {
+            let connected = LocalProductConnector.connect(address, timeout)?;
+            Ok(ConnectedProduct {
+                stream: Box::new(Stream {
+                    inner: connected.stream,
+                }),
+                interrupt: connected.interrupt,
+            })
+        }
+    }
+    let (release, held) = signal();
+    let (endpoint, peer) = peer(move |_wire| receive(&held));
+    let session = ProductSession::prepare(
+        endpoint.address,
+        endpoint.identity,
+        endpoint.pin,
+        "credential".into(),
+        "phone-instance".into(),
+        Arc::new(Connector),
+        Arc::new(fixtures::Time(Instant::now())),
+        Arc::new(ThreadProductWake::default()),
+        limits(1),
+    );
+    session.start().unwrap();
+    session.wait_ready().unwrap();
+    assert_eq!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| session.close()))
+            .expect("shutdown panic must not escape close"),
+        Err(ProductFailure::WorkerPanicked)
+    );
+    assert_eq!(session.failure(), Some(ProductFailure::WorkerPanicked));
+    release.send(()).unwrap();
+    peer.join();
+}
+
+#[test]
 fn independent_interrupt_drains_pinned_opening_before_handshake_deadline() {
     let (endpoint, peer, seen, release) = fixtures::held_opening();
     let session = prepare(endpoint, limits(1));
