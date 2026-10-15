@@ -3,13 +3,15 @@
  * system's Tailwind *source* rather than its prebuilt stylesheet. The built
  * CSS only carries the utilities the library's own components happen to use,
  * which silently drops any class the app writes for itself; compiling from
- * source gives the app the full utility set and the same tokens.
+ * source gives the app the full utility set and the same tokens. Automatic
+ * repository scanning is off: only the explicit UI sources supply utilities
+ * (scripts/tailwind-sources.test.mjs checks the watch boundary and UI updates).
  *
  * `@import "@nessa-ui/react/app.css"` is that source file. The path table
  * (`scripts/nessa-ui-paths.mjs`) sends the package's exported stylesheet
  * names to `src/`, not to `dist/` and not to `src/components/`.
  */
-@import "@nessa-ui/react/app.css";
+@import "@nessa-ui/react/app.css" source(none);
 @source "./";
 
 html,

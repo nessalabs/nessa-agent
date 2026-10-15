@@ -1391,7 +1391,10 @@ says why where the conversations would be.
   of its key, marked Paired; a choice is reported by its full name and shown
   on the row, and nothing scrolls sideways. The tray is the only place a host
   is chosen; the gateway refuses a host its `config.json` does not name, and a
-  paired machine that is not connected.
+  paired machine that is not connected. The fixture owns its viewport height;
+  the same checks measure its height and bottom against the viewport (within
+  1 px), keeping the tray at its foot without scanning test utilities into the
+  production CSS (#929).
 
 ## Restored local tab lifetimes
 
