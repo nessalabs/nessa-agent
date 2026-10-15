@@ -536,20 +536,22 @@ is a delivery id, the registration, and the source checkpoint
 also sets the cursor to the same checkpoint, and the two commit together.
 The conversation commit stays in the conversation store. A crash after
 that commit and before the outbox write leaves the cursor behind the
-source. Restart, before it admits work, reads each granted conversation
-inside the cursor's incarnation, or from the start of the current
-incarnation when the cursor is unset, and inserts a `queued` row for every
-checkpoint of that incarnation that does not have one. A checkpoint that
-already has a row keeps that delivery id. A stream incarnation that is
+source. The live reader, and restart before it admits work, reads each
+granted conversation inside the cursor's incarnation, or from the start
+of the current incarnation when the cursor is unset, and inserts a
+`queued` row for every checkpoint of that incarnation that does not have
+one. A checkpoint that already has a row keeps that delivery id. A stream
+incarnation that is
 not the cursor's incarnation does not backfill. The cursor is marked
 reset-required and keeps the old checkpoint. `queued` and `retry scheduled`
 rows for the old incarnation are written `not sent`. A `sending` row is
 not cancelled. Restart does not clear a reset-required cursor. The owner
 resets it, and the next queue starts at the first checkpoint of the
 current incarnation. A crash while the attempt
-is waiting leaves the `queued` row. Restart admits each `queued` row, and
-each `retry scheduled` row whose `due_at` has arrived, in checkpoint
-order.
+is waiting leaves the `queued` row. The same scan admits each `queued`
+row, and each `retry scheduled` row whose `due_at` has arrived, in
+checkpoint order. The live sender runs that scan when a read of the
+registration's outbox succeeds. It does not wait for the process to exit.
 
 Revoke and a delivery attempt share one permit for that registration, the
 same shape as `hold_revision` on a share grant. The attempt that holds the
@@ -570,9 +572,12 @@ epoch. Admitted work finishes, and the next command is refused.
   was current. That write commits first. If it fails, the POST is not
   written. The row is written `not sent`, cause audit unavailable, and
   that write commits before the permit drops. If the `not sent` write does
-  not commit, the row stays `queued`. The permit drops at
+  not commit, the row stays the state the attempt read, `queued` or
+  `retry scheduled`. The permit drops at
   `webhook.post_deadline`, measured from when the attempt took it, even
-  when neither write has committed. Restart admits the queued row. Revoke
+  when neither write has committed. The live sender admits that row when
+  its next read of the outbox succeeds, and does not wait for process
+  exit. A failed read does not admit and does not start a timer. Revoke
   can take the permit after that drop. After `sending` commits, the
   attempt writes the POST.
 - The decision is that `retry scheduled` is a non-terminal outbox state
@@ -618,7 +623,8 @@ epoch. Admitted work finishes, and the next command is refused.
   and drops the permit. If a complete response has been read, the deadline
   commits that outcome and does not record `timed out`. If neither the
   `sending` write nor the `not sent` write has committed, the deadline
-  drops the permit and the row stays the state the attempt read. Revoke
+  drops the permit and the row stays the state the attempt read. The next
+  successful read of that outbox admits it. Revoke
   waits for the attempt's
   outcome or for that deadline, whichever comes first, and
   does not wait longer. Revoke still does not cancel a write that finishes
@@ -626,8 +632,8 @@ epoch. Admitted work finishes, and the next command is refused.
   after the deadline. That late arrival is not recorded as `sent` and does
   not schedule a retry. A retry is a new admission.
 
-One POST that already holds the permit can still reach the receiver. No
-later attempt is sent. Each attempt records the target, the delivery id,
+One POST that already holds the permit can still reach the receiver. After
+the grant is gone, no later attempt is sent. Each attempt records the target, the delivery id,
 the grant epoch it read, the outcome of that attempt (sent, retry
 scheduled, timed out, or not sent), and the cause. `retry scheduled`
 names the due time stored on the outbox row. An attempt is one observation of
@@ -806,7 +812,12 @@ cursor is one field per registration and conversation: the last
 checkpoint whose outbox row committed. The cursor advances only in the
 same write as that row, and only to the next contiguous checkpoint. The
 conversation commit is not in that write. One permit per registration
-serializes revoke and delivery. The permit generation is in-process.
+serializes revoke and delivery. The permit generation is in-process. The
+live sender and restart run one scan of the outbox. A `queued` row, or a
+`retry scheduled` row, with the permit free is admitted by that scan. The
+scan does not wait for process exit. A failed read does not admit and
+does not start a timer. A second insert does not admit an existing row.
+A `sending` row is not scanned into a new POST.
 
 **Invariants.**
 
@@ -817,7 +828,7 @@ serializes revoke and delivery. The permit generation is in-process.
 5. **W5.** The `queued` row commits before the attempt waits for the permit. Rows: W-queue.
 6. **W6.** `sending` is recorded before any POST byte and is not replaced. A terminal record is appended beside it. Rows: W-send, W-sent, W-unknown.
 7. **W7.** If the `sending` write fails, no POST byte is written. The row is written `not sent`, cause audit unavailable, conditional on the row still being the state the attempt read, and that write commits before the permit drops. Rows: W-audit-fail.
-8. **W8.** If that `not sent` write does not commit, the row stays the state the attempt read, `queued` or `retry scheduled`. The permit drops at `webhook.post_deadline`, measured from when the attempt took it, even when neither write has committed. That attempt discards its uncommitted write before the drop. A late write commits only while the row is still the state it guarded. Restart admits that state. Revoke can take the permit after the drop. Rows: W-deadline-queued, W-audit-race.
+8. **W8.** If that `not sent` write does not commit, the row stays the state the attempt read, `queued` or `retry scheduled`. The permit drops at `webhook.post_deadline`, measured from when the attempt took it, even when neither write has committed. That attempt discards its uncommitted write before the drop. A late write commits only while the row is still the state it guarded. The live sender and restart admit that state by one scan when a read succeeds. The scan does not wait for process exit. Revoke can take the permit after the drop. Rows: W-deadline-queued, W-rescan, W-audit-race.
 9. **W9.** `retry scheduled` is non-terminal and stores `due_at` on the same row in that write. The delivery id stays. Restart admits the row when `due_at` has arrived and waits while `due_at` is ahead. There is no second scheduler store. Rows: W-retry, W-due, W-wait.
 10. **W10.** `sent`, `timed out`, `not sent`, and `unknown` are terminal and are not admitted again. The first terminal record to commit wins. Restart that finds `sending` with no terminal record appends `unknown` and does not POST that delivery id again. Rows: W-sent, W-timeout, W-final, W-unknown, W-terminal-race.
 11. **W11.** The sender does not follow redirects. A 3xx is `not sent`. The next admitted POST goes to the registered URL only. Rows: W-3xx.
@@ -828,6 +839,7 @@ serializes revoke and delivery. The permit generation is in-process.
 16. **W16.** The signed timestamp is written in the `sending` commit, before any POST byte. A later admission of that delivery id uses that stored timestamp and does not read the clock again. Rows: W-send, W-post.
 17. **W17.** `webhook.post_deadline` records `timed out` only while this attempt has not read a complete response. A complete response commits its own outcome, including when that commit is the deadline's write. `timed out` does not replace it. Rows: W-timeout, W-deadline-known, W-prec-response.
 18. **W18.** An incarnation change does not advance the cursor and does not backfill. The old checkpoint is retained and the cursor is marked reset-required. `queued` and `retry scheduled` rows for the old incarnation are written `not sent`. A `sending` row is not cancelled. The new incarnation is queued only after the owner resets that cursor. Restart does not reset it. Rows: W-incarnation, W-reset, C-W-incarnation, C-W-reset.
+19. **W19.** The live sender and restart run one scan. A `queued` or `retry scheduled` row with the permit free is admitted by that scan when a read of that registration's outbox succeeds, including after the deadline drop. The scan does not wait for process exit and does not start a timer. A failed read does not admit. A second insert does not admit an existing row. A `sending` row is not scanned into a new POST. Rows: W-rescan, W-deadline-queued, W-queue-exists, C-W-queued.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -835,12 +847,13 @@ serializes revoke and delivery. The permit generation is in-process.
 | W-issue-refuse | registration active | `credential.issue` | A registration for that principal is already active | registration active | The owner | Nothing. No credential and no second registration. | Refusal, cause registration active, initiator the owner |
 | W-reissue | registration stopped | `credential.issue` | The previous registration is stopped | registration active, a new URL and mac key | The owner | One new registration and one credential | Target the principal, before stopped, after active, cause issue, initiator the owner |
 | W-queue | no outbox row | The conversation checkpoint has committed, and this registration has a grant | This writer holds the cursor. The cursor is not reset-required. Either the cursor is unset and this checkpoint is the first of the conversation's current incarnation, or the cursor names the previous checkpoint of this same incarnation. No row exists for this checkpoint. | queued | The live reader, or restart | The queued row (delivery id, registration, checkpoint) and the cursor set to that same checkpoint. The conversation commit is not in this write. This commit finishes before the attempt waits for the permit. | Target the delivery id, before no row, after queued, cause source ahead of cursor, initiator the reader or restart |
-| W-queue-exists | a row for this checkpoint | A second insert | A row already stores this checkpoint for this registration | That row's state, same delivery id | The live reader, or restart | Nothing | None |
+| W-queue-exists | a row for this checkpoint | A second insert | A row already stores this checkpoint for this registration | That row's state, same delivery id. This row does not admit it. A permit-free `queued` or `retry scheduled` row is W-rescan. | The live reader, or restart | Nothing | None |
 | W-incarnation | cursor at incarnation I | The stream incarnation is J, and J is not I | The cursor names a checkpoint of I and is not yet reset-required | reset-required, still naming I and its position. No row is queued for J. | The live reader, or restart | Mark the cursor reset-required. Write every `queued` or `retry scheduled` row for that registration, conversation, and I as `not sent`, cause incarnation replaced. A `sending` row is not cancelled. | Target the registration and conversation, before cursor at I, after reset-required holding I, cause incarnation changed, initiator the reader or restart |
 | W-reset | reset-required | The owner resets the webhook cursor | The owner asks. Restart does not. | Cursor unset for the current incarnation. Old outbox rows stay keyed by their incarnation and stay terminal. | The owner | The cursor is cleared in this commit. The next W-queue starts at the first checkpoint of the current incarnation. | Target the registration and conversation, before reset-required at I, after unset, cause owner reset, initiator the owner |
 | W-send | queued or retry scheduled | The attempt takes the permit | The epoch allows delivery. The credential is current. From `retry scheduled`, `due_at` has arrived. The `sending` write commits, or the `sending` record is already stored. | sending | The delivery attempt | From `queued`: `sending`, the target, the delivery id, the epoch read, credential current, and the signed timestamp. This commit finishes before any POST byte. From `retry scheduled`: the stored timestamp and delivery id stay. The clock is not read again. | Target the delivery id, before queued or retry scheduled, after sending, cause admitted, initiator the attempt, epoch the one read |
 | W-audit-fail | queued or retry scheduled | The `sending` write fails | No POST byte has been written. The `not sent` write commits, conditional on the row still being the state the attempt read. | not sent | The delivery attempt | `not sent`, same delivery id, cause audit unavailable. This commit finishes before the permit drops. | Target the delivery id, before queued or retry scheduled, after not sent, cause audit unavailable, initiator the attempt |
-| W-deadline-queued | queued or retry scheduled, permit held | `webhook.post_deadline`, measured from when this attempt took the permit | The `sending` write did not commit and the `not sent` write did not commit | That same state. The permit drops. | The deadline, on that same attempt | None. The attempt discards its uncommitted write before the drop. | None. The delivery is not terminal. |
+| W-deadline-queued | queued or retry scheduled, permit held | `webhook.post_deadline`, measured from when this attempt took the permit | The `sending` write did not commit and the `not sent` write did not commit | That same state. The permit drops. The next successful read of this outbox takes W-rescan and does not wait for process exit. | The deadline, on that same attempt | None. The attempt discards its uncommitted write before the drop. | None. The delivery is not terminal. |
+| W-rescan | queued, or retry scheduled, permit free | The live sender or restart reads this registration's outbox | The permit is free. The read succeeds. The row is not `sending` and is not terminal. This is not a second insert. | `queued` takes W-send or W-refuse. `retry scheduled` with `due_at` arrived takes W-due. `due_at` still ahead takes W-wait. The same delivery id. The live sender does not wait for process exit. | The live sender, or restart | The admission's write when the next state admits. None when the next state is W-wait. A failed read writes nothing and starts no timer. The next successful read of this outbox is this row again. | The admission's audit when it admits. None when it waits. |
 | W-refuse | queued or retry scheduled | The attempt takes the permit | The epoch no longer allows delivery, or the credential is not current | not sent | The delivery attempt | `not sent`, the epoch read. No POST. The permit drops after this commit. | Target the delivery id, before queued or retry scheduled, after not sent, cause epoch or credential, initiator the attempt |
 | W-post | sending | The attempt writes the POST | `sending` has committed. The timestamp header is the signed timestamp stored on that row. A retry does not read the clock again. The body is `Content-Type: application/json`, UTF-8 JSON, keys in order `conversationId`, `incarnation`, `position`, `record`, no insignificant whitespace. `record` is the committed record a read grant may see, the same bytes `recordsPage` returns for that checkpoint. The record schema stays with `recordsPage`. The signature is HMAC-SHA256 of three length-prefixed fields, each a big-endian unsigned 64-bit length then that many bytes: ASCII decimal Unix milliseconds with no sign and no leading zeros except `0`, the delivery id's UTF-8, and the exact body bytes. Headers `Nessa-Webhook-Timestamp`, `Nessa-Webhook-Id`, and `Nessa-Webhook-Signature` as `v1=` plus 64 lowercase hex characters. The key is not in the body. No redirect is followed. | sending | The delivery attempt | None. `sending` already committed. The POST is not a terminal write. | None until the outcome row |
 | W-3xx | sending | The response is a 3xx | The response completed | not sent | The delivery attempt | `not sent`. The redirect is not followed. `sending` stays beside this record. The permit drops after this commit. | Target the delivery id, before sending, after not sent, cause redirect, initiator the attempt |
@@ -866,6 +879,7 @@ sequenceDiagram
   Outbox->>Permit: take the permit
   Outbox->>Outbox: record sending before any POST byte
   Note over Permit: the permit drops at the deadline even when no write committed
+  Note over Outbox: the next successful read admits a queued row with the permit free
   Outbox->>Outbox: retry scheduled stores due_at
   Outbox->>Outbox: sent, timed out, not sent, or unknown closes the delivery
 ```
@@ -877,7 +891,7 @@ sequenceDiagram
 | C-W-gap | After the conversation commit, before W-queue commits, inside the cursor's incarnation | The checkpoint is in that incarnation. The cursor is behind it. No row for that checkpoint. | W-queue, in order, for that incarnation. A checkpoint that already has a row takes W-queue-exists. |
 | C-W-incarnation | After the stream incarnation changes, before W-incarnation commits | The cursor still names incarnation I. No row has been queued for J. | W-incarnation. Restart does not queue J and does not clear the cursor. |
 | C-W-reset | After W-incarnation commits, before the owner resets | reset-required, holding I. `queued` and `retry scheduled` rows for I are `not sent`. | Leave the cursor. Restart does not reset it and does not queue J. |
-| C-W-queued | While `queued`, waiting for the permit, or after W-deadline-queued | `queued` | Admit the row. The permit died with the process. |
+| C-W-queued | While `queued`, waiting for the permit, or after W-deadline-queued | `queued` | W-rescan. Restart uses that same scan. The live process does not wait to exit. |
 | C-W-sending | After `sending` commits and before a terminal record commits, whether or not a POST byte was written | `sending`, no terminal record | W-unknown. That delivery id is not posted again. |
 | C-W-due | After W-retry commits | `retry scheduled` and `due_at` | W-wait until `due_at`, then W-due. Same delivery id. |
 | C-W-terminal | After `sent`, `timed out`, `not sent`, or `unknown` commits | That terminal record, `sending` still beside it when the attempt had reached `sending` | Do not admit that delivery id. |
@@ -908,8 +922,9 @@ sequenceDiagram
 | W-prec-credential | A credential that is not current | An active registration and a grant epoch that still allows delivery | W-refuse. The epoch is not bumped. |
 | W-prec-response | A complete response this attempt has read | `timed out` | W-deadline-known. The deadline commits that outcome. |
 | W-prec-stamp | The timestamp stored on `sending` | A fresh clock read on retry | W-post uses the stored timestamp. |
+| W-prec-scan | A successful read of a `queued` or due row with the permit free | Waiting for process exit | W-rescan. W-queue-exists does not admit. A `sending` row is not posted again. |
 
-**Rejected.** An in-memory retry after a terminal `retry scheduled` loses the delivery on exit. One transaction across the conversation store and the outbox is not available. A second registration for one principal would POST to a URL the first issue did not register. Replaying `sending` can deliver twice. Two cursor writers can commit checkpoint N+1 ahead of N. Backfilling a new stream incarnation from the old cursor, or clearing that cursor on restart, would deliver a stream the owner has not reset.
+**Rejected.** An in-memory retry after a terminal `retry scheduled` loses the delivery on exit. One transaction across the conversation store and the outbox is not available. A second registration for one principal would POST to a URL the first issue did not register. Replaying `sending` can deliver twice. Two cursor writers can commit checkpoint N+1 ahead of N. Backfilling a new stream incarnation from the old cursor, or clearing that cursor on restart, would deliver a stream the owner has not reset. Waiting for process exit to admit a `queued` row the live sender can already read would skip that delivery. A second scan beside the outbox read would be a second scheduler.
 
 ### Directory binding
 
@@ -1264,6 +1279,7 @@ not add a rule.
 | 4278630314 | G-refuse-old, G-current, G10 |
 | 4278630316 | P-install, P-reject, P-key, P14 |
 | 4278630318 | U-cap, U-local-close, U1 |
+| 4278864016 | W-rescan, W-deadline-queued, W19 |
 
 ## Open questions / known limits
 
@@ -1593,7 +1609,9 @@ second POST of that delivery id. A retry signs with the timestamp stored
 on the `sending` row. A failed `sending` write sends
 nothing only after the row commits `not sent`. If that write does not
 commit, the row stays `queued` and the permit drops at
-`webhook.post_deadline`. A crash while an event waits for the permit leaves its `queued`
+`webhook.post_deadline`. The live sender admits that row when its next
+outbox read succeeds, and does not wait for a restart. A second insert
+of that checkpoint does not admit it. A crash while an event waits for the permit leaves its `queued`
 outbox row, and restart delivers that delivery id. A crash after the
 conversation commit and before the outbox write is recovered from the
 replay cursor: restart inserts the missing `queued` row, and a checkpoint
