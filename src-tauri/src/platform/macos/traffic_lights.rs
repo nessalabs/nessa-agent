@@ -77,6 +77,8 @@ thread_local! {
     /// buttons are first moved: read again later, it can catch AppKit halfway
     /// through moving the three.
     static SPACING: Cell<Option<f64>> = const { Cell::new(None) };
+    /// The last error `report` printed, while it lasts.
+    static REPORTED: Cell<Option<String>> = const { Cell::new(None) };
 }
 
 /// The window's three buttons, close first.
@@ -100,7 +102,9 @@ pub fn place(window: &NSWindow, _main: MainThreadMarker) -> Result<(), String> {
 
 fn place_now(window: &NSWindow) -> Result<(), String> {
     let style: usize = unsafe { msg_send![window, styleMask] };
-    if style & FULL_SCREEN != 0 {
+    // Hidden in the menu bar or in the Dock, nothing shows the buttons, and
+    // the run loop check costs nothing.
+    if style & FULL_SCREEN != 0 || !window.isVisible() || window.isMiniaturized() {
         return Ok(());
     }
     let buttons = buttons(window);
@@ -147,9 +151,15 @@ fn place_now(window: &NSWindow) -> Result<(), String> {
     let spacing = match SPACING.get() {
         Some(spacing) => spacing,
         None => {
+            let width = close.frame().size.width;
             let spacing = minimize.frame().origin.x - close.frame().origin.x;
-            SPACING.set(Some(spacing));
-            spacing
+            if spacing > width && spacing < 3.0 * width {
+                SPACING.set(Some(spacing));
+                spacing
+            } else {
+                // Read mid-move: not kept, and AppKit's usual gap for now.
+                width + 9.0
+            }
         }
     };
     for (index, button) in buttons.iter().enumerate() {
@@ -195,12 +205,14 @@ fn set_frame(view: &NSView, frame: NSRect) {
 /// posting.
 pub fn watch(window: Retained<NSWindow>, main: MainThreadMarker) -> Result<(), String> {
     place(&window, main)?;
-    check_before_each_sleep(window.clone(), main)?;
     let buttons = buttons(&window);
     let close = buttons
         .first()
         .ok_or_else(|| String::from("the window has no traffic lights"))?;
+    // Found before anything is observed, so a failure here leaves nothing
+    // registered for the next attempt to register again.
     let (row, container) = titlebar_views(close)?;
+    check_before_each_sleep(window.clone(), main)?;
 
     let views: [&NSView; 3] = [&container, &row, close];
     for view in views {
@@ -284,9 +296,15 @@ fn observe(name: &NSNotificationName, object: &AnyObject, then: impl Fn() + 'sta
 }
 
 /// A button off the row costs alignment, not the window: reported, and never
-/// a panic inside an AppKit callback.
+/// a panic inside an AppKit callback. Placing runs every turn of the run loop,
+/// so an error is reported when it starts, not on every turn it lasts.
 fn report(placed: Result<(), String>) {
-    if let Err(error) = placed {
-        eprintln!("[nessa] could not place the traffic lights: {error}");
+    let error = placed.err();
+    if error.is_some() && error != REPORTED.take() {
+        eprintln!(
+            "[nessa] could not place the traffic lights: {}",
+            error.as_deref().unwrap_or_default()
+        );
     }
+    REPORTED.set(error);
 }
