@@ -1810,4 +1810,8 @@ and sends it unchanged to the injected clipboard port on Copy. Send Again reuses
 the refused message; Discard removes it. Clipboard permission failures and panel
 retry/unknown-admission identities are also covered by application/component tests.
 Native first-use and refused-agent setup use the existing selected-agent readiness,
-installer and authentication controls, without automatic message replay.
+installer and authentication controls, without automatic message replay. Both
+engines exercise download → sign-in → ready on first use; successful setup retires
+the ordinary hint, while independent audit failures remain visible.
+The fixture’s `?clipboard=native` path uses the real host writer for isolated
+native window Copy verification rather than the browser test capture.

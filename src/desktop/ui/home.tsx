@@ -1,4 +1,4 @@
-import { SelectedAgentSetup } from "../../onboarding"
+import { SelectedAgentSetup } from "../../onboarding/ui/selected-agent-setup"
 import { agentForProvider } from "../model/composer-options"
 import { useState } from "react"
 import { useGreetingPreference } from "../adapters/window-preferences"

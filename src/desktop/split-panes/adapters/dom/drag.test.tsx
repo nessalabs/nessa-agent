@@ -439,7 +439,7 @@ it("keeps a ready failure that is not cancellation", async () => {
   }
 })
 
-it("a target-only drop leaves body restoration to the layout owner", async () => {
+it("a target-only drop leaves pane bodies available", async () => {
   const fake = fakeSource(two())
   const commit = fake.source.commitDrop
   vi.spyOn(fake.source, "commitDrop").mockImplementation((drop) => {

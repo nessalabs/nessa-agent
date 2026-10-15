@@ -155,11 +155,34 @@ it("does not turn unknown readiness into a missing runtime or show native setup 
   expect(container.textContent).toBe("")
 })
 
-it("shows a first-use hint only for a published not-installed answer", async () => {
-  await render(source("needs-authentication"), "claude", false)
-  expect(container.textContent).toBe("")
-  await render(source("not-installed"), "claude", false)
+it("continues first-use download through sign-in and retires the ready hint", async () => {
+  const value = source()
+  await render(value, "claude", false)
   expect(container.textContent).toContain("Download Claude")
+  value.readiness.read.mockResolvedValue({
+    ok: true,
+    agents: { claude: "needs-authentication" },
+  })
+  await React.act(async () => button("Download Claude").click())
+  expect(container.textContent).toContain("Sign in to Claude")
+  expect(value.signIn).not.toHaveBeenCalled()
+  value.readiness.read.mockResolvedValue({ ok: true, agents: { claude: "ready" } })
+  await React.act(async () => button("Sign in to Claude").click())
+  expect(value.signIn).toHaveBeenCalledExactlyOnceWith("claude")
+  expect(container.textContent).toBe("")
+})
+
+it("retains a first-use failed installation when the next readiness read is unknown", async () => {
+  const value = source()
+  await render(value, "claude", false)
+  value.installations.install.mockResolvedValue({
+    status: "failed",
+    reason: "verification",
+  })
+  value.readiness.read.mockResolvedValue({ ok: false, reason: "unreachable" })
+  await React.act(async () => button("Download Claude").click())
+  expect(container.textContent).toContain("Check setup again")
+  expect(container.textContent).not.toBe("")
 })
 
 it("does not publish an old installation to a newly selected agent", async () => {
@@ -203,26 +226,29 @@ async function saveKey(value: string) {
   return input
 }
 
-it("reuses OpenCode key entry and retains failed audit evidence after readiness retires the form", async () => {
-  const value = source()
-  value.readiness.read.mockResolvedValue({
-    ok: true,
-    agents: { opencode: "needs-authentication" },
-  })
-  const save = vi.fn(async () => ({ status: "saved-audit-failed" as const }))
-  await render({ ...value, apiKeys: { save } }, "opencode")
-  expect(container.querySelector("input")?.type).toBe("password")
-  expect(container.textContent).toContain("messages may be metered")
-  value.readiness.read.mockResolvedValue({ ok: true, agents: { opencode: "ready" } })
-  await saveKey("fixture-private-key")
-  expect(save).toHaveBeenCalledExactlyOnceWith("opencode", "fixture-private-key")
-  expect(container.querySelector("input")).toBeNull()
-  expect(container.textContent).toContain(
-    "The key was saved, but Nessa could not record its security audit record",
-  )
-  expect(container.textContent).not.toContain("fixture-private-key")
-  expect(value.installations.install).not.toHaveBeenCalled()
-})
+it.each([true, false])(
+  "retains failed key audit evidence after readiness retires the form (recovery %s)",
+  async (recovery) => {
+    const value = source()
+    value.readiness.read.mockResolvedValue({
+      ok: true,
+      agents: { opencode: "needs-authentication" },
+    })
+    const save = vi.fn(async () => ({ status: "saved-audit-failed" as const }))
+    await render({ ...value, apiKeys: { save } }, "opencode", recovery)
+    expect(container.querySelector("input")?.type).toBe("password")
+    expect(container.textContent).toContain("messages may be metered")
+    value.readiness.read.mockResolvedValue({ ok: true, agents: { opencode: "ready" } })
+    await saveKey("fixture-private-key")
+    expect(save).toHaveBeenCalledExactlyOnceWith("opencode", "fixture-private-key")
+    expect(container.querySelector("input")).toBeNull()
+    expect(container.textContent).toContain(
+      "The key was saved, but Nessa could not record its security audit record",
+    )
+    expect(container.textContent).not.toContain("fixture-private-key")
+    expect(value.installations.install).not.toHaveBeenCalled()
+  },
+)
 
 it("keeps an uncertain OpenCode key and its independent failed audit fact", async () => {
   const value = source()

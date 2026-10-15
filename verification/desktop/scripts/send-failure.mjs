@@ -39,6 +39,21 @@ await main(
               )
             }, css.sendFailure)
             if (!placement) throw new Error("failure is not above the composer")
+            const overflow = await page.evaluate(
+              (selector) =>
+                [
+                  ...document.querySelectorAll(
+                    `${selector}, ${selector} button, .workspace-bubble`,
+                  ),
+                ].some((element) => {
+                  const box = element.getBoundingClientRect()
+                  return box.left < 0 || box.right > innerWidth + 1
+                }),
+              css.sendFailure,
+            )
+            if (overflow)
+              throw new Error("recovery controls or message overflow the actual viewport")
+
             await page
               .getByRole("button", { name: "Copy error details", exact: true })
               .click()
@@ -74,6 +89,71 @@ await main(
             await opened.close()
           }
         }
+      for (const surface of ["setup", "first-use"]) {
+        const firstUse = surface === "first-use"
+        const attempts = firstUse ? 0 : 1
+        const target = new URL(
+          `/verification/desktop/fixtures/send-failure/index.html?surface=${surface}`,
+          url,
+        )
+        const opened = await openPage(browser, {
+          url: target.href,
+          width: 360,
+          height: 800,
+        })
+        try {
+          const page = opened.page
+          const setup = page.getByRole("region", { name: "Claude setup" })
+          await page
+            .getByRole("button", { name: "Download Claude · 1 MB", exact: true })
+            .click()
+          await page
+            .getByText("Downloading and verifying Claude.", { exact: false })
+            .waitFor()
+          let state = await page.evaluate(() => ({
+            attempts: window.__sendFailure.attempts,
+            installs: window.__sendFailure.installs,
+          }))
+          if (state.attempts !== attempts || state.installs.join() !== "claude")
+            throw new Error("setup retargeted or automatically retried a send")
+          await page.evaluate(() => window.__sendFailure.releaseInstall())
+          await page
+            .getByRole("button", { name: "Sign in to Claude", exact: true })
+            .click()
+          if (firstUse) await setup.waitFor({ state: "detached" })
+          else
+            await page
+              .getByText("Ready. Send your message when you are ready.", { exact: true })
+              .waitFor()
+          state = await page.evaluate(() => ({
+            attempts: window.__sendFailure.attempts,
+            installs: window.__sendFailure.installs,
+          }))
+          if (state.attempts !== attempts)
+            throw new Error("setup completion automatically replayed the message")
+          if (options.shots && !firstUse) {
+            await setup.screenshot({
+              path: resolve(options.shots, `${engine}-selected-agent-setup.png`),
+            })
+          }
+          if (!firstUse) {
+            await page.getByRole("button", { name: "Send Again", exact: true }).click()
+            await page.locator(css.sendFailure).waitFor({ state: "detached" })
+            if ((await page.locator(`${css.message}[data-role="user"]`).count()) !== 1)
+              throw new Error("setup retry duplicated the message")
+          }
+          rep.add({
+            name: firstUse ? "first-use-setup" : "selected-agent-setup",
+            engine,
+            width: 360,
+            failures: [],
+            detail:
+              "selected runtime only; progress; sign-in; no automatic message replay",
+          })
+        } finally {
+          await opened.close()
+        }
+      }
     })
   },
 )

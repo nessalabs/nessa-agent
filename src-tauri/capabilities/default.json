@@ -7,6 +7,7 @@
     "setup"
   ],
   "permissions": [
+    "clipboard-manager:allow-write-text",
     "core:default",
     "core:event:default",
     "core:window:allow-start-dragging",

@@ -1,4 +1,4 @@
-import { SelectedAgentSetup } from "../../../onboarding"
+import { SelectedAgentSetup } from "../../../onboarding/ui/selected-agent-setup"
 import { agentForProvider } from "../../model/composer-options"
 import { SendFailure } from "../../../conversation"
 import { discardUnsent, resendMessage } from "../adapters/store/commands"

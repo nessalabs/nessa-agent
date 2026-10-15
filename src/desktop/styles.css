@@ -2,6 +2,10 @@
 @source "./";
 /* The conversation vertical's cards the window draws too: the files an agent published. */
 @source "../conversation/ui/published-files.tsx";
+@source "../conversation/ui/send-failure.tsx";
+@source "../onboarding/ui/selected-agent-setup.tsx";
+@source "../onboarding/ui/agent-api-key-form.tsx";
+@source "../onboarding/ui/agent-api-key-save.tsx";
 
 html,
 body,

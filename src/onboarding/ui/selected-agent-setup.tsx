@@ -44,7 +44,7 @@ export function SelectedAgentSetup({
   recovery = false,
 }: {
   agent: string
-  /** First-use hints show only a published missing-runtime answer. */
+  /** First-use hints follow published missing-runtime/authentication answers. */
   recovery?: boolean
 }) {
   const source = React.useContext(Setup)
@@ -115,7 +115,19 @@ function SelectedSetup({
     }
   }, [check])
   const offer = downloads.offers?.find((offer) => offer.agent === agent)
-  if (!recovery && readiness !== "not-installed") return null
+  const retainedResult =
+    downloads.outcome?.status === "failed" ||
+    (downloads.outcome?.status === "installed" && downloads.outcome.cleanupPending)
+  if (
+    !recovery &&
+    readiness !== "not-installed" &&
+    readiness !== "needs-authentication" &&
+    downloads.pending === undefined &&
+    !retainedResult &&
+    !credentials.auditFailure &&
+    !loginFailed
+  )
+    return null
   return (
     <section
       aria-label={`${name} setup`}

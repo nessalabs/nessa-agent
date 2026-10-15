@@ -108,7 +108,7 @@ These additional Nessa-specific invariants must stay true:
    are not read from outside the process and have nothing to substitute.
 3. The panel frame is reapplied on every show. Nothing caches a frame across
    shows — that is the bug the design exists to prevent.
-4. Every host call goes through `src/host/window.ts` and no-ops outside Tauri.
+4. Native host calls go through `src/host/window.ts`. Browser previews use explicit fallbacks; unavailable capabilities do not report success.
 5. A settings file missing keys still launches; every new key has a default.
 6. Edge failures — blur, sizing, tray, viewport — are reported and survivable,
    never fatal. The panel opening unblurred, or without a tray, beats the panel
@@ -1527,6 +1527,16 @@ ticket. Tests under `tests/attachments/` split domain rules, the service over
 doubles, the real store on a real filesystem, audit records, the adapters, the
 HTTP boundary, the wire mapping, the socket and router, and the facts this
 context and the published protocol schema must agree on (`agreement.rs`).
+
+## Copying send diagnostics
+
+`src/conversation/ui/send-failure.tsx` receives clipboard writing from composition
+through `ClipboardProvider`. `src/host/window.ts` selects the official Tauri
+clipboard plugin in native windows and the browser Clipboard API in previews.
+The native capabilities grant only text writing to `main`, `setup` and `desktop`;
+`scripts/desktop/clipboard-permission.test.mjs` checks the local window scope
+and excludes clipboard reading. The shared control retains the full diagnostic
+for an explicit Copy action and reports write failure without claiming success.
 
 ## Installing an agent runtime
 

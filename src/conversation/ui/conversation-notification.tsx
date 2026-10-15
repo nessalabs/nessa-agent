@@ -1,4 +1,4 @@
-import { SelectedAgentSetup } from "../../onboarding"
+import { SelectedAgentSetup } from "../../onboarding/ui/selected-agent-setup"
 import { SendFailure } from "./send-failure"
 import { executionTargets } from "@nessa/client"
 import { AgentNotification } from "@nessa-ui/react/agent-notification"
