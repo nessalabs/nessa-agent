@@ -995,6 +995,13 @@ and responses may finish after revocation; later operations read the latest
 committed state. Only auth mutations serialize; network writes share no admission mutex. The HTTP `/health` probe returns
 only liveness, without product state.
 
+Currently the manifest generates method names and requested grants, while the
+gateway independently matches strings for handler routing, response lanes and
+paired-admission shape. [ADR 921](adr/todo/921-close-product-method-classification.md)
+proposes a generated closed method identity and one exhaustive gateway plan. It
+is not implemented: current runtime behavior, including unknown-method refusal
+and the separate control lane, is unchanged.
+
 The panel authenticates using its distinct private surface credential loaded by
 the native host; the desktop window connects under the same credential and
 client id (`nessa-panel`), served once the gateway is ready (#419). Both are
