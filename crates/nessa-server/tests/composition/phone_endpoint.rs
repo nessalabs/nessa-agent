@@ -143,6 +143,7 @@ fn a_wildcard_with_a_bound_port_uses_the_route_and_port_zero_stays_unpublished()
         ("0.0.0.0:47650", Some("127.0.0.1".parse().unwrap())),
         ("[::]:47650", Some(route)),
         ("[::]:47650", Some("fe80::1".parse().unwrap())),
+        ("0.0.0.0:47650", Some("255.255.255.255".parse().unwrap())),
     ] {
         assert_eq!(
             super::super::advertised_endpoint(bound.parse().unwrap(), route),

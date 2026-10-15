@@ -480,10 +480,11 @@ impl RunningNative {
 
 /// The address discovery may publish. A named bind is that address. A wildcard
 /// bind is the configured `advertised` host on the bound port. Port zero, no
-/// configured host, loopback, link-local IPv6, or the other IP family stays
-/// unpublished; `OwnerPhoneRequest::validate_endpoint` is the owner of what
-/// may be disclosed. Callers pass the configured port: a port of zero here is
-/// unpublished, and `bind` does not substitute the ephemeral port.
+/// configured host, loopback, the IPv4 limited broadcast, link-local IPv6, or
+/// the other IP family stays unpublished; `OwnerPhoneRequest::validate_endpoint`
+/// is the owner of what may be disclosed. Callers pass the configured port: a
+/// port of zero here is unpublished, and `bind` does not substitute the
+/// ephemeral port.
 fn advertised_endpoint(bound: SocketAddr, advertised: Option<IpAddr>) -> Option<SocketAddr> {
     let endpoint = if bound.ip().is_unspecified() {
         let ip = advertised
