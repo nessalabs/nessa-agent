@@ -109,7 +109,7 @@ await main(
             exact: true,
           })
           await download.waitFor()
-          // A production-sized label beside Check setup again must wrap inside
+          // A production-sized label beside Retry must wrap inside
           // the card, never run past it or the viewport.
           const geometry = await setup.evaluate((region) => {
             const card = region.querySelector(".agent-action-card")

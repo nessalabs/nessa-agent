@@ -39,7 +39,7 @@ const readinessText = (name: string): Record<AgentReadiness, string> => ({
   "not-configured":
     "This gateway is not configured to run this agent. Downloading a runtime alone will not change that.",
   "not-supported": "This agent is not supported by this gateway.",
-  unknown: "Nessa could not check this agent. Check setup again before trying to send.",
+  unknown: "Nessa could not check this agent. Retry before sending.",
 })
 
 /** A setup action never resends the message whose refusal opened this view. */
@@ -189,14 +189,14 @@ function SelectedSetup({
                 void check()
               }}
             >
-              Check setup again
+              Retry
             </AgentActionButton>
           </>
         }
       >
         {downloads.outcome ? <p>{installationOutcomeText(downloads.outcome)}</p> : null}
         {downloads.unavailable ? (
-          <p>Downloads could not be checked. Check setup again.</p>
+          <p>Downloads could not be checked. Retry to check them again.</p>
         ) : null}
         {readiness === "needs-authentication" &&
         agent === "opencode" &&
@@ -211,7 +211,7 @@ function SelectedSetup({
         ) : null}
         <AgentApiKeyAuditWarning failure={credentials.auditFailure} />
         {loginFailed ? (
-          <p>Sign-in could not be opened. Check setup and try again.</p>
+          <p>Sign-in could not be opened. Try again.</p>
         ) : null}
       </AgentActionCard>
     </section>

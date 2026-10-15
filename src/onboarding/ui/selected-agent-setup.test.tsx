@@ -116,7 +116,7 @@ it.each(["busy", "not-confirmed"] as const)(
       ),
     ).toBe(false)
     expect(value.installations.install).toHaveBeenCalledTimes(1)
-    await React.act(async () => button("Check setup again").click())
+    await React.act(async () => button("Retry").click())
     expect(button("Download Claude")).toBeDefined()
     expect(value.installations.install).toHaveBeenCalledTimes(1)
   },
@@ -181,7 +181,7 @@ it("retains a first-use failed installation when the next readiness read is unkn
   })
   value.readiness.read.mockResolvedValue({ ok: false, reason: "unreachable" })
   await React.act(async () => button("Download Claude").click())
-  expect(container.textContent).toContain("Check setup again")
+  expect(container.textContent).toContain("Retry")
   expect(container.textContent).not.toBe("")
 })
 
