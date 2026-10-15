@@ -21,7 +21,7 @@
 //! S1–S14 in `docs/design/auth/device-pairing.md` ("Owner routes and mounting")
 //! and S7, S8, D5, D6 ("Activation and credential delivery"), and PR1, PR13
 //! ("Protected reads over the native channel").
-use super::runtime_config::{NativeConfig, RelayAddress};
+use super::runtime_config::{routable_advertised_host, NativeConfig, RelayAddress};
 use crate::conversation::application::FenceCapture;
 use crate::conversation::infrastructure::LocalReceiverAuthority;
 use crate::core::{NativeFailure, NativeShutdownFailure, RunError};
@@ -290,18 +290,19 @@ pub(super) async fn bind(
     let bind_failed = |source| RunError::Native(NativeFailure::Bind { address, source });
     let socket = TcpEnrollmentAccept::new(TcpListener::bind(address).await.map_err(bind_failed)?);
     let bound = socket.local_address().map_err(bind_failed)?;
-    // A wildcard listener has a real port after bind and no host of its own.
-    // Publish the configured address on that port. Port zero and a wildcard
-    // with no configured address stay unpublished.
-    let route = bound
-        .ip()
-        .is_unspecified()
+    // The configured port is the one a phone can keep. Binding port zero
+    // assigns an ephemeral port that the next start will not repeat, so that
+    // listener stays unpublished. A wildcard with a fixed port publishes the
+    // configured address on that port.
+    let route = (address.port() != 0 && bound.ip().is_unspecified())
         .then_some(advertised_address)
         .flatten();
-    if let Some(endpoint) = advertised_endpoint(bound, route) {
-        gateway
-            .publish_native_endpoint(endpoint)
-            .map_err(|error| RunError::Native(NativeFailure::Open(error)))?;
+    if address.port() != 0 {
+        if let Some(endpoint) = advertised_endpoint(bound, route) {
+            gateway
+                .publish_native_endpoint(endpoint)
+                .map_err(|error| RunError::Native(NativeFailure::Open(error)))?;
+        }
     }
     let sessions = NativeSessions::new(product, Arc::new(RegistryDevices(registry)));
     let connections = NativeEnrollmentConnections::new(gateway.clone(), clock.clone())
@@ -479,16 +480,14 @@ impl RunningNative {
 
 /// The address discovery may publish. A named bind is that address. A wildcard
 /// bind is the configured `advertised` host on the bound port. Port zero, no
-/// configured host, loopback, or the other IP family stays unpublished;
-/// `OwnerPhoneRequest::validate_endpoint` is the owner of what may be disclosed.
+/// configured host, loopback, link-local IPv6, or the other IP family stays
+/// unpublished; `OwnerPhoneRequest::validate_endpoint` is the owner of what
+/// may be disclosed. Callers pass the configured port: a port of zero here is
+/// unpublished, and `bind` does not substitute the ephemeral port.
 fn advertised_endpoint(bound: SocketAddr, advertised: Option<IpAddr>) -> Option<SocketAddr> {
     let endpoint = if bound.ip().is_unspecified() {
-        let ip = advertised.filter(|ip| {
-            !ip.is_unspecified()
-                && !ip.is_loopback()
-                && !ip.is_multicast()
-                && ip.is_ipv4() == bound.is_ipv4()
-        })?;
+        let ip = advertised
+            .filter(|ip| routable_advertised_host(*ip) && ip.is_ipv4() == bound.is_ipv4())?;
         SocketAddr::new(ip, bound.port())
     } else {
         bound

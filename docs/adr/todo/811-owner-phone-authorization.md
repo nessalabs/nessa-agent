@@ -20,7 +20,7 @@ Auth owns a separate OwnerPhoneReadWrite class, its complete ordered capability 
 
 This table is the order for authorizing an owner phone and for the connection that follows. `SessionCloseReason` stays the wire reason. `connection_outcome` in `crates/nessa-protocol/src/product/handshake.rs` is the only projection of a reason, or of a close that carried none, into what the client does next. `retryable()` stays on the reason and is not copied into that projection. A command that already happened is idempotent success; it is not a close and it does not end the session.
 
-A wildcard listener is published as the configured `native.advertisedAddress` on the bound port. A specific bind is published as itself. An absent listener, port zero, an unspecified address, or a wildcard with no advertised address discloses nothing. The process does not look up a route.
+A wildcard listener is published as the configured `native.advertisedAddress` on the configured port. A specific bind is published as itself. An absent listener, a configured port of zero, an unspecified address, or a wildcard with no advertised address discloses nothing. Binding port zero assigns an ephemeral port; that port is not published and is not stored in an authorization. An IPv6 link-local advertised address is refused, because the setting is an address with no interface scope. The process does not look up a route.
 
 | From | Event | Who | Client | Evidence |
 | --- | --- | --- | --- | --- |
@@ -44,9 +44,9 @@ A wildcard listener is published as the configured `native.advertisedAddress` on
 | any session | a malformed `session.terminated` | peer | not a client class; a protocol failure; the authorization is unchanged and the event is not queued | none |
 | owned conversation | `conversation.delete` | owner or the phone | success; the session stays up | `ConversationDeletionAuditRecord`: conversation, before Owned, after Deleted, `CallerRequested`, initiator, surface, correlation |
 | tombstone committed | the same delete | that caller | idempotent success | the first audit record; a contradicting record is refused; erasure resumes from the tombstone |
-| listener | wildcard bind and a routable `native.advertisedAddress` of that family | configuration | that address and the bound port may be authorized | the signed request stores the endpoint it was shown |
-| listener | a specific bind | configuration | that bound address may be authorized. An advertised address is accepted only for a wildcard of the same family, and only when it is unicast, not loopback, and not multicast | config parse refusal is the evidence that the setting does not apply |
-| listener | no listener, port zero, or a wildcard with no advertised address | configuration | nothing is disclosed; a new original that names another endpoint conflicts | none |
+| listener | wildcard bind, a fixed port, and a routable `native.advertisedAddress` of that family | configuration | that address and the configured port may be authorized | the signed request stores the endpoint it was shown |
+| listener | a specific bind on a fixed port | configuration | that bound address may be authorized. An advertised address is accepted only for a wildcard of the same family, and only when it is unicast, not loopback, not multicast, and not IPv6 link-local | config parse refusal is the evidence that the setting does not apply |
+| listener | no listener, a configured port of zero, or a wildcard with no advertised address | configuration | nothing is disclosed, including after the socket is given an ephemeral port; a new original that names another endpoint conflicts | none |
 
 `authentication_failed`, `credential_revoked`, `credential_expired`, and `authorization_lost` share one next action: stop, and do not retry that authorization. The reason stays the evidence, so a failed proof is not recorded as an owner revoke. A `server_shutdown` frame keeps the authorization and ends this session. This gateway's own process stop is the retryable `temporary_unavailable` close above, not that frame. `protocol_incompatible` keeps the authorization and is not called a shutdown: the process is still up, and a matching client can connect. Plain EOF is retryable because the gateway named no cause. Termination does not delete cached conversations.
 

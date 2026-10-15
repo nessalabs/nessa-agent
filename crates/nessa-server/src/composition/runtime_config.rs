@@ -16,6 +16,18 @@ use std::{
     time::Duration,
 };
 
+/// A host that may be stored as `native.advertisedAddress`. An IPv6 link-local
+/// address needs an interface scope, and this setting is only an `IpAddr`.
+pub(super) fn routable_advertised_host(address: IpAddr) -> bool {
+    if address.is_unspecified() || address.is_loopback() || address.is_multicast() {
+        return false;
+    }
+    match address {
+        IpAddr::V6(address) => !address.is_unicast_link_local(),
+        IpAddr::V4(_) => true,
+    }
+}
+
 /// The most bytes `config.json` may have: what startup reads and what a
 /// change to the stored MCP servers may write (`mcp_servers::settings`).
 pub(super) const MAX_CONFIG_BYTES: usize = 65_536;
@@ -187,9 +199,9 @@ impl RuntimeConfig {
         Ok(config)
     }
 
-    /// A wildcard listener publishes `advertisedAddress` on the bound port.
-    /// The address is configuration, not a route-table probe: it has to be a
-    /// unicast host of the listen family, and it applies only to a wildcard.
+    /// A wildcard listener publishes `advertisedAddress` on the configured
+    /// port. The address is configuration, not a route-table probe: it has to
+    /// be a routable host of the listen family, and it applies only to a wildcard.
     fn advertised_address(&self) -> Result<(), RunError> {
         let Some(native) = &self.native else {
             return Ok(());
@@ -198,9 +210,7 @@ impl RuntimeConfig {
             return Ok(());
         };
         if native.listen_address.ip().is_unspecified()
-            && !address.is_unspecified()
-            && !address.is_loopback()
-            && !address.is_multicast()
+            && routable_advertised_host(address)
             && address.is_ipv4() == native.listen_address.is_ipv4()
         {
             return Ok(());
@@ -498,6 +508,7 @@ mod tests {
             br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"0.0.0.0"}}"#,
             br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"224.0.0.1"}}"#,
             br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"2001:db8::1"}}"#,
+            br#"{"native":{"listenAddress":"[::]:47650","advertisedAddress":"fe80::1"}}"#,
             br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"not-an-address"}}"#,
         ] {
             assert!(
