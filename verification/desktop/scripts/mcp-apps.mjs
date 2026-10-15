@@ -29,7 +29,7 @@ import {
   answer as mcpAnswer,
 } from "../../../scripts/mcp-test-server/server.mjs"
 import { attempt, CannotRun, devServerOnlySteps, recordIfLeftOut } from "./lib/cli.mjs"
-import { appFrame } from "./lib/apps.mjs"
+import { appFrame, settleAppFrame } from "./lib/apps.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { target } from "./lib/server.mjs"
@@ -105,6 +105,8 @@ Checks, per engine and layout (--only <names> to pick):
                words of the app's in the host's chrome
   teardown     closing the pane takes its frames off the page; the app asking to
                go is sent ui/resource-teardown before its pane closes
+  moving-frame the action wait keeps the discovered app through finite host
+               motion; a controlled nested-frame Close receives one click
 
 departures, departures-back and chart read the dev server's modules. Under
 --mode prod those steps are not run. The other fixtures need the sandbox
@@ -821,7 +823,12 @@ async function departuresOn(page, scenarios) {
   }
 }
 
-const sandboxProbeChecks = new Set(["departures", "departures-back", "chart"])
+const sandboxProbeChecks = new Set([
+  "departures",
+  "departures-back",
+  "chart",
+  "moving-frame",
+])
 const sandboxProbePath = "/verification/desktop/fixtures/sandbox-probes/index.html"
 
 /** Visible probes get their own document, without the product sidebar or chats. */
@@ -982,7 +989,8 @@ async function fills(page, body, frame) {
 
 /** Checks the app in `place` is live, told `mode`, with its call's input and result. */
 async function expectLive(page, place, mode, failures) {
-  const { element, proxy, app } = await appFrame(page, place)
+  const frames = await appFrame(page, place)
+  const { element, proxy, app } = frames
   const said = await appState(app, "live")
   if (said.state !== "live") failures.push(`the ${place} app is ${said.state}, not live`)
   if (said.mode !== mode)
@@ -991,6 +999,7 @@ async function expectLive(page, place, mode, failures) {
     failures.push(`the ${place} app was told input ${said.input}`)
   if (said.result !== '{"rows":3}')
     failures.push(`the ${place} app was told result ${said.result}`)
+  await settleAppFrame(page, frames)
   const box = await rect(element)
   if (box.w <= 0 || box.h <= 0)
     failures.push(`the ${place} frame has no room: ${JSON.stringify(box)}`)
@@ -1147,6 +1156,74 @@ async function chartLive(page, layout, shots) {
 }
 
 const checks = {
+  "moving-frame": async (page) => {
+    // Same-origin geometry control, not the sandbox's security contract. Moving
+    // the ancestor on mousemove makes a frame-local stable target miss the later
+    // press; #906's observed failure has not been causally tied to this ordering.
+    await page.evaluate(() => {
+      const host = document.querySelector("[data-sandbox-probes]")
+      Object.assign(host.style, {
+        display: "block",
+        position: "relative",
+        width: "1000px",
+        height: "320px",
+      })
+      const moving = document.createElement("div")
+      moving.setAttribute("data-moving-app-host", "")
+      moving.style.cssText =
+        "position:absolute;left:20px;top:20px;transform:translateX(0px)"
+      const html = `<body data-clicks="0"><button data-fixture="close" style="position:absolute;left:20px;top:30px;width:100px;height:40px">Close</button><script>
+        document.addEventListener("mousemove", function () {
+          var owner = top.document.querySelector("[data-moving-app-host]");
+          var animation = owner.getAnimations()[0];
+          if (animation.playState === "running")
+            animation.currentTime = animation.effect.getTiming().duration;
+        }, { signal: top.__sandboxProbeAbort.signal });
+        document.querySelector("button").addEventListener("click", function (event) {
+          if (event.isTrusted) document.body.dataset.clicks = String(Number(document.body.dataset.clicks) + 1);
+        }, { signal: top.__sandboxProbeAbort.signal });
+      </script></body>`
+      const proxy = document.createElement("iframe")
+      proxy.setAttribute("data-app-frame", "pane")
+      proxy.style.cssText = "width:500px;height:250px;border:0"
+      proxy.srcdoc = `<iframe style="width:500px;height:250px;border:0" srcdoc="${html.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;")}"></iframe>`
+      moving.append(proxy)
+      host.append(moving)
+    })
+    const discovered = await appFrame(page, "pane")
+    await discovered.app.waitForSelector(selectorFor.fixtureControl("close"))
+    await page.evaluate(() => {
+      const owner = document.querySelector("[data-moving-app-host]")
+      owner.animate(
+        [{ transform: "translateX(0px)" }, { transform: "translateX(350px)" }],
+        { duration: 10000, fill: "forwards" },
+      )
+    })
+    // Discovery remains usable before motion has completed. Only the action
+    // primitive waits, on these handles, rather than discovering another app.
+    const lookup = await appFrame(page, "pane", 1000)
+    const before = await page.evaluate(() => {
+      const animation = document
+        .querySelector("[data-moving-app-host]")
+        .getAnimations()[0]
+      const state = animation.playState
+      animation.effect.updateTiming({ duration: 1500 })
+      animation.currentTime = 0
+      return state
+    })
+    const failures = []
+    if (lookup.app !== discovered.app || before !== "running")
+      failures.push("discovery did not retain the app before host motion finished")
+    await settleAppFrame(page, discovered)
+    await discovered.app.click(selectorFor.fixtureControl("close"))
+    const clicks = await discovered.app.evaluate(() =>
+      Number(document.body.dataset.clicks),
+    )
+    if (clicks !== 1)
+      failures.push(`the discovered app received ${clicks} Close clicks, expected one`)
+    return { before, clicks, failures }
+  },
+
   inline: async (page) => {
     const failures = []
     const { app, box, said } = await expectLive(page, "inline", "inline", failures)
