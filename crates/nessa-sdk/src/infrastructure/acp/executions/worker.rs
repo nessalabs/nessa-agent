@@ -2775,11 +2775,11 @@ impl<P: AcpProfile> Worker<P> {
                 .captures_content()
                 .then(|| self.profile.traced_tool_arguments(tool.id().as_str()))
                 .flatten();
-            self.traces.tool(
-                self.trace_now(),
-                super::gen_ai::tool_fact(name, arguments, &tool, self.traces.captures_content()),
-            );
-            self.emit(execution.tool_event(&target, tool)?)
+            let fact =
+                super::gen_ai::tool_fact(name, arguments, &tool, self.traces.captures_content());
+            let event = execution.tool_event(&target, tool)?;
+            self.traces.tool(self.trace_now(), fact);
+            self.emit(event)
         }
     }
     async fn permission(

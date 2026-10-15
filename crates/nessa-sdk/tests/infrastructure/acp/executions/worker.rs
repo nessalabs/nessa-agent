@@ -1,6 +1,8 @@
 use super::*;
 use crate::application::agent_execution::agents::AgentFuture;
-use crate::application::agent_execution::traces::{ContentCapture, LocalTraceStore, TraceRecorder};
+use crate::application::agent_execution::traces::{
+    ContentCapture, FinishReason, LocalTraceStore, TraceRecorder,
+};
 use crate::infrastructure::acp::{
     executions::event_queue::EventQueueBudget,
     tests::profile_substitution::{profile_setup, TestAcpProfile},
@@ -307,6 +309,57 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             .await
             .unwrap();
     }
+}
+
+#[tokio::test]
+async fn a_rejected_tool_update_is_not_traced() {
+    let (mut worker, _commands, _close, _events) =
+        dispatch_policy::worker_with_ready_frames(&[], "").await;
+    let store = LocalTraceStore::new();
+    worker.traces = TraceRecorder::new(store.clone(), ContentCapture::off());
+    let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
+    let (reply, _result) = oneshot::channel();
+    worker
+        .dispatch_execution(
+            &mut execution,
+            dispatched(dispatch_policy::request(), None),
+            reply,
+        )
+        .await
+        .unwrap_or_else(|failure| panic!("{}", failure.error()));
+    let tool = |id: &str, title: String| {
+        json!({
+            "sessionId": "context",
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": id,
+                "title": title,
+                "status": "in_progress",
+            }
+        })
+    };
+    worker
+        .update(&mut execution, tool("kept", "list".into()))
+        .unwrap();
+    let oversized = "x".repeat(32 * 1024 * 1024 + 64);
+    assert!(worker
+        .update(&mut execution, tool("rejected", oversized))
+        .is_err());
+    worker
+        .traces
+        .finish(Duration::from_secs(1), FinishReason::Stop);
+    let ids: Vec<_> = store
+        .read("next")
+        .iter()
+        .filter(|span| span.operation() == "execute_tool")
+        .map(|span| span.string("gen_ai.tool.call.id").unwrap().to_owned())
+        .collect();
+    assert_eq!(ids, vec!["kept".to_owned()]);
+    worker
+        .scope
+        .cleanup(Duration::ZERO, Duration::from_secs(2))
+        .await
+        .unwrap();
 }
 
 #[path = "worker/panics.rs"]
