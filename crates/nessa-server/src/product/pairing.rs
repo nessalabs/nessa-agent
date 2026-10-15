@@ -236,6 +236,7 @@ pub(super) fn refusal(error: PairingRuntimeError) -> &'static str {
         PairingRuntimeError::Owner(OwnerError::Enrollment(error))
         | PairingRuntimeError::Enrollment(error) => store_refusal(error),
         PairingRuntimeError::Owner(OwnerError::Domain(error)) => domain_refusal(error),
+        PairingRuntimeError::Owner(OwnerError::Entropy) => PairingErrorCode::PairingUnavailable,
         PairingRuntimeError::Busy | PairingRuntimeError::Registration(RegistrationError::Busy) => {
             PairingErrorCode::PairingBusy
         }

@@ -61,6 +61,8 @@ impl ActivationError {
             Self::Owner(OwnerError::Authorization(error)) => access_error_recurs(*error),
             Self::Owner(OwnerError::Enrollment(error)) => store_error_recurs(*error),
             Self::Owner(OwnerError::Domain(_)) => true,
+            // A generator that failed can succeed on the next approval.
+            Self::Owner(OwnerError::Entropy) => false,
             Self::Receiver(error) => receiver_error_recurs(*error),
             Self::ReceiverNotCurrent => true,
             Self::Cleanup(error) => error.recurs(),
@@ -93,7 +95,7 @@ impl PairingOwner<'_> {
         let decided = self
             .decide(session, id, OwnerDecision::Approve(key))
             .await?;
-        self.activate_approved(session, decided, fresh).await
+        self.activate_approved(session, decided, Some(fresh)).await
     }
 
     /// Continue a canonical approval already committed by signed owner-phone consent.
@@ -102,7 +104,7 @@ impl PairingOwner<'_> {
         &self,
         session: &AuthenticatedSession,
         decided: PairingRecord,
-        fresh: FreshStage,
+        fresh: Option<FreshStage>,
     ) -> Result<Approval, OwnerError> {
         let id = decided.id();
         if !matches!(
@@ -133,10 +135,13 @@ impl PairingOwner<'_> {
         &self,
         session: &AuthenticatedSession,
         record: PairingRecord,
-        fresh: FreshStage,
+        fresh: Option<FreshStage>,
     ) -> Result<PairingRecord, ActivationError> {
         let id = record.id();
         if record.phase() == PairingPhase::Approved {
+            // Staging is the only step that consumes fresh identities. A caller
+            // that reached an approved record without them cannot invent one.
+            let fresh = fresh.ok_or(ActivationError::Owner(OwnerError::Entropy))?;
             // The decision advanced the revision, so this admission is fresh.
             let admission = self
                 .admit(session, id)

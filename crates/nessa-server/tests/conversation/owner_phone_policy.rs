@@ -652,6 +652,30 @@ async fn owner_phone_reader_factory_requires_actual_original_holding_without_own
             Err(ReadRefusal::WrongOwner)
         );
     }
+    assert_eq!(
+        reader.admit_conversation(&owned, AccessAction::Erase),
+        Err(ReadRefusal::WrongOwner)
+    );
+    assert_eq!(
+        reader.admit_conversation(&deleted, AccessAction::Erase),
+        Ok(())
+    );
+    let foreign_deleted = target(foreign.clone(), f.purpose.organization().clone())
+        .deleted(
+            ConversationDeletion::new(
+                f.purpose.organization().clone(),
+                foreign.clone(),
+                "test".into(),
+                "foreign-delete".into(),
+                110_002,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        reader.admit_conversation(&foreign_deleted, AccessAction::Erase),
+        Err(ReadRefusal::WrongOwner)
+    );
     for (holding, expected) in [
         (None, ReadRefusal::Unverifiable),
         (
@@ -699,6 +723,9 @@ async fn owner_phone_reader_factory_requires_actual_original_holding_without_own
 
 #[path = "owner_phone_catalogue.rs"]
 mod catalogue;
+
+#[path = "owner_phone_delete.rs"]
+mod delete;
 
 #[path = "owner_phone_profile.rs"]
 mod owner_phone_profile;

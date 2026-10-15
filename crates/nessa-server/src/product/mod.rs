@@ -61,4 +61,7 @@ mod agent_install;
 pub use change_watch::WatchTaskFault;
 
 #[cfg(test)]
+pub(crate) use conversation::dispatch as dispatch_conversation;
+
+#[cfg(test)]
 pub(crate) use socket::HostWatchFixture;

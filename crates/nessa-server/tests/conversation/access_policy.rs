@@ -265,6 +265,34 @@ fn owner_act_admits_the_owner_until_the_conversation_is_deleted() {
 }
 
 #[test]
+fn owner_erase_admits_only_the_owner_of_a_tombstone() {
+    let policy = policy();
+    let deleted = conversation("org", "owner", true);
+    let live = conversation("org", "owner", false);
+    assert_eq!(
+        allowed_by(&person(
+            &policy,
+            AccessAction::Erase,
+            &deleted,
+            "org",
+            "owner"
+        )),
+        Some(&["owner.erase".to_owned()][..])
+    );
+    assert!(!allowed(&person(
+        &policy,
+        AccessAction::Erase,
+        &live,
+        "org",
+        "owner"
+    )));
+    assert_eq!(
+        person(&policy, AccessAction::Erase, &deleted, "org", "other"),
+        AccessDecision::Deny(AccessDenial::NotPermitted)
+    );
+}
+
+#[test]
 fn owner_read_and_artifact_read_admit_the_owner_until_deleted() {
     let policy = policy();
     for (action, id) in [

@@ -1,7 +1,7 @@
 //! Signed original commands keep the same blocking lease through activation.
 use super::{GatewayPairing, PairingRuntimeError};
 use crate::device_pairing::application::{
-    claimed_status, ActivationError, DeviceStatusError, FreshOwnerPhone, FreshStage,
+    claimed_status, ActivationError, DeviceStatusError, FreshOwnerPhone, FreshStage, OwnerError,
     PairingReceivers, ReceiverError,
 };
 use nessa_auth::{
@@ -49,6 +49,35 @@ fn current(
     })
 }
 
+/// Invitation, consent, and stage identities for one new original. Called only
+/// after the store reports that original absent, or when activation still has
+/// no stage to resume.
+fn mint_phone_identities(
+    entropy: &mut (impl RngCore + CryptoRng),
+) -> Result<(FreshOwnerPhone, FreshStage), OwnerError> {
+    let mut bytes = [0; 64];
+    entropy
+        .try_fill_bytes(&mut bytes)
+        .map_err(|_| OwnerError::Entropy)?;
+    let mut invitation = [0; 16];
+    invitation.copy_from_slice(&bytes[..16]);
+    let mut consent = [0; 16];
+    consent.copy_from_slice(&bytes[16..32]);
+    let mut stage = [0; 16];
+    stage.copy_from_slice(&bytes[48..]);
+    Ok((
+        FreshOwnerPhone {
+            invitation: InvitationId::new(invitation),
+            consent: ConsentIntentId::new(consent),
+        },
+        FreshStage {
+            credential: CredentialId::new(format!("device-{}", super::hex(&bytes[32..48])))
+                .map_err(|_| OwnerError::Entropy)?,
+            request: AttemptId::new(stage),
+        },
+    ))
+}
+
 impl GatewayPairing {
     /// Verify the exact signed request before any registry mutation, then own
     /// approval, receiver settlement and final receipt independently of observers.
@@ -61,37 +90,19 @@ impl GatewayPairing {
     ) -> Result<PhoneAuthorization, PairingRuntimeError> {
         let proof =
             verify_owner_phone_request(request, &signature).map_err(PairingRuntimeError::Crypto)?;
-        let mut bytes = [0; 64];
-        entropy
-            .try_fill_bytes(&mut bytes)
-            .map_err(|_| PairingRuntimeError::Entropy)?;
-        let mut invitation = [0; 16];
-        invitation.copy_from_slice(&bytes[..16]);
-        let mut consent = [0; 16];
-        consent.copy_from_slice(&bytes[16..32]);
-        let mut stage = [0; 16];
-        stage.copy_from_slice(&bytes[48..]);
-        let fresh = FreshOwnerPhone {
-            invitation: InvitationId::new(invitation),
-            consent: ConsentIntentId::new(consent),
-        };
-        let stage = FreshStage {
-            credential: CredentialId::new(format!("device-{}", super::hex(&bytes[32..48])))
-                .map_err(|_| PairingRuntimeError::Entropy)?,
-            request: AttemptId::new(stage),
-        };
         let originals = self.dependencies.originals.clone();
         let endpoint = self.native_endpoint();
         let session = session.clone();
         self.owner_command(move |owner, handle| {
             handle.block_on(async {
+                // Identities are drawn only once the store says this original
+                // is absent, or an approved record still has no stage.
                 let approval = owner
                     .authorize_and_activate_phone(
                         &session,
                         originals.as_ref(),
                         &proof,
-                        fresh,
-                        stage,
+                        || mint_phone_identities(&mut entropy),
                         endpoint,
                     )
                     .await?;

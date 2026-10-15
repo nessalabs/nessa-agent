@@ -247,10 +247,17 @@ pub(super) async fn admit_conversation(
 /// metadata is independently scoped by Cedar before effects; absence remains
 /// the command owner's fact (missing target, missing receipt, or a new creation),
 /// never fabricated target metadata or a Rust permission verdict.
+///
+/// A live conversation asks `conversation.act`. A tombstone asks
+/// `when_deleted`. Delete passes `conversation.erase`, so the owner of a
+/// committed tombstone can take the idempotent receipt and resume erasure.
+/// Every other command passes `Act`, which the ownership policy refuses once
+/// the conversation is deleted.
 pub(super) async fn admit_command_target(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     id: &ConversationId,
+    when_deleted: AccessAction,
 ) -> Result<(), &'static str> {
     let Reader::OwnerPhone(phone) = reader(state, session).await? else {
         return Ok(());
@@ -263,8 +270,13 @@ pub(super) async fn admit_command_target(
             .await
             .map_err(|_| "temporarily_unavailable")?
     {
+        let action = if target.deletion().is_some() {
+            when_deleted
+        } else {
+            AccessAction::Act
+        };
         phone
-            .admit_conversation(&target, AccessAction::Act)
+            .admit_conversation(&target, action)
             .map_err(refusal_code)?;
     }
     Ok(())

@@ -10,7 +10,7 @@ use nessa_auth::{
     },
     domain::pairing::{
         ConsentClass, ConsentIntent, ConsentIntentId, InvitationId, OwnerPhoneRequestId,
-        OwnerPhoneSource, PairingError, PairingRecord,
+        OwnerPhoneSource, PairingError, PairingPhase, PairingRecord,
     },
 };
 use std::net::SocketAddr;
@@ -30,17 +30,27 @@ impl PairingOwner<'_> {
         session: &AuthenticatedSession,
         originals: &dyn OwnerPhoneStore,
         proof: &VerifiedOwnerPhoneDeviceProof,
-        fresh: FreshOwnerPhone,
-        stage: FreshStage,
+        mut mint: impl FnMut() -> Result<(FreshOwnerPhone, FreshStage), OwnerError>,
         endpoint: Option<(SocketAddr, [u8; 44])>,
     ) -> Result<Approval, OwnerError> {
-        let approved = self
-            .authorize_phone(session, originals, proof, fresh, endpoint)
+        let (approved, staged) = self
+            .authorize_phone(session, originals, proof, &mut mint, endpoint)
             .await?;
         // Canonical expiry owns first-cause and cleanup before a mutating resume.
         // Read-only status/recovery never take this path. Later stage/publication
         // already obtain new admissions after an expiry changes the revision.
         let current = self.expire(approved.id()).await?;
+        // An exact replay of a stored stage or an active receipt draws nothing.
+        // A first commit already minted its stage. Only an approved record that
+        // still has none asks the generator, and only for that stage.
+        let stage = if current.phase() == PairingPhase::Approved {
+            Some(match staged {
+                Some(stage) => stage,
+                None => mint()?.1,
+            })
+        } else {
+            None
+        };
         self.activate_approved(session, current, stage).await
     }
     /// Admit the exact stored original before exposing it. A lookup is never admission.
@@ -76,11 +86,14 @@ impl PairingOwner<'_> {
         session: &AuthenticatedSession,
         originals: &dyn OwnerPhoneStore,
         proof: &VerifiedOwnerPhoneDeviceProof,
-        fresh: FreshOwnerPhone,
+        mint: &mut impl FnMut() -> Result<(FreshOwnerPhone, FreshStage), OwnerError>,
         endpoint: Option<(SocketAddr, [u8; 44])>,
-    ) -> Result<PairingRecord, OwnerError> {
+    ) -> Result<(PairingRecord, Option<FreshStage>), OwnerError> {
         let request = proof.request();
         let mut race_failure = None;
+        // Kept across a lost race so the winner's later activation can use the
+        // identities this call already drew, instead of drawing again.
+        let mut staged = None;
         loop {
             let initial = match originals.find_owner_phone_original(request.source(), request.id())
             {
@@ -94,6 +107,8 @@ impl PairingOwner<'_> {
                     if endpoint != Some((request.endpoint(), *request.gateway_pin())) {
                         return Err(OwnerError::Domain(PairingError::Conflict));
                     }
+                    let (fresh, stage) = mint()?;
+                    staged = Some(stage);
                     let source = request.source();
                     let intent = ConsentIntent::new(
                         fresh.consent,
@@ -129,7 +144,7 @@ impl PairingOwner<'_> {
                 .authorize_owner_phone(&initial, proof, &admission, self.clock)
                 .await
             {
-                Ok(record) => return Ok(record),
+                Ok(record) => return Ok((record, staged)),
                 Err(
                     error @ (PairingStoreError::Domain(PairingError::Conflict)
                     | PairingStoreError::StaleRevision),

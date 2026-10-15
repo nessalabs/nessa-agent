@@ -59,7 +59,7 @@ use serde_json::{json, Value};
 
 /// `initiation` is who a turn this request starts is saved as started by,
 /// as the request was admitted (`read_access::admit_request`).
-pub(super) async fn dispatch(
+pub(crate) async fn dispatch(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     frame: RequestFrame,
@@ -93,10 +93,15 @@ pub(super) async fn dispatch(
         };
     }
     macro_rules! target_params {
-        ($kind:ty) => {{
+        ($kind:ty) => {
+            target_params!($kind, crate::conversation::application::AccessAction::Act)
+        };
+        ($kind:ty, $when_deleted:expr) => {{
             let value = params!($kind);
             let id = conversation_id(&value.conversation_id)?;
-            if let Err(code) = super::read_access::admit_command_target(state, session, &id).await {
+            if let Err(code) =
+                super::read_access::admit_command_target(state, session, &id, $when_deleted).await
+            {
                 return Ok(failure(&frame.id, code));
             }
             value
@@ -533,7 +538,10 @@ pub(super) async fn dispatch(
                 ))
             }
             "conversation.delete" => {
-                let params = target_params!(ConversationDeleteParams);
+                let params = target_params!(
+                    ConversationDeleteParams,
+                    crate::conversation::application::AccessAction::Erase
+                );
                 let applied = service
                     .delete(
                         conversation_id(&params.conversation_id)?,

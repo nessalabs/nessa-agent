@@ -57,6 +57,8 @@ That lookup is the command receipt on main
 | `failed` | The send returns a `ConversationErrorCode`, or lookup `stage` is `settled` and `outcome` is `no_effect`, `refused_after_save`, or `unavailable_after_save`. |
 | `unknown` | The send answer was lost and lookup `found` is false; the lookup itself failed; lookup `stage` is `attempted`; or the send returned `submission_unresolved`. |
 
+A submit lookup settles as `dispatched`, `no_effect`, `refused_after_save`, or `unavailable_after_save`. `withdrawn`, `cancelled`, and `already_final` are `conversation.stop` outcomes; a submit lookup does not return them.
+
 `submission_unresolved` is a restored `Attempted` receipt
 ([command creation](command-creation.md), row M4). The effect may have
 happened. The outbox keeps this `requestId` and does not send another.

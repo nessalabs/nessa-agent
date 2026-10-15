@@ -161,6 +161,84 @@ async fn signed_setup_from_empty_ledger_activates_once_and_reads_exact_original(
     drop(bound);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exact_replay_returns_the_stored_original_when_entropy_is_unavailable() {
+    use nessa_auth::adapters::pairing::{rand::Error, CryptoRng, OsEntropy, RngCore};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct RefuseEntropy(Arc<AtomicUsize>);
+    impl RngCore for RefuseEntropy {
+        fn next_u32(&mut self) -> u32 {
+            0
+        }
+        fn next_u64(&mut self) -> u64 {
+            0
+        }
+        fn fill_bytes(&mut self, bytes: &mut [u8]) {
+            bytes.fill(0);
+        }
+        fn try_fill_bytes(&mut self, _: &mut [u8]) -> Result<(), Error> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(Error::from(
+                std::num::NonZeroU32::new(Error::CUSTOM_START).unwrap(),
+            ))
+        }
+    }
+    impl CryptoRng for RefuseEntropy {}
+
+    let namespace = Namespace::new();
+    let registry = namespace.registry();
+    let token = credential(&registry);
+    let (prepared, commands, _peers) = prepare(&loopback(), namespace.inputs(registry.clone()))
+        .await
+        .unwrap();
+    let draws = Arc::new(AtomicUsize::new(0));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let commands = commands.with_entropy({
+        let calls = calls.clone();
+        let draws = draws.clone();
+        Arc::new(move || {
+            let n = calls.fetch_add(1, Ordering::SeqCst);
+            if n == 0 {
+                Box::new(OsEntropy)
+                    as Box<dyn crate::device_pairing::infrastructure::InvitationEntropy>
+            } else {
+                Box::new(RefuseEntropy(draws.clone()))
+                    as Box<dyn crate::device_pairing::infrastructure::InvitationEntropy>
+            }
+        })
+    });
+    let commands = Arc::new(commands);
+    let state = product(registry.clone()).with_pairing(commands);
+    let bound = bind(
+        prepared,
+        RuntimeDependencies::default().clock,
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let serving = tokio::spawn(async move {
+        axum::serve(listener, crate::server::entrypoint::http::router(state))
+            .await
+            .unwrap();
+    });
+    tokio::task::block_in_place(|| {
+        let mut client = ProductClient::connect(address, &token);
+        let params = signed(&mut client, 62);
+        let initial = client.ok("phone.authorize", params.clone());
+        assert_eq!(initial["phase"], "active", "{initial}");
+        let replay = client.ok("phone.authorize", params);
+        assert_eq!(replay, initial);
+        assert_eq!(draws.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    });
+    serving.abort();
+    let _ = serving.await;
+    drop(bound);
+}
+
 #[path = "owner_phone_expiry.rs"]
 mod expiry;
 #[path = "owner_phone_route_refusals.rs"]

@@ -191,7 +191,7 @@ impl PairingStore for LocalCredentialStore {
                 .map_err(|_| PairingStoreError::Unavailable)?;
             let current = slot.as_ref().ok_or(PairingStoreError::Unavailable)?;
             let now = clock.unix_milliseconds();
-            validate_pairing_admission(current, admission, now)?;
+            validate_pairing_admission(current, admission, now, true)?;
             if record.intent() != admission.intent()
                 || record.created_at_ms() > now
                 || now >= record.expires_at_ms()
@@ -517,7 +517,12 @@ impl PairingStore for LocalCredentialStore {
                 .map_err(|_| PairingStoreError::Unavailable)?;
             let current = slot.as_ref().ok_or(PairingStoreError::Unavailable)?;
             let now = clock.unix_milliseconds();
-            validate_pairing_admission(current, admission, now)?;
+            validate_pairing_admission(
+                current,
+                admission,
+                now,
+                !matches!(decision, OwnerDecision::Cancel | OwnerDecision::Deny),
+            )?;
             let index = current
                 .pairings
                 .iter()
@@ -634,7 +639,7 @@ impl LocalCredentialStore {
             .map_err(|_| PairingStoreError::Unavailable)?;
         let current = slot.as_ref().ok_or(PairingStoreError::Unavailable)?;
         let now = clock.unix_milliseconds();
-        validate_pairing_admission(current, admission, now)?;
+        validate_pairing_admission(current, admission, now, true)?;
         let index = current
             .pairings
             .iter()
@@ -756,6 +761,7 @@ pub(super) fn validate_pairing_admission(
     registry: &Registry,
     admission: &PairingAdmission,
     now_ms: u64,
+    require_original_issuer: bool,
 ) -> Result<(), PairingStoreError> {
     if registry.revision != admission.revision() {
         return Err(PairingStoreError::StaleRevision);
@@ -767,9 +773,10 @@ pub(super) fn validate_pairing_admission(
         return Err(PairingStoreError::Domain(PairingError::Expired));
     }
     let intent = admission.intent();
-    // Every later owner-phone stage and publication keeps the original bootstrap
-    // issuer. Another credential of the same principal is not original replay authority.
-    if !intent.class().uses_pake() {
+    // Owner-phone authorization, reads, staging, and publication keep the
+    // original bootstrap issuer. Cancel and deny do not: a later credential of
+    // the same principal may end the enrollment.
+    if require_original_issuer && !intent.class().uses_pake() {
         for stored in &registry.pairings {
             let Some(request) = stored
                 .owner_phone_request()

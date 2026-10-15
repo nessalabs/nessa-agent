@@ -69,7 +69,7 @@ impl OwnerPhoneStore for LocalCredentialStore {
                 .map_err(|_| PairingStoreError::Unavailable)?;
             let current = slot.as_ref().ok_or(PairingStoreError::Unavailable)?;
             let now = clock.unix_milliseconds();
-            validate_pairing_admission(current, admission, now)?;
+            validate_pairing_admission(current, admission, now, true)?;
             binding(proof.request(), admission)?;
             if let Some(index) = original(
                 &current.pairings,
@@ -174,7 +174,7 @@ impl OwnerPhoneStore for LocalCredentialStore {
             .registry()
             .map_err(|_| PairingStoreError::Unavailable)?;
         let current = slot.as_ref().ok_or(PairingStoreError::Unavailable)?;
-        validate_pairing_admission(current, admission, clock.unix_milliseconds())?;
+        validate_pairing_admission(current, admission, clock.unix_milliseconds(), true)?;
         // Existing-original issuer belongs to validate_pairing_admission. The
         // supplied request must equal its stored original, whose restoration
         // binds source to intent; the receipt's intent is compared below.

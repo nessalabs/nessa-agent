@@ -335,5 +335,144 @@ fn another_valid_owner_credential_cannot_stage_the_original_signed_consent() {
     );
 }
 
+#[test]
+fn a_replacement_owner_can_end_the_enrollment_and_cannot_stage_or_approve_it() {
+    use crate::domain::pairing::DeviceKey;
+
+    let f = signed_fixture();
+    let approved = ready(f.store.authorize_owner_phone(
+        &f.initial,
+        &f.proof,
+        &signed_admission(&f, f.initial.intent()),
+        &Time,
+    ))
+    .unwrap();
+    let second_request = OwnerPhoneRequest::new(
+        OwnerPhoneRequestId::new([8; 16]).unwrap(),
+        f.request.source().clone(),
+        *f.request.gateway_pin(),
+        f.request.endpoint(),
+        f.request.device_key(),
+    )
+    .unwrap();
+    let second_proof = verify_owner_phone_request(
+        second_request.clone(),
+        &f.identity
+            .sign_owner_phone_request(&second_request)
+            .unwrap(),
+    )
+    .unwrap();
+    let second_intent = ConsentIntent::new(
+        ConsentIntentId::new([18; 16]),
+        1,
+        f.initial.intent().audience().clone(),
+        f.initial.intent().owner().clone(),
+        f.initial.intent().membership().clone(),
+        f.initial.intent().resource().clone(),
+        ConsentClass::OwnerPhoneReadWrite,
+    )
+    .unwrap();
+    let second_initial = PairingRecord::new_owner_phone(
+        InvitationId::new([19; 16]),
+        second_intent,
+        Time.unix_milliseconds(),
+        PairingPolicy::initial(),
+    )
+    .unwrap();
+    let denied_target = ready(f.store.authorize_owner_phone(
+        &second_initial,
+        &second_proof,
+        &signed_admission(&f, second_initial.intent()),
+        &Time,
+    ))
+    .unwrap();
+    let mut request = ordinary_issue("replacement-owner");
+    request.principal.id = "owner".into();
+    request.principal.kind = PrincipalKindDto::Human;
+    request.membership.id = "owner-membership".into();
+    request.membership.principal_id = "owner".into();
+    request.membership.role = MembershipRoleDto::Admin;
+    request.grants = [
+        "credential.manage",
+        "conversation.read",
+        "conversation.write",
+        "server.read",
+    ]
+    .iter()
+    .map(|action| grant("org-1", action))
+    .collect();
+    let outcome = f
+        .store
+        .issue_internal(request, IssuePath::SurfaceProvision)
+        .unwrap();
+    let evidence = match outcome {
+        IssueCredentialOutcome::Issued { evidence, .. } => evidence,
+        _ => panic!("expected a replacement owner credential"),
+    };
+    let replacement = ready(
+        AuthenticateSession {
+            verifier: f.store.as_ref(),
+            access: f.store.as_ref(),
+            clock: &Time,
+        }
+        .execute(&evidence, &AudienceId::new("gateway-1").unwrap()),
+    )
+    .unwrap();
+    let admit = |intent: &ConsentIntent| {
+        ready(
+            AuthorizePairing {
+                access: f.store.as_ref(),
+                policy: &CedarPolicyEvaluator::new().unwrap(),
+                clock: &Time,
+            }
+            .execute(&replacement, intent, intent.resource()),
+        )
+        .unwrap()
+    };
+    assert!(matches!(
+        f.store.stage_pairing(
+            approved.id(),
+            CredentialId::new("phone-credential").unwrap(),
+            AttemptId::new([77; 16]),
+            &admit(approved.intent()),
+            &Time,
+        ),
+        Err(PairingStoreError::Domain(PairingError::Conflict))
+    ));
+    assert!(matches!(
+        ready(f.store.decide_pairing(
+            approved.id(),
+            OwnerDecision::Approve(DeviceKey::new([2; 32])),
+            &admit(approved.intent()),
+            &Time,
+        )),
+        Err(PairingStoreError::Domain(PairingError::Conflict))
+    ));
+    let cancelled = ready(f.store.decide_pairing(
+        approved.id(),
+        OwnerDecision::Cancel,
+        &admit(approved.intent()),
+        &Time,
+    ))
+    .unwrap();
+    assert_eq!(cancelled.phase(), PairingPhase::Terminal);
+    assert_eq!(
+        cancelled.terminal().map(|(cause, _)| cause),
+        Some(TerminalCause::Cancelled)
+    );
+    let denied = ready(f.store.decide_pairing(
+        denied_target.id(),
+        OwnerDecision::Deny,
+        &admit(denied_target.intent()),
+        &Time,
+    ))
+    .unwrap();
+    assert_eq!(denied.phase(), PairingPhase::Terminal);
+    assert_eq!(
+        denied.terminal().map(|(cause, _)| cause),
+        Some(TerminalCause::Denied)
+    );
+}
+
 #[path = "owner_phone_purpose_tests.rs"]
 mod owner_phone_purpose_tests;

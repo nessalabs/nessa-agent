@@ -47,7 +47,13 @@ pub(super) async fn dispatch(
     let Ok(conversation) = ConversationId::new(&params.conversation_id) else {
         return failure(&frame.id, error_code(BeginError::InvalidRequest).as_str());
     };
-    if let Err(code) = super::read_access::admit_command_target(state, session, &conversation).await
+    if let Err(code) = super::read_access::admit_command_target(
+        state,
+        session,
+        &conversation,
+        crate::conversation::application::AccessAction::Act,
+    )
+    .await
     {
         return failure(&frame.id, code);
     }

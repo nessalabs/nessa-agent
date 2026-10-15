@@ -62,6 +62,12 @@ impl PairingOwnerCommands {
     pub fn new(gateway: Arc<GatewayPairing>, entropy: InvitationEntropySource) -> Self {
         Self { gateway, entropy }
     }
+    /// A test substitutes the generator after composition has opened the gateway.
+    #[cfg(test)]
+    pub(crate) fn with_entropy(mut self, entropy: InvitationEntropySource) -> Self {
+        self.entropy = entropy;
+        self
+    }
     /// Create one invitation enrolling `class`; the code is returned only
     /// after the registry commit (`GatewayPairing::create`).
     pub async fn create(

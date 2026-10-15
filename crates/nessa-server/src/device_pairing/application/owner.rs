@@ -27,6 +27,9 @@ pub enum OwnerError {
     Enrollment(PairingStoreError),
     /// Generated immutable identity/policy or collection admission refused.
     Domain(PairingError),
+    /// The generator could not supply identities for a new original or an
+    /// approved record that still has no stage.
+    Entropy,
 }
 /// Current admission held across code registration. It creates no durable
 /// invitation, and its private fields mean only `PairingOwner::prepare` makes one.

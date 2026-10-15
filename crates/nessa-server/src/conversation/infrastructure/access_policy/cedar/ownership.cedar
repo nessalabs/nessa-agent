@@ -31,6 +31,21 @@ when {
     !resource.deleted
 };
 
+// The owner finishes deleting it after the tombstone is committed. A repeat
+// delete returns the same receipt and carries on erasure. A live conversation
+// is still `conversation.act`.
+@id("owner.erase")
+permit (
+    principal is NessaConversation::Person,
+    action == NessaConversation::Action::"conversation.erase",
+    resource is NessaConversation::Conversation
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner &&
+    resource.deleted
+};
+
 // The owner reads it until it is deleted.
 @id("owner.read")
 permit (
