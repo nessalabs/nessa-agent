@@ -6,6 +6,7 @@ use nessa_auth::adapters::pairing::NativeIdentity;
 use nessa_protocol::clock::Clock;
 use nessa_protocol::pairing::{MAX_PROTECTED_REQUEST_BYTES, MAX_PROTECTED_RESPONSE_BYTES};
 use nessa_protocol::product::generated::ProductSessionReady;
+use nessa_protocol::product::handshake::{connection_outcome, ConnectionOutcome};
 use nessa_protocol::product::passive_read::{encode_request, ReadEncodeError};
 use nessa_protocol::product_contract::generated::SessionCloseReason;
 use nessa_protocol::protocol::{unique_value, EventFrame, RequestFrame, ResponseFrame};
@@ -53,6 +54,17 @@ pub enum ProductFailure {
     WorkerPanicked,
     /// Opening has not produced an actual Ready.
     NotReady,
+}
+impl ProductFailure {
+    /// The lifecycle class when this failure is a close. A protocol failure,
+    /// including a malformed `session.terminated`, is not a class.
+    pub fn connection_outcome(self) -> Option<ConnectionOutcome> {
+        match self {
+            Self::Closed(reason) => Some(connection_outcome(reason)),
+            Self::Authentication(reason) => Some(connection_outcome(Some(reason))),
+            _ => None,
+        }
+    }
 }
 impl From<GatewayError> for ProductFailure {
     fn from(error: GatewayError) -> Self {

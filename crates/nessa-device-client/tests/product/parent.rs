@@ -4,9 +4,9 @@ use nessa_local_storage::create_directory_beneath;
 
 pub(crate) mod fixtures;
 use crate::{
-    test_support::PrivateFixture, NativeDeviceSession, NativeProductCallError,
-    NativeProductCloseReason, NativeProductCompletionKind, NativeProductFailure,
-    NativeProductFailureKind, NativeProductSession,
+    test_support::PrivateFixture, NativeConnectionOutcome, NativeDeviceSession,
+    NativeProductCallError, NativeProductCloseReason, NativeProductCompletionKind,
+    NativeProductFailure, NativeProductFailureKind, NativeProductSession,
 };
 use fixtures::{CleanupConnector, Held, HeldConnector};
 use nessa_auth::application::pairing::{DeviceCredential, PendingEnrollment, PrivateKeyMaterial};
@@ -27,6 +27,7 @@ use std::{
     time::Instant,
 };
 
+use nessa_protocol::product::handshake::connection_outcome;
 use nessa_protocol::product_contract::generated::SessionCloseReason;
 #[test]
 fn no_issued_record_or_closed_parent_opens_no_product() {
@@ -914,6 +915,11 @@ fn all_original_product_failure_variants_and_close_reason_payloads_survive_forei
         let failure = NativeProductFailure { value: source };
         assert_eq!(failure.kind(), kind);
         assert!(failure.close_reason().is_none());
+        let class = match source {
+            ProductFailure::Closed(None) => Some(NativeConnectionOutcome::Retryable),
+            _ => None,
+        };
+        assert_eq!(failure.outcome(), class);
     }
     for (reason, expected) in [
         (
@@ -971,6 +977,9 @@ fn all_original_product_failure_variants_and_close_reason_payloads_survive_forei
         assert_eq!(auth.kind(), NativeProductFailureKind::Authentication);
         assert_eq!(closed.close_reason(), Some(expected));
         assert_eq!(auth.close_reason(), Some(expected));
+        let class = NativeConnectionOutcome::from(connection_outcome(Some(reason)));
+        assert_eq!(closed.outcome(), Some(class));
+        assert_eq!(auth.outcome(), Some(class));
         let parent = crate::NativeSessionFailure {
             value: SessionFailure::Product(ProductFailure::Authentication(reason)),
         };

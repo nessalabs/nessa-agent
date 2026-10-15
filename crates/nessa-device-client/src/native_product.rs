@@ -8,7 +8,7 @@ use nessa_client_core::product::{
 };
 use nessa_protocol::{
     pairing::MAX_PROTECTED_RESPONSE_BYTES, product::generated::ProductSessionReady,
-    product_contract::generated::SessionCloseReason,
+    product::handshake::ConnectionOutcome, product_contract::generated::SessionCloseReason,
 };
 use std::{
     error::Error,
@@ -41,6 +41,28 @@ pub enum NativeProductCloseReason {
     ServerShutdown,
     /// Same-named protocol reason.
     TransportInterrupted,
+}
+/// Client class of a close, projected from [`ConnectionOutcome`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq, uniffi::Enum)]
+pub enum NativeConnectionOutcome {
+    /// Same-named protocol class.
+    Retryable,
+    /// Same-named protocol class.
+    TerminalRevoke,
+    /// Same-named protocol class.
+    TerminalShutdown,
+    /// Same-named protocol class.
+    TerminalProtocol,
+}
+impl From<ConnectionOutcome> for NativeConnectionOutcome {
+    fn from(value: ConnectionOutcome) -> Self {
+        match value {
+            ConnectionOutcome::Retryable => Self::Retryable,
+            ConnectionOutcome::TerminalRevoke => Self::TerminalRevoke,
+            ConnectionOutcome::TerminalShutdown => Self::TerminalShutdown,
+            ConnectionOutcome::TerminalProtocol => Self::TerminalProtocol,
+        }
+    }
 }
 impl From<SessionCloseReason> for NativeProductCloseReason {
     fn from(value: SessionCloseReason) -> Self {
@@ -133,6 +155,10 @@ impl NativeProductFailure {
             ProductFailure::Authentication(reason) => Some(reason.into()),
             _ => None,
         }
+    }
+    /// The lifecycle class. A failure that is not a close has none.
+    pub fn outcome(&self) -> Option<NativeConnectionOutcome> {
+        self.value.connection_outcome().map(Into::into)
     }
 }
 /// Foreign product call refusal, carrying its original immutable typed cause.

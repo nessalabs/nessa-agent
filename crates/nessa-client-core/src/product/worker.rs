@@ -255,9 +255,13 @@ mod tests {
                 })
                 .unwrap(),
             );
+            let failure = session_termination(&event);
+            assert_eq!(failure, Some(super::ProductFailure::Closed(Some(reason))));
             assert_eq!(
-                session_termination(&event),
-                Some(super::ProductFailure::Closed(Some(reason)))
+                failure.unwrap().connection_outcome(),
+                Some(nessa_protocol::product::handshake::connection_outcome(
+                    Some(reason)
+                ))
             );
         }
         let ordinary = EventFrame::push("conversation.changed", &json!({}), 1, 0).unwrap();
@@ -276,5 +280,10 @@ mod tests {
             }))),
             Some(super::ProductFailure::Protocol)
         );
+        assert_eq!(
+            super::ProductFailure::Closed(None).connection_outcome(),
+            Some(nessa_protocol::product::handshake::ConnectionOutcome::Retryable)
+        );
+        assert_eq!(super::ProductFailure::Protocol.connection_outcome(), None);
     }
 }

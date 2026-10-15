@@ -16,6 +16,44 @@ Existing device pairing deliberately delegates one read capability and requires 
 
 Auth owns a separate OwnerPhoneReadWrite class, its complete ordered capability set, signed exact device request and durable original-request ledger. The exact original bootstrap credential admits creation, replay, staging and publication. The issued device uses its private native key with its public credential ID for protected product and native read connections. Canonical Auth enrollment and its remembered receiver receipt durably own purpose once; current delegated Auth and current receiver agreement establish the distinct OwnerPhone reader. The purpose Cedar policy consumes published method/action facts and default-denies ancillary administration; it also preserves configured Ask approval and refuses owner-local path links. Current signed purpose and original receiver holding admit a first-party reader only after the canonical linkage policy passes. The shared ConversationAccessPolicyEvaluator then decides actual conversation Read/Act/Locate and catalogue List from current metadata, including deletion. Device and peer readers remain separate paired subjects with their existing share roles. Existing peer/device share roles, tool approval and revocation remain separate authorities.
 
+## Lifecycle
+
+This table is the order for authorizing an owner phone and for the connection that follows. `SessionCloseReason` stays the wire reason. `connection_outcome` in `crates/nessa-protocol/src/product/handshake.rs` is the only projection of a reason, or of a close that carried none, into what the client does next. `retryable()` stays on the reason and is not copied into that projection. A command that already happened is idempotent success; it is not a close and it does not end the session.
+
+A wildcard listener is published as the configured `native.advertisedAddress` on the bound port. A specific bind is published as itself. An absent listener, port zero, an unspecified address, or a wildcard with no advertised address discloses nothing. The process does not look up a route.
+
+| From | Event | Who | Client | Evidence |
+| --- | --- | --- | --- | --- |
+| no original | `phone.authorize` commits the signed request | owner | success; this is the first commit, not a repeat | `PairingTransition`: before Available, after Approved, event `OwnerPhoneApproved`, owner actor, time |
+| Approved | the same `phone.authorize` bytes | owner | success; activation continues | may draw a stage and append `Stage`; it does not append another approval |
+| Staging | the same `phone.authorize` bytes | owner | success; activation continues | may append the receiver and activation transitions still missing; no new invitation |
+| Active | the same `phone.authorize` bytes | owner | idempotent success; no new entropy | no draw and no append |
+| Terminal | the same `phone.authorize` bytes, or deny or cancel again | owner | idempotent success | the stored terminal record; no draw and no append |
+| Available, Approved, or Staging | owner denies or cancels | owner | terminal revoke | `End(Denied)` or `End(Cancelled)`, owner actor; the first cause stays. Deny on Active is refused. Active cancel is the next row |
+| Active | owner cancels, or the credential is revoked | owner, or the credential authority | terminal revoke | an Active cancel correlates `CredentialTransition` cause Explicit, same actor and second; an independent revoke is event `CredentialRevoked` |
+| Available, Claimed, Approved, or Staging | the deadline is due | system | terminal revoke of that attempt; Active is left as it is | `End(Expired)`, system actor; Active and Terminal return no new transition |
+| Available | startup loses the unapproved invitation | system | terminal revoke of that attempt | `End(Restarted)`, system actor |
+| ready session | the credential is revoked or expired | credential authority | terminal revoke (`credential_revoked`, `credential_expired`) | `session.terminated`, then the socket closes; the credential transition is the audit; the close writes none |
+| ready session | access is unavailable or a stale revision; a watch cannot be verified or has no passive-read authority; watch admission closes, including process stop, recheck or registration overdue, a failed acknowledgement, or a missed delivery deadline | gateway | retryable (`temporary_unavailable`); the authorization stays | `session.terminated`; no pairing write. The shutdown report is separate and is not a session reason |
+| ready session | any other access error, or a passive-read refusal | Cedar for the read; other access errors through `close_reason` | terminal revoke (`authorization_lost`) | `session.terminated`; no pairing write |
+| ready session | a `session.terminated` whose code is `server_shutdown` | the peer that sent it | terminal shutdown; the authorization stays | the frame. This gateway does not construct that code when the process stops |
+| any session | handshake timeout, restarting, overloaded, or the transport is interrupted | gateway or the transport | retryable | the close reason only |
+| handshake | authentication fails | gateway | terminal revoke (`authentication_failed`); no Ready | no cache delete |
+| handshake | the protocol does not match | gateway | terminal protocol (`protocol_incompatible`); the authorization stays; this is not a revoke and not a shutdown | no Ready |
+| any session | EOF and no valid `session.terminated` | transport | retryable; not a revoke | none; the client does not invent a reason |
+| any session | a malformed `session.terminated` | peer | not a client class; a protocol failure; the authorization is unchanged and the event is not queued | none |
+| owned conversation | `conversation.delete` | owner or the phone | success; the session stays up | `ConversationDeletionAuditRecord`: conversation, before Owned, after Deleted, `CallerRequested`, initiator, surface, correlation |
+| tombstone committed | the same delete | that caller | idempotent success | the first audit record; a contradicting record is refused; erasure resumes from the tombstone |
+| listener | wildcard bind and a routable `native.advertisedAddress` of that family | configuration | that address and the bound port may be authorized | the signed request stores the endpoint it was shown |
+| listener | a specific bind | configuration | that bound address may be authorized. An advertised address is accepted only for a wildcard of the same family, and only when it is unicast, not loopback, and not multicast | config parse refusal is the evidence that the setting does not apply |
+| listener | no listener, port zero, or a wildcard with no advertised address | configuration | nothing is disclosed; a new original that names another endpoint conflicts | none |
+
+`authentication_failed`, `credential_revoked`, `credential_expired`, and `authorization_lost` share one next action: stop, and do not retry that authorization. The reason stays the evidence, so a failed proof is not recorded as an owner revoke. A `server_shutdown` frame keeps the authorization and ends this session. This gateway's own process stop is the retryable `temporary_unavailable` close above, not that frame. `protocol_incompatible` keeps the authorization and is not called a shutdown: the process is still up, and a matching client can connect. Plain EOF is retryable because the gateway named no cause. Termination does not delete cached conversations.
+
+The rejected shapes are a route lookup toward a documentation address (it fails with no default route and follows a full-tunnel VPN, and it reads the operating system from inside pairing), one "not retryable" bucket that would drop a phone on a `server_shutdown` frame or a protocol mismatch, and a second client list of the same reasons that also stores `retryable`.
+
+`connection_outcome` is the only close-class projection. `connection_outcome_is_the_only_close_class` names every `SessionCloseReason` and a missing reason. The command and endpoint rows stay with `exact_replay_returns_the_stored_original_when_entropy_is_unavailable` (Active, no draw), `owner_phone_delete_retry_returns_the_idempotent_receipt`, `endpoint_publishes_the_configured_address_for_a_wildcard_bind`, `advertised_address_is_a_routable_host_for_a_wildcard_listen`, `session_terminated_is_the_close_reason_and_is_not_queued`, and `plain_eof_stays_an_untyped_close_and_a_bad_termination_is_protocol`.
+
 ## Alternatives considered
 
 - Bulk sharing existing conversations misses future/empty targets and changes the meaning of shared access.
@@ -30,10 +68,9 @@ The gateway must publish authenticated actual native discovery and support exact
 
 ## Current integration and verification boundaries
 
-`phone.endpoint` returns the authenticated source and a routable numeric native
-endpoint/public pin. A wildcard `native.listenAddress` is published as
-`native.advertisedAddress` on the actual bound port. An absent listener, port
-zero, or a wildcard with no advertised address discloses nothing. `phone.authorize` and `phone.status` consume the complete
+`phone.endpoint` returns the authenticated source and a numeric native
+endpoint and public pin. Which address may be disclosed is the listener rows
+of the lifecycle table. `phone.authorize` and `phone.status` consume the complete
 original signed request through the canonical Auth ledger; original TLS recovery
 uses the saved UUID/digest and actual device proof without restoring a PAKE
 attempt. Mutating resume owns expiry and late receiver Pair/fence settlement;
