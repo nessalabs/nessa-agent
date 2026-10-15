@@ -13,12 +13,14 @@
 //!
 //! So this module is the one owner of their placement, and it places them by
 //! their centre, measured from the buttons themselves: whatever size and
-//! offset a release gives them, their middle is put on the row's. It places
-//! them again whenever AppKit lays the titlebar out or moves a button. A title
-//! change moves the buttons back to AppKit's own place without laying anything
-//! out and without posting a frame change, so the buttons themselves, and the
-//! views that lay them out, place them again after AppKit is done with them;
-//! the window events that relayout follows place them too.
+//! offset a release gives them, their middle is put on the row's. It never
+//! moves a button inside the view that holds the three. AppKit moves them back
+//! to its own spot in that view whenever it likes (a title change does, with
+//! no layout and no frame-change notice), so a button moved there does not
+//! stay. It moves that view instead, by the distance from AppKit's spot to the
+//! row's, and AppKit's spot then lands on the row. It places them again when
+//! the titlebar's views change frame and after the window events that relayout
+//! follows.
 //! `tauri.conf.json` names no `trafficLightPosition`, so nothing else moves
 //! them.
 //!
@@ -26,12 +28,10 @@
 //! plain `NSWindow` (`window_controls.rs` is the Tauri side).
 
 use std::cell::Cell;
-use std::ffi::CString;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
+use objc2::msg_send;
 use objc2::rc::Retained;
-use objc2::runtime::{AnyClass, AnyObject, ClassBuilder, Sel};
-use objc2::{msg_send, sel};
+use objc2::runtime::AnyObject;
 use objc2_app_kit::{
     NSView, NSViewFrameDidChangeNotification, NSWindow, NSWindowDidBecomeKeyNotification,
     NSWindowDidBecomeMainNotification, NSWindowDidChangeBackingPropertiesNotification,
@@ -59,14 +59,6 @@ const FULL_SCREEN: usize = 1 << 14;
 /// Below this, two frames are the same frame. Writing a frame AppKit already
 /// has would post a frame change and place the buttons again for nothing.
 const SAME: f64 = 0.01;
-/// The start of the name of each class that places the buttons after AppKit
-/// changes a view (`hold`); the name of the class it extends follows.
-const HOLDING: &str = "NessaTrafficLightsHolding_";
-
-/// How many layouts the held views have run: a placement that made AppKit
-/// lay out again, and so on, would show here as a count that keeps climbing.
-pub static LAYOUTS: AtomicUsize = AtomicUsize::new(0);
-
 thread_local! {
     /// Set while the buttons are being placed: the frame changes that placing
     /// posts are this placement's own, not AppKit's.
@@ -98,7 +90,7 @@ fn place_now(window: &NSWindow) -> Result<(), String> {
         return Ok(());
     }
     let buttons = buttons(window);
-    let [close, minimize, _] = buttons.as_slice() else {
+    let Some(close) = buttons.first() else {
         return Err(String::from("the window has no traffic lights"));
     };
     let (row, container) = titlebar_views(close)?;
@@ -116,39 +108,31 @@ fn place_now(window: &NSWindow) -> Result<(), String> {
         ),
     );
 
-    // The row's centre, in the container, then in the buttons' own view:
-    // wherever AppKit put that view, and whichever way each counts its y.
-    let centre_y = if container.isFlipped() {
-        ROW_CENTRE
+    // The buttons stay where AppKit puts them inside their own view, so
+    // AppKit laying them out again (a title change does, without a word) puts
+    // them back on the same spot. That view moves instead, by however far
+    // AppKit's spot is from the row's: measured, whatever a release draws.
+    let size = container.bounds().size;
+    let now = row.frame();
+    set_frame(&row, NSRect::new(now.origin, size));
+    let close_in_container = container.convertRect_fromView(close.bounds(), Some(close));
+    let top = if container.isFlipped() {
+        close_in_container.origin.y
     } else {
-        height - ROW_CENTRE
+        height - (close_in_container.origin.y + close_in_container.size.height)
     };
-    let centre_in_row = || row.convertPoint_fromView(NSPoint::new(0.0, centre_y), Some(&container));
-    let tallest = buttons
-        .iter()
-        .map(|button| button.frame().size.height)
-        .fold(0.0, f64::max);
-    let centre = centre_in_row();
-    let bounds = row.bounds();
-    if centre.y - tallest / 2.0 < bounds.origin.y
-        || centre.y + tallest / 2.0 > bounds.origin.y + bounds.size.height
-    {
-        // The buttons' view would clip them on the row: it spans the container.
-        set_frame(&row, container.bounds());
-    }
-    let centre = centre_in_row();
-
-    let spacing = minimize.frame().origin.x - close.frame().origin.x;
-    for (index, button) in buttons.iter().enumerate() {
-        let origin = NSPoint::new(
-            LEFT + index as f64 * spacing,
-            centre.y - button.frame().size.height / 2.0,
-        );
-        let now = button.frame().origin;
-        if (now.x - origin.x).abs() > SAME || (now.y - origin.y).abs() > SAME {
-            button.setFrameOrigin(origin);
-        }
-    }
+    let low = top + close_in_container.size.height / 2.0 - ROW_CENTRE;
+    let right = LEFT - close_in_container.origin.x;
+    let now = row.frame();
+    let y = if container.isFlipped() {
+        now.origin.y - low
+    } else {
+        now.origin.y + low
+    };
+    set_frame(
+        &row,
+        NSRect::new(NSPoint::new(now.origin.x + right, y), now.size),
+    );
     Ok(())
 }
 
@@ -175,10 +159,8 @@ fn set_frame(view: &NSView, frame: NSRect) {
     }
 }
 
-/// Keeps the buttons placed for the window's life: again after each layout of
-/// the window's frame view or the titlebar's views, whenever AppKit moves a
-/// button, whenever one of the titlebar's views changes frame, and after each
-/// window event that relayout follows, once at once and once on the next turn
+/// Keeps the buttons placed for the window's life: again whenever one of the
+/// titlebar's views changes frame, and after each window event that relayout follows, once at once and once on the next turn
 /// of the main queue, since AppKit can finish its layout after posting.
 pub fn watch(window: Retained<NSWindow>, main: MainThreadMarker) -> Result<(), String> {
     place(&window, main)?;
@@ -187,15 +169,6 @@ pub fn watch(window: Retained<NSWindow>, main: MainThreadMarker) -> Result<(), S
         .first()
         .ok_or_else(|| String::from("the window has no traffic lights"))?;
     let (row, container) = titlebar_views(close)?;
-    // SAFETY: on the main thread (`place` took its marker).
-    let frame_view = unsafe { container.superview() }
-        .ok_or_else(|| String::from("the titlebar has no frame view"))?;
-    for view in [&*frame_view, &*container, &*row] {
-        hold(view, Hold::Layout)?;
-    }
-    for button in &buttons {
-        hold(button, Hold::Frame)?;
-    }
 
     let views: [&NSView; 3] = [&container, &row, close];
     for view in views {
@@ -231,141 +204,6 @@ pub fn watch(window: Retained<NSWindow>, main: MainThreadMarker) -> Result<(), S
         });
     }
     Ok(())
-}
-
-/// What a held view does after AppKit changes it.
-#[derive(Clone, Copy)]
-enum Hold {
-    /// After each of its `layout`s, place the buttons: the frame view and the
-    /// titlebar's views, which lay the buttons out.
-    Layout,
-    /// After each `setFrameOrigin:` or `setFrame:`, place the buttons again:
-    /// the buttons, which AppKit moves without laying anything out (a title
-    /// change does) and without posting a frame change.
-    Frame,
-}
-
-/// Makes `view` place the buttons after AppKit changes it, the way key-value
-/// observing extends an object: the view becomes an instance of a subclass of
-/// its own class whose methods call the original's, then place them.
-fn hold(view: &AnyObject, kind: Hold) -> Result<(), String> {
-    let class = AnyObject::class(view);
-    if class.name().to_string_lossy().starts_with(HOLDING) {
-        return Ok(());
-    }
-    let label = match kind {
-        Hold::Layout => "Layout",
-        Hold::Frame => "Frame",
-    };
-    let name = CString::new(format!(
-        "{HOLDING}{label}_{}",
-        class.name().to_string_lossy()
-    ))
-    .map_err(|error| error.to_string())?;
-    let holding = match AnyClass::get(&name) {
-        Some(holding) => holding,
-        None => {
-            let mut builder = ClassBuilder::new(&name, class)
-                .ok_or_else(|| format!("{} cannot be extended", class.name().to_string_lossy()))?;
-            // SAFETY: each matches the method it overrides: `- (void)layout`,
-            // `- (void)setFrameOrigin:(NSPoint)`, `- (void)setFrame:(NSRect)`
-            // and `- (Class)class`.
-            unsafe {
-                match kind {
-                    Hold::Layout => builder.add_method(
-                        sel!(layout),
-                        layout_then_place as unsafe extern "C-unwind" fn(*mut AnyObject, Sel),
-                    ),
-                    Hold::Frame => {
-                        builder.add_method(
-                            sel!(setFrameOrigin:),
-                            origin_then_place
-                                as unsafe extern "C-unwind" fn(*mut AnyObject, Sel, NSPoint),
-                        );
-                        builder.add_method(
-                            sel!(setFrame:),
-                            frame_then_place
-                                as unsafe extern "C-unwind" fn(*mut AnyObject, Sel, NSRect),
-                        );
-                    }
-                }
-                builder.add_method(
-                    sel!(class),
-                    own_class
-                        as unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> *const AnyClass,
-                );
-            }
-            builder.register()
-        }
-    };
-    // SAFETY: the subclass adds no instance variables, so the view's memory
-    // is the same shape under it.
-    unsafe { AnyObject::set_class(view, holding) };
-    Ok(())
-}
-
-/// The class a held view was before it was held.
-fn original(view: &AnyObject) -> &'static AnyClass {
-    let mut class = view.class();
-    while !class.name().to_string_lossy().starts_with(HOLDING) {
-        // Something extended the view again after it was held.
-        class = class
-            .superclass()
-            .expect("a held view's class extends the holding class");
-    }
-    class
-        .superclass()
-        .expect("the holding class extends the view's class")
-}
-
-/// Places the buttons of `view`'s window, from inside one of its methods.
-fn place_from(view: &AnyObject) {
-    let Some(main) = MainThreadMarker::new() else {
-        return;
-    };
-    let window: Option<Retained<NSWindow>> = unsafe { msg_send![view, window] };
-    if let Some(window) = window {
-        report(place(&window, main));
-    }
-}
-
-unsafe extern "C-unwind" fn origin_then_place(view: *mut AnyObject, _: Sel, origin: NSPoint) {
-    // SAFETY: AppKit sends `setFrameOrigin:` to a live view.
-    let view = unsafe { &*view };
-    unsafe {
-        let _: () = msg_send![super(view, original(view)), setFrameOrigin: origin];
-    }
-    // Placing moves the buttons through here too: `place` does nothing while
-    // it is already placing them.
-    place_from(view);
-}
-
-unsafe extern "C-unwind" fn frame_then_place(view: *mut AnyObject, _: Sel, frame: NSRect) {
-    // SAFETY: AppKit sends `setFrame:` to a live view.
-    let view = unsafe { &*view };
-    unsafe {
-        let _: () = msg_send![super(view, original(view)), setFrame: frame];
-    }
-    place_from(view);
-}
-
-unsafe extern "C-unwind" fn layout_then_place(view: *mut AnyObject, _: Sel) {
-    // SAFETY: AppKit sends `layout` to a live view.
-    let view = unsafe { &*view };
-    LAYOUTS.fetch_add(1, Ordering::Relaxed);
-    unsafe {
-        let _: () = msg_send![super(view, original(view)), layout];
-    }
-    place_from(view);
-}
-
-/// Answers `class` as the view did before it was held, as key-value observing
-/// does, so AppKit's checks of the view's class see what they made.
-unsafe extern "C-unwind" fn own_class(view: *mut AnyObject, _: Sel) -> *const AnyClass {
-    // SAFETY: `class` is sent to a live view.
-    let view = unsafe { &*view };
-    let class: &AnyClass = unsafe { msg_send![super(view, original(view)), class] };
-    class
 }
 
 /// Runs `then` each time `object` posts `name`, for the app's life.
