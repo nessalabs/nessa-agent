@@ -13,6 +13,7 @@ use nessa_protocol::protocol::{unique_value, EventFrame, RequestFrame, ResponseF
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::ops::Deref;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -199,8 +200,17 @@ impl Owner {
             state.failure.get_or_insert(ProductFailure::Cancelled);
             state.interrupt.clone()
         };
+        // The interrupt is injected. A panic there must not skip the wake or
+        // the join in `close`: the worker is still drained, and the failure
+        // is `WorkerPanicked` unless a decoded failure was already recorded.
         if let Some(interrupt) = interrupt {
-            interrupt.interrupt();
+            let panicked = catch_unwind(AssertUnwindSafe(|| interrupt.interrupt())).is_err();
+            if panicked {
+                let mut state = lock(&self.state);
+                if matches!(state.failure, None | Some(ProductFailure::Cancelled)) {
+                    state.failure = Some(ProductFailure::WorkerPanicked);
+                }
+            }
         }
         self.wake.wake();
     }

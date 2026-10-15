@@ -2,7 +2,7 @@
 mod fixtures;
 use crate::product::{
     ConnectedProduct, LocalProductConnector, ProductCompletion, ProductConnector, ProductFailure,
-    ProductLimits, ProductSession, ProductStream, ProductWake, ThreadProductWake,
+    ProductInterrupt, ProductLimits, ProductSession, ProductStream, ProductWake, ThreadProductWake,
 };
 use fixtures::{open, peer, prepare, receive, signal};
 use nessa_auth::adapters::pairing::{NativeIdentity, OsEntropy};
@@ -958,6 +958,80 @@ fn known_decoded_failure_is_reserved_before_held_cleanup_and_later_stop() {
         }
         peer.join();
     }
+}
+
+#[test]
+fn injected_interrupt_panic_stays_inside_stop_and_close_still_joins() {
+    struct PanicInterrupt;
+    impl ProductInterrupt for PanicInterrupt {
+        fn interrupt(&self) {
+            panic!("injected interrupt");
+        }
+    }
+    struct Stream {
+        inner: Box<dyn ProductStream>,
+    }
+    impl Read for Stream {
+        fn read(&mut self, bytes: &mut [u8]) -> IoResult<usize> {
+            self.inner.read(bytes)
+        }
+    }
+    impl Write for Stream {
+        fn write(&mut self, bytes: &[u8]) -> IoResult<usize> {
+            self.inner.write(bytes)
+        }
+        fn flush(&mut self) -> IoResult<()> {
+            self.inner.flush()
+        }
+    }
+    impl ProductStream for Stream {
+        fn read_timeout(&self, timeout: Duration) -> IoResult<()> {
+            self.inner.read_timeout(timeout)
+        }
+        fn write_timeout(&self, timeout: Duration) -> IoResult<()> {
+            self.inner.write_timeout(timeout)
+        }
+        fn shutdown(&self) -> IoResult<()> {
+            self.inner.shutdown()
+        }
+    }
+    struct Connector;
+    impl ProductConnector for Connector {
+        fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<ConnectedProduct> {
+            let connected = LocalProductConnector.connect(address, timeout)?;
+            Ok(ConnectedProduct {
+                stream: Box::new(Stream {
+                    inner: connected.stream,
+                }),
+                interrupt: Arc::new(PanicInterrupt),
+            })
+        }
+    }
+    let (release, held) = signal();
+    let (endpoint, peer) = peer(move |_wire| receive(&held));
+    let session = ProductSession::prepare(
+        endpoint.address,
+        endpoint.identity,
+        endpoint.pin,
+        "credential".into(),
+        "phone-instance".into(),
+        Arc::new(Connector),
+        Arc::new(fixtures::Time(Instant::now())),
+        Arc::new(ThreadProductWake::default()),
+        limits(1),
+    );
+    session.start().unwrap();
+    session.wait_ready().unwrap();
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| session.request_close())).is_ok()
+    );
+    assert_eq!(session.failure(), Some(ProductFailure::WorkerPanicked));
+    release.send(()).unwrap();
+    assert_eq!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| session.close())).unwrap(),
+        Err(ProductFailure::WorkerPanicked)
+    );
+    peer.join();
 }
 
 #[test]
