@@ -441,11 +441,12 @@ fn every_transition_and_precedence_pair() {
         ConversationErrorCode::TurnRunning,
     ));
     let successor = command("command-2");
-    let direct_return = [
+    let mut direct_return = [
         audit(Cause::Held, draft),
         audit(Cause::Departed, not_admitted),
         audit(Cause::ReturnedToDraft, running_failure),
     ];
+    direct_return[2].successor = Some(successor.clone());
     assert!(history_reaches(
         &not_admitted_row
             .clone()
@@ -469,12 +470,13 @@ fn every_transition_and_precedence_pair() {
     );
     assert_eq!(stored_evidence(&direct_return), Evidence::Direct);
 
-    let lookup_return = [
+    let mut lookup_return = [
         audit(Cause::Held, draft),
         audit(Cause::Departed, not_admitted),
         audit_by(Cause::Lookup, running_failure, Initiator::Recovery),
         audit_by(Cause::ReturnedToDraft, running_failure, Initiator::Recovery),
     ];
+    lookup_return[3].successor = Some(successor.clone());
     assert!(history_reaches(
         &not_admitted_row
             .clone()
@@ -497,18 +499,19 @@ fn every_transition_and_precedence_pair() {
         ),
         "one caller writes the lookup and the return"
     );
-    let recovery_direct = [
+    let mut recovery_direct = [
         audit(Cause::Held, draft),
         audit(Cause::Departed, not_admitted),
         audit_by(Cause::ReturnedToDraft, running_failure, Initiator::Recovery),
     ];
+    recovery_direct[2].successor = Some(successor.clone());
     assert!(
         !history_reaches(
             &not_admitted_row
                 .clone()
                 .with_sends(1)
                 .with_outcome(running_failure)
-                .with_successor(successor),
+                .with_successor(successor.clone()),
             &recovery_direct,
             false
         ),
@@ -525,6 +528,43 @@ fn every_transition_and_precedence_pair() {
         &[audit_by(Cause::Held, draft, Initiator::Recovery)],
         false
     ));
+
+    let over_done = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::Lookup, done),
+        audit(Cause::SendAnswered, accepted),
+    ];
+    assert!(
+        history_reaches(
+            &not_admitted_row
+                .clone()
+                .with_sends(1)
+                .with_outcome(accepted),
+            &over_done,
+            false
+        ),
+        "a direct answer replays from the row before the lookup"
+    );
+    let mut over_running = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit_by(Cause::Lookup, running_failure, Initiator::Recovery),
+        audit_by(Cause::ReturnedToDraft, running_failure, Initiator::Recovery),
+        audit(Cause::SendAnswered, accepted),
+    ];
+    over_running[3].successor = Some(successor.clone());
+    assert!(
+        history_reaches(
+            &not_admitted_row
+                .clone()
+                .with_sends(1)
+                .with_outcome(accepted),
+            &over_running,
+            false
+        ),
+        "a direct answer replays from the row before a turn_running lookup"
+    );
 
     let direct_running = [
         audit(Cause::Held, draft),
@@ -670,6 +710,7 @@ fn audit_by(cause: Cause, outcome: PhoneOutcome, initiator: Initiator) -> Intent
         outcome,
         initiator,
         observed_at_ms: 1,
+        successor: None,
     }
 }
 

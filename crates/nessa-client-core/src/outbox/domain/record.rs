@@ -114,7 +114,7 @@ impl PhoneView {
 }
 
 /// One audit row written in the same transaction as the outcome it records.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IntentEvent {
     /// Why the outcome changed.
     pub cause: Cause,
@@ -124,4 +124,6 @@ pub struct IntentEvent {
     pub initiator: Initiator,
     /// When the outbox observed the transition, on the injected clock.
     pub observed_at_ms: u64,
+    /// The draft this return minted. Only [`Cause::ReturnedToDraft`] sets it.
+    pub successor: Option<PhoneCommandId>,
 }

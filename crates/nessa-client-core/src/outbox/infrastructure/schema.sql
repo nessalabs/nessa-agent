@@ -28,7 +28,12 @@ CREATE TABLE phone_intent_event (
     unknown TEXT,
     initiator TEXT NOT NULL CHECK (initiator IN ('person', 'recovery')),
     observed_at_ms INTEGER NOT NULL CHECK (observed_at_ms >= 0),
-    PRIMARY KEY (request_id, ordinal)
+    successor TEXT,
+    PRIMARY KEY (request_id, ordinal),
+    CHECK (
+        (cause = 'returned_to_draft' AND successor IS NOT NULL)
+        OR (cause != 'returned_to_draft' AND successor IS NULL)
+    )
 ) STRICT, WITHOUT ROWID;
 
 PRAGMA user_version = 1;

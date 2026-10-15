@@ -133,7 +133,7 @@ impl IntentStore for Memory {
         self.events
             .entry(id.clone())
             .or_default()
-            .extend(events.iter().copied());
+            .extend(events.iter().cloned());
         self.rows.insert(id, next.clone());
         self.insert(draft, draft_event)?;
         let _ = previous;
@@ -216,6 +216,7 @@ fn depart(path: &Path, intent: PhoneIntent) {
                 outcome: PhoneOutcome::Draft,
                 initiator: Initiator::Person,
                 observed_at_ms: 1,
+                successor: None,
             },
         )
         .unwrap();
@@ -229,6 +230,7 @@ fn depart(path: &Path, intent: PhoneIntent) {
                 outcome: record.outcome(),
                 initiator: Initiator::Person,
                 observed_at_ms: 1,
+                successor: None,
             },
         )
         .unwrap();
@@ -510,6 +512,7 @@ fn audit(cause: Cause, outcome: PhoneOutcome) -> IntentEvent {
         outcome,
         initiator: Initiator::Person,
         observed_at_ms: 1,
+        successor: None,
     }
 }
 
@@ -565,12 +568,12 @@ impl IntentStore for PlantOn {
         events: &[IntentEvent],
         draft_event: IntentEvent,
     ) -> Result<(), StoreError> {
-        self.replace(previous, next, events[0])?;
+        self.replace(previous, next, events[0].clone())?;
         for event in events.iter().skip(1) {
             self.events
                 .entry(next.intent().command().as_str().to_owned())
                 .or_default()
-                .push(*event);
+                .push(event.clone());
         }
         self.insert(draft, draft_event)
     }
@@ -1724,7 +1727,7 @@ fn a_recovery_draft_requires_its_turn_running_predecessor() {
     connection
         .execute(
             "INSERT INTO phone_intent_event
-             SELECT 'command-2', ordinal, cause, outcome, failure, unknown, initiator, observed_at_ms
+             SELECT 'command-2', ordinal, cause, outcome, failure, unknown, initiator, observed_at_ms, successor
              FROM phone_intent_event WHERE request_id = 'command-1'",
             [],
         )
@@ -2293,6 +2296,315 @@ fn a_self_successor_is_corrupt() {
     assert_eq!(successor, "command-1");
 }
 
+#[test]
+fn a_direct_answer_after_a_lookup_still_loads() {
+    let dir = directory();
+    let path = path_in(&dir);
+    let mut outbox = planted_outbox(&path, PlantedAnswer::Done);
+    person_hold(&mut outbox, text_intent("command-1", "hello"));
+    let view = outbox.send(&command("command-1")).unwrap();
+    assert_eq!(view.outcome(), PhoneOutcome::Accepted);
+    let listed = outbox.list().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].outcome(), PhoneOutcome::Accepted);
+    assert!(listed[0].successor().is_none());
+    drop(outbox);
+    let connection = Connection::open(&path).unwrap();
+    assert_eq!(
+        event_causes(&connection, "command-1"),
+        ["held", "departed", "lookup", "send_answered"]
+    );
+}
+
+#[test]
+fn a_direct_answer_clears_the_turn_running_successor() {
+    let dir = directory();
+    let path = path_in(&dir);
+    let mut outbox = planted_outbox(&path, PlantedAnswer::TurnRunning);
+    person_hold(&mut outbox, text_intent("command-1", "hello"));
+    let view = outbox.send(&command("command-1")).unwrap();
+    assert_eq!(view.outcome(), PhoneOutcome::Accepted);
+    assert!(view.successor().is_none());
+    let listed = outbox.list().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].outcome(), PhoneOutcome::Accepted);
+    assert!(listed[0].successor().is_none());
+    drop(outbox);
+    let connection = Connection::open(&path).unwrap();
+    assert_eq!(
+        event_causes(&connection, "command-1"),
+        [
+            "held",
+            "departed",
+            "lookup",
+            "returned_to_draft",
+            "send_answered",
+        ]
+    );
+    let drafts: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM phone_intent WHERE request_id = 'planted-draft'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(drafts, 0);
+}
+
+#[test]
+fn a_successor_names_the_draft_the_return_minted() {
+    let dir = directory();
+    let path = path_in(&dir);
+    let minted = {
+        let mut outbox = opened(
+            &path,
+            Scripted::new(
+                vec![
+                    failure(ConversationErrorCode::TurnRunning),
+                    SendAnswer::Receipt(Delivery::Queued),
+                ],
+                Vec::new(),
+            ),
+        );
+        person_hold(&mut outbox, text_intent("command-1", "same words"));
+        let returned = outbox.send(&command("command-1")).unwrap();
+        let minted = returned.successor().unwrap().as_str().to_owned();
+        person_hold(&mut outbox, text_intent("command-other", "same words"));
+        let accepted = outbox.send(&command("command-other")).unwrap();
+        assert_eq!(accepted.outcome(), PhoneOutcome::Accepted);
+        minted
+    };
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE phone_intent SET successor = 'command-other' WHERE request_id = 'command-1'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+    assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
+    drop(outbox);
+    let connection = Connection::open(&path).unwrap();
+    let successor: String = connection
+        .query_row(
+            "SELECT successor FROM phone_intent WHERE request_id = 'command-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(successor, "command-other");
+    let named: String = connection
+        .query_row(
+            "SELECT successor FROM phone_intent_event
+             WHERE request_id = 'command-1' AND cause = 'returned_to_draft'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(named, minted);
+}
+
+#[test]
+fn an_orphaned_audit_history_is_corrupt() {
+    let dir = directory();
+    let path = path_in(&dir);
+    {
+        let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+        person_hold(&mut outbox, text_intent("command-1", "hello"));
+    }
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "DELETE FROM phone_intent WHERE request_id = 'command-1'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+    assert_eq!(
+        outbox.hold(text_intent("command-1", "hello")).unwrap_err(),
+        OutboxError::Corrupt
+    );
+    assert_eq!(
+        outbox.send(&command("command-1")).unwrap_err(),
+        OutboxError::Corrupt
+    );
+    drop(outbox);
+    let connection = Connection::open(&path).unwrap();
+    let events: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM phone_intent_event WHERE request_id = 'command-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(events, 1);
+}
+
+fn event_causes(connection: &Connection, id: &str) -> Vec<String> {
+    let mut statement = connection
+        .prepare("SELECT cause FROM phone_intent_event WHERE request_id = ?1 ORDER BY ordinal")
+        .unwrap();
+    statement
+        .query_map(params![id], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
+fn planted_outbox(path: &Path, kind: PlantedAnswer) -> PhoneOutbox<PlantLookup, Scripted, SeqIds> {
+    PhoneOutbox::new(
+        PlantLookup::open(path, kind),
+        Scripted::new(vec![SendAnswer::Receipt(Delivery::Queued)], Vec::new()),
+        SeqIds::default(),
+        clock(),
+    )
+}
+
+/// The answer lease rolls back, then a committed lookup lands before replay.
+#[derive(Clone, Copy)]
+enum PlantedAnswer {
+    Done,
+    TurnRunning,
+}
+
+struct PlantLookup {
+    inner: SqliteIntents,
+    planted: bool,
+    kind: PlantedAnswer,
+}
+
+impl PlantLookup {
+    fn open(path: &Path, kind: PlantedAnswer) -> Self {
+        Self {
+            inner: SqliteIntents::open(path).unwrap(),
+            planted: false,
+            kind,
+        }
+    }
+}
+
+impl IntentStore for PlantLookup {
+    fn load(&mut self, id: &PhoneCommandId) -> Result<Option<PhoneRecord>, StoreError> {
+        self.inner.load(id)
+    }
+    fn insert(&mut self, record: &PhoneRecord, event: IntentEvent) -> Result<(), StoreError> {
+        self.inner.insert(record, event)
+    }
+    fn replace(
+        &mut self,
+        previous: &PhoneRecord,
+        next: &PhoneRecord,
+        event: IntentEvent,
+    ) -> Result<(), StoreError> {
+        self.inner.replace(previous, next, event)
+    }
+    fn replace_and_insert(
+        &mut self,
+        previous: &PhoneRecord,
+        next: &PhoneRecord,
+        draft: &PhoneRecord,
+        events: &[IntentEvent],
+        draft_event: IntentEvent,
+    ) -> Result<(), StoreError> {
+        self.inner
+            .replace_and_insert(previous, next, draft, events, draft_event)
+    }
+    fn list(&mut self) -> Result<Vec<PhoneRecord>, StoreError> {
+        self.inner.list()
+    }
+    fn events(&mut self, id: &PhoneCommandId) -> Result<Vec<IntentEvent>, StoreError> {
+        IntentStore::events(&mut self.inner, id)
+    }
+    fn begin_exclusive(&mut self) -> Result<(), StoreError> {
+        self.inner.begin_exclusive()
+    }
+    fn end_exclusive(&mut self) -> Result<(), StoreError> {
+        if self.planted {
+            return self.inner.end_exclusive();
+        }
+        self.planted = true;
+        let kind = self.kind;
+        self.inner.abort_exclusive();
+        plant_committed_lookup(&mut self.inner, kind).expect("planted lookup");
+        Err(StoreError::Uncertain)
+    }
+    fn abort_exclusive(&mut self) {
+        self.inner.abort_exclusive();
+    }
+}
+
+fn plant_committed_lookup(
+    store: &mut SqliteIntents,
+    kind: PlantedAnswer,
+) -> Result<(), StoreError> {
+    let id = PhoneCommandId::new("command-1").map_err(|_| StoreError::Corrupt)?;
+    let saved = store.load(&id)?.ok_or(StoreError::Corrupt)?;
+    match kind {
+        PlantedAnswer::Done => {
+            let next = saved.clone().with_outcome(PhoneOutcome::Done);
+            store.replace(
+                &saved,
+                &next,
+                IntentEvent {
+                    cause: Cause::Lookup,
+                    outcome: PhoneOutcome::Done,
+                    initiator: Initiator::Recovery,
+                    observed_at_ms: 1,
+                    successor: None,
+                },
+            )
+        }
+        PlantedAnswer::TurnRunning => {
+            let outcome = PhoneOutcome::Failed(PhoneFailure::Conversation(
+                ConversationErrorCode::TurnRunning,
+            ));
+            let successor =
+                PhoneCommandId::new("planted-draft").map_err(|_| StoreError::Corrupt)?;
+            let turn = ExecutionId::new("planted-turn").map_err(|_| StoreError::Corrupt)?;
+            let draft = PhoneRecord::held(
+                saved
+                    .intent()
+                    .again(successor.clone(), turn)
+                    .map_err(|_| StoreError::Corrupt)?,
+            );
+            let next = saved
+                .clone()
+                .with_outcome(outcome)
+                .with_successor(successor.clone());
+            store.replace_and_insert(
+                &saved,
+                &next,
+                &draft,
+                &[
+                    IntentEvent {
+                        cause: Cause::Lookup,
+                        outcome,
+                        initiator: Initiator::Recovery,
+                        observed_at_ms: 1,
+                        successor: None,
+                    },
+                    IntentEvent {
+                        cause: Cause::ReturnedToDraft,
+                        outcome,
+                        initiator: Initiator::Recovery,
+                        observed_at_ms: 1,
+                        successor: Some(successor),
+                    },
+                ],
+                IntentEvent {
+                    cause: Cause::Held,
+                    outcome: PhoneOutcome::Draft,
+                    initiator: Initiator::Recovery,
+                    observed_at_ms: 1,
+                    successor: None,
+                },
+            )
+        }
+    }
+}
+
 struct CountingGateway {
     sends: Arc<AtomicUsize>,
     lookups: Arc<AtomicUsize>,
@@ -2409,7 +2721,10 @@ impl IntentStore for RollbackLease {
             let rows = book_mut(&mut state);
             match rows.rows.get(&id) {
                 Some(stored) if stored == previous => {
-                    rows.events.entry(id.clone()).or_default().extend(events);
+                    rows.events
+                        .entry(id.clone())
+                        .or_default()
+                        .extend(events.iter().cloned());
                     rows.rows.insert(id, next.clone());
                 }
                 _ => return Err(StoreError::Conflict),

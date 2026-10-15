@@ -3,9 +3,12 @@
 //!
 //! Restoration rejects a snapshot whose audit rows do not reach it
 //! (`a_done_row_whose_history_stops_at_departure_is_corrupt`). It does not
-//! repair the row. Precedence is the table in `docs/design/phone-outbox.md`:
-//! a direct answer beats any lookup, and inside one source a higher outcome
-//! beats a lower one (`every_transition_and_precedence_pair`).
+//! repair the row. A direct answer written after the lookup it replaces is
+//! replayed from the row before that lookup
+//! (`a_direct_answer_after_a_lookup_still_loads`). Precedence is the table in
+//! `docs/design/phone-outbox.md`: a direct answer beats any lookup, and inside
+//! one source a higher outcome beats a lower one
+//! (`every_transition_and_precedence_pair`).
 
 use super::decide::{apply_lookup, apply_retry, apply_send, budget, Applied, Budget, Evidence};
 use super::{
@@ -91,13 +94,19 @@ pub(crate) fn history_reaches(
     let mut state = PhoneRecord::held(record.intent().clone());
     let mut older = first.cause;
     let mut previous = first;
+    // `reached[i]` is the row after `events[i]`. A direct answer that cannot
+    // move the lookup row is applied to the row before that lookup.
+    let mut reached = vec![state.clone()];
     for event in rest {
-        let Some(next) = advance(&state, event, previous, older) else {
+        let Some(next) = advance(&state, event, previous, older)
+            .or_else(|| direct_over_lookup(events, &reached, event))
+        else {
             return false;
         };
         state = next;
         older = previous.cause;
         previous = event;
+        reached.push(state.clone());
     }
     state.outcome() == record.outcome()
         && state.sends() == record.sends()
@@ -378,14 +387,95 @@ fn successor_follows(record: &PhoneRecord, events: &[IntentEvent]) -> bool {
     {
         return false;
     }
-    let returned = events
-        .last()
-        .is_some_and(|event| event.cause == Cause::ReturnedToDraft);
-    let running = turn_running_outcome(record.outcome());
-    matches!(
-        (returned, record.successor().is_some(), running),
-        (true, true, true) | (false, false, false)
-    )
+    if events
+        .iter()
+        .any(|event| (event.cause == Cause::ReturnedToDraft) != event.successor.is_some())
+    {
+        return false;
+    }
+    let Some(last) = events.last() else {
+        return false;
+    };
+    if last.cause == Cause::ReturnedToDraft {
+        return turn_running_outcome(record.outcome())
+            && last.successor.as_ref() == record.successor();
+    }
+    !turn_running_outcome(record.outcome()) && record.successor().is_none()
+}
+
+/// A direct answer appended after the lookup it replaces.
+///
+/// `apply_send` cannot move a non-retryable lookup outcome, so the answer is
+/// applied to the row before that lookup suffix
+/// (`a_direct_answer_after_a_lookup_still_loads`).
+fn direct_over_lookup(
+    events: &[IntentEvent],
+    reached: &[PhoneRecord],
+    event: &IntentEvent,
+) -> Option<PhoneRecord> {
+    if !direct_answer_event(event) {
+        return None;
+    }
+    let mut cut = reached.len();
+    while cut > 0 && lookup_suffix(&events[cut - 1], events.get(cut.wrapping_sub(2))) {
+        cut -= 1;
+    }
+    if cut == reached.len() || cut == 0 {
+        return None;
+    }
+    let base = &reached[cut - 1];
+    let previous = &events[cut - 1];
+    let older = if cut >= 2 {
+        events[cut - 2].cause
+    } else {
+        previous.cause
+    };
+    if !initiator_allowed(event.cause, event.initiator) {
+        return None;
+    }
+    match event.cause {
+        Cause::ExplicitRetry
+            if !matches!(
+                event.outcome,
+                PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+            ) =>
+        {
+            terminal(base, event, Cause::ExplicitRetry)
+        }
+        Cause::SendAnswered | Cause::ForegroundSend | Cause::ReturnedToDraft => {
+            advance(base, event, previous, older)
+        }
+        _ => None,
+    }
+}
+
+fn direct_answer_event(event: &IntentEvent) -> bool {
+    match event.cause {
+        Cause::SendAnswered | Cause::ForegroundSend => true,
+        Cause::ReturnedToDraft => event.initiator == Initiator::Person,
+        Cause::ExplicitRetry => !matches!(
+            event.outcome,
+            PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+        ),
+        Cause::Held
+        | Cause::Departed
+        | Cause::SendLost
+        | Cause::Unreadable
+        | Cause::Lookup
+        | Cause::Bound => false,
+    }
+}
+
+fn lookup_suffix(event: &IntentEvent, previous: Option<&IntentEvent>) -> bool {
+    match event.cause {
+        Cause::Lookup | Cause::Bound => true,
+        Cause::ReturnedToDraft => previous.is_some_and(|previous| {
+            previous.cause == Cause::Lookup
+                && previous.outcome == event.outcome
+                && previous.initiator == event.initiator
+        }),
+        _ => false,
+    }
 }
 
 fn turn_running_outcome(outcome: PhoneOutcome) -> bool {

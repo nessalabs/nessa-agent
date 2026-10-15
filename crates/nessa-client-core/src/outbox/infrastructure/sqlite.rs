@@ -63,7 +63,12 @@ pub fn open<G: PhoneGateway, I: CommandIds>(
 impl IntentStore for SqliteIntents {
     fn load(&mut self, id: &PhoneCommandId) -> Result<Option<PhoneRecord>, StoreError> {
         let Some(record) = read_record(&self.connection, id.as_str())? else {
-            return Ok(None);
+            // Events left behind a deleted row are not "never saved"
+            // (`an_orphaned_audit_history_is_corrupt`).
+            if read_events(&self.connection, id.as_str())?.is_empty() {
+                return Ok(None);
+            }
+            return Err(StoreError::Corrupt);
         };
         confirm(&self.connection, &record, &mut BTreeSet::new())?;
         Ok(Some(record))
@@ -84,7 +89,8 @@ impl IntentStore for SqliteIntents {
     ) -> Result<(), StoreError> {
         self.transaction(|tx| {
             update_record(tx, previous, next)?;
-            append_event(tx, next.intent().command().as_str(), &event)
+            append_event(tx, next.intent().command().as_str(), &event)?;
+            release_held_draft(tx, previous, next)
         })
     }
 
@@ -240,6 +246,38 @@ fn update_record(
     Ok(())
 }
 
+/// A direct answer that clears `turn_running` drops a draft that is still only held.
+fn release_held_draft(
+    tx: &Connection,
+    previous: &PhoneRecord,
+    next: &PhoneRecord,
+) -> Result<(), StoreError> {
+    if next.successor().is_some() {
+        return Ok(());
+    }
+    let Some(successor) = previous.successor() else {
+        return Ok(());
+    };
+    let events = read_events(tx, successor.as_str())?;
+    let [event] = events.as_slice() else {
+        return Ok(());
+    };
+    if event.cause != Cause::Held || event.outcome != PhoneOutcome::Draft {
+        return Ok(());
+    }
+    tx.execute(
+        "DELETE FROM phone_intent_event WHERE request_id = ?1",
+        params![successor.as_str()],
+    )
+    .map_err(unavailable)?;
+    tx.execute(
+        "DELETE FROM phone_intent WHERE request_id = ?1",
+        params![successor.as_str()],
+    )
+    .map_err(unavailable)?;
+    Ok(())
+}
+
 fn append_event(tx: &Connection, command: &str, event: &IntentEvent) -> Result<(), StoreError> {
     let ordinal: i64 = tx
         .query_row(
@@ -251,8 +289,8 @@ fn append_event(tx: &Connection, command: &str, event: &IntentEvent) -> Result<(
     let (outcome, failure, unknown) = outcome_columns(event.outcome);
     tx.execute(
         "INSERT INTO phone_intent_event
-         (request_id, ordinal, cause, outcome, failure, unknown, initiator, observed_at_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+         (request_id, ordinal, cause, outcome, failure, unknown, initiator, observed_at_ms, successor)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             command,
             ordinal,
@@ -262,6 +300,7 @@ fn append_event(tx: &Connection, command: &str, event: &IntentEvent) -> Result<(
             unknown,
             initiator_text(event.initiator),
             i64::try_from(event.observed_at_ms).map_err(|_| StoreError::Unavailable)?,
+            event.successor.as_ref().map(PhoneCommandId::as_str),
         ],
     )
     .map_err(unavailable)?;
@@ -298,7 +337,7 @@ fn read_records(connection: &Connection) -> Result<Vec<PhoneRecord>, StoreError>
 fn read_events(connection: &Connection, command: &str) -> Result<Vec<IntentEvent>, StoreError> {
     let mut statement = connection
         .prepare(
-            "SELECT ordinal, cause, outcome, failure, unknown, initiator, observed_at_ms
+            "SELECT ordinal, cause, outcome, failure, unknown, initiator, observed_at_ms, successor
              FROM phone_intent_event WHERE request_id = ?1 ORDER BY ordinal",
         )
         .map_err(unavailable)?;
@@ -336,17 +375,48 @@ fn confirm(
     if !history_reaches(record, &events, recovery_hold) {
         return Err(StoreError::Corrupt);
     }
+    tie_successor(connection, record, &events, seen)
+}
+
+/// The successor is the draft this return minted.
+///
+/// The event owns the id (`successor_follows`). This checks the other row:
+/// one predecessor, the same prompt, and Held by that return's initiator
+/// (`a_successor_names_the_draft_the_return_minted`).
+fn tie_successor(
+    connection: &Connection,
+    record: &PhoneRecord,
+    events: &[IntentEvent],
+    seen: &mut BTreeSet<String>,
+) -> Result<(), StoreError> {
     let Some(successor) = record.successor() else {
         return Ok(());
     };
-    if seen.contains(successor.as_str()) {
-        return Ok(());
+    let id = record.intent().command().as_str();
+    let predecessors = predecessor_ids(connection, successor.as_str())?;
+    if predecessors.as_slice() != [id.to_owned()] {
+        return Err(StoreError::Corrupt);
     }
+    let initiator = events
+        .last()
+        .filter(|event| event.cause == Cause::ReturnedToDraft)
+        .map(|event| event.initiator)
+        .ok_or(StoreError::Corrupt)?;
     let Some(draft) = read_record(connection, successor.as_str())? else {
         return Err(StoreError::Corrupt);
     };
     if !same_prompt(record.intent(), draft.intent()) {
         return Err(StoreError::Corrupt);
+    }
+    let draft_events = read_events(connection, successor.as_str())?;
+    let held = draft_events
+        .first()
+        .is_some_and(|event| event.cause == Cause::Held && event.initiator == initiator);
+    if !held {
+        return Err(StoreError::Corrupt);
+    }
+    if seen.contains(successor.as_str()) {
+        return Ok(());
     }
     confirm(connection, &draft, seen)
 }
@@ -485,17 +555,33 @@ fn event_row(
     let unknown: Option<String> = row.get(4)?;
     let initiator: String = row.get(5)?;
     let observed: i64 = row.get(6)?;
+    let successor: Option<String> = row.get(7)?;
     Ok((|| {
+        let cause = parse_cause(&cause)?;
         Ok((
             ordinal,
             IntentEvent {
-                cause: parse_cause(&cause)?,
+                cause,
                 outcome: parse_outcome(&outcome, failure.as_deref(), unknown.as_deref())?,
                 initiator: parse_initiator(&initiator)?,
                 observed_at_ms: u64::try_from(observed).map_err(|_| StoreError::Corrupt)?,
+                successor: event_successor(cause, successor.as_deref())?,
             },
         ))
     })())
+}
+
+fn event_successor(
+    cause: Cause,
+    successor: Option<&str>,
+) -> Result<Option<PhoneCommandId>, StoreError> {
+    match (cause, successor) {
+        (Cause::ReturnedToDraft, Some(id)) => Ok(Some(
+            PhoneCommandId::new(id).map_err(|_| StoreError::Corrupt)?,
+        )),
+        (Cause::ReturnedToDraft, None) | (_, Some(_)) => Err(StoreError::Corrupt),
+        (_, None) => Ok(None),
+    }
 }
 
 fn outcome_columns(outcome: PhoneOutcome) -> (&'static str, Option<String>, Option<&'static str>) {

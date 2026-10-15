@@ -130,9 +130,24 @@ answer stays only when `budget`, `apply_send`, `apply_lookup`, or
 count, and departure must equal that replay
 (`a_send_count_the_replay_does_not_reach_is_corrupt`). A successor names a
 different command. A row whose successor is its own id does not reach
-(`a_self_successor_is_corrupt`). Lookup and
+(`a_self_successor_is_corrupt`). The `ReturnedToDraft` event names the draft
+that return minted, and the row's successor is that id. Exactly one row
+points at that draft, the prompt matches, and the draft's first event is
+Held by the same initiator. A later send of that draft still loads. A pointer
+that names another command does not reach
+(`a_successor_names_the_draft_the_return_minted`). Lookup and
 ReturnedToDraft for one `turn_running` share one initiator. A history this
 replay does not return is corrupt. The row is not repaired.
+
+A direct answer that replaces a lookup is replayed from the row before that
+lookup. The lookup events stay
+(`a_direct_answer_after_a_lookup_still_loads`). That same write clears a
+`turn_running` successor the direct answer replaces, and removes a replacement
+draft that is still only held
+(`a_direct_answer_clears_the_turn_running_successor`).
+
+An intent row that is gone while its events remain is corrupt. The id is not
+held again (`an_orphaned_audit_history_is_corrupt`).
 
 | Function | When the outbox asks | What it persists |
 | --- | --- | --- |
@@ -227,6 +242,8 @@ second rule.
 | S9 | Send answer is not a receipt or a known refusal | The receipt is read. No further send in that call | `an_unreadable_send_answer_is_not_sent_again` |
 | S10 | Saving the answer fails | Maybe sent. The caller does not hear not sent | `a_failed_save_after_a_send_keeps_possible_delivery` |
 | S11 | A direct answer arrives against a stored lookup, including forbidden and done | The direct answer is saved | `a_direct_answer_beats_a_lookup` |
+| S16 | An uncertain answer commit rolls back, and a lookup of done is saved before the direct answer is written again | The direct answer loads. The lookup event stays | `a_direct_answer_after_a_lookup_still_loads` |
+| S17 | That lookup is `turn_running` and has already minted a draft | The direct answer is saved, the successor is cleared, and the still-held draft is removed | `a_direct_answer_clears_the_turn_running_successor` |
 | S14 | A lookup arrives after a direct answer was stored | The direct answer stays. This is the order the lease produces | `a_lookup_does_not_replace_a_direct_answer` |
 | L1 | Send answer lost, lookup finds `accepted` | Accepted. No further send | `a_lost_answer_with_an_accepted_receipt_is_not_sent_again` |
 | L2 | Send answer lost, lookup finds `attempted` | Unknown, attempted. No further send | `an_attempted_receipt_is_unknown_and_not_sent_again` |
@@ -253,6 +270,8 @@ second rule.
 | C6 | A recovery hold whose predecessor is missing, not unique, a different prompt, not `turn_running`, or not the recovery caller | Corrupt. The draft is not sent | `a_recovery_draft_requires_its_turn_running_predecessor` |
 | C7 | An event's failure or unknown column contradicts its outcome | Corrupt. The column is not dropped | `an_event_column_contradiction_is_corrupt` |
 | C8 | The stored send count disagrees with the replay | Corrupt. The count is not rewritten | `a_send_count_the_replay_does_not_reach_is_corrupt` |
+| C9 | The successor column names a different command than the return event | Corrupt. The column is left | `a_successor_names_the_draft_the_return_minted` |
+| C10 | The intent row is gone and its events remain | Corrupt. The id is not held again | `an_orphaned_audit_history_is_corrupt` |
 | C2 | Each transition | Command, outcome, cause, and initiator | `a_transition_keeps_its_cause_and_initiator` |
 
 `FOREGROUND_SENDS` in `crates/nessa-client-core/src/outbox/domain/decide.rs`

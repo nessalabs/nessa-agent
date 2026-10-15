@@ -442,8 +442,8 @@ where
                 .again(command.clone(), turn)
                 .map_err(OutboxError::Id)?,
         );
-        let failed = failed.with_successor(command);
-        let events = self.draft_events(failed.outcome(), by, evidence);
+        let failed = failed.with_successor(command.clone());
+        let events = self.draft_events(failed.outcome(), by, evidence, &command);
         let draft_event = self.event(Cause::Held, draft.outcome(), by);
         match self
             .store
@@ -488,8 +488,8 @@ where
                     .again(command.clone(), turn)
                     .map_err(OutboxError::Id)?,
             );
-            let next = overlay(&saved, &failed).with_successor(command);
-            let events = self.draft_events(next.outcome(), by, evidence);
+            let next = overlay(&saved, &failed).with_successor(command.clone());
+            let events = self.draft_events(next.outcome(), by, evidence, &command);
             let draft_event = self.event(Cause::Held, draft.outcome(), by);
             match self
                 .store
@@ -560,8 +560,10 @@ where
         outcome: PhoneOutcome,
         by: Initiator,
         evidence: Evidence,
+        successor: &PhoneCommandId,
     ) -> Vec<IntentEvent> {
-        let returned = self.event(Cause::ReturnedToDraft, outcome, by);
+        let mut returned = self.event(Cause::ReturnedToDraft, outcome, by);
+        returned.successor = Some(successor.clone());
         match evidence {
             Evidence::Lookup => vec![self.event(Cause::Lookup, outcome, by), returned],
             Evidence::Direct => vec![returned],
@@ -660,6 +662,7 @@ where
             outcome,
             initiator,
             observed_at_ms: self.clock.unix_milliseconds(),
+            successor: None,
         }
     }
 }
@@ -769,14 +772,17 @@ fn asked(error: OutboxError) -> OutboxError {
 /// How many times a lost compare-and-swap reloads the row before giving up.
 const SAVE_ATTEMPTS: usize = 4;
 
-/// `next`'s outcome and send count on the committed intent.
+/// `next`'s outcome, send count, and successor on the committed intent.
+///
+/// A direct answer that replaces `turn_running` clears the successor in that
+/// same write (`a_direct_answer_clears_the_turn_running_successor`).
 fn overlay(saved: &PhoneRecord, next: &PhoneRecord) -> PhoneRecord {
-    let mut updated = saved
+    let updated = saved
         .clone()
         .with_sends(next.sends().max(saved.sends()))
         .with_outcome(next.outcome());
-    if let Some(successor) = next.successor() {
-        updated = updated.with_successor(successor.clone());
+    match next.successor() {
+        Some(successor) => updated.with_successor(successor.clone()),
+        None => updated.clear_successor(),
     }
-    updated
 }
