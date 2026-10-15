@@ -680,8 +680,10 @@ numbers are the caller's: the gateway takes them from the selected model's
 
 First-party phone authorization is [ADR811](adr/todo/811-owner-phone-authorization.md).
 `nessa-server/src/product/phone_endpoint.rs` publishes actual authenticated native
-discovery; `product/phone.rs` maps the signed setup/status DTOs, and
-`product/owner_phone.rs` supplies current purpose/method/input admission.
+discovery. `composition/native_pairing.rs` publishes a wildcard listener as the
+host route address on the bound port. `product/phone.rs` maps the signed
+setup/status DTOs, and `product/owner_phone.rs` supplies current purpose/method/input
+admission.
 `device_pairing/application/owner_phone.rs` and its infrastructure adapter use
 Auth's original-request ledger and the existing activation/expiry/cleanup owners.
 `device_pairing/application/read_status.rs` projects exact signed TLS recovery

@@ -196,8 +196,9 @@ impl GatewayPairing {
             inventory: Arc::new(OnceLock::new()),
         })
     }
-    /// Public metadata for the actual listener, never a guessed product host or
-    /// configured port before bind. Unusable wildcard/zero endpoints disclose none.
+    /// Public metadata for the listener composition published, never a guessed
+    /// product host or the configured port before bind. A stored wildcard or
+    /// port zero discloses none; composition publishes a route address instead.
     pub fn native_endpoint(&self) -> Option<(SocketAddr, [u8; 44])> {
         let endpoint = *self.native_endpoint.get()?;
         OwnerPhoneRequest::validate_endpoint(endpoint).ok()?;

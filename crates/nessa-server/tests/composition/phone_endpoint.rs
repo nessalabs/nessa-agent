@@ -123,8 +123,34 @@ async fn endpoint_discloses_actual_bound_port_and_current_source_without_allocat
     drop(bound);
 }
 
+#[test]
+fn a_wildcard_with_a_bound_port_uses_the_route_and_port_zero_stays_unpublished() {
+    let route = "192.0.2.10".parse().unwrap();
+    assert_eq!(
+        super::super::advertised_endpoint("0.0.0.0:47650".parse().unwrap(), Some(route)),
+        Some("192.0.2.10:47650".parse().unwrap())
+    );
+    for (bound, route) in [
+        ("0.0.0.0:0", Some(route)),
+        ("127.0.0.1:0", None),
+        ("0.0.0.0:47650", None),
+        ("0.0.0.0:47650", Some("127.0.0.1".parse().unwrap())),
+        ("[::]:47650", Some(route)),
+    ] {
+        assert_eq!(
+            super::super::advertised_endpoint(bound.parse().unwrap(), route),
+            None,
+            "{bound}"
+        );
+    }
+    assert_eq!(
+        super::super::advertised_endpoint("127.0.0.1:47650".parse().unwrap(), Some(route)),
+        Some("127.0.0.1:47650".parse().unwrap())
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn endpoint_refuses_absent_unbound_and_wildcard_native_destinations() {
+async fn endpoint_refuses_absent_and_unbound_native_destinations() {
     let namespace = Namespace::new();
     let registry = namespace.registry();
     let credential = token(&registry, true);
@@ -139,28 +165,58 @@ async fn endpoint_refuses_absent_unbound_and_wildcard_native_destinations() {
     let _ = serving.await;
     let mut config = loopback();
     config.listen_address = "0.0.0.0:0".parse().unwrap();
-    let (prepared, commands, _peers) = prepare(&config, namespace.inputs(registry.clone()))
+    let (_prepared, commands, _peers) = prepare(&config, namespace.inputs(registry.clone()))
         .await
         .unwrap();
     let commands = Arc::new(commands);
     let state = product(registry).with_pairing(commands.clone());
-    let (address, serving) = serve(state.clone()).await;
+    let (address, serving) = serve(state).await;
     tokio::task::block_in_place(|| {
         assert_eq!(
             ProductClient::connect(address, &credential).refused("phone.endpoint", json!({})),
             "pairing_unavailable"
         );
     });
-    let bound = bind(prepared, RuntimeDependencies::default().clock, state)
+    assert!(commands.native_endpoint().is_none());
+    serving.abort();
+    let _ = serving.await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn endpoint_publishes_the_host_route_for_a_wildcard_bind() {
+    let namespace = Namespace::new();
+    let registry = namespace.registry();
+    let credential = token(&registry, true);
+    let mut config = loopback();
+    config.listen_address = "0.0.0.0:0".parse().unwrap();
+    let (prepared, commands, _peers) = prepare(&config, namespace.inputs(registry.clone()))
         .await
         .unwrap();
-    assert_ne!(bound.local_address().port(), 0);
-    assert!(commands.native_endpoint().is_none());
+    let commands = Arc::new(commands);
+    let state = product(registry).with_pairing(commands.clone());
+    let bound = bind(
+        prepared,
+        RuntimeDependencies::default().clock,
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    let listener = bound.local_address();
+    assert!(listener.ip().is_unspecified());
+    assert_ne!(listener.port(), 0);
+    let route = super::super::host_route(listener).expect("the host has a route address");
+    let expected = commands.native_endpoint().unwrap();
+    assert_eq!(
+        expected.0,
+        std::net::SocketAddr::new(route, listener.port())
+    );
+    assert!(!expected.0.ip().is_unspecified());
+    assert!(!expected.0.ip().is_loopback());
+    let (address, serving) = serve(state).await;
     tokio::task::block_in_place(|| {
-        assert_eq!(
-            ProductClient::connect(address, &credential).refused("phone.endpoint", json!({})),
-            "pairing_unavailable"
-        );
+        let found = ProductClient::connect(address, &credential).ok("phone.endpoint", json!({}));
+        assert_eq!(found["nativeEndpoint"], expected.0.to_string());
+        assert_eq!(found["gatewayKey"], json!(expected.1.to_vec()));
     });
     serving.abort();
     let _ = serving.await;
