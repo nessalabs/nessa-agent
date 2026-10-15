@@ -50,8 +50,9 @@ a title label or divider. The host centres the native buttons 24px below the
 window's top (`platform/macos/traffic_lights.rs`), on the same centre as the
 titlebar's controls. It places them by their measured centre rather than a
 fixed offset, so a macOS release that redraws the buttons keeps them on the
-row, and it places them again after each AppKit event that lays the titlebar
-out. `tauri.conf.json` sets no `trafficLightPosition`, so nothing else moves them.
+row. AppKit moves them back to its own spot on some changes without any
+notice (a title change does), so it checks them each time the main run loop
+is about to sleep and moves only a button that is off the row. `tauri.conf.json` sets no `trafficLightPosition`, so nothing else moves them.
 The inset is macOS-only; browser and other hosts use ordinary header padding.
 The surface uses the design system's dark theme. Back/forward controls are
 disabled because the single-view shell has no navigation history.
