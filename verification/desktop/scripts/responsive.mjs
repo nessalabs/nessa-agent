@@ -1324,7 +1324,6 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
       if (leaving.some((opacity) => opacity !== "0"))
         failures.push(`reduced motion: ${key} left the old words drawn (${leaving})`)
     }
-    failures.push(...reduced.errors)
   } finally {
     await reduced.close()
   }

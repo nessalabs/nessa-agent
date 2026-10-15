@@ -227,14 +227,15 @@ export async function openPage(browser, o) {
   const opened = {
     context,
     page,
-    errors: lines.errors,
-    harmless: lines.harmless,
+    get heldErrorCount() {
+      return lines.errors.length
+    },
     noteHarmless: (pattern) => lines.noteHarmless(pattern),
     reclassifyHeld: (keep, asHarmless) => lines.reclassifyHeld(keep, asHarmless),
     close: () => context.close(),
     settleRequests: () => settleSizeReports(sizeReports),
   }
-  attachLines(opened, lineBase)
+  attachLines(opened, lineBase, lines)
   return opened
 }
 

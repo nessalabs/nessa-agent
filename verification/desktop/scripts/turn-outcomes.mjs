@@ -103,7 +103,6 @@ const checks = {
         })
       }
       await opened.settleRequests()
-      failures.push(...opened.errors)
       return { marks, failures }
     } finally {
       await opened.close()
@@ -128,7 +127,6 @@ const checks = {
           if (!text.includes(line)) failures.push(`${surface} is missing ${line}`)
       }
       await opened.settleRequests()
-      failures.push(...opened.errors)
       return { notice, failures }
     } finally {
       await opened.close()
@@ -182,7 +180,6 @@ const checks = {
       if (!kept.includes("Provider connection lost") || !kept.includes("Halfway"))
         failures.push("answering a question dropped the turn outcomes")
       await opened.settleRequests()
-      failures.push(...opened.errors)
       return { failures }
     } finally {
       await opened.close()

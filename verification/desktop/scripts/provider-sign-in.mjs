@@ -183,7 +183,7 @@ await main(
               )
               if (unsupportedCalls.length !== 0)
                 throw new Error("unsupported host attempted provider login")
-              const errorCount = opened.errors.length
+              const errorCount = opened.heldErrorCount
               rep.add({
                 name: "provider-sign-in",
                 engine,
@@ -241,7 +241,7 @@ await main(
             shown,
             count,
             passed: true,
-            errors: opened.errors.length,
+            errors: opened.heldErrorCount,
           })
         } finally {
           await opened.close()

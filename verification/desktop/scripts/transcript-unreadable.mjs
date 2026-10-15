@@ -170,7 +170,6 @@ const checks = {
         })
       }
       await opened.settleRequests()
-      failures.push(...opened.errors)
       return { order: seen, failures }
     } finally {
       await opened.close()
