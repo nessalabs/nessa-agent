@@ -20,9 +20,7 @@
     },
     {
       "ok": false,
-      "failures": [
-        "1000x700 Privacy & Permissions: a row ends at y=766, below the fold"
-      ],
+      "failures": ["1000x700 Privacy & Permissions: a row ends at y=766, below the fold"],
       "engine": "chromium",
       "name": "masthead",
       "seen": [
@@ -318,9 +316,7 @@
     },
     {
       "ok": false,
-      "failures": [
-        "1000x700 Privacy & Permissions: a row ends at y=766, below the fold"
-      ],
+      "failures": ["1000x700 Privacy & Permissions: a row ends at y=766, below the fold"],
       "engine": "webkit",
       "name": "masthead",
       "seen": [
