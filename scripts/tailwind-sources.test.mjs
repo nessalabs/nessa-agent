@@ -175,6 +175,10 @@ for (const entry of ["src/styles.css", "src/desktop/styles.css"]) {
         while (!packets.some((packet) => ["full-reload", "update"].includes(packet.type)))
           await once(socket, "message")
         assert.ok(
+          packets.some((packet) => packet.type === "update"),
+          "registered UI edit must publish a CSS HMR update",
+        )
+        assert.ok(
           (await css()).includes(`z-index: ${value};`),
           `changed UI class ${value} is compiled`,
         )
