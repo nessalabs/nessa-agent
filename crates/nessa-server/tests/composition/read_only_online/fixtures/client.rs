@@ -137,7 +137,7 @@ pub(crate) struct WireClient {
 }
 /// One frame as it arrived: its decoded text with the exact encoded length, or
 /// the end of the connection. A named native close arrives first as
-/// `session.terminated`; the following read is the end.
+/// `session.terminated`; the read after that event is the end.
 pub(crate) enum Frame {
     Text { value: Value, bytes: usize },
     Closed,
