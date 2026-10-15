@@ -46,11 +46,12 @@ opens it again; where there is no Dock either, closing it quits the app
 (`desktop_window::on_close`) — it is never destroyed while the app runs on,
 since nothing could open it again. On macOS an overlay titlebar retains the native traffic lights;
 a fixed full-width WindowTitlebar places the sidebar toggle beside them, without
-a title label or divider. The desktop window's `trafficLightPosition` (16, 26)
-centres the native buttons 24px below the window's top, and the titlebar's
-controls sit on the same 24px centre. Both were measured in the running macOS
-window through the accessibility frames of the close button and the window;
-recheck native geometry when changing the Tauri/Tao version or macOS version.
+a title label or divider. The host centres the native buttons 24px below the
+window's top (`platform/macos/window_controls.rs`), on the same centre as the
+titlebar's controls. It places them by their measured centre rather than a
+fixed offset, so a macOS release that redraws the buttons keeps them on the
+row, and it places them again after each AppKit event that lays the titlebar
+out. `tauri.conf.json` sets no `trafficLightPosition`, so nothing else moves them.
 The inset is macOS-only; browser and other hosts use ordinary header padding.
 The surface uses the design system's dark theme. Back/forward controls are
 disabled because the single-view shell has no navigation history.

@@ -97,7 +97,13 @@ body {
   /* Motion: base and slow, beside fast and medium above; two more for the workspace's travel. */
   --desktop-base: 180ms;
   --desktop-slow: 240ms;
-  /* A pane travelling to its new place when the layout changes. */
+  /*
+   * A pane travelling to its new place when the layout changes. Opening and
+   * closing the sidebar or the session list is seen many times a day, and
+   * still moves: the frequency rule's "none" does not apply to it. Only
+   * reduced motion (below) makes it, and `--desktop-slow`, instant
+   * (`styles.test.ts`).
+   */
   --desktop-flight: 220ms;
   /* A first message's composer gliding from a new session's home. */
   --desktop-arrival: 420ms;
@@ -258,7 +264,7 @@ html:not(.dark) [data-surface] {
 /*
  * Native macOS window buttons remain host-owned and sit inside the sidebar,
  * centred on the same row as the controls: 24px from the window's top, where
- * the desktop window's `trafficLightPosition` in tauri.conf.json puts them.
+ * the host puts them (`src-tauri/src/platform/macos/window_controls.rs`).
  */
 [data-host="macos"][data-surface="window"] {
   --desktop-window-controls-inset: 79px;
