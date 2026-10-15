@@ -301,6 +301,7 @@
   },
   "events": {
     "session.challenge": "SessionChallenge",
+    "session.terminated": "SessionTermination",
     "conversation.changed": "ConversationChanged",
     "conversation.watchEnded": "ConversationWatchEnded",
     "conversation.view": "ConversationViewed",

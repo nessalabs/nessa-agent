@@ -2881,6 +2881,7 @@ export const ProductMethod = {
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
+  SessionTerminated: "session.terminated",
   ConversationChanged: "conversation.changed",
   ConversationWatchEnded: "conversation.watchEnded",
   ConversationView: "conversation.view",

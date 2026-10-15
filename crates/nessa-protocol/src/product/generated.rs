@@ -2794,6 +2794,7 @@ pub mod product_method {
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
+    pub const SESSION_TERMINATED: &str = "session.terminated";
     pub const CONVERSATION_CHANGED: &str = "conversation.changed";
     pub const CONVERSATION_WATCH_ENDED: &str = "conversation.watchEnded";
     pub const CONVERSATION_VIEW: &str = "conversation.view";

@@ -7,8 +7,9 @@ use crate::read_only_sync::application::{
 };
 use crate::read_only_sync::infrastructure::gateway::{DeviceEvidence, Session};
 use nessa_auth::adapters::pairing::NativeIdentity;
-use nessa_protocol::product::generated::ProductSurfaceKind;
-use nessa_protocol::protocol::OutgoingMessage;
+use nessa_protocol::product::generated::{product_event, ProductSurfaceKind};
+use nessa_protocol::product::handshake::accepted_termination;
+use nessa_protocol::protocol::{EventFrame, OutgoingMessage};
 use std::io::{Error, Read, Result as IoResult, Write};
 use std::net::SocketAddr;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -185,6 +186,9 @@ fn exchange(owner: &Arc<Owner>, channel: &mut Channel) -> Result<(), ProductFail
                 ticket.complete(ProductCompletion::Response(Box::new(response)));
             }
             OutgoingMessage::Event(event) => {
+                if let Some(termination) = session_termination(&event) {
+                    return Err(termination);
+                }
                 let mut state = lock(&owner.state);
                 let bytes = state
                     .event_bytes
@@ -200,5 +204,77 @@ fn exchange(owner: &Arc<Owner>, channel: &mut Channel) -> Result<(), ProductFail
                 owner.wake.wake();
             }
         }
+    }
+}
+
+/// `session.terminated` is the connection's close, read before any caller
+/// event is queued. A malformed payload is a protocol failure. Any other
+/// event is caller data.
+fn session_termination(event: &EventFrame) -> Option<ProductFailure> {
+    if event.event != product_event::SESSION_TERMINATED {
+        return None;
+    }
+    Some(match accepted_termination(&event.payload) {
+        Some(termination) => ProductFailure::Closed(Some(termination.code)),
+        None => ProductFailure::Protocol,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_termination;
+    use nessa_protocol::product::generated::{product_event, SessionTermination};
+    use nessa_protocol::product_contract::generated::SessionCloseReason;
+    use nessa_protocol::protocol::EventFrame;
+    use serde_json::json;
+
+    fn frame(payload: &serde_json::Value) -> EventFrame {
+        EventFrame::push(product_event::SESSION_TERMINATED, payload, 1, 0).unwrap()
+    }
+
+    #[test]
+    fn every_termination_reason_closes_and_a_malformed_one_does_not_queue() {
+        for reason in [
+            SessionCloseReason::AuthenticationFailed,
+            SessionCloseReason::CredentialRevoked,
+            SessionCloseReason::CredentialExpired,
+            SessionCloseReason::AuthorizationLost,
+            SessionCloseReason::ProtocolIncompatible,
+            SessionCloseReason::HandshakeTimeout,
+            SessionCloseReason::TemporaryUnavailable,
+            SessionCloseReason::GatewayRestarting,
+            SessionCloseReason::GatewayOverloaded,
+            SessionCloseReason::ServerShutdown,
+            SessionCloseReason::TransportInterrupted,
+        ] {
+            let event = frame(
+                &serde_json::to_value(SessionTermination {
+                    code: reason,
+                    retryable: reason.retryable(),
+                    retry_after_ms: None,
+                })
+                .unwrap(),
+            );
+            assert_eq!(
+                session_termination(&event),
+                Some(super::ProductFailure::Closed(Some(reason)))
+            );
+        }
+        let ordinary = EventFrame::push("conversation.changed", &json!({}), 1, 0).unwrap();
+        assert_eq!(session_termination(&ordinary), None);
+        assert_eq!(
+            session_termination(&frame(
+                &json!({"code":"credential_revoked","retryable":true})
+            )),
+            Some(super::ProductFailure::Protocol)
+        );
+        assert_eq!(
+            session_termination(&frame(&json!({
+                "code": "temporary_unavailable",
+                "retryable": true,
+                "retryAfterMs": 60_001
+            }))),
+            Some(super::ProductFailure::Protocol)
+        );
     }
 }

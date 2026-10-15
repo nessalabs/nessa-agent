@@ -10,6 +10,8 @@ use nessa_protocol::clock::Clock;
 use nessa_protocol::pairing::{
     encode_frame, MAX_PROTECTED_REQUEST_BYTES, MAX_PROTECTED_RESPONSE_BYTES,
 };
+use nessa_protocol::product::generated::{product_event, SessionTermination};
+use nessa_protocol::product_contract::generated::SessionCloseReason;
 use nessa_protocol::protocol::{EventFrame, OutgoingMessage, ResponseFrame};
 use serde_json::json;
 use std::error::Error;
@@ -1197,4 +1199,83 @@ fn first_physical_failure_survives_stop_before_error_payload_release() {
         matches!(ticket.wait().value(),ProductCompletion::Uncertain(cause)|ProductCompletion::NotDispatched(cause) if *cause==ProductFailure::Closed(None))
     );
     peer.join();
+}
+
+fn termination(reason: SessionCloseReason, seq: u64) -> OutgoingMessage {
+    OutgoingMessage::Event(
+        EventFrame::push(
+            product_event::SESSION_TERMINATED,
+            &SessionTermination {
+                code: reason,
+                retryable: reason.retryable(),
+                retry_after_ms: None,
+            },
+            seq,
+            0,
+        )
+        .unwrap(),
+    )
+}
+
+#[test]
+fn session_terminated_is_the_close_reason_and_is_not_queued() {
+    let (sent, seen) = signal();
+    let (endpoint, peer) = peer(move |wire| {
+        wire.event(1);
+        let request = wire.request().unwrap();
+        sent.send(()).unwrap();
+        wire.send(termination(SessionCloseReason::CredentialRevoked, 2));
+        wire.send(termination(SessionCloseReason::ServerShutdown, 3));
+        let _ = request;
+    });
+    let session = open(endpoint, limits(1));
+    let ticket = session
+        .request("conversation.list", &json!({}).to_string())
+        .unwrap();
+    receive(&seen);
+    let batch = session.events(u64::MAX).unwrap();
+    assert_eq!(batch.len(), 1);
+    assert_eq!(batch[0].event, "conversation.changed");
+    assert_eq!(
+        session.events(u64::MAX).err(),
+        Some(ProductFailure::Closed(Some(
+            SessionCloseReason::CredentialRevoked
+        )))
+    );
+    assert!(matches!(
+        ticket.wait().value(),
+        ProductCompletion::Uncertain(ProductFailure::Closed(Some(
+            SessionCloseReason::CredentialRevoked
+        )))
+    ));
+    session.close().unwrap_err();
+    peer.join();
+}
+
+#[test]
+fn plain_eof_stays_an_untyped_close_and_a_bad_termination_is_protocol() {
+    let (endpoint, closed) = peer(|_| {});
+    let session = open(endpoint, limits(1));
+    assert_eq!(
+        session.events(u64::MAX).err(),
+        Some(ProductFailure::Closed(None))
+    );
+    closed.join();
+    let (endpoint, malformed) = peer(|wire| {
+        wire.send(OutgoingMessage::Event(
+            EventFrame::push(
+                product_event::SESSION_TERMINATED,
+                &json!({"code": "credential_revoked", "retryable": true}),
+                1,
+                0,
+            )
+            .unwrap(),
+        ));
+    });
+    let session = open(endpoint, limits(1));
+    assert_eq!(
+        session.events(u64::MAX).err(),
+        Some(ProductFailure::Protocol)
+    );
+    malformed.join();
 }
