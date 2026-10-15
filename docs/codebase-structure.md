@@ -1552,7 +1552,9 @@ adapter and `ui/agent-downloads.tsx` supply setup and panel download controls.
 refusal recovery through one provider. `ui/agent-api-key-save.tsx` keeps the
 existing API-key save audit warning visible after a successful save retires its
 form, shared with onboarding. It reuses readiness and the download hook;
-install, sign-in and Check are explicit and never replay a message. Native
+install, sign-in and Check are explicit and never replay a message. Its steps
+sit in the same `provider-authentication/ui/agent-action-card.tsx` card as
+sign-in recovery, so download and sign-in prompts look alike. Native
 readiness resolves the host-assigned gateway endpoint within its bounded read.
 
 `composition/managed_adapter.rs` joins a verified native snapshot to the bundled

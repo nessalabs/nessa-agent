@@ -1,5 +1,5 @@
-/* Provider recovery shares the transcript's quiet cards and controls. */
-.provider-sign-in {
+/* Agent recovery and setup share the transcript's quiet cards and controls. */
+.agent-action-card {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -9,21 +9,31 @@
     var(--desktop-rim, color-mix(in oklab, var(--foreground) 7%, transparent));
   border-radius: var(--desktop-radius-md, 12px);
   background: color-mix(in oklab, var(--foreground) 3%, transparent);
+  color: var(--foreground);
+  text-align: start;
 }
-.provider-sign-in h3 {
+.agent-action-card h3 {
   flex: 1;
+  min-width: 12rem;
   margin: 0;
   font-size: var(--desktop-text-body, 13px);
   font-weight: 500;
 }
-.provider-sign-in p {
+/* Zero specificity, so a note's own class (an error colour) still wins. */
+:where(.agent-action-card > :not(h3, .agent-action-card-actions)) {
   flex-basis: 100%;
   margin: 0;
   color: var(--desktop-muted, color-mix(in oklab, var(--foreground) 56%, transparent));
   font-size: var(--desktop-text-footnote, 12px);
 }
+.agent-action-card-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 
-.provider-sign-in-button {
+.agent-action-card-button {
   height: 28px;
   flex: none;
   padding: 0 12px;
@@ -35,10 +45,18 @@
   font-weight: 500;
   white-space: nowrap;
 }
-.provider-sign-in-button:hover {
+.agent-action-card-button.is-quiet {
+  background: transparent;
+  color: var(--desktop-muted, color-mix(in oklab, var(--foreground) 56%, transparent));
+}
+.agent-action-card-button:hover {
   background: color-mix(in oklab, var(--foreground) 13%, transparent);
 }
-.provider-sign-in-button:disabled {
+.agent-action-card-button.is-quiet:hover {
+  background: color-mix(in oklab, var(--foreground) 6%, transparent);
+  color: color-mix(in oklab, var(--foreground) 82%, transparent);
+}
+.agent-action-card-button:disabled {
   opacity: 0.5;
   cursor: wait;
 }

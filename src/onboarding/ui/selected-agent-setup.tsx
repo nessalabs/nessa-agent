@@ -1,4 +1,8 @@
 import * as React from "react"
+import {
+  AgentActionButton,
+  AgentActionCard,
+} from "../../provider-authentication/ui/agent-action-card"
 import type { AgentInstallations } from "../application/agent-installations"
 import type { AgentApiKeySink, AgentReadinessSource } from "../application/ports"
 import { AGENT_CHOICES, type AgentId, type AgentReadiness } from "../model/onboarding"
@@ -28,15 +32,15 @@ export function AgentSetupProvider({
   return <Setup.Provider value={source}>{children}</Setup.Provider>
 }
 
-const readinessText: Record<AgentReadiness, string> = {
+const readinessText = (name: string): Record<AgentReadiness, string> => ({
   ready: "Ready. Send your message when you are ready.",
   "needs-authentication": "The runtime is installed. Sign in to your agent account next.",
-  "not-installed": "Download the selected agent to use it in Nessa.",
+  "not-installed": `Download ${name} to use it in Nessa.`,
   "not-configured":
     "This gateway is not configured to run this agent. Downloading a runtime alone will not change that.",
   "not-supported": "This agent is not supported by this gateway.",
   unknown: "Nessa could not check this agent. Check setup again before trying to send.",
-}
+})
 
 /** A setup action never resends the message whose refusal opened this view. */
 export function SelectedAgentSetup({
@@ -128,80 +132,88 @@ function SelectedSetup({
     !loginFailed
   )
     return null
-  return (
-    <section
-      aria-label={`${name} setup`}
-      className="mb-2 flex flex-col gap-2 text-xs text-muted-foreground"
-    >
-      <p role="status" aria-live="polite">
+  const primary =
+    readiness === "not-installed" && offer && !offer.installed ? (
+      <AgentActionButton
+        disabled={downloads.pending !== undefined || checking}
+        onClick={() => downloads.install(agent)}
+      >
         {downloads.pending
-          ? `Downloading and verifying ${name}. You can leave this view; installation will continue.`
-          : checking
-            ? `Checking ${name} setup…`
-            : readinessText[readiness]}
-      </p>
-      {downloads.outcome ? <p>{installationOutcomeText(downloads.outcome)}</p> : null}
-      {downloads.unavailable ? (
-        <p>Downloads could not be checked. Check setup again.</p>
-      ) : null}
-      {readiness === "not-installed" && offer && !offer.installed ? (
-        <button
-          type="button"
-          disabled={downloads.pending !== undefined || checking}
-          onClick={() => downloads.install(agent)}
-        >
-          {downloads.pending
-            ? "Downloading…"
-            : `Download ${name} · ${Math.ceil(offer.archiveBytes / 1_000_000)} MB`}
-        </button>
-      ) : null}
-      {readiness === "needs-authentication" && agent !== "opencode" && loginAvailable ? (
-        <button
-          type="button"
-          disabled={signingIn}
-          onClick={async () => {
-            if (loginWorking.current) return
-            loginWorking.current = true
-            const lifetime = generation.current
-            setSigningIn(true)
-            setLoginFailed(false)
-            try {
-              await source.signIn(agent)
-            } catch {
-              if (generation.current === lifetime) setLoginFailed(true)
-            }
-            if (generation.current !== lifetime) return
-            loginWorking.current = false
-            setSigningIn(false)
-            void check()
-          }}
-        >
-          {signingIn ? "Opening sign-in…" : `Sign in to ${name}`}
-        </button>
-      ) : null}
-      {readiness === "needs-authentication" && agent === "opencode" && source.apiKeys ? (
-        <AgentApiKeyForm
-          agent="opencode"
-          agentName="OpenCode"
-          hint="OpenCode connects through Zen using your API key. Depending on the configured model, messages may be metered."
-          onSave={credentials.save}
-          onSaved={check}
-        />
-      ) : null}
-      <AgentApiKeyAuditWarning failure={credentials.auditFailure} />
-      {loginFailed ? (
-        <p>Sign-in could not be opened. Check setup and try again.</p>
-      ) : null}
-      <button
-        type="button"
-        disabled={checking || downloads.pending !== undefined}
-        onClick={() => {
-          downloads.refresh()
+          ? "Downloading…"
+          : `Download ${name} · ${Math.ceil(offer.archiveBytes / 1_000_000)} MB`}
+      </AgentActionButton>
+    ) : readiness === "needs-authentication" && agent !== "opencode" && loginAvailable ? (
+      <AgentActionButton
+        disabled={signingIn}
+        onClick={async () => {
+          if (loginWorking.current) return
+          loginWorking.current = true
+          const lifetime = generation.current
+          setSigningIn(true)
+          setLoginFailed(false)
+          try {
+            await source.signIn(agent)
+          } catch {
+            if (generation.current === lifetime) setLoginFailed(true)
+          }
+          if (generation.current !== lifetime) return
+          loginWorking.current = false
+          setSigningIn(false)
           void check()
         }}
       >
-        Check setup again
-      </button>
+        {signingIn ? "Opening sign-in…" : `Sign in to ${name}`}
+      </AgentActionButton>
+    ) : null
+  return (
+    <section aria-label={`${name} setup`} className="mb-2">
+      <AgentActionCard
+        label={`${name} setup steps`}
+        title={
+          <span role="status" aria-live="polite">
+            {downloads.pending
+              ? `Downloading and verifying ${name}. You can leave this view; installation will continue.`
+              : checking
+                ? `Checking ${name} setup…`
+                : readinessText(name)[readiness]}
+          </span>
+        }
+        actions={
+          <>
+            {primary}
+            <AgentActionButton
+              quiet={primary !== null}
+              disabled={checking || downloads.pending !== undefined}
+              onClick={() => {
+                downloads.refresh()
+                void check()
+              }}
+            >
+              Check setup again
+            </AgentActionButton>
+          </>
+        }
+      >
+        {downloads.outcome ? <p>{installationOutcomeText(downloads.outcome)}</p> : null}
+        {downloads.unavailable ? (
+          <p>Downloads could not be checked. Check setup again.</p>
+        ) : null}
+        {readiness === "needs-authentication" &&
+        agent === "opencode" &&
+        source.apiKeys ? (
+          <AgentApiKeyForm
+            agent="opencode"
+            agentName="OpenCode"
+            hint="OpenCode connects through Zen using your API key. Depending on the configured model, messages may be metered."
+            onSave={credentials.save}
+            onSaved={check}
+          />
+        ) : null}
+        <AgentApiKeyAuditWarning failure={credentials.auditFailure} />
+        {loginFailed ? (
+          <p>Sign-in could not be opened. Check setup and try again.</p>
+        ) : null}
+      </AgentActionCard>
     </section>
   )
 }
