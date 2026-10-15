@@ -47,6 +47,7 @@ const checks = [
   "pane-level",
   "rail-corner",
   "rail-view-inert",
+  "rail-loading",
   "titlebar-steady",
   "titlebar-row",
   "rail-off",
@@ -78,6 +79,8 @@ Checks, per engine, layout and size:
                    both closed; "nessa Studio" holds its place between Agents
                    and a full view and is never under the toggle
   rail-view-inert  ⌘B, ⌘0 and ⌥⌘S under a full view change nothing behind it
+  rail-loading     an item's view opens empty; still loading at 3 s it shows
+                   only the kit's sweeping text, with no panel or border
   titlebar-steady  through a rail toggle the titlebar's controls stay between
                    where they were and where they land, every frame
   titlebar-row     the titlebar's controls are centred 24px down, on the traffic
@@ -672,6 +675,63 @@ const body = {
         failures.push(`back in Agents, ${name} is ${after[name]} (was ${value})`)
     }
     return { before, under, after, failures }
+  },
+
+  "rail-loading": async ({ page, size }) => {
+    await arrange(page, size, { rail: true, sidebar: true })
+    const railDrawn = await page.evaluate(
+      (frame) => document.querySelector(frame)?.dataset.rail === "open",
+      css.workspaceWindow,
+    )
+    if (!railDrawn) throw new CannotRun("no room for the side rail at this size")
+    const loader = () =>
+      page.evaluate(() => {
+        const view = document.querySelector(".rail-view")
+        const text = view?.querySelector(".rail-view-loading")
+        if (!view || !text) return { view: view !== null, text: null }
+        // Every box from the text up to the view: none may draw a frame.
+        const framed = []
+        for (let el = text; el && el !== view; el = el.parentElement) {
+          const style = getComputedStyle(el)
+          if (
+            parseFloat(style.borderTopWidth) > 0 ||
+            style.backgroundColor !== "rgba(0, 0, 0, 0)"
+          )
+            framed.push(el.className || el.tagName)
+        }
+        const sweep = text.firstElementChild
+        return {
+          view: true,
+          text: text.textContent,
+          slot: text.getAttribute("data-slot"),
+          panel: view.querySelector('[data-slot="generating-surface"]') !== null,
+          framed,
+          sweeping: sweep ? sweep.getAnimations().length > 0 : false,
+          reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
+        }
+      })
+    await page.locator(selectorFor.railItem("files")).click()
+    const opened = await loader()
+    await page.waitForTimeout(3300)
+    const late = await loader()
+    // Back to Agents, so the sweep stops before the next check.
+    await page.locator(selectorFor.railItem("agents")).click()
+    const failures = []
+    if (!opened.view) failures.push("choosing Files drew no view")
+    if (opened.text !== null)
+      failures.push(`the view opened with a loader already: "${opened.text}"`)
+    if (late.text === null) failures.push("no loader 3.3 s after choosing Files")
+    else {
+      if (late.slot !== "loading-text")
+        failures.push(`the loader is ${late.slot}, not the kit's LoadingText`)
+      if (!late.text.includes("Loading Files"))
+        failures.push(`the loader reads "${late.text}"`)
+      if (late.panel) failures.push("a generating-surface panel is drawn")
+      if (late.framed.length)
+        failures.push(`boxes around the text: ${late.framed.join(", ")}`)
+      if (!late.reduced && !late.sweeping) failures.push("the text is not sweeping")
+    }
+    return { opened, late, failures }
   },
 }
 
