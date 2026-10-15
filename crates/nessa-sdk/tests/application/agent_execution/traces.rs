@@ -1063,6 +1063,43 @@ fn a_result_on_a_running_update_stays_when_completion_omits_it() {
 }
 
 #[test]
+fn an_empty_completion_result_replaces_the_one_seen_while_running() {
+    let store = LocalTraceStore::with_capture(ContentCapture::on());
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.tool(
+        at(2),
+        ToolFact::new(
+            "call-1",
+            "Read",
+            "function",
+            ToolProgress::Running,
+            None,
+            Some("secret-marker".into()),
+        ),
+    );
+    recorder.tool(
+        at(3),
+        ToolFact::new(
+            "call-1",
+            "Read",
+            "function",
+            ToolProgress::Completed,
+            None,
+            Some(String::new()),
+        ),
+    );
+    recorder.finish(at(4), FinishReason::Stop);
+    let tool = store
+        .read("conversation-1")
+        .into_iter()
+        .find(|span| span.operation() == "execute_tool")
+        .unwrap();
+    assert_eq!(tool.string("gen_ai.tool.call.result"), Some(""));
+    assert!(!format!("{tool:?}").contains("secret-marker"));
+}
+
+#[test]
 fn a_completion_result_replaces_the_one_seen_while_running() {
     let store = LocalTraceStore::with_capture(ContentCapture::on());
     let mut recorder = turn(&store);

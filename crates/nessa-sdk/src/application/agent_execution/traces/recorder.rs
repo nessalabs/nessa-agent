@@ -698,11 +698,7 @@ impl TraceRecorder {
     ) {
         assign_tool_name(&mut tool.span, &tool.id, &fact.name);
         if self.capture {
-            let result = fact
-                .result
-                .as_deref()
-                .filter(|result| !result.is_empty())
-                .or(tool.result.as_deref());
+            let result = fact.result.as_deref().or(tool.result.as_deref());
             if let Some(result) = result {
                 set_str(&mut tool.span.attributes, ATTR_TOOL_RESULT, result);
             }

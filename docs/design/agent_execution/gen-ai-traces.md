@@ -83,7 +83,8 @@ When content capture is on, `gen_ai.input.messages`, `gen_ai.output.messages`,
 They are absent otherwise. A result that arrives while the tool is still
 running is kept and written when the span closes. That includes a completion
 patch that carries only a status, and a turn that ends with the tool still
-open. A completion that carries its own result uses that result.
+open. A completion that carries its own result uses that result, including
+when the result is empty.
 
 ## `nessa.*` attributes
 
