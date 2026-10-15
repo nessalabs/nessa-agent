@@ -75,6 +75,20 @@ impl ObservedTools {
         self.entries.clear();
         self.input_bytes = 0;
     }
+
+    pub(in crate::infrastructure::codex_acp) fn traced_name(&self, id: &str) -> Option<String> {
+        let tool = self.entries.get(id)?;
+        tool.name.clone().or_else(|| tool.kind.clone())
+    }
+
+    pub(in crate::infrastructure::codex_acp) fn traced_arguments(
+        &self,
+        id: &str,
+    ) -> Option<String> {
+        self.entries
+            .get(id)
+            .and_then(|tool| tool.input.as_deref().map(str::to_owned))
+    }
 }
 
 // This bounds the adapter's original-input cache, independently of the
@@ -606,3 +620,7 @@ pub(in crate::infrastructure::codex_acp) fn permission_input(
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/codex_acp/tools/wire.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/codex_acp/tools/gen_ai.rs"]
+mod gen_ai;

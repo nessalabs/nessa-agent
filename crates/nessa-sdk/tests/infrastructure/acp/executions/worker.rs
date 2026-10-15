@@ -1,5 +1,8 @@
 use super::*;
 use crate::application::agent_execution::agents::AgentFuture;
+use crate::application::agent_execution::traces::{
+    ContentCapture, FinishReason, LocalTraceStore, TraceRecorder,
+};
 use crate::infrastructure::acp::{
     executions::event_queue::EventQueueBudget,
     tests::profile_substitution::{profile_setup, TestAcpProfile},
@@ -262,6 +265,7 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
                 crate::application::agent_execution::executions::NativeHooksLaunchCause::Open,
             session_key: None,
             hold_remembered_allows: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            traces: TraceRecorder::new(LocalTraceStore::new(), ContentCapture::off()),
         };
         if pending_permission {
             worker
@@ -305,6 +309,185 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             .await
             .unwrap();
     }
+}
+
+#[tokio::test]
+async fn a_rejected_tool_update_is_not_traced() {
+    let (mut worker, _commands, _close, _events) =
+        dispatch_policy::worker_with_ready_frames(&[], "").await;
+    let store = LocalTraceStore::new();
+    worker.traces = TraceRecorder::new(store.clone(), ContentCapture::off());
+    let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
+    let (reply, _result) = oneshot::channel();
+    worker
+        .dispatch_execution(
+            &mut execution,
+            dispatched(dispatch_policy::request(), None),
+            reply,
+        )
+        .await
+        .unwrap_or_else(|failure| panic!("{}", failure.error()));
+    let tool = |id: &str, title: String| {
+        json!({
+            "sessionId": "context",
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": id,
+                "title": title,
+                "status": "in_progress",
+            }
+        })
+    };
+    worker
+        .update(&mut execution, tool("kept", "list".into()))
+        .unwrap();
+    let oversized = "x".repeat(32 * 1024 * 1024 + 64);
+    assert!(worker
+        .update(&mut execution, tool("rejected", oversized))
+        .is_err());
+    worker
+        .traces
+        .finish(Duration::from_secs(1), FinishReason::Stop);
+    let ids: Vec<_> = store
+        .read("next")
+        .iter()
+        .filter(|span| span.operation() == "execute_tool")
+        .map(|span| span.string("gen_ai.tool.call.id").unwrap().to_owned())
+        .collect();
+    assert_eq!(ids, vec!["kept".to_owned()]);
+    worker
+        .scope
+        .cleanup(Duration::ZERO, Duration::from_secs(2))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn usage_after_the_turn_closes_is_not_applied_to_the_next_turn() {
+    let (mut worker, _commands, _close, _events) =
+        dispatch_policy::worker_with_ready_frames(&[], "").await;
+    let store = LocalTraceStore::new();
+    worker.traces = TraceRecorder::new(store.clone(), ContentCapture::off());
+    let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
+    let (reply, _result) = oneshot::channel();
+    worker
+        .dispatch_execution(
+            &mut execution,
+            dispatched(dispatch_policy::request(), None),
+            reply,
+        )
+        .await
+        .unwrap_or_else(|failure| panic!("{}", failure.error()));
+    let usage = |tokens: u64, used: Option<u64>| {
+        let mut update = json!({
+            "sessionUpdate": "usage_update",
+            "inputTokens": tokens,
+        });
+        if let Some(used) = used {
+            update["used"] = json!(used);
+        }
+        json!({"sessionId": "context", "update": update})
+    };
+    worker.update(&mut execution, usage(3, None)).unwrap();
+    worker
+        .traces
+        .finish(Duration::from_secs(1), FinishReason::Stop);
+    worker.active = None;
+    worker.update(&mut execution, usage(9, Some(40))).unwrap();
+    worker.traces.accept_usage_before_turn();
+    worker.update(&mut execution, usage(5, None)).unwrap();
+    worker.traces.begin_turn(
+        Duration::from_secs(2),
+        TurnIdentity::new("next", "later", "openai", "agent", "fixture", None),
+        "",
+    );
+    worker
+        .traces
+        .finish(Duration::from_secs(3), FinishReason::Stop);
+    let spans = store.read("next");
+    let agent = |execution: &str| {
+        spans
+            .iter()
+            .find(|span| {
+                span.operation() == "invoke_agent"
+                    && span.string("nessa.execution.id") == Some(execution)
+            })
+            .unwrap()
+    };
+    assert_eq!(agent("next").int("gen_ai.usage.input_tokens"), Some(3));
+    assert_eq!(agent("later").int("gen_ai.usage.input_tokens"), Some(5));
+    assert!(agent("later").int("nessa.context.used_tokens").is_none());
+    worker
+        .scope
+        .cleanup(Duration::ZERO, Duration::from_secs(2))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn usage_read_before_a_rejected_dispatch_does_not_land_on_the_next_turn() {
+    let usage = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": "context",
+            "update": {
+                "sessionUpdate": "usage_update",
+                "inputTokens": 9,
+                "used": 40
+            }
+        }
+    });
+    let (mut worker, _commands, _close, _events) =
+        dispatch_policy::worker_with_ready_frames(&[usage], "").await;
+    let store = LocalTraceStore::new();
+    worker.traces = TraceRecorder::new(store.clone(), ContentCapture::off());
+    let (steer_reply, _steer_result) = oneshot::channel();
+    worker.steering = Some(PendingSteering {
+        id: 7,
+        reply: steer_reply,
+        deadline: worker.config.clock.now() + steering::RESPONSE_TIMEOUT,
+    });
+    let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
+    let (reply, result) = oneshot::channel();
+    worker
+        .dispatch_execution(
+            &mut execution,
+            dispatched(dispatch_policy::request(), None),
+            reply,
+        )
+        .await
+        .unwrap_or_else(|failure| panic!("{}", failure.error()));
+    assert!(matches!(
+        result.await.unwrap(),
+        ProviderExecutionReply::Rejected(AgentError::Busy)
+    ));
+    assert!(store.read("next").is_empty());
+    worker.steering = None;
+    let (reply, _result) = oneshot::channel();
+    worker
+        .dispatch_execution(
+            &mut execution,
+            dispatched(dispatch_policy::request(), None),
+            reply,
+        )
+        .await
+        .unwrap_or_else(|failure| panic!("{}", failure.error()));
+    worker
+        .traces
+        .finish(Duration::from_secs(1), FinishReason::Stop);
+    let spans = store.read("next");
+    let agent = spans
+        .iter()
+        .find(|span| span.operation() == "invoke_agent")
+        .unwrap();
+    assert!(agent.int("gen_ai.usage.input_tokens").is_none());
+    assert!(agent.int("nessa.context.used_tokens").is_none());
+    worker
+        .scope
+        .cleanup(Duration::ZERO, Duration::from_secs(2))
+        .await
+        .unwrap();
 }
 
 #[path = "worker/panics.rs"]

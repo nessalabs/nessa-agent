@@ -6,6 +6,7 @@ use crate::application::agent_execution::executions::ExecutionAudit;
 use crate::application::agent_execution::providers::{
     AgentProvider, ProviderIdentity, ProviderOpenFuture, ProviderOpenRequest,
 };
+use crate::application::agent_execution::traces::LocalTraceStore;
 use crate::domain::agent_execution::permissions::PermissionScope;
 use crate::domain::common::value_objects::TokenLimits;
 use crate::domain::effective_capabilities::value_objects::{
@@ -123,6 +124,8 @@ pub struct OpencodeAcpProvider {
     audit: Arc<dyn ExecutionAudit>,
     /// Deletions this binding started that are still stopping their process.
     deletions: DeletionCleanups,
+    /// Spans for every session this factory opens.
+    traces: Arc<LocalTraceStore>,
 }
 
 impl OpencodeAcpProvider {
@@ -255,7 +258,16 @@ impl OpencodeAcpProvider {
             capabilities,
             audit,
             deletions: DeletionCleanups::default(),
+            traces: LocalTraceStore::new(),
         })
+    }
+    /// Record this factory's turns into `traces`.
+    ///
+    /// The default store is private to the factory. A host that rebuilds the
+    /// factory for the same conversation passes the store it already reads.
+    pub fn with_traces(mut self, traces: Arc<LocalTraceStore>) -> Self {
+        self.traces = traces;
+        self
     }
 
     // No `with_system_prompt`, deliberately, and its absence is the contract:
@@ -436,7 +448,11 @@ impl AgentProvider for OpencodeAcpProvider {
         &self.capabilities
     }
 
+    fn traces(&self) -> Option<Arc<LocalTraceStore>> {
+        Some(self.traces.clone())
+    }
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
+        let traces = self.traces.clone();
         Box::pin(async move {
             acp_binding::open(
                 self.process_factory(),
@@ -445,6 +461,7 @@ impl AgentProvider for OpencodeAcpProvider {
                 self.profile(),
                 self.audit.clone(),
                 request,
+                traces,
             )
             .await
         })

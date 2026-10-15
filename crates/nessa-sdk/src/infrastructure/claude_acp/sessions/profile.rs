@@ -10,7 +10,7 @@ use crate::domain::agent_execution::prompts::SystemPrompt;
 use crate::domain::agent_execution::tools::ToolCallUpdate;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::domain::model_metadata::value_objects::EffortLevel;
-use crate::infrastructure::acp::fields::string;
+use crate::infrastructure::acp::fields::{identifier, string};
 use crate::infrastructure::acp::profile::AcpProfile;
 use crate::infrastructure::acp::sessions::{thought_level, AcpConfig};
 use crate::infrastructure::json_rpc::protocol;
@@ -70,6 +70,11 @@ pub(crate) struct ClaudeProfile {
     /// `None` leaves the agent on its own default, and nothing is sent.
     effort_level: Option<EffortLevel>,
     tool_names: HashMap<String, wire::ObservedTool>,
+    /// Arguments from the latest accepted tool frame, for the trace only.
+    ///
+    /// A finished call clears its review cache and still reports the input
+    /// that frame supplied. The next accepted `tool_call` replaces this.
+    trace_arguments: Option<(String, Box<str>)>,
     system_prompt: Option<SystemPrompt>,
     mcp_prefixes: Vec<String>,
     /// When true, this process start allows Claude's own hooks and loads
@@ -89,6 +94,7 @@ impl ClaudeProfile {
             approval_mode,
             effort_level,
             tool_names: HashMap::new(),
+            trace_arguments: None,
             system_prompt,
             mcp_prefixes: Vec::new(),
             native_hooks_allowed: false,
@@ -308,9 +314,28 @@ impl AcpProfile for ClaudeProfile {
     }
     fn begin_execution(&mut self) {
         self.tool_names.clear();
+        self.trace_arguments = None;
     }
     fn tool_call(&mut self, value: &Value) -> Result<ToolCallUpdate, AgentError> {
-        wire::tool_call(value, &mut self.tool_names, &self.mcp_prefixes)
+        let traced = wire::frame_trace_arguments(value, &self.tool_names);
+        let update = wire::tool_call(value, &mut self.tool_names, &self.mcp_prefixes)?;
+        self.trace_arguments = traced.and_then(|arguments| {
+            identifier(value, "toolCallId")
+                .ok()
+                .map(|id| (id.to_owned(), arguments))
+        });
+        Ok(update)
+    }
+    fn traced_tool_name(&self, id: &str) -> Option<String> {
+        wire::retained_tool_name(&self.tool_names, id)
+    }
+    fn traced_tool_arguments(&self, id: &str) -> Option<String> {
+        if let Some((cached_id, arguments)) = &self.trace_arguments {
+            if cached_id == id {
+                return Some(arguments.to_string());
+            }
+        }
+        wire::retained_tool_arguments(&self.tool_names, id)
     }
     fn permission_input(&self, request: &Value) -> Result<ToolReviewInput, AgentError> {
         wire::permission_input(request, &self.tool_names, &self.mcp_prefixes)

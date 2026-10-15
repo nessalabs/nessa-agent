@@ -17,6 +17,7 @@ unrelated future systems.
 | [Invocation window](../../adr/todo/133-hook-invocation-context.md) | Proposed slice of 0014 for #133: a permission-review hook sees every event kind, thinking included, inside the same evaluation budget |
 | [Hook capability survey](hook-capabilities.md) | Pinned Claude/Codex/Opencode source evidence, unpinned Kiro observations, and explicit limits on Nessa enforcement |
 | [Telemetry](telemetry.md) | Proposed research behind [ADR 195](../../adr/todo/195-tracing-is-the-telemetry-port.md): what exists, the `tracing`-as-port design, its growth costs, and the slices tracked under #195 |
+| [GenAI traces](gen-ai-traces.md) | Implemented spans for #898: GenAI semantic-convention attributes derived from events the worker already sees, the `nessa.*` attributes, and the local read API |
 
 ```text
 current Agent --> local session snapshots + scheduling --> provider harness

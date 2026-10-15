@@ -140,6 +140,10 @@ pub enum ToolVerdict {
 pub struct ToolRefusal {
     reason: Box<str>,
     outcome: RefusalOutcome,
+    /// Set only when the runtime stood in for a hook that did not return.
+    /// A reason the hook itself returned stays `None`, even when the text
+    /// matches a runtime failure message.
+    failure: Option<HookFailureKind>,
 }
 
 impl ToolRefusal {
@@ -151,6 +155,12 @@ impl ToolRefusal {
     /// What the refusal does to the turn.
     pub fn outcome(&self) -> RefusalOutcome {
         self.outcome
+    }
+
+    /// The runtime failure that produced this refusal, when the hook did not
+    /// return a verdict of its own.
+    pub(crate) fn failure(&self) -> Option<HookFailureKind> {
+        self.failure
     }
 }
 
@@ -191,17 +201,22 @@ impl ToolVerdict {
         Self::Refuse(ToolRefusal {
             reason: cap_hook_reason(reason.into()).into_boxed_str(),
             outcome,
+            failure: None,
         })
     }
 
     pub(crate) fn hook_failed(kind: HookFailureKind) -> Self {
-        let kind = match kind {
+        let label = match kind {
             HookFailureKind::Error => "error",
             HookFailureKind::Panic => "panic",
             HookFailureKind::Timeout => "timeout",
             HookFailureKind::Busy => "busy",
         };
-        Self::refuse(format!("hook failed: {kind}"), RefusalOutcome::Continue)
+        Self::Refuse(ToolRefusal {
+            reason: cap_hook_reason(format!("hook failed: {label}")).into_boxed_str(),
+            outcome: RefusalOutcome::Continue,
+            failure: Some(kind),
+        })
     }
 }
 

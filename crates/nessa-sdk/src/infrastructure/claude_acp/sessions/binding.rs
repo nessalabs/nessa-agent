@@ -7,6 +7,7 @@ use crate::application::agent_execution::providers::{
     AgentProvider, ApprovalMode, HarnessHost, HarnessLaunch, NativeHooksSwitch, ProviderIdentity,
     ProviderOpenFuture, ProviderOpenRequest,
 };
+use crate::application::agent_execution::traces::LocalTraceStore;
 use crate::domain::agent_execution::permissions::PermissionScope;
 use crate::domain::agent_execution::prompts::SystemPrompt;
 use crate::domain::common::value_objects::TokenLimits;
@@ -40,6 +41,8 @@ pub struct ClaudeAcpProvider {
     /// Where its harness is started when that is not this machine
     /// ([`AgentProvider::on_host`]).
     host: Option<Arc<dyn HarnessHost>>,
+    /// Spans for every session this factory opens.
+    traces: Arc<LocalTraceStore>,
     #[cfg(test)]
     process: Option<acp_binding::ProcessFactory>,
 }
@@ -132,9 +135,18 @@ impl ClaudeAcpProvider {
             audit,
             deletions: DeletionCleanups::default(),
             host: None,
+            traces: LocalTraceStore::new(),
             #[cfg(test)]
             process: None,
         })
+    }
+    /// Record this factory's turns into `traces`.
+    ///
+    /// The default store is private to the factory. A host that rebuilds the
+    /// factory for the same conversation passes the store it already reads.
+    pub fn with_traces(mut self, traces: Arc<LocalTraceStore>) -> Self {
+        self.traces = traces;
+        self
     }
     #[cfg(all(test, unix))]
     pub(crate) fn with_process_factory(mut self, process: acp_binding::ProcessFactory) -> Self {
@@ -265,9 +277,13 @@ impl AgentProvider for ClaudeAcpProvider {
             ..self.clone()
         }))
     }
+    fn traces(&self) -> Option<Arc<LocalTraceStore>> {
+        Some(self.traces.clone())
+    }
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         // The process start reads the switch. This open does not snapshot it.
         let profile = self.launch_profile();
+        let traces = self.traces.clone();
         Box::pin(async move {
             acp_binding::open(
                 self.process_factory(),
@@ -276,6 +292,7 @@ impl AgentProvider for ClaudeAcpProvider {
                 profile,
                 self.audit.clone(),
                 request,
+                traces,
             )
             .await
         })
