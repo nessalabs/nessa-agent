@@ -133,7 +133,7 @@ function scriptedGateway(scenario = {}) {
   let grants = [
     {
       credentialId: "device-phone-0001",
-      role: "drive",
+      capabilities: ["read", "comment", "drive"],
       policy: { preset: "read_only_tools", commandHosts: ["devbox"] },
       policyRevision: revision,
       grantedAtMs: 1_700_000_000_000,
@@ -165,7 +165,8 @@ function scriptedGateway(scenario = {}) {
     if (stale) return changed
     const same =
       before &&
-      before.role === params.role &&
+      JSON.stringify([...(before.capabilities ?? [])].sort()) ===
+        JSON.stringify([...(params.capabilities ?? [])].sort()) &&
       JSON.stringify(before.policy) === JSON.stringify(params.policy)
     if (same)
       return {
@@ -177,12 +178,12 @@ function scriptedGateway(scenario = {}) {
         },
       }
     revision += 1
-    // A new grant moves the catalogue. A change of role or policy does not,
-    // as the gateway's change_revision does not.
+    // A new grant moves the catalogue. A change of capabilities or policy
+    // does not, as the gateway's change_revision does not.
     if (!before) catalogue += 1
     const next = {
       credentialId: params.credentialId,
-      role: params.role,
+      capabilities: params.capabilities,
       ...(params.policy ? { policy: params.policy } : {}),
       policyRevision: revision,
       grantedAtMs: before?.grantedAtMs ?? 1_760_000_000_000,
@@ -553,7 +554,10 @@ await main(meta, async ({ options, rep, url }) => {
           share?.params?.conversationId === conversationId
             ? null
             : "another conversation",
-          share?.params?.role === "drive" ? null : `role ${share?.params?.role}`,
+          JSON.stringify([...(share?.params?.capabilities ?? [])].sort()) ===
+          JSON.stringify(["comment", "drive", "read"])
+            ? null
+            : `capabilities ${JSON.stringify(share?.params?.capabilities)}`,
           policy ===
           JSON.stringify({ preset: "no_shell", commandHosts: ["devbox", "ci-runner"] })
             ? null
@@ -717,7 +721,10 @@ await main(meta, async ({ options, rep, url }) => {
       await page.locator(`${row} ${selectorFor.shareAction("change")}`).click()
       await choose(page, css.sharePresets, "No shell")
       // Another window changes the grant after this one read it.
-      gate.changeElsewhere({ credentialId: "device-phone-0001", role: "comment" })
+      gate.changeElsewhere({
+        credentialId: "device-phone-0001",
+        capabilities: ["read", "comment"],
+      })
       await page.locator(selectorFor.shareAction("submit")).click()
       await page.waitForSelector(`${css.shareNotice}[data-share-notice="changed"]`, {
         timeout: 10_000,

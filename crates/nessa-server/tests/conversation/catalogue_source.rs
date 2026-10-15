@@ -7,9 +7,7 @@ use crate::conversation::{
         ConversationRepository, Reader,
     },
     domain::{
-        Conversation, ConversationDeletion, ShareAccess, ShareRole,
-        ShareRole::{Comment, Read},
-        ToolPolicy, ToolPreset,
+        Capabilities, Conversation, ConversationDeletion, ShareAccess, ToolPolicy, ToolPreset,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -391,12 +389,12 @@ async fn source_resolves_deletion_after_manifest_and_keeps_newer_revision() {
 /// for a grant of `refused`, or decides nothing when `undecided`; it counts
 /// the entries it is asked about.
 struct EntryPolicy {
-    refused: Option<ShareRole>,
+    refused: Option<Capabilities>,
     undecided: bool,
     asked: AtomicUsize,
 }
 impl EntryPolicy {
-    fn new(refused: Option<ShareRole>, undecided: bool) -> Arc<Self> {
+    fn new(refused: Option<Capabilities>, undecided: bool) -> Arc<Self> {
         Arc::new(Self {
             refused,
             undecided,
@@ -425,7 +423,7 @@ impl ConversationAccessPolicyEvaluator for EntryPolicy {
 /// Alice's conversations, created in order and granted to "receiver" with
 /// the roles given, and the receiver's head over them.
 async fn granted_catalogue(
-    roles: &[ShareRole],
+    roles: &[Capabilities],
 ) -> (
     tempfile::TempDir,
     Arc<LocalConversationStore>,
@@ -447,7 +445,8 @@ async fn granted_catalogue(
             .create(owned(&conversation_id, "alice"))
             .await
             .unwrap();
-        let policy = (*role == ShareRole::Drive).then_some(ToolPolicy::preset(ToolPreset::NoShell));
+        let policy =
+            (*role == Capabilities::drive()).then_some(ToolPolicy::preset(ToolPreset::NoShell));
         crate::conversation_test_support::grant_as(
             store.as_ref(),
             &conversation_id,
@@ -511,7 +510,11 @@ async fn resolve(
 /// finds, the role its grant holds; the owner's rows hold none.
 #[tokio::test]
 async fn a_catalogue_row_carries_the_role_its_reader_holds() {
-    let roles = [ShareRole::Read, ShareRole::Comment, ShareRole::Drive];
+    let roles = [
+        Capabilities::read(),
+        Capabilities::comment(),
+        Capabilities::drive(),
+    ];
     let (_directory, store, ids, head) = granted_catalogue(&roles).await;
     let request = |reader: Reader| CataloguePageRequest {
         organization: caller().organization_id,
@@ -546,7 +549,7 @@ async fn a_catalogue_row_carries_the_role_its_reader_holds() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(resolved.descriptor.held, Some(ShareRole::Comment));
+    assert_eq!(resolved.descriptor.held, Some(Capabilities::comment()));
 }
 
 /// A manifest admits each entry the grant index returns: an entry the
@@ -555,9 +558,18 @@ async fn a_catalogue_row_carries_the_role_its_reader_holds() {
 /// is asked about once per page.
 #[tokio::test]
 async fn a_manifest_leaves_out_what_the_policy_refuses_and_reads_on_to_fill_the_page() {
-    let roles = [Read, Read, Comment, Read, Read, Read, Comment, Read];
+    let roles = [
+        Capabilities::read(),
+        Capabilities::read(),
+        Capabilities::comment(),
+        Capabilities::read(),
+        Capabilities::read(),
+        Capabilities::read(),
+        Capabilities::comment(),
+        Capabilities::read(),
+    ];
     let (_directory, store, ids, head) = granted_catalogue(&roles).await;
-    let policy = EntryPolicy::new(Some(Read), false);
+    let policy = EntryPolicy::new(Some(Capabilities::read()), false);
     let source = admitted_by(&store, policy.clone(), &head.incarnation);
     let request = ManifestRequest {
         pass: pass(source.scope().clone(), head.revision),
@@ -604,10 +616,11 @@ async fn a_manifest_leaves_out_what_the_policy_refuses_and_reads_on_to_fill_the_
 /// is; one it admits resolves.
 #[tokio::test]
 async fn a_resolve_the_policy_refuses_is_missing() {
-    let (_directory, store, ids, head) = granted_catalogue(&[Read, Comment]).await;
+    let (_directory, store, ids, head) =
+        granted_catalogue(&[Capabilities::read(), Capabilities::comment()]).await;
     let source = admitted_by(
         &store,
-        EntryPolicy::new(Some(Read), false),
+        EntryPolicy::new(Some(Capabilities::read()), false),
         &head.incarnation,
     );
     let pass = pass(source.scope().clone(), head.revision);
@@ -623,7 +636,7 @@ async fn a_resolve_the_policy_refuses_is_missing() {
 /// never shorter or missing.
 #[tokio::test]
 async fn a_catalogue_read_the_policy_cannot_decide_is_unavailable() {
-    let (_directory, store, ids, head) = granted_catalogue(&[Read]).await;
+    let (_directory, store, ids, head) = granted_catalogue(&[Capabilities::read()]).await;
     let source = admitted_by(&store, EntryPolicy::new(None, true), &head.incarnation);
     let request = ManifestRequest {
         pass: pass(source.scope().clone(), head.revision),

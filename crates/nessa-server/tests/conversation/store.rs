@@ -12,8 +12,8 @@ use crate::conversation::{
         ConversationSummaries, Reader, WatchCatalogue,
     },
     domain::{
-        Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink,
-        ShareAccess, ShareRole, ToolPolicy, ToolPreset, ToolRules,
+        Capabilities, Conversation, ConversationDeletion, ProviderSessionErasure,
+        ProviderSessionLink, ShareAccess, ToolPolicy, ToolPreset, ToolRules,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId, MAX_IDENTIFIER_BYTES};
@@ -230,7 +230,7 @@ fn an_alpha_v1_database_is_refused_without_migrating_its_rows() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 1,
-            expected: 5
+            expected: 6
         })
     ));
     let old_row: String = raw(&path)
@@ -257,7 +257,7 @@ fn an_alpha_v2_database_is_refused_without_erasing_ownership() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 2,
-            expected: 5
+            expected: 6
         })
     ));
     let retained: String = raw(&path)
@@ -2665,6 +2665,7 @@ fn grant_change(
     crate::conversation::application::ShareGrantChange {
         transition,
         conversation_id: id.clone(),
+        principal_id: receiver.map(|id| PrincipalId::new(format!("grantee-{id}")).unwrap()),
         receiver_id: receiver.map(str::to_owned),
         credential_id: nessa_auth::domain::CredentialId::new(credential).unwrap(),
         expected_policy_revision: None,
@@ -2855,9 +2856,9 @@ async fn a_revoke_takes_the_row_out_of_the_devices_catalogue() {
     assert!(!opened.store.is_granted(&id, "phone").await.unwrap());
 }
 
-/// A version 4 file, whose grants hold no role but Read and no policy, is
-/// refused rather than read into the version 5 shape, and keeps its rows
-/// (docs/adr/todo/202-versioned-local-datasets.md).
+/// A version 4 file, whose grants hold no capability set but read and no
+/// policy, is refused rather than read into the version 6 shape, and keeps
+/// its rows (docs/adr/todo/202-versioned-local-datasets.md).
 #[test]
 fn a_version_4_database_is_refused_without_erasing_its_grants() {
     let directory = tempfile::tempdir().unwrap();
@@ -2880,13 +2881,262 @@ fn a_version_4_database_is_refused_without_erasing_its_grants() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 4,
-            expected: 5
+            expected: 6
         })
     ));
     let kept: String = raw(&path)
         .query_row("SELECT receiver_id FROM read_grants", [], |row| row.get(0))
         .unwrap();
     assert_eq!(kept, "phone");
+}
+
+/// The previous metadata version, whose grants name a role, is refused and
+/// left untouched. This build reads version 6 only.
+#[test]
+fn a_version_5_database_is_refused_without_erasing_its_grants() {
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let path = private.join("metadata.sqlite3");
+    let old = nessa_local_database::Schema::new(
+        "CREATE TABLE share_grants (
+            receiver_id TEXT NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('read', 'comment', 'drive'))
+         ) STRICT;
+         PRAGMA user_version = 5;",
+    )
+    .unwrap();
+    let connection = nessa_local_database::open(&path, &old).unwrap();
+    connection
+        .execute(
+            "INSERT INTO share_grants (receiver_id, role) VALUES ('phone', 'drive')",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    assert!(matches!(
+        LocalConversationStore::open(&path),
+        Err(nessa_local_database::OpenError::Version {
+            found: 5,
+            expected: 6
+        })
+    ));
+    let kept: String = raw(&path)
+        .query_row("SELECT role FROM share_grants", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(kept, "drive");
+}
+
+/// A comment grant written through the store, past `conversation.share`, is
+/// a legal capability set. Cedar lets the device that is signed in as the
+/// binding owner comment, and denies the gateway comment because it is not.
+/// Neither may drive: the set does not contain `drive`.
+#[tokio::test]
+async fn a_hand_built_comment_grant_for_a_gateway_is_denied_by_cedar() {
+    use crate::conversation::application::{
+        AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
+        ConversationAccessPolicyEvaluator, RequestShape, ShareGrants,
+    };
+    use crate::conversation::infrastructure::CedarConversationAccessPolicy;
+    let opened = opened();
+    let id = new_id();
+    let record = owned(&id);
+    opened.store.create(record.clone()).await.unwrap();
+    let comment = ShareAccess::new(Capabilities::comment(), None).unwrap();
+    assert!(share_as(&opened.store, &id, "peer", comment, "hand")
+        .await
+        .unwrap());
+    let held = opened.store.held_capabilities(&id, "peer").await.unwrap();
+    assert_eq!(held, Some(Capabilities::comment()));
+    let policy = CedarConversationAccessPolicy::new().unwrap();
+    let (organization, owner, gateway) =
+        (org(), alice(), PrincipalId::new("gateway:peer").unwrap());
+    let ask = |signed_in_as: &PrincipalId, action: AccessAction| {
+        policy.evaluate(&AccessAsk {
+            subject: AccessSubject::PairedReader {
+                organization: &organization,
+                signed_in_as,
+                binding_owner: &owner,
+                receiver: "peer",
+            },
+            action,
+            resource: AccessResource::of(&record),
+            held,
+            request: RequestShape::default(),
+            target: None,
+        })
+    };
+    assert!(matches!(
+        ask(&gateway, AccessAction::Read),
+        AccessDecision::Allow { .. }
+    ));
+    assert!(matches!(
+        ask(&owner, AccessAction::Comment),
+        AccessDecision::Allow { .. }
+    ));
+    assert_eq!(
+        ask(&gateway, AccessAction::Comment),
+        AccessDecision::Deny(AccessDenial::NotPermitted)
+    );
+    assert_eq!(
+        ask(&owner, AccessAction::Drive),
+        AccessDecision::Deny(AccessDenial::NotPermitted)
+    );
+    assert_eq!(
+        ask(&gateway, AccessAction::Drive),
+        AccessDecision::Deny(AccessDenial::NotPermitted)
+    );
+}
+
+/// A grant is keyed by principal, resource kind, and resource id. This slice
+/// writes kind `conversation`. One may name no receiver, and is not found by
+/// a receiver lookup. A paired grant is still found by its receiver. A second
+/// row for the same principal, kind, and resource id cannot be stored: a later
+/// change of that principal replaces the row it has. The same principal and
+/// resource id with kind `directory` is a different row.
+#[tokio::test]
+async fn a_grant_is_keyed_by_principal_and_may_name_no_receiver() {
+    use crate::conversation::application::{
+        ResourceKind, ShareGrantChange, ShareGrantTransition, ShareGrants,
+    };
+    use nessa_auth::domain::CredentialId;
+    let opened = opened();
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    let principal = PrincipalId::new("webhook:one").unwrap();
+    let caller = |request: &str| crate::conversation::application::ConversationCaller {
+        organization_id: org(),
+        principal_id: alice(),
+        surface_id: "desktop".into(),
+        action_id: request.into(),
+    };
+    let stored = opened
+        .store
+        .change(ShareGrantChange {
+            transition: ShareGrantTransition::Grant(ShareAccess::read()),
+            conversation_id: id.clone(),
+            principal_id: Some(principal.clone()),
+            receiver_id: None,
+            credential_id: CredentialId::new("webhook-credential").unwrap(),
+            expected_policy_revision: None,
+            initiator: caller("grant-webhook"),
+            at_ms: 7,
+        })
+        .await
+        .unwrap();
+    assert!(stored.applied);
+    assert_eq!(
+        opened.store.held_grant(&id, "anyone").await.unwrap(),
+        None,
+        "a grant with no receiver is not found by one"
+    );
+    let listed = opened.store.grants(&id).await.unwrap().grants;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].principal_id, principal);
+    assert_eq!(listed[0].receiver_id, None);
+
+    assert!(grant(&opened.store, &id, "phone").await);
+    assert!(opened
+        .store
+        .held_grant(&id, "phone")
+        .await
+        .unwrap()
+        .is_some());
+    let replaced = opened
+        .store
+        .change(ShareGrantChange {
+            transition: ShareGrantTransition::Grant(
+                ShareAccess::new(Capabilities::comment(), None).unwrap(),
+            ),
+            conversation_id: id.clone(),
+            principal_id: Some(PrincipalId::new("grantee-phone").unwrap()),
+            receiver_id: Some("tablet".into()),
+            credential_id: CredentialId::new("tablet-credential").unwrap(),
+            expected_policy_revision: None,
+            initiator: caller("replace-phone"),
+            at_ms: 8,
+        })
+        .await
+        .unwrap();
+    assert!(replaced.applied);
+    let grants = opened.store.grants(&id).await.unwrap().grants;
+    assert_eq!(grants.len(), 2, "the webhook and the one paired principal");
+    let paired = grants
+        .iter()
+        .find(|grant| grant.principal_id.as_str() == "grantee-phone")
+        .expect("the paired principal");
+    assert_eq!(paired.receiver_id.as_deref(), Some("tablet"));
+    assert_eq!(paired.credential_id.as_str(), "tablet-credential");
+    assert_eq!(paired.access.capabilities(), Capabilities::comment());
+    assert!(opened
+        .store
+        .held_grant(&id, "phone")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(opened
+        .store
+        .held_grant(&id, "tablet")
+        .await
+        .unwrap()
+        .is_some());
+    let kind: String = raw(&opened.path)
+        .query_row(
+            "SELECT resource_kind FROM share_grants WHERE principal_id = 'webhook:one'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(kind, ResourceKind::Conversation.as_str());
+    let duplicated = raw(&opened.path).execute(
+        "INSERT INTO share_grants
+            (principal_id, resource_kind, resource_id, receiver_id, credential_id, capabilities,
+             policy, policy_revision, granted_at_ms)
+         SELECT principal_id, resource_kind, resource_id, 'other', 'other-credential',
+                capabilities, policy, policy_revision, granted_at_ms
+         FROM share_grants WHERE principal_id = 'grantee-phone'",
+        [],
+    );
+    let error = duplicated
+        .expect_err("the primary key refuses a second row")
+        .to_string();
+    assert!(
+        error.contains("UNIQUE"),
+        "the primary key refuses a second row for one principal and resource: {error}"
+    );
+    let directory = ResourceKind::Directory.as_str();
+    raw(&opened.path)
+        .execute(
+            "INSERT INTO share_grants
+                (principal_id, resource_kind, resource_id, receiver_id, credential_id, capabilities,
+                 policy, policy_revision, granted_at_ms)
+             SELECT principal_id, ?1, resource_id, NULL, 'dir-credential', capabilities, policy,
+                    policy_revision, granted_at_ms
+             FROM share_grants WHERE principal_id = 'grantee-phone'",
+            [directory],
+        )
+        .expect("a different resource kind is a different grant");
+    assert_eq!(
+        opened.store.grants(&id).await.unwrap().grants.len(),
+        2,
+        "a directory row is not a conversation grant"
+    );
+    let again = raw(&opened.path).execute(
+        "INSERT INTO share_grants
+            (principal_id, resource_kind, resource_id, receiver_id, credential_id, capabilities,
+             policy, policy_revision, granted_at_ms)
+         SELECT principal_id, resource_kind, resource_id, NULL, 'dir-credential-2', capabilities,
+                policy, policy_revision, granted_at_ms
+         FROM share_grants WHERE resource_kind = 'directory'",
+        [],
+    );
+    let error = again
+        .expect_err("the primary key refuses a second directory row")
+        .to_string();
+    assert!(
+        error.contains("UNIQUE"),
+        "the primary key refuses a second row for one principal, kind, and resource: {error}"
+    );
 }
 
 /// Row H9 (`docs/design/auth/peer-gateways.md`): a paired reader's head
@@ -3242,7 +3492,7 @@ async fn every_grant_change_is_journaled_with_its_initiator() {
     let connection = raw(&opened.path);
     let mut statement = connection
         .prepare(
-            "SELECT conversation_id, receiver_id, credential_id, before, after, initiator,
+            "SELECT resource_id, receiver_id, credential_id, before, after, initiator,
                     surface, request, changed_at_ms, revision
              FROM share_grant_changes ORDER BY sequence",
         )
@@ -3292,7 +3542,7 @@ async fn every_grant_change_is_journaled_with_its_initiator() {
 // docs/design/read-grants.md.
 
 fn drive_with(policy: ToolPolicy) -> ShareAccess {
-    ShareAccess::new(ShareRole::Drive, Some(policy)).unwrap()
+    ShareAccess::new(Capabilities::drive(), Some(policy)).unwrap()
 }
 fn no_shell() -> ShareAccess {
     drive_with(ToolPolicy::preset(ToolPreset::NoShell))
@@ -3496,9 +3746,14 @@ async fn a_change_of_role_or_policy_is_applied_journaled_and_moves_the_policy_re
             .collect::<Vec<_>>(),
         vec![
             row("none", "read", &None, &None),
-            row("read", "drive", &None, &no_shell_text),
-            row("drive", "drive", &no_shell_text, &rules_text),
-            row("drive", "read", &rules_text, &None),
+            row("read", "read+comment+drive", &None, &no_shell_text),
+            row(
+                "read+comment+drive",
+                "read+comment+drive",
+                &no_shell_text,
+                &rules_text
+            ),
+            row("read+comment+drive", "read", &rules_text, &None),
         ]
     );
     assert!(journal.iter().all(|entry| entry.4 == revision));
@@ -3539,7 +3794,238 @@ async fn an_identical_share_changes_nothing_and_keeps_the_policy_revision() {
     assert_eq!(journal.len(), 2);
     let (before, after, policy_before, policy_after, _, _) = &journal[1];
     assert_eq!((before, policy_before), (after, policy_after));
-    assert_eq!(after, "drive");
+    assert_eq!(after, "read+comment+drive");
+}
+
+/// Two paired credentials of one principal are one grant. Sharing the same
+/// capabilities through the other receiver applies, keeps the grant epoch,
+/// and moves the catalogue: the receiver that gained the grant pages the
+/// conversation, and the one that lost it drops it. A retry of that request
+/// answers the same receipt.
+#[tokio::test]
+async fn a_receiver_switch_is_applied_and_moves_the_catalogue() {
+    use crate::conversation::application::{ShareGrantTransition, ShareGrants};
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    let principal = PrincipalId::new("grantee-shared").unwrap();
+    let share = |receiver: &str, request: &str| {
+        let mut change = grant_change(
+            ShareGrantTransition::Grant(ShareAccess::read()),
+            &id,
+            Some(receiver),
+            &format!("{receiver}-credential"),
+            request,
+        );
+        change.principal_id = Some(principal.clone());
+        change
+    };
+    let first = store.change(share("phone", "share")).await.unwrap();
+    assert!(first.applied);
+    let epoch = only_grant(store, &id).await.policy_revision;
+    assert_eq!(first.policy_revision, Some(epoch));
+    let phone_head = store
+        .head(&org(), &alice(), &device("phone"))
+        .await
+        .unwrap()
+        .revision;
+    let catalogue = store.grants(&id).await.unwrap().change_revision;
+    let switched = store.change(share("tablet", "switch")).await.unwrap();
+    assert!(switched.applied);
+    assert_eq!(switched.policy_revision, Some(epoch));
+    let grant = only_grant(store, &id).await;
+    assert_eq!(grant.principal_id, principal);
+    assert_eq!(grant.receiver_id.as_deref(), Some("tablet"));
+    assert_eq!(grant.credential_id.as_str(), "tablet-credential");
+    assert_eq!(grant.policy_revision, epoch);
+    assert!(store.grants(&id).await.unwrap().change_revision > catalogue);
+    assert!(!store.is_granted(&id, "phone").await.unwrap());
+    assert!(store.is_granted(&id, "tablet").await.unwrap());
+    let phone_after = store
+        .head(&org(), &alice(), &device("phone"))
+        .await
+        .unwrap()
+        .revision;
+    assert!(phone_after > phone_head);
+    assert!(device_pass(store, device("phone"), phone_head)
+        .await
+        .is_empty());
+    assert_eq!(
+        device_pass(store, device("tablet"), phone_head).await,
+        vec![(id.clone(), phone_after)]
+    );
+    assert_eq!(
+        store.change(share("tablet", "switch")).await.unwrap(),
+        switched
+    );
+    let journal = role_journal(&opened.path);
+    assert_eq!(journal.len(), 2);
+    assert_eq!(journal[1].0, "read");
+    assert_eq!(journal[1].1, "read");
+}
+
+/// A change that names a principal resolves that principal's row only. Naming
+/// another principal's credential does not rewrite that grant.
+#[tokio::test]
+async fn a_named_principal_does_not_take_another_principals_grant() {
+    use crate::conversation::application::{ConversationError, ShareGrantTransition, ShareGrants};
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    assert!(grant(store, &id, "phone").await);
+    let held = only_grant(store, &id).await;
+    let mut change = grant_change(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &id,
+        Some("tablet"),
+        "phone-credential",
+        "take",
+    );
+    change.principal_id = Some(PrincipalId::new("grantee-other").unwrap());
+    assert!(matches!(
+        store.change(change).await,
+        Err(ConversationError::Metadata)
+    ));
+    assert_eq!(only_grant(store, &id).await, held);
+}
+
+/// A retry is the first request. Naming another principal, or another
+/// receiver, under that request id is refused and leaves the grant and the
+/// journal as the first write left them. The same refusal holds for a revoke.
+#[tokio::test]
+async fn a_retried_share_that_names_another_principal_is_refused() {
+    use crate::conversation::application::{ConversationError, ShareGrantTransition, ShareGrants};
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    let first = grant_change(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &id,
+        Some("phone"),
+        "phone-credential",
+        "share",
+    );
+    let granted = store.change(first.clone()).await.unwrap();
+    assert!(granted.applied);
+    assert_eq!(store.change(first).await.unwrap(), granted);
+    let held = only_grant(store, &id).await;
+    let journaled = role_journal(&opened.path).len();
+    let mut other_principal = grant_change(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &id,
+        Some("phone"),
+        "phone-credential",
+        "share",
+    );
+    other_principal.principal_id = Some(PrincipalId::new("grantee-other").unwrap());
+    assert!(matches!(
+        store.change(other_principal).await,
+        Err(ConversationError::InvalidInput)
+    ));
+    let mut other_receiver = grant_change(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &id,
+        Some("tablet"),
+        "phone-credential",
+        "share",
+    );
+    other_receiver.principal_id = Some(held.principal_id.clone());
+    assert!(matches!(
+        store.change(other_receiver).await,
+        Err(ConversationError::InvalidInput)
+    ));
+    assert_eq!(only_grant(store, &id).await, held);
+    assert_eq!(role_journal(&opened.path).len(), journaled);
+
+    let revoke = grant_change(
+        ShareGrantTransition::Revoke,
+        &id,
+        None,
+        "phone-credential",
+        "revoke",
+    );
+    let revoked = store.change(revoke.clone()).await.unwrap();
+    assert!(revoked.applied);
+    assert_eq!(store.change(revoke).await.unwrap(), revoked);
+    let journaled = role_journal(&opened.path).len();
+    let mut revoked_as_other = grant_change(
+        ShareGrantTransition::Revoke,
+        &id,
+        None,
+        "phone-credential",
+        "revoke",
+    );
+    revoked_as_other.principal_id = Some(PrincipalId::new("grantee-other").unwrap());
+    assert!(matches!(
+        store.change(revoked_as_other).await,
+        Err(ConversationError::InvalidInput)
+    ));
+    let mut revoked_for_tablet = grant_change(
+        ShareGrantTransition::Revoke,
+        &id,
+        Some("tablet"),
+        "phone-credential",
+        "revoke",
+    );
+    revoked_for_tablet.principal_id = None;
+    assert!(matches!(
+        store.change(revoked_for_tablet).await,
+        Err(ConversationError::InvalidInput)
+    ));
+    assert!(!store.is_granted(&id, "phone").await.unwrap());
+    assert!(!store.is_granted(&id, "tablet").await.unwrap());
+    assert_eq!(role_journal(&opened.path).len(), journaled);
+}
+
+/// Moving a drive grant onto another receiver keeps the epoch, and that
+/// receiver still reads the policy the epoch names. The receiver that lost
+/// the grant is a revocation, so a snapshot cannot give it back.
+#[tokio::test]
+async fn a_replaced_receiver_keeps_the_drive_policy_and_is_fenced() {
+    use crate::conversation::application::{ShareGrantTransition, ShareGrants};
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    let principal = PrincipalId::new("grantee-shared").unwrap();
+    let share = |receiver: &str, request: &str| {
+        let mut change = grant_change(
+            ShareGrantTransition::Grant(no_shell()),
+            &id,
+            Some(receiver),
+            &format!("{receiver}-credential"),
+            request,
+        );
+        change.principal_id = Some(principal.clone());
+        change
+    };
+    assert!(store.change(share("phone", "drive")).await.unwrap().applied);
+    let epoch = only_grant(store, &id).await.policy_revision;
+    let moved = store.change(share("tablet", "move")).await.unwrap();
+    assert!(moved.applied);
+    assert_eq!(moved.policy_revision, Some(epoch));
+    assert_eq!(
+        store
+            .policy_at(&id, "tablet", epoch)
+            .await
+            .unwrap()
+            .as_ref(),
+        no_shell().policy()
+    );
+    assert_eq!(
+        store.policy_at(&id, "phone", epoch).await.unwrap().as_ref(),
+        no_shell().policy()
+    );
+    assert_eq!(store.policy_at(&id, "laptop", epoch).await.unwrap(), None);
+    let facts = store.export_facts().await.unwrap();
+    assert_eq!(facts.revocations.len(), 1);
+    let revocation = &facts.revocations[0];
+    assert_eq!(revocation.receiver_id, "phone");
+    assert_eq!(revocation.credential_id, "phone-credential");
+    assert_eq!(revocation.capabilities, "read+comment+drive");
 }
 
 /// Row J6: a share retried with its request id answers what it answered the
@@ -3564,7 +4050,7 @@ async fn a_retried_share_replays_its_role_and_policy_or_is_refused() {
         .await
         .unwrap());
     assert_eq!(only_grant(store, &id).await.access, ShareAccess::read());
-    let comment = ShareAccess::new(ShareRole::Comment, None).unwrap();
+    let comment = ShareAccess::new(Capabilities::comment(), None).unwrap();
     for other in [comment, rules(), ShareAccess::read()] {
         let refused = share_as(store, &id, "phone", other.clone(), "share-1").await;
         assert!(
@@ -3897,12 +4383,12 @@ async fn a_first_grant_naming_no_revision_is_refused_once_another_landed() {
 #[tokio::test]
 async fn a_revoke_ends_a_grant_of_any_role() {
     use crate::conversation::application::ShareGrants;
-    let comment = ShareAccess::new(ShareRole::Comment, None).unwrap();
-    for (access, role, policy) in [
-        (comment, "comment", None),
+    let comment = ShareAccess::new(Capabilities::comment(), None).unwrap();
+    for (access, capabilities, policy) in [
+        (comment, "read+comment", None),
         (
             no_shell(),
-            "drive",
+            "read+comment+drive",
             Some(r#"{"preset":"no_shell"}"#.to_owned()),
         ),
     ] {
@@ -3922,7 +4408,7 @@ async fn a_revoke_ends_a_grant_of_any_role() {
         let last = journal.last().unwrap();
         assert_eq!(
             (last.0.as_str(), last.1.as_str(), &last.2, &last.3),
-            (role, "none", &policy, &None)
+            (capabilities, "none", &policy, &None)
         );
     }
 }
@@ -3974,7 +4460,7 @@ async fn a_conversation_holds_a_bounded_number_of_drive_grants() {
     let grants = store.grants(&id).await.unwrap().grants;
     let driving = grants
         .iter()
-        .filter(|grant| grant.access.role() == ShareRole::Drive)
+        .filter(|grant| grant.access.capabilities() == Capabilities::drive())
         .count();
     assert_eq!(driving as i64, MAX_DRIVE_GRANTS_PER_CONVERSATION);
     // A driver's own policy can still change: it takes no new Drive grant,
@@ -4268,7 +4754,8 @@ async fn a_turn_is_saved_only_while_its_grant_stays_at_the_admitted_revision() {
         .unwrap();
     connection
         .execute(
-            "UPDATE share_grants SET policy_revision = 0 WHERE conversation_id = ?1",
+            "UPDATE share_grants SET policy_revision = 0
+             WHERE resource_kind = 'conversation' AND resource_id = ?1",
             params![again.to_string()],
         )
         .unwrap();

@@ -304,6 +304,7 @@ impl Peer {
             ShareGrantChange {
                 transition,
                 conversation_id: id.clone(),
+                principal_id: Some(PrincipalId::new(format!("grantee-{}", reader.0)).unwrap()),
                 receiver_id: Some(reader.0.clone()),
                 credential_id: CredentialId::new(reader.1.clone()).unwrap(),
                 expected_policy_revision: None,

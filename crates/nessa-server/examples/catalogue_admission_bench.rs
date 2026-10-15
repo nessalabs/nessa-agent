@@ -41,7 +41,7 @@ use nessa_server::conversation::application::{
     RequestShape, ShareGrantChange, ShareGrantTransition, ShareGrants, MAX_LISTED_CONVERSATIONS,
 };
 use nessa_server::conversation::domain::{
-    Conversation, ConversationDeletion, ShareAccess, ShareRole,
+    Capabilities, Conversation, ConversationDeletion, ShareAccess,
 };
 use nessa_server::conversation::infrastructure::{
     CedarConversationAccessPolicy, LocalConversationStore, NessaCatalogueSource,
@@ -273,9 +273,9 @@ async fn seed(store: &Arc<LocalConversationStore>, size: usize) -> Result<String
             )
             .await?;
         let role = if index % 2 == 0 {
-            ShareRole::Read
+            Capabilities::read()
         } else {
-            ShareRole::Comment
+            Capabilities::comment()
         };
         let receipt = store
             .change(ShareGrantChange {
@@ -283,6 +283,7 @@ async fn seed(store: &Arc<LocalConversationStore>, size: usize) -> Result<String
                     ShareAccess::new(role, None).map_err(|error| format!("{error:?}"))?,
                 ),
                 conversation_id: id.clone(),
+                principal_id: Some(PrincipalId::new(format!("grantee-{RECEIVER}")).unwrap()),
                 receiver_id: Some(RECEIVER.into()),
                 credential_id: CredentialId::new(format!("{RECEIVER}-credential"))?,
                 expected_policy_revision: None,
@@ -402,7 +403,7 @@ fn bench_evaluations(count: usize, cedar: &CedarConversationAccessPolicy) {
             owner: &owner,
             deleted: false,
         },
-        held: Some(ShareRole::Read),
+        held: Some(Capabilities::read()),
         request: RequestShape::default(),
         target: None,
     };

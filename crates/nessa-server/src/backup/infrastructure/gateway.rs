@@ -1583,7 +1583,7 @@ fn fences_from_facts(facts: &ExportFences) -> Vec<DeletionFence> {
         }
     }
     for revocation in &facts.revocations {
-        let Some(role) = GrantRole::parse(&revocation.role) else {
+        let Some(role) = GrantRole::parse(&revocation.capabilities) else {
             continue;
         };
         if let Ok(fence) = DeletionFence::share_grant(

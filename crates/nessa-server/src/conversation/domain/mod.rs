@@ -22,9 +22,9 @@ pub use receiver::{
     ReceiverTransitionError,
 };
 pub use value_objects::{
-    CommandHosts, ConversationDeletion, DeletionContradiction, ProviderSessionErasure,
-    ProviderSessionLink, ShareAccess, ShareAccessError, ShareRole, ToolCall, ToolChoice,
-    ToolPolicy, ToolPolicyError, ToolPreset, ToolRules, ToolSource,
+    Capabilities, Capability, CommandHosts, ConversationDeletion, DeletionContradiction,
+    ProviderSessionErasure, ProviderSessionLink, ShareAccess, ShareAccessError, ToolCall,
+    ToolChoice, ToolPolicy, ToolPolicyError, ToolPreset, ToolRules, ToolSource,
 };
 
 #[cfg(test)]
