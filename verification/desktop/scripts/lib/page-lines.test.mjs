@@ -1,11 +1,12 @@
 import assert from "node:assert/strict"
-import { readdirSync, readFileSync, statSync } from "node:fs"
+import { readdirSync, statSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
+import ts from "typescript"
 
 import { report } from "./cli.mjs"
-import { noteLiveMountResourceAbort } from "./browser.mjs"
+import { noteLiveMountResourceAbort, openPage } from "./browser.mjs"
 import {
   applyLines,
   attachLines,
@@ -15,13 +16,15 @@ import {
 } from "./page-lines.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
+const collectors = new WeakMap()
 
 function page() {
   let closed = 0
   const lines = watchLines()
   const opened = {
-    errors: lines.errors,
-    harmless: lines.harmless,
+    get heldErrorCount() {
+      return lines.errors.length
+    },
     noteHarmless: (pattern) => lines.noteHarmless(pattern),
     reclassifyHeld: (keep, asHarmless) => lines.reclassifyHeld(keep, asHarmless),
     close: async () => {
@@ -29,6 +32,7 @@ function page() {
     },
     closed: () => closed,
   }
+  collectors.set(opened, lines)
   return opened
 }
 
@@ -38,13 +42,13 @@ test("#647: live mount proof classifies a late abort before close, keeping rejec
   const lines = watchLines()
   let closed = 0
   const opened = {
-    ...lines,
+    noteHarmless: (pattern) => lines.noteHarmless(pattern),
     page: { url: () => "http://127.0.0.1:1438/desktop.html" },
     close: async () => {
       closed += 1
     },
   }
-  attachLines(opened, { engine: "chromium" })
+  attachLines(opened, { engine: "chromium" }, lines)
   const abort = "requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED"
   lines.keep(abort, false)
   noteLiveMountResourceAbort(opened, "live")
@@ -79,11 +83,11 @@ test("#647: an absent live mount proof leaves held and late aborts as failures",
     bindReporter(rep)
     const lines = watchLines()
     const opened = {
-      ...lines,
+      noteHarmless: (pattern) => lines.noteHarmless(pattern),
       page: { url: () => "http://127.0.0.1:1438/desktop.html" },
       close: async () => {},
     }
-    attachLines(opened, {})
+    attachLines(opened, {}, lines)
     const abort = "requestfailed: http://127.0.0.1:1438/mcp-resources net::ERR_ABORTED"
     lines.keep(abort, false)
     noteLiveMountResourceAbort(opened, state)
@@ -103,22 +107,22 @@ test("a page's lines are reported once, on the result that follows them", async 
   const rep = report("page-lines", {})
   bindReporter(rep)
   const opened = page()
-  attachLines(opened, { engine: "chromium", layout: "columns" })
-  opened.errors.push("console.error: during the step")
+  attachLines(opened, { engine: "chromium", layout: "columns" }, collectors.get(opened))
+  collectors.get(opened).keep("console.error: during the step", false)
   rep.add({ name: "step", failures: ["an assertion"] })
   assert.deepEqual(rep.results[0].failures, [
     "an assertion",
     "console.error: during the step",
   ])
-  assert.equal(opened.errors.length, 0)
+  assert.equal(opened.heldErrorCount, 0)
 
-  opened.errors.push("console.error: between steps")
-  opened.harmless.push("requestfailed: kept")
+  collectors.get(opened).keep("console.error: between steps", false)
+  collectors.get(opened).keep("requestfailed: kept", true)
   rep.add({ name: "next" })
   assert.deepEqual(rep.results[1].failures, ["console.error: between steps"])
   assert.deepEqual(rep.results[1].harmless, ["requestfailed: kept"])
 
-  opened.errors.push("console.error: after the last step")
+  collectors.get(opened).keep("console.error: after the last step", false)
   await opened.close()
   const late = rep.results.at(-1)
   assert.equal(late.name, "console")
@@ -132,8 +136,8 @@ test("a page's lines are reported once, on the result that follows them", async 
   const skipped = report("page-lines-skip", {})
   bindReporter(skipped)
   const held = page()
-  attachLines(held, { engine: "webkit" })
-  held.errors.push("console.error: while opening")
+  attachLines(held, { engine: "webkit" }, collectors.get(held))
+  collectors.get(held).keep("console.error: while opening", false)
   skipped.add({ name: "open", cannotRun: true, error: "could not run" })
   skipped.add({
     name: "later",
@@ -144,7 +148,7 @@ test("a page's lines are reported once, on the result that follows them", async 
     skipped.results.every((result) => result.failures.length === 0),
     true,
   )
-  assert.deepEqual(held.errors, ["console.error: while opening"])
+  assert.deepEqual(collectors.get(held).errors, ["console.error: while opening"])
   await held.close()
   assert.deepEqual(skipped.results.at(-1).failures, ["console.error: while opening"])
 
@@ -164,11 +168,9 @@ test("a page's lines are reported once, on the result that follows them", async 
   bindReporter(moved)
   const watched = watchLines()
   const noisy = {
-    errors: watched.errors,
-    harmless: watched.harmless,
     close: async () => {},
   }
-  attachLines(noisy, {})
+  attachLines(noisy, {}, watched)
   watched.keep("requestfailed: https://page/browser/check net::ERR_ABORTED", false)
   watched.keep("console.error: real", false)
   watched.noteHarmless(/\/browser\/check net::ERR_ABORTED/)
@@ -183,9 +185,11 @@ test("a page's lines are reported once, on the result that follows them", async 
   const live = report("page-lines-reclassify", {})
   bindReporter(live)
   const mount = page()
-  attachLines(mount, {})
-  mount.errors.push("requestfailed: https://page/mcp-resources net::ERR_ABORTED")
-  mount.errors.push("console.error: real")
+  attachLines(mount, {}, collectors.get(mount))
+  collectors
+    .get(mount)
+    .keep("requestfailed: https://page/mcp-resources net::ERR_ABORTED", false)
+  collectors.get(mount).keep("console.error: real", false)
   mount.reclassifyHeld(
     (line) => line.includes("/mcp-resources"),
     (line) => `${line} (mount went live, #473)`,
@@ -215,8 +219,8 @@ test("a page's lines are reported once, on the result that follows them", async 
   })
   const chromium = (async () => {
     const opened = page()
-    attachLines(opened, { engine: "chromium" })
-    opened.errors.push("console.error: chromium")
+    attachLines(opened, { engine: "chromium" }, collectors.get(opened))
+    collectors.get(opened).keep("console.error: chromium", false)
     chromiumAttached()
     await webkitReady
     concurrent.add({ name: "chromium" })
@@ -226,8 +230,8 @@ test("a page's lines are reported once, on the result that follows them", async 
   const webkit = (async () => {
     await chromiumReady
     const opened = page()
-    attachLines(opened, { engine: "webkit" })
-    opened.errors.push("console.error: webkit")
+    attachLines(opened, { engine: "webkit" }, collectors.get(opened))
+    collectors.get(opened).keep("console.error: webkit", false)
     webkitAttached()
     await chromiumDone
     concurrent.add({ name: "webkit" })
@@ -239,13 +243,78 @@ test("a page's lines are reported once, on the result that follows them", async 
   )
   assert.deepEqual(byName.chromium.failures, ["console.error: chromium"])
   assert.deepEqual(byName.webkit.failures, ["console.error: webkit"])
-  assert.equal(chromiumPage.errors.length, 0)
-  assert.equal(webkitPage.errors.length, 0)
+  assert.equal(chromiumPage.heldErrorCount, 0)
+  assert.equal(webkitPage.heldErrorCount, 0)
   await chromiumPage.close()
   await webkitPage.close()
 })
 
-test("scripts do not splice a page's line arrays", () => {
+test("openPage publishes counts and classification actions without diagnostic queues", async () => {
+  const rep = report("page-lines-public-api", {})
+  bindReporter(rep)
+  const handlers = new Map()
+  let closed = 0
+  const context = {
+    addInitScript: async () => {},
+    newPage: async () => ({
+      on: (name, receive) => handlers.set(name, receive),
+      goto: async () => {},
+      waitForSelector: async () => {},
+      waitForFunction: async () => {},
+    }),
+    close: async () => {
+      closed += 1
+    },
+  }
+  const opened = await openPage(
+    { browserType: () => ({ name: () => "chromium" }), newContext: async () => context },
+    { url: "http://page/", width: 600, lines: { width: 600 } },
+  )
+  assert.equal(Object.hasOwn(opened, "errors"), false)
+  assert.equal(Object.hasOwn(opened, "harmless"), false)
+  assert.equal(opened.heldErrorCount, 0)
+  const error = { type: () => "error", text: () => "same fault", location: () => ({}) }
+  handlers.get("console")(error)
+  handlers.get("console")(error)
+  assert.equal(opened.heldErrorCount, 2)
+  await opened.settleRequests()
+  await opened.close()
+  await opened.close()
+  assert.equal(opened.heldErrorCount, 0)
+  assert.equal(closed, 1)
+  assert.equal(rep.results.length, 1)
+  assert.deepEqual(rep.results[0].failures, [
+    "console.error: same fault",
+    "console.error: same fault",
+  ])
+  assert.equal(rep.results[0].engine, "chromium")
+  assert.equal(rep.results[0].width, 600)
+})
+
+test("close reports held diagnostics even when context retirement fails", async () => {
+  const rep = report("page-lines-close-failure", {})
+  bindReporter(rep)
+  const lines = watchLines()
+  const failure = new Error("context close failed")
+  let closed = 0
+  const opened = {
+    close: async () => {
+      closed += 1
+      throw failure
+    },
+  }
+  attachLines(opened, { engine: "webkit", width: 360 }, lines)
+  lines.keep("pageerror: held before close", false)
+  await assert.rejects(opened.close(), (error) => error === failure)
+  await opened.close()
+  assert.equal(closed, 1)
+  assert.equal(rep.results.length, 1)
+  assert.deepEqual(rep.results[0].failures, ["pageerror: held before close"])
+  assert.equal(rep.results[0].engine, "webkit")
+  assert.equal(rep.results[0].width, 360)
+})
+
+test("page consumers and wrappers do not access private queues through any handle name", () => {
   const root = join(here, "..")
   const files = []
   const walk = (directory) => {
@@ -256,13 +325,53 @@ test("scripts do not splice a page's line arrays", () => {
     }
   }
   walk(root)
+  const program = ts.createProgram(files, {
+    allowJs: true,
+    checkJs: true,
+    noEmit: true,
+    module: ts.ModuleKind.NodeNext,
+    moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    target: ts.ScriptTarget.ESNext,
+  })
+  const checker = program.getTypeChecker()
+  const browser = program.getSourceFile(join(here, "browser.mjs"))
+  const declaration = browser.statements.find(
+    (node) => ts.isFunctionDeclaration(node) && node.name?.text === "openPage",
+  )
+  const pageType = checker.getAwaitedType(
+    checker.getReturnTypeOfSignature(checker.getSignatureFromDeclaration(declaration)),
+  )
   const offenders = []
   for (const path of files) {
-    if (path.endsWith(`${join("lib", "page-lines.mjs")}`)) continue
     if (path.endsWith(".test.mjs")) continue
-    const source = readFileSync(path, "utf8")
-    if (source.includes(".errors.splice") || source.includes(".harmless.splice"))
-      offenders.push(path)
+    const source = program.getSourceFile(path)
+    const visit = (node) => {
+      const binding = ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent)
+      const key = binding ? (node.propertyName ?? node.name) : null
+      const property =
+        key && (ts.isIdentifier(key) || ts.isStringLiteral(key))
+          ? key.text
+          : ts.isPropertyAccessExpression(node)
+            ? node.name.text
+            : ts.isElementAccessExpression(node) &&
+                ts.isStringLiteral(node.argumentExpression)
+              ? node.argumentExpression.text
+              : null
+      if (property === "errors" || property === "harmless") {
+        const receiver = checker.getNonNullableType(
+          checker.getTypeAtLocation(binding ? node.parent : node.expression),
+        )
+        if (
+          !(receiver.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) &&
+          checker.isTypeAssignableTo(receiver, pageType)
+        ) {
+          const { line } = source.getLineAndCharacterOfPosition(node.getStart())
+          offenders.push(`${path}:${line + 1}: ${node.getText(source)}`)
+        }
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(source)
   }
   assert.deepEqual(offenders, [])
 })

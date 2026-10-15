@@ -1,8 +1,16 @@
 # Page console and request lines
 
 One owner, `verification/desktop/scripts/lib/page-lines.mjs`, reports every
-console error and failed request a desktop check's page records. A script
-does not splice those arrays and does not copy them onto a result.
+console error and failed request a desktop check's page records. `openPage`
+keeps its queues out of the returned page API; scripts receive classification
+actions and `heldErrorCount`, not the arrays. The owner takes the collector
+directly when it attaches, so a caller cannot retain a queue as result evidence.
+The queue-free API and once-only reporting are tested in `page-lines.test.mjs`.
+Its consumer check uses TypeScript inference to recognize the `openPage`
+contract through differently named handles and wrappers, rejecting queue
+member access and destructuring. It does not claim to resolve `any` or
+`unknown`; the public API test separately rejects exposing the queues.
+Browser regression evidence accompanies the #912 fix with its exact source.
 
 `run.mjs` binds the check's reporter once. `openPage` watches when a
 reporter is bound. `report().add` takes the lines of the page opened in the
@@ -18,9 +26,10 @@ line metadata, so a late console failure also fails that engine's summary cell
 | a step's result is added, and its page has lines | those lines move onto that result; errors append to `failures`, harmless lines are `harmless` |
 | a line arrives after that result | the next result of that same work takes it, or close does when no result follows |
 | two pages are open, and each has a result | each result takes only the page its own work opened |
-| close, and lines remain | one `console` result, then the page closes |
+| close, and lines remain | one `console` result, then the page closes; a context-close failure still retains that reported result |
 | the result could not run, including a later step "not run" | it takes nothing; the lines stay for a real result or for close |
 | open throws after the page exists | close reports the lines, the open result is "could not run", and each step not started is "not run" |
+| a script inspects held errors | `heldErrorCount` publishes the count without exposing the queue; reporting still belongs to this owner |
 | a script already knows a line is noise | `noteHarmless(pattern)` moves matches, including ones still to come, onto `harmless` |
 | a step learns afterwards which held lines are noise | `reclassifyHeld` moves those lines, rewritten, and leaves every other error |
 | the apps step proves its mount is live, with a same-origin `/mcp-resources` `net::ERR_ABORTED` held (#647) | `browser.mjs` publishes the exact endpoint pattern; `noteHarmless` moves the held match |

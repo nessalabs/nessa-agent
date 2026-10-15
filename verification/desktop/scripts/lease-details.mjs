@@ -99,7 +99,7 @@ async function runOn(browser, rep, url, engine, width) {
     try {
       await attempt(rep, { engine, width, name: `run-on-${name}` }, async () => {
         const { page } = opened
-        const failures = opened.errors.map((line) => `page error: ${line}`)
+        const failures = []
         const plus = page.getByRole("button", { name: /More options|Add attachment/ })
         await plus.click()
         const row = page.getByRole("button", { name: /^Run on/ })
@@ -196,19 +196,15 @@ await main(
               await page.getByRole("heading", { name: "Details", exact: true }).waitFor()
               const section = page.getByRole(...leaseRoles.whereItRuns)
               const sections = await section.count()
-              const errors = opened.errors.map((line) => `page error: ${line}`)
               if (rows === null)
                 return {
                   sections,
-                  failures: [
-                    ...(sections === 0 ? [] : [`${sections} sections, expected none`]),
-                    ...errors,
-                  ],
+                  failures: sections === 0 ? [] : [`${sections} sections, expected none`],
                 }
               if (sections !== 1)
                 return {
                   sections,
-                  failures: [`${sections} sections, expected 1`, ...errors],
+                  failures: [`${sections} sections, expected 1`],
                 }
               const measured = await section.evaluate((node) => {
                 const facts = node.lastElementChild
@@ -241,7 +237,6 @@ await main(
                   ...(measured.right > measured.viewport + 1
                     ? [`the section ends at ${measured.right}, past ${measured.viewport}`]
                     : []),
-                  ...errors,
                 ],
               }
             })

@@ -59,12 +59,9 @@ await main(meta, async ({ options, rep, url }) => {
               failures.push(
                 `the rendered clock was ${readCrossing.renderedNow}, expected 1000`,
               )
-            if (opened.errors.length)
-              failures.push(`browser reported errors: ${opened.errors.join("; ")}`)
             return {
               injectedReads: readCrossing.nowValues.slice(0, 2),
               renderedNow: readCrossing.renderedNow,
-              browserErrors: opened.errors,
               failures,
             }
           }
@@ -136,15 +133,12 @@ await main(meta, async ({ options, rep, url }) => {
             afterUnmount.timerStops !== afterUnmount.timerStarts
           )
             failures.push(`timer cleanup was incomplete: ${JSON.stringify(afterUnmount)}`)
-          if (opened.errors.length)
-            failures.push(`browser reported errors: ${opened.errors.join("; ")}`)
           return {
             injectedNow: "999 → 1000",
             beforeTick,
             published,
             beforeUnmount,
             afterUnmount,
-            browserErrors: opened.errors,
             failures,
           }
         } finally {
