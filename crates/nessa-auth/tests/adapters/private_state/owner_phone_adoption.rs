@@ -30,6 +30,12 @@ fn seed(value: u8) -> PrivateKeyMaterial {
 impl Fixture {
     fn new() -> Self {
         let temporary = tempfile::tempdir().unwrap();
+        // Windows validates an ordinary drive path and creates the protected
+        // DACL. A canonicalized temp path is a reparse point there, which the
+        // private-directory check refuses. Unix resolves the temp alias first.
+        #[cfg(windows)]
+        let root = temporary.path().join("root");
+        #[cfg(not(windows))]
         let root = temporary.path().canonicalize().unwrap().join("root");
         nessa_local_storage::create_directory(&root).unwrap();
         nessa_local_storage::create_directory_beneath(&root, Path::new("private")).unwrap();
