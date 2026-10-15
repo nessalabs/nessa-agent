@@ -34,6 +34,7 @@ function fixture(t, { installed = true } = {}) {
       String.raw`
 import fs from 'node:fs'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 const root = FIXTURE_ROOT
 const args = process.argv.slice(2)
 const tool = path.basename(process.argv[1])
@@ -41,7 +42,12 @@ const marker = name => path.join(root, name)
 const exists = name => fs.existsSync(marker(name))
 const touch = name => fs.writeFileSync(marker(name), '')
 fs.appendFileSync(marker('calls'), JSON.stringify({tool,args})+'\n')
-if (tool === 'uname') console.log(args[0] === '-s' ? 'Linux' : 'x86_64')
+if (tool === 'timeout') {
+  if (exists('stall-browser-repair')) process.exit(124)
+  const result=spawnSync(args[2],args.slice(3),{env:process.env,stdio:'inherit'})
+  process.exit(result.status ?? 1)
+}
+else if (tool === 'uname') console.log(args[0] === '-s' ? 'Linux' : 'x86_64')
 else if (tool === 'dpkg-query') { if (!exists('packages') || (exists('missing-package') && fs.readFileSync(marker('missing-package'),'utf8')===args.at(-1))) process.exit(1); console.log('installed') }
 else if (tool === 'sudo') { if (args.includes('install')) touch('packages') }
 else if (tool === 'curl') {
@@ -63,6 +69,17 @@ else if (tool === 'cargo') {
 } else if (tool === 'pnpm') {
   if (args.includes('--version')) console.log('11.9.0')
   else if (args[0] === 'install') {
+    if (args.includes('--nested-ui')) {
+      if (!exists('ui-dependency')) {
+        if (process.env.PNPM_CONFIG_OFFLINE === 'true') process.exit(1)
+        touch('ui-dependency'); touch('ui-network')
+      }
+      process.exit(0)
+    }
+    if (exists('preinstall-ui')) {
+      const nested=spawnSync(process.execPath,[process.argv[1],'install','--frozen-lockfile','--nested-ui'],{env:process.env})
+      if (nested.status !== 0) process.exit(nested.status ?? 1)
+    }
     if (exists('fail-pnpm')) process.exit(1)
     if (args.includes('--offline') && !exists('pnpm')) process.exit(1)
     touch('pnpm')
@@ -81,6 +98,7 @@ else process.exit(2)
   )
   chmodSync(dispatcher, 0o755)
   for (const name of [
+    "timeout",
     "uname",
     "dpkg-query",
     "sudo",
@@ -386,4 +404,40 @@ test("present browser executables do not hide missing runtime libraries", (t) =>
     .filter(({ tool, args }) => tool === "pnpm" && args.includes("playwright"))
   assert.equal(calls.length, 1)
   assert.ok(calls[0].args.includes("--with-deps"))
+})
+
+test("a stalled browser repair is bounded and cannot publish success", (t) => {
+  const f = bootstrapFixture(t)
+  assert.equal(f.prepare("setup").status, 0)
+  const previous = f.receipt()
+  rmSync(join(f.root, "browser-libraries"))
+  writeFileSync(join(f.root, "stall-browser-repair"), "")
+  const result = f.prepare("maintenance")
+  assert.equal(result.status, 124, result.stderr)
+  assert.deepEqual(f.receipt(), previous)
+  const calls = f.calls().filter(({ tool }) => tool === "timeout")
+  assert.deepEqual(calls.at(-1).args, [
+    "--kill-after=30s",
+    "45m",
+    "pnpm",
+    "exec",
+    "playwright",
+    "install",
+    "--with-deps",
+    "chromium",
+    "webkit",
+  ])
+})
+
+test("nested UI dependency fetching cannot be reported as offline reuse", (t) => {
+  const f = bootstrapFixture(t)
+  assert.equal(f.prepare("setup").status, 0)
+  writeFileSync(join(f.root, "preinstall-ui"), "")
+  const fetched = f.prepare("maintenance")
+  assert.equal(fetched.status, 0, fetched.stderr)
+  assert.equal(f.receipt().steps.dependencies, "fetched")
+  assert.equal(readFileSync(join(f.root, "ui-network"), "utf8"), "")
+  const reused = f.prepare("maintenance")
+  assert.equal(reused.status, 0, reused.stderr)
+  assert.equal(f.receipt().steps.dependencies, "offline")
 })

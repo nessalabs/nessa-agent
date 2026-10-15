@@ -125,7 +125,7 @@ if ! node scripts/ensure-nessa-ui.mjs --check; then
   node scripts/ensure-nessa-ui.mjs
 fi
 dependencies_status=offline
-if ! pnpm install --offline --frozen-lockfile; then
+if ! PNPM_CONFIG_OFFLINE=true pnpm install --offline --frozen-lockfile; then
   dependencies_status=fetched
   pnpm install --frozen-lockfile
 fi
@@ -154,7 +154,7 @@ JS
 }
 if ! browsers_ready; then
   browser_status=installed
-  pnpm exec playwright install --with-deps chromium webkit
+  timeout --kill-after=30s 45m pnpm exec playwright install --with-deps chromium webkit
 fi
 browsers_ready
 node scripts/ensure-nessa-ui.mjs --check
