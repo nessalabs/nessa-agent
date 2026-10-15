@@ -155,8 +155,10 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.ConversationDeleted:
       return true
     // A share naming a credential that is not one of the owner's paired
-    // devices is refused before the grant table is written.
+    // devices is refused before the grant table is written. So is a share
+    // whose comment or drive Cedar denied: nothing was written.
     case ConversationErrorCode.ShareTargetNotPaired:
+    case ConversationErrorCode.CapabilitiesRefused:
       return true
     // A share or revoke whose expected revision the grant no longer holds is
     // refused inside the transaction that would write it, which then writes

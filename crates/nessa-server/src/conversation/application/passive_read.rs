@@ -170,7 +170,7 @@ impl AdmitPassiveRead<'_> {
         // G4). Refused, it is told what a missing conversation is told.
         let held = self
             .share_grants
-            .held_role(conversation_id, &binding.receiver_id)
+            .held_capabilities(conversation_id, &binding.receiver_id)
             .await
             .map_err(|_| ReadRefusal::Unverifiable)?;
         let ask = AccessAsk {

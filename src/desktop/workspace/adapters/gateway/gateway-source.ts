@@ -1653,6 +1653,7 @@ function reasonFor(
     case ConversationErrorCode.ConversationConfigurationChanged:
     case ConversationErrorCode.ShareTargetNotPaired:
     case ConversationErrorCode.ShareGrantChanged:
+    case ConversationErrorCode.CapabilitiesRefused:
     case ConversationErrorCode.IdempotencyConflict:
     case ConversationErrorCode.DrivePolicyUnenforceable:
     case ConversationErrorCode.Revoked:

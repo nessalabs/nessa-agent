@@ -10,6 +10,7 @@ import {
   sharePage,
   toolPolicyBounds,
   type AgentsListResult,
+  type ConversationCapability,
   type ConversationSharesResult,
 } from "@nessa/client"
 import { describe, expect, it, vi } from "vitest"
@@ -40,17 +41,17 @@ function credential(id: string, actions: string[], revokedAt: number | null = nu
 const shares: ConversationSharesResult = {
   changeRevision: 1,
   items: [
-    { credentialId: "phone", role: "read", policyRevision: 1, grantedAtMs: 5 },
+    { credentialId: "phone", capabilities: ["read"], policyRevision: 1, grantedAtMs: 5 },
     {
       credentialId: "tablet",
-      role: "drive",
+      capabilities: ["read", "comment", "drive"],
       policy: { allow: ["Read"], deny: [] },
       policyRevision: 3,
       grantedAtMs: 6,
     },
     {
       credentialId: "laptop",
-      role: "drive",
+      capabilities: ["drive", "read", "comment"],
       policy: { preset: "no_shell", commandHosts: ["devbox"] },
       policyRevision: 1,
       grantedAtMs: 7,
@@ -206,7 +207,12 @@ describe("reading a session's sharing", () => {
               return {
                 changeRevision: 1,
                 items: [
-                  { credentialId, role: "read", policyRevision: 1, grantedAtMs: n },
+                  {
+                    credentialId,
+                    capabilities: ["read"],
+                    policyRevision: 1,
+                    grantedAtMs: n,
+                  },
                 ],
                 cursor: { credentialId, grantedAtMs: n },
               }
@@ -224,7 +230,7 @@ describe("reading a session's sharing", () => {
     const dropped = shares.items[0]
     const kept = {
       credentialId: "watch",
-      role: "read" as const,
+      capabilities: ["read"] as ConversationCapability[],
       policyRevision: 4,
       grantedAtMs: 8,
     }
@@ -268,7 +274,7 @@ describe("reading a session's sharing", () => {
                 items: [
                   {
                     credentialId,
-                    role: "read" as const,
+                    capabilities: ["read"] as ConversationCapability[],
                     policyRevision: 1,
                     grantedAtMs: n,
                   },
@@ -370,7 +376,7 @@ describe("reading a session's sharing", () => {
 })
 
 describe("sharing and revoking", () => {
-  it("sends the role, the policy as the wire takes it, the revision it was built on and the request id, and answers the grant's revision", async () => {
+  it("sends the capability set, the policy as the wire takes it, the revision it was built on and the request id, and answers the grant's revision", async () => {
     const gateway = client()
     const source = sharingGateway({ connected: async () => gateway })
     expect(
@@ -383,7 +389,7 @@ describe("sharing and revoking", () => {
     expect(gateway.conversation.share).toHaveBeenLastCalledWith(
       "c1",
       "phone",
-      "read",
+      ["read"],
       undefined,
       // 0: a first grant, built on a list where the device held none.
       { requestId: "req-1", expectedPolicyRevision: 0 },
@@ -401,7 +407,7 @@ describe("sharing and revoking", () => {
     expect(gateway.conversation.share).toHaveBeenLastCalledWith(
       "c1",
       "phone",
-      "drive",
+      ["read", "comment", "drive"],
       { allow: ["Read"], deny: [], commandHosts: ["devbox"] },
       { requestId: "req-2", expectedPolicyRevision: 4 },
     )

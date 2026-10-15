@@ -6134,12 +6134,16 @@ fn bind_live_grants(harness: &Harness, grants: Arc<dyn super::ShareGrants>) {
 }
 
 async fn grant_drive(harness: &Harness, receiver: &str) -> u64 {
-    use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy, ToolPreset};
+    use crate::conversation::domain::{Capabilities, ShareAccess, ToolPolicy, ToolPreset};
     crate::conversation_test_support::grant_as(
         &harness.metadata,
         &harness.id,
         receiver,
-        ShareAccess::new(ShareRole::Drive, Some(ToolPolicy::preset(ToolPreset::All))).unwrap(),
+        ShareAccess::new(
+            Capabilities::drive(),
+            Some(ToolPolicy::preset(ToolPreset::All)),
+        )
+        .unwrap(),
     )
     .await;
     super::ShareGrants::grants(&*harness.metadata, &harness.id)
@@ -6147,7 +6151,7 @@ async fn grant_drive(harness: &Harness, receiver: &str) -> u64 {
         .unwrap()
         .grants
         .into_iter()
-        .find(|grant| grant.receiver_id == receiver)
+        .find(|grant| grant.receiver_id.as_deref() == Some(receiver))
         .expect("the grant")
         .policy_revision
 }
@@ -6165,6 +6169,7 @@ async fn revoke_drive(store: &LocalConversationStore, id: &ConversationId, recei
         ShareGrantChange {
             transition: ShareGrantTransition::Revoke,
             conversation_id: id.clone(),
+            principal_id: None,
             receiver_id: None,
             credential_id: nessa_auth::domain::CredentialId::new(format!("{receiver}-credential"))
                 .unwrap(),
@@ -6216,7 +6221,7 @@ async fn submit_drive(
 /// Row J31: a grant revoked, or its policy replaced, after `policy_at` and
 /// before the turn is saved does not start that turn.
 async fn moved_during_admission(revoke: bool) {
-    use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy, ToolPreset};
+    use crate::conversation::domain::{Capabilities, ShareAccess, ToolPolicy, ToolPreset};
     let root = tempfile::tempdir().unwrap();
     let harness = in_process(root.path(), DELETION_BUDGETS.stop);
     let (entered, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
@@ -6259,7 +6264,7 @@ async fn moved_during_admission(revoke: bool) {
             &harness.id,
             "phone",
             ShareAccess::new(
-                ShareRole::Drive,
+                Capabilities::drive(),
                 Some(ToolPolicy::preset(ToolPreset::ReadOnlyTools)),
             )
             .unwrap(),
@@ -6811,7 +6816,7 @@ async fn a_grant_change_waits_until_the_turn_is_saved() {
 /// the process's.
 #[tokio::test]
 async fn a_stalled_save_on_one_conversation_does_not_block_another() {
-    use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy, ToolPreset};
+    use crate::conversation::domain::{Capabilities, ShareAccess, ToolPolicy, ToolPreset};
     let root = tempfile::tempdir().unwrap();
     let harness = in_process(root.path(), DELETION_BUDGETS.stop);
     bind_live_grants(
@@ -6834,7 +6839,11 @@ async fn a_stalled_save_on_one_conversation_does_not_block_another() {
         &harness.metadata,
         &other,
         "phone",
-        ShareAccess::new(ShareRole::Drive, Some(ToolPolicy::preset(ToolPreset::All))).unwrap(),
+        ShareAccess::new(
+            Capabilities::drive(),
+            Some(ToolPolicy::preset(ToolPreset::All)),
+        )
+        .unwrap(),
     )
     .await;
     let other_revision = super::ShareGrants::grants(&*harness.metadata, &other)
@@ -6842,7 +6851,7 @@ async fn a_stalled_save_on_one_conversation_does_not_block_another() {
         .unwrap()
         .grants
         .into_iter()
-        .find(|grant| grant.receiver_id == "phone")
+        .find(|grant| grant.receiver_id.as_deref() == Some("phone"))
         .expect("the other grant")
         .policy_revision;
     let (entered, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));

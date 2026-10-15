@@ -1884,7 +1884,7 @@ impl crate::conversation::application::ShareGrants for EveryConversationGranted 
     ) -> ConversationFuture<'a, Option<crate::conversation::application::HeldGrant>> {
         Box::pin(async {
             Ok(Some(crate::conversation::application::HeldGrant {
-                role: crate::conversation::domain::ShareRole::Read,
+                capabilities: crate::conversation::domain::Capabilities::read(),
                 policy_revision: 1,
             }))
         })
@@ -1953,6 +1953,7 @@ pub(crate) async fn grant_as(
         crate::conversation::application::ShareGrantChange {
             transition: crate::conversation::application::ShareGrantTransition::Grant(access),
             conversation_id: id.clone(),
+            principal_id: Some(PrincipalId::new(format!("grantee-{receiver}")).unwrap()),
             receiver_id: Some(receiver.to_owned()),
             credential_id: nessa_auth::domain::CredentialId::new(format!("{receiver}-credential"))
                 .unwrap(),
@@ -1974,11 +1975,11 @@ pub(crate) async fn grant_as(
 /// A Comment grant and a Drive grant under a preset policy: every role
 /// besides Read, for tests that each reads exactly as Read does (row J1).
 pub(crate) fn roles_beyond_read() -> [crate::conversation::domain::ShareAccess; 2] {
-    use crate::conversation::domain::{ShareAccess, ShareRole, ToolPolicy, ToolPreset};
+    use crate::conversation::domain::{Capabilities, ShareAccess, ToolPolicy, ToolPreset};
     [
-        ShareAccess::new(ShareRole::Comment, None).unwrap(),
+        ShareAccess::new(Capabilities::comment(), None).unwrap(),
         ShareAccess::new(
-            ShareRole::Drive,
+            Capabilities::drive(),
             Some(ToolPolicy::preset(ToolPreset::NoShell)),
         )
         .unwrap(),

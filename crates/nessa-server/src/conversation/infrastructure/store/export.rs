@@ -4,17 +4,19 @@
 use std::path::Path;
 
 use super::failed;
-use crate::conversation::application::ConversationError;
+use crate::conversation::application::{ConversationError, ResourceKind};
 use nessa_local_database::rusqlite::{Connection, Error, OpenFlags, Row};
 use serde_json::{json, Value};
 
-/// One grant whose latest journal row took the role away.
+/// One party that no longer holds its grant: a revoke, or a receiver the
+/// grant moved off. `capabilities` is what that party held.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RevocationFact {
     pub conversation_id: String,
     pub receiver_id: String,
     pub credential_id: String,
-    pub role: String,
+    /// The capabilities the revoke took away, as [`Capabilities::as_str`].
+    pub capabilities: String,
     pub sequence: u64,
 }
 
@@ -147,8 +149,13 @@ pub(super) fn read(connection: &Connection) -> Result<ExportFacts, ConversationE
     let tombstones = tombstones(connection, &mut skipped)?;
     let grants = json_rows(
         connection,
-        "SELECT conversation_id, receiver_id, credential_id, role, policy, policy_revision
-         FROM share_grants ORDER BY conversation_id, receiver_id",
+        &format!(
+            "SELECT resource_id, principal_id, receiver_id, credential_id, capabilities, policy,
+                    policy_revision
+             FROM share_grants WHERE resource_kind = '{kind}'
+             ORDER BY resource_id, principal_id",
+            kind = ResourceKind::Conversation.as_str(),
+        ),
         &mut skipped,
         grant_skip,
         grant_row,
@@ -211,18 +218,23 @@ fn tombstone_row(row: &Row<'_>) -> Result<Value, Error> {
 }
 
 fn grant_row(row: &Row<'_>) -> Result<Value, Error> {
-    let role: String = row.get(3)?;
-    if !known_role(&role) {
+    let capabilities: String = row.get(4)?;
+    if !known_capabilities(&capabilities) {
         return Ok(Value::Null);
     }
-    Ok(json!({
+    let mut value = json!({
         "conversationId": row.get::<_, String>(0)?,
-        "receiverId": row.get::<_, String>(1)?,
-        "credentialId": row.get::<_, String>(2)?,
-        "role": role,
-        "policy": row.get::<_, Option<String>>(4)?,
-        "policyRevision": row.get::<_, i64>(5)?,
-    }))
+        "resourceKind": ResourceKind::Conversation.as_str(),
+        "principalId": row.get::<_, String>(1)?,
+        "credentialId": row.get::<_, String>(3)?,
+        "capabilities": capabilities,
+        "policy": row.get::<_, Option<String>>(5)?,
+        "policyRevision": row.get::<_, i64>(6)?,
+    });
+    if let Some(receiver) = row.get::<_, Option<String>>(2)? {
+        value["receiverId"] = Value::String(receiver);
+    }
+    Ok(value)
 }
 
 fn json_rows(
@@ -264,17 +276,43 @@ fn revocation_rows(
     skipped: &mut Vec<ExportSkip>,
 ) -> Result<Vec<RevocationFact>, ConversationError> {
     let mut statement = connection
-        .prepare(
-            "SELECT j.conversation_id, j.receiver_id, j.credential_id, j.before, j.sequence
-             FROM share_grant_changes AS j
-             WHERE j.after = 'none'
-               AND j.sequence = (
-                   SELECT MAX(j2.sequence) FROM share_grant_changes AS j2
-                   WHERE j2.conversation_id = j.conversation_id
-                     AND j2.receiver_id = j.receiver_id
-               )
-             ORDER BY j.sequence",
-        )
+        .prepare(&format!(
+            "SELECT resource_id, principal_id, receiver_id, credential_id, capabilities, sequence
+                 FROM (
+                     SELECT j.resource_id, j.principal_id, j.receiver_id, j.credential_id,
+                            j.before AS capabilities, j.sequence
+                     FROM share_grant_changes AS j
+                     WHERE j.resource_kind = '{kind}'
+                       AND j.after = 'none'
+                       AND j.sequence = (
+                           SELECT MAX(j2.sequence) FROM share_grant_changes AS j2
+                           WHERE j2.resource_kind = j.resource_kind
+                             AND j2.resource_id = j.resource_id
+                             AND j2.principal_id = j.principal_id
+                       )
+                     UNION ALL
+                     SELECT j.resource_id, j.principal_id, j.receiver_id, j.credential_id,
+                            j.after AS capabilities, j.sequence
+                     FROM share_grant_changes AS j
+                     WHERE j.resource_kind = '{kind}'
+                       AND j.receiver_id IS NOT NULL
+                       AND j.after <> 'none'
+                       AND j.sequence = (
+                           SELECT MAX(j2.sequence) FROM share_grant_changes AS j2
+                           WHERE j2.resource_kind = j.resource_kind
+                             AND j2.resource_id = j.resource_id
+                             AND j2.receiver_id = j.receiver_id
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1 FROM share_grants AS g
+                           WHERE g.resource_kind = j.resource_kind
+                             AND g.resource_id = j.resource_id
+                             AND g.receiver_id = j.receiver_id
+                       )
+                 )
+                 ORDER BY sequence",
+            kind = ResourceKind::Conversation.as_str(),
+        ))
         .map_err(failed)?;
     let mut query = statement.query([]).map_err(failed)?;
     let mut found = Vec::new();
@@ -283,13 +321,25 @@ fn revocation_rows(
         index += 1;
         let parsed = (|| {
             let conversation_id: String = row.get(0)?;
-            let receiver_id: String = row.get(1)?;
-            let credential_id: String = row.get(2)?;
-            let role: String = row.get(3)?;
-            let sequence: i64 = row.get(4)?;
-            Ok::<_, Error>((conversation_id, receiver_id, credential_id, role, sequence))
+            let principal_id: String = row.get(1)?;
+            let receiver_id: Option<String> = row.get(2)?;
+            let credential_id: String = row.get(3)?;
+            let capabilities: String = row.get(4)?;
+            let sequence: i64 = row.get(5)?;
+            // A paired grant is fenced by its receiver. A grant that stores
+            // none is fenced by its principal, in the same field: the
+            // deletion line still names one party.
+            let receiver_id = receiver_id.unwrap_or(principal_id);
+            Ok::<_, Error>((
+                conversation_id,
+                receiver_id,
+                credential_id,
+                capabilities,
+                sequence,
+            ))
         })();
-        let Ok((conversation_id, receiver_id, credential_id, role, sequence)) = parsed else {
+        let Ok((conversation_id, receiver_id, credential_id, capabilities, sequence)) = parsed
+        else {
             skipped.push(ExportSkip::Grant {
                 identity: format!("revoke-{index}"),
             });
@@ -304,7 +354,7 @@ fn revocation_rows(
             });
             continue;
         };
-        if !known_role(&role)
+        if !known_capabilities(&capabilities)
             || !nameable(&conversation_id)
             || !nameable(&receiver_id)
             || !nameable(&credential_id)
@@ -318,7 +368,7 @@ fn revocation_rows(
             conversation_id,
             receiver_id,
             credential_id,
-            role,
+            capabilities,
             sequence,
         });
     }
@@ -336,7 +386,8 @@ fn identity_of(prefix: &str, value: &Value) -> Option<String> {
     let extra = value
         .get("receiverId")
         .and_then(Value::as_str)
-        .map(|receiver| format!(":{receiver}"))
+        .or_else(|| value.get("principalId").and_then(Value::as_str))
+        .map(|party| format!(":{party}"))
         .unwrap_or_default();
     let identity = format!("{prefix}-{id}{extra}");
     nameable(&identity).then_some(identity)
@@ -350,8 +401,8 @@ fn grant_skip(identity: String) -> ExportSkip {
     ExportSkip::Grant { identity }
 }
 
-fn known_role(role: &str) -> bool {
-    matches!(role, "read" | "comment" | "drive")
+fn known_capabilities(capabilities: &str) -> bool {
+    matches!(capabilities, "read" | "read+comment" | "read+comment+drive")
 }
 
 fn nameable(value: &str) -> bool {
