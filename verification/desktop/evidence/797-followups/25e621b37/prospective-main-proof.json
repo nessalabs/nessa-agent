@@ -1,0 +1,12 @@
+{
+  "main": "4b7a2d00158a8a45dafc820c983ebd3a78bbfada",
+  "head": "35bb18cf2f57164baae9c474b9ebe4e13f99052c",
+  "prospective_tree": "25737ac9775cb254ae1818f94c88faf79b40b932",
+  "differences": [
+    "docs/adr/todo/252-runtime-roles-and-execution-leases.md",
+    "docs/design/auth/peer-gateways.md",
+    "docs/design/runtime-architecture.md",
+    "verification/desktop/evidence/905-privacy-tabs/baseline-settings-masthead.json",
+    "verification/desktop/evidence/905-privacy-tabs/reinsert-probe.json"
+  ]
+}

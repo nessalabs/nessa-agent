@@ -1,0 +1,2960 @@
+{
+  "check": "message-sync",
+  "ok": true,
+  "started": "2026-10-15T01:02:27.519Z",
+  "finished": "2026-10-15T01:04:52.839Z",
+  "target": {
+    "url": "http://127.0.0.1:54170/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:54170/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "calibration",
+      "engine": "chromium",
+      "calibration": {
+        "rate": 4,
+        "plainMs": 22,
+        "throttledMs": 65,
+        "ratio": 2.92,
+        "ok": true
+      },
+      "calibrationFrame": {
+        "cost": 120,
+        "measuredMs": 120.5,
+        "attributed": true,
+        "ok": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "chromium",
+      "layout": "columns",
+      "run": 1,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [
+          19.09999990463257, 23.899999976158142, 17.200000047683716, 27.5,
+          23.600000023841858, 32.200000047683716, 28, 20.5, 17.600000023841858,
+          26.299999952316284
+        ],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 23.75,
+          "maxMs": 32.200000047683716
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 22.600000023841858,
+          "maxMs": 28.200000047683716
+        },
+        "throttle": 4,
+        "activeFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 19.09999990463257,
+          "over": 0,
+          "frames": 84,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 18.100000023841858,
+          "over": 0,
+          "frames": 43,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [
+          21.800000071525574, 22.600000023841858, 17.700000047683716, 28.200000047683716,
+          23.899999976158142
+        ],
+        "before": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 2,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 1371.7000000476837,
+          "lastFastFrame": {
+            "at": 966.1000000238419,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 12,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 2766.899999976158,
+          "lastFastFrame": {
+            "at": 2635.3000000715256,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "subscribes": 3,
+          "lists": 2,
+          "fastFrames": 17,
+          "slowFrames": 2,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3482.7000000476837,
+          "lastFastFrame": {
+            "at": 3352.100000023842,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3500.100000023842,
+          "lastFastFrame": {
+            "at": 3487.8000000715256,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 6501.600000023842,
+          "lastFastFrame": {
+            "at": 3487.8000000715256,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "chromium",
+      "layout": "columns",
+      "run": 2,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [
+          17.600000023841858, 25.5, 19, 29.399999976158142, 23.90000009536743,
+          16.299999952316284, 27.299999952316284, 22.100000023841858, 31.40000009536743,
+          25.899999976158142
+        ],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 24.700000047683716,
+          "maxMs": 31.40000009536743
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 24.800000071525574,
+          "maxMs": 27.899999976158142
+        },
+        "throttle": 4,
+        "activeFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 18.799999952316284,
+          "over": 0,
+          "frames": 84,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 17.800000071525574,
+          "over": 0,
+          "frames": 43,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [
+          23.200000047683716, 25.200000047683716, 18.100000023841858, 27.899999976158142,
+          24.800000071525574
+        ],
+        "before": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 2,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 1354,
+          "lastFastFrame": {
+            "at": 950.7999999523163,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 12,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 2748.2999999523163,
+          "lastFastFrame": {
+            "at": 2616.899999976158,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "subscribes": 3,
+          "lists": 2,
+          "fastFrames": 17,
+          "slowFrames": 2,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3465.2999999523163,
+          "lastFastFrame": {
+            "at": 3334.6999999284744,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3480.6999999284744,
+          "lastFastFrame": {
+            "at": 3469.899999976158,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 6482.099999904633,
+          "lastFastFrame": {
+            "at": 3469.899999976158,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "chromium",
+      "layout": "columns",
+      "run": 3,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [
+          32.799999952316284, 24.5, 18.700000047683716, 28.59999990463257,
+          24.399999976158142, 32.800000071525574, 26.5, 21.5, 16.90000009536743,
+          25.59999990463257
+        ],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 25.049999952316284,
+          "maxMs": 32.800000071525574
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 23.299999952316284,
+          "maxMs": 29.300000071525574
+        },
+        "throttle": 4,
+        "activeFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 18.100000023841858,
+          "over": 0,
+          "frames": 85,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 17.699999928474426,
+          "over": 0,
+          "frames": 43,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [
+          23.299999952316284, 25.699999928474426, 17.600000023841858, 29.300000071525574,
+          23.200000047683716
+        ],
+        "before": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 2,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 1431,
+          "lastFastFrame": {
+            "at": 1025.3000000715256,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 12,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 2840.3000000715256,
+          "lastFastFrame": {
+            "at": 2709.3000000715256,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "subscribes": 3,
+          "lists": 2,
+          "fastFrames": 17,
+          "slowFrames": 2,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3557.399999976158,
+          "lastFastFrame": {
+            "at": 3428.600000023842,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3573.100000023842,
+          "lastFastFrame": {
+            "at": 3561.899999976158,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 6574.200000047684,
+          "lastFastFrame": {
+            "at": 3561.899999976158,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "chromium",
+      "layout": "columns",
+      "run": 4,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [
+          19.100000023841858, 24.399999976158142, 18.799999952316284, 29.700000047683716,
+          22.200000047683716, 15.799999952316284, 27, 22.600000023841858,
+          31.600000023841858, 25.800000071525574
+        ],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 23.5,
+          "maxMs": 31.600000023841858
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 25.100000023841858,
+          "maxMs": 28.600000023841858
+        },
+        "throttle": 4,
+        "activeFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 20.200000047683716,
+          "over": 0,
+          "frames": 84,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 17.600000023841858,
+          "over": 0,
+          "frames": 43,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [
+          25.600000023841858, 23.799999952316284, 19.199999928474426, 28.600000023841858,
+          25.100000023841858
+        ],
+        "before": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 2,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 1347.8000000715256,
+          "lastFastFrame": {
+            "at": 943,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 12,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 2740.4000000953674,
+          "lastFastFrame": {
+            "at": 2610.100000023842,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "subscribes": 3,
+          "lists": 2,
+          "fastFrames": 17,
+          "slowFrames": 2,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3459.4000000953674,
+          "lastFastFrame": {
+            "at": 3329,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3475.600000023842,
+          "lastFastFrame": {
+            "at": 3465.4000000953674,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 6478.200000047684,
+          "lastFastFrame": {
+            "at": 3465.4000000953674,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "chromium",
+      "layout": "columns",
+      "run": 5,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [
+          30.899999976158142, 25.700000047683716, 18.600000023841858, 27.399999976158142,
+          23.799999952316284, 15.899999976158142, 27.90000009536743, 21, 33,
+          25.800000071525574
+        ],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 25.750000059604645,
+          "maxMs": 33
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 24.100000023841858,
+          "maxMs": 29.199999928474426
+        },
+        "throttle": 4,
+        "activeFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 20,
+          "over": 0,
+          "frames": 84,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 17.899999976158142,
+          "over": 0,
+          "frames": 43,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [
+          22.100000023841858, 25.200000047683716, 18.600000023841858, 29.199999928474426,
+          24.100000023841858
+        ],
+        "before": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 2,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 1372.3000000715256,
+          "lastFastFrame": {
+            "at": 968.1000000238419,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 12,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 2778.2000000476837,
+          "lastFastFrame": {
+            "at": 2646.399999976158,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "subscribes": 3,
+          "lists": 2,
+          "fastFrames": 17,
+          "slowFrames": 2,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3493,
+          "lastFastFrame": {
+            "at": 3364.100000023842,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3509,
+          "lastFastFrame": {
+            "at": 3498.3000000715256,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 6510.700000047684,
+          "lastFastFrame": {
+            "at": 3498.3000000715256,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "run": 1,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [
+          26.899999976158142, 24.100000023841858, 19.09999990463257, 28.299999952316284,
+          23.600000023841858, 16.899999976158142, 26.799999952316284, 22.100000023841858,
+          32.5, 26.300000071525574
+        ],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 25.200000047683716,
+          "maxMs": 32.5
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 24.299999952316284,
+          "maxMs": 29.5
+        },
+        "throttle": 4,
+        "activeFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 18.100000023841858,
+          "over": 0,
+          "frames": 84,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 17.899999976158142,
+          "over": 0,
+          "frames": 43,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [
+          23.799999952316284, 26.799999952316284, 17.700000047683716, 29.5,
+          24.299999952316284
+        ],
+        "before": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 2,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 1359.8999999761581,
+          "lastFastFrame": {
+            "at": 954.6999999284744,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 12,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 2762.0999999046326,
+          "lastFastFrame": {
+            "at": 2631.0999999046326,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "subscribes": 3,
+          "lists": 2,
+          "fastFrames": 17,
+          "slowFrames": 2,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3478.0999999046326,
+          "lastFastFrame": {
+            "at": 3349.5,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3490.5,
+          "lastFastFrame": {
+            "at": 3485.2999999523163,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 6491.799999952316,
+          "lastFastFrame": {
+            "at": 3485.2999999523163,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "run": 2,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [
+          18.299999952316284, 25.5, 17, 27.600000023841858, 23.700000047683716, 18.5,
+          27.799999952316284, 22.100000023841858, 30.600000023841858, 26.899999976158142
+        ],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 24.600000023841858,
+          "maxMs": 30.600000023841858
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 22.600000023841858,
+          "maxMs": 31
+        },
+        "throttle": 4,
+        "activeFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 19.200000047683716,
+          "over": 0,
+          "frames": 84,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 17.799999952316284,
+          "over": 0,
+          "frames": 43,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [
+          20.799999952316284, 25.100000023841858, 18.09999990463257, 31,
+          22.600000023841858
+        ],
+        "before": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 2,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 1366.1999999284744,
+          "lastFastFrame": {
+            "at": 961.1999999284744,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 12,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 2761.7999999523163,
+          "lastFastFrame": {
+            "at": 2627.2999999523163,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "subscribes": 3,
+          "lists": 2,
+          "fastFrames": 17,
+          "slowFrames": 2,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3476.7999999523163,
+          "lastFastFrame": {
+            "at": 3347.6999999284744,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3490,
+          "lastFastFrame": {
+            "at": 3483.0999999046326,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 6492.299999952316,
+          "lastFastFrame": {
+            "at": 3483.0999999046326,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "run": 3,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [
+          20.899999976158142, 24.600000023841858, 17.799999952316284, 28.09999990463257,
+          24.799999952316284, 32.5, 29.300000071525574, 21.100000023841858, 32,
+          28.199999928474426
+        ],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 26.449999928474426,
+          "maxMs": 32.5
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 23.600000023841858,
+          "maxMs": 29.699999928474426
+        },
+        "throttle": 4,
+        "activeFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 18.200000047683716,
+          "over": 0,
+          "frames": 85,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 18.199999928474426,
+          "over": 0,
+          "frames": 43,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [
+          21.200000047683716, 25.40000009536743, 17.800000071525574, 29.699999928474426,
+          23.600000023841858
+        ],
+        "before": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 2,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 1367,
+          "lastFastFrame": {
+            "at": 960.3999999761581,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 12,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 2781,
+          "lastFastFrame": {
+            "at": 2646.8000000715256,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "subscribes": 3,
+          "lists": 2,
+          "fastFrames": 17,
+          "slowFrames": 2,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3497.600000023842,
+          "lastFastFrame": {
+            "at": 3367.399999976158,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3511.100000023842,
+          "lastFastFrame": {
+            "at": 3504.3000000715256,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 6513.399999976158,
+          "lastFastFrame": {
+            "at": 3504.3000000715256,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "run": 4,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [
+          17.800000071525574, 23.700000047683716, 18.700000047683716, 28.699999928474426,
+          22.200000047683716, 32.60000002384186, 27.300000071525574, 20.700000047683716,
+          32.699999928474426, 25.899999976158142
+        ],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 24.80000001192093,
+          "maxMs": 32.699999928474426
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 23.700000047683716,
+          "maxMs": 29
+        },
+        "throttle": 4,
+        "activeFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 19.200000047683716,
+          "over": 0,
+          "frames": 85,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 17.700000047683716,
+          "over": 0,
+          "frames": 43,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [
+          22.600000023841858, 24.799999952316284, 18.700000047683716, 29,
+          23.700000047683716
+        ],
+        "before": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 2,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 1350.7999999523163,
+          "lastFastFrame": {
+            "at": 945.8999999761581,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 12,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 2760.6999999284744,
+          "lastFastFrame": {
+            "at": 2629.100000023842,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "subscribes": 3,
+          "lists": 2,
+          "fastFrames": 17,
+          "slowFrames": 2,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3477,
+          "lastFastFrame": {
+            "at": 3348.1999999284744,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3490.2999999523163,
+          "lastFastFrame": {
+            "at": 3482.6999999284744,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 6491.399999976158,
+          "lastFastFrame": {
+            "at": 3482.6999999284744,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "chromium",
+      "layout": "sidebar",
+      "run": 5,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [
+          18.899999976158142, 26.100000023841858, 17.899999976158142, 28.800000071525574,
+          23.100000023841858, 32.89999997615814, 26.600000023841858, 21.59999990463257,
+          31.699999928474426, 26.399999976158142
+        ],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 26.25,
+          "maxMs": 32.89999997615814
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 23.600000023841858,
+          "maxMs": 27.300000071525574
+        },
+        "throttle": 4,
+        "activeFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 18,
+          "over": 0,
+          "frames": 85,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 17.899999976158142,
+          "over": 0,
+          "frames": 43,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [
+          23.40000009536743, 26, 19.899999976158142, 27.300000071525574,
+          23.600000023841858
+        ],
+        "before": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 2,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 1365.6000000238419,
+          "lastFastFrame": {
+            "at": 961.3000000715256,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 12,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 2776.5,
+          "lastFastFrame": {
+            "at": 2645.3000000715256,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "subscribes": 3,
+          "lists": 2,
+          "fastFrames": 17,
+          "slowFrames": 2,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3493.600000023842,
+          "lastFastFrame": {
+            "at": 3364.8000000715256,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3506.4000000953674,
+          "lastFastFrame": {
+            "at": 3499.4000000953674,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 6508.600000023842,
+          "lastFastFrame": {
+            "at": 3499.4000000953674,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "webkit",
+      "layout": "columns",
+      "run": 1,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [31, 18, 31, 24, 22, 32, 26, 20, 29, 24],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 25,
+          "maxMs": 32
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 25,
+          "maxMs": 34
+        },
+        "throttle": 1,
+        "activeFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 19,
+          "over": 0,
+          "frames": 90,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 20,
+          "over": 0,
+          "frames": 45,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [34, 22, 32, 25, 21],
+        "before": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 2,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 1481,
+          "lastFastFrame": {
+            "at": 1076,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 12,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 2982,
+          "lastFastFrame": {
+            "at": 2848,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "subscribes": 3,
+          "lists": 2,
+          "fastFrames": 17,
+          "slowFrames": 2,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3733,
+          "lastFastFrame": {
+            "at": 3603,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3755,
+          "lastFastFrame": {
+            "at": 3742,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 6760,
+          "lastFastFrame": {
+            "at": 3742,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "webkit",
+      "layout": "columns",
+      "run": 2,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [32, 18, 17, 27, 19, 16, 26, 17, 32, 22],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 20.5,
+          "maxMs": 32
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 23,
+          "maxMs": 27
+        },
+        "throttle": 1,
+        "activeFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 21,
+          "over": 0,
+          "frames": 85,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 19,
+          "over": 0,
+          "frames": 43,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [19, 23, 16, 27, 23],
+        "before": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 2,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 1347,
+          "lastFastFrame": {
+            "at": 940,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 12,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 2761,
+          "lastFastFrame": {
+            "at": 2630,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "subscribes": 3,
+          "lists": 2,
+          "fastFrames": 17,
+          "slowFrames": 2,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3475,
+          "lastFastFrame": {
+            "at": 3345,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3483,
+          "lastFastFrame": {
+            "at": 3478,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 6488,
+          "lastFastFrame": {
+            "at": 3478,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "webkit",
+      "layout": "columns",
+      "run": 3,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [22, 21, 30, 29, 21, 32, 22, 19, 29, 23],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 22.5,
+          "maxMs": 32
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 27,
+          "maxMs": 32
+        },
+        "throttle": 1,
+        "activeFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 20,
+          "over": 0,
+          "frames": 86,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 20,
+          "over": 0,
+          "frames": 44,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [28, 19, 32, 27, 15],
+        "before": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 2,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 1339,
+          "lastFastFrame": {
+            "at": 934,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 12,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 2778,
+          "lastFastFrame": {
+            "at": 2643,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "subscribes": 3,
+          "lists": 2,
+          "fastFrames": 17,
+          "slowFrames": 2,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3525,
+          "lastFastFrame": {
+            "at": 3398,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3544,
+          "lastFastFrame": {
+            "at": 3531,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 6548,
+          "lastFastFrame": {
+            "at": 3531,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "webkit",
+      "layout": "columns",
+      "run": 4,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [24, 26, 28, 28, 22, 24, 27, 17, 25, 25],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 25,
+          "maxMs": 28
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 25,
+          "maxMs": 27
+        },
+        "throttle": 1,
+        "activeFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 21,
+          "over": 0,
+          "frames": 86,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 19,
+          "over": 0,
+          "frames": 44,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [25, 22, 27, 27, 19],
+        "before": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 2,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 1353,
+          "lastFastFrame": {
+            "at": 946,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 12,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 2800,
+          "lastFastFrame": {
+            "at": 2662,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "subscribes": 3,
+          "lists": 2,
+          "fastFrames": 17,
+          "slowFrames": 2,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3549,
+          "lastFastFrame": {
+            "at": 3417,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3565,
+          "lastFastFrame": {
+            "at": 3558,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 6570,
+          "lastFastFrame": {
+            "at": 3558,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "webkit",
+      "layout": "columns",
+      "run": 5,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [28, 26, 31, 27, 20, 26, 27, 33, 30, 20],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 27,
+          "maxMs": 33
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 20,
+          "maxMs": 23
+        },
+        "throttle": 1,
+        "activeFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 22,
+          "over": 0,
+          "frames": 88,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 19,
+          "over": 0,
+          "frames": 43,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [17, 21, 19, 23, 20],
+        "before": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 2,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 1353,
+          "lastFastFrame": {
+            "at": 946,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 12,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 2817,
+          "lastFastFrame": {
+            "at": 2687,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "subscribes": 3,
+          "lists": 2,
+          "fastFrames": 17,
+          "slowFrames": 2,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3536,
+          "lastFastFrame": {
+            "at": 3404,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3559,
+          "lastFastFrame": {
+            "at": 3544,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 6563,
+          "lastFastFrame": {
+            "at": 3544,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "run": 1,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [22, 26, 28, 26, 22, 30, 24, 19, 28, 21],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 25,
+          "maxMs": 30
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 27,
+          "maxMs": 32
+        },
+        "throttle": 1,
+        "activeFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 20,
+          "over": 0,
+          "frames": 86,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 20,
+          "over": 0,
+          "frames": 44,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [32, 27, 16, 28, 19],
+        "before": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 2,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 1343,
+          "lastFastFrame": {
+            "at": 937,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 12,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 2781,
+          "lastFastFrame": {
+            "at": 2650,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "subscribes": 3,
+          "lists": 2,
+          "fastFrames": 17,
+          "slowFrames": 2,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3512,
+          "lastFastFrame": {
+            "at": 3383,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3530,
+          "lastFastFrame": {
+            "at": 3522,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 6533,
+          "lastFastFrame": {
+            "at": 3522,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "run": 2,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [21, 21, 30, 27, 16, 29, 24, 33, 29, 23],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 25.5,
+          "maxMs": 33
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 25,
+          "maxMs": 35
+        },
+        "throttle": 1,
+        "activeFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 23,
+          "over": 0,
+          "frames": 87,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 21,
+          "over": 0,
+          "frames": 45,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [35, 23, 30, 25, 20],
+        "before": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 2,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 1344,
+          "lastFastFrame": {
+            "at": 939,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 12,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 2796,
+          "lastFastFrame": {
+            "at": 2664,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "subscribes": 3,
+          "lists": 2,
+          "fastFrames": 17,
+          "slowFrames": 2,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3544,
+          "lastFastFrame": {
+            "at": 3417,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3561,
+          "lastFastFrame": {
+            "at": 3549,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 6564,
+          "lastFastFrame": {
+            "at": 3549,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "run": 3,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [21, 18, 29, 26, 18, 29, 25, 22, 28, 22],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 23.5,
+          "maxMs": 29
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 21,
+          "maxMs": 29
+        },
+        "throttle": 1,
+        "activeFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 21,
+          "over": 0,
+          "frames": 86,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 20,
+          "over": 0,
+          "frames": 44,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [21, 21, 29, 28, 16],
+        "before": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 2,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 1346,
+          "lastFastFrame": {
+            "at": 941,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 12,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 2777,
+          "lastFastFrame": {
+            "at": 2647,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "subscribes": 3,
+          "lists": 2,
+          "fastFrames": 17,
+          "slowFrames": 2,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3510,
+          "lastFastFrame": {
+            "at": 3384,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3524,
+          "lastFastFrame": {
+            "at": 3514,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 6528,
+          "lastFastFrame": {
+            "at": 3514,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "run": 4,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [21, 21, 32, 27, 20, 31, 25, 19, 28, 25],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 25,
+          "maxMs": 32
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 23,
+          "maxMs": 32
+        },
+        "throttle": 1,
+        "activeFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 20,
+          "over": 0,
+          "frames": 86,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 20,
+          "over": 0,
+          "frames": 44,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [19, 22, 32, 23, 24],
+        "before": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 2,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 1344,
+          "lastFastFrame": {
+            "at": 939,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 12,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 2777,
+          "lastFastFrame": {
+            "at": 2643,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "subscribes": 3,
+          "lists": 2,
+          "fastFrames": 17,
+          "slowFrames": 2,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3513,
+          "lastFastFrame": {
+            "at": 3377,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3528,
+          "lastFastFrame": {
+            "at": 3517,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 6530,
+          "lastFastFrame": {
+            "at": 3517,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery",
+      "engine": "webkit",
+      "layout": "sidebar",
+      "run": 5,
+      "measured": {
+        "timeoutDiagnostics": [],
+        "activeMs": [20, 21, 30, 27, 18, 30, 24, 32, 30, 25],
+        "activeSummary": {
+          "samples": 10,
+          "medianMs": 26,
+          "maxMs": 32
+        },
+        "heldSummary": {
+          "samples": 5,
+          "medianMs": 26,
+          "maxMs": 30
+        },
+        "throttle": 1,
+        "activeFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 21,
+          "over": 0,
+          "frames": 87,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldFrames": {
+          "frameClock": "raf-callback-execution",
+          "maxFrame": 19,
+          "over": 0,
+          "frames": 44,
+          "slow": [],
+          "noLoaf": false
+        },
+        "heldMs": [30, 22, 29, 26, 20],
+        "before": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 2,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 1354,
+          "lastFastFrame": {
+            "at": 949,
+            "revision": "2",
+            "text": "Initial answer"
+          }
+        },
+        "after": {
+          "subscribes": 3,
+          "lists": 1,
+          "fastFrames": 12,
+          "slowFrames": 1,
+          "heldLists": 0,
+          "heldReads": 0,
+          "observes": 0,
+          "now": 2809,
+          "lastFastFrame": {
+            "at": 2672,
+            "revision": "12",
+            "text": "active-9"
+          }
+        },
+        "stalled": {
+          "subscribes": 3,
+          "lists": 2,
+          "fastFrames": 17,
+          "slowFrames": 2,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3554,
+          "lastFastFrame": {
+            "at": 3422,
+            "revision": "17",
+            "text": "held-4"
+          }
+        },
+        "idle": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 3566,
+          "lastFastFrame": {
+            "at": 3559,
+            "revision": "18",
+            "text": "Finished"
+          }
+        },
+        "rested": {
+          "subscribes": 3,
+          "lists": 3,
+          "fastFrames": 18,
+          "slowFrames": 3,
+          "heldLists": 1,
+          "heldReads": 1,
+          "observes": 0,
+          "now": 6569,
+          "lastFastFrame": {
+            "at": 3559,
+            "revision": "18",
+            "text": "Finished"
+          }
+        }
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "delivery-statistics",
+      "summaries": [
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "run": 1,
+          "throttle": 4,
+          "active": {
+            "samples": 10,
+            "medianMs": 23.75,
+            "maxMs": 32.200000047683716
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 22.600000023841858,
+            "maxMs": 28.200000047683716
+          },
+          "frameMaxMs": 19.09999990463257,
+          "activeMs": [
+            19.09999990463257, 23.899999976158142, 17.200000047683716, 27.5,
+            23.600000023841858, 32.200000047683716, 28, 20.5, 17.600000023841858,
+            26.299999952316284
+          ],
+          "heldMs": [
+            21.800000071525574, 22.600000023841858, 17.700000047683716,
+            28.200000047683716, 23.899999976158142
+          ],
+          "over50": 0
+        },
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "run": 2,
+          "throttle": 4,
+          "active": {
+            "samples": 10,
+            "medianMs": 24.700000047683716,
+            "maxMs": 31.40000009536743
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 24.800000071525574,
+            "maxMs": 27.899999976158142
+          },
+          "frameMaxMs": 18.799999952316284,
+          "activeMs": [
+            17.600000023841858, 25.5, 19, 29.399999976158142, 23.90000009536743,
+            16.299999952316284, 27.299999952316284, 22.100000023841858, 31.40000009536743,
+            25.899999976158142
+          ],
+          "heldMs": [
+            23.200000047683716, 25.200000047683716, 18.100000023841858,
+            27.899999976158142, 24.800000071525574
+          ],
+          "over50": 0
+        },
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "run": 3,
+          "throttle": 4,
+          "active": {
+            "samples": 10,
+            "medianMs": 25.049999952316284,
+            "maxMs": 32.800000071525574
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 23.299999952316284,
+            "maxMs": 29.300000071525574
+          },
+          "frameMaxMs": 18.100000023841858,
+          "activeMs": [
+            32.799999952316284, 24.5, 18.700000047683716, 28.59999990463257,
+            24.399999976158142, 32.800000071525574, 26.5, 21.5, 16.90000009536743,
+            25.59999990463257
+          ],
+          "heldMs": [
+            23.299999952316284, 25.699999928474426, 17.600000023841858,
+            29.300000071525574, 23.200000047683716
+          ],
+          "over50": 0
+        },
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "run": 4,
+          "throttle": 4,
+          "active": {
+            "samples": 10,
+            "medianMs": 23.5,
+            "maxMs": 31.600000023841858
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 25.100000023841858,
+            "maxMs": 28.600000023841858
+          },
+          "frameMaxMs": 20.200000047683716,
+          "activeMs": [
+            19.100000023841858, 24.399999976158142, 18.799999952316284,
+            29.700000047683716, 22.200000047683716, 15.799999952316284, 27,
+            22.600000023841858, 31.600000023841858, 25.800000071525574
+          ],
+          "heldMs": [
+            25.600000023841858, 23.799999952316284, 19.199999928474426,
+            28.600000023841858, 25.100000023841858
+          ],
+          "over50": 0
+        },
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "run": 5,
+          "throttle": 4,
+          "active": {
+            "samples": 10,
+            "medianMs": 25.750000059604645,
+            "maxMs": 33
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 24.100000023841858,
+            "maxMs": 29.199999928474426
+          },
+          "frameMaxMs": 20,
+          "activeMs": [
+            30.899999976158142, 25.700000047683716, 18.600000023841858,
+            27.399999976158142, 23.799999952316284, 15.899999976158142, 27.90000009536743,
+            21, 33, 25.800000071525574
+          ],
+          "heldMs": [
+            22.100000023841858, 25.200000047683716, 18.600000023841858,
+            29.199999928474426, 24.100000023841858
+          ],
+          "over50": 0
+        },
+        {
+          "engine": "chromium",
+          "layout": "sidebar",
+          "run": 1,
+          "throttle": 4,
+          "active": {
+            "samples": 10,
+            "medianMs": 25.200000047683716,
+            "maxMs": 32.5
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 24.299999952316284,
+            "maxMs": 29.5
+          },
+          "frameMaxMs": 18.100000023841858,
+          "activeMs": [
+            26.899999976158142, 24.100000023841858, 19.09999990463257, 28.299999952316284,
+            23.600000023841858, 16.899999976158142, 26.799999952316284,
+            22.100000023841858, 32.5, 26.300000071525574
+          ],
+          "heldMs": [
+            23.799999952316284, 26.799999952316284, 17.700000047683716, 29.5,
+            24.299999952316284
+          ],
+          "over50": 0
+        },
+        {
+          "engine": "chromium",
+          "layout": "sidebar",
+          "run": 2,
+          "throttle": 4,
+          "active": {
+            "samples": 10,
+            "medianMs": 24.600000023841858,
+            "maxMs": 30.600000023841858
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 22.600000023841858,
+            "maxMs": 31
+          },
+          "frameMaxMs": 19.200000047683716,
+          "activeMs": [
+            18.299999952316284, 25.5, 17, 27.600000023841858, 23.700000047683716, 18.5,
+            27.799999952316284, 22.100000023841858, 30.600000023841858, 26.899999976158142
+          ],
+          "heldMs": [
+            20.799999952316284, 25.100000023841858, 18.09999990463257, 31,
+            22.600000023841858
+          ],
+          "over50": 0
+        },
+        {
+          "engine": "chromium",
+          "layout": "sidebar",
+          "run": 3,
+          "throttle": 4,
+          "active": {
+            "samples": 10,
+            "medianMs": 26.449999928474426,
+            "maxMs": 32.5
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 23.600000023841858,
+            "maxMs": 29.699999928474426
+          },
+          "frameMaxMs": 18.200000047683716,
+          "activeMs": [
+            20.899999976158142, 24.600000023841858, 17.799999952316284, 28.09999990463257,
+            24.799999952316284, 32.5, 29.300000071525574, 21.100000023841858, 32,
+            28.199999928474426
+          ],
+          "heldMs": [
+            21.200000047683716, 25.40000009536743, 17.800000071525574, 29.699999928474426,
+            23.600000023841858
+          ],
+          "over50": 0
+        },
+        {
+          "engine": "chromium",
+          "layout": "sidebar",
+          "run": 4,
+          "throttle": 4,
+          "active": {
+            "samples": 10,
+            "medianMs": 24.80000001192093,
+            "maxMs": 32.699999928474426
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 23.700000047683716,
+            "maxMs": 29
+          },
+          "frameMaxMs": 19.200000047683716,
+          "activeMs": [
+            17.800000071525574, 23.700000047683716, 18.700000047683716,
+            28.699999928474426, 22.200000047683716, 32.60000002384186, 27.300000071525574,
+            20.700000047683716, 32.699999928474426, 25.899999976158142
+          ],
+          "heldMs": [
+            22.600000023841858, 24.799999952316284, 18.700000047683716, 29,
+            23.700000047683716
+          ],
+          "over50": 0
+        },
+        {
+          "engine": "chromium",
+          "layout": "sidebar",
+          "run": 5,
+          "throttle": 4,
+          "active": {
+            "samples": 10,
+            "medianMs": 26.25,
+            "maxMs": 32.89999997615814
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 23.600000023841858,
+            "maxMs": 27.300000071525574
+          },
+          "frameMaxMs": 18,
+          "activeMs": [
+            18.899999976158142, 26.100000023841858, 17.899999976158142,
+            28.800000071525574, 23.100000023841858, 32.89999997615814, 26.600000023841858,
+            21.59999990463257, 31.699999928474426, 26.399999976158142
+          ],
+          "heldMs": [
+            23.40000009536743, 26, 19.899999976158142, 27.300000071525574,
+            23.600000023841858
+          ],
+          "over50": 0
+        },
+        {
+          "engine": "webkit",
+          "layout": "columns",
+          "run": 1,
+          "throttle": 1,
+          "active": {
+            "samples": 10,
+            "medianMs": 25,
+            "maxMs": 32
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 25,
+            "maxMs": 34
+          },
+          "frameMaxMs": 20,
+          "activeMs": [31, 18, 31, 24, 22, 32, 26, 20, 29, 24],
+          "heldMs": [34, 22, 32, 25, 21],
+          "over50": 0
+        },
+        {
+          "engine": "webkit",
+          "layout": "columns",
+          "run": 2,
+          "throttle": 1,
+          "active": {
+            "samples": 10,
+            "medianMs": 20.5,
+            "maxMs": 32
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 23,
+            "maxMs": 27
+          },
+          "frameMaxMs": 21,
+          "activeMs": [32, 18, 17, 27, 19, 16, 26, 17, 32, 22],
+          "heldMs": [19, 23, 16, 27, 23],
+          "over50": 0
+        },
+        {
+          "engine": "webkit",
+          "layout": "columns",
+          "run": 3,
+          "throttle": 1,
+          "active": {
+            "samples": 10,
+            "medianMs": 22.5,
+            "maxMs": 32
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 27,
+            "maxMs": 32
+          },
+          "frameMaxMs": 20,
+          "activeMs": [22, 21, 30, 29, 21, 32, 22, 19, 29, 23],
+          "heldMs": [28, 19, 32, 27, 15],
+          "over50": 0
+        },
+        {
+          "engine": "webkit",
+          "layout": "columns",
+          "run": 4,
+          "throttle": 1,
+          "active": {
+            "samples": 10,
+            "medianMs": 25,
+            "maxMs": 28
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 25,
+            "maxMs": 27
+          },
+          "frameMaxMs": 21,
+          "activeMs": [24, 26, 28, 28, 22, 24, 27, 17, 25, 25],
+          "heldMs": [25, 22, 27, 27, 19],
+          "over50": 0
+        },
+        {
+          "engine": "webkit",
+          "layout": "columns",
+          "run": 5,
+          "throttle": 1,
+          "active": {
+            "samples": 10,
+            "medianMs": 27,
+            "maxMs": 33
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 20,
+            "maxMs": 23
+          },
+          "frameMaxMs": 22,
+          "activeMs": [28, 26, 31, 27, 20, 26, 27, 33, 30, 20],
+          "heldMs": [17, 21, 19, 23, 20],
+          "over50": 0
+        },
+        {
+          "engine": "webkit",
+          "layout": "sidebar",
+          "run": 1,
+          "throttle": 1,
+          "active": {
+            "samples": 10,
+            "medianMs": 25,
+            "maxMs": 30
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 27,
+            "maxMs": 32
+          },
+          "frameMaxMs": 20,
+          "activeMs": [22, 26, 28, 26, 22, 30, 24, 19, 28, 21],
+          "heldMs": [32, 27, 16, 28, 19],
+          "over50": 0
+        },
+        {
+          "engine": "webkit",
+          "layout": "sidebar",
+          "run": 2,
+          "throttle": 1,
+          "active": {
+            "samples": 10,
+            "medianMs": 25.5,
+            "maxMs": 33
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 25,
+            "maxMs": 35
+          },
+          "frameMaxMs": 23,
+          "activeMs": [21, 21, 30, 27, 16, 29, 24, 33, 29, 23],
+          "heldMs": [35, 23, 30, 25, 20],
+          "over50": 0
+        },
+        {
+          "engine": "webkit",
+          "layout": "sidebar",
+          "run": 3,
+          "throttle": 1,
+          "active": {
+            "samples": 10,
+            "medianMs": 23.5,
+            "maxMs": 29
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 21,
+            "maxMs": 29
+          },
+          "frameMaxMs": 21,
+          "activeMs": [21, 18, 29, 26, 18, 29, 25, 22, 28, 22],
+          "heldMs": [21, 21, 29, 28, 16],
+          "over50": 0
+        },
+        {
+          "engine": "webkit",
+          "layout": "sidebar",
+          "run": 4,
+          "throttle": 1,
+          "active": {
+            "samples": 10,
+            "medianMs": 25,
+            "maxMs": 32
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 23,
+            "maxMs": 32
+          },
+          "frameMaxMs": 20,
+          "activeMs": [21, 21, 32, 27, 20, 31, 25, 19, 28, 25],
+          "heldMs": [19, 22, 32, 23, 24],
+          "over50": 0
+        },
+        {
+          "engine": "webkit",
+          "layout": "sidebar",
+          "run": 5,
+          "throttle": 1,
+          "active": {
+            "samples": 10,
+            "medianMs": 26,
+            "maxMs": 32
+          },
+          "held": {
+            "samples": 5,
+            "medianMs": 26,
+            "maxMs": 30
+          },
+          "frameMaxMs": 21,
+          "activeMs": [20, 21, 30, 27, 18, 30, 24, 32, 30, 25],
+          "heldMs": [30, 22, 29, 26, 20],
+          "over50": 0
+        }
+      ],
+      "aggregates": [
+        {
+          "engine": "chromium",
+          "layout": "columns",
+          "runs": 5,
+          "active": {
+            "samples": 50,
+            "medianMs": 24.44999998807907,
+            "maxMs": 33
+          },
+          "held": {
+            "samples": 25,
+            "medianMs": 23.899999976158142,
+            "maxMs": 29.300000071525574
+          },
+          "frameMaxMs": 20.200000047683716,
+          "frameRunMedianMs": 19.09999990463257,
+          "over50": 0
+        },
+        {
+          "engine": "chromium",
+          "layout": "sidebar",
+          "runs": 5,
+          "active": {
+            "samples": 50,
+            "medianMs": 25.69999998807907,
+            "maxMs": 32.89999997615814
+          },
+          "held": {
+            "samples": 25,
+            "medianMs": 23.700000047683716,
+            "maxMs": 31
+          },
+          "frameMaxMs": 19.200000047683716,
+          "frameRunMedianMs": 18.200000047683716,
+          "over50": 0
+        },
+        {
+          "engine": "webkit",
+          "layout": "columns",
+          "runs": 5,
+          "active": {
+            "samples": 50,
+            "medianMs": 25.5,
+            "maxMs": 33
+          },
+          "held": {
+            "samples": 25,
+            "medianMs": 23,
+            "maxMs": 34
+          },
+          "frameMaxMs": 22,
+          "frameRunMedianMs": 21,
+          "over50": 0
+        },
+        {
+          "engine": "webkit",
+          "layout": "sidebar",
+          "runs": 5,
+          "active": {
+            "samples": 50,
+            "medianMs": 25,
+            "maxMs": 33
+          },
+          "held": {
+            "samples": 25,
+            "medianMs": 24,
+            "maxMs": 35
+          },
+          "frameMaxMs": 23,
+          "frameRunMedianMs": 21,
+          "over50": 0
+        }
+      ]
+    }
+  ]
+}

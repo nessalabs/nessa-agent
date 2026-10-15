@@ -1,0 +1,238 @@
+{
+  "source": "25e621b37c3f6c4c31f5b3edaf28441746fccb6f",
+  "original_ok": false,
+  "summary": [
+    {
+      "check": "smoke",
+      "status": "held",
+      "held": "33/33",
+      "seconds": 17
+    },
+    {
+      "check": "icon-buttons",
+      "status": "held",
+      "held": "13/13",
+      "seconds": 26
+    },
+    {
+      "check": "shared-controls",
+      "status": "held",
+      "held": "33/33",
+      "seconds": 92
+    },
+    {
+      "check": "focus",
+      "status": "held",
+      "held": "85/85",
+      "seconds": 307
+    },
+    {
+      "check": "drag",
+      "status": "held",
+      "held": "173/173",
+      "seconds": 719
+    },
+    {
+      "check": "responsive",
+      "status": "held",
+      "held": "35/35",
+      "seconds": 165
+    },
+    {
+      "check": "safe-area",
+      "status": "held",
+      "held": "91/91",
+      "seconds": 82
+    },
+    {
+      "check": "columns",
+      "status": "held",
+      "held": "85/85",
+      "seconds": 500
+    },
+    {
+      "check": "committed-transcript",
+      "status": "held",
+      "held": "121/121",
+      "seconds": 10
+    },
+    {
+      "check": "local-tab-lifetimes",
+      "status": "held",
+      "held": "25/25",
+      "seconds": 5
+    },
+    {
+      "check": "lease-details",
+      "status": "held",
+      "held": "109/109",
+      "seconds": 59
+    },
+    {
+      "check": "load-fallback",
+      "status": "held",
+      "held": "16/16",
+      "seconds": 8
+    },
+    {
+      "check": "gateway-states",
+      "status": "held",
+      "held": "15/15",
+      "seconds": 38
+    },
+    {
+      "check": "conversation-unread",
+      "status": "held",
+      "held": "5/5",
+      "seconds": 7
+    },
+    {
+      "check": "mode-publication",
+      "status": "COULD NOT RUN",
+      "held": "0/1",
+      "seconds": 0
+    },
+    {
+      "check": "panel-list-follow",
+      "status": "COULD NOT RUN",
+      "held": "0/1",
+      "seconds": 0
+    },
+    {
+      "check": "linked-devices",
+      "status": "held",
+      "held": "15/15",
+      "seconds": 26
+    },
+    {
+      "check": "share-dialog",
+      "status": "held",
+      "held": "22/22",
+      "seconds": 100
+    },
+    {
+      "check": "settings-page",
+      "status": "held",
+      "held": "23/23",
+      "seconds": 87
+    },
+    {
+      "check": "widgets",
+      "status": "held",
+      "held": "49/49",
+      "seconds": 135
+    },
+    {
+      "check": "subagents",
+      "status": "held",
+      "held": "13/13",
+      "seconds": 130
+    },
+    {
+      "check": "mcp-apps",
+      "status": "held",
+      "held": "93/93",
+      "seconds": 419
+    },
+    {
+      "check": "app-review",
+      "status": "held",
+      "held": "37/37",
+      "seconds": 177
+    },
+    {
+      "check": "approval-deadline",
+      "status": "held",
+      "held": "3/3",
+      "seconds": 22
+    },
+    {
+      "check": "clock-snapshots",
+      "status": "held",
+      "held": "5/5",
+      "seconds": 2
+    },
+    {
+      "check": "message-sync",
+      "status": "FAILED",
+      "held": "14/15",
+      "seconds": 91
+    },
+    {
+      "check": "command-order",
+      "status": "held",
+      "held": "9/9",
+      "seconds": 10
+    },
+    {
+      "check": "published-files",
+      "status": "held",
+      "held": "25/25",
+      "seconds": 57
+    },
+    {
+      "check": "transcript-notes",
+      "status": "held",
+      "held": "17/17",
+      "seconds": 22
+    },
+    {
+      "check": "transcript-unreadable",
+      "status": "held",
+      "held": "5/5",
+      "seconds": 6
+    },
+    {
+      "check": "user-attachments",
+      "status": "held",
+      "held": "109/109",
+      "seconds": 4
+    },
+    {
+      "check": "turn-outcomes",
+      "status": "held",
+      "held": "13/13",
+      "seconds": 17
+    }
+  ],
+  "raw_sha256": "475df8051a6f8198708a8a40dfd6f601101b24b2d5d2cbcbbf20eaee5d760582",
+  "raw_file": "functional-original.json.gz",
+  "skipped": [
+    {
+      "ok": false,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "retained-app",
+      "skipped": "not run: dev server only",
+      "check": "message-sync"
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "sidebar",
+      "name": "retained-app",
+      "skipped": "not run: dev server only",
+      "check": "message-sync"
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "columns",
+      "name": "retained-app",
+      "skipped": "not run: dev server only",
+      "check": "message-sync"
+    },
+    {
+      "ok": false,
+      "failures": [],
+      "engine": "webkit",
+      "layout": "sidebar",
+      "name": "retained-app",
+      "skipped": "not run: dev server only",
+      "check": "message-sync"
+    }
+  ]
+}

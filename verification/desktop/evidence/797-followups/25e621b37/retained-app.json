@@ -1,0 +1,50 @@
+{
+  "check": "message-sync",
+  "ok": true,
+  "started": "2026-10-15T01:05:07.619Z",
+  "finished": "2026-10-15T01:05:16.328Z",
+  "target": {
+    "url": "http://127.0.0.1:1438/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1438/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "retained-app",
+      "engine": "chromium",
+      "layout": "columns"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "retained-app",
+      "engine": "chromium",
+      "layout": "sidebar"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "retained-app",
+      "engine": "webkit",
+      "layout": "columns"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "name": "retained-app",
+      "engine": "webkit",
+      "layout": "sidebar"
+    }
+  ]
+}
