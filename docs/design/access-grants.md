@@ -294,11 +294,13 @@ a new directory at the same path, on a filesystem that reuses device and
 inode numbers, and does not copy the marker. The open is refused and the
 grants are revoked. The no-follow walk starts from the handle whose
 marker matched. `read` lists and reads named paths under that directory.
-`write` creates and edits named paths under it. The name `.nessa-binding`
-is refused to `read`, `write`, and `exec`, including a sandboxed command.
-The grantor's open is the reader of that file. `exec` is admitted only
-when the process cannot open `.nessa-binding` at all. A profile that
-exposes that name is refused `exec`. An allowed program cannot read,
+`write` creates and edits named paths under it. The marker file is refused
+to `read`, `write`, and `exec`, including a sandboxed command. The check
+is the directory entry the filesystem opens, so a case-folded alias of
+`.nessa-binding` is that same file. The grantor's open is the reader of
+that file. `exec` is admitted only when the process cannot open the marker
+file at all, including such an alias. A profile that exposes that name is
+refused `exec`. An allowed program cannot read,
 unlink, or rewrite the marker.
 The environment walks from a directory handle on the granted directory,
 and opens each component no-follow against the parent handle: publish, a
@@ -346,8 +348,12 @@ person. That choice is an immutable field of the invitation. The
 `gateway:<key>` principal is not known until the peer key is claimed and
 activation runs, so the invitation stores no link row. A restart between
 create and activation reads the choice from the invitation and does not
-ask again. The Active commit writes the link when the choice is true, and
-writes no link when it is false. The credential still names `gateway:<key>`
+ask again. The credential store commits Active first: the phase, the
+credential id, and the receiver. When the choice is true, the link row is
+the next grant-store write. When that write fails, the next successful
+grant-store write inserts the link, and admission does not report the
+person until that insert commits. When the choice is false, no link is
+written. The credential still names `gateway:<key>`
 and `hold.peer` is unchanged. A link row says that gateway principal acts
 for the owner's person principal. Admission reports the person as who it acts for and the
 grant as what it may do. The link adds no capability, copies no
@@ -528,7 +534,12 @@ carries three headers: `Nessa-Webhook-Timestamp` is the timestamp string,
 `v1=` plus 64 lowercase hex characters of the MAC. The receiver rebuilds
 the three fields from those headers and the raw body bytes. It does not
 re-encode JSON. A retry repeats the same delivery id and the timestamp
-stored when `sending` committed. It does not read the clock again. The
+stored when `sending` committed. It does not read the clock again. A
+transport error with no response byte can occur after the receiver has
+processed that POST, so the retry can deliver the same
+`Nessa-Webhook-Id` again. A receiver that applies a side effect
+deduplicates by that id. `unknown` is terminal and is not posted again,
+so this lifecycle is not at-least-once. The
 epoch must still allow delivery.
 
 The sender does not follow redirects. A 3xx is `not sent`. It is not
@@ -691,7 +702,9 @@ code and does not leave a MAC key on either record.
 the HMAC key.
 
 This slice adds the discovery field after the enrollment is Active and
-both sides have a pinned TLS session. The field moves only by the pairing
+both sides have a pinned TLS session. The public half each side sends is
+X25519(private, basepoint 9), the 32-byte little-endian u-coordinate, not
+an encoding of the private key. The field moves only by the pairing
 table. This section does not add a step. The dialing gateway stores the
 field on the peer file beside the pin. The granting gateway stores it on
 the pairing record that already keeps that peer's pin and `class: "peer"`.
@@ -779,7 +792,8 @@ decision.
 | G-admit | active | A use reads the row | The row is present | active | The use: a turn, a lease, a subscribe, a webhook attempt, or a directory open | Nothing on the grant row. The use stores the epoch it read on its own record | None on the grant row |
 | G-next | absent | The next admission after revoke | No row for that key | absent | The next use | Nothing | Refusal, cause no grant, initiator the use |
 | G-inflight | active, or already absent | Work that already read an epoch finishes | The use stored that epoch at G-admit | The use's own terminal state. The grant row stays as the later grant commit left it. | The use that read the epoch | The use's own outcome. No second grant row | The use's own audit. The epoch on that record is the epoch it read |
-| G-link | any grant state | Activation applies the invitation's stored choice | The invitation's choice is true. The principal is the `gateway:<key>` this activation stored. The choice was not asked again. | Unchanged. The grant subject stays the receiver. | Activation, in the P-active commit | The link row only, in that same write. No grant row is inserted or copied. | Target the gateway principal, before no link, after the person link, cause the same-person choice, initiator the owner |
+| G-link | phase Active, link absent | The grant-store write after Active | The invitation's choice is true. The principal is the `gateway:<key>` this activation stored. The choice was not asked again. The phase is Active. | Link present. The grant subject stays the receiver. Admission reports the person only after this commit. | Activation, or G-link-retry | The link row only. No grant row is inserted or copied. | Target the gateway principal, before no link, after the person link, cause the same-person choice, initiator the owner |
+| G-link-retry | phase Active, choice true, link absent | The next successful write of the grant store, live or on restart | The invitation's choice is true. The phase is Active. No link row names this gateway principal. A `Revoked` phase or a revoked credential does not insert a link. | link present. Admission reports the person only after this commit. The choice is not asked again. | The live process, or restart | The link row is inserted in this write. No grant row is written. | Target the gateway principal, before no link, after the person link, cause the same-person choice, initiator the live retry or restart |
 | G-unlink | link present | `credential.revoke`, credential expiry, or enrollment revoke | The link names that gateway principal | link absent. Grant rows stay. A later credential does not inherit it. | The owner, or expiry | The link row is removed. Enrollment revoke does this in the same commit as P-revoke. Credential revoke commits in the credential store first, and this removal commits next. A failure of that next write, while the process stays up, is G-unlink-retry. A crash between them is C-G-unlink. | Target the gateway principal, before the person link, after no link, cause credential revoked, expired, or enrollment revoked, initiator the owner or expiry |
 | G-unlink-retry | credential revoked or expired, or phase `Revoked`, and the link is still present | The next successful write of the grant store, live or on restart | The link names that gateway principal. A new enrollment of that gateway key is refused until this removal commits. | link absent. A later credential does not inherit it. | The live process, or restart | The link row is removed in this write. No new link is written. P-active does not commit while this row is still present. | Target the gateway principal, before the person link, after no link, cause credential revoked, expired, or enrollment revoked, initiator the live retry or restart |
 | G-cred | active | `credential.revoke` or credential expiry | The credential is the one that subject uses | active, same epoch | The owner, or expiry | Nothing on the grant row | None on the grant row. W-cred records the registration stop |
@@ -812,6 +826,7 @@ sequenceDiagram
 | C-G-revoke | Before G-revoke commits | The row still active | The row stays. The owner repeats the revoke. |
 | C-G-refuse | Startup reads a grant store at another version | The other version, unchanged. The conversation metadata file is unchanged. | G-refuse-old again. Startup does not migrate and does not rewrite the grant store. It does not delete the conversation file. |
 | C-G-unlink | After the credential is revoked or the phase is `Revoked`, before G-unlink commits | The link row is still present | G-unlink-retry. Restart removes the link before admission reports the person and before a new enrollment of that gateway key. It does not recreate the link. |
+| C-G-link | After the credential store commits Active, before G-link commits, and the choice is true | Active. The choice is on the invitation. No link row. | G-link-retry. Restart inserts the link before admission reports the person. It does not ask again and does not add a phase. |
 
 **Concurrency.**
 
@@ -829,6 +844,7 @@ sequenceDiagram
 | G-prec-inflight | The epoch an in-flight use already read | A later revoke or epoch bump | That use finishes under the epoch it read. The next admission reads the row again. |
 | G-prec-cedar | Cedar's denial | A use-case write | Nothing is stored. |
 | G-prec-cred | A credential that is not current, for the next delivery | The grant epoch | The epoch stays. W-refuse sends nothing. |
+| G-prec-link | A missing link after Active when the choice is true | Admission reporting the person | G-link-retry. The person is reported only after the link commits. |
 
 **Rejected.** Keying a paired grant by principal alone, or by the same-person link, would collapse two receivers. Keying by path would follow a replaced directory. A Rust principal match would decide beside Cedar. A startup migration of the previous share shape would invent a reader of a file this build refuses. Deleting the conversation metadata file to refuse an old grant shape would drop conversations, deletions, and summaries. Re-enrolling while a revoked link row remains would report the new credential as that person.
 
@@ -860,7 +876,7 @@ A `sending` row is not scanned into a new POST.
 6. **W6.** `sending` is recorded before any POST byte and is not replaced. A terminal record is appended beside it. Rows: W-send, W-sent, W-unknown.
 7. **W7.** If the `sending` write fails, no POST byte is written. The row is written `not sent`, cause audit unavailable, conditional on the row still being the state the attempt read, and that write commits before the permit drops. Rows: W-audit-fail.
 8. **W8.** If that `not sent` write does not commit, the row stays the state the attempt read, `queued` or `retry scheduled`. The permit drops at `webhook.post_deadline`, measured from when the attempt took it, even when neither write has committed. That attempt discards its uncommitted write before the drop. A late write commits only while the row is still the state it guarded. The live sender and restart admit that state by one scan when a read succeeds. The scan does not wait for process exit. Revoke can take the permit after the drop. Rows: W-deadline-queued, W-rescan, W-audit-race.
-9. **W9.** `retry scheduled` is non-terminal and stores `due_at` on the same row in that write. The delivery id stays. Restart admits the row when `due_at` has arrived and waits while `due_at` is ahead. There is no second scheduler store. Rows: W-retry, W-due, W-wait.
+9. **W9.** `retry scheduled` is non-terminal and stores `due_at` on the same row in that write. The delivery id stays. A transport error with no response byte can occur after the receiver has processed that id, so the later POST can deliver the same `Nessa-Webhook-Id` again. A receiver that applies a side effect deduplicates by that id. `unknown` is terminal and is not posted again, so this lifecycle is not at-least-once. Restart admits the row when `due_at` has arrived and waits while `due_at` is ahead. There is no second scheduler store. Rows: W-retry, W-due, W-wait, W-unknown.
 10. **W10.** `sent`, `timed out`, `not sent`, and `unknown` are terminal and are not admitted again. The first terminal record to commit wins. A `sending` row with the permit free and no held outcome is appended `unknown` by the live sender or by restart, and that delivery id is not posted again. Rows: W-sent, W-timeout, W-final, W-unknown, W-terminal-race, W-reconcile.
 11. **W11.** The sender does not follow redirects. A 3xx is `not sent`. The next admitted POST goes to the registered URL only. Rows: W-3xx.
 12. **W12.** The signature is HMAC-SHA256 of three length-prefixed fields, each a big-endian unsigned 64-bit length then that many bytes: ASCII decimal Unix milliseconds with no sign and no leading zeros except `0`, the delivery id's UTF-8, and the exact body bytes. The headers are `Nessa-Webhook-Timestamp`, `Nessa-Webhook-Id`, and `Nessa-Webhook-Signature` as `v1=` plus 64 lowercase hex characters. The receiver rebuilds those fields from the headers and the raw body. Rows: W-post.
@@ -889,7 +905,7 @@ A `sending` row is not scanned into a new POST.
 | W-refuse | queued or retry scheduled | The attempt takes the permit | The epoch no longer allows delivery, or the credential is not current | not sent | The delivery attempt | `not sent`, the epoch read. No POST. The permit drops after this commit. | Target the delivery id, before queued or retry scheduled, after not sent, cause epoch or credential, initiator the attempt |
 | W-post | sending | The attempt writes the POST | `sending` has committed. The timestamp header is the signed timestamp stored on that row. A retry does not read the clock again. The body is `Content-Type: application/json`, UTF-8 JSON, keys in order `conversationId`, `incarnation`, `position`, `record`, no insignificant whitespace. `record` is the committed record a read grant may see, the same bytes `recordsPage` returns for that checkpoint. The record schema stays with `recordsPage`. The signature is HMAC-SHA256 of three length-prefixed fields, each a big-endian unsigned 64-bit length then that many bytes: ASCII decimal Unix milliseconds with no sign and no leading zeros except `0`, the delivery id's UTF-8, and the exact body bytes. Headers `Nessa-Webhook-Timestamp`, `Nessa-Webhook-Id`, and `Nessa-Webhook-Signature` as `v1=` plus 64 lowercase hex characters. The key is not in the body. No redirect is followed. | sending | The delivery attempt | None. `sending` already committed. The POST is not a terminal write. | None until the outcome row |
 | W-3xx | sending | The response is a 3xx | The response completed | not sent | The delivery attempt | `not sent`. The redirect is not followed. `sending` stays beside this record. The permit drops after this commit. | Target the delivery id, before sending, after not sent, cause redirect, initiator the attempt |
-| W-retry | sending | A retryable response | HTTP 408, 429, or any 5xx, or a transport error the live attempt observed with no response byte | retry scheduled | The delivery attempt | The same row, `due_at` set, same delivery id. `sending` stays beside this record. The permit drops after this commit. | Target the delivery id, before sending, after retry scheduled, cause the response or the transport error, initiator the attempt, due time the stored `due_at` |
+| W-retry | sending | A retryable response | HTTP 408, 429, or any 5xx, or a transport error the live attempt observed with no response byte | retry scheduled. A transport error with no response byte can occur after the receiver has processed this id, so the later POST can deliver the same `Nessa-Webhook-Id` again. A receiver that applies a side effect deduplicates by that id. `unknown` is terminal and is not posted again. | The delivery attempt | The same row, `due_at` set, same delivery id. `sending` stays beside this record. The permit drops after this commit. | Target the delivery id, before sending, after retry scheduled, cause the response or the transport error, initiator the attempt, due time the stored `due_at` |
 | W-sent | sending | The response is HTTP 2xx | The response completed | sent | The delivery attempt | `sent`. `sending` stays beside this record. The permit drops after this commit. | Target the delivery id, before sending, after sent, cause the response, initiator the attempt |
 | W-timeout | sending | `webhook.post_deadline` | The deadline is measured from when the attempt took the permit. This attempt has not read a complete response. No terminal record has committed. | timed out | The sender, at the deadline | `timed out`. The sender closes its side. The permit drops. `sending` stays. A later arrival is not recorded as `sent`. If this write does not commit, the row stays `sending` and the next successful write takes W-reconcile with outcome `timed out`. No POST. | Target the delivery id, before sending, after timed out, cause deadline, initiator the sender |
 | W-deadline-known | sending | `webhook.post_deadline` | This attempt has read a complete response. No terminal record has committed. | The outcome of that response: `sent` for HTTP 2xx, `not sent` for a 3xx or other final response, `retry scheduled` for a retryable response. Not `timed out`. | The deadline, on that same attempt | That outcome, beside `sending`, and `due_at` when the outcome is `retry scheduled`. The permit drops after this commit. If this write does not commit, the row stays `sending`, the permit still drops, and the next successful write takes W-reconcile. This attempt does not write `timed out` and does not POST. | Target the delivery id, before sending, after the known outcome, cause the response, initiator the sender |
@@ -982,8 +998,8 @@ are not a source. Binding bytes alone are not a source.
 7. **D7.** One share of a directory runs at a time. The lease is the canonical path in that environment, taken after canonicalization. The next share reads the file only after the earlier attempt has committed its resource or removed a marker that attempt created and that no committed resource stores. Rows: D-lease.
 8. **D8.** Open reads the marker through a directory handle. A missing root, a missing marker, or different bytes refuse the use and revoke every grant for that resource. A directory recreated at the same path, including when device and inode numbers are reused, does not receive the grants. Rows: D-open-ok, D-open-bad.
 9. **D9.** The named-path walk is no-follow from the handle whose marker matched. A component that is `..`, a symlink, or otherwise leaves that directory is refused. Rows: D-walk.
-10. **D10.** The name `.nessa-binding` is refused to `read`, `write`, and `exec`. The grantor's open is the reader of that file. Grants stay. Rows: D-name.
-11. **D11.** `exec` is admitted only when the process cannot open `.nessa-binding` at all and every sandbox root is inside the granted directory. A profile that exposes that name is refused `exec`. Sandbox `none` is refused `exec`. A root outside the granted directory is refused `exec`. Rows: D-exec, D-exec-hide, D-exec-none, D-exec-root.
+10. **D10.** The marker file is refused to `read`, `write`, and `exec`. The check is the directory entry the filesystem opens, so a case-folded alias of `.nessa-binding` is that same marker name. A case-sensitive string compare is not the check. The grantor's open is the reader of that file. Grants stay. Rows: D-name.
+11. **D11.** `exec` is admitted only when the process cannot open the marker file at all, including a filesystem-equivalent alias, and every sandbox root is inside the granted directory. A profile that exposes that name is refused `exec`. Sandbox `none` is refused `exec`. A root outside the granted directory is refused `exec`. Rows: D-exec, D-exec-hide, D-exec-none, D-exec-root.
 12. **D12.** A marker mismatch records the resource id, before active, after absent, cause marker missing or marker bytes differ, and the open as initiator. A repeated open keeps that first cause. If the audit sink is unavailable, the grants are still removed, the use is still refused, and the result says the audit was not recorded. Rows: D-open-bad, D-open-again, D-audit-down.
 13. **D13.** Copying the marker into another directory is refused. The copied bytes do not attach a grant. This proposal adds no operating-system generation. Rows: D-copy.
 
@@ -1000,10 +1016,10 @@ are not a source. Binding bytes alone are not a source.
 | D-open-bad | minted | Open | The root is missing, the marker is missing, or the bytes differ. Device and inode reuse without the same marker bytes is this guard. | revoked. Every grant for that resource is removed. | The open | Remove those grant rows even when the audit write fails. G-marker writes each receiver tombstone in that removal. See D-audit-down. | Target the resource id, before active, after absent, cause marker missing or marker bytes differ, initiator the open |
 | D-open-again | revoked | A later open finds the same mismatch | A mismatch audit for that resource has already committed | revoked. Grants stay absent. | The open | Nothing | None. The first cause stays. |
 | D-audit-down | minted | Open, and the audit sink is unavailable | The same guard as D-open-bad | revoked. The use is refused. | The open | The grant rows are still removed | No audit record. The refusal says the audit was not recorded. |
-| D-name | minted | `read`, `write`, or `exec` names `.nessa-binding` | The name is that file | minted. Grants stay. | The grantee's use | Nothing | Refusal, cause marker name, initiator the use. The grantor's open remains the reader. |
+| D-name | minted | `read`, `write`, or `exec` names the marker | The opened directory entry is the marker file, including a filesystem-equivalent alias of `.nessa-binding` such as a case-folded name | minted. Grants stay. | The grantee's use | Nothing | Refusal, cause marker name, initiator the use. The grantor's open remains the reader. |
 | D-walk | minted | A named-path walk | The walk starts from the handle whose marker matched, and opens each component no-follow against the parent handle | minted when every component stays inside. Refused when a component is `..`, a symlink, or otherwise leaves the directory. | The grantee's publish, file tool, or command working directory | Nothing on the resource row | Refusal when the walk leaves, cause path leaves the directory, initiator the use |
-| D-exec | minted | `exec` | The process cannot open `.nessa-binding` at all. Every sandbox root is inside the granted directory. The name is also refused by D-name. | minted. The process may start. | The grantor, admitting the command | Nothing on the marker | Admission, the sandbox profile applied, initiator the command |
-| D-exec-hide | minted | `exec` | The sandbox can expose `.nessa-binding` to the process, including read-only | minted. `exec` is refused. The process does not start. | The grantor | Nothing | Refusal, cause marker visible to the process, initiator the command |
+| D-exec | minted | `exec` | The process cannot open the marker file at all, including a filesystem-equivalent alias of `.nessa-binding`. Every sandbox root is inside the granted directory. The name is also refused by D-name. | minted. The process may start. | The grantor, admitting the command | Nothing on the marker | Admission, the sandbox profile applied, initiator the command |
+| D-exec-hide | minted | `exec` | The sandbox can expose the marker file to the process, including a filesystem-equivalent alias and including read-only | minted. `exec` is refused. The process does not start. | The grantor | Nothing | Refusal, cause marker visible to the process, initiator the command |
 | D-exec-none | minted | `exec` | The environment can only run sandbox `none` | minted. `exec` is refused. | The grantor | Nothing | Refusal, cause sandbox none, initiator the command |
 | D-exec-root | minted | `exec` | A sandbox root is outside the granted directory | minted. `exec` is refused. | The grantor | Nothing | Refusal, cause root outside the grant, initiator the command |
 | D-copy | minted | Share of a directory whose environment or canonical path differs | The marker bytes equal a stored binding, and the stored environment or canonical path is not this directory | No grant. The existing resource and its path stay. The file at this path is not rewritten and not removed. No generation is added. | The owner's share | Nothing | Refusal, target the existing resource id and the path offered, before no grant, after no grant, cause binding belongs to another directory, initiator the share |
@@ -1040,7 +1056,7 @@ sequenceDiagram
 | D-lease | Two shares of one canonical directory | One lease on that canonical path, taken after canonicalization. The waiter reads the file only after the holder commits the resource or finishes D-cleanup. |
 | D-bind-race | Two shares of different paths whose marker bytes are equal, and neither resource has committed | One resource insert wins. The loser reloads and takes D-copy. No second resource is minted. The loser's subject gets no grant on the winner's path. |
 | D-share-open | Share against open, before the resource commit | Open sees no resource, so it sees no grants. An orphan marker is not a grant. Open does not mint. |
-| D-name-race | A grantee names `.nessa-binding` against the grantor's open | D-name. The grantee does not become a reader. |
+| D-name-race | A grantee names the marker, including a case-folded alias, against the grantor's open | D-name. The grantee does not become a reader. |
 | D-exec-race | `exec` against a profile that can open the marker | D-exec-hide. The process does not start. |
 
 **Precedence.**
@@ -1053,7 +1069,7 @@ sequenceDiagram
 | D-prec-cause | The first committed mismatch cause | A later open | D-open-again. |
 | D-prec-exec | A sandbox that cannot hide `.nessa-binding`, sandbox `none`, or a root outside the grant | `exec` admission | D-exec-hide, D-exec-none, or D-exec-root. |
 
-**Rejected.** The path as the resource id follows a later directory. Device and inode numbers are reused. An operating-system generation is not added. Rewriting the marker on every share drops the first subject's binding. A count of in-flight sharers is a second protocol beside the one lease. Attaching a grant because the marker bytes match a resource stored at another path would open that other path.
+**Rejected.** The path as the resource id follows a later directory. Device and inode numbers are reused. An operating-system generation is not added. Rewriting the marker on every share drops the first subject's binding. A count of in-flight sharers is a second protocol beside the one lease. Attaching a grant because the marker bytes match a resource stored at another path would open that other path. Treating only the literal spelling `.nessa-binding` as the marker would let a case-folded alias open that file.
 
 ### Grant subscription stream and cursor
 
@@ -1178,24 +1194,24 @@ pin. The LAN section does not add a discovery step.
 7. **P7.** The token is HMAC-SHA256 of the P-announce bytes, in order: the window index as 8 bytes, one family byte, 4 or 16 address bytes, and the port as 2 bytes. An IPv4-mapped IPv6 address is rewritten to family 4 before the MAC. A token copied onto a different address or port does not match. The pinned key, its fingerprint, and any other stable gateway id stay out of the announcement. Rows: P-announce.
 8. **P8.** Unlinkability is not a property of the announcement. The dial address, the port, the network source, and the token count stay visible. Rows: P-announce.
 9. **P9.** Shipped pairing and `#705` do not supply the MAC key. A peer with no discovery key stays `none`. Alpha does not invent a key. That peer is left out of the announcement. Rows: P-old.
-10. **P10.** The same-person link is not a phase and not a grant subject. The choice is an immutable field of the invitation until activation writes the link. Rows: P-link, P-active, G-link, G-unlink.
+10. **P10.** The same-person link is not a phase and not a grant subject. The choice is an immutable field of the invitation until the link write commits. If Active commits and that write fails, the live process retries it, and admission does not report the person until it commits. Rows: P-link, P-active, G-link, G-link-retry, G-unlink.
 11. **P11.** `Revoked` beats announce. `Active` is required before `keyed`. Rows: P-quiet, P-key, P-prec-phase.
 12. **P12.** The local ephemeral private key is durable before its public half is sent. A crash before that commit publishes nothing. Rows: P-key, P-publish, P-accept, C-P-keyed.
 13. **P13.** The dialer's generation id beats any other unfinished id. If both sides have minted, the lesser 32-byte id wins. The loser persists a new private key for the winning generation before it sends that public half. Rows: P-cross, P-accept.
-14. **P14.** The discovery MAC key is 32 bytes, produced by the P-install derivation. Each ephemeral key is X25519 (RFC 7748). A public key that is not the RFC 7748 32-byte encoding, or is 32 zero bytes, is rejected. A shared secret of 32 zero bytes is not installed. The raw shared secret is not stored. Rows: P-key, P-publish, P-install, P-reject.
+14. **P14.** The discovery MAC key is 32 bytes, produced by the P-install derivation. Each ephemeral private key is X25519 (RFC 7748). The public half is X25519(private, basepoint 9), the 32-byte little-endian u-coordinate, not an encoding of the private key. A public key that is not that 32-byte encoding, or is 32 zero bytes, is rejected. A shared secret of 32 zero bytes is not installed. The raw shared secret is not stored. Rows: P-key, P-publish, P-install, P-reject.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | P-pending | no enrollment | Enrollment starts | The one-use code | Pending. No session and no grant stream. | Pairing | The peer record at `Pending`, and the invitation's same-person choice. The choice is true or false and does not change after this commit. No link row. The gateway principal is not known yet. | Target the invitation, before none, after Pending, cause enrollment, initiator the owner. The choice is part of that record. |
-| P-active | Pending | Enrollment completes | The credential id and the receiver are stored. The invitation's choice is the one P-pending stored. No link for this gateway key remains after a revoke. A remaining link is G-unlink-retry, and this commit waits. | Active. No phase is added. Subscriptions can open. Discovery field is `none` until P-key or P-accept. | Enrollment | The phase `Active`, the credential id, and the receiver, in the same write. When the choice is true, that write inserts the link row naming `gateway:<key>`, as G-link. When the choice is false, no link is written. A false choice does not clear a stale link by omission. The choice is not asked again. No phase besides `Pending`, `Active`, and `Revoked`. | Target the peer, before Pending, after Active, cause enrollment complete, initiator the owner |
+| P-active | Pending | Enrollment completes | The credential id and the receiver are stored. The invitation's choice is the one P-pending stored. No link for this gateway key remains after a revoke. A remaining link is G-unlink-retry, and this commit waits. | Active. No phase is added. Subscriptions can open. Discovery field is `none` until P-key or P-accept. | Enrollment | The phase `Active`, the credential id, and the receiver, in the same write of the credential store. When the choice is true, the link row is the next grant-store write, as G-link. A failure of that next write is G-link-retry. Admission does not report the person until the link commits. When the choice is false, no link is written. A false choice does not clear a stale link by omission. The choice is not asked again. No phase besides `Pending`, `Active`, and `Revoked`. | Target the peer, before Pending, after Active, cause enrollment complete, initiator the owner |
 | P-revoke | Pending or Active | Enrollment revoke | The owner's revoke | Revoked. No announcement. | The owner | The phase `Revoked`. A same-person link for this peer is removed by G-unlink in this commit. | Target the peer, before Pending or Active, after Revoked, cause revoke, initiator the owner |
-| P-key | none, phase Active | The dialer mints one generation | This side is the dialer. The phase is Active. No generation is unfinished. A new generation does not start while one is unfinished. | keyed | The dialer | The generation id, 32 bytes, and this side's X25519 private key (RFC 7748), 32 bytes. The public half is the RFC 7748 32-byte little-endian encoding of that private key, and it is sent only after this commit. No peer public. No discovery byte is sent in this commit. | Target the peer, before none, after keyed, cause local key, initiator this gateway |
-| P-publish | keyed or offered | Send this side's public half | The ephemeral private key for this generation is already durable. The bytes are the RFC 7748 32-byte little-endian public encoding of that private key, and they are not 32 zero bytes. The private key is durable before its public half is sent. | The same state | This gateway | None | None |
+| P-key | none, phase Active | The dialer mints one generation | This side is the dialer. The phase is Active. No generation is unfinished. A new generation does not start while one is unfinished. | keyed | The dialer | The generation id, 32 bytes, and this side's X25519 private key (RFC 7748), 32 bytes. The public half is X25519(private, basepoint 9), the 32-byte little-endian u-coordinate, not an encoding of the private key, and it is sent only after this commit. No peer public. No discovery byte is sent in this commit. | Target the peer, before none, after keyed, cause local key, initiator this gateway |
+| P-publish | keyed or offered | Send this side's public half | The ephemeral private key for this generation is already durable. The bytes are X25519(private, basepoint 9), the RFC 7748 32-byte little-endian u-coordinate, and they are not 32 zero bytes. They are not an encoding of the private key. The private key is durable before its public half is sent. | The same state | This gateway | None | None |
 | P-offer | keyed | The peer's public key for this same generation is known | The `keyed` write has committed. The generation matches. The peer public is exactly 32 bytes and is not 32 zero bytes. Any other public key takes P-reject. | offered | This gateway | Add the peer's public key. `stored` is sent only after this commit. | Target the peer, before keyed, after offered, cause peer public, initiator this gateway |
-| P-accept | none, phase Active | The dialer's generation and public key arrive | This side is the granting gateway. It has not minted a generation. The phase is Active. The dialer's public key is exactly 32 bytes and is not 32 zero bytes. Any other public key takes P-reject. | offered | The granting gateway | That generation, this side's new X25519 private key (RFC 7748), 32 bytes, and the dialer's public key. The public half this side will send is the RFC 7748 32-byte little-endian encoding of that private key. This commit finishes before this side sends its public half. | Target the peer, before none, after offered, cause accept dialer generation, initiator this gateway |
-| P-cross | keyed or offered | The peer presents a different generation id | Both generation ids are known | The winning generation. The dialer's id beats a grantor-minted id. If both sides minted, the lesser 32-byte id wins. The winner keeps its private key. The loser replaces its generation. | This gateway | On the loser: the winning generation and a new X25519 private key (RFC 7748), 32 bytes. Its public half is the RFC 7748 32-byte little-endian encoding, sent only after this commit. The old peer public is dropped. On the winner: nothing until a public key for the winning generation arrives. | Target the peer, before the losing generation, after the winning generation, cause dialer generation or lesser generation, initiator this gateway |
+| P-accept | none, phase Active | The dialer's generation and public key arrive | This side is the granting gateway. It has not minted a generation. The phase is Active. The dialer's public key is exactly 32 bytes and is not 32 zero bytes. Any other public key takes P-reject. | offered | The granting gateway | That generation, this side's new X25519 private key (RFC 7748), 32 bytes, and the dialer's public key. The public half this side will send is X25519(private, basepoint 9), the 32-byte little-endian u-coordinate, not an encoding of the private key. This commit finishes before this side sends its public half. | Target the peer, before none, after offered, cause accept dialer generation, initiator this gateway |
+| P-cross | keyed or offered | The peer presents a different generation id | Both generation ids are known | The winning generation. The dialer's id beats a grantor-minted id. If both sides minted, the lesser 32-byte id wins. The winner keeps its private key. The loser replaces its generation. | This gateway | On the loser: the winning generation and a new X25519 private key (RFC 7748), 32 bytes. Its public half is X25519(private, basepoint 9), the 32-byte little-endian u-coordinate, not an encoding of the private key, sent only after this commit. The old peer public is dropped. On the winner: nothing until a public key for the winning generation arrives. | Target the peer, before the losing generation, after the winning generation, cause dialer generation or lesser generation, initiator this gateway |
 | P-reject | none, keyed, or offered | A public key is presented, or install would derive | The public key is not exactly 32 bytes, or it is 32 zero bytes, or X25519 of our private key and that public key is 32 zero bytes | The discovery field stays. No MAC key is stored. | This gateway | Nothing. The ephemeral private key stays until a later P-install. | Refusal, target the peer, before the current field, after the same field, cause public key rejected or shared secret all zeros, initiator this gateway |
-| P-install | offered | Both sides have acked `stored` | This side's `offered` write has committed. The peer's `stored` has been seen. Both public keys are exactly 32 bytes and neither is 32 zero bytes. The shared secret is X25519 (RFC 7748) of this side's private key and the peer's public key, and that secret is not 32 zero bytes. Otherwise P-reject. | installed | This gateway | The same generation and the 32-byte MAC key. The MAC key is HKDF-SHA256 (RFC 5869). Salt is the 32-byte generation id. IKM is the X25519 shared secret. Info is the 22 ASCII bytes of nessa-discovery-mac-v1, then the dialer's 32-byte public key, then the grantor's 32-byte public key, with no length prefix. L is 32. Role order is dialer then grantor on both sides. Dialer and grantor are the enrollment roles on the peer record, not the winner of P-cross. The label separates this announcement MAC from TLS, the enrollment PAKE, and the webhook HMAC. The raw shared secret is not stored. The ephemeral private key leaves in this write. `installed` is sent only after this commit. | Target the peer, before offered, after installed, cause discovery install, initiator this gateway |
+| P-install | offered | Both sides have acked `stored` | This side's `offered` write has committed. The peer's `stored` has been seen. Both public keys are exactly 32 bytes and neither is 32 zero bytes. The shared secret is X25519 (RFC 7748) of this side's private key and the peer's public key. That public key is the peer's X25519(private, basepoint 9). The secret is not 32 zero bytes. Otherwise P-reject. | installed | This gateway | The same generation and the 32-byte MAC key. The MAC key is HKDF-SHA256 (RFC 5869). Salt is the 32-byte generation id. IKM is the X25519 shared secret. Info is the 22 ASCII bytes of nessa-discovery-mac-v1, then the dialer's 32-byte public key, then the grantor's 32-byte public key, with no length prefix. L is 32. Role order is dialer then grantor on both sides. Dialer and grantor are the enrollment roles on the peer record, not the winner of P-cross. The label separates this announcement MAC from TLS, the enrollment PAKE, and the webhook HMAC. The raw shared secret is not stored. The ephemeral private key leaves in this write. `installed` is sent only after this commit. | Target the peer, before offered, after installed, cause discovery install, initiator this gateway |
 | P-peer-installed | offered | The peer sends `installed` for this generation | This side's `offered` write has committed, so the private key and the peer public are stored. The P-install derivation succeeds. A shared secret of 32 zero bytes takes P-reject and does not install. | installed | This gateway, on the peer's message | The same generation and the MAC key from the P-install derivation. The ephemeral private key leaves. | Target the peer, before offered, after installed, cause peer installed, initiator this gateway |
 | P-retry-keyed | keyed | The session drops | The `keyed` write has committed | keyed | This gateway | Nothing. Resend the public half of the stored private key. Do not mint. | None |
 | P-retry-offered | offered | The session drops | The `offered` write has committed | offered | This gateway | Nothing. Resend the stored public key and `stored`. Do not mint a new one. | None |
@@ -1252,9 +1268,9 @@ sequenceDiagram
 | P-prec-generation | The dialer's generation id | Another unfinished id | P-cross |
 | P-prec-none | A missing discovery key | An invented key | P-old |
 | P-prec-token | The window, address, and port inside the HMAC | A token presented with a different address or port | No match. The bytes are the P-announce widths. An IPv4-mapped address is family 4. |
-| P-prec-choice | The choice stored on the invitation | Asking again at activation | P-active. The link is written only when that stored choice is true. |
+| P-prec-choice | The choice stored on the invitation | Asking again at activation | P-active. The link is written only when that stored choice is true. A failed link write is G-link-retry. Admission does not report the person until the link commits. |
 
-**Rejected.** Writing the peer's public key into the same first commit as the local private key, which made the public exchange precede the only durable write. Each side minting its own generation and keeping it. A stable fingerprint in the announcement, an unlinkability claim, a MAC key taken from the enrollment PAKE or from `#705`, installing the raw X25519 shared secret as the MAC key, a new generation on a half-written install, and `PeerPoller` as the Active follow path. Asking the same-person choice again at activation, or writing the link before the principal exists, would lose the choice on restart or name a principal the invitation does not have. Activating a new enrollment while a link remains after revoke would report the new credential as that person.
+**Rejected.** Writing the peer's public key into the same first commit as the local private key, which made the public exchange precede the only durable write. Each side minting its own generation and keeping it. A stable fingerprint in the announcement, an unlinkability claim, a MAC key taken from the enrollment PAKE or from `#705`, installing the raw X25519 shared secret as the MAC key, a new generation on a half-written install, and `PeerPoller` as the Active follow path. Asking the same-person choice again at activation, or writing the link before the principal exists, would lose the choice on restart or name a principal the invitation does not have. Activating a new enrollment while a link remains after revoke would report the new credential as that person. Sending the little-endian private scalar as the public half would make the two sides install different MAC keys. Leaving a true choice unapplied after Active would omit the person from admission.
 
 ### Finding to row
 
@@ -1264,7 +1280,7 @@ not add a rule.
 **Invariant.**
 
 1. **X1.** Issues `#889` through `#897` are filed. A fence states the slice delta and the gate. A fence does not add a lifecycle state. Rows: X-filed.
-2. **X2.** Inside one store, a change a peer can observe and the cursor or outcome that names it commit in the same write. A non-terminal in-flight row is reconciled by the live sender when the next read or write of that store succeeds. Restart uses that same reconciler. Process exit is not the reconciler. The conversation store and the outbox are not one store. The grant store and the conversation file are not one store. Rows: U-log, U-done, W-reconcile, W-rescan, P-active, G-unlink-retry.
+2. **X2.** Inside one store, a change a peer can observe and the cursor or outcome that names it commit in the same write. A non-terminal in-flight row is reconciled by the live sender when the next read or write of that store succeeds. Restart uses that same reconciler. Process exit is not the reconciler. The conversation store and the outbox are not one store. The grant store and the conversation file are not one store. The credential store and the grant store are not one store. Rows: U-log, U-done, W-reconcile, W-rescan, P-active, G-unlink-retry, G-link-retry.
 
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -1338,6 +1354,10 @@ not add a rule.
 | 4279054331 | U-trim, U-stale, U-full, U14 |
 | 4279054335 | G-unlink-retry, C-G-unlink, G11 |
 | 4279068029 | G-refuse-old, G-current, G10 |
+| 4279299634 | P-key, P-publish, P-accept, P-cross, P14 |
+| 4279299640 | G-link-retry, C-G-link, P-active, P10 |
+| 4279334719 | D-name, D10 |
+| 4279334725 | W-retry, W-unknown, W9 |
 
 ## Open questions / known limits
 
@@ -1369,7 +1389,7 @@ a procedure.
   (U-trim). An older cursor takes a full snapshot (U-stale).
 - Refusing or deleting the grant store leaves the conversation metadata
   file in place (G-refuse-old). The credential store and the link row
-  are not one transaction. The live retry closes that gap (G-unlink-retry).
+  are not one transaction. The live retry closes a removal (G-unlink-retry) and a missing insert (G-link-retry). Admission does not report the person until a true choice's link commits.
 - A case these tables do not settle is a test of the slice that owns it.
   It is not a new state added in review.
 
@@ -1530,7 +1550,7 @@ first grant in place and leaves the marker bytes unchanged. Sharing a
 different directory whose marker bytes equal that resource is refused
 and writes no grant. A second
 share whose grant commit fails leaves the marker and the first grant. A
-subject with `write` is refused `.nessa-binding`, and the grants stay.
+subject with `write` is refused the marker file, including a case-folded alias of `.nessa-binding`, and the grants stay.
 An allowed program cannot read, unlink, or rewrite the marker. A profile
 that exposes that name is refused `exec`. A
 second share of a directory waits until the first attempt has committed
@@ -1563,8 +1583,10 @@ The contract is Same person, above. The delta is the choice on
 ## Gate
 
 The choice is stored on the invitation at `pairing.create`. A restart
-before activation still has it. The Active commit writes the link when
-the choice is true, and writes no link when it is false. Pairing with
+before activation still has it. The credential store commits Active first. When the choice is true, the
+next grant-store write inserts the link. If that write fails, the live
+process retries it and admission does not report the person until it
+commits. When the choice is false, no link is written. Pairing with
 the choice records the person and the gateway principal. A
 read still requires a share grant. Two linked gateways with grants on
 the same conversation have two rows. A gateway paired without the choice has
@@ -1668,7 +1690,9 @@ has not committed. The row stays the state the attempt read.
 
 A webhook granted one chat receives that chat's events and no other. A
 retry of an attempt that is still at its admitted epoch repeats the
-delivery id and the signature. The webhook credential cannot call
+delivery id and the signature. A transport error with no response byte
+can deliver that same id twice. A receiver that applies a side effect
+deduplicates by `Nessa-Webhook-Id`. `unknown` is not posted again. The webhook credential cannot call
 `conversation.send`. Revoke waits for the one attempt that holds the
 permit; that attempt is recorded under the epoch it read, and the grant
 row is then removed. A retry that takes the permit after that removal is
@@ -1731,7 +1755,8 @@ discovery field on the existing peer record, and the window-length row in
 
 An unpaired gateway sends no announcement. A paired peer with no discovery
 key is left out, and is not given an invented key. A drop before the
-local private-key commit sends no public half. A drop after that commit
+local private-key commit sends no public half. The public half is
+X25519(private, basepoint 9), not an encoding of the private key. A drop after that commit
 resends the stored public half and does not mint. Two generation ids
 resolve to the dialer's id, and both sides finish on that generation. An announcement cannot
 enroll a listener. The announcement bytes contain no key fingerprint and
