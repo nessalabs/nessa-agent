@@ -250,6 +250,8 @@ struct OpenTool {
     span: OpenSpan,
     id: String,
     permission_id: Option<String>,
+    /// Result text from a running update. A later patch may report only status.
+    result: Option<String>,
 }
 
 struct OpenTurn {
@@ -410,6 +412,9 @@ impl TraceRecorder {
                 if turn.capture {
                     if let Some(arguments) = fact.arguments {
                         set_str(&mut tool.span.attributes, ATTR_TOOL_ARGUMENTS, &arguments);
+                    }
+                    if let Some(result) = fact.result.filter(|result| !result.is_empty()) {
+                        tool.result = Some(result);
                     }
                 }
             }
@@ -665,6 +670,7 @@ impl TraceRecorder {
                 span,
                 id: fact.id.clone(),
                 permission_id: None,
+                result: None,
             });
         }
     }
@@ -692,10 +698,13 @@ impl TraceRecorder {
     ) {
         assign_tool_name(&mut tool.span, &tool.id, &fact.name);
         if self.capture {
-            if let Some(result) = &fact.result {
-                if !result.is_empty() {
-                    set_str(&mut tool.span.attributes, ATTR_TOOL_RESULT, result);
-                }
+            let result = fact
+                .result
+                .as_deref()
+                .filter(|result| !result.is_empty())
+                .or(tool.result.as_deref());
+            if let Some(result) = result {
+                set_str(&mut tool.span.attributes, ATTR_TOOL_RESULT, result);
             }
         }
         let status = match error_type {

@@ -6,10 +6,13 @@ session updates and permission events the ACP worker already decodes. The
 recorder does not call the harness and does not open a network connection.
 
 `LocalTraceStore` keeps the finished spans. `Agent::read_traces` returns the
-ones for a conversation, in the order they closed. A turn still running is
-absent until its agent span closes. The store keeps the most recent 2048
-finished spans, and the same number of child spans from turns that are still
-open. Those children are dropped one span at a time, oldest first. Every
+ones for a conversation, in the order they closed. The gateway's agent holds
+a lease fence around the binding, and the fence returns that binding's store.
+Claude's credential wrapper owns one store and passes it into every binding
+it builds, so a later open records into the store the read returns. A turn
+still running is absent until its agent span closes. The store keeps the most
+recent 2048 finished spans, and the same number of child spans from turns
+that are still open. Those children are dropped one span at a time, oldest first. Every
 retained string, including tool names and pending notes, shares an 8 MiB
 budget with captured message text. Older finished spans are dropped while
 more than one remains; the last finished span stays, and open-turn children
@@ -77,7 +80,10 @@ or `extension` when the call names an MCP tool.
 
 When content capture is on, `gen_ai.input.messages`, `gen_ai.output.messages`,
 `gen_ai.tool.call.arguments`, and `gen_ai.tool.call.result` carry the text.
-They are absent otherwise.
+They are absent otherwise. A result that arrives while the tool is still
+running is kept and written when the span closes. That includes a completion
+patch that carries only a status, and a turn that ends with the tool still
+open. A completion that carries its own result uses that result.
 
 ## `nessa.*` attributes
 

@@ -1023,6 +1023,106 @@ fn one_exporter_panic_does_not_skip_the_next() {
     assert!(*keep.seen.lock().unwrap() >= 1);
 }
 
+#[test]
+fn a_result_on_a_running_update_stays_when_completion_omits_it() {
+    let store = LocalTraceStore::with_capture(ContentCapture::on());
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.tool(
+        at(2),
+        ToolFact::new(
+            "call-1",
+            "Read",
+            "function",
+            ToolProgress::Running,
+            Some("{\"path\":\"a\"}".into()),
+            Some("secret-marker".into()),
+        ),
+    );
+    recorder.tool(
+        at(3),
+        ToolFact::new(
+            "call-1",
+            "Read",
+            "function",
+            ToolProgress::Completed,
+            None,
+            None,
+        ),
+    );
+    recorder.finish(at(4), FinishReason::Stop);
+    let tool = store
+        .read("conversation-1")
+        .into_iter()
+        .find(|span| span.operation() == "execute_tool")
+        .unwrap();
+    assert_eq!(
+        tool.string("gen_ai.tool.call.result"),
+        Some("secret-marker")
+    );
+}
+
+#[test]
+fn a_completion_result_replaces_the_one_seen_while_running() {
+    let store = LocalTraceStore::with_capture(ContentCapture::on());
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.tool(
+        at(2),
+        ToolFact::new(
+            "call-1",
+            "Read",
+            "function",
+            ToolProgress::Running,
+            None,
+            Some("earlier".into()),
+        ),
+    );
+    recorder.tool(
+        at(3),
+        ToolFact::new(
+            "call-1",
+            "Read",
+            "function",
+            ToolProgress::Completed,
+            None,
+            Some("later".into()),
+        ),
+    );
+    recorder.finish(at(4), FinishReason::Stop);
+    let tool = store
+        .read("conversation-1")
+        .into_iter()
+        .find(|span| span.operation() == "execute_tool")
+        .unwrap();
+    assert_eq!(tool.string("gen_ai.tool.call.result"), Some("later"));
+}
+
+#[test]
+fn a_result_seen_while_running_is_kept_when_the_turn_ends() {
+    let store = LocalTraceStore::with_capture(ContentCapture::on());
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.tool(
+        at(2),
+        ToolFact::new(
+            "call-1",
+            "Read",
+            "function",
+            ToolProgress::Running,
+            None,
+            Some("still-open".into()),
+        ),
+    );
+    recorder.finish(at(3), FinishReason::Cancelled);
+    let tool = store
+        .read("conversation-1")
+        .into_iter()
+        .find(|span| span.operation() == "execute_tool")
+        .unwrap();
+    assert_eq!(tool.string("gen_ai.tool.call.result"), Some("still-open"));
+}
+
 fn stored_text_bytes(span: &GenAiSpan) -> usize {
     let mut total = span.name().len()
         + span.trace_id().len()
