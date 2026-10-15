@@ -62,8 +62,15 @@ else:
         if hashlib.sha256((root / name).read_bytes()).hexdigest() != record['hashes'][name]:
             raise SystemExit('Cached provisioning artifact does not match its setup receipt.')
 PY
+# Node and its bundled npm are one installation capability: an interrupted
+# extraction may leave the executable usable before npm exists.
+node_ready() {
+  [ -x "$cloud_root/node/bin/node" ] &&
+    [[ "$("$cloud_root/node/bin/node" --version)" == "v${node_major}."* ]] &&
+    PATH="$cloud_root/node/bin:$PATH" "$cloud_root/node/bin/npm" --version >/dev/null 2>&1
+}
 node_status=reused
-if [ ! -x "$cloud_root/node/bin/node" ] || [[ "$("$cloud_root/node/bin/node" --version)" != "v${node_major}."* ]]; then
+if ! node_ready; then
   node_status=installed
   case "$(uname -m)" in x86_64) node_arch=x64 ;; aarch64|arm64) node_arch=arm64 ;; *) echo 'Unsupported Node architecture.' >&2; exit 2 ;; esac
   node_download=$(mktemp -d)
@@ -80,6 +87,7 @@ if hashlib.sha256((directory / name).read_bytes()).hexdigest() != expected:
     raise SystemExit('Official Node archive checksum mismatch.')
 PY
   tar -xJf "$node_download/$node_archive" --strip-components=1 -C "$cloud_root/node"
+  node_ready
 fi
 
 # Persist the selected tools to agent, login and clean child shells. The owned
@@ -107,7 +115,7 @@ wanted=${wanted%%+*}
 pnpm_status=reused
 if [ ! -x "$cloud_root/node/bin/pnpm" ] || [ "$("$cloud_root/node/bin/pnpm" --version)" != "$wanted" ]; then
   pnpm_status=installed
-  npm install --global --prefix "$cloud_root/node" "$manager"
+  "$cloud_root/node/bin/npm" install --global --prefix "$cloud_root/node" "$manager"
 fi
 [ "$("$cloud_root/node/bin/pnpm" --version)" = "$wanted" ]
 [[ "$(node --version)" = "v${node_major}."* ]]

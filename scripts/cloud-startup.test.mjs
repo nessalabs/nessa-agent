@@ -55,8 +55,13 @@ else if (tool === 'curl') {
   const url = args.find(arg => arg.startsWith('https://'))
   fs.copyFileSync(marker(url.endsWith('SHASUMS256.txt') ? 'SHASUMS256.txt' : 'node.tar.xz'), output)
 } else if (tool === 'npm') {
+  if (args.includes('--version')) {
+    const runtime=spawnSync('node',['--version'],{encoding:'utf8'})
+    if (runtime.status !== 0 || !runtime.stdout.startsWith('v24.')) process.exit(9)
+    console.log('11.9.0'); process.exit(0)
+  }
   const prefix = args[args.indexOf('--prefix') + 1]
-  fs.symlinkSync(process.argv[1], path.join(prefix, 'bin/pnpm'))
+  fs.symlinkSync(fs.realpathSync(process.argv[1]), path.join(prefix, 'bin/pnpm'))
 } else if (tool === 'rustup') {
   if (args[0] === 'toolchain') touch('rust')
   else if (!exists('rust')) process.exit(1)
@@ -268,7 +273,7 @@ test("cold preparation installs owned tools; warm maintenance verifies without n
       ({ tool, args }) =>
         tool === "curl" ||
         tool === "sudo" ||
-        tool === "npm" ||
+        (tool === "npm" && args[0] === "install") ||
         (tool === "rustup" && args[0] === "toolchain") ||
         (tool === "pnpm" &&
           (args.includes("playwright") ||
@@ -486,4 +491,64 @@ test("lost UI readiness after dependency work preserves the earlier receipt", (t
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /UI fixture requires preparation/)
   assert.equal(readFileSync(receipt, "utf8"), previous)
+})
+
+for (const damage of ["missing", "broken"]) {
+  test(`a ${damage} bundled npm repairs Node before replacing pnpm`, (t) => {
+    const f = bootstrapFixture(t)
+    assert.equal(f.prepare("setup").status, 0)
+    const npm = join(f.env.NESSA_CLOUD_ROOT, "node/bin/npm")
+    rmSync(npm)
+    rmSync(join(f.env.NESSA_CLOUD_ROOT, "node/bin/pnpm"))
+    if (damage === "broken") {
+      writeFileSync(npm, "#!/bin/sh\nexit 7\n")
+      chmodSync(npm, 0o755)
+    }
+    const repaired = f.prepare("maintenance")
+    assert.equal(repaired.status, 0, repaired.stderr)
+    assert.equal(f.receipt().steps.node, "installed")
+    assert.equal(f.receipt().steps.pnpm, "installed")
+    assert.equal(spawnSync(npm, ["--version"], { env: f.env }).status, 0)
+  })
+}
+
+test("a failed bundled npm repair cannot publish new preparation", (t) => {
+  const f = bootstrapFixture(t)
+  assert.equal(f.prepare("setup").status, 0)
+  const receipt = join(f.env.NESSA_CLOUD_ROOT, "preparation.json")
+  const previous = readFileSync(receipt, "utf8")
+  rmSync(join(f.env.NESSA_CLOUD_ROOT, "node/bin/npm"))
+  const archiveNpm = join(f.root, "archive/node-v24.22.0-linux-x64/bin/npm")
+  rmSync(archiveNpm)
+  writeFileSync(archiveNpm, "#!/bin/sh\nexit 7\n")
+  chmodSync(archiveNpm, 0o755)
+  execFileSync("tar", [
+    "-cJf",
+    join(f.root, "node.tar.xz"),
+    "-C",
+    join(f.root, "archive"),
+    "node-v24.22.0-linux-x64",
+  ])
+  const checksum = createHash("sha256")
+    .update(readFileSync(join(f.root, "node.tar.xz")))
+    .digest("hex")
+  writeFileSync(
+    join(f.root, "SHASUMS256.txt"),
+    `${checksum}  node-v24.22.0-linux-x64.tar.xz\n`,
+  )
+  const failed = f.prepare("maintenance")
+  assert.notEqual(failed.status, 0)
+  assert.equal(readFileSync(receipt, "utf8"), previous)
+})
+
+test("bundled npm readiness uses owned Node before publishing the shell helper", (t) => {
+  const f = bootstrapFixture(t)
+  assert.equal(f.prepare("setup").status, 0)
+  const inherited = join(f.bin, "node")
+  rmSync(inherited)
+  writeFileSync(inherited, "#!/bin/sh\necho v18.0.0\n")
+  chmodSync(inherited, 0o755)
+  const maintained = f.prepare("maintenance")
+  assert.equal(maintained.status, 0, maintained.stderr)
+  assert.equal(f.receipt().steps.node, "reused")
 })
