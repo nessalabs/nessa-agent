@@ -13,6 +13,7 @@ use nessa_local_database::{
     rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior},
     OpenError, Schema,
 };
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
@@ -323,23 +324,24 @@ fn confirm(
 ) -> Result<(), StoreError> {
     let id = record.intent().command().as_str();
     if !seen.insert(id.to_owned()) {
-        return Err(StoreError::Corrupt);
+        return Ok(());
     }
     let events = read_events(connection, id)?;
-    // A recovery hold is legal only on the draft some other row names.
-    let recovery_hold: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM phone_intent WHERE successor = ?1",
-            params![id],
-            |row| row.get(0),
-        )
-        .map_err(unavailable)?;
-    if !history_reaches(record, &events, recovery_hold > 0) {
+    let recovery_hold = events
+        .first()
+        .is_some_and(|event| event.cause == Cause::Held && event.initiator == Initiator::Recovery);
+    if recovery_hold {
+        tie_predecessor(connection, record, seen)?;
+    }
+    if !history_reaches(record, &events, recovery_hold) {
         return Err(StoreError::Corrupt);
     }
     let Some(successor) = record.successor() else {
         return Ok(());
     };
+    if seen.contains(successor.as_str()) {
+        return Ok(());
+    }
     let Some(draft) = read_record(connection, successor.as_str())? else {
         return Err(StoreError::Corrupt);
     };
@@ -347,6 +349,57 @@ fn confirm(
         return Err(StoreError::Corrupt);
     }
     confirm(connection, &draft, seen)
+}
+
+/// The one `turn_running` row that minted this recovery draft.
+///
+/// A count of successors is not that row
+/// (`a_recovery_draft_requires_its_turn_running_predecessor`).
+fn tie_predecessor(
+    connection: &Connection,
+    record: &PhoneRecord,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), StoreError> {
+    let id = record.intent().command().as_str();
+    let preds = predecessor_ids(connection, id)?;
+    let [pred_id] = preds.as_slice() else {
+        return Err(StoreError::Corrupt);
+    };
+    let Some(pred) = read_record(connection, pred_id)? else {
+        return Err(StoreError::Corrupt);
+    };
+    if pred.successor().map(PhoneCommandId::as_str) != Some(id) {
+        return Err(StoreError::Corrupt);
+    }
+    if !same_prompt(pred.intent(), record.intent()) {
+        return Err(StoreError::Corrupt);
+    }
+    if !matches!(
+        pred.outcome(),
+        PhoneOutcome::Failed(PhoneFailure::Conversation(
+            ConversationErrorCode::TurnRunning
+        ))
+    ) {
+        return Err(StoreError::Corrupt);
+    }
+    let pred_events = read_events(connection, pred_id)?;
+    if pred_events.last().map(|event| event.cause) != Some(Cause::ReturnedToDraft) {
+        return Err(StoreError::Corrupt);
+    }
+    if !seen.contains(pred_id) {
+        confirm(connection, &pred, seen)?;
+    }
+    Ok(())
+}
+
+fn predecessor_ids(connection: &Connection, id: &str) -> Result<Vec<String>, StoreError> {
+    let mut statement = connection
+        .prepare("SELECT request_id FROM phone_intent WHERE successor = ?1 ORDER BY request_id")
+        .map_err(unavailable)?;
+    let rows = statement
+        .query_map(params![id], |row| row.get(0))
+        .map_err(unavailable)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(unavailable)
 }
 
 fn record_row(
@@ -473,6 +526,17 @@ fn parse_outcome(
     failure: Option<&str>,
     unknown: Option<&str>,
 ) -> Result<PhoneOutcome, StoreError> {
+    // The same tagged union as `phone_intent`. An extra column is corrupt,
+    // not dropped (`an_event_column_contradiction_is_corrupt`).
+    let columns = match outcome {
+        "failed" => failure.is_some() && unknown.is_none(),
+        "unknown" => unknown.is_some() && failure.is_none(),
+        "draft" | "accepted" | "running" | "done" => failure.is_none() && unknown.is_none(),
+        _ => false,
+    };
+    if !columns {
+        return Err(StoreError::Corrupt);
+    }
     match outcome {
         "draft" => Ok(PhoneOutcome::Draft),
         "accepted" => Ok(PhoneOutcome::Accepted),

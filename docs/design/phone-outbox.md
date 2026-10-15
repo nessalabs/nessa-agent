@@ -92,7 +92,8 @@ Departure's unknown is not a direct answer.
 | Unknown, not admitted | send answer lost, lookup finds nothing, budget remains | Stays unknown, not admitted, then the same bytes are sent again | Person, cause SendLost, then ForegroundSend with the later answer | Yes, the same hold |
 | Unknown, not admitted | that budget is spent | Stays unknown, not admitted | Person, cause Bound. Not Lookup | Yes |
 | Unknown, lookup failed | that budget is already spent | Stays lookup failed. No send and no Bound event | Person, the waiter | Yes. The waiter holds the lease and writes nothing |
-| Unknown, not admitted or lookup failed | explicit retry after lookup found nothing | Stays unknown, not admitted, then the same bytes are sent again | Person, cause Lookup, then ExplicitRetry | Yes. The waiter reloads |
+| Unknown, lookup failed | a later foreground call loses the send, then the lookup finds nothing, and the budget remains | Becomes not admitted, then the same bytes are sent again | Person, cause SendLost, then Lookup, then ForegroundSend | Yes, the same hold |
+| Unknown, not admitted or lookup failed | explicit retry after lookup found nothing | Not admitted, the send count returns to zero, then the same bytes are sent again | Person, cause Lookup, then ExplicitRetry | Yes. The waiter reloads |
 | Unknown, attempted | lookup finds a settled submit receipt | Done or failed, per the receipt | Person or Recovery, cause Lookup | No |
 | Any unknown | lookup lost, broken, or not a submit receipt | The row unchanged | Person or Recovery | No |
 | Any unknown | lookup returns `submission_unresolved` | Unknown, unresolved | Person or Recovery, cause Lookup | No |
@@ -107,6 +108,45 @@ again in that call.
 A lookup does not produce running. Running is only the direct injected
 receipt. Restoration rejects a `Lookup` event whose outcome is running
 (`every_transition_and_precedence_pair`).
+
+## Restoration replays the live transition
+
+Restoration does not keep a second list of legal outcomes. `history_reaches`
+starts from the held draft and asks the same functions the outbox uses to
+decide what one answer persists. An event stays only when one of those
+functions returns that cause and that outcome. The row's outcome and its
+send count must equal the replay. A history those functions do not return
+is corrupt. The row is not repaired.
+
+| Function | When the outbox asks | What it persists |
+| --- | --- | --- |
+| `budget` | Foreground is entered and the send count is already at the budget | Not admitted stays not admitted, cause Bound. Nothing is sent. Lookup failed writes nothing |
+| `apply_send` | Foreground calls `conversation.send`. The outcome is not admitted or lookup failed, and the budget remains. The cause argument is SendAnswered, ForegroundSend, or ExplicitRetry | A terminal answer keeps that cause and is direct. Lost persists SendLost, then a lookup that may resend. Broken persists Unreadable, then a lookup that may not resend. `turn_running` persists only ReturnedToDraft |
+| `apply_lookup`, resend false | Reconcile, recovery, and the lookup after Unreadable | A changed receipt persists Lookup. Not found, lost, or broken on attempted persists nothing: attempted stays attempted and is not retryable. `turn_running` persists Lookup, then ReturnedToDraft |
+| `apply_lookup`, resend true | The lookup after SendLost in that same foreground call | Not found under the budget persists Lookup only when the outcome changes, then the next send is ForegroundSend. Not found at the budget persists Bound when the row is already not admitted. A not-found lookup that moves lookup failed to not admitted persists Lookup, including at the budget. Any other changed receipt persists Lookup |
+| `apply_retry` | Explicit retry after a lookup found nothing. Only not admitted or lookup failed | Lookup of not admitted, then ExplicitRetry that sets the send count to zero. The send after that reset is ExplicitRetry |
+
+Departed, SendAnswered, SendLost, Unreadable, ForegroundSend, ExplicitRetry,
+and Bound are the person. Lookup and ReturnedToDraft are the person or
+recovery. Held is the person, including the draft a direct `turn_running`
+mints. Recovery holds only the successor draft recovery minted after a
+lookup `turn_running`.
+
+A recovery hold is accepted only when exactly one predecessor names this
+draft as its successor, that predecessor's own history reaches it, the
+prompt matches, and the predecessor is a `turn_running` return
+(`ReturnedToDraft`). A count of rows is not that check
+(`a_recovery_draft_requires_its_turn_running_predecessor`).
+
+An audit column is the same tagged union as `phone_intent`. `failed` carries
+a failure and a null unknown. `unknown` carries an unknown and a null
+failure. Every other outcome has both null. A contradiction is corrupt at
+decode. The extra column is not dropped
+(`an_event_column_contradiction_is_corrupt`).
+
+Attempted followed by Lookup of not admitted, or of lookup failed, does not
+reach (`every_transition_and_precedence_pair`). `after_lookup` keeps
+attempted for not found, lost, and broken, so those events are not a replay.
 
 A submit receipt is stage `accepted`, `attempted`, or `settled` with
 `dispatched`, `no_effect`, `refused_after_save`, or `unavailable_after_save`.
@@ -175,6 +215,8 @@ second rule.
 | L5 | Send answer lost, lookup finds nothing, foreground budget remains | The same bytes are sent again. The resend is recorded with its answer | `a_lost_answer_retransmits_the_same_bytes_until_the_bound` |
 | L6 | That budget is spent | Unknown, not admitted, cause Bound. No further send in that call | `foreground_send_stops_at_the_bound` |
 | L7 | Send answer lost and the lookup itself fails | Unknown, lookup failed | `a_lookup_that_cannot_be_asked_stays_unknown` |
+| L10 | That lookup failed row is explicitly retried and the lookup finds nothing | Not admitted, then the same bytes. The row reloads | `a_lookup_failure_is_retried_as_an_explicit_send` |
+| L11 | A later foreground call loses a send of lookup failed, then finds nothing | Lookup of not admitted, then ForegroundSend | `every_transition_and_precedence_pair` |
 | L9 | A waiter reaches lookup failed after that budget is already spent | Stays lookup failed. No send and no Bound event. The row still loads | `a_spent_budget_keeps_lookup_failed` |
 | L8 | Lookup returns `submission_conflict` | Failed. `found` is not a receipt | `a_conflicting_lookup_is_failed` |
 | R1 | Restart after departure, lookup finds nothing | Unknown. No send | `recovery_does_not_send_when_the_receipt_is_absent` |
@@ -186,6 +228,9 @@ second rule.
 | C1 | Stored canonical bytes do not decode | Corrupt. The row is not rewritten | `corrupt_canonical_bytes_are_left_in_place` |
 | C3 | Events do not reach the row, or a send cause is marked recovery | Corrupt. The row is not rewritten | `a_done_row_whose_history_stops_at_departure_is_corrupt` |
 | C4 | A lookup event claims running | Corrupt. The row is not rewritten | `a_lookup_cannot_restore_running` |
+| C5 | Attempted is followed by not admitted or lookup failed | Corrupt. The attempt is not retried | `every_transition_and_precedence_pair`, `an_attempted_receipt_is_not_restored_as_not_admitted` |
+| C6 | A recovery hold whose predecessor is missing, not unique, a different prompt, or not `turn_running` | Corrupt. The draft is not sent | `a_recovery_draft_requires_its_turn_running_predecessor` |
+| C7 | An event's failure or unknown column contradicts its outcome | Corrupt. The column is not dropped | `an_event_column_contradiction_is_corrupt` |
 | C2 | Each transition | Command, outcome, cause, and initiator | `a_transition_keeps_its_cause_and_initiator` |
 
 `FOREGROUND_SENDS` in `crates/nessa-client-core/src/outbox/domain/decide.rs`

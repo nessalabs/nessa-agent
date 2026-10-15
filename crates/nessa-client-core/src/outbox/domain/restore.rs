@@ -7,20 +7,12 @@
 //! a direct answer beats any lookup, and inside one source a higher outcome
 //! beats a lower one (`every_transition_and_precedence_pair`).
 
+use super::decide::{apply_lookup, apply_retry, apply_send, budget, Applied, Budget, Evidence};
 use super::{
-    Cause, Initiator, IntentEvent, PhoneFailure, PhoneIntent, PhoneOutcome, PhoneRecord,
-    UnknownCause,
+    Cause, Initiator, IntentEvent, LookupAnswer, PhoneFailure, PhoneIntent, PhoneOutcome,
+    PhoneRecord, ReceiptEffect, ReceiptStage, SendAnswer, UnknownCause,
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
-
-/// Where an outcome came from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Evidence {
-    /// `conversation.send` returned this outcome.
-    Direct,
-    /// A lookup, a departure, or another row that has not stored a direct answer.
-    Lookup,
-}
 
 /// Whether `incoming` should replace `stored`.
 ///
@@ -96,20 +88,252 @@ pub(crate) fn history_reaches(
     if !hold_initiator(first.initiator, recovery_hold) {
         return false;
     }
-    if record.outcome() != events[events.len() - 1].outcome {
-        return false;
-    }
-    let mut state = first.outcome;
+    let mut state = PhoneRecord::held(record.intent().clone());
+    let mut older = first.cause;
     let mut previous = first.cause;
     for event in rest {
-        if !initiator_allowed(event.cause, event.initiator) || !step_allowed(state, event, previous)
-        {
+        let Some(next) = advance(&state, event, previous, older) else {
             return false;
-        }
-        state = event.outcome;
+        };
+        state = next;
+        older = previous;
         previous = event.cause;
     }
-    successor_follows(record, events)
+    state.outcome() == record.outcome()
+        && state.sends() == record.sends()
+        && state.departed() == record.departed()
+        && successor_follows(record, events)
+}
+
+/// The next row, when `event` is one [`apply_send`], [`apply_lookup`],
+/// [`apply_retry`], or [`budget`] would persist. Anything else is not a replay
+/// (`an_attempted_receipt_is_not_restored_as_not_admitted`).
+fn advance(
+    before: &PhoneRecord,
+    event: &IntentEvent,
+    previous: Cause,
+    older: Cause,
+) -> Option<PhoneRecord> {
+    if !initiator_allowed(event.cause, event.initiator) {
+        return None;
+    }
+    match event.cause {
+        Cause::Held => None,
+        Cause::Departed => {
+            let next = before.clone().depart()?;
+            (next.outcome() == event.outcome).then_some(next)
+        }
+        Cause::SendLost => marked(before, SendAnswer::Lost, event),
+        Cause::Unreadable => marked(before, SendAnswer::Broken, event),
+        Cause::SendAnswered => terminal(before, event, Cause::SendAnswered),
+        Cause::ForegroundSend => {
+            // The same call's next send. Not found that leaves the outcome
+            // writes no lookup, so the predecessor is SendLost. Not found
+            // that moves lookup failed to not admitted writes Lookup first.
+            let after_lost = previous == Cause::SendLost
+                || (previous == Cause::Lookup
+                    && older == Cause::SendLost
+                    && matches!(
+                        before.outcome(),
+                        PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+                    ));
+            if !after_lost {
+                return None;
+            }
+            terminal(before, event, Cause::ForegroundSend)
+        }
+        Cause::ExplicitRetry => explicit(before, event, previous),
+        Cause::Lookup => lookup_event(before, event, previous),
+        Cause::Bound => bound(before, event, previous),
+        Cause::ReturnedToDraft => returned(before, event, previous),
+    }
+}
+
+fn marked(before: &PhoneRecord, answer: SendAnswer, event: &IntentEvent) -> Option<PhoneRecord> {
+    match apply_send(before.clone(), answer, Cause::SendAnswered) {
+        Applied::Mark {
+            record, cause: got, ..
+        } if got == event.cause && record.outcome() == event.outcome => Some(record),
+        _ => None,
+    }
+}
+
+fn terminal(before: &PhoneRecord, event: &IntentEvent, cause: Cause) -> Option<PhoneRecord> {
+    let answer = send_witness(event.outcome)?;
+    match apply_send(before.clone(), answer, cause) {
+        Applied::Save {
+            record, cause: got, ..
+        } if got == cause && record.outcome() == event.outcome => Some(record),
+        _ => None,
+    }
+}
+
+fn explicit(before: &PhoneRecord, event: &IntentEvent, previous: Cause) -> Option<PhoneRecord> {
+    if event.outcome == PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+        && previous == Cause::Lookup
+    {
+        let reset = apply_retry(before.clone())?;
+        return (reset.reset.outcome() == event.outcome).then_some(reset.reset);
+    }
+    if previous == Cause::ExplicitRetry {
+        return terminal(before, event, Cause::ExplicitRetry);
+    }
+    None
+}
+
+fn lookup_event(before: &PhoneRecord, event: &IntentEvent, previous: Cause) -> Option<PhoneRecord> {
+    let resend = previous == Cause::SendLost;
+    for answer in lookup_witnesses(event.outcome) {
+        if let Some(record) = lookup_applied(before, answer, false, event.outcome) {
+            return Some(record);
+        }
+        if resend {
+            if let Some(record) = lookup_applied(before, answer, true, event.outcome) {
+                return Some(record);
+            }
+        }
+    }
+    if event.outcome == PhoneOutcome::Unknown(UnknownCause::NotAdmitted) {
+        let reset = apply_retry(before.clone())?;
+        if reset.looked.outcome() == event.outcome && reset.looked.sends() == before.sends() {
+            return Some(reset.looked);
+        }
+    }
+    None
+}
+
+fn lookup_applied(
+    before: &PhoneRecord,
+    answer: LookupAnswer,
+    resend: bool,
+    outcome: PhoneOutcome,
+) -> Option<PhoneRecord> {
+    match apply_lookup(before.clone(), answer, resend) {
+        Applied::Save {
+            record,
+            cause: Cause::Lookup,
+            ..
+        } if record.outcome() == outcome => Some(record),
+        Applied::Resend { record }
+            if resend && record.outcome() == outcome && record.outcome() != before.outcome() =>
+        {
+            Some(record)
+        }
+        Applied::Return {
+            record,
+            lookup: true,
+        } if record.outcome() == outcome => Some(record),
+        _ => None,
+    }
+}
+
+fn bound(before: &PhoneRecord, event: &IntentEvent, previous: Cause) -> Option<PhoneRecord> {
+    if event.outcome != PhoneOutcome::Unknown(UnknownCause::NotAdmitted) {
+        return None;
+    }
+    if let Budget::Bound(record) = budget(before.clone()) {
+        if record.outcome() == event.outcome {
+            return Some(record);
+        }
+    }
+    if previous == Cause::SendLost {
+        if let Applied::Save {
+            record,
+            cause: Cause::Bound,
+            ..
+        } = apply_lookup(before.clone(), LookupAnswer::NotFound, true)
+        {
+            if record.outcome() == event.outcome {
+                return Some(record);
+            }
+        }
+    }
+    None
+}
+
+fn returned(before: &PhoneRecord, event: &IntentEvent, previous: Cause) -> Option<PhoneRecord> {
+    if !turn_running_outcome(event.outcome) {
+        return None;
+    }
+    if previous == Cause::Lookup && before.outcome() == event.outcome {
+        return Some(before.clone());
+    }
+    let answer = SendAnswer::Refused(PhoneFailure::Conversation(
+        ConversationErrorCode::TurnRunning,
+    ));
+    match apply_send(before.clone(), answer, Cause::SendAnswered) {
+        Applied::Return {
+            record,
+            lookup: false,
+        } if record.outcome() == event.outcome => Some(record),
+        _ => None,
+    }
+}
+
+fn send_witness(outcome: PhoneOutcome) -> Option<SendAnswer> {
+    Some(match outcome {
+        PhoneOutcome::Accepted => SendAnswer::Receipt(super::Delivery::Queued),
+        PhoneOutcome::Running => SendAnswer::Receipt(super::Delivery::Injected),
+        PhoneOutcome::Done => SendAnswer::Receipt(super::Delivery::Settled),
+        PhoneOutcome::Unknown(UnknownCause::Unresolved) => SendAnswer::Refused(
+            PhoneFailure::Conversation(ConversationErrorCode::SubmissionUnresolved),
+        ),
+        PhoneOutcome::Failed(failure) => SendAnswer::Refused(failure),
+        PhoneOutcome::Draft | PhoneOutcome::Unknown(_) => return None,
+    })
+}
+
+fn lookup_witnesses(outcome: PhoneOutcome) -> Vec<LookupAnswer> {
+    let mut answers = Vec::new();
+    match outcome {
+        PhoneOutcome::Unknown(UnknownCause::NotAdmitted) => answers.push(LookupAnswer::NotFound),
+        PhoneOutcome::Unknown(UnknownCause::LookupFailed) => {
+            answers.push(LookupAnswer::Lost);
+            answers.push(LookupAnswer::Broken);
+        }
+        PhoneOutcome::Unknown(UnknownCause::Unresolved) => answers.push(LookupAnswer::Refused(
+            PhoneFailure::Conversation(ConversationErrorCode::SubmissionUnresolved),
+        )),
+        PhoneOutcome::Unknown(UnknownCause::Attempted) => answers.push(LookupAnswer::Found {
+            stage: ReceiptStage::Attempted,
+            effect: None,
+        }),
+        PhoneOutcome::Accepted => answers.push(LookupAnswer::Found {
+            stage: ReceiptStage::Accepted,
+            effect: None,
+        }),
+        PhoneOutcome::Done => answers.push(LookupAnswer::Found {
+            stage: ReceiptStage::Settled,
+            effect: Some(ReceiptEffect::Dispatched),
+        }),
+        PhoneOutcome::Running | PhoneOutcome::Draft => {}
+        PhoneOutcome::Failed(failure) => {
+            answers.push(LookupAnswer::Refused(failure));
+            if let PhoneFailure::Conversation(code) = failure {
+                let effect = match code {
+                    ConversationErrorCode::Revoked => Some(ReceiptEffect::NoEffect),
+                    ConversationErrorCode::RevokedAfterSave => {
+                        Some(ReceiptEffect::RefusedAfterSave)
+                    }
+                    ConversationErrorCode::UnavailableAfterSave => {
+                        Some(ReceiptEffect::UnavailableAfterSave)
+                    }
+                    ConversationErrorCode::SubmissionConflict => {
+                        answers.push(LookupAnswer::Conflict);
+                        None
+                    }
+                    _ => None,
+                };
+                if let Some(effect) = effect {
+                    answers.push(LookupAnswer::Found {
+                        stage: ReceiptStage::Settled,
+                        effect: Some(effect),
+                    });
+                }
+            }
+        }
+    }
+    answers
 }
 
 /// The new draft carries the text and images `turn_running` handed back.
@@ -148,55 +372,6 @@ fn successor_follows(record: &PhoneRecord, events: &[IntentEvent]) -> bool {
         (returned, record.successor().is_some(), running),
         (true, true, true) | (false, false, false)
     )
-}
-
-fn step_allowed(from: PhoneOutcome, event: &IntentEvent, previous: Cause) -> bool {
-    let to = event.outcome;
-    match event.cause {
-        Cause::Held => false,
-        Cause::Departed => {
-            from == PhoneOutcome::Draft && to == PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
-        }
-        Cause::SendLost | Cause::Unreadable | Cause::Bound => {
-            from == PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
-                && to == PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
-        }
-        Cause::SendAnswered | Cause::ForegroundSend => open_unknown(from) && send_outcome(to),
-        Cause::ExplicitRetry => {
-            (from == PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
-                && to == PhoneOutcome::Unknown(UnknownCause::NotAdmitted))
-                || (open_unknown(from) && send_outcome(to))
-        }
-        Cause::Lookup => open_unknown(from) && lookup_outcome(to),
-        Cause::ReturnedToDraft => {
-            let failed = turn_running_outcome(to);
-            (open_unknown(from) && failed) || (from == to && failed && previous == Cause::Lookup)
-        }
-    }
-}
-
-fn open_unknown(outcome: PhoneOutcome) -> bool {
-    matches!(
-        outcome,
-        PhoneOutcome::Unknown(
-            UnknownCause::NotAdmitted | UnknownCause::LookupFailed | UnknownCause::Attempted
-        )
-    )
-}
-
-fn send_outcome(outcome: PhoneOutcome) -> bool {
-    match outcome {
-        PhoneOutcome::Accepted | PhoneOutcome::Running | PhoneOutcome::Done => true,
-        PhoneOutcome::Unknown(UnknownCause::Unresolved) => true,
-        PhoneOutcome::Failed(failure) => !turn_running(failure),
-        PhoneOutcome::Draft | PhoneOutcome::Unknown(_) => false,
-    }
-}
-
-fn lookup_outcome(outcome: PhoneOutcome) -> bool {
-    // Running is only a direct injected receipt. A lookup cannot record it
-    // (`every_transition_and_precedence_pair`).
-    !matches!(outcome, PhoneOutcome::Draft | PhoneOutcome::Running)
 }
 
 fn turn_running_outcome(outcome: PhoneOutcome) -> bool {

@@ -367,7 +367,6 @@ fn every_transition_and_precedence_pair() {
         audit(Cause::Held, draft),
         audit(Cause::Departed, not_admitted),
         audit(Cause::SendLost, not_admitted),
-        audit(Cause::Lookup, not_admitted),
         audit(Cause::ForegroundSend, accepted),
     ];
     assert!(history_reaches(
@@ -378,6 +377,43 @@ fn every_transition_and_precedence_pair() {
         &resend,
         false
     ));
+    let resumed = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::SendLost, not_admitted),
+        audit(Cause::Lookup, lookup_failed),
+        audit(Cause::SendLost, lookup_failed),
+        audit(Cause::Lookup, not_admitted),
+        audit(Cause::ForegroundSend, accepted),
+    ];
+    assert!(
+        history_reaches(
+            &not_admitted_row
+                .clone()
+                .with_sends(3)
+                .with_outcome(accepted),
+            &resumed,
+            false
+        ),
+        "a lost lookup that finds nothing is a foreground send"
+    );
+    let forged = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::Lookup, not_admitted),
+        audit(Cause::ForegroundSend, accepted),
+    ];
+    assert!(
+        !history_reaches(
+            &not_admitted_row
+                .clone()
+                .with_sends(1)
+                .with_outcome(accepted),
+            &forged,
+            false
+        ),
+        "foreground send does not follow an explicit-retry lookup"
+    );
 
     let explicit = [
         audit(Cause::Held, draft),
@@ -413,6 +449,7 @@ fn every_transition_and_precedence_pair() {
     assert!(history_reaches(
         &not_admitted_row
             .clone()
+            .with_sends(1)
             .with_outcome(running_failure)
             .with_successor(successor.clone()),
         &direct_return,
@@ -513,6 +550,29 @@ fn every_transition_and_precedence_pair() {
         &bound,
         false
     ));
+
+    let attempted_prefix = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::Lookup, attempted),
+    ];
+    assert!(history_reaches(
+        &not_admitted_row.clone().with_outcome(attempted),
+        &attempted_prefix,
+        false
+    ));
+    for downgrade in [not_admitted, lookup_failed] {
+        let mut events = attempted_prefix.to_vec();
+        events.push(audit(Cause::Lookup, downgrade));
+        assert!(
+            !history_reaches(
+                &not_admitted_row.clone().with_outcome(downgrade),
+                &events,
+                false
+            ),
+            "attempted must not restore as {downgrade:?}"
+        );
+    }
 
     let skipped = [
         audit(Cause::Held, draft),

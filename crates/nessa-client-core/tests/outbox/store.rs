@@ -1051,6 +1051,62 @@ fn recovery_adopts_a_dispatched_receipt_without_sending() {
 }
 
 #[test]
+fn a_lookup_failure_is_retried_as_an_explicit_send() {
+    let dir = directory();
+    let path = path_in(&dir);
+    {
+        let gateway = Scripted::new(vec![SendAnswer::Lost], vec![LookupAnswer::Lost]);
+        let mut outbox = opened(&path, gateway);
+        person_hold(&mut outbox, text_intent("command-1", "hello"));
+        let view = outbox.send(&command("command-1")).unwrap();
+        assert_eq!(
+            view.outcome(),
+            PhoneOutcome::Unknown(UnknownCause::LookupFailed)
+        );
+    }
+    let gateway = Scripted::new(
+        vec![SendAnswer::Receipt(Delivery::Queued)],
+        vec![LookupAnswer::NotFound],
+    );
+    let mut outbox = opened(&path, gateway);
+    let view = outbox.retry(&command("command-1")).unwrap();
+    assert_eq!(view.outcome(), PhoneOutcome::Accepted);
+    drop(outbox);
+    let mut check = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+    let rows = check.list().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].outcome(), PhoneOutcome::Accepted);
+    drop(check);
+    let mut store = SqliteIntents::open(&path).unwrap();
+    let events = store.events("command-1").unwrap();
+    let causes: Vec<_> = events.iter().map(|event| event.cause).collect();
+    assert_eq!(
+        causes,
+        [
+            Cause::Held,
+            Cause::Departed,
+            Cause::SendLost,
+            Cause::Lookup,
+            Cause::Lookup,
+            Cause::ExplicitRetry,
+            Cause::ExplicitRetry,
+        ]
+    );
+    assert_eq!(
+        events[3].outcome,
+        PhoneOutcome::Unknown(UnknownCause::LookupFailed)
+    );
+    assert_eq!(
+        events[4].outcome,
+        PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+    );
+    assert_eq!(
+        store.load(&command("command-1")).unwrap().unwrap().sends(),
+        1
+    );
+}
+
+#[test]
 fn an_explicit_retry_looks_up_before_it_sends() {
     let dir = directory();
     let path = path_in(&dir);
@@ -1552,6 +1608,250 @@ fn a_done_row_whose_history_stops_at_departure_is_corrupt() {
         )
         .unwrap();
     assert_eq!(initiator, "recovery");
+}
+
+#[test]
+fn an_attempted_receipt_is_not_restored_as_not_admitted() {
+    let dir = directory();
+    let path = path_in(&dir);
+    {
+        let gateway = Scripted::new(
+            vec![SendAnswer::Lost],
+            vec![LookupAnswer::Found {
+                stage: ReceiptStage::Attempted,
+                effect: None,
+            }],
+        );
+        let mut outbox = opened(&path, gateway);
+        person_hold(&mut outbox, text_intent("command-1", "hello"));
+        let view = outbox.send(&command("command-1")).unwrap();
+        assert_eq!(
+            view.outcome(),
+            PhoneOutcome::Unknown(UnknownCause::Attempted)
+        );
+    }
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let ordinal: i64 = connection
+        .query_row(
+            "SELECT COALESCE(MAX(ordinal), -1) + 1 FROM phone_intent_event
+             WHERE request_id = 'command-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE phone_intent SET outcome = 'unknown', unknown = 'not_admitted', failure = NULL
+             WHERE request_id = 'command-1'",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO phone_intent_event
+             (request_id, ordinal, cause, outcome, failure, unknown, initiator, observed_at_ms)
+             VALUES ('command-1', ?1, 'lookup', 'unknown', NULL, 'not_admitted', 'person', 1)",
+            nessa_local_database::rusqlite::params![ordinal],
+        )
+        .unwrap();
+    drop(connection);
+    let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+    assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
+    drop(outbox);
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let unknown: String = connection
+        .query_row(
+            "SELECT unknown FROM phone_intent WHERE request_id = 'command-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(unknown, "not_admitted");
+}
+
+#[test]
+fn a_recovery_draft_requires_its_turn_running_predecessor() {
+    let prepare = || {
+        let dir = directory();
+        let path = path_in(&dir);
+        depart(&path, text_intent("command-1", "keep this"));
+        let gateway = Scripted::new(
+            Vec::new(),
+            vec![failure_lookup(ConversationErrorCode::TurnRunning)],
+        );
+        let mut outbox = opened(&path, gateway);
+        let recovered = outbox.recover().unwrap();
+        let successor = recovered[0].successor().unwrap().as_str().to_owned();
+        assert_eq!(outbox.list().unwrap().len(), 2);
+        drop(outbox);
+        (dir, path, successor)
+    };
+
+    let (_dir, path, successor) = prepare();
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "DELETE FROM phone_intent WHERE request_id = 'command-1'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+    assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
+    drop(outbox);
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let outcome: String = connection
+        .query_row(
+            "SELECT outcome FROM phone_intent WHERE request_id = ?1",
+            nessa_local_database::rusqlite::params![successor.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(outcome, "draft");
+
+    let (_dir, path, successor) = prepare();
+    let duplicate = text_intent("command-2", "keep this");
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO phone_intent
+             SELECT 'command-2', ?1, departed, outcome, failure, unknown, sends, successor
+             FROM phone_intent WHERE request_id = 'command-1'",
+            nessa_local_database::rusqlite::params![duplicate.canonical()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO phone_intent_event
+             SELECT 'command-2', ordinal, cause, outcome, failure, unknown, initiator, observed_at_ms
+             FROM phone_intent_event WHERE request_id = 'command-1'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+    assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
+    drop(outbox);
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let pointed: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM phone_intent WHERE successor = ?1",
+            nessa_local_database::rusqlite::params![successor.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(pointed, 2);
+
+    let (_dir, path, _successor) = prepare();
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE phone_intent SET outcome = 'done', failure = NULL, unknown = NULL
+             WHERE request_id = 'command-1'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+    assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
+    drop(outbox);
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let outcome: String = connection
+        .query_row(
+            "SELECT outcome FROM phone_intent WHERE request_id = 'command-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(outcome, "done");
+
+    let (_dir, path, successor) = prepare();
+    depart(&path, text_intent("command-2", "keep this"));
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE phone_intent SET successor = ?1 WHERE request_id = 'command-2'",
+            nessa_local_database::rusqlite::params![successor.as_str()],
+        )
+        .unwrap();
+    drop(connection);
+    let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+    assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
+
+    let (_dir, path, _successor) = prepare();
+    let other = text_intent("command-1", "other");
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE phone_intent SET canonical = ?1 WHERE request_id = 'command-1'",
+            nessa_local_database::rusqlite::params![other.canonical()],
+        )
+        .unwrap();
+    drop(connection);
+    let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+    assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
+    drop(outbox);
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let canonical: Vec<u8> = connection
+        .query_row(
+            "SELECT canonical FROM phone_intent WHERE request_id = 'command-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(canonical, other.canonical());
+}
+
+#[test]
+fn an_event_column_contradiction_is_corrupt() {
+    let dir = directory();
+    let path = path_in(&dir);
+    {
+        let gateway = Scripted::new(
+            vec![
+                SendAnswer::Receipt(Delivery::Queued),
+                failure(ConversationErrorCode::TemporarilyUnavailable),
+            ],
+            Vec::new(),
+        );
+        let mut outbox = opened(&path, gateway);
+        person_hold(&mut outbox, text_intent("command-1", "hello"));
+        outbox.send(&command("command-1")).unwrap();
+        person_hold(&mut outbox, text_intent("command-2", "hello"));
+        let failed = outbox.send(&command("command-2")).unwrap();
+        assert!(matches!(failed.outcome(), PhoneOutcome::Failed(_)));
+    }
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let accepted = connection
+        .execute(
+            "UPDATE phone_intent_event SET failure = 'forbidden'
+             WHERE request_id = 'command-1' AND cause = 'send_answered'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(accepted, 1);
+    let failed = connection
+        .execute(
+            "UPDATE phone_intent_event SET unknown = 'not_admitted'
+             WHERE request_id = 'command-2' AND cause = 'send_answered'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(failed, 1);
+    drop(connection);
+    let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
+    assert_eq!(outbox.list().unwrap_err(), OutboxError::Corrupt);
+    drop(outbox);
+    let connection = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    let failure: String = connection
+        .query_row(
+            "SELECT failure FROM phone_intent_event
+             WHERE request_id = 'command-1' AND cause = 'send_answered'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(failure, "forbidden");
 }
 
 #[test]

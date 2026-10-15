@@ -5,9 +5,9 @@
 //! that answer. A lost save after departure reloads the row.
 
 use super::super::domain::{
-    after_lookup, after_send, replaces, stored_evidence, Cause, Evidence, Initiator, IntentEvent,
-    LookupAnswer, PhoneCommandId, PhoneIntent, PhoneOutcome, PhoneRecord, PhoneView, Step,
-    UnknownCause, FOREGROUND_SENDS,
+    apply_lookup as commit_lookup, apply_retry, apply_send as commit_send, budget, replaces,
+    retryable, stored_evidence, Applied, Budget, Cause, Evidence, Initiator, IntentEvent,
+    LookupAnswer, PhoneCommandId, PhoneIntent, PhoneOutcome, PhoneRecord, PhoneView, UnknownCause,
 };
 use super::ports::{CommandIds, IntentStore, OutboxError, PhoneGateway, StoreError};
 use nessa_auth::application::ports::Clock;
@@ -187,20 +187,25 @@ where
         if record != original {
             return Ok(kept_body(record.view()));
         }
-        let looked = record
-            .clone()
-            .with_outcome(PhoneOutcome::Unknown(UnknownCause::NotAdmitted));
-        let marked = self.asked_or_kept(&record, &looked, Cause::Lookup, by, Evidence::Lookup)?;
-        if marked.resave.is_none() {
-            return Ok(marked);
-        }
-        let reset = looked.clone().with_sends(0);
+        let Some(reset) = apply_retry(record.clone()) else {
+            return Ok(kept_body(record.view()));
+        };
         let marked =
-            self.asked_or_kept(&looked, &reset, Cause::ExplicitRetry, by, Evidence::Lookup)?;
+            self.asked_or_kept(&record, &reset.looked, Cause::Lookup, by, Evidence::Lookup)?;
         if marked.resave.is_none() {
             return Ok(marked);
         }
-        self.foreground(reset, by, Cause::ExplicitRetry)
+        let marked = self.asked_or_kept(
+            &reset.looked,
+            &reset.reset,
+            Cause::ExplicitRetry,
+            by,
+            Evidence::Lookup,
+        )?;
+        if marked.resave.is_none() {
+            return Ok(marked);
+        }
+        self.foreground(reset.reset, by, Cause::ExplicitRetry)
     }
 
     /// Wait for the writer lease, run `body`, and commit it.
@@ -277,80 +282,90 @@ where
         mut cause: Cause,
     ) -> Result<LeaseBody, OutboxError> {
         loop {
-            if record.sends() >= FOREGROUND_SENDS {
-                tracing::warn!(
-                    limit = "client.foreground_sends",
-                    "product session hit an operational limit"
-                );
-                // Bound is only not-admitted staying not-admitted. A lookup
-                // that already failed stays lookup-failed. Writing Bound
-                // across that change does not restore
-                // (`a_spent_budget_keeps_lookup_failed`).
-                if !matches!(
-                    record.outcome(),
-                    PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
-                ) {
-                    return Ok(kept_body(record.view()));
+            match budget(record.clone()) {
+                Budget::Bound(next) => {
+                    tracing::warn!(
+                        limit = "client.foreground_sends",
+                        "product session hit an operational limit"
+                    );
+                    return self.asked_or_kept(&record, &next, Cause::Bound, by, Evidence::Lookup);
                 }
-                let next = record
-                    .clone()
-                    .with_outcome(PhoneOutcome::Unknown(UnknownCause::NotAdmitted));
-                return self.asked_or_kept(&record, &next, Cause::Bound, by, Evidence::Lookup);
+                // Lookup failed at the budget writes nothing
+                // (`a_spent_budget_keeps_lookup_failed`).
+                Budget::Stop => return Ok(kept_body(record.view())),
+                Budget::Send => {}
             }
             let answer = self.gateway.send(record.intent());
-            match after_send(record.clone(), answer) {
-                Step::Done(next) => {
-                    return self.asked_or_kept(&record, &next, cause, by, Evidence::Direct)
-                }
-                Step::ReturnToDraft(next) => {
-                    return self.return_to_draft(&record, next, by, Evidence::Direct)
-                }
-                Step::Lookup {
+            match commit_send(record.clone(), answer, cause) {
+                Applied::Save {
+                    record: next,
+                    cause,
+                    evidence,
+                } => return self.asked_or_kept(&record, &next, cause, by, evidence),
+                Applied::Return {
+                    record: next,
+                    lookup: false,
+                } => return self.return_to_draft(&record, next, by, Evidence::Direct),
+                Applied::Mark {
                     record: bumped,
+                    cause: lost,
                     resend,
                 } => {
-                    let lost = if resend {
-                        Cause::SendLost
-                    } else {
-                        Cause::Unreadable
-                    };
                     let marked =
                         self.asked_or_kept(&record, &bumped, lost, by, Evidence::Lookup)?;
                     if marked.resave.is_none() {
                         return Ok(marked);
                     }
                     let looked = self.gateway.lookup(bumped.intent());
-                    match after_lookup(bumped.clone(), looked, resend) {
-                        Step::Done(next) => {
-                            let at_bound = resend && stopped_at_bound(&bumped, &next);
-                            if at_bound {
+                    match commit_lookup(bumped.clone(), looked, resend) {
+                        Applied::Save {
+                            record: next,
+                            cause,
+                            evidence,
+                        } => {
+                            if cause == Cause::Bound {
                                 tracing::warn!(
                                     limit = "client.foreground_sends",
                                     "product session hit an operational limit"
                                 );
                             }
-                            let cause = if at_bound {
-                                Cause::Bound
-                            } else {
-                                Cause::Lookup
-                            };
-                            return self.asked_or_kept(&bumped, &next, cause, by, Evidence::Lookup);
+                            return self.asked_or_kept(&bumped, &next, cause, by, evidence);
                         }
-                        Step::ReturnToDraft(next) => {
-                            return self.return_to_draft(&bumped, next, by, Evidence::Lookup)
-                        }
-                        Step::Send(next) => {
-                            // The resend is recorded with its answer, after
-                            // `conversation.send`. A crash before that call
-                            // leaves no ForegroundSend event
+                        Applied::Return {
+                            record: next,
+                            lookup: true,
+                        } => return self.return_to_draft(&bumped, next, by, Evidence::Lookup),
+                        Applied::Resend { record: next } => {
+                            // Not found under the budget writes Lookup only
+                            // when that changes the outcome. The resend is
+                            // recorded with its answer
                             // (`a_lost_answer_retransmits_the_same_bytes_until_the_bound`).
+                            if next.outcome() != bumped.outcome() {
+                                let marked = self.asked_or_kept(
+                                    &bumped,
+                                    &next,
+                                    Cause::Lookup,
+                                    by,
+                                    Evidence::Lookup,
+                                )?;
+                                if marked.resave.is_none() {
+                                    return Ok(marked);
+                                }
+                            }
                             record = next;
                             cause = Cause::ForegroundSend;
                         }
-                        Step::Lookup { .. } => return Err(OutboxError::Unsaved),
+                        // An impossible receipt, or not-found after an
+                        // unreadable answer, leaves the marked row.
+                        Applied::Keep => return Ok(marked),
+                        Applied::Mark { .. } | Applied::Return { .. } => {
+                            return Err(OutboxError::Unsaved)
+                        }
                     }
                 }
-                Step::Send(_) => return Err(OutboxError::Unsaved),
+                Applied::Keep | Applied::Resend { .. } | Applied::Return { .. } => {
+                    return Err(OutboxError::Unsaved)
+                }
             }
         }
     }
@@ -362,21 +377,30 @@ where
         by: Initiator,
         allow_send: bool,
     ) -> Result<LeaseBody, OutboxError> {
-        match after_lookup(record.clone(), answer, allow_send) {
-            Step::Done(next) if next == record => Ok(kept_body(record.view())),
-            Step::Done(next) => {
-                self.asked_or_kept(&record, &next, Cause::Lookup, by, Evidence::Lookup)
-            }
-            Step::ReturnToDraft(next) => self.return_to_draft(&record, next, by, Evidence::Lookup),
-            Step::Send(next) => {
-                let marked =
-                    self.asked_or_kept(&record, &next, Cause::Lookup, by, Evidence::Lookup)?;
-                if marked.resave.is_none() {
-                    return Ok(marked);
+        match commit_lookup(record.clone(), answer, allow_send) {
+            Applied::Keep => Ok(kept_body(record.view())),
+            Applied::Save {
+                record: next,
+                cause,
+                evidence,
+            } => self.asked_or_kept(&record, &next, cause, by, evidence),
+            Applied::Return {
+                record: next,
+                lookup: true,
+            } => self.return_to_draft(&record, next, by, Evidence::Lookup),
+            Applied::Resend { record: next } => {
+                if next.outcome() != record.outcome() {
+                    let marked =
+                        self.asked_or_kept(&record, &next, Cause::Lookup, by, Evidence::Lookup)?;
+                    if marked.resave.is_none() {
+                        return Ok(marked);
+                    }
                 }
                 self.foreground(next, by, Cause::ForegroundSend)
             }
-            Step::Lookup { .. } => Err(OutboxError::Unsaved),
+            Applied::Mark { .. } | Applied::Return { lookup: false, .. } => {
+                Err(OutboxError::Unsaved)
+            }
         }
     }
 
@@ -652,13 +676,6 @@ fn kept_body(view: PhoneView) -> LeaseBody {
     LeaseBody { view, resave: None }
 }
 
-fn retryable(record: &PhoneRecord) -> bool {
-    matches!(
-        record.outcome(),
-        PhoneOutcome::Unknown(UnknownCause::NotAdmitted | UnknownCause::LookupFailed)
-    )
-}
-
 /// A departed command whose receipt may still change. Attempted is included
 /// so recovery can adopt a later settled receipt. It is not retried.
 fn open_outcome(record: &PhoneRecord) -> bool {
@@ -689,12 +706,4 @@ fn overlay(saved: &PhoneRecord, next: &PhoneRecord) -> PhoneRecord {
         updated = updated.with_successor(successor.clone());
     }
     updated
-}
-
-fn stopped_at_bound(before: &PhoneRecord, next: &PhoneRecord) -> bool {
-    before.sends() >= FOREGROUND_SENDS
-        && matches!(
-            next.outcome(),
-            PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
-        )
 }

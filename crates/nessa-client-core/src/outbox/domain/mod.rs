@@ -15,14 +15,19 @@ mod record;
 mod restore;
 
 pub use decide::FOREGROUND_SENDS;
-pub(crate) use decide::{after_lookup, after_send, submit_outcome, Step};
+#[cfg(test)]
+pub(crate) use decide::{after_lookup, after_send, Step};
+pub(crate) use decide::{
+    apply_lookup, apply_retry, apply_send, budget, retryable, submit_outcome, Applied, Budget,
+    Evidence,
+};
 pub use intent::{IntentError, PhoneCommandId, PhoneImage, PhoneIntent};
 pub use outcome::{
     Cause, Delivery, Initiator, LookupAnswer, PhoneFailure, PhoneOutcome, ReceiptEffect,
     ReceiptStage, SendAnswer, UnknownCause,
 };
 pub use record::{IntentEvent, PhoneRecord, PhoneView};
-pub(crate) use restore::{history_reaches, replaces, same_prompt, stored_evidence, Evidence};
+pub(crate) use restore::{history_reaches, replaces, same_prompt, stored_evidence};
 
 #[cfg(test)]
 #[path = "../../../tests/outbox/domain.rs"]

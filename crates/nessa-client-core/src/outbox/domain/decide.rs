@@ -1,8 +1,8 @@
 //! How a gateway answer moves a departed command. No store and no socket.
 
 use super::{
-    Delivery, LookupAnswer, PhoneFailure, PhoneOutcome, PhoneRecord, ReceiptEffect, ReceiptStage,
-    SendAnswer, UnknownCause,
+    Cause, Delivery, LookupAnswer, PhoneFailure, PhoneOutcome, PhoneRecord, ReceiptEffect,
+    ReceiptStage, SendAnswer, UnknownCause,
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 
@@ -149,4 +149,182 @@ pub(crate) fn submit_outcome(
 
 fn failed(code: ConversationErrorCode) -> PhoneOutcome {
     PhoneOutcome::Failed(PhoneFailure::Conversation(code))
+}
+
+/// Where an outcome came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Evidence {
+    /// `conversation.send` returned this outcome.
+    Direct,
+    /// A lookup, a departure, or another row that has not stored a direct answer.
+    Lookup,
+}
+
+/// What one live answer persists. The outbox and restoration both ask this.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Applied {
+    /// Append one event and adopt `record`.
+    Save {
+        /// The row after the event.
+        record: PhoneRecord,
+        /// The audit cause.
+        cause: Cause,
+        /// Whether the cause is a direct answer.
+        evidence: Evidence,
+    },
+    /// Append SendLost or Unreadable, then look the receipt up.
+    Mark {
+        /// The row after the lost or unreadable send.
+        record: PhoneRecord,
+        /// SendLost or Unreadable.
+        cause: Cause,
+        /// Whether an absent receipt may send again.
+        resend: bool,
+    },
+    /// `turn_running`. `lookup` writes a Lookup event before ReturnedToDraft.
+    Return {
+        /// The failed row, before its successor is named.
+        record: PhoneRecord,
+        /// True when the refusal came from a lookup.
+        lookup: bool,
+    },
+    /// Not found while the budget remains. No event. Send `record` again.
+    Resend {
+        /// The row the next send uses.
+        record: PhoneRecord,
+    },
+    /// The row stays. No event.
+    Keep,
+}
+
+/// Whether foreground may call `conversation.send`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Budget {
+    /// The send count is under the budget and the outcome may still be sent.
+    Send,
+    /// Not admitted, and the budget is spent. Persist Bound.
+    Bound(PhoneRecord),
+    /// Write nothing. Lookup failed at the budget is this, and so is a finished row.
+    Stop,
+}
+
+/// The explicit-retry pair: a not-admitted lookup, then a send count of zero.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RetryReset {
+    /// Lookup of not admitted. The send count is unchanged.
+    pub looked: PhoneRecord,
+    /// ExplicitRetry. The send count is zero.
+    pub reset: PhoneRecord,
+}
+
+/// Not admitted or lookup failed. Attempted is not retried.
+pub(crate) fn retryable(record: &PhoneRecord) -> bool {
+    matches!(
+        record.outcome(),
+        PhoneOutcome::Unknown(UnknownCause::NotAdmitted | UnknownCause::LookupFailed)
+    )
+}
+
+/// What foreground does before it asks `conversation.send`.
+pub(crate) fn budget(record: PhoneRecord) -> Budget {
+    if record.sends() < FOREGROUND_SENDS {
+        if retryable(&record) {
+            Budget::Send
+        } else {
+            Budget::Stop
+        }
+    } else if matches!(
+        record.outcome(),
+        PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+    ) {
+        Budget::Bound(record.with_outcome(PhoneOutcome::Unknown(UnknownCause::NotAdmitted)))
+    } else {
+        Budget::Stop
+    }
+}
+
+/// The event `conversation.send` persists, including the lost and unreadable marks.
+///
+/// At the budget this persists nothing: the caller asked [`budget`] first
+/// (`a_spent_budget_keeps_lookup_failed`).
+pub(crate) fn apply_send(record: PhoneRecord, answer: SendAnswer, cause: Cause) -> Applied {
+    if !matches!(
+        cause,
+        Cause::SendAnswered | Cause::ForegroundSend | Cause::ExplicitRetry
+    ) || !matches!(budget(record.clone()), Budget::Send)
+    {
+        return Applied::Keep;
+    }
+    match after_send(record, answer) {
+        Step::Done(next) => Applied::Save {
+            record: next,
+            cause,
+            evidence: Evidence::Direct,
+        },
+        Step::ReturnToDraft(record) => Applied::Return {
+            record,
+            lookup: false,
+        },
+        Step::Lookup { record, resend } => Applied::Mark {
+            cause: if resend {
+                Cause::SendLost
+            } else {
+                Cause::Unreadable
+            },
+            resend,
+            record,
+        },
+        Step::Send(_) => Applied::Keep,
+    }
+}
+
+/// The event `conversation.receipt` persists.
+///
+/// `resend` is true only after SendLost in that same foreground call.
+/// Not found on attempted leaves the row
+/// (`an_attempted_receipt_is_not_restored_as_not_admitted`). Bound is only
+/// not admitted staying not admitted.
+pub(crate) fn apply_lookup(record: PhoneRecord, answer: LookupAnswer, resend: bool) -> Applied {
+    let before = record.clone();
+    match after_lookup(record, answer, resend) {
+        Step::Done(next) if next == before && !bound_stop(&before, &next, resend) => Applied::Keep,
+        Step::Done(next) => Applied::Save {
+            cause: if bound_stop(&before, &next, resend) {
+                Cause::Bound
+            } else {
+                Cause::Lookup
+            },
+            evidence: Evidence::Lookup,
+            record: next,
+        },
+        Step::ReturnToDraft(record) => Applied::Return {
+            record,
+            lookup: true,
+        },
+        Step::Send(record) => Applied::Resend { record },
+        Step::Lookup { .. } => Applied::Keep,
+    }
+}
+
+/// The two events an explicit retry writes before it sends.
+pub(crate) fn apply_retry(record: PhoneRecord) -> Option<RetryReset> {
+    if !retryable(&record) {
+        return None;
+    }
+    let looked = record.with_outcome(PhoneOutcome::Unknown(UnknownCause::NotAdmitted));
+    let reset = looked.clone().with_sends(0);
+    Some(RetryReset { looked, reset })
+}
+
+fn bound_stop(before: &PhoneRecord, next: &PhoneRecord, resend: bool) -> bool {
+    resend
+        && before.sends() >= FOREGROUND_SENDS
+        && matches!(
+            before.outcome(),
+            PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+        )
+        && matches!(
+            next.outcome(),
+            PhoneOutcome::Unknown(UnknownCause::NotAdmitted)
+        )
 }
