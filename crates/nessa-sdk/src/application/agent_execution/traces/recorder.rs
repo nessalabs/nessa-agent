@@ -164,7 +164,7 @@ pub enum PermissionFact {
         tool_id: String,
         /// `allow` or `deny`.
         effect: String,
-        /// Who answered: `person`, `deadline`, `hook`, `provider`, or `runtime`.
+        /// Who answered: `person`, `rule`, `mode`, `hook`, `deadline`, `provider`, or `runtime`.
         decider: String,
     },
     /// The review was withdrawn.
@@ -305,7 +305,7 @@ impl TraceRecorder {
         if self.turn.is_some() {
             self.finish(at, FinishReason::Cancelled);
         }
-        let trace_id = trace_id(&identity.execution_id);
+        let trace_id = trace_id(&identity.conversation_id, &identity.execution_id);
         let mut agent = self.open_span(
             trace_id.clone(),
             None,
@@ -429,6 +429,10 @@ impl TraceRecorder {
                 arguments,
             } => {
                 self.ensure_tool_for_permission(&tool_id, &tool_name, arguments.as_deref());
+                if self.permission_is_terminal(&tool_id) {
+                    self.prefer_tool_name(&tool_id, &tool_name);
+                    return;
+                }
                 self.mark_permission(&tool_id, &id, "requested", None, None);
             }
             PermissionFact::Answered {
@@ -436,13 +440,16 @@ impl TraceRecorder {
                 tool_id,
                 effect,
                 decider,
-            } => self.mark_permission(
-                &tool_id,
-                &id,
-                "answered",
-                Some(effect.as_str()),
-                Some(decider.as_str()),
-            ),
+            } => {
+                self.ensure_tool_for_permission(&tool_id, &tool_id, None);
+                self.mark_permission(
+                    &tool_id,
+                    &id,
+                    "answered",
+                    Some(effect.as_str()),
+                    Some(decider.as_str()),
+                );
+            }
             PermissionFact::Cancelled {
                 id,
                 tool_id,
@@ -732,6 +739,35 @@ impl TraceRecorder {
         );
     }
 
+    fn permission_is_terminal(&self, tool_id: &str) -> bool {
+        self.turn.as_ref().is_some_and(|turn| {
+            turn.tools.iter().any(|tool| {
+                tool.id == tool_id
+                    && matches!(
+                        tool.span.string_attr(NESSA_PERMISSION_STATE),
+                        Some("answered" | "cancelled" | "declined" | "deadline")
+                    )
+            })
+        })
+    }
+
+    fn prefer_tool_name(&mut self, tool_id: &str, tool_name: &str) {
+        if tool_name.is_empty() {
+            return;
+        }
+        let Some(turn) = self.turn.as_mut() else {
+            return;
+        };
+        let Some(tool) = turn.tools.iter_mut().find(|tool| tool.id == tool_id) else {
+            return;
+        };
+        let current = tool.span.string_attr(ATTR_TOOL_NAME).map(str::to_owned);
+        if current.as_deref().is_none_or(|name| name == tool.id) {
+            set_str(&mut tool.span.attributes, ATTR_TOOL_NAME, tool_name);
+            tool.span.name = format!("execute_tool {tool_name}");
+        }
+    }
+
     fn mark_permission(
         &mut self,
         tool_id: &str,
@@ -986,13 +1022,17 @@ fn merge_usage(mut base: ReportedUsage, next: &ReportedUsage) -> ReportedUsage {
     base
 }
 
-fn trace_id(execution_id: &str) -> String {
+fn trace_id(conversation_id: &str, execution_id: &str) -> String {
     let mut high = 0xcbf2_9ce4_8422_2325_u64;
     let mut low = 0xbb91_b341_5d2a_7c1f_u64;
-    for byte in execution_id.as_bytes() {
-        high ^= u64::from(*byte);
+    for byte in conversation_id
+        .bytes()
+        .chain(std::iter::once(0xff))
+        .chain(execution_id.bytes())
+    {
+        high ^= u64::from(byte);
         high = high.wrapping_mul(0x100_0000_01b3);
-        low ^= u64::from(*byte);
+        low ^= u64::from(byte);
         low = low.wrapping_mul(0x100_0000_01b3);
     }
     format!("{high:016x}{low:016x}")

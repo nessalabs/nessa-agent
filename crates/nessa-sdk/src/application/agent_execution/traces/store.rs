@@ -2,8 +2,15 @@
 #![deny(missing_docs)]
 
 use super::span::{AttributeValue, GenAiSpan};
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
+
+thread_local! {
+    /// Stores currently forwarding to an exporter on this thread.
+    /// A re-entrant export still records the span and does not forward again.
+    static EXPORTING: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
 
 const CAPACITY: usize = 2048;
 const OP_AGENT: &str = "invoke_agent";
@@ -76,16 +83,28 @@ impl SpanExporter for ExporterList {
     }
 }
 
-struct HookNote {
-    event: String,
-    verdict: String,
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct NoteKey {
+    conversation_id: String,
+    execution_id: String,
+}
+
+impl NoteKey {
+    fn new(conversation_id: &str, execution_id: &str) -> Self {
+        Self {
+            conversation_id: conversation_id.to_owned(),
+            execution_id: execution_id.to_owned(),
+        }
+    }
 }
 
 struct Pending {
     grant_id: Option<String>,
     policy_revision: Option<u64>,
     tools_checked: Option<bool>,
-    hooks: Vec<HookNote>,
+    hook_event: Option<String>,
+    hook_verdict: Option<String>,
+    hook_count: u64,
     subagent_id: Option<String>,
     subagent_parent: Option<String>,
 }
@@ -96,7 +115,9 @@ impl Pending {
             grant_id: None,
             policy_revision: None,
             tools_checked: None,
-            hooks: Vec::new(),
+            hook_event: None,
+            hook_verdict: None,
+            hook_count: 0,
             subagent_id: None,
             subagent_parent: None,
         }
@@ -105,10 +126,14 @@ impl Pending {
 
 struct Inner {
     spans: VecDeque<GenAiSpan>,
-    pending: HashMap<String, Pending>,
+    pending: HashMap<NoteKey, Pending>,
+    pending_order: VecDeque<NoteKey>,
+    /// Child spans of a turn whose agent span has not closed.
+    withheld: HashMap<String, Vec<GenAiSpan>>,
+    withheld_order: VecDeque<String>,
+    withheld_count: usize,
     extra: Option<Arc<dyn SpanExporter>>,
     capture: ContentCapture,
-    busy: bool,
 }
 
 /// Finished spans for the conversations this process has run, and the place a
@@ -133,9 +158,12 @@ impl LocalTraceStore {
             inner: Mutex::new(Inner {
                 spans: VecDeque::new(),
                 pending: HashMap::new(),
+                pending_order: VecDeque::new(),
+                withheld: HashMap::new(),
+                withheld_order: VecDeque::new(),
+                withheld_count: 0,
                 extra: None,
                 capture,
-                busy: false,
             }),
         })
     }
@@ -159,71 +187,84 @@ impl LocalTraceStore {
             .collect()
     }
 
-    /// Record that `execution_id` was started under `grant_id` at `policy_revision`.
+    /// Record that `execution_id` in `conversation_id` was started under `grant_id`
+    /// at `policy_revision`.
     ///
     /// `tools_checked` is whether the host checked the turn's tool calls against
     /// that grant. The note is applied to the agent span when it is exported,
-    /// or to the span already stored when the note arrives later.
+    /// or to the span already stored when the note arrives later. Notes for two
+    /// conversations do not share an execution id. Unconsumed notes are capped
+    /// at the same 2048 entries as finished spans; the oldest is dropped.
     pub fn note_grant(
         &self,
+        conversation_id: &str,
         execution_id: &str,
         grant_id: &str,
         policy_revision: u64,
         tools_checked: bool,
     ) {
         let mut inner = self.lock();
-        if let Some(span) = agent_span(&mut inner.spans, execution_id) {
+        if let Some(span) = agent_span(&mut inner.spans, conversation_id, execution_id) {
             let updated = grant(span.clone(), grant_id, policy_revision, tools_checked);
             *span = updated;
             return;
         }
-        let pending = inner
-            .pending
-            .entry(execution_id.to_owned())
-            .or_insert_with(Pending::new);
+        let pending = hold_pending(&mut inner, conversation_id, execution_id);
         pending.grant_id = Some(grant_id.to_owned());
         pending.policy_revision = Some(policy_revision);
         pending.tools_checked = Some(tools_checked);
     }
 
-    /// Record a hook verdict for `execution_id`.
+    /// Record a hook verdict for `execution_id` in `conversation_id`.
     ///
     /// The latest `event` and `verdict` are stored, and `nessa.hook.count` is
-    /// how many notes have been applied to that turn.
-    pub fn note_hook(&self, execution_id: &str, event: &str, verdict: &str) {
+    /// how many notes have been applied to that turn. The conversation scopes
+    /// the note the same way [`Self::note_grant`] does.
+    pub fn note_hook(&self, conversation_id: &str, execution_id: &str, event: &str, verdict: &str) {
         let mut inner = self.lock();
-        if let Some(span) = agent_span(&mut inner.spans, execution_id) {
+        if let Some(span) = agent_span(&mut inner.spans, conversation_id, execution_id) {
             let updated = hook_note(span, event, verdict, 1);
             *span = updated;
             return;
         }
-        inner
-            .pending
-            .entry(execution_id.to_owned())
-            .or_insert_with(Pending::new)
-            .hooks
-            .push(HookNote {
-                event: event.to_owned(),
-                verdict: verdict.to_owned(),
-            });
+        let pending = hold_pending(&mut inner, conversation_id, execution_id);
+        pending.hook_event = Some(event.to_owned());
+        pending.hook_verdict = Some(verdict.to_owned());
+        pending.hook_count = pending.hook_count.saturating_add(1);
     }
 
-    /// Record that `execution_id` spawned subagent `child_id` under `parent_id`.
+    /// Record that `execution_id` in `conversation_id` spawned subagent `child_id`
+    /// under `parent_id`.
     ///
-    /// A later note for the same execution replaces the pair.
-    pub fn note_subagent(&self, execution_id: &str, child_id: &str, parent_id: &str) {
+    /// A later note for the same conversation and execution replaces the pair.
+    pub fn note_subagent(
+        &self,
+        conversation_id: &str,
+        execution_id: &str,
+        child_id: &str,
+        parent_id: &str,
+    ) {
         let mut inner = self.lock();
-        if let Some(span) = agent_span(&mut inner.spans, execution_id) {
+        if let Some(span) = agent_span(&mut inner.spans, conversation_id, execution_id) {
             let updated = subagent(span, child_id, parent_id);
             *span = updated;
             return;
         }
-        let pending = inner
-            .pending
-            .entry(execution_id.to_owned())
-            .or_insert_with(Pending::new);
+        let pending = hold_pending(&mut inner, conversation_id, execution_id);
         pending.subagent_id = Some(child_id.to_owned());
         pending.subagent_parent = Some(parent_id.to_owned());
+    }
+
+    /// Drop an unconsumed note for `execution_id` in `conversation_id`.
+    ///
+    /// Called when an invocation ends without an agent span consuming the note.
+    /// A note already applied to a stored span is left alone.
+    pub fn retire(&self, conversation_id: &str, execution_id: &str) {
+        let mut inner = self.lock();
+        let key = NoteKey::new(conversation_id, execution_id);
+        if inner.pending.remove(&key).is_some() {
+            inner.pending_order.retain(|existing| existing != &key);
+        }
     }
 
     /// Install the exporter that receives each span after this store has
@@ -245,34 +286,34 @@ impl LocalTraceStore {
 
 impl SpanExporter for LocalTraceStore {
     fn export(&self, span: &GenAiSpan) {
+        let me = self as *const Self as usize;
         let (finished, extra) = {
             let mut inner = self.lock();
-            if inner.busy {
-                return;
-            }
             let finished = finish_span(&mut inner, span.clone());
-            inner.spans.push_back(finished.clone());
-            while inner.spans.len() > CAPACITY {
-                inner.spans.pop_front();
+            if finished.operation() == OP_AGENT {
+                publish_turn(&mut inner, &finished);
+            } else {
+                withhold(&mut inner, finished.clone());
             }
-            let extra = inner.extra.clone();
-            if extra.is_some() {
-                inner.busy = true;
-            }
+            let reentered = EXPORTING.with(|stack| stack.borrow().contains(&me));
+            let extra = if reentered { None } else { inner.extra.clone() };
             (finished, extra)
         };
         if let Some(extra) = extra {
-            let _guard = Busy(self);
+            EXPORTING.with(|stack| stack.borrow_mut().push(me));
+            let _frame = ExportFrame;
             extra.export(&finished);
         }
     }
 }
 
-struct Busy<'a>(&'a LocalTraceStore);
+struct ExportFrame;
 
-impl Drop for Busy<'_> {
+impl Drop for ExportFrame {
     fn drop(&mut self) {
-        self.0.lock().busy = false;
+        EXPORTING.with(|stack| {
+            stack.borrow_mut().pop();
+        });
     }
 }
 
@@ -283,9 +324,14 @@ fn finish_span(inner: &mut Inner, span: GenAiSpan) -> GenAiSpan {
     let Some(execution_id) = span.string(EXECUTION).map(str::to_owned) else {
         return span;
     };
-    let Some(pending) = inner.pending.remove(&execution_id) else {
+    let Some(conversation_id) = span.string(CONVERSATION).map(str::to_owned) else {
         return span;
     };
+    let key = NoteKey::new(&conversation_id, &execution_id);
+    let Some(pending) = inner.pending.remove(&key) else {
+        return span;
+    };
+    inner.pending_order.retain(|existing| existing != &key);
     let mut span = span;
     if let (Some(grant_id), Some(revision), Some(checked)) = (
         pending.grant_id.as_deref(),
@@ -294,9 +340,12 @@ fn finish_span(inner: &mut Inner, span: GenAiSpan) -> GenAiSpan {
     ) {
         span = grant(span, grant_id, revision, checked);
     }
-    if let Some(note) = pending.hooks.last() {
-        let count = i64::try_from(pending.hooks.len()).unwrap_or(i64::MAX);
-        span = hook_note(&span, &note.event, &note.verdict, count);
+    if let (Some(event), Some(verdict)) = (
+        pending.hook_event.as_deref(),
+        pending.hook_verdict.as_deref(),
+    ) {
+        let count = i64::try_from(pending.hook_count).unwrap_or(i64::MAX);
+        span = hook_note(&span, event, verdict, count);
     }
     if let (Some(child), Some(parent)) = (
         pending.subagent_id.as_deref(),
@@ -305,6 +354,61 @@ fn finish_span(inner: &mut Inner, span: GenAiSpan) -> GenAiSpan {
         span = subagent(&span, child, parent);
     }
     span
+}
+
+fn hold_pending<'a>(
+    inner: &'a mut Inner,
+    conversation_id: &str,
+    execution_id: &str,
+) -> &'a mut Pending {
+    let key = NoteKey::new(conversation_id, execution_id);
+    if !inner.pending.contains_key(&key) {
+        while inner.pending_order.len() >= CAPACITY {
+            if let Some(old) = inner.pending_order.pop_front() {
+                inner.pending.remove(&old);
+            }
+        }
+        inner.pending_order.push_back(key.clone());
+        inner.pending.insert(key.clone(), Pending::new());
+    }
+    inner
+        .pending
+        .get_mut(&key)
+        .expect("pending note was just inserted")
+}
+
+fn withhold(inner: &mut Inner, span: GenAiSpan) {
+    let trace_id = span.trace_id().to_owned();
+    if !inner.withheld.contains_key(&trace_id) {
+        inner.withheld_order.push_back(trace_id.clone());
+    }
+    inner.withheld.entry(trace_id).or_default().push(span);
+    inner.withheld_count = inner.withheld_count.saturating_add(1);
+    while inner.withheld_count > CAPACITY {
+        let Some(oldest) = inner.withheld_order.pop_front() else {
+            break;
+        };
+        if let Some(dropped) = inner.withheld.remove(&oldest) {
+            inner.withheld_count = inner.withheld_count.saturating_sub(dropped.len());
+        }
+    }
+}
+
+fn publish_turn(inner: &mut Inner, agent: &GenAiSpan) {
+    let trace_id = agent.trace_id();
+    if let Some(position) = inner.withheld_order.iter().position(|id| id == trace_id) {
+        inner.withheld_order.remove(position);
+    }
+    if let Some(children) = inner.withheld.remove(trace_id) {
+        inner.withheld_count = inner.withheld_count.saturating_sub(children.len());
+        for child in children {
+            inner.spans.push_back(child);
+        }
+    }
+    inner.spans.push_back(agent.clone());
+    while inner.spans.len() > CAPACITY {
+        inner.spans.pop_front();
+    }
 }
 
 fn grant(span: GenAiSpan, grant_id: &str, policy_revision: u64, tools_checked: bool) -> GenAiSpan {
@@ -336,10 +440,12 @@ fn subagent(span: &GenAiSpan, child_id: &str, parent_id: &str) -> GenAiSpan {
 
 fn agent_span<'a>(
     spans: &'a mut VecDeque<GenAiSpan>,
+    conversation_id: &str,
     execution_id: &str,
 ) -> Option<&'a mut GenAiSpan> {
-    spans
-        .iter_mut()
-        .rev()
-        .find(|span| span.operation() == OP_AGENT && span.string(EXECUTION) == Some(execution_id))
+    spans.iter_mut().rev().find(|span| {
+        span.operation() == OP_AGENT
+            && span.string(CONVERSATION) == Some(conversation_id)
+            && span.string(EXECUTION) == Some(execution_id)
+    })
 }

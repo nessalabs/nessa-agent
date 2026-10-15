@@ -18,6 +18,7 @@ use crate::application::agent_execution::providers::{
     ResourceCleanup, SessionCloseOwnership, SessionCloseRequest, TurnStopCleanup,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
+use crate::application::agent_execution::traces::LocalTraceStore;
 use crate::application::dto::{ModalitiesDto, ModelMetadataDto};
 use crate::domain::agent_execution::executions::{ExecutionId, ExecutionOutcome, MessageKind};
 use crate::domain::agent_execution::permissions::{
@@ -349,7 +350,7 @@ pub(crate) async fn open_proven_stop(
         ProvenStopProfile::new(provider.profile_allowing(false)),
         audit,
         request,
-        crate::application::agent_execution::traces::LocalTraceStore::new(),
+        LocalTraceStore::new(),
     )
     .await
 }
@@ -378,7 +379,7 @@ async fn a_non_claude_profile_uses_shared_sessions_permissions_and_transport() {
         },
         Arc::new(RecordingAudit::default()),
         ProviderOpenRequest::without_startup_control(None),
-        crate::application::agent_execution::traces::LocalTraceStore::new(),
+        LocalTraceStore::new(),
     )
     .await
     .unwrap();
@@ -532,7 +533,7 @@ async fn an_open_holds_its_sessions_grant_until_the_provider_session_ends() {
                 Some(session) => ProviderOpenRequest::new(session, None, no_startup_control()),
                 None => ProviderOpenRequest::without_startup_control(None),
             },
-            crate::application::agent_execution::traces::LocalTraceStore::new(),
+            LocalTraceStore::new(),
         )
     };
     let opened = open(Some(SessionId::new("conversation").unwrap()), false)
@@ -710,7 +711,7 @@ async fn failed_pre_spawn_admission_transfers_exact_release_retry_ownership() {
         },
         Arc::new(RecordingAudit::default()),
         ProviderOpenRequest::without_startup_control(None),
-        crate::application::agent_execution::traces::LocalTraceStore::new(),
+        LocalTraceStore::new(),
     )
     .await
     {
@@ -760,7 +761,7 @@ async fn pre_generation_admission_failure_never_fabricates_cleanup_ownership() {
         },
         Arc::new(RecordingAudit::default()),
         ProviderOpenRequest::without_startup_control(None),
-        crate::application::agent_execution::traces::LocalTraceStore::new(),
+        LocalTraceStore::new(),
     )
     .await
     {
@@ -787,7 +788,7 @@ async fn failed_startup_retains_real_process_until_explicit_cleanup_retry() {
         },
         Arc::new(RecordingAudit::default()),
         ProviderOpenRequest::without_startup_control(None),
-        crate::application::agent_execution::traces::LocalTraceStore::new(),
+        LocalTraceStore::new(),
     )
     .await;
     let error = match result {
@@ -833,7 +834,7 @@ async fn live_close_recovers_real_scope_and_preserves_failed_audit_evidence() {
         },
         Arc::new(RejectAudit),
         ProviderOpenRequest::without_startup_control(None),
-        crate::application::agent_execution::traces::LocalTraceStore::new(),
+        LocalTraceStore::new(),
     )
     .await
     .unwrap();
@@ -973,7 +974,7 @@ async fn failed_restoration_cleanup_is_confirmed_before_a_later_generation_start
         },
         Arc::new(RecordingAudit::default()),
         ProviderOpenRequest::without_startup_control(None),
-        crate::application::agent_execution::traces::LocalTraceStore::new(),
+        LocalTraceStore::new(),
     )
     .await
     .unwrap();
@@ -1019,7 +1020,7 @@ async fn close_retries_the_failed_restoration_instead_of_the_old_generation() {
         },
         Arc::new(RecordingAudit::default()),
         ProviderOpenRequest::without_startup_control(None),
-        crate::application::agent_execution::traces::LocalTraceStore::new(),
+        LocalTraceStore::new(),
     )
     .await
     .unwrap();
@@ -1058,7 +1059,7 @@ async fn close_during_restoration_cleanup_keeps_the_current_owner_and_cause() {
         },
         Arc::new(RecordingAudit::default()),
         ProviderOpenRequest::without_startup_control(None),
-        crate::application::agent_execution::traces::LocalTraceStore::new(),
+        LocalTraceStore::new(),
     )
     .await
     .unwrap();
@@ -1156,7 +1157,7 @@ async fn dropping_a_failed_restoration_keeps_its_directory_until_confirmed_clean
         },
         Arc::new(RecordingAudit::default()),
         ProviderOpenRequest::without_startup_control(None),
-        crate::application::agent_execution::traces::LocalTraceStore::new(),
+        LocalTraceStore::new(),
     )
     .await
     .unwrap();
@@ -1199,7 +1200,7 @@ async fn failed_spawn_with_a_retained_resource_returns_retryable_cleanup() {
         },
         Arc::new(RecordingAudit::default()),
         ProviderOpenRequest::without_startup_control(None),
-        crate::application::agent_execution::traces::LocalTraceStore::new(),
+        LocalTraceStore::new(),
     )
     .await
     {
@@ -1281,7 +1282,7 @@ async fn known_startup_context_retains_audit_and_cleanup_failures_until_retry() 
             },
             audit.clone(),
             ProviderOpenRequest::without_startup_control(None),
-            crate::application::agent_execution::traces::LocalTraceStore::new(),
+            LocalTraceStore::new(),
         )
         .await
         .err()
@@ -1467,7 +1468,7 @@ async fn losing_open_wait_before_readiness_preserves_handle_loss_cause_and_clean
                     profile,
                     opening_audit,
                     ProviderOpenRequest::without_startup_control(None),
-                    crate::application::agent_execution::traces::LocalTraceStore::new(),
+                    LocalTraceStore::new(),
                 )
                 .await
             });
@@ -1540,7 +1541,7 @@ async fn dropping_failed_open_recovery_still_confirms_process_cleanup() {
         },
         Arc::new(RecordingAudit::default()),
         ProviderOpenRequest::without_startup_control(None),
-        crate::application::agent_execution::traces::LocalTraceStore::new(),
+        LocalTraceStore::new(),
     )
     .await
     .err()
@@ -1599,7 +1600,7 @@ async fn a_profile_with_nothing_to_configure_still_has_its_session_held_to_the_f
         },
         Arc::new(RecordingAudit::default()),
         ProviderOpenRequest::without_startup_control(None),
-        crate::application::agent_execution::traces::LocalTraceStore::new(),
+        LocalTraceStore::new(),
     )
     .await
     .unwrap();

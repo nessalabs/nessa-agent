@@ -18,6 +18,7 @@ use crate::application::agent_execution::{
         PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
         PermissionResolution, QuestionAnswer,
     },
+    traces::LocalTraceStore,
 };
 use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
@@ -296,7 +297,7 @@ pub trait AgentProvider: Send + Sync {
     /// Claude, Codex, and OpenCode return the store their sessions write.
     /// Other providers return nothing. The store is shared across opens of
     /// this factory. Reading it does not call the provider.
-    fn traces(&self) -> Option<Arc<crate::application::agent_execution::traces::LocalTraceStore>> {
+    fn traces(&self) -> Option<Arc<LocalTraceStore>> {
         None
     }
     /// The same factory, starting its harness on `host` rather than as a

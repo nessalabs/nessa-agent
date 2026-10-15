@@ -15,6 +15,7 @@ use crate::application::agent_execution::executions::{
     ExecutionAudit, ExecutionEvent, ExecutionRequest, NativeHooksLaunchCause,
     PermissionAuthoritySource,
 };
+use crate::application::agent_execution::traces::LocalTraceStore;
 use crate::domain::agent_execution::permissions::{
     PermissionAuthority, PermissionAuthorityError, PermissionId,
 };
@@ -68,7 +69,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
     profile: P,
     audit: Arc<dyn ExecutionAudit>,
     request: ProviderOpenRequest,
-    traces: Arc<crate::application::agent_execution::traces::LocalTraceStore>,
+    traces: Arc<LocalTraceStore>,
 ) -> Result<OpenedProviderSession, ProviderOpenError> {
     let session_key = request.session_key().map(str::to_owned);
     let (session, restore, mut open_control) = request.into_parts();
@@ -195,7 +196,7 @@ struct WorkerFactory<P> {
     /// of the worker that holds them.
     question_sequence: Arc<AtomicU64>,
     /// Spans for every generation this open starts.
-    traces: Arc<crate::application::agent_execution::traces::LocalTraceStore>,
+    traces: Arc<LocalTraceStore>,
     /// The host's grant for this open, revoked when the factory — and so the
     /// provider session — is dropped.
     _stand_in_grant: Option<StandInGrant>,

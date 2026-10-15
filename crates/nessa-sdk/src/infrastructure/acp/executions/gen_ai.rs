@@ -3,7 +3,7 @@
 //! the profile and the session update already said.
 
 use crate::application::agent_execution::executions::{ExecutionEvent, ExecutionUpdate};
-use crate::application::agent_execution::permissions::CancellationOrigin;
+use crate::application::agent_execution::permissions::{ApprovalBasis, CancellationOrigin};
 use crate::application::agent_execution::traces::{
     FinishReason, ModelChannel, PermissionFact, ToolFact, ToolProgress, TraceRecorder,
 };
@@ -105,6 +105,16 @@ pub(super) fn tool_fact(
     )
 }
 
+pub(super) fn permission_decider(basis: &ApprovalBasis) -> &'static str {
+    match basis {
+        ApprovalBasis::Explicit => "person",
+        ApprovalBasis::Mode(_) => "mode",
+        ApprovalBasis::Rule(_) => "rule",
+        ApprovalBasis::Deadline(_) => "deadline",
+        ApprovalBasis::Hook(_) => "hook",
+    }
+}
+
 pub(super) fn finish_reason(outcome: ExecutionOutcome) -> FinishReason {
     match outcome {
         ExecutionOutcome::Completed => FinishReason::Stop,
@@ -149,4 +159,34 @@ fn result_text(update: &ToolCallUpdate) -> Option<String> {
         }
     }
     (!text.is_empty()).then_some(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::permission_decider;
+    use crate::application::agent_execution::permissions::{
+        ActionContext, ApprovalBasis, ApprovalModeSnapshot, ApprovalRuleReference, HookRefusal,
+    };
+
+    #[test]
+    fn a_decider_follows_the_answer_basis() {
+        let actor = ActionContext::new("owner", "surface", "request").unwrap();
+        assert_eq!(permission_decider(&ApprovalBasis::Explicit), "person");
+        assert_eq!(
+            permission_decider(&ApprovalBasis::Mode(
+                ApprovalModeSnapshot::new("ask", "1").unwrap()
+            )),
+            "mode"
+        );
+        assert_eq!(
+            permission_decider(&ApprovalBasis::Rule(
+                ApprovalRuleReference::new("rule", "1", actor).unwrap()
+            )),
+            "rule"
+        );
+        assert_eq!(
+            permission_decider(&ApprovalBasis::Hook(HookRefusal::new(Some(0), "no"))),
+            "hook"
+        );
+    }
 }

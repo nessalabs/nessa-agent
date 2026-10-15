@@ -82,7 +82,7 @@ only when that fact was observed.
 | `nessa.permission.id` | Tool span, or the agent span when the decline names no open tool | The review id |
 | `nessa.permission.effect` | Tool span | `allow` or `deny`, once a decision exists |
 | `nessa.permission.state` | Tool span | `requested`, `answered`, `cancelled`, `declined`, or `deadline` |
-| `nessa.permission.decider` | Tool span | `person`, `deadline`, `hook`, `provider`, or `runtime` |
+| `nessa.permission.decider` | Tool span | `person` for an explicit choice, `rule` for a remembered rule, `mode` for the host's approval mode, `hook` for a permission-review hook, `deadline` when the deadline answered, or `provider` or `runtime` when that side withdrew the review |
 | `nessa.grant.id` | Agent span | The share grant the turn was started under |
 | `nessa.grant.policy_revision` | Agent span | The revision of that grant the host checked |
 | `nessa.grant.tools_checked` | Agent span | Whether the host checked the turn's tool calls against the grant |
@@ -94,5 +94,10 @@ only when that fact was observed.
 | `nessa.context.cost.currency` | Agent span | The currency that cost was denominated in |
 
 A grant or hook note can arrive before the worker exports the agent span. The
-store keeps the note and applies it when the span closes. A note that arrives
-after the span is stored replaces that span's attributes.
+store keeps the note, keyed by conversation and execution, and applies it when
+the span closes. A note that arrives after the span is stored replaces that
+span's attributes. Unconsumed notes are capped at 2048; the oldest is dropped.
+An invocation that ends without a span consumes its own note.
+
+Child spans stay out of `read` until the agent span closes. Two conversations
+that reuse an execution id do not share a trace or a note.

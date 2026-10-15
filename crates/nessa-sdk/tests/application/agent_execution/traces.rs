@@ -224,10 +224,20 @@ fn tokens_are_usage_and_context_occupancy_is_not() {
 #[test]
 fn permission_grant_hook_and_subagent_notes_land_on_the_spans() {
     let store = LocalTraceStore::new();
-    store.note_grant("execution-1", "grant-1", 7, true);
-    store.note_hook("execution-1", "before_permission_review", "allow");
-    store.note_hook("execution-1", "before_permission_review", "refuse");
-    store.note_subagent("execution-1", "child-1", "parent-1");
+    store.note_grant("conversation-1", "execution-1", "grant-1", 7, true);
+    store.note_hook(
+        "conversation-1",
+        "execution-1",
+        "before_permission_review",
+        "allow",
+    );
+    store.note_hook(
+        "conversation-1",
+        "execution-1",
+        "before_permission_review",
+        "refuse",
+    );
+    store.note_subagent("conversation-1", "execution-1", "child-1", "parent-1");
     let mut recorder = turn(&store);
     recorder.begin_turn(at(1), identity(), "");
     recorder.permission(PermissionFact::Requested {
@@ -288,7 +298,7 @@ fn a_note_after_the_span_is_stored_replaces_that_span() {
     let mut recorder = turn(&store);
     recorder.begin_turn(at(1), identity(), "");
     recorder.finish(at(2), FinishReason::Stop);
-    store.note_subagent("execution-1", "child-2", "parent-2");
+    store.note_subagent("conversation-1", "execution-1", "child-2", "parent-2");
     let agent = store
         .read("conversation-1")
         .into_iter()
@@ -326,7 +336,7 @@ fn the_extra_exporter_sees_the_finished_agent_span() {
         }
     }
     store.set_exporter(Arc::new(Remember(seen.clone())));
-    store.note_grant("execution-1", "grant-9", 1, false);
+    store.note_grant("conversation-1", "execution-1", "grant-9", 1, false);
     let mut recorder = turn(&store);
     recorder.begin_turn(at(1), identity(), "");
     recorder.finish(at(2), FinishReason::Stop);
@@ -337,4 +347,222 @@ fn the_extra_exporter_sees_the_finished_agent_span() {
         .unwrap();
     assert_eq!(agent.string("nessa.grant.id"), Some("grant-9"));
     let _ = ExporterList::new(vec![store.clone()]);
+}
+
+#[test]
+fn an_open_turn_is_absent_until_the_agent_span_closes() {
+    let store = LocalTraceStore::new();
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.tool(
+        at(2),
+        ToolFact::new(
+            "tool-1",
+            "Read",
+            "function",
+            ToolProgress::Completed,
+            None,
+            None,
+        ),
+    );
+    assert!(store.read("conversation-1").is_empty());
+    recorder.finish(at(3), FinishReason::Stop);
+    assert_eq!(operations(&store), ["chat", "execute_tool", "invoke_agent"]);
+}
+
+#[test]
+fn the_same_execution_id_in_two_conversations_keeps_separate_notes() {
+    let store = LocalTraceStore::new();
+    store.note_grant("conversation-1", "execution-1", "grant-a", 1, true);
+    store.note_grant("conversation-2", "execution-1", "grant-b", 2, false);
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.finish(at(2), FinishReason::Stop);
+    recorder.begin_turn(
+        at(3),
+        TurnIdentity::new(
+            "conversation-2",
+            "execution-1",
+            "openai",
+            "codex",
+            "gpt",
+            None,
+        ),
+        "",
+    );
+    recorder.finish(at(4), FinishReason::Stop);
+    let first = store
+        .read("conversation-1")
+        .into_iter()
+        .find(|span| span.operation() == "invoke_agent")
+        .unwrap();
+    let second = store
+        .read("conversation-2")
+        .into_iter()
+        .find(|span| span.operation() == "invoke_agent")
+        .unwrap();
+    assert_eq!(first.string("nessa.grant.id"), Some("grant-a"));
+    assert_eq!(second.string("nessa.grant.id"), Some("grant-b"));
+    assert_ne!(first.trace_id(), second.trace_id());
+}
+
+#[test]
+fn an_answer_recorded_before_the_request_stays_answered() {
+    let store = LocalTraceStore::new();
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.permission(PermissionFact::Answered {
+        id: "review-1".into(),
+        tool_id: "tool-1".into(),
+        effect: "deny".into(),
+        decider: "rule".into(),
+    });
+    recorder.permission(PermissionFact::Requested {
+        id: "review-1".into(),
+        tool_id: "tool-1".into(),
+        tool_name: "Read".into(),
+        arguments: None,
+    });
+    recorder.finish(at(2), FinishReason::Stop);
+    let tool = store
+        .read("conversation-1")
+        .into_iter()
+        .find(|span| span.operation() == "execute_tool")
+        .unwrap();
+    assert_eq!(tool.string("nessa.permission.state"), Some("answered"));
+    assert_eq!(tool.string("nessa.permission.effect"), Some("deny"));
+    assert_eq!(tool.string("nessa.permission.decider"), Some("rule"));
+    assert_eq!(tool.string("gen_ai.tool.name"), Some("Read"));
+}
+
+#[test]
+fn retiring_a_note_before_the_turn_leaves_the_span_without_it() {
+    let store = LocalTraceStore::new();
+    store.note_grant("conversation-1", "execution-1", "grant-1", 1, true);
+    store.retire("conversation-1", "execution-1");
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.finish(at(2), FinishReason::Stop);
+    let agent = store
+        .read("conversation-1")
+        .into_iter()
+        .find(|span| span.operation() == "invoke_agent")
+        .unwrap();
+    assert!(agent.string("nessa.grant.id").is_none());
+}
+
+#[test]
+fn pending_notes_drop_the_oldest_past_capacity() {
+    let store = LocalTraceStore::new();
+    for index in 0..=2048 {
+        store.note_grant(
+            "conversation-1",
+            &format!("execution-{index}"),
+            "grant",
+            1,
+            true,
+        );
+    }
+    let mut recorder = turn(&store);
+    recorder.begin_turn(
+        at(1),
+        TurnIdentity::new(
+            "conversation-1",
+            "execution-0",
+            "anthropic",
+            "claude",
+            "claude-sonnet",
+            None,
+        ),
+        "",
+    );
+    recorder.finish(at(2), FinishReason::Stop);
+    recorder.begin_turn(
+        at(3),
+        TurnIdentity::new(
+            "conversation-1",
+            "execution-2048",
+            "anthropic",
+            "claude",
+            "claude-sonnet",
+            None,
+        ),
+        "",
+    );
+    recorder.finish(at(4), FinishReason::Stop);
+    let spans = store.read("conversation-1");
+    let oldest = spans
+        .iter()
+        .find(|span| {
+            span.operation() == "invoke_agent"
+                && span.string("nessa.execution.id") == Some("execution-0")
+        })
+        .unwrap();
+    let newest = spans
+        .iter()
+        .find(|span| {
+            span.operation() == "invoke_agent"
+                && span.string("nessa.execution.id") == Some("execution-2048")
+        })
+        .unwrap();
+    assert!(oldest.string("nessa.grant.id").is_none());
+    assert_eq!(newest.string("nessa.grant.id"), Some("grant"));
+}
+
+#[test]
+fn a_span_finished_while_an_exporter_runs_is_kept() {
+    use std::sync::mpsc;
+    use std::thread;
+
+    let store = LocalTraceStore::new();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    struct Hold {
+        entered: Mutex<Option<mpsc::Sender<()>>>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+    impl SpanExporter for Hold {
+        fn export(&self, _span: &GenAiSpan) {
+            let entered = self.entered.lock().unwrap().take();
+            if let Some(entered) = entered {
+                let _ = entered.send(());
+                let _ = self.release.lock().unwrap().recv();
+            }
+        }
+    }
+    store.set_exporter(Arc::new(Hold {
+        entered: Mutex::new(Some(entered_tx)),
+        release: Mutex::new(release_rx),
+    }));
+    let exporter = store.clone();
+    let handle = thread::spawn(move || {
+        let mut recorder = turn(&exporter);
+        recorder.begin_turn(at(1), identity(), "");
+        recorder.finish(at(2), FinishReason::Stop);
+    });
+    entered_rx.recv().unwrap();
+    let mut other = turn(&store);
+    other.begin_turn(
+        at(3),
+        TurnIdentity::new(
+            "conversation-2",
+            "execution-2",
+            "openai",
+            "codex",
+            "gpt",
+            None,
+        ),
+        "",
+    );
+    other.finish(at(4), FinishReason::Stop);
+    release_tx.send(()).unwrap();
+    handle.join().unwrap();
+    assert!(store
+        .read("conversation-2")
+        .iter()
+        .any(|span| span.operation() == "invoke_agent"));
+    assert!(store
+        .read("conversation-1")
+        .iter()
+        .any(|span| span.operation() == "invoke_agent"));
 }

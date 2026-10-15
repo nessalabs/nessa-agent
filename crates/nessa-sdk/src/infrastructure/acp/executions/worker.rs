@@ -2282,7 +2282,8 @@ impl<P: AcpProfile> Worker<P> {
                 id: resolution.request().id().as_str().to_owned(),
                 tool_id: resolution.request().tool_id().as_str().to_owned(),
                 effect: decision.effect().as_str().to_owned(),
-                decider: "person".to_owned(),
+                decider: super::gen_ai::permission_decider(resolution.attribution().basis())
+                    .to_owned(),
             });
         }
         self.armed_permissions.remove(&permission_id);

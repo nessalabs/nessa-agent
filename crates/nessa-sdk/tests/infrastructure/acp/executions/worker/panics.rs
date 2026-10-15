@@ -6,6 +6,7 @@ use crate::application::agent_execution::permissions::{
 };
 use crate::application::agent_execution::providers::ProviderCleanup;
 use crate::application::agent_execution::tools::ToolReviewInput;
+use crate::application::agent_execution::traces::LocalTraceStore;
 use crate::domain::agent_execution::permissions::{PermissionOptionId, PermissionStateView};
 use crate::domain::agent_execution::prompts::{PromptText, UserMessage};
 use crate::domain::agent_execution::tools::ToolCallUpdate;
@@ -123,7 +124,7 @@ fn spawn_worker<P: AcpProfile>(
         crate::application::agent_execution::executions::NativeHooksLaunchCause::Open,
         None,
         Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        crate::application::agent_execution::traces::LocalTraceStore::new(),
+        LocalTraceStore::new(),
     ));
     (
         RunningWorker {
