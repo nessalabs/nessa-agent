@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * Settings › Access native hooks: the rows rest without a gateway, and with
+ * Settings › Native hooks: the rows rest without a gateway, and with
  * one they show the catalog's choice and send a change.
  */
 import { act } from "react"
@@ -148,7 +148,7 @@ it("reads the choice again when the window regains focus or becomes visible", as
   )
   await act(async () => {})
   expect(toggle("claude-native-hooks")?.getAttribute("aria-checked")).toBe("false")
-  // Another client turns Claude's hooks on while Access stays open.
+  // Another client turns Claude's hooks on while Native hooks stays open.
   choice = { claude: true, codex: false }
   await act(async () => window.dispatchEvent(new Event("focus")))
   expect(toggle("claude-native-hooks")?.getAttribute("aria-checked")).toBe("true")

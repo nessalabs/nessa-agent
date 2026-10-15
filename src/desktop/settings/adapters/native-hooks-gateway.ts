@@ -1,5 +1,5 @@
 /**
- * Claude and Codex native-hook choices, for Settings › Access: the window's
+ * Claude and Codex native-hook choices, for Settings › Native hooks: the window's
  * client (`client.agents`) read into two switches. OpenCode is not a choice.
  * Who may change the choice is the gateway's to say, by its answers.
  */
@@ -31,7 +31,7 @@ export type NativeHooksWrite =
   | { readonly ok: true; readonly agent: NativeHooksAgentName; readonly enabled: boolean }
   | { readonly ok: false }
 
-/** The two switches, as Settings › Access manages them. */
+/** The two switches, as Settings › Native hooks manages them. */
 export interface NativeHooksGateway {
   /** The stored choice. A missing catalog row does not change it. */
   read(): Promise<NativeHooksRead>

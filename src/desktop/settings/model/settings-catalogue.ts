@@ -79,8 +79,9 @@ export const settingsCategories = [
       {
         id: "access",
         label: "Access",
-        keywords: "permissions approval ask shield hooks",
+        keywords: "permissions approval ask shield",
       },
+      { id: "native-hooks", label: "Native hooks", keywords: "claude codex startup" },
       { id: "data", label: "Data", keywords: "history crash reports storage" },
     ],
   },
@@ -395,9 +396,10 @@ export const settingsEntries = [
       "Allow notifications to hear about a review while you are away from this window.",
     keywords: "notify notification desktop phone permission review waiting",
   },
+  // Privacy & Permissions › Native hooks
   {
     id: "claude-native-hooks",
-    tab: "access",
+    tab: "native-hooks",
     label: "Claude Code hooks",
     detail:
       "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. Applies the next time each conversation's agent starts. This also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust.",
@@ -405,7 +407,7 @@ export const settingsEntries = [
   },
   {
     id: "codex-native-hooks",
-    tab: "access",
+    tab: "native-hooks",
     label: "Codex hooks",
     detail:
       "Hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. Applies the next time each conversation's agent starts.",

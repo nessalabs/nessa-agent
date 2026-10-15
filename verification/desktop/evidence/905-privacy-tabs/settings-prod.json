@@ -1,0 +1,922 @@
+{
+  "check": "settings-page",
+  "ok": true,
+  "started": "2026-10-14T23:30:02.854Z",
+  "finished": "2026-10-14T23:31:10.300Z",
+  "target": {
+    "url": "http://127.0.0.1:1496/desktop.html",
+    "mode": "prod"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1496/favicon.ico)"
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "name": "masthead",
+      "seen": [
+        {
+          "size": "1440x900",
+          "category": "General",
+          "top": 85,
+          "left": 534,
+          "right": 1154,
+          "lastRow": 347,
+          "sidebar": "open"
+        },
+        {
+          "size": "1440x900",
+          "category": "Appearance",
+          "top": 85,
+          "left": 534,
+          "right": 1154,
+          "lastRow": null,
+          "sidebar": "open"
+        },
+        {
+          "size": "1440x900",
+          "category": "Workspace",
+          "top": 85,
+          "left": 534,
+          "right": 1154,
+          "lastRow": 481,
+          "sidebar": "open"
+        },
+        {
+          "size": "1440x900",
+          "category": "Models",
+          "top": 85,
+          "left": 534,
+          "right": 1154,
+          "lastRow": 358,
+          "sidebar": "open"
+        },
+        {
+          "size": "1440x900",
+          "category": "Connections",
+          "top": 85,
+          "left": 534,
+          "right": 1154,
+          "lastRow": 345,
+          "sidebar": "open"
+        },
+        {
+          "size": "1440x900",
+          "category": "Privacy & Permissions",
+          "top": 85,
+          "left": 534,
+          "right": 1154,
+          "lastRow": 597,
+          "sidebar": "open"
+        },
+        {
+          "size": "1440x900",
+          "category": "Advanced",
+          "top": 85,
+          "left": 534,
+          "right": 1154,
+          "lastRow": 293,
+          "sidebar": "open"
+        },
+        {
+          "size": "1440x900",
+          "category": "About",
+          "top": 85,
+          "left": 534,
+          "right": 1154,
+          "lastRow": 241,
+          "sidebar": "open"
+        },
+        {
+          "size": "1000x700",
+          "category": "General",
+          "top": 75,
+          "left": 314,
+          "right": 934,
+          "lastRow": 337,
+          "sidebar": "open"
+        },
+        {
+          "size": "1000x700",
+          "category": "Appearance",
+          "top": 75,
+          "left": 314,
+          "right": 934,
+          "lastRow": null,
+          "sidebar": "open"
+        },
+        {
+          "size": "1000x700",
+          "category": "Workspace",
+          "top": 75,
+          "left": 314,
+          "right": 934,
+          "lastRow": 471,
+          "sidebar": "open"
+        },
+        {
+          "size": "1000x700",
+          "category": "Models",
+          "top": 75,
+          "left": 314,
+          "right": 934,
+          "lastRow": 348,
+          "sidebar": "open"
+        },
+        {
+          "size": "1000x700",
+          "category": "Connections",
+          "top": 75,
+          "left": 314,
+          "right": 934,
+          "lastRow": 335,
+          "sidebar": "open"
+        },
+        {
+          "size": "1000x700",
+          "category": "Privacy & Permissions",
+          "top": 75,
+          "left": 314,
+          "right": 934,
+          "lastRow": 587,
+          "sidebar": "open"
+        },
+        {
+          "size": "1000x700",
+          "category": "Advanced",
+          "top": 75,
+          "left": 314,
+          "right": 934,
+          "lastRow": 283,
+          "sidebar": "open"
+        },
+        {
+          "size": "1000x700",
+          "category": "About",
+          "top": 75,
+          "left": 314,
+          "right": 934,
+          "lastRow": 231,
+          "sidebar": "open"
+        },
+        {
+          "size": "760x700",
+          "category": "General",
+          "top": 75,
+          "left": 280,
+          "right": 728,
+          "lastRow": 337,
+          "sidebar": "open"
+        },
+        {
+          "size": "760x700",
+          "category": "Appearance",
+          "top": 75,
+          "left": 280,
+          "right": 728,
+          "lastRow": null,
+          "sidebar": "open"
+        },
+        {
+          "size": "760x700",
+          "category": "Workspace",
+          "top": 75,
+          "left": 280,
+          "right": 728,
+          "lastRow": 466,
+          "sidebar": "open"
+        },
+        {
+          "size": "760x700",
+          "category": "Models",
+          "top": 75,
+          "left": 280,
+          "right": 728,
+          "lastRow": 348,
+          "sidebar": "open"
+        },
+        {
+          "size": "760x700",
+          "category": "Connections",
+          "top": 75,
+          "left": 280,
+          "right": 728,
+          "lastRow": 335,
+          "sidebar": "open"
+        },
+        {
+          "size": "760x700",
+          "category": "Privacy & Permissions",
+          "top": 75,
+          "left": 280,
+          "right": 728,
+          "lastRow": 638,
+          "sidebar": "open"
+        },
+        {
+          "size": "760x700",
+          "category": "Advanced",
+          "top": 75,
+          "left": 280,
+          "right": 728,
+          "lastRow": 283,
+          "sidebar": "open"
+        },
+        {
+          "size": "760x700",
+          "category": "About",
+          "top": 75,
+          "left": 280,
+          "right": 728,
+          "lastRow": 231,
+          "sidebar": "open"
+        },
+        {
+          "size": "600x700",
+          "category": "General",
+          "top": 75,
+          "left": 32,
+          "right": 568,
+          "lastRow": 337,
+          "sidebar": "closed"
+        },
+        {
+          "size": "600x700",
+          "category": "Appearance",
+          "top": 75,
+          "left": 32,
+          "right": 568,
+          "lastRow": null,
+          "sidebar": "closed"
+        },
+        {
+          "size": "600x700",
+          "category": "Workspace",
+          "top": 75,
+          "left": 32,
+          "right": 568,
+          "lastRow": 485,
+          "sidebar": "closed"
+        },
+        {
+          "size": "600x700",
+          "category": "Models",
+          "top": 75,
+          "left": 32,
+          "right": 568,
+          "lastRow": 348,
+          "sidebar": "closed"
+        },
+        {
+          "size": "600x700",
+          "category": "Connections",
+          "top": 75,
+          "left": 32,
+          "right": 568,
+          "lastRow": 335,
+          "sidebar": "closed"
+        },
+        {
+          "size": "600x700",
+          "category": "Privacy & Permissions",
+          "top": 75,
+          "left": 32,
+          "right": 568,
+          "lastRow": 587,
+          "sidebar": "closed"
+        },
+        {
+          "size": "600x700",
+          "category": "Advanced",
+          "top": 75,
+          "left": 32,
+          "right": 568,
+          "lastRow": 283,
+          "sidebar": "closed"
+        },
+        {
+          "size": "600x700",
+          "category": "About",
+          "top": 75,
+          "left": 32,
+          "right": 568,
+          "lastRow": 231,
+          "sidebar": "closed"
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "name": "condense",
+      "seen": [
+        {
+          "size": "1000x700",
+          "before": {
+            "condensed": false,
+            "opacity": 0,
+            "left": 314,
+            "text": "Workspace",
+            "sidebar": "open",
+            "column": 314
+          },
+          "after": {
+            "condensed": true,
+            "opacity": 1,
+            "left": 314,
+            "text": "Workspace",
+            "sidebar": "open",
+            "column": 314
+          },
+          "back": {
+            "condensed": false,
+            "opacity": 0,
+            "left": 314,
+            "text": "Workspace",
+            "sidebar": "open",
+            "column": 314
+          }
+        },
+        {
+          "size": "600x700",
+          "before": {
+            "condensed": false,
+            "opacity": 0,
+            "left": 205,
+            "text": "Workspace",
+            "sidebar": "closed",
+            "column": 32
+          },
+          "after": {
+            "condensed": true,
+            "opacity": 1,
+            "left": 205,
+            "text": "Workspace",
+            "sidebar": "closed",
+            "column": 32
+          },
+          "back": {
+            "condensed": false,
+            "opacity": 0,
+            "left": 205,
+            "text": "Workspace",
+            "sidebar": "closed",
+            "column": 32
+          }
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "name": "arrive",
+      "normal": [
+        {
+          "name": "settings-arrive",
+          "duration": 220
+        },
+        {
+          "name": "settings-arrive",
+          "duration": 220
+        }
+      ],
+      "reduced": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "name": "search",
+      "landed": {
+        "heading": "Appearance",
+        "tab": "Motion",
+        "inView": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "name": "review-notices",
+      "text": "Review notificationsAllow notifications to hear about a review while you are away from this window.Allow"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "name": "remembered-rules",
+      "text": "Remembered rulesNot available in this window."
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "name": "native-hooks",
+      "read": [
+        {
+          "id": "claude-native-hooks",
+          "disabled": true,
+          "switches": 0,
+          "text": "Claude Code hooksNot available in this window."
+        },
+        {
+          "id": "codex-native-hooks",
+          "disabled": true,
+          "switches": 0,
+          "text": "Codex hooksNot available in this window."
+        }
+      ],
+      "routing": [
+        {
+          "id": "claude-native-hooks",
+          "tab": "Native hooks",
+          "top": 179,
+          "bottom": 240,
+          "inView": true
+        },
+        {
+          "id": "codex-native-hooks",
+          "tab": "Native hooks",
+          "top": 240,
+          "bottom": 300,
+          "inView": true
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "name": "focus-ring",
+      "tab": {
+        "style": "solid",
+        "width": 2
+      },
+      "control": {
+        "style": "solid",
+        "width": 2
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "name": "masthead",
+      "seen": [
+        {
+          "size": "1440x900",
+          "category": "General",
+          "top": 85,
+          "left": 534,
+          "right": 1154,
+          "lastRow": 347,
+          "sidebar": "open"
+        },
+        {
+          "size": "1440x900",
+          "category": "Appearance",
+          "top": 85,
+          "left": 534,
+          "right": 1154,
+          "lastRow": null,
+          "sidebar": "open"
+        },
+        {
+          "size": "1440x900",
+          "category": "Workspace",
+          "top": 85,
+          "left": 534,
+          "right": 1154,
+          "lastRow": 481,
+          "sidebar": "open"
+        },
+        {
+          "size": "1440x900",
+          "category": "Models",
+          "top": 85,
+          "left": 534,
+          "right": 1154,
+          "lastRow": 358,
+          "sidebar": "open"
+        },
+        {
+          "size": "1440x900",
+          "category": "Connections",
+          "top": 85,
+          "left": 534,
+          "right": 1154,
+          "lastRow": 345,
+          "sidebar": "open"
+        },
+        {
+          "size": "1440x900",
+          "category": "Privacy & Permissions",
+          "top": 85,
+          "left": 534,
+          "right": 1154,
+          "lastRow": 597,
+          "sidebar": "open"
+        },
+        {
+          "size": "1440x900",
+          "category": "Advanced",
+          "top": 85,
+          "left": 534,
+          "right": 1154,
+          "lastRow": 293,
+          "sidebar": "open"
+        },
+        {
+          "size": "1440x900",
+          "category": "About",
+          "top": 85,
+          "left": 534,
+          "right": 1154,
+          "lastRow": 241,
+          "sidebar": "open"
+        },
+        {
+          "size": "1000x700",
+          "category": "General",
+          "top": 75,
+          "left": 314,
+          "right": 934,
+          "lastRow": 337,
+          "sidebar": "open"
+        },
+        {
+          "size": "1000x700",
+          "category": "Appearance",
+          "top": 75,
+          "left": 314,
+          "right": 934,
+          "lastRow": null,
+          "sidebar": "open"
+        },
+        {
+          "size": "1000x700",
+          "category": "Workspace",
+          "top": 75,
+          "left": 314,
+          "right": 934,
+          "lastRow": 471,
+          "sidebar": "open"
+        },
+        {
+          "size": "1000x700",
+          "category": "Models",
+          "top": 75,
+          "left": 314,
+          "right": 934,
+          "lastRow": 348,
+          "sidebar": "open"
+        },
+        {
+          "size": "1000x700",
+          "category": "Connections",
+          "top": 75,
+          "left": 314,
+          "right": 934,
+          "lastRow": 335,
+          "sidebar": "open"
+        },
+        {
+          "size": "1000x700",
+          "category": "Privacy & Permissions",
+          "top": 75,
+          "left": 314,
+          "right": 934,
+          "lastRow": 587,
+          "sidebar": "open"
+        },
+        {
+          "size": "1000x700",
+          "category": "Advanced",
+          "top": 75,
+          "left": 314,
+          "right": 934,
+          "lastRow": 283,
+          "sidebar": "open"
+        },
+        {
+          "size": "1000x700",
+          "category": "About",
+          "top": 75,
+          "left": 314,
+          "right": 934,
+          "lastRow": 231,
+          "sidebar": "open"
+        },
+        {
+          "size": "760x700",
+          "category": "General",
+          "top": 75,
+          "left": 280,
+          "right": 728,
+          "lastRow": 337,
+          "sidebar": "open"
+        },
+        {
+          "size": "760x700",
+          "category": "Appearance",
+          "top": 75,
+          "left": 280,
+          "right": 728,
+          "lastRow": null,
+          "sidebar": "open"
+        },
+        {
+          "size": "760x700",
+          "category": "Workspace",
+          "top": 75,
+          "left": 280,
+          "right": 728,
+          "lastRow": 466,
+          "sidebar": "open"
+        },
+        {
+          "size": "760x700",
+          "category": "Models",
+          "top": 75,
+          "left": 280,
+          "right": 728,
+          "lastRow": 348,
+          "sidebar": "open"
+        },
+        {
+          "size": "760x700",
+          "category": "Connections",
+          "top": 75,
+          "left": 280,
+          "right": 728,
+          "lastRow": 335,
+          "sidebar": "open"
+        },
+        {
+          "size": "760x700",
+          "category": "Privacy & Permissions",
+          "top": 75,
+          "left": 280,
+          "right": 728,
+          "lastRow": 638,
+          "sidebar": "open"
+        },
+        {
+          "size": "760x700",
+          "category": "Advanced",
+          "top": 75,
+          "left": 280,
+          "right": 728,
+          "lastRow": 283,
+          "sidebar": "open"
+        },
+        {
+          "size": "760x700",
+          "category": "About",
+          "top": 75,
+          "left": 280,
+          "right": 728,
+          "lastRow": 231,
+          "sidebar": "open"
+        },
+        {
+          "size": "600x700",
+          "category": "General",
+          "top": 75,
+          "left": 32,
+          "right": 568,
+          "lastRow": 337,
+          "sidebar": "closed"
+        },
+        {
+          "size": "600x700",
+          "category": "Appearance",
+          "top": 75,
+          "left": 32,
+          "right": 568,
+          "lastRow": null,
+          "sidebar": "closed"
+        },
+        {
+          "size": "600x700",
+          "category": "Workspace",
+          "top": 75,
+          "left": 32,
+          "right": 568,
+          "lastRow": 485,
+          "sidebar": "closed"
+        },
+        {
+          "size": "600x700",
+          "category": "Models",
+          "top": 75,
+          "left": 32,
+          "right": 568,
+          "lastRow": 348,
+          "sidebar": "closed"
+        },
+        {
+          "size": "600x700",
+          "category": "Connections",
+          "top": 75,
+          "left": 32,
+          "right": 568,
+          "lastRow": 335,
+          "sidebar": "closed"
+        },
+        {
+          "size": "600x700",
+          "category": "Privacy & Permissions",
+          "top": 75,
+          "left": 32,
+          "right": 568,
+          "lastRow": 587,
+          "sidebar": "closed"
+        },
+        {
+          "size": "600x700",
+          "category": "Advanced",
+          "top": 75,
+          "left": 32,
+          "right": 568,
+          "lastRow": 283,
+          "sidebar": "closed"
+        },
+        {
+          "size": "600x700",
+          "category": "About",
+          "top": 75,
+          "left": 32,
+          "right": 568,
+          "lastRow": 231,
+          "sidebar": "closed"
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "name": "condense",
+      "seen": [
+        {
+          "size": "1000x700",
+          "before": {
+            "condensed": false,
+            "opacity": 0,
+            "left": 314,
+            "text": "Workspace",
+            "sidebar": "open",
+            "column": 314
+          },
+          "after": {
+            "condensed": true,
+            "opacity": 1,
+            "left": 314,
+            "text": "Workspace",
+            "sidebar": "open",
+            "column": 314
+          },
+          "back": {
+            "condensed": false,
+            "opacity": 0,
+            "left": 314,
+            "text": "Workspace",
+            "sidebar": "open",
+            "column": 314
+          }
+        },
+        {
+          "size": "600x700",
+          "before": {
+            "condensed": false,
+            "opacity": 0,
+            "left": 205,
+            "text": "Workspace",
+            "sidebar": "closed",
+            "column": 32
+          },
+          "after": {
+            "condensed": true,
+            "opacity": 1,
+            "left": 205,
+            "text": "Workspace",
+            "sidebar": "closed",
+            "column": 32
+          },
+          "back": {
+            "condensed": false,
+            "opacity": 0,
+            "left": 205,
+            "text": "Workspace",
+            "sidebar": "closed",
+            "column": 32
+          }
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "name": "arrive",
+      "normal": [
+        {
+          "name": "settings-arrive",
+          "duration": 220
+        },
+        {
+          "name": "settings-arrive",
+          "duration": 220
+        }
+      ],
+      "reduced": []
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "name": "search",
+      "landed": {
+        "heading": "Appearance",
+        "tab": "Motion",
+        "inView": true
+      }
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "name": "review-notices",
+      "text": "Review notificationsAllow notifications to hear about a review while you are away from this window.Allow"
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "name": "remembered-rules",
+      "text": "Remembered rulesNot available in this window."
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "name": "native-hooks",
+      "read": [
+        {
+          "id": "claude-native-hooks",
+          "disabled": true,
+          "switches": 0,
+          "text": "Claude Code hooksNot available in this window."
+        },
+        {
+          "id": "codex-native-hooks",
+          "disabled": true,
+          "switches": 0,
+          "text": "Codex hooksNot available in this window."
+        }
+      ],
+      "routing": [
+        {
+          "id": "claude-native-hooks",
+          "tab": "Native hooks",
+          "top": 179,
+          "bottom": 240,
+          "inView": true
+        },
+        {
+          "id": "codex-native-hooks",
+          "tab": "Native hooks",
+          "top": 240,
+          "bottom": 300,
+          "inView": true
+        }
+      ]
+    },
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "webkit",
+      "name": "focus-ring",
+      "tab": {
+        "style": "solid",
+        "width": 2
+      },
+      "control": {
+        "style": "solid",
+        "width": 2
+      }
+    }
+  ]
+}
