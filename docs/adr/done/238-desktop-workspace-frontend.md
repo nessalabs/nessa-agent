@@ -757,12 +757,12 @@ changes rows it fades in at its new place and what is beneath it glides by
 the row, by transform and opacity; if its column is sliding at that moment,
 an inline title holds still at its place (`holdStill`) rather than ride the
 slide from where the column began. A column's titlebar-row action hides at
-once as the column folds and shows once it has slid in; a pane's header is
-hidden while its pane flies and changes size. A pane's header is its titlebar
+once as the column folds and shows once it has slid in. Pane headers keep
+rendering while their panes fly and change size (#914). A pane's header is its titlebar
 row, and what follows it begins below the titlebar's height wherever the pane
 is, so a scrolled transcript or a narrow pane's heading never passes under
 the controls; a conversation's picture band begins after them in the corner
-pane, and waits out of sight while panes travel. A frame-sampled check over
+pane. Existing pane content stays visible while panes travel. A frame-sampled check over
 every transition that moves titlebar content (⌘B, ⌥⌘S, the edge reveal, a
 resize that folds, a split, a new session, Settings, a change of layout), a
 scrolled transcript, and widths down to 560, in Chrome and WebKit at 1440 ×
