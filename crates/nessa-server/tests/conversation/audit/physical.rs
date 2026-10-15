@@ -48,18 +48,24 @@ struct HeldFileWriter {
     gate: Arc<Gate>,
     entered: Mutex<Option<Sender<()>>>,
     calls: AtomicUsize,
+    hold_at: usize,
 }
 impl ExecutionAuditFileWriter for HeldFileWriter {
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), AgentError> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        if let Some(entered) = self.entered.lock().unwrap().take() {
-            let _ = entered.send(());
+        let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if call == self.hold_at {
+            if let Some(entered) = self.entered.lock().unwrap().take() {
+                let _ = entered.send(());
+            }
+            self.gate.wait();
         }
-        self.gate.wait();
         fs::write(path, bytes).map_err(|_| AgentError::AuditFailure)
     }
 }
 fn held_writer() -> (Arc<HeldFileWriter>, Receiver<()>, ReleaseOnDrop) {
+    held_writer_at(1)
+}
+fn held_writer_at(hold_at: usize) -> (Arc<HeldFileWriter>, Receiver<()>, ReleaseOnDrop) {
     let gate = Arc::new(Gate::default());
     let release = ReleaseOnDrop(gate.clone());
     let (entered, waiting) = oneshot::channel();
@@ -67,6 +73,7 @@ fn held_writer() -> (Arc<HeldFileWriter>, Receiver<()>, ReleaseOnDrop) {
         gate,
         entered: Mutex::new(Some(entered)),
         calls: AtomicUsize::new(0),
+        hold_at,
     });
     (writer, waiting, release)
 }
@@ -294,3 +301,6 @@ fn audit_without_a_runtime_is_a_typed_pre_effect_failure() {
     assert_eq!(clock.0.load(Ordering::SeqCst), 0);
     assert_eq!(fs::read_dir(root.path().join("audit")).unwrap().count(), 0);
 }
+
+#[path = "physical/attachment_deadlines.rs"]
+mod attachment_deadlines;

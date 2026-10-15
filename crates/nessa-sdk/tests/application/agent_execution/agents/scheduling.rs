@@ -449,9 +449,9 @@ async fn pending_admission_audit_fails_and_close_completes_after_physical_cleanu
     cleanup_started.await.unwrap();
     assert!(!close.is_finished());
     // Runtime time alone cannot expire this separately injected clock.
-    tokio::time::advance(SCHEDULING_AUDIT_TIMEOUT).await;
+    tokio::time::advance(AUDIT_OBSERVATION_TIMEOUT).await;
     assert!(!admission.is_finished());
-    clock.advance(SCHEDULING_AUDIT_TIMEOUT);
+    clock.advance(AUDIT_OBSERVATION_TIMEOUT);
     let admission = tokio::time::timeout(Duration::from_secs(1), admission)
         .await
         .expect("the injected audit deadline must release admission")
@@ -499,7 +499,7 @@ async fn stalled_first_bulk_settlement_does_not_suppress_later_audit_or_receipt(
         }
     });
     first_waiting.await.unwrap();
-    tokio::time::advance(SCHEDULING_AUDIT_TIMEOUT).await;
+    tokio::time::advance(AUDIT_OBSERVATION_TIMEOUT).await;
 
     assert!(matches!(
         settlement.await.unwrap(),
@@ -551,10 +551,10 @@ async fn timed_out_observer_leaves_late_physical_audit_write_owned_without_retry
         }
     });
     waiting.await.unwrap();
-    tokio::time::advance(SCHEDULING_AUDIT_TIMEOUT).await;
+    tokio::time::advance(AUDIT_OBSERVATION_TIMEOUT).await;
     assert_eq!(
         observer.await.unwrap(),
-        Err(SchedulingAuditFailure::Unacknowledged(
+        Err(AuditObservationFailure::Unacknowledged(
             AgentError::AuditFailure
         ))
     );
@@ -588,7 +588,7 @@ async fn stalled_first_close_cancellation_does_not_suppress_later_audit_or_recei
     });
     waiting.await.unwrap();
     drop(_invocation);
-    tokio::time::advance(SCHEDULING_AUDIT_TIMEOUT).await;
+    tokio::time::advance(AUDIT_OBSERVATION_TIMEOUT).await;
     assert!(close.await.unwrap().is_err());
     assert_eq!(audit.attempts.lock().unwrap().len(), 2);
     assert!(first.wait().await.is_err());
@@ -615,10 +615,10 @@ async fn stalled_audit_observers_release_their_payloads_after_each_timeout() {
         while live.load(Ordering::SeqCst) == 0 {
             tokio::task::yield_now().await;
         }
-        tokio::time::advance(SCHEDULING_AUDIT_TIMEOUT).await;
+        tokio::time::advance(AUDIT_OBSERVATION_TIMEOUT).await;
         assert_eq!(
             observer.await.unwrap(),
-            Err(SchedulingAuditFailure::Unacknowledged(
+            Err(AuditObservationFailure::Unacknowledged(
                 AgentError::AuditFailure
             ))
         );
@@ -658,12 +658,12 @@ async fn each_bulk_settlement_gets_its_full_audit_observation_bound() {
         }
     });
     waiting.await.unwrap();
-    tokio::time::advance(SCHEDULING_AUDIT_TIMEOUT).await;
+    tokio::time::advance(AUDIT_OBSERVATION_TIMEOUT).await;
     while audit.attempts.lock().unwrap().len() < 2 {
         tokio::task::yield_now().await;
     }
     assert!(!settlement.is_finished());
-    tokio::time::advance(SCHEDULING_AUDIT_TIMEOUT - Duration::from_secs(1)).await;
+    tokio::time::advance(AUDIT_OBSERVATION_TIMEOUT - Duration::from_secs(1)).await;
     assert!(!settlement.is_finished());
     tokio::time::advance(Duration::from_secs(1)).await;
     assert!(settlement.await.unwrap().is_err());
@@ -703,7 +703,7 @@ async fn dropped_admission_caller_does_not_lose_timeout_evidence() {
     waiting.await.unwrap();
     caller.abort();
     assert!(matches!(caller.await, Err(error) if error.is_cancelled()));
-    tokio::time::advance(SCHEDULING_AUDIT_TIMEOUT).await;
+    tokio::time::advance(AUDIT_OBSERVATION_TIMEOUT).await;
     let recovered = agent
         .enqueue(request("lost-caller"), Submitter::owner(actor()))
         .await
@@ -744,7 +744,7 @@ async fn audit_acknowledgement_wins_when_deadline_is_also_ready() {
     waiting.await.unwrap();
     // Neither wake yields the test task, so both branches are ready next poll.
     release.send(()).unwrap();
-    clock.advance(SCHEDULING_AUDIT_TIMEOUT);
+    clock.advance(AUDIT_OBSERVATION_TIMEOUT);
     assert_eq!(observer.await.unwrap(), Ok(()));
 }
 
@@ -756,45 +756,79 @@ async fn scheduling_audit_panics_are_typed_and_observer_is_dropped() {
             agent
                 .record_scheduling_audit(test_admission(&agent), "panic_test")
                 .await,
-            Err(SchedulingAuditFailure::Panicked)
+            Err(AuditObservationFailure::Panicked)
         );
     }
 }
 
 #[tokio::test]
 async fn scheduling_audit_clock_panic_remains_distinct_from_a_sink_failure() {
-    struct PanickingClock;
+    #[derive(Clone, Copy)]
+    enum ClockFault {
+        Read,
+        Construction,
+        Poll,
+        Drop,
+    }
+    struct PanickingClock(ClockFault);
+    struct FaultingWake(ClockFault);
+    impl Future for FaultingWake {
+        type Output = ();
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> {
+            assert!(!matches!(self.0, ClockFault::Poll), "audit clock poll");
+            Poll::Ready(())
+        }
+    }
+    impl Drop for FaultingWake {
+        fn drop(&mut self) {
+            assert!(!matches!(self.0, ClockFault::Drop), "audit clock drop");
+        }
+    }
     impl MessageCommitClock for PanickingClock {
         fn now(&self) -> Duration {
-            panic!("audit clock read");
+            assert!(!matches!(self.0, ClockFault::Read), "audit clock read");
+            Duration::ZERO
         }
         fn sleep_until(&self, _: Duration) -> MessageCommitSleep {
-            Box::pin(std::future::pending())
+            assert!(
+                !matches!(self.0, ClockFault::Construction),
+                "audit clock construction"
+            );
+            Box::pin(FaultingWake(self.0))
         }
         fn unix_milliseconds(&self) -> u64 {
             0
         }
     }
-    let manager = SessionManager::open(
-        None,
-        Arc::new(InMemoryStorage::new()),
-        Arc::new(PanickingClock),
-    )
-    .await
-    .unwrap();
-    let agent = Agent::prepare(
-        Arc::new(TestProvider),
-        manager,
-        Arc::new(SettlementPanickingAudit::default()),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        agent
-            .record_scheduling_audit(test_admission(&agent), "clock_panic_test")
-            .await,
-        Err(SchedulingAuditFailure::Panicked)
-    );
+    for point in [
+        ClockFault::Read,
+        ClockFault::Construction,
+        ClockFault::Poll,
+        ClockFault::Drop,
+    ] {
+        let manager = SessionManager::open(
+            None,
+            Arc::new(InMemoryStorage::new()),
+            Arc::new(PanickingClock(point)),
+        )
+        .await
+        .unwrap();
+        let agent = Agent::prepare(
+            Arc::new(TestProvider),
+            manager,
+            Arc::new(PendingAdmissionAudit {
+                entered: Mutex::new(None),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            agent
+                .record_scheduling_audit(test_admission(&agent), "clock_panic_test")
+                .await,
+            Err(AuditObservationFailure::Panicked)
+        );
+    }
 }
 
 fn request(id: &str) -> ExecutionRequest {

@@ -380,6 +380,11 @@ impl SessionManager {
     pub(crate) async fn wait_for_message_deadline(&self, deadline: Duration) {
         self.message_commit_clock.sleep_until(deadline).await;
     }
+    /// Share the injected clock with Agent audit observation owners.
+    pub(crate) fn message_commit_clock(&self) -> Arc<dyn MessageCommitClock> {
+        self.message_commit_clock.clone()
+    }
+
     /// Elapsed time on the injected message-commit clock.
     pub(crate) fn message_commit_now(&self) -> Duration {
         self.message_commit_clock.now()

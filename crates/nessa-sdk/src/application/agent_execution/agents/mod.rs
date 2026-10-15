@@ -14,6 +14,8 @@
 //!       |-> SessionLifecycle -> work permits / work generations
 //!                              |-> attachment generation / active dispatch
 //!                              |-> owner-issued attachment audit records + evidence ledger
+//!                              |                   |-> shared bounded AuditObserver
+//!                              |-> cleanup joins physical result + bounded evidence slots
 //!                              |-> shared stop -> cleanup attempts / retained lease
 //!                              |-> optional owned-lifetime seal read before admission
 //!       |-> event subscribers
@@ -33,6 +35,7 @@
 mod agent;
 mod attachment;
 mod attachment_evidence;
+mod audit_observation;
 mod coordination;
 mod error;
 mod error_limits;
