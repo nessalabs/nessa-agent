@@ -278,7 +278,9 @@ a new directory at the same path, on a filesystem that reuses device and
 inode numbers, and does not copy the marker. The open is refused and the
 grants are revoked. The no-follow walk starts from the handle whose
 marker matched. `read` lists and reads named paths under that directory.
-`write` creates and edits named paths under it. The open is the check.
+`write` creates and edits named paths under it. The name `.nessa-binding`
+is refused to `read`, `write`, and `exec`, including a sandboxed command.
+The grantor's open is the reader of that file. The open is the check.
 The environment walks from a directory handle on the granted directory,
 and opens each component no-follow against the parent handle: publish, a
 file tool that names a path, and the working directory of a command. A
@@ -721,7 +723,11 @@ row committed. The cursor advances in the same write as that row. The
 conversation commit stays in the conversation store.
 
 **Invariants.** One active registration per integration principal. One
-delivery id per checkpoint per registration. Restart does not mint a second
+delivery id per checkpoint per registration. One writer advances the replay
+cursor for a registration and conversation, in checkpoint order. The cursor
+moves only to the next contiguous checkpoint, in the same write as that
+checkpoint's row. A later checkpoint does not commit ahead of an earlier
+one. Restart does not mint a second
 delivery id for a checkpoint that already has a row. `queued` and
 `retry scheduled` are admitted again. `sent`, `timed out`, `not sent`, and
 `unknown` are terminal and are not admitted again. `sending` is recorded
@@ -776,6 +782,9 @@ sequenceDiagram
 - Replay a `sending` row that has no outcome. The POST bytes may already
   have arrived. The outcome is `unknown`, and that delivery id is not sent
   again.
+- Let two live insertions advance one cursor. Checkpoint N+1 could commit
+  ahead of N, and a crash would restart past N. One writer commits
+  checkpoints in order.
 
 ### Directory binding
 
@@ -786,10 +795,15 @@ the directory root. A grant row does not store a second binding.
 
 **Invariants.** The resource id is not the path. The marker is written
 once, when the file is absent. A later share of the same directory leaves
-the file unchanged. A failed grant commit leaves the marker and every
-grant already stored. The marker is removed only when this attempt created
-the file and no committed resource stores that binding. Device and inode
-numbers are not the binding.
+the file unchanged. `.nessa-binding` is not a granted path. `read`,
+`write`, and `exec` refuse that name, including a sandboxed command. The
+grantor's open is the only reader. One share of a directory runs at a
+time. The next share reads the file only after the earlier attempt has
+committed its resource or removed a marker that attempt created and that
+no committed resource stores. A failed grant commit leaves the marker and
+every grant already stored. The marker is removed only when this attempt
+created the file and no committed resource stores that binding. Device and
+inode numbers are not the binding.
 
 | State | Meaning |
 | --- | --- |
@@ -803,7 +817,7 @@ numbers are not the binding.
 | absent, file present | Share finds an orphan marker | minted | Adopt the bytes already in the file, commit the resource, then the grant. The file is not rewritten. |
 | minted | Share to another subject | minted | Another grant row for the same resource id. The marker bytes stay. A failed grant commit leaves the marker and the first grant. |
 | minted | Open reads a matching marker | minted | The no-follow walk starts from the handle that matched. |
-| minted | Open finds a missing root, a missing marker, or different bytes | revoked | The use is refused and the grants for that resource are revoked. A directory recreated at the same path, including when device and inode numbers are reused, has no marker and does not receive the grants. |
+| minted | Open finds a missing root, a missing marker, or different bytes | revoked | The use is refused and the grants for that resource are revoked. The audit record names the resource id, before active, after absent, cause marker missing or marker bytes differ, and the open as initiator. A repeated open keeps that first cause. If the audit sink is unavailable, the grants are still removed and the use is still refused, and the result says the audit was not recorded. A directory recreated at the same path, including when device and inode numbers are reused, has no marker and does not receive the grants. |
 
 ```mermaid
 sequenceDiagram
@@ -832,6 +846,9 @@ sequenceDiagram
   fails. A second subject would revoke the first, and the cleanup would
   remove the marker the first grant still needs. The resource is minted
   once, and later grants attach to it.
+- Count in-flight sharers in a reservation protocol. One share of a
+  directory runs at a time, and cleanup of a failed create finishes before
+  the next share reads the file.
 
 ### Peer discovery and pairing
 
@@ -1140,7 +1157,11 @@ conversation id. Capabilities are
 `read`, `write`, and `exec`. `read` and
 `write` open a named path by walking from a directory handle on the
 granted directory, no-follow against each parent handle. A component that
-is `..`, a symlink, or otherwise leaves the directory is refused.
+is `..`, a symlink, or otherwise leaves the directory is refused. The
+name `.nessa-binding` is refused to `read`, `write`, and `exec`. One share
+of a directory runs at a time. The next share reads the marker only after
+the earlier attempt has committed its resource or removed a marker that
+attempt created.
 Resolving the path and then opening the resolved name is not the boundary.
 `exec` is admitted only when that
 environment enforces a filesystem sandbox around the process (the harness
@@ -1189,7 +1210,14 @@ test does that on a filesystem that reuses device and inode numbers and
 does not copy `.nessa-binding`. The open is refused and the grants are
 revoked. Sharing the same directory with a second subject leaves the
 first grant in place and leaves the marker bytes unchanged. A second
-share whose grant commit fails leaves the marker and the first grant.
+share whose grant commit fails leaves the marker and the first grant. A
+subject with `write` is refused `.nessa-binding`, and the grants stay. A
+second share of a directory waits until the first attempt has committed
+its resource or removed the marker it created. A failed first attempt
+leaves no marker and no grant. An open that finds a missing or different
+marker revokes the grants and records the resource, the before and after,
+the marker cause, and the open as initiator. An unavailable audit sink
+still revokes, and the refusal says the audit was not recorded.
 
 An opted-in Claude or Codex harness still runs its own hooks. The gateway
 cannot write a wider `grants.json` than the machine's owner wrote. A
@@ -1400,7 +1428,8 @@ starts unset. An event is written to the registration's outbox before the
 attempt waits for the permit: delivery id, registration, and source
 checkpoint (conversation id, incarnation, position), state `queued`. That
 write also sets the cursor to the same checkpoint, and the two commit
-together. The conversation commit stays in the conversation store. A
+together. One writer does that in checkpoint order. The cursor moves only
+to the next contiguous checkpoint. The conversation commit stays in the conversation store. A
 crash after that commit and before the outbox write leaves the cursor
 behind the source. Restart, before it admits work, reads each granted
 conversation from its cursor, or from the start when the cursor is unset,
@@ -1482,7 +1511,9 @@ nothing. A crash while an event waits for the permit leaves its `queued`
 outbox row, and restart delivers that delivery id. A crash after the
 conversation commit and before the outbox write is recovered from the
 replay cursor: restart inserts the missing `queued` row, and a checkpoint
-that already has a row keeps its delivery id. A crash after `retry
+that already has a row keeps its delivery id. Two checkpoints of one
+registration and conversation commit in order. A crash cannot leave the
+cursor past a checkpoint that has no row. A crash after `retry
 scheduled` and its `due_at` are written leaves that row. Restart admits
 the same delivery id once `due_at` has arrived. A second `credential.issue`
 while a registration is active is refused and writes nothing. After that
