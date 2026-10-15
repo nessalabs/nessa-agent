@@ -22,6 +22,8 @@ This table is the order for authorizing an owner phone and for the connection th
 
 A wildcard listener is published as the configured `native.advertisedAddress` on the configured port. A specific bind is published as itself. An absent listener, a configured port of zero, an unspecified address, or a wildcard with no advertised address discloses nothing. Binding port zero assigns an ephemeral port; that port is not published and is not stored in an authorization. An advertised address is a unicast host: an IPv6 link-local address is refused because the setting has no interface scope, and the IPv4 limited broadcast `255.255.255.255` is refused because a phone cannot open TCP to it. The process does not look up a route.
 
+A phone `conversation.answer` may be one shot. Remembering a permission rule (`nessa.remember.allow`, `nessa.remember.deny`) is a separate purpose decision, `conversation.remember`, and this purpose forbids it. The same decision is what a phone send asks before it offers those choices. A desktop owner is not this purpose and keeps the permission-rule catalog.
+
 | From | Event | Who | Client | Evidence |
 | --- | --- | --- | --- | --- |
 | no original | `phone.authorize` commits the signed request | owner | success; this is the first commit, not a repeat | `PairingTransition`: before Available, after Approved, event `OwnerPhoneApproved`, owner actor, time |
@@ -44,6 +46,9 @@ A wildcard listener is published as the configured `native.advertisedAddress` on
 | any session | a malformed `session.terminated` | peer | not a client class; a protocol failure; the authorization is unchanged and the event is not queued | none |
 | owned conversation | `conversation.delete` | owner or the phone | success; the session stays up | `ConversationDeletionAuditRecord`: conversation, before Owned, after Deleted, `CallerRequested`, initiator, surface, correlation |
 | tombstone committed | the same delete | that caller | idempotent success | the first audit record; a contradicting record is refused; erasure resumes from the tombstone |
+| owned conversation | phone `conversation.answer` once | phone | the review is answered; this is not a remembered rule | method `conversation.answer` stays permitted. A failed membership read still answers once |
+| owned conversation | phone `conversation.answer` with `nessa.remember.allow` or `nessa.remember.deny` | phone | refused; no rule is stored and the answerer is not noted | Cedar forbid `owner-phone.remember` on `conversation.remember` |
+| owned conversation | phone `conversation.send` or `conversation.steer` | phone | the turn is not offered a remember choice | the same `conversation.remember` decision |
 | listener | wildcard bind, a fixed port, and a routable `native.advertisedAddress` of that family | configuration | that address and the configured port may be authorized | the signed request stores the endpoint it was shown |
 | listener | a specific bind on a fixed port | configuration | that bound address may be authorized. An advertised address is accepted only for a wildcard of the same family, and only when it is unicast, not loopback, not multicast, not the IPv4 limited broadcast, and not IPv6 link-local | config parse refusal is the evidence that the setting does not apply |
 | listener | no listener, a configured port of zero, or a wildcard with no advertised address | configuration | nothing is disclosed, including after the socket is given an ephemeral port; a new original that names another endpoint conflicts | none |
@@ -52,7 +57,7 @@ A wildcard listener is published as the configured `native.advertisedAddress` on
 
 The rejected shapes are a route lookup toward a documentation address (it fails with no default route and follows a full-tunnel VPN, and it reads the operating system from inside pairing), one "not retryable" bucket that would drop a phone on a `server_shutdown` frame or a protocol mismatch, and a second client list of the same reasons that also stores `retryable`.
 
-`connection_outcome` is the only close-class projection. `connection_outcome_is_the_only_close_class` names every `SessionCloseReason` and a missing reason. The command and endpoint rows stay with `exact_replay_returns_the_stored_original_when_entropy_is_unavailable` (Active, no draw), `owner_phone_delete_retry_returns_the_idempotent_receipt`, `endpoint_publishes_the_configured_address_for_a_wildcard_bind`, `advertised_address_is_a_routable_host_for_a_wildcard_listen`, `session_terminated_is_the_close_reason_and_is_not_queued`, and `plain_eof_stays_an_untyped_close_and_a_bad_termination_is_protocol`.
+`connection_outcome` is the only close-class projection. `connection_outcome_is_the_only_close_class` names every `SessionCloseReason` and a missing reason. The command and endpoint rows stay with `exact_replay_returns_the_stored_original_when_entropy_is_unavailable` (Active, no draw), `owner_phone_delete_retry_returns_the_idempotent_receipt`, `endpoint_publishes_the_configured_address_for_a_wildcard_bind`, `advertised_address_is_a_routable_host_for_a_wildcard_listen`, `owner_phone_remember_is_refused_and_a_once_answer_stays_admitted`, `owner_phone_remember_answer_stores_no_rule`, `session_terminated_is_the_close_reason_and_is_not_queued`, and `plain_eof_stays_an_untyped_close_and_a_bad_termination_is_protocol`.
 
 ## Alternatives considered
 

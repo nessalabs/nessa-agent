@@ -721,11 +721,40 @@ async fn owner_phone_reader_factory_requires_actual_original_holding_without_own
     ));
 }
 
+#[tokio::test]
+async fn owner_phone_remember_is_refused_and_a_once_answer_stays_admitted() {
+    let f = fixture().await;
+    let evaluator = CedarOwnerPhonePolicyEvaluator::new().unwrap();
+    match decide(&evaluator, &f, OwnerPhoneOperation::Remember, &f.receiver).unwrap() {
+        OwnerPhoneDecision::Deny { rules } => {
+            assert!(
+                rules.iter().any(|rule| rule == "owner-phone.remember"),
+                "{rules:?}"
+            );
+        }
+        OwnerPhoneDecision::Allow { rules } => {
+            panic!("a phone may not remember a permission rule: {rules:?}")
+        }
+    }
+    allow(decide(
+        &evaluator,
+        &f,
+        OwnerPhoneOperation::ProductMethod {
+            method: "conversation.answer",
+            published_action: Some("conversation.write"),
+        },
+        &f.receiver,
+    ));
+}
+
 #[path = "owner_phone_catalogue.rs"]
 mod catalogue;
 
 #[path = "owner_phone_delete.rs"]
 mod delete;
+
+#[path = "owner_phone_remember.rs"]
+mod remember;
 
 #[path = "owner_phone_profile.rs"]
 mod owner_phone_profile;

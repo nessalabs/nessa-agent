@@ -105,6 +105,7 @@ impl OwnerPhonePolicyEvaluator for CedarOwnerPhonePolicyEvaluator {
                     serde_json::json!({"linkedFiles": count}),
                 )
             }
+            OwnerPhoneOperation::Remember => ("conversation.remember", serde_json::json!({})),
         };
         let resource = serde_json::json!({
             "gatewayId": facts.gateway.id().as_str(),

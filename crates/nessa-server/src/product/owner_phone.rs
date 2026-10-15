@@ -71,6 +71,18 @@ pub(super) async fn admit_creation(
     .map(|_| ())
 }
 
+/// Whether this purpose may remember a permission rule. A session that is
+/// not an owner phone is `Ok`: the permission-rule catalog remains its owner.
+/// A phone is admitted only when `conversation.remember` permits it.
+pub(super) async fn admit_remember(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<(), &'static str> {
+    admit_operation(state, session, OwnerPhoneOperation::Remember)
+        .await
+        .map(|_| ())
+}
+
 pub(super) async fn admit_submission_input(
     state: &ProductRouteState,
     session: &AuthenticatedSession,

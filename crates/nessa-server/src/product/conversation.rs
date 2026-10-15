@@ -220,9 +220,14 @@ pub(crate) async fn dispatch(
                 // Admission still starts an unpaired session as an owner turn.
                 // Whether that turn may offer a remember choice is this
                 // membership, and a membership that cannot be read offers none.
+                // An owner phone asks `conversation.remember` for the same
+                // choice; that purpose forbids it, so the turn offers none.
                 let offers_remember = authenticated_rule_principal(state, session)
                     .await
-                    .is_ok_and(|principal| principal == RulePrincipal::Owner);
+                    .is_ok_and(|principal| principal == RulePrincipal::Owner)
+                    && super::owner_phone::admit_remember(state, session)
+                        .await
+                        .is_ok();
                 let submitted = service
                     .submit_command(
                         store,
@@ -443,6 +448,14 @@ pub(crate) async fn dispatch(
             }
             "conversation.answer" => {
                 let params = target_params!(ConversationAnswerParams);
+                // A remember choice is its own purpose decision, asked before
+                // the permission-rule catalog. An ordinary once answer does
+                // not ask it, so a failed membership read still answers once.
+                if is_remember_option(&params.option_id) {
+                    if let Err(code) = super::owner_phone::admit_remember(state, session).await {
+                        return Ok(failure(&frame.id, code));
+                    }
+                }
                 // Only a remember choice reads the membership. An ordinary
                 // once answer does not fail when that read is unavailable.
                 let permission_caller = match permission_caller_for_option(

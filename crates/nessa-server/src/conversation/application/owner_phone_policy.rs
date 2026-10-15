@@ -283,6 +283,8 @@ pub enum OwnerPhoneOperation<'a> {
     },
     /// Count of canonically decoded owner-local path links before submission.
     SubmissionInput { linked_files: usize },
+    /// A remember choice on an answer or a send, distinct from a one-shot answer.
+    Remember,
 }
 
 impl OwnerPhoneOperation<'_> {
@@ -292,6 +294,7 @@ impl OwnerPhoneOperation<'_> {
             Self::ProductMethod { .. } => "product.request",
             Self::Creation { .. } => "conversation.create",
             Self::SubmissionInput { .. } => "conversation.input",
+            Self::Remember => "conversation.remember",
         }
     }
 }

@@ -71,3 +71,9 @@ when {
 @id("owner-phone.submission-input")
 permit (principal is NessaPhone::Phone, action == NessaPhone::Action::"conversation.input", resource is NessaPhone::Scope)
 when { context.linkedFiles == 0 };
+
+// A phone answer may be once. Remembering a permission rule is this action,
+// and this purpose does not grant it. A later permit would be the decision
+// that a phone may remember; this forbid is that decision today.
+@id("owner-phone.remember")
+forbid (principal is NessaPhone::Phone, action == NessaPhone::Action::"conversation.remember", resource is NessaPhone::Scope);

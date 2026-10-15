@@ -167,6 +167,21 @@
           }
         }
       },
+      "conversation.remember": {
+        "appliesTo": {
+          "principalTypes": [
+            "Phone"
+          ],
+          "resourceTypes": [
+            "Scope"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {},
+            "additionalAttributes": false
+          }
+        }
+      },
       "phone.context": {
         "appliesTo": {
           "principalTypes": [
