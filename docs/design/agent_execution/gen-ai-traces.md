@@ -66,12 +66,14 @@ underscores). ACP `usage_update.used` is context occupancy, not input tokens.
 
 `gen_ai.tool.name` is the provider's tool name when the profile kept one
 (Claude's `_meta.claudeCode.toolName` or ACP `name`; Codex's `name`, otherwise
-its kind). A kind label stored first (`read`, `edit`, `search`, `fetch`,
-`execute`, `think`, `delete`, `move`, `switch_mode`, `other`) is replaced when
-a later update carries the provider's tool name. A specific name is left in
-place when a later update only repeats the kind. `gen_ai.tool.call.id` is the
-tool-call id. `gen_ai.tool.type` is `function`, or `extension` when the call
-names an MCP tool.
+its kind). A display title is used only when content capture is on. With
+capture off and no retained name, the name is the ACP kind, or the call id
+when the update has no kind. A kind label stored first (`read`, `edit`,
+`search`, `fetch`, `execute`, `think`, `delete`, `move`, `switch_mode`,
+`other`) is replaced when a later update carries the provider's tool name. A
+specific name is left in place when a later update only repeats the kind.
+`gen_ai.tool.call.id` is the tool-call id. `gen_ai.tool.type` is `function`,
+or `extension` when the call names an MCP tool.
 
 When content capture is on, `gen_ai.input.messages`, `gen_ai.output.messages`,
 `gen_ai.tool.call.arguments`, and `gen_ai.tool.call.result` carry the text.

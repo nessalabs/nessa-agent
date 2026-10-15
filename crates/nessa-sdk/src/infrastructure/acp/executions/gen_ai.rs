@@ -80,9 +80,16 @@ pub(super) fn tool_fact(
     capture: bool,
 ) -> ToolFact {
     let id = update.id().as_str().to_owned();
+    // A title is display text. OpenCode builds some of them from model
+    // arguments, so it is captured content. A retained provider name and the
+    // ACP kind are identities and stay when capture is off.
+    let title = capture
+        .then(|| update.title().clone())
+        .flatten()
+        .filter(|title| !title.is_empty());
     let name = name
         .filter(|name| !name.is_empty())
-        .or_else(|| update.title().clone().filter(|title| !title.is_empty()))
+        .or(title)
         .or_else(|| update.kind().map(ToolKind::label).map(str::to_owned))
         .unwrap_or_else(|| id.clone());
     let tool_type = if update.mcp_tool().is_some() {
@@ -148,10 +155,110 @@ fn result_text(update: &ToolCallUpdate) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::permission_decider;
+    use super::{permission_decider, tool_fact};
     use crate::application::agent_execution::permissions::{
         ActionContext, ApprovalBasis, ApprovalModeSnapshot, ApprovalRuleReference, HookRefusal,
     };
+    use crate::application::agent_execution::traces::{
+        ContentCapture, FinishReason, GenAiSpan, LocalTraceStore, TraceRecorder, TurnIdentity,
+    };
+    use crate::domain::agent_execution::tools::{ToolCallId, ToolCallUpdate, ToolKind, ToolStatus};
+    use std::time::Duration;
+
+    fn update(title: Option<&str>, kind: Option<ToolKind>) -> ToolCallUpdate {
+        ToolCallUpdate::new(
+            ToolCallId::new("call-1").unwrap(),
+            title.map(str::to_owned),
+            kind,
+            Some(ToolStatus::Completed),
+            None,
+            None,
+        )
+    }
+
+    fn recorded(fact_name: Option<&str>, update: &ToolCallUpdate, capture: bool) -> Vec<GenAiSpan> {
+        let store = if capture {
+            LocalTraceStore::with_capture(ContentCapture::on())
+        } else {
+            LocalTraceStore::new()
+        };
+        let mut recorder = TraceRecorder::new(store.clone(), store.capture());
+        recorder.begin_turn(
+            Duration::from_millis(1),
+            TurnIdentity::new(
+                "conversation-1",
+                "execution-1",
+                "opencode",
+                "agent",
+                "model",
+                None,
+            ),
+            "",
+        );
+        recorder.tool(
+            Duration::from_millis(2),
+            tool_fact(fact_name.map(str::to_owned), None, update, capture),
+        );
+        recorder.finish(Duration::from_millis(3), FinishReason::Stop);
+        store.read("conversation-1")
+    }
+
+    fn tool_span(spans: &[GenAiSpan]) -> &GenAiSpan {
+        spans
+            .iter()
+            .find(|span| span.operation() == "execute_tool")
+            .unwrap()
+    }
+
+    #[test]
+    fn a_display_title_is_not_the_tool_name_when_capture_is_off() {
+        let spans = recorded(
+            None,
+            &update(Some("websearch secret-marker"), Some(ToolKind::Fetch)),
+            false,
+        );
+        let tool = tool_span(&spans);
+        assert_eq!(tool.string("gen_ai.tool.name"), Some("fetch"));
+        assert_eq!(tool.name(), "execute_tool fetch");
+        assert!(!format!("{spans:?}").contains("secret-marker"));
+    }
+
+    #[test]
+    fn a_display_title_without_a_kind_uses_the_call_id_when_capture_is_off() {
+        let spans = recorded(None, &update(Some("websearch secret-marker"), None), false);
+        let tool = tool_span(&spans);
+        assert_eq!(tool.string("gen_ai.tool.name"), Some("call-1"));
+        assert_eq!(tool.name(), "execute_tool call-1");
+        assert!(!format!("{spans:?}").contains("secret-marker"));
+    }
+
+    #[test]
+    fn a_retained_name_stays_when_capture_is_off() {
+        let spans = recorded(
+            Some("Read"),
+            &update(Some("websearch secret-marker"), Some(ToolKind::Read)),
+            false,
+        );
+        let tool = tool_span(&spans);
+        assert_eq!(tool.string("gen_ai.tool.name"), Some("Read"));
+        assert_eq!(tool.name(), "execute_tool Read");
+        assert!(!format!("{spans:?}").contains("secret-marker"));
+    }
+
+    #[test]
+    fn a_display_title_names_the_tool_when_capture_is_on() {
+        let spans = recorded(
+            None,
+            &update(Some("websearch secret-marker"), Some(ToolKind::Fetch)),
+            true,
+        );
+        let tool = tool_span(&spans);
+        assert_eq!(
+            tool.string("gen_ai.tool.name"),
+            Some("websearch secret-marker")
+        );
+        assert_eq!(tool.name(), "execute_tool websearch secret-marker");
+    }
 
     #[test]
     fn a_decider_follows_the_answer_basis() {

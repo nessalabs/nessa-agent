@@ -162,7 +162,8 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
     /// Provider tool name retained for `id`, when this profile kept one.
     ///
     /// The shared runtime uses it as `gen_ai.tool.name`. The default is that
-    /// the profile kept no name, and the runtime uses the update's title.
+    /// the profile kept no name. A display title is used only while content
+    /// capture is on; otherwise the runtime uses the ACP kind, or the call id.
     fn traced_tool_name(&self, _id: &str) -> Option<String> {
         None
     }
