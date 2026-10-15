@@ -20,6 +20,23 @@
 # DEBIAN_FRONTEND is a sudo assignment on purpose. Preserving the whole
 # environment would hand apt the release job's updater signing key.
 set -euo pipefail
+packages=(
+  libwebkit2gtk-4.1-dev libgtk-3-dev
+  libayatana-appindicator3-dev librsvg2-dev libxdo-dev "$@"
+)
+# A resumed container needs capability verification, not another mirror update.
+# cloud-startup.test.mjs exercises both the installed and missing-package paths.
+installed=true
+for package in "${packages[@]}"; do
+  if [ "$(dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null)" != installed ]; then
+    installed=false
+    break
+  fi
+done
+if "$installed"; then
+  echo 'Linux build dependencies are installed.'
+  exit 0
+fi
 apt_options=(
   -o Acquire::Retries=3
   -o Acquire::http::Timeout=30
@@ -36,5 +53,4 @@ for attempt in 1 2 3; do
   sleep $((attempt * 15))
 done
 sudo DEBIAN_FRONTEND=noninteractive timeout --kill-after=30s 45m apt-get "${apt_options[@]}" install -y \
-  libwebkit2gtk-4.1-dev libgtk-3-dev \
-  libayatana-appindicator3-dev librsvg2-dev libxdo-dev "$@"
+  "${packages[@]}"

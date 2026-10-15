@@ -880,6 +880,33 @@ conversation's freshly resolved provider always supplies the authoritative
 request result. Tests live under `crates/nessa-server/tests/agent_warm_up/` and
 the composition seam under `crates/nessa-server/tests/composition/`.
 
+## Cloud development preparation
+
+[`scripts/cloud-startup.sh`](../scripts/cloud-startup.sh) owns Cloud setup and
+maintenance. Setup runs `bash scripts/cloud-startup.sh setup "$PWD"` and installs
+that recipe plus the canonical native installer into `/opt/nessa-cloud`.
+Maintenance runs `bash /opt/nessa-cloud/bootstrap.sh maintenance "$PWD"` against
+the task checkout; the cached executable survives a branch that predates its
+source. Installed artifact hashes are checked against their setup record.
+The recipe verifies the owned Node 24 and
+repository pnpm, stable Rust, UI revision, offline pnpm/Cargo dependencies and
+installed Playwright executables before fetching missing capabilities. The native
+package list and installed-package check remain with
+[`install-linux-build-deps.sh`](../scripts/desktop/install-linux-build-deps.sh).
+Its adjacent root-level `cloud-startup.test.mjs` exercises cold preparation, warm
+reconciliation, clean login/child shells, missing components and failed receipts.
+
+The bootstrap persists the selected PATH in one owned helper. It records a
+container-minted identity, preexisting identity/previous receipt, actual entry
+mode, task source, provisioning source/hashes and per-step reuse in
+`/opt/nessa-cloud/preparation.json` only
+after successful verification. A repeated setup can reuse capabilities too;
+`mode=setup` is never relabeled as maintenance. Correlating the identity between
+actual platform invocations distinguishes reused owned state from a fresh run;
+these receipts do not promise that the platform will resume a cache. Toolchain
+updates beyond the required Node line, stable Rust channel and packageManager pin
+are explicit provisioning work rather than an unconditional update on each chat.
+
 ## MCP tools
 
 `crates/nessa-mcp/src/mcp.rs` owns stdio transport and routing. Nessa-owned tools
