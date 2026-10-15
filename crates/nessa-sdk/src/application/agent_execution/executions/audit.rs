@@ -49,60 +49,7 @@ pub enum AttachmentAuditCause {
     Failed,
 }
 
-/// Attributed before/after evidence for one attachment lifecycle transition.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AttachmentAuditRecord {
-    session_id: SessionId,
-    generation: u64,
-    before: AttachmentAuditStage,
-    after: AttachmentAuditStage,
-    cause: AttachmentAuditCause,
-    actor: Option<ActionContext>,
-}
-impl AttachmentAuditRecord {
-    /// Construct exact attachment transition evidence without performing effects.
-    pub fn new(
-        session_id: SessionId,
-        generation: u64,
-        before: AttachmentAuditStage,
-        after: AttachmentAuditStage,
-        cause: AttachmentAuditCause,
-        actor: Option<ActionContext>,
-    ) -> Self {
-        Self {
-            session_id,
-            generation,
-            before,
-            after,
-            cause,
-            actor,
-        }
-    }
-    /// Local session whose attachment lifecycle changed.
-    pub fn session_id(&self) -> &SessionId {
-        &self.session_id
-    }
-    /// Attachment generation affected by this transition.
-    pub fn generation(&self) -> u64 {
-        self.generation
-    }
-    /// Stage before the transition.
-    pub fn before(&self) -> AttachmentAuditStage {
-        self.before
-    }
-    /// Stage after the transition.
-    pub fn after(&self) -> AttachmentAuditStage {
-        self.after
-    }
-    /// Typed transition cause.
-    pub fn cause(&self) -> AttachmentAuditCause {
-        self.cause
-    }
-    /// Verified caller for explicit causes, absent for automatic ones.
-    pub fn actor(&self) -> Option<&ActionContext> {
-        self.actor.as_ref()
-    }
-}
+pub use crate::application::agent_execution::agents::lifecycle::AttachmentAuditRecord;
 
 /// Audited ownership stage for a submitted input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

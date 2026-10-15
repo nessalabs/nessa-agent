@@ -16,10 +16,9 @@ use crate::application::agent_execution::agents::{
 };
 use crate::application::agent_execution::caller_wake::{contain_caller_wake, CallerWaiter};
 use crate::application::agent_execution::executions::{
-    limits::MAX_RETAINED_OUTPUT_EVENTS, AttachmentAuditCause, AttachmentAuditRecord,
-    AttachmentAuditStage, EffortChangeOutcome, EffortLevelChange, EffortLevelChangeRecord,
-    ExecutionAudit, ExecutionAuditRecord, ExecutionEvent, ExecutionRequest, ExecutionUpdate,
-    Submitter,
+    limits::MAX_RETAINED_OUTPUT_EVENTS, EffortChangeOutcome, EffortLevelChange,
+    EffortLevelChangeRecord, ExecutionAudit, ExecutionAuditRecord, ExecutionEvent,
+    ExecutionRequest, ExecutionUpdate, Submitter,
 };
 use crate::application::agent_execution::hooks::{
     EvaluationSuffix, HookFailureKind, HookRegistration, InvocationHook, InvocationHooks,
@@ -971,18 +970,10 @@ impl Agent {
         let (start, wait) = self.inner.lifecycle.start_attachment(authorization)?;
         let agent = self.clone();
         runtime.spawn(async move {
-            let started = AttachmentAuditRecord::new(
-                agent.inner.manager.id().clone(),
-                start.generation,
-                AttachmentAuditStage::Waiting,
-                AttachmentAuditStage::Starting,
-                AttachmentAuditCause::Started(start.cause),
-                start.actor.clone(),
-            );
             let started = agent
                 .inner
                 .lifecycle
-                .record_attachment_audit(ExecutionAuditRecord::Attachment(started))
+                .record_attachment_audit(ExecutionAuditRecord::Attachment(start.record))
                 .await;
             start.started_evidence.send_replace(Some(started.clone()));
             let lifecycle = agent.inner.lifecycle.clone();
@@ -1009,17 +1000,9 @@ impl Agent {
                                     };
                                     AttachmentAttemptFailure::new(failure.cause, source)
                                 })?;
-                            let published_evidence = lifecycle
+                            let (published, published_evidence) = lifecycle
                                 .publish_attachment(start.generation, attached)
                                 .map_err(|_| AttachmentAttemptFailure::from(AgentError::Closed))?;
-                            let published = AttachmentAuditRecord::new(
-                                agent.inner.manager.id().clone(),
-                                start.generation,
-                                AttachmentAuditStage::Starting,
-                                AttachmentAuditStage::ContextPublished,
-                                AttachmentAuditCause::Published,
-                                start.actor.clone(),
-                            );
                             let published_result = agent
                                 .inner
                                 .lifecycle
@@ -1057,18 +1040,22 @@ impl Agent {
             };
             let result = if let Err(mut failure) = attempt_result {
                 let original = failure.error();
-                let code = match &original {
-                    AgentError::AuditFailure | AgentError::AuditAndCleanupFailure => {
-                        AttachmentFailureCode::Audit
+                let code = if failure.attachment_audit_failed(start.generation) {
+                    AttachmentFailureCode::Audit
+                } else {
+                    match &original {
+                        AgentError::AuditFailure | AgentError::AuditAndCleanupFailure => {
+                            AttachmentFailureCode::Audit
+                        }
+                        AgentError::Storage(_) | AgentError::StorageInitialization { .. } => {
+                            AttachmentFailureCode::Storage
+                        }
+                        AgentError::CleanupUncertain
+                        | AgentError::OperationAndCleanupFailure { .. } => {
+                            AttachmentFailureCode::Cleanup
+                        }
+                        _ => AttachmentFailureCode::Provider,
                     }
-                    AgentError::Storage(_) | AgentError::StorageInitialization { .. } => {
-                        AttachmentFailureCode::Storage
-                    }
-                    AgentError::CleanupUncertain
-                    | AgentError::OperationAndCleanupFailure { .. } => {
-                        AttachmentFailureCode::Cleanup
-                    }
-                    _ => AttachmentFailureCode::Provider,
                 };
                 let recorded_context = agent.inner.manager.has_observed_provider_context().await;
                 let transition = lifecycle.fail_attachment(
@@ -1090,21 +1077,11 @@ impl Agent {
                     if let Err(settlement_error) = settlement {
                         failure.retain_independent(settlement_error);
                     }
-                    if code != AttachmentFailureCode::Audit {
-                        let failed = AttachmentAuditRecord::new(
-                            agent.inner.manager.id().clone(),
-                            start.generation,
-                            AttachmentAuditStage::Starting,
-                            AttachmentAuditStage::Failed,
-                            AttachmentAuditCause::Failed,
-                            start.actor.clone(),
-                        );
+                    if let Some((failed, completion)) = failed_evidence {
                         let failed_result = lifecycle
                             .record_attachment_audit(ExecutionAuditRecord::Attachment(failed))
                             .await;
-                        if let Some(completion) = failed_evidence {
-                            completion.send_replace(Some(failed_result.clone()));
-                        }
+                        completion.send_replace(Some(failed_result.clone()));
                         if let Err(audit_error) = failed_result {
                             lifecycle.retain_attachment_evidence_failure(
                                 start.generation,

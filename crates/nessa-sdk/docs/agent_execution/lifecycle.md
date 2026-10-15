@@ -110,6 +110,24 @@ failures still block restoration. The old event reader drains retained observati
 with their original execution identities, but retirement prevents its already
 reported failure from being attached to a newly dispatched invocation.
 
+Attachment audit records are immutable outputs of `SessionLifecycle`, exposed
+through the existing `AttachmentAuditRecord` getters. Start, context publication,
+failure, abandonment and close derive their related facts under the lifecycle
+lock; the public record has no constructor or writable fields. The two record
+compile-fail doctests hold that boundary. `authorization_wait_and_start_publish_one_coherent_status`,
+`close_joins_failed_transition_registered_before_delivery` and
+`abandoned_authorization_blocks_replacement_until_audit_settles` check the issued
+session, generation, stage, cause and actor together.
+
+An audit sink's diagnostic does not replace the known origin of a failed
+attachment audit. `AttachmentAttemptFailure` retains the transition source;
+`starting_audit_origin_does_not_depend_on_sink_error_variant` and
+`published_audit_origin_does_not_depend_on_sink_error_variant` cross start and
+publication with protocol and storage diagnostics. These failures retain the
+Audit category and original diagnostic, prevent dispatch and complete owned
+cleanup without adding a provider-failure record. Context publication remains
+separate from audit acknowledgement and dispatch readiness.
+
 A restoring worker reserves its reader slot before starting, but joins the public
 reader only after startup succeeds. Failed startup releases that slot; repeated
 failures do not require the caller to drain a reader before retrying. Dropping a

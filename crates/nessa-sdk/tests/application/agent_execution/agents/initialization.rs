@@ -24,6 +24,7 @@ struct AttachmentAuditProbe {
     records: Mutex<Vec<AttachmentAuditRecord>>,
     reject: AtomicBool,
     reject_after: Mutex<Option<AttachmentAuditStage>>,
+    reject_error: Mutex<Option<AgentError>>,
     entered: Notify,
     completed: Notify,
     gate_after: Mutex<Option<AttachmentAuditStage>>,
@@ -61,7 +62,12 @@ impl ExecutionAudit for AttachmentAuditProbe {
                     _ => self.reject_after.lock().unwrap().is_none(),
                 };
             let result = if reject {
-                Err(AgentError::AuditFailure)
+                Err(self
+                    .reject_error
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .unwrap_or(AgentError::AuditFailure))
             } else {
                 Ok(())
             };
@@ -156,6 +162,7 @@ enum OpenPanic {
 }
 struct PanickingProvider(OpenPanic);
 struct NoResourcesProvider;
+struct RejectingOpenProvider(AgentError);
 struct GatedFailedOpenProvider {
     cleanup: Arc<GatedFailedOpenCleanup>,
 }
@@ -224,6 +231,17 @@ impl AgentProvider for NoResourcesProvider {
     }
     fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async { Err(ProviderOpenError::no_resources(AgentError::Closed)) })
+    }
+}
+impl AgentProvider for RejectingOpenProvider {
+    fn identity(&self) -> ProviderIdentity {
+        ProviderIdentity::new("rejected-open", "fixture", "test").unwrap()
+    }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
+        Box::pin(async { Err(ProviderOpenError::no_resources(self.0.clone())) })
     }
 }
 impl ProviderCleanup for GatedFailedOpenCleanup {
@@ -1484,7 +1502,8 @@ async fn child_record_receipt_probe() {
 async fn authorization_wait_and_start_publish_one_coherent_status() {
     let storage = MemoryStorage::default();
     let provider = TestProvider::new();
-    let agent = prepared(provider.clone(), &storage, Arc::new(AcceptingAudit)).await;
+    let audit = Arc::new(AttachmentAuditProbe::default());
+    let agent = prepared(provider.clone(), &storage, audit.clone()).await;
     let authorization = agent
         .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
         .unwrap();
@@ -1505,6 +1524,26 @@ async fn authorization_wait_and_start_publish_one_coherent_status() {
         storage.snapshot().provider_context,
         ProviderContext::Recorded(_)
     ));
+    let records = audit.records.lock().unwrap().clone();
+    assert_eq!(records.len(), 2);
+    for record in &records {
+        assert_eq!(
+            record.session_id(),
+            &SessionId::new("conversation").unwrap()
+        );
+        assert_eq!(record.generation(), 0);
+        assert_eq!(record.actor(), Some(&actor()));
+    }
+    assert_eq!(records[0].before(), AttachmentAuditStage::Waiting);
+    assert_eq!(records[0].after(), AttachmentAuditStage::Starting);
+    assert_eq!(
+        records[0].cause(),
+        AttachmentAuditCause::Started(AttachmentCause::Initial)
+    );
+    assert_eq!(records[1].before(), AttachmentAuditStage::Starting);
+    assert_eq!(records[1].after(), AttachmentAuditStage::ContextPublished);
+    assert_eq!(records[1].cause(), AttachmentAuditCause::Published);
+    agent.close(close_action()).await.unwrap();
 }
 
 #[tokio::test]
@@ -1630,6 +1669,121 @@ async fn published_context_is_not_dispatchable_before_audit_acknowledgement() {
 }
 
 #[tokio::test]
+async fn starting_audit_origin_does_not_depend_on_sink_error_variant() {
+    check_attachment_audit_origin(AttachmentAuditStage::Starting).await;
+}
+
+#[tokio::test]
+async fn published_audit_origin_does_not_depend_on_sink_error_variant() {
+    check_attachment_audit_origin(AttachmentAuditStage::ContextPublished).await;
+}
+
+async fn check_attachment_audit_origin(stage: AttachmentAuditStage) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        for diagnostic in [
+            AgentError::Protocol("audit transport rejected".into()),
+            AgentError::Storage(StorageError::Unresolved),
+        ] {
+            for close_before_rejection in [false, true] {
+                let storage = MemoryStorage::default();
+                let provider = TestProvider::new();
+                let audit = Arc::new(AttachmentAuditProbe::default());
+                audit.reject.store(true, Ordering::SeqCst);
+                *audit.reject_after.lock().unwrap() = Some(stage);
+                *audit.reject_error.lock().unwrap() = Some(diagnostic.clone());
+                *audit.gate_after.lock().unwrap() = Some(stage);
+                let (release, waiting) = oneshot::channel();
+                *audit.release.lock().unwrap() = Some(waiting);
+                let agent = prepared(provider.clone(), &storage, audit.clone()).await;
+                let authorization = agent
+                    .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+                    .unwrap();
+                let attachment = agent.start_attachment(authorization).unwrap();
+                audit.entered.notified().await;
+                let closing = if close_before_rejection {
+                    let closing_agent = agent.clone();
+                    let closing = tokio::spawn(async move { closing_agent.close(close_action()).await });
+                    while agent.attachment_status().phase() != AttachmentPhase::Absent {
+                        tokio::task::yield_now().await;
+                    }
+                    assert!(!closing.is_finished());
+                    Some(closing)
+                } else {
+                    None
+                };
+                release.send(()).unwrap();
+                assert!(attachment.wait().await.is_err());
+                if let Some(closing) = closing {
+                    assert!(closing.await.unwrap().is_err());
+                }
+                let status = agent.attachment_status();
+                let records = audit.records.lock().unwrap().clone();
+                let failure = status.evidence_failure().unwrap_or_else(|| panic!(
+                    "audit origin lost for {stage:?}, {diagnostic:?}, close={close_before_rejection}; records={records:?}"
+                ));
+                assert_eq!(failure.code(), AttachmentFailureCode::Audit);
+                assert_eq!(failure.error(), &diagnostic);
+                assert_eq!(
+                    records[0].session_id(),
+                    &SessionId::new("conversation").unwrap()
+                );
+                assert_eq!(records[0].actor(), Some(&actor()));
+                assert_eq!(failure.generation(), records[0].generation());
+                assert!(
+                    records
+                        .iter()
+                        .all(|record| record.after() != AttachmentAuditStage::Failed),
+                    "audit rejection is not another provider failure: {records:?}"
+                );
+                assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 0);
+                assert_eq!(
+                    provider.calls.closes.lock().unwrap().len(),
+                    usize::from(stage == AttachmentAuditStage::ContextPublished)
+                );
+                assert!(agent.close(close_action()).await.is_err());
+                assert_eq!(
+                    provider.calls.closes.lock().unwrap().len(),
+                    usize::from(stage == AttachmentAuditStage::ContextPublished)
+                );
+            }
+        }
+    }).await.expect("attachment audit failure and close settled");
+}
+
+#[tokio::test]
+async fn provider_protocol_failure_keeps_its_distinct_transition_origin() {
+    let diagnostic = AgentError::Protocol("audit transport rejected".into());
+    let storage = MemoryStorage::default();
+    let audit = Arc::new(AttachmentAuditProbe::default());
+    let agent = prepared(
+        Arc::new(RejectingOpenProvider(diagnostic.clone())),
+        &storage,
+        audit.clone(),
+    )
+    .await;
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    assert_eq!(
+        agent.start_attachment(authorization).unwrap().wait().await,
+        Err(diagnostic.clone())
+    );
+    let status = agent.attachment_status();
+    assert_eq!(status.evidence_failure(), None);
+    let failure = status.failure().unwrap();
+    assert_eq!(failure.code(), AttachmentFailureCode::Provider);
+    assert_eq!(failure.error(), &diagnostic);
+    let records = audit.records.lock().unwrap().clone();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[1].before(), AttachmentAuditStage::Starting);
+    assert_eq!(records[1].after(), AttachmentAuditStage::Failed);
+    assert_eq!(records[1].cause(), AttachmentAuditCause::Failed);
+    assert_eq!(records[1].generation(), records[0].generation());
+    assert_eq!(records[1].actor(), Some(&actor()));
+    agent.close(close_action()).await.unwrap();
+}
+
+#[tokio::test]
 async fn close_joins_context_publication_registered_before_delivery() {
     let storage = MemoryStorage::default();
     let provider = TestProvider::new();
@@ -1691,6 +1845,19 @@ async fn close_joins_failed_transition_registered_before_delivery() {
     release.send(()).unwrap();
     closing.await.unwrap().unwrap();
     assert_eq!(attachment.wait().await, Err(AgentError::Closed));
+    let records = audit.records.lock().unwrap().clone();
+    let failed = records
+        .iter()
+        .find(|record| record.after() == AttachmentAuditStage::Failed)
+        .unwrap();
+    assert_eq!(
+        failed.session_id(),
+        &SessionId::new("conversation").unwrap()
+    );
+    assert_eq!(failed.generation(), records[0].generation());
+    assert_eq!(failed.before(), AttachmentAuditStage::Starting);
+    assert_eq!(failed.cause(), AttachmentAuditCause::Failed);
+    assert_eq!(failed.actor(), Some(&actor()));
 }
 
 #[tokio::test]
@@ -1989,6 +2156,20 @@ async fn abandoned_authorization_blocks_replacement_until_audit_settles() {
     release.send(()).unwrap();
     audit.completed.notified().await;
     assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Absent);
+    let records = audit.records.lock().unwrap().clone();
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].session_id(),
+        &SessionId::new("conversation").unwrap()
+    );
+    assert_eq!(records[0].generation(), 0);
+    assert_eq!(records[0].before(), AttachmentAuditStage::Waiting);
+    assert_eq!(records[0].after(), AttachmentAuditStage::Absent);
+    assert_eq!(
+        records[0].cause(),
+        AttachmentAuditCause::AuthorizationAbandoned
+    );
+    assert_eq!(records[0].actor(), Some(&actor()));
 }
 
 #[tokio::test]
@@ -2179,9 +2360,20 @@ async fn provider_context_save_panics_fail_durably_and_cleanup_provider() {
         agent.start_attachment(retry).unwrap().wait().await.unwrap();
         assert_eq!(provider.calls.opens.lock().unwrap().len(), 2);
         assert!(provider.calls.opens.lock().unwrap()[1].is_some());
-        assert!(audit.records.lock().unwrap().iter().any(|record| {
-            record.cause() == AttachmentAuditCause::Started(AttachmentCause::Reopen)
-        }));
+        let records = audit.records.lock().unwrap().clone();
+        let reopen = records
+            .iter()
+            .find(|record| record.cause() == AttachmentAuditCause::Started(AttachmentCause::Reopen))
+            .unwrap();
+        assert!(reopen.generation() > records[0].generation());
+        assert_eq!(reopen.actor(), Some(&actor()));
+        let published = records.last().unwrap();
+        assert_eq!(published.generation(), reopen.generation());
+        assert_eq!(published.session_id(), reopen.session_id());
+        assert_eq!(published.actor(), reopen.actor());
+        assert_eq!(published.before(), AttachmentAuditStage::Starting);
+        assert_eq!(published.after(), AttachmentAuditStage::ContextPublished);
+        assert_eq!(published.cause(), AttachmentAuditCause::Published);
         agent.close(close_action()).await.unwrap();
     }
 }
