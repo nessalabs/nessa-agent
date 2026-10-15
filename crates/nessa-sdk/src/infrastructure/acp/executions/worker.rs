@@ -1964,10 +1964,13 @@ impl<P: AcpProfile> Worker<P> {
             reply,
             deadline,
         });
-        self.begin_trace(&execution_id, &user_text);
         self.provider_result = None;
         self.profile.begin_execution();
-        self.send_encoded(frame, deadline).await.map_err(Into::into)
+        self.send_encoded(frame, deadline)
+            .await
+            .map_err(WorkerFailure::from)?;
+        self.begin_trace(&execution_id, &user_text);
+        Ok(())
     }
     /// Send one `_session/steering` request for `prompt`, after applying
     /// provider evidence that is already readable.
