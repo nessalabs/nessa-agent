@@ -327,6 +327,19 @@ impl TraceRecorder {
         self.accept_early_usage = true;
     }
 
+    /// Drop usage held for a prompt that will not open a turn.
+    ///
+    /// Dispatch arms the hold before it reads the provider, then calls this
+    /// when that prompt is refused before the trace opens. Figures already
+    /// applied to an open turn stay there.
+    pub fn release_usage_before_turn(&mut self) {
+        if self.turn.is_some() {
+            return;
+        }
+        self.held_usage = ReportedUsage::new();
+        self.accept_early_usage = false;
+    }
+
     /// Open the agent span and the first model span for `identity`.
     ///
     /// `user_text` is the prompt already admitted for the turn. It is stored

@@ -424,6 +424,72 @@ async fn usage_after_the_turn_closes_is_not_applied_to_the_next_turn() {
         .unwrap();
 }
 
+#[tokio::test]
+async fn usage_read_before_a_rejected_dispatch_does_not_land_on_the_next_turn() {
+    let usage = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": "context",
+            "update": {
+                "sessionUpdate": "usage_update",
+                "inputTokens": 9,
+                "used": 40
+            }
+        }
+    });
+    let (mut worker, _commands, _close, _events) =
+        dispatch_policy::worker_with_ready_frames(&[usage], "").await;
+    let store = LocalTraceStore::new();
+    worker.traces = TraceRecorder::new(store.clone(), ContentCapture::off());
+    let (steer_reply, _steer_result) = oneshot::channel();
+    worker.steering = Some(PendingSteering {
+        id: 7,
+        reply: steer_reply,
+        deadline: worker.config.clock.now() + steering::RESPONSE_TIMEOUT,
+    });
+    let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
+    let (reply, result) = oneshot::channel();
+    worker
+        .dispatch_execution(
+            &mut execution,
+            dispatched(dispatch_policy::request(), None),
+            reply,
+        )
+        .await
+        .unwrap_or_else(|failure| panic!("{}", failure.error()));
+    assert!(matches!(
+        result.await.unwrap(),
+        ProviderExecutionReply::Rejected(AgentError::Busy)
+    ));
+    assert!(store.read("next").is_empty());
+    worker.steering = None;
+    let (reply, _result) = oneshot::channel();
+    worker
+        .dispatch_execution(
+            &mut execution,
+            dispatched(dispatch_policy::request(), None),
+            reply,
+        )
+        .await
+        .unwrap_or_else(|failure| panic!("{}", failure.error()));
+    worker
+        .traces
+        .finish(Duration::from_secs(1), FinishReason::Stop);
+    let spans = store.read("next");
+    let agent = spans
+        .iter()
+        .find(|span| span.operation() == "invoke_agent")
+        .unwrap();
+    assert!(agent.int("gen_ai.usage.input_tokens").is_none());
+    assert!(agent.int("nessa.context.used_tokens").is_none());
+    worker
+        .scope
+        .cleanup(Duration::ZERO, Duration::from_secs(2))
+        .await
+        .unwrap();
+}
+
 #[path = "worker/panics.rs"]
 mod panics;
 

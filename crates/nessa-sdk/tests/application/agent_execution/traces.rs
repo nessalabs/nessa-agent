@@ -272,6 +272,33 @@ fn usage_after_a_turn_closes_does_not_land_on_the_next_turn() {
 }
 
 #[test]
+fn usage_read_for_a_refused_prompt_does_not_land_on_the_next_turn() {
+    let store = LocalTraceStore::new();
+    let mut recorder = turn(&store);
+    recorder.accept_usage_before_turn();
+    recorder.usage(
+        ReportedUsage::new()
+            .with_input_tokens(9)
+            .with_context_used(40),
+    );
+    recorder.release_usage_before_turn();
+    recorder.accept_usage_before_turn();
+    recorder.usage(ReportedUsage::new().with_input_tokens(5));
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.finish(at(2), FinishReason::Stop);
+    let spans = store.read("conversation-1");
+    let agent = spans
+        .iter()
+        .find(|span| span.operation() == "invoke_agent")
+        .unwrap();
+    assert_eq!(agent.int("gen_ai.usage.input_tokens"), Some(5));
+    assert!(agent.int("nessa.context.used_tokens").is_none());
+    assert!(spans
+        .iter()
+        .all(|span| span.int("gen_ai.usage.input_tokens") != Some(9)));
+}
+
+#[test]
 fn an_unrepresentable_token_count_is_omitted() {
     let store = LocalTraceStore::new();
     let mut recorder = turn(&store);

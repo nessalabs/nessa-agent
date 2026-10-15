@@ -1904,13 +1904,16 @@ impl<P: AcpProfile> Worker<P> {
                 ))
             };
             let _ = reply.send(report);
+            self.traces.release_usage_before_turn();
             return readiness.map(|_| ());
         }
         if reply.is_closed() {
+            self.traces.release_usage_before_turn();
             return Ok(());
         }
         if self.steering.is_some() {
             let _ = reply.send(ProviderExecutionReply::Rejected(AgentError::Busy));
+            self.traces.release_usage_before_turn();
             return Ok(());
         }
         let DispatchedPrompt {
@@ -1921,16 +1924,24 @@ impl<P: AcpProfile> Worker<P> {
         let _budget = images.take_charge();
         if let Err(error) = self.profile.validate_execution(&input, &self.capabilities) {
             let _ = reply.send(ProviderExecutionReply::Rejected(error));
+            self.traces.release_usage_before_turn();
             return Ok(());
         }
         let blocks = match self.prompt_blocks(&input.user_message, images) {
             Ok(blocks) => blocks,
             Err(error) => {
                 let _ = reply.send(ProviderExecutionReply::Rejected(error));
+                self.traces.release_usage_before_turn();
                 return Ok(());
             }
         };
-        let id = self.pending_id()?;
+        let id = match self.pending_id() {
+            Ok(id) => id,
+            Err(error) => {
+                self.traces.release_usage_before_turn();
+                return Err(error.into());
+            }
+        };
         let frame = match json_rpc::encode(
             json_rpc::request(
                 id,
@@ -1942,6 +1953,7 @@ impl<P: AcpProfile> Worker<P> {
             Ok(frame) => frame,
             Err(error) => {
                 let _ = reply.send(ProviderExecutionReply::Rejected(error));
+                self.traces.release_usage_before_turn();
                 return Ok(());
             }
         };
@@ -1953,6 +1965,7 @@ impl<P: AcpProfile> Worker<P> {
         let execution_id = input.execution_id;
         if let Err(error) = execution.begin_execution(execution_id.clone()) {
             let _ = reply.send(ProviderExecutionReply::Rejected(error));
+            self.traces.release_usage_before_turn();
             return Ok(());
         }
         self.sequence = id;
@@ -1967,9 +1980,10 @@ impl<P: AcpProfile> Worker<P> {
         });
         self.provider_result = None;
         self.profile.begin_execution();
-        self.send_encoded(frame, deadline)
-            .await
-            .map_err(WorkerFailure::from)?;
+        if let Err(error) = self.send_encoded(frame, deadline).await {
+            self.traces.release_usage_before_turn();
+            return Err(WorkerFailure::from(error));
+        }
         self.begin_trace(&execution_id, &user_text);
         Ok(())
     }
