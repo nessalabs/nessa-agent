@@ -105,20 +105,21 @@ export function reportDetached(base, errors, harmless) {
  * `console` result keeps. The async work that opens the page is the one
  * whose later results take its lines. Does nothing when no reporter is bound.
  *
- * @param {{ errors: string[], harmless: string[], close(): Promise<unknown> }} opened
+ * @param {{ close(): Promise<unknown> }} opened
  * @param {object} base
+ * @param {ReturnType<typeof watchLines>} lines
  */
-export function attachLines(opened, base) {
+export function attachLines(opened, base, lines) {
   if (!reporter) return
-  const entry = { opened, base }
+  const entry = { lines, base }
   currentPage.enterWith(entry)
   const original = opened.close
   let closed = false
   opened.close = async () => {
     if (closed) return
     closed = true
-    const errors = opened.errors.splice(0, opened.errors.length)
-    const harmless = opened.harmless.splice(0, opened.harmless.length)
+    const errors = lines.errors.splice(0, lines.errors.length)
+    const harmless = lines.harmless.splice(0, lines.harmless.length)
     try {
       if ((errors.length > 0 || harmless.length > 0) && reporter) {
         reporter.add({
@@ -147,8 +148,8 @@ export function applyLines(result) {
   if (result[skipLineDrain] || result.cannotRun) return result
   const entry = currentPage.getStore()
   if (!entry) return result
-  const errors = entry.opened.errors.splice(0, entry.opened.errors.length)
-  const harmless = entry.opened.harmless.splice(0, entry.opened.harmless.length)
+  const errors = entry.lines.errors.splice(0, entry.lines.errors.length)
+  const harmless = entry.lines.harmless.splice(0, entry.lines.harmless.length)
   if (errors.length === 0 && harmless.length === 0) return result
   const next = { ...result }
   if (errors.length > 0 || Object.hasOwn(result, "failures"))

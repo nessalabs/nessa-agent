@@ -137,7 +137,6 @@ await main(
           if (restored.oneShotReads !== 0)
             failures.push("a live Messages follow asked through the one-shot list path")
           await opened.settleRequests()
-          if (opened.errors.length) failures.push(...opened.errors)
           return {
             failures,
             detail: {

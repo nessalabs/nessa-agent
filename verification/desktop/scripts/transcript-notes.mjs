@@ -119,7 +119,6 @@ const checks = {
       if (inside.length)
         failures.push(`notes inside a bubble or reply: ${inside.join(", ")}`)
       await opened.settleRequests()
-      failures.push(...opened.errors)
       return { order: seen, failures }
     } finally {
       await opened.close()
@@ -168,7 +167,6 @@ const checks = {
         }
       }
       await opened.settleRequests()
-      failures.push(...opened.errors)
       return { read, failures }
     } finally {
       await opened.close()
@@ -264,7 +262,6 @@ const checks = {
         })
       }
       await opened.settleRequests()
-      failures.push(...opened.errors)
       return { ...measured, failures }
     } finally {
       await opened.close()
@@ -344,7 +341,6 @@ const checks = {
         }
       }
       await opened.settleRequests()
-      failures.push(...opened.errors)
       return { ...read, failures }
     } finally {
       await opened.close()
