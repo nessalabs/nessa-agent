@@ -39,7 +39,7 @@ store is built with content capture on. Thought text is never stored.
 | `usage_update` for a prompt that is then refused | Dropped when the refusal happens before the trace opens. It is not applied to the next turn |
 | `usage_update` after a turn closes | Discarded until the next prompt is dispatched. It is not applied to the next turn |
 | `usage_update` during a turn | Context figures go on the agent span. Input and output tokens, when the payload actually has them, go on the open chat span and are summed onto the agent span |
-| A permission request, answer, cancel, decline, or deadline | `nessa.permission.*` on the tool span. A request that arrives before the tool update opens the tool span. A decline that names a tool is attached only when one open tool has that name; otherwise it is recorded on the agent span |
+| A permission request, answer, cancel, decline, or deadline | `nessa.permission.*` on the tool span. A request or answer that arrives before the tool update opens the tool span at that observation. A decline that names a tool is attached only when one open tool has that name; otherwise it is recorded on the agent span |
 | The recorder is dropped with a turn open | The turn closes as `cancelled` |
 
 A turn that only speaks is an agent span and one chat span. A turn that calls

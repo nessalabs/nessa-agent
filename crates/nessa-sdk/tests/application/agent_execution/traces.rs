@@ -351,20 +351,26 @@ fn permission_grant_hook_and_subagent_notes_land_on_the_spans() {
     store.note_subagent("conversation-1", "execution-1", "child-1", "parent-1");
     let mut recorder = turn(&store);
     recorder.begin_turn(at(1), identity(), "");
-    recorder.permission(PermissionFact::Requested {
-        id: "review-1".into(),
-        tool_id: "tool-1".into(),
-        tool_name: "Read".into(),
-        arguments: Some("secret-marker".into()),
-        tool_type: "function".into(),
-        category_name: false,
-    });
-    recorder.permission(PermissionFact::Answered {
-        id: "review-1".into(),
-        tool_id: "tool-1".into(),
-        effect: "allow".into(),
-        decider: "person".into(),
-    });
+    recorder.permission(
+        at(1),
+        PermissionFact::Requested {
+            id: "review-1".into(),
+            tool_id: "tool-1".into(),
+            tool_name: "Read".into(),
+            arguments: Some("secret-marker".into()),
+            tool_type: "function".into(),
+            category_name: false,
+        },
+    );
+    recorder.permission(
+        at(1),
+        PermissionFact::Answered {
+            id: "review-1".into(),
+            tool_id: "tool-1".into(),
+            effect: "allow".into(),
+            decider: "person".into(),
+        },
+    );
     recorder.tool(
         at(2),
         ToolFact::new(
@@ -524,20 +530,26 @@ fn an_answer_recorded_before_the_request_stays_answered() {
     let store = LocalTraceStore::new();
     let mut recorder = turn(&store);
     recorder.begin_turn(at(1), identity(), "");
-    recorder.permission(PermissionFact::Answered {
-        id: "review-1".into(),
-        tool_id: "tool-1".into(),
-        effect: "deny".into(),
-        decider: "rule".into(),
-    });
-    recorder.permission(PermissionFact::Requested {
-        id: "review-1".into(),
-        tool_id: "tool-1".into(),
-        tool_name: "Read".into(),
-        arguments: None,
-        tool_type: "function".into(),
-        category_name: false,
-    });
+    recorder.permission(
+        at(1),
+        PermissionFact::Answered {
+            id: "review-1".into(),
+            tool_id: "tool-1".into(),
+            effect: "deny".into(),
+            decider: "rule".into(),
+        },
+    );
+    recorder.permission(
+        at(1),
+        PermissionFact::Requested {
+            id: "review-1".into(),
+            tool_id: "tool-1".into(),
+            tool_name: "Read".into(),
+            arguments: None,
+            tool_type: "function".into(),
+            category_name: false,
+        },
+    );
     recorder.finish(at(2), FinishReason::Stop);
     let tool = store
         .read("conversation-1")
@@ -555,20 +567,26 @@ fn request_arguments_land_on_a_tool_the_answer_opened() {
     let store = LocalTraceStore::with_capture(ContentCapture::on());
     let mut recorder = turn(&store);
     recorder.begin_turn(at(1), identity(), "");
-    recorder.permission(PermissionFact::Answered {
-        id: "review-1".into(),
-        tool_id: "tool-1".into(),
-        effect: "deny".into(),
-        decider: "rule".into(),
-    });
-    recorder.permission(PermissionFact::Requested {
-        id: "review-1".into(),
-        tool_id: "tool-1".into(),
-        tool_name: "Read".into(),
-        arguments: Some("{\"path\":\"secret-marker\"}".into()),
-        tool_type: "function".into(),
-        category_name: false,
-    });
+    recorder.permission(
+        at(1),
+        PermissionFact::Answered {
+            id: "review-1".into(),
+            tool_id: "tool-1".into(),
+            effect: "deny".into(),
+            decider: "rule".into(),
+        },
+    );
+    recorder.permission(
+        at(1),
+        PermissionFact::Requested {
+            id: "review-1".into(),
+            tool_id: "tool-1".into(),
+            tool_name: "Read".into(),
+            arguments: Some("{\"path\":\"secret-marker\"}".into()),
+            tool_type: "function".into(),
+            category_name: false,
+        },
+    );
     recorder.finish(at(2), FinishReason::Stop);
     let tool = store
         .read("conversation-1")
@@ -870,10 +888,13 @@ fn a_decline_by_name_attaches_only_when_one_tool_has_that_name() {
             None,
         ),
     );
-    recorder.permission(PermissionFact::Declined {
-        id: "review-ambiguous".into(),
-        tool_name: Some("Read".into()),
-    });
+    recorder.permission(
+        at(1),
+        PermissionFact::Declined {
+            id: "review-ambiguous".into(),
+            tool_name: Some("Read".into()),
+        },
+    );
     recorder.tool(
         at(4),
         ToolFact::new(
@@ -885,10 +906,13 @@ fn a_decline_by_name_attaches_only_when_one_tool_has_that_name() {
             None,
         ),
     );
-    recorder.permission(PermissionFact::Declined {
-        id: "review-grep".into(),
-        tool_name: Some("Grep".into()),
-    });
+    recorder.permission(
+        at(1),
+        PermissionFact::Declined {
+            id: "review-grep".into(),
+            tool_name: Some("Grep".into()),
+        },
+    );
     recorder.finish(at(5), FinishReason::Stop);
     let spans = store.read("conversation-1");
     let agent = spans
@@ -977,20 +1001,26 @@ fn a_kind_fallback_tool_name_is_replaced_by_the_provider_name() {
         )
         .with_category_name(true),
     );
-    recorder.permission(PermissionFact::Answered {
-        id: "review-3".into(),
-        tool_id: "call-3".into(),
-        effect: "allow".into(),
-        decider: "person".into(),
-    });
-    recorder.permission(PermissionFact::Requested {
-        id: "review-3".into(),
-        tool_id: "call-3".into(),
-        tool_name: "exec_command".into(),
-        arguments: None,
-        tool_type: "function".into(),
-        category_name: false,
-    });
+    recorder.permission(
+        at(1),
+        PermissionFact::Answered {
+            id: "review-3".into(),
+            tool_id: "call-3".into(),
+            effect: "allow".into(),
+            decider: "person".into(),
+        },
+    );
+    recorder.permission(
+        at(1),
+        PermissionFact::Requested {
+            id: "review-3".into(),
+            tool_id: "call-3".into(),
+            tool_name: "exec_command".into(),
+            arguments: None,
+            tool_type: "function".into(),
+            category_name: false,
+        },
+    );
     recorder.tool(
         at(7),
         ToolFact::new(
@@ -1422,14 +1452,17 @@ fn a_permission_that_names_an_mcp_tool_opens_an_extension_span() {
     let store = LocalTraceStore::new();
     let mut recorder = turn(&store);
     recorder.begin_turn(at(1), identity(), "");
-    recorder.permission(PermissionFact::Requested {
-        id: "review-1".into(),
-        tool_id: "call-1".into(),
-        tool_name: "show".into(),
-        arguments: None,
-        tool_type: "extension".into(),
-        category_name: false,
-    });
+    recorder.permission(
+        at(1),
+        PermissionFact::Requested {
+            id: "review-1".into(),
+            tool_id: "call-1".into(),
+            tool_name: "show".into(),
+            arguments: None,
+            tool_type: "extension".into(),
+            category_name: false,
+        },
+    );
     recorder.tool(
         at(2),
         ToolFact::new(
@@ -1444,6 +1477,45 @@ fn a_permission_that_names_an_mcp_tool_opens_an_extension_span() {
     recorder.finish(at(3), FinishReason::Stop);
     let tool = tool_named(&store, "call-1");
     assert_eq!(tool.string("gen_ai.tool.type"), Some("extension"));
+}
+
+#[test]
+fn a_permission_that_opens_a_tool_starts_when_that_permission_is_observed() {
+    let store = LocalTraceStore::new();
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.permission(
+        at(50),
+        PermissionFact::Requested {
+            id: "review-1".into(),
+            tool_id: "tool-1".into(),
+            tool_name: "Read".into(),
+            arguments: None,
+            tool_type: "function".into(),
+            category_name: false,
+        },
+    );
+    recorder.permission(
+        at(60),
+        PermissionFact::Answered {
+            id: "review-2".into(),
+            tool_id: "tool-2".into(),
+            effect: "allow".into(),
+            decider: "rule".into(),
+        },
+    );
+    recorder.finish(at(80), FinishReason::Stop);
+    let spans = store.read("conversation-1");
+    let tool = |id: &str| {
+        spans
+            .iter()
+            .find(|span| span.string("gen_ai.tool.call.id") == Some(id))
+            .unwrap()
+    };
+    assert_eq!(tool("tool-1").start(), at(50));
+    assert_eq!(tool("tool-1").end(), at(80));
+    assert_eq!(tool("tool-2").start(), at(60));
+    assert_eq!(tool("tool-2").end(), at(80));
 }
 
 #[test]

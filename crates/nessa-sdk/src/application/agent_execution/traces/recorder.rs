@@ -457,7 +457,11 @@ impl TraceRecorder {
     }
 
     /// A permission decision or request for a tool already named on this turn.
-    pub fn permission(&mut self, fact: PermissionFact) {
+    ///
+    /// `at` is when the permission was observed. A tool span this call opens
+    /// starts then.
+    pub fn permission(&mut self, at: Duration, fact: PermissionFact) {
+        self.now = at;
         match fact {
             PermissionFact::Requested {
                 id,

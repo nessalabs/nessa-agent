@@ -2296,13 +2296,16 @@ impl<P: AcpProfile> Worker<P> {
             }
         };
         if let PermissionStateView::Answered { decision, .. } = resolution.request().state() {
-            self.traces.permission(PermissionFact::Answered {
-                id: resolution.request().id().as_str().to_owned(),
-                tool_id: resolution.request().tool_id().as_str().to_owned(),
-                effect: decision.effect().as_str().to_owned(),
-                decider: super::gen_ai::permission_decider(resolution.attribution().basis())
-                    .to_owned(),
-            });
+            self.traces.permission(
+                self.trace_now(),
+                PermissionFact::Answered {
+                    id: resolution.request().id().as_str().to_owned(),
+                    tool_id: resolution.request().tool_id().as_str().to_owned(),
+                    effect: decision.effect().as_str().to_owned(),
+                    decider: super::gen_ai::permission_decider(resolution.attribution().basis())
+                        .to_owned(),
+                },
+            );
         }
         self.armed_permissions.remove(&permission_id);
         let correlation = self.next_correlation();

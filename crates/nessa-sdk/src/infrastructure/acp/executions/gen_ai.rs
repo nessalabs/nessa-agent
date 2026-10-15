@@ -45,14 +45,17 @@ pub(super) fn observe_event(recorder: &mut TraceRecorder, at: Duration, event: &
             } else {
                 "function"
             };
-            recorder.permission(PermissionFact::Requested {
-                id: id.as_str().to_owned(),
-                tool_id: tool_id.as_str().to_owned(),
-                category_name: kind_from_spelling(&input.name).is_some(),
-                tool_name: input.name.clone(),
-                arguments,
-                tool_type: tool_type.to_owned(),
-            });
+            recorder.permission(
+                at,
+                PermissionFact::Requested {
+                    id: id.as_str().to_owned(),
+                    tool_id: tool_id.as_str().to_owned(),
+                    category_name: kind_from_spelling(&input.name).is_some(),
+                    tool_name: input.name.clone(),
+                    arguments,
+                    tool_type: tool_type.to_owned(),
+                },
+            );
         }
         ExecutionUpdate::PermissionCancelled(record) => {
             let decider = match record.origin() {
@@ -61,23 +64,32 @@ pub(super) fn observe_event(recorder: &mut TraceRecorder, at: Duration, event: &
                 CancellationOrigin::Provider => "provider",
                 CancellationOrigin::Runtime => "runtime",
             };
-            recorder.permission(PermissionFact::Cancelled {
-                id: record.request().id().as_str().to_owned(),
-                tool_id: record.request().tool_id().as_str().to_owned(),
-                decider: decider.to_owned(),
-            });
+            recorder.permission(
+                at,
+                PermissionFact::Cancelled {
+                    id: record.request().id().as_str().to_owned(),
+                    tool_id: record.request().tool_id().as_str().to_owned(),
+                    decider: decider.to_owned(),
+                },
+            );
         }
         ExecutionUpdate::ReviewDeclined(observation) => {
-            recorder.permission(PermissionFact::Declined {
-                id: observation.id().as_str().to_owned(),
-                tool_name: observation.decline().declared().map(str::to_owned),
-            });
+            recorder.permission(
+                at,
+                PermissionFact::Declined {
+                    id: observation.id().as_str().to_owned(),
+                    tool_name: observation.decline().declared().map(str::to_owned),
+                },
+            );
         }
         ExecutionUpdate::DeadlineAnswered { id, effect, .. } => {
-            recorder.permission(PermissionFact::Deadline {
-                id: id.as_str().to_owned(),
-                effect: effect.as_str().to_owned(),
-            });
+            recorder.permission(
+                at,
+                PermissionFact::Deadline {
+                    id: id.as_str().to_owned(),
+                    effect: effect.as_str().to_owned(),
+                },
+            );
         }
         ExecutionUpdate::QuestionAsked { .. } | ExecutionUpdate::QuestionClosed { .. } => {}
     }
