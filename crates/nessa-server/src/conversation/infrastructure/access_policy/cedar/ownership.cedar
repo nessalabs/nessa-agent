@@ -44,6 +44,33 @@ when {
     !resource.deleted
 };
 
+// An unpaired person's own conversations supply their waiting reviews.
+@id("review.owner")
+permit (
+    principal is NessaConversation::ReviewRecipient,
+    action == NessaConversation::Action::"review.notice",
+    resource is NessaConversation::Conversation
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner &&
+    !resource.deleted
+};
+
+// Current admin membership admits an unpaired surface to its organization's
+// waiting reviews. Role interpretation belongs here, not in the Rust caller.
+@id("review.admin")
+permit (
+    principal is NessaConversation::ReviewRecipient,
+    action == NessaConversation::Action::"review.notice",
+    resource is NessaConversation::Conversation
+)
+when {
+    principal.organization == resource.organization &&
+    principal.membership == "admin" &&
+    !resource.deleted
+};
+
 // The owner reads back a file it holds until it is deleted.
 @id("owner.artifact_read")
 permit (

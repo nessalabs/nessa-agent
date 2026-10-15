@@ -686,6 +686,158 @@ numbers are the caller's: the gateway takes them from the selected model's
 
 ## Gateway conversation ownership
 
+Review notices receive an application-owned `ConversationMetadataReader` from
+product-route composition. Its private repository delegates to the checked
+metadata loader, so returned identity is correlated before ownership policy
+or publication consumes the record (#918). Unpaired review recipients supply
+current membership facts to Cedar's `review.notice` action; paired recipients
+retain their conversation-grant admission (#920). Metadata is loaded and
+correlated first, then current membership is read immediately before the
+synchronous policy decision. A membership read before the metadata await could
+retain an admin role after a concurrent demotion.
+
+| Metadata result | Membership when policy is about to run | Review outcome | Regression |
+| --- | --- | --- | --- |
+| Another identity | Any | Refused before policy | `a_review_notice_refuses_mismatched_metadata_before_policy_or_publication` |
+| Correlated live conversation in the same organization | Admin unchanged during the metadata read | Permitted | `review_admission_reads_membership_after_metadata_returns` |
+| Correlated conversation owned by someone else | Admin demoted to Member during the metadata read | Refused | `review_admission_reads_membership_after_metadata_returns` |
+| Correlated conversation | Membership disabled during the metadata read | Refused before policy | `review_admission_reads_membership_after_metadata_returns` |
+
+An unpaired `review.notice` decision is a selection, not a claim that a socket
+received it. `conversation/application/review_notice_selection.rs` owns the
+complete checked-metadata/current-recipient/Cedar/independent-audit-acknowledgement
+transition. Only that use case constructs an opaque `AuditedReviewSelection`;
+product receives its complete typed decision and actual authority revision, not
+an unaudited boolean. `review_notice_audit.rs` owns bounded audit admission and
+the immutable record shared with that receipt. Admission precedes metadata and
+current-session reads. After synchronous Cedar, the admitted owner receives the
+complete record without an intervening await; its attempt survives loss of the
+publisher that observes it. Product owns whole-candidate validation and UI
+admission; it does not reconstruct audit evidence. Recipient identity
+and current membership are recorded as facts; the initiator is the system's
+review-snapshot refresh, not a person impersonated by that refresh. The decision
+retains policy IDs in controlled storage, never in the UI notice.
+
+`ReviewNoticeAudit` and `ReviewNoticeClock` are injected application ports.
+`MonotonicReviewNoticeClock` adapts the runtime deadline clock without importing
+SDK infrastructure into the application.
+`infrastructure/review_notice_audit.rs` implements it with one shared physical
+worker, private immutable files, and injected observation time. Acknowledgement
+follows file sync and create-only publication, with directory sync where the
+platform supports it. On Windows it does not establish directory-entry
+durability or survival of arbitrary power loss; the platform boundary is owned
+by [local storage](../crates/nessa-local-storage/README.md). The worker retains the physical write
+and its admission slot when an async observer disappears; an observation timeout
+does not assert rollback or retry the write. Composition closes the shared
+application auditor before polling cleanup and observes all admitted selections
+under the existing shutdown deadline. A successful audit drain requires every
+transferred decision to be acknowledged and every pre-decision admission to end.
+The first failure, a lost transferred task, or the shared deadline keeps shutdown
+unconfirmed, including when later work succeeds. Abrupt runtime/process loss can
+still interrupt delivery; no crash replay of an unacknowledged record is claimed.
+The [shutdown order table](design/authorized-record-reads.md#review-notice-audit-shutdown-ownership)
+owns those cases. Composition supplies one shared auditor and adapter for all sockets.
+Paired readers retain their existing `conversation.read` grant policy path; this
+audit boundary concerns the new unpaired `review.notice` decision.
+
+| Audit/publication ordering | Owner and result | Regression |
+| --- | --- | --- |
+| Concurrent filtering seeks admission | Bounded auditor admits before metadata/current facts; no detached task is queued without a permit | `review_notice_audit_admission_is_bounded_before_decision` |
+| Publishers disappear while all audit owners await acknowledgement | Owned attempts retain admission; later selectors cannot bypass the bound until an owner settles | `review_notice_lost_publishers_retain_bounded_audit_admission` |
+| Metadata is genuinely absent (`Ok(None)`) | Hidden selection may publish an empty snapshot, with no Cedar decision or fabricated audit record | `review_notice_missing_metadata_is_a_successful_hidden_selection` |
+| Metadata read fails, including mismatched identity | Typed Unavailable closes with TemporaryUnavailable before any snapshot, Cedar decision or audit record; a new connection can recover without a board change | `review_notice_metadata_read_failure_closes_before_false_empty_snapshot`, `a_review_notice_refuses_mismatched_metadata_before_policy_or_publication` |
+| Current-session read fails, including disabled or unverifiable membership | Typed Unavailable prevents a successful empty replacement before Cedar; no fabricated audit record; a new connection can recover without a board change | `review_notice_current_read_failure_prevents_false_empty_snapshot`, `review_admission_reads_membership_after_metadata_returns` |
+| Cedar allows or denies, including Unavailable | Full typed answer, correlated target, recipient and system cause transfer synchronously to the audit owner | `review_notice_policy_decisions_preserve_audit_evidence` |
+| Acknowledgement is delayed | Publisher waits; no selected allow enters the UI queue | `review_notice_publication_waits_for_audit_acknowledgement` |
+| Durable acknowledgement and its deadline become ready together | A ready acknowledgement wins, preserving a confirmed positive selection | `review_notice_publication_waits_for_audit_acknowledgement` |
+| Authority changes during audit acknowledgement | Previously audited selection remains evidence; a fresh current-version check rejects the candidate and reselects before snapshot admission | `review_notice_reselects_after_authority_changes_during_audit` |
+| Membership is disabled during audit acknowledgement | Current-session validation closes with authorization-lost; no policy denial or disclosure is fabricated | `review_notice_disabled_recipient_closes_after_audit` |
+| Different reviews in one candidate used different authority versions | Discard the mixed candidate; every included selection must agree with the final current version | `review_notice_mixed_authority_batch_is_reselected` |
+| Board or shared visibility changes during audit acknowledgement | Publisher discards the candidate and filters the current board/shared state before admission | `review_notice_reselects_after_shared_changes_during_audit` |
+| Every tentative selection changes before acknowledgement completes | At most three passes, then a typed temporary-unavailable close; no stale snapshot or unbounded retry | `review_notice_continuous_change_has_bounded_selection_attempts` |
+| Admitted snapshot waits for UI capacity, then authority changes | Already admitted snapshot may finish; pending version then produces a fresh audited replacement | `review_authority_updates_survive_waiting_publication` |
+| Sink fails, panics, or the injected deadline passes | Typed audit failure prevents the snapshot and closes through the independent control lane; cleanup still runs | `review_notice_audit_failure_closes_without_disclosure` |
+| Audit fails while the control lane is full | Publisher completion reaches the connection owner through its retained join handle; close admission may fail, but the owner always stops receiving and tears down | `review_notice_audit_failure_with_full_control_lane_ends_connection` |
+| Publisher terminates unexpectedly | Connection owner observes completion, requests temporary-unavailable closure and tears down instead of retaining a silent live connection | `review_notice_publisher_panic_ends_connection` |
+| Audit clock panics before admission or in an owned attempt | Typed panic failure closes without disclosure, including after the policy answer was transferred | `review_notice_audit_clock_panic_closes_without_disclosure` |
+| Publisher/socket disappears after the decision | Admitted audit attempt continues independently to acknowledgement or its bounded failure | `review_notice_audit_survives_publisher_loss` |
+| UI queue is full after audit succeeds | Captured evidence remains delivered while publication waits | `review_notice_audit_precedes_ui_backpressure` |
+| Response write fails after audit succeeds | Selection evidence stays durable; no claim of confirmed wire delivery is added | `review_notice_audit_survives_wire_failure` |
+| Sink failure and socket loss coincide | Audit failure is observed by the admitted owner even with no response observer | `review_notice_audit_survives_publisher_loss` |
+| Physical writer outlives its observer or fails | Shared worker retains its slot and owned input until physical completion; failure cannot acknowledge selection | `review_notice_durable_audit_retains_physical_write` |
+| Real storage receives allow, forbidden, no-permit and unavailable answers | Immutable JSON preserves the exact typed decision and policy IDs, recipient and target facts | `review_notice_durable_audit_preserves_typed_decisions` |
+
+Audit acknowledgement is not snapshot admission. After every actual decision has
+been acknowledged, the publisher checks the selected authority versions against
+fresh current authority and checks the board/shared generations. A changed
+candidate is reselected; its earlier immutable audit records remain selections,
+not wire-delivery claims. A stable check admits the replacement before it waits
+for UI capacity. As with other admitted gateway responses, that in-flight
+replacement may finish after a later authority change; the pending watch then
+filters the next one. No global authority/write mutex is introduced. The 32
+audit owners bound admitted attempts across the gateway; their five-second
+capacity and acknowledgement budgets bound observation, not metadata reads,
+physical writes, or the lifetime of an already admitted UI response.
+
+The waiting-review board's `WaitingReviews` mutex owns notice contents and both
+authoritative versions. Mutations advance the corresponding version while that
+state is locked; `current`, `visibility` and `is_current` read that state. The
+watch channels only project monotonic wakeups after the lock is released, so
+notification backpressure cannot split an admission token from its contents or
+hold the state lock. A late projection cannot move a watch backwards. Exhausted
+versions cannot validate an audited candidate.
+
+| Board ordering | State/projection result | Regression |
+| --- | --- | --- |
+| Waiting/clear commits while a watch reader blocks notification | Contents and authoritative generation remain coherent; earlier token is invalid; projection catches up after release | `review_board_snapshot_owns_versions_before_notification` |
+| Visibility changes while a watch reader blocks notification | Visibility reads and candidate validation observe the authoritative version before wake projection catches up | `review_board_snapshot_owns_versions_before_notification` |
+| Concurrent waiting and visibility updates | Each actual mutation advances its authoritative version; final projection agrees | `review_board_concurrent_mutations_keep_monotonic_versions` |
+| Older notification arrives after a newer one | Watch remains at the newer version; a waiter on that version remains pending | `review_board_late_projection_cannot_regress_waiters` |
+| Source version is ahead of its wake projection | Waiters check authoritative state and use the projection only to wake; a waiter on the current source version does not spin | `review_board_late_projection_cannot_regress_waiters` |
+| Either authoritative version is exhausted | Candidate validation fails closed | `review_board_exhausted_versions_refuse_candidate_validation` |
+
+Review admission and retained visibility have separate owners. Cedar owns each
+filter decision. `PermissionMemory` owns board generation and the shared
+visibility generation for share/unshare changes. Each authenticated connection
+owns its bounded authority refresh and a local watch carrying the observed
+committed authorization revision, seeded once from
+`AuthenticatedSession::auth_revision()`. That watch wakes only its own review
+publisher. The authority behind `AccessReader` owns committed versions, so a new
+visibility fact does not require a second list of relevant fields or a policy
+cache. A registry-wide mutation can still advance every connection's observed
+revision; each connection refilters its own notices once, rather than publishing
+another global wakeup. `review_authority_refresh_wakes_only_its_connection`
+checks the separate policy-read counts and unchanged shared visibility.
+
+The publisher emits an initial snapshot and then listens to board changes,
+shared share visibility and its local authority revision. Each loop marks the
+local watch observed before awaited filtering or publication; a version that
+arrives during either await remains pending for the next pass. The shared waits
+compare the counters captured by that pass. No second copy of a last-published
+revision is needed. Closing the local channel ends its publisher. Invalid sessions keep the existing socket-close
+path. No additional polling loop is introduced. The earlier retained-visibility
+finding exposed a missing refresh notification; its global implementation then
+exposed the wrong notification scope. Authority refresh belongs to the connection,
+while conversation sharing belongs to the shared board visibility owner.
+
+Regression sources for this boundary live in
+`tests/product/socket/review_notice_audit.rs`: actual publisher/connection tests
+exercise selection acknowledgement, coherent whole-candidate admission, caller
+loss, UI backpressure and wire failure. The same consumer tests drive the real
+private-file adapter through physical-write observer loss, failure and recovery.
+
+| Live connection ordering | Visibility action | Published result | Regression |
+| --- | --- | --- | --- |
+| Admin demoted before first refresh, or after an observed refresh | Local changed revision invalidates | Foreign notice removed; owned notice retained | `a_live_review_publisher_refilters_after_authority_refresh` |
+| Same role at a new committed revision, or member promoted | Local changed revision invalidates | Same owned set refiltered, or foreign notice restored by Cedar | `a_live_review_publisher_refilters_after_authority_refresh` |
+| Authentication revision or later version unchanged | No local invalidation | No replacement notice | `a_live_review_publisher_refilters_after_authority_refresh` |
+| Two sockets observe one registry revision at staggered refreshes | Each wakes only its own publisher | One filtering pass per connection; no cross-connection duplicate | `review_authority_refresh_wakes_only_its_connection` |
+| Shared visibility or board generation changes | Existing shared signal wakes both publishers | Each filters the changed shared state | `review_authority_refresh_wakes_only_its_connection` |
+| Local version preloaded before first publisher poll, or arriving during metadata await | Capture latest version; retain later pending version | Initial snapshot, then any required fresh pass | `review_authority_updates_survive_initial_and_pending_metadata` |
+| Local version arrives while publication awaits capacity | Retain the pending version | Admitted snapshot finishes, then latest facts are published | `review_authority_updates_survive_waiting_publication` |
+| Local authority sender closes | End the publisher | No closed-channel spin | `review_authority_updates_survive_initial_and_pending_metadata` |
+| Membership disabled after publication | Existing invalid-session close | Typed authorization-lost close | `a_live_review_publisher_refilters_after_authority_refresh` |
+
 Client permission controls capture related IDs through
 `packages/nessa-client/src/application/permission-target.ts` and consume those
 opaque targets in `presentation/conversation-api.ts`. Panel effects and control
@@ -1974,11 +2126,15 @@ Tests mirror those owners under `nessa-sdk/tests/infrastructure/session_storage/
 
 Watch shutdown is part of normal host cleanup in `composition/root.rs`: after native
 pairing is signalled to stop, it closes
-`ProductRouteState` watch admission before polling the reader and watch drains,
-then carries their outcomes through conversation/storage, MCP and the native join
+`ProductRouteState` watch and review-notice audit admission before polling the
+reader, watch, and review-audit drains under one shared deadline. Audit deadline
+observation records an unconfirmed result without claiming physical release;
+reader/watch drains retain their existing physical joins. Composition then
+carries their outcomes through conversation/storage, MCP and the native join
 in the same `ShutdownReport` (one `Outcome` per cleanup owner and a derived
 stage, in `core/shutdown.rs`). Interleaving tests are
-`tests/composition/watch_shutdown.rs`, using the watch fixture in
+`tests/composition/watch_shutdown.rs` and `tests/composition/review_notice_shutdown.rs`,
+using the watch fixture in
 `tests/product/socket/watches.rs`; the MCP stage through the same cleanup —
 `composition/mcp_servers.rs::stop` draining stored-server changes before the
 servers stop — in `tests/composition/mcp_shutdown.rs`. The separate-process replay-to-live tests, with
