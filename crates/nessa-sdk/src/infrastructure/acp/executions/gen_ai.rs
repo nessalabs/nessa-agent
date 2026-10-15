@@ -8,9 +8,8 @@ use crate::application::agent_execution::traces::{
     FinishReason, ModelChannel, PermissionFact, ToolFact, ToolProgress, TraceRecorder,
 };
 use crate::domain::agent_execution::executions::{ExecutionOutcome, MessageKind};
-use crate::domain::agent_execution::tools::{
-    ToolCallUpdate, ToolContentView, ToolKind, ToolStatus,
-};
+use crate::domain::agent_execution::tools::{ToolCallUpdate, ToolContentView, ToolStatus};
+use crate::infrastructure::acp::tools::wire::{kind_from_spelling, kind_spelling};
 use std::time::Duration;
 
 pub(super) fn observe_event(recorder: &mut TraceRecorder, at: Duration, event: &ExecutionEvent) {
@@ -30,18 +29,29 @@ pub(super) fn observe_event(recorder: &mut TraceRecorder, at: Duration, event: &
         }
         ExecutionUpdate::Tool(_) => {}
         ExecutionUpdate::PermissionRequested {
-            id, tool_id, input, ..
+            id,
+            tool_id,
+            observation,
+            input,
+            ..
         } => {
             let arguments = if recorder.captures_content() {
                 Some(input.arguments_json.clone())
             } else {
                 None
             };
+            let tool_type = if observation.mcp_tool().is_some() {
+                "extension"
+            } else {
+                "function"
+            };
             recorder.permission(PermissionFact::Requested {
                 id: id.as_str().to_owned(),
                 tool_id: tool_id.as_str().to_owned(),
+                category_name: kind_from_spelling(&input.name).is_some(),
                 tool_name: input.name.clone(),
                 arguments,
+                tool_type: tool_type.to_owned(),
             });
         }
         ExecutionUpdate::PermissionCancelled(record) => {
@@ -90,8 +100,9 @@ pub(super) fn tool_fact(
     let name = name
         .filter(|name| !name.is_empty())
         .or(title)
-        .or_else(|| update.kind().map(ToolKind::label).map(str::to_owned))
+        .or_else(|| update.kind().map(kind_spelling).map(str::to_owned))
         .unwrap_or_else(|| id.clone());
+    let category_name = kind_from_spelling(&name).is_some();
     let tool_type = if update.mcp_tool().is_some() {
         "extension"
     } else {
@@ -110,6 +121,7 @@ pub(super) fn tool_fact(
         capture.then_some(arguments).flatten(),
         capture.then(|| result_text(update)).flatten(),
     )
+    .with_category_name(category_name)
 }
 
 pub(super) fn permission_decider(basis: &ApprovalBasis) -> &'static str {
@@ -155,7 +167,7 @@ fn result_text(update: &ToolCallUpdate) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{permission_decider, tool_fact};
+    use super::{observe_event, permission_decider, tool_fact};
     use crate::application::agent_execution::permissions::{
         ActionContext, ApprovalBasis, ApprovalModeSnapshot, ApprovalRuleReference, HookRefusal,
     };
@@ -258,6 +270,171 @@ mod tests {
             Some("websearch secret-marker")
         );
         assert_eq!(tool.name(), "execute_tool websearch secret-marker");
+    }
+
+    #[test]
+    fn a_kind_spelling_is_replaced_by_a_later_provider_name() {
+        let store = LocalTraceStore::new();
+        let mut recorder = TraceRecorder::new(store.clone(), ContentCapture::off());
+        recorder.begin_turn(
+            Duration::from_millis(1),
+            TurnIdentity::new(
+                "conversation-1",
+                "execution-1",
+                "openai",
+                "codex",
+                "model",
+                None,
+            ),
+            "",
+        );
+        recorder.tool(
+            Duration::from_millis(2),
+            tool_fact(
+                None,
+                None,
+                &ToolCallUpdate::new(
+                    ToolCallId::new("call-1").unwrap(),
+                    None,
+                    Some(ToolKind::Execute),
+                    Some(ToolStatus::Running),
+                    None,
+                    None,
+                ),
+                false,
+            ),
+        );
+        recorder.tool(
+            Duration::from_millis(3),
+            tool_fact(
+                Some("exec_command".into()),
+                None,
+                &update(None, Some(ToolKind::Execute)),
+                false,
+            ),
+        );
+        recorder.finish(Duration::from_millis(4), FinishReason::Stop);
+        let spans = store.read("conversation-1");
+        let tool = tool_span(&spans);
+        assert_eq!(tool.string("gen_ai.tool.name"), Some("exec_command"));
+    }
+
+    #[test]
+    fn a_permission_observation_that_names_an_mcp_tool_opens_an_extension_span() {
+        use crate::application::agent_execution::executions::{ExecutionEvent, ExecutionUpdate};
+        use crate::application::agent_execution::tools::ToolReviewInput;
+        use crate::domain::agent_execution::executions::ExecutionId;
+        use crate::domain::agent_execution::permissions::{
+            PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy,
+            PermissionOption, PermissionOptionId, PermissionOptions, PermissionScope,
+        };
+        use crate::domain::agent_execution::tools::{McpTool, ToolObservation};
+
+        let store = LocalTraceStore::new();
+        let mut recorder = TraceRecorder::new(store.clone(), ContentCapture::off());
+        recorder.begin_turn(
+            Duration::from_millis(1),
+            TurnIdentity::new(
+                "conversation-1",
+                "execution-1",
+                "openai",
+                "codex",
+                "model",
+                None,
+            ),
+            "",
+        );
+        let id = ToolCallId::new("call-1").unwrap();
+        let observation = ToolObservation::default().with_update(
+            ToolCallUpdate::new(id.clone(), None, None, None, None, None)
+                .with_mcp_tool(McpTool::new("charts", "show").unwrap()),
+        );
+        let options = PermissionOptions::new(
+            vec![PermissionOption::new(
+                PermissionOptionId::new("allow").unwrap(),
+                "Allow",
+                PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request()),
+            )
+            .unwrap()],
+            &PermissionOfferPolicy::once_only(),
+        )
+        .unwrap();
+        observe_event(
+            &mut recorder,
+            Duration::from_millis(2),
+            &ExecutionEvent::new(
+                ExecutionId::new("execution-1").unwrap(),
+                ExecutionUpdate::PermissionRequested {
+                    id: PermissionId::new("review-1").unwrap(),
+                    tool_id: id,
+                    observation,
+                    input: ToolReviewInput {
+                        name: "show".into(),
+                        arguments_json: "{}".into(),
+                    },
+                    options,
+                    deadline: None,
+                },
+            ),
+        );
+        recorder.tool(
+            Duration::from_millis(3),
+            tool_fact(Some("show".into()), None, &update(None, None), false),
+        );
+        recorder.finish(Duration::from_millis(4), FinishReason::Stop);
+        let spans = store.read("conversation-1");
+        let tool = tool_span(&spans);
+        assert_eq!(tool.string("gen_ai.tool.type"), Some("extension"));
+        assert_eq!(tool.string("gen_ai.tool.name"), Some("show"));
+    }
+
+    #[test]
+    fn a_later_mcp_update_upgrades_the_tool_type() {
+        use crate::domain::agent_execution::tools::McpTool;
+
+        let store = LocalTraceStore::new();
+        let mut recorder = TraceRecorder::new(store.clone(), ContentCapture::off());
+        recorder.begin_turn(
+            Duration::from_millis(1),
+            TurnIdentity::new(
+                "conversation-1",
+                "execution-1",
+                "openai",
+                "codex",
+                "model",
+                None,
+            ),
+            "",
+        );
+        recorder.tool(
+            Duration::from_millis(2),
+            tool_fact(
+                Some("show".into()),
+                None,
+                &ToolCallUpdate::new(
+                    ToolCallId::new("call-1").unwrap(),
+                    None,
+                    None,
+                    Some(ToolStatus::Running),
+                    None,
+                    None,
+                ),
+                false,
+            ),
+        );
+        recorder.tool(
+            Duration::from_millis(3),
+            tool_fact(
+                Some("show".into()),
+                None,
+                &update(None, None).with_mcp_tool(McpTool::new("charts", "show").unwrap()),
+                false,
+            ),
+        );
+        recorder.finish(Duration::from_millis(4), FinishReason::Stop);
+        let spans = store.read("conversation-1");
+        let tool = tool_span(&spans);
+        assert_eq!(tool.string("gen_ai.tool.type"), Some("extension"));
     }
 
     #[test]

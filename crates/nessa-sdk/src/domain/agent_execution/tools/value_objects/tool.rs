@@ -51,44 +51,6 @@ pub enum ToolKind {
     Other,
 }
 
-impl ToolKind {
-    /// ACP spelling of this category.
-    ///
-    /// GenAI traces use this spelling as a fallback tool name until a later
-    /// update carries the provider's own name.
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Read => "read",
-            Self::Edit => "edit",
-            Self::Search => "search",
-            Self::Fetch => "fetch",
-            Self::Execute => "execute",
-            Self::Think => "think",
-            Self::Delete => "delete",
-            Self::Move => "move",
-            Self::SwitchMode => "switch_mode",
-            Self::Other => "other",
-        }
-    }
-
-    /// The kind whose [`Self::label`] is `name`.
-    pub fn from_label(name: &str) -> Option<Self> {
-        const KINDS: [ToolKind; 10] = [
-            ToolKind::Read,
-            ToolKind::Edit,
-            ToolKind::Search,
-            ToolKind::Fetch,
-            ToolKind::Execute,
-            ToolKind::Think,
-            ToolKind::Delete,
-            ToolKind::Move,
-            ToolKind::SwitchMode,
-            ToolKind::Other,
-        ];
-        KINDS.into_iter().find(|kind| kind.label() == name)
-    }
-}
-
 /// Last provider-reported progress; completion does not independently verify effects.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolStatus {
@@ -782,24 +744,5 @@ mod reversible_tests {
             Some("{}")
         );
         assert_eq!(replaced.restored(undo).mcp_arguments(), Some(&arguments));
-    }
-
-    #[test]
-    fn every_kind_label_round_trips() {
-        for kind in [
-            ToolKind::Read,
-            ToolKind::Edit,
-            ToolKind::Search,
-            ToolKind::Fetch,
-            ToolKind::Execute,
-            ToolKind::Think,
-            ToolKind::Delete,
-            ToolKind::Move,
-            ToolKind::SwitchMode,
-            ToolKind::Other,
-        ] {
-            assert_eq!(ToolKind::from_label(kind.label()), Some(kind));
-        }
-        assert_eq!(ToolKind::from_label("exec_command"), None);
     }
 }

@@ -9,13 +9,46 @@ use serde_json::Value;
 /// Bounded display text for a structurally valid tool result Nessa cannot render.
 pub(crate) const UNSUPPORTED_TOOL_CONTENT: &str = "[unsupported tool result content]";
 
+/// The ACP `kind` spelling for `kind`. The domain category stays free of that spelling.
+pub(crate) const fn kind_spelling(kind: ToolKind) -> &'static str {
+    match kind {
+        ToolKind::Read => "read",
+        ToolKind::Edit => "edit",
+        ToolKind::Search => "search",
+        ToolKind::Fetch => "fetch",
+        ToolKind::Execute => "execute",
+        ToolKind::Think => "think",
+        ToolKind::Delete => "delete",
+        ToolKind::Move => "move",
+        ToolKind::SwitchMode => "switch_mode",
+        ToolKind::Other => "other",
+    }
+}
+
+/// The category whose ACP `kind` spelling is `spelling`.
+pub(crate) fn kind_from_spelling(spelling: &str) -> Option<ToolKind> {
+    Some(match spelling {
+        "read" => ToolKind::Read,
+        "edit" => ToolKind::Edit,
+        "search" => ToolKind::Search,
+        "fetch" => ToolKind::Fetch,
+        "execute" => ToolKind::Execute,
+        "think" => ToolKind::Think,
+        "delete" => ToolKind::Delete,
+        "move" => ToolKind::Move,
+        "switch_mode" => ToolKind::SwitchMode,
+        "other" => ToolKind::Other,
+        _ => return None,
+    })
+}
+
 pub(crate) fn tool_call(value: &Value) -> Result<ToolCallUpdate, AgentError> {
     let id = identifier(value, "toolCallId")?.to_owned();
     let kind = value
         .get("kind")
         .map(|kind| {
             kind.as_str()
-                .and_then(ToolKind::from_label)
+                .and_then(kind_from_spelling)
                 .ok_or_else(|| protocol("unsupported tool kind"))
         })
         .transpose()?;

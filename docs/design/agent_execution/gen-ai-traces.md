@@ -70,13 +70,18 @@ underscores). ACP `usage_update.used` is context occupancy, not input tokens.
 `gen_ai.tool.name` is the provider's tool name when the profile kept one
 (Claude's `_meta.claudeCode.toolName` or ACP `name`; Codex's `name`, otherwise
 its kind). A display title is used only when content capture is on. With
-capture off and no retained name, the name is the ACP kind, or the call id
-when the update has no kind. A kind label stored first (`read`, `edit`,
-`search`, `fetch`, `execute`, `think`, `delete`, `move`, `switch_mode`,
-`other`) is replaced when a later update carries the provider's tool name. A
-specific name is left in place when a later update only repeats the kind.
-`gen_ai.tool.call.id` is the tool-call id. `gen_ai.tool.type` is `function`,
-or `extension` when the call names an MCP tool.
+capture off and no retained name, the name is the ACP kind spelling the
+adapter recorded, or the call id when the update has no kind. The adapter
+marks that spelling as a category. A category name stored first (`read`,
+`edit`, `search`, `fetch`, `execute`, `think`, `delete`, `move`,
+`switch_mode`, `other`) is replaced when a later update carries the
+provider's tool name. A specific name is left in place when a later update
+only repeats the kind. `gen_ai.tool.call.id` is the tool-call id.
+`gen_ai.tool.type` is `function`, or `extension` when the call names an MCP
+tool. A permission request that already names the MCP tool opens the span as
+`extension`. A later update that names an MCP tool upgrades `function` to
+`extension`. An update that omits the MCP identity leaves `extension` in
+place. A tool update the turn rejects is not recorded.
 
 When content capture is on, `gen_ai.input.messages`, `gen_ai.output.messages`,
 `gen_ai.tool.call.arguments`, and `gen_ai.tool.call.result` carry the text.
@@ -84,7 +89,9 @@ They are absent otherwise. A result that arrives while the tool is still
 running is kept and written when the span closes. That includes a completion
 patch that carries only a status, and a turn that ends with the tool still
 open. A completion that carries its own result uses that result, including
-when the result is empty.
+when the result is empty. Arguments follow the same rule: a completion that
+supplies them writes them, including when they are empty, and a completion
+that omits them leaves the arguments already seen.
 
 ## `nessa.*` attributes
 

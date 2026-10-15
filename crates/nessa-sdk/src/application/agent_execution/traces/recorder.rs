@@ -9,7 +9,6 @@
 
 use super::span::{AttributeValue, GenAiSpan, ReportedUsage, SpanStatus};
 use super::store::SpanExporter;
-use crate::domain::agent_execution::tools::ToolKind;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -117,6 +116,7 @@ pub struct ToolFact {
     progress: ToolProgress,
     arguments: Option<String>,
     result: Option<String>,
+    category_name: bool,
 }
 
 impl ToolFact {
@@ -139,7 +139,17 @@ impl ToolFact {
             progress,
             arguments,
             result,
+            category_name: false,
         }
+    }
+
+    /// `name` is a category label rather than the provider's own tool name.
+    ///
+    /// A later specific name replaces it. A specific name is not replaced by a
+    /// later category label.
+    pub fn with_category_name(mut self, category_name: bool) -> Self {
+        self.category_name = category_name;
+        self
     }
 }
 
@@ -156,6 +166,10 @@ pub enum PermissionFact {
         tool_name: String,
         /// Arguments, dropped unless content capture is on.
         arguments: Option<String>,
+        /// `function`, or `extension` when the review already names an MCP tool.
+        tool_type: String,
+        /// Whether `tool_name` is a category label rather than the provider's name.
+        category_name: bool,
     },
     /// Someone answered the review.
     Answered {
@@ -252,6 +266,8 @@ struct OpenTool {
     permission_id: Option<String>,
     /// Result text from a running update. A later patch may report only status.
     result: Option<String>,
+    /// The current tool name is a category label, so a specific name may replace it.
+    category_name: bool,
 }
 
 struct OpenTurn {
@@ -408,15 +424,8 @@ impl TraceRecorder {
             self.close_tool(at, &fact);
         } else if let Some(turn) = self.turn.as_mut() {
             if let Some(tool) = turn.tools.iter_mut().find(|tool| tool.id == fact.id) {
-                assign_tool_name(&mut tool.span, &tool.id, &fact.name);
-                if turn.capture {
-                    if let Some(arguments) = fact.arguments {
-                        set_str(&mut tool.span.attributes, ATTR_TOOL_ARGUMENTS, &arguments);
-                    }
-                    if let Some(result) = fact.result.filter(|result| !result.is_empty()) {
-                        tool.result = Some(result);
-                    }
-                }
+                let capture = turn.capture;
+                fold_open_tool(tool, &fact, capture);
             }
         }
     }
@@ -429,10 +438,19 @@ impl TraceRecorder {
                 tool_id,
                 tool_name,
                 arguments,
+                tool_type,
+                category_name,
             } => {
-                self.ensure_tool_for_permission(&tool_id, &tool_name, arguments.as_deref());
+                self.ensure_tool_for_permission(
+                    &tool_id,
+                    &tool_name,
+                    arguments.as_deref(),
+                    &tool_type,
+                    category_name,
+                );
+                self.note_extension(&tool_id, &tool_type);
                 if self.permission_is_terminal(&tool_id) {
-                    self.prefer_tool_name(&tool_id, &tool_name);
+                    self.prefer_tool_name(&tool_id, &tool_name, category_name);
                     return;
                 }
                 self.mark_permission(&tool_id, &id, "requested", None, None);
@@ -443,7 +461,7 @@ impl TraceRecorder {
                 effect,
                 decider,
             } => {
-                self.ensure_tool_for_permission(&tool_id, &tool_id, None);
+                self.ensure_tool_for_permission(&tool_id, &tool_id, None, "function", false);
                 self.mark_permission(
                     &tool_id,
                     &id,
@@ -666,11 +684,13 @@ impl TraceRecorder {
             }
         }
         if let Some(turn) = self.turn.as_mut() {
+            let displayed_is_named = !fact.name.is_empty();
             turn.tools.push(OpenTool {
                 span,
                 id: fact.id.clone(),
                 permission_id: None,
                 result: None,
+                category_name: fact.category_name && displayed_is_named,
             });
         }
     }
@@ -696,8 +716,11 @@ impl TraceRecorder {
         fact: &ToolFact,
         error_type: Option<&str>,
     ) {
-        assign_tool_name(&mut tool.span, &tool.id, &fact.name);
+        fold_tool_identity(&mut tool, fact);
         if self.capture {
+            if let Some(arguments) = fact.arguments.as_deref() {
+                set_str(&mut tool.span.attributes, ATTR_TOOL_ARGUMENTS, arguments);
+            }
             let result = fact.result.as_deref().or(tool.result.as_deref());
             if let Some(result) = result {
                 set_str(&mut tool.span.attributes, ATTR_TOOL_RESULT, result);
@@ -717,6 +740,8 @@ impl TraceRecorder {
         tool_id: &str,
         tool_name: &str,
         arguments: Option<&str>,
+        tool_type: &str,
+        category_name: bool,
     ) {
         let exists = self
             .turn
@@ -730,12 +755,26 @@ impl TraceRecorder {
             ToolFact::new(
                 tool_id,
                 tool_name,
-                "function",
+                tool_type,
                 ToolProgress::Running,
                 arguments.map(str::to_owned),
                 None,
-            ),
+            )
+            .with_category_name(category_name),
         );
+    }
+
+    fn note_extension(&mut self, tool_id: &str, tool_type: &str) {
+        if tool_type != "extension" {
+            return;
+        }
+        let Some(turn) = self.turn.as_mut() else {
+            return;
+        };
+        let Some(tool) = turn.tools.iter_mut().find(|tool| tool.id == tool_id) else {
+            return;
+        };
+        set_str(&mut tool.span.attributes, ATTR_TOOL_TYPE, "extension");
     }
 
     fn permission_is_terminal(&self, tool_id: &str) -> bool {
@@ -750,14 +789,14 @@ impl TraceRecorder {
         })
     }
 
-    fn prefer_tool_name(&mut self, tool_id: &str, tool_name: &str) {
+    fn prefer_tool_name(&mut self, tool_id: &str, tool_name: &str, category_name: bool) {
         let Some(turn) = self.turn.as_mut() else {
             return;
         };
         let Some(tool) = turn.tools.iter_mut().find(|tool| tool.id == tool_id) else {
             return;
         };
-        assign_tool_name(&mut tool.span, &tool.id, tool_name);
+        assign_tool_name(tool, tool_name, category_name);
     }
 
     fn mark_permission(
@@ -960,28 +999,43 @@ fn apply_context(attributes: &mut BTreeMap<String, AttributeValue>, usage: &Repo
     }
 }
 
-fn assign_tool_name(span: &mut OpenSpan, tool_id: &str, next: &str) {
-    if !should_replace_tool_name(span.string_attr(ATTR_TOOL_NAME), tool_id, next) {
+fn fold_open_tool(tool: &mut OpenTool, fact: &ToolFact, capture: bool) {
+    fold_tool_identity(tool, fact);
+    if !capture {
         return;
     }
-    set_str(&mut span.attributes, ATTR_TOOL_NAME, next);
-    span.name = format!("execute_tool {next}");
+    if let Some(arguments) = fact.arguments.as_deref() {
+        set_str(&mut tool.span.attributes, ATTR_TOOL_ARGUMENTS, arguments);
+    }
+    if let Some(result) = fact.result.as_ref().filter(|result| !result.is_empty()) {
+        tool.result = Some(result.clone());
+    }
 }
 
-fn should_replace_tool_name(current: Option<&str>, tool_id: &str, next: &str) -> bool {
+fn fold_tool_identity(tool: &mut OpenTool, fact: &ToolFact) {
+    assign_tool_name(tool, &fact.name, fact.category_name);
+    if fact.tool_type == "extension" {
+        set_str(&mut tool.span.attributes, ATTR_TOOL_TYPE, "extension");
+    }
+}
+
+fn assign_tool_name(tool: &mut OpenTool, next: &str, next_is_category: bool) {
+    if !should_replace_tool_name(tool, next, next_is_category) {
+        return;
+    }
+    set_str(&mut tool.span.attributes, ATTR_TOOL_NAME, next);
+    tool.span.name = format!("execute_tool {next}");
+    tool.category_name = next_is_category;
+}
+
+fn should_replace_tool_name(tool: &OpenTool, next: &str, next_is_category: bool) -> bool {
     if next.is_empty() {
         return false;
     }
-    match current {
+    match tool.span.string_attr(ATTR_TOOL_NAME) {
         None => true,
-        Some(name) if name == tool_id => true,
-        Some(name)
-            if ToolKind::from_label(name).is_some()
-                && next != tool_id
-                && ToolKind::from_label(next).is_none() =>
-        {
-            true
-        }
+        Some(name) if name == tool.id => true,
+        Some(_) if tool.category_name && next != tool.id && !next_is_category => true,
         _ => false,
     }
 }

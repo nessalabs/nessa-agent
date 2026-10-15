@@ -245,6 +245,8 @@ fn permission_grant_hook_and_subagent_notes_land_on_the_spans() {
         tool_id: "tool-1".into(),
         tool_name: "Read".into(),
         arguments: Some("secret-marker".into()),
+        tool_type: "function".into(),
+        category_name: false,
     });
     recorder.permission(PermissionFact::Answered {
         id: "review-1".into(),
@@ -422,6 +424,8 @@ fn an_answer_recorded_before_the_request_stays_answered() {
         tool_id: "tool-1".into(),
         tool_name: "Read".into(),
         arguments: None,
+        tool_type: "function".into(),
+        category_name: false,
     });
     recorder.finish(at(2), FinishReason::Stop);
     let tool = store
@@ -780,7 +784,8 @@ fn a_kind_fallback_tool_name_is_replaced_by_the_provider_name() {
             ToolProgress::Running,
             None,
             None,
-        ),
+        )
+        .with_category_name(true),
     );
     recorder.tool(
         at(3),
@@ -813,7 +818,8 @@ fn a_kind_fallback_tool_name_is_replaced_by_the_provider_name() {
             ToolProgress::Completed,
             None,
             None,
-        ),
+        )
+        .with_category_name(true),
     );
     recorder.tool(
         at(6),
@@ -824,7 +830,8 @@ fn a_kind_fallback_tool_name_is_replaced_by_the_provider_name() {
             ToolProgress::Running,
             None,
             None,
-        ),
+        )
+        .with_category_name(true),
     );
     recorder.permission(PermissionFact::Answered {
         id: "review-3".into(),
@@ -837,6 +844,8 @@ fn a_kind_fallback_tool_name_is_replaced_by_the_provider_name() {
         tool_id: "call-3".into(),
         tool_name: "exec_command".into(),
         arguments: None,
+        tool_type: "function".into(),
+        category_name: false,
     });
     recorder.tool(
         at(7),
@@ -847,7 +856,8 @@ fn a_kind_fallback_tool_name_is_replaced_by_the_provider_name() {
             ToolProgress::Completed,
             None,
             None,
-        ),
+        )
+        .with_category_name(true),
     );
     recorder.finish(at(8), FinishReason::Stop);
     let spans = store.read("conversation-1");
@@ -1158,6 +1168,189 @@ fn a_result_seen_while_running_is_kept_when_the_turn_ends() {
         .find(|span| span.operation() == "execute_tool")
         .unwrap();
     assert_eq!(tool.string("gen_ai.tool.call.result"), Some("still-open"));
+}
+
+#[test]
+fn arguments_supplied_on_completion_are_kept_when_the_running_update_omitted_them() {
+    let store = LocalTraceStore::with_capture(ContentCapture::on());
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.tool(
+        at(2),
+        ToolFact::new(
+            "call-1",
+            "Read",
+            "function",
+            ToolProgress::Running,
+            None,
+            None,
+        ),
+    );
+    recorder.tool(
+        at(3),
+        ToolFact::new(
+            "call-1",
+            "Read",
+            "function",
+            ToolProgress::Completed,
+            Some("{\"path\":\"secret-marker\"}".into()),
+            None,
+        ),
+    );
+    recorder.finish(at(4), FinishReason::Stop);
+    let tool = tool_named(&store, "call-1");
+    assert_eq!(
+        tool.string("gen_ai.tool.call.arguments"),
+        Some("{\"path\":\"secret-marker\"}")
+    );
+}
+
+#[test]
+fn arguments_seen_while_running_stay_when_completion_omits_them() {
+    let store = LocalTraceStore::with_capture(ContentCapture::on());
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.tool(
+        at(2),
+        ToolFact::new(
+            "call-1",
+            "Read",
+            "function",
+            ToolProgress::Running,
+            Some("{\"path\":\"secret-marker\"}".into()),
+            None,
+        ),
+    );
+    recorder.tool(
+        at(3),
+        ToolFact::new(
+            "call-1",
+            "Read",
+            "function",
+            ToolProgress::Completed,
+            None,
+            None,
+        ),
+    );
+    recorder.finish(at(4), FinishReason::Stop);
+    let tool = tool_named(&store, "call-1");
+    assert_eq!(
+        tool.string("gen_ai.tool.call.arguments"),
+        Some("{\"path\":\"secret-marker\"}")
+    );
+}
+
+#[test]
+fn an_empty_completion_argument_replaces_the_one_seen_while_running() {
+    let store = LocalTraceStore::with_capture(ContentCapture::on());
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.tool(
+        at(2),
+        ToolFact::new(
+            "call-1",
+            "Read",
+            "function",
+            ToolProgress::Running,
+            Some("{\"path\":\"secret-marker\"}".into()),
+            None,
+        ),
+    );
+    recorder.tool(
+        at(3),
+        ToolFact::new(
+            "call-1",
+            "Read",
+            "function",
+            ToolProgress::Completed,
+            Some(String::new()),
+            None,
+        ),
+    );
+    recorder.finish(at(4), FinishReason::Stop);
+    let tool = tool_named(&store, "call-1");
+    assert_eq!(tool.string("gen_ai.tool.call.arguments"), Some(""));
+    assert!(!format!("{tool:?}").contains("secret-marker"));
+}
+
+#[test]
+fn a_permission_that_names_an_mcp_tool_opens_an_extension_span() {
+    let store = LocalTraceStore::new();
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.permission(PermissionFact::Requested {
+        id: "review-1".into(),
+        tool_id: "call-1".into(),
+        tool_name: "show".into(),
+        arguments: None,
+        tool_type: "extension".into(),
+        category_name: false,
+    });
+    recorder.tool(
+        at(2),
+        ToolFact::new(
+            "call-1",
+            "show",
+            "function",
+            ToolProgress::Completed,
+            None,
+            None,
+        ),
+    );
+    recorder.finish(at(3), FinishReason::Stop);
+    let tool = tool_named(&store, "call-1");
+    assert_eq!(tool.string("gen_ai.tool.type"), Some("extension"));
+}
+
+#[test]
+fn a_later_mcp_identity_upgrades_the_tool_type_and_a_sparse_update_does_not_downgrade_it() {
+    let store = LocalTraceStore::new();
+    let mut recorder = turn(&store);
+    recorder.begin_turn(at(1), identity(), "");
+    recorder.tool(
+        at(2),
+        ToolFact::new(
+            "call-1",
+            "show",
+            "function",
+            ToolProgress::Running,
+            None,
+            None,
+        ),
+    );
+    recorder.tool(
+        at(3),
+        ToolFact::new(
+            "call-1",
+            "show",
+            "extension",
+            ToolProgress::Running,
+            None,
+            None,
+        ),
+    );
+    recorder.tool(
+        at(4),
+        ToolFact::new(
+            "call-1",
+            "show",
+            "function",
+            ToolProgress::Completed,
+            None,
+            None,
+        ),
+    );
+    recorder.finish(at(5), FinishReason::Stop);
+    let tool = tool_named(&store, "call-1");
+    assert_eq!(tool.string("gen_ai.tool.type"), Some("extension"));
+}
+
+fn tool_named(store: &LocalTraceStore, id: &str) -> GenAiSpan {
+    store
+        .read("conversation-1")
+        .into_iter()
+        .find(|span| span.string("gen_ai.tool.call.id") == Some(id))
+        .unwrap()
 }
 
 fn stored_text_bytes(span: &GenAiSpan) -> usize {
