@@ -1,3 +1,4 @@
+import type { SubmissionDiagnostic } from "../../model"
 import {
   contentText,
   messageFiles,
@@ -31,10 +32,14 @@ export function beginSend(
     executionId: string
     actionId: string
     mode: "queued" | "steering"
+    retryTurnId?: string
   },
 ): LocalTabs {
   const conv = findConversation(tabs, input.conversationId)
   if (!conv) return tabs
+  const retry =
+    input.retryTurnId === undefined ? undefined : refusedTurn(conv, input.retryTurnId)
+  if (input.retryTurnId !== undefined && !retry) return tabs
   // Beginning a send empties the draft. A file the draft holds and the message
   // does not would vanish without having gone anywhere, so that is no send.
   const sent = new Set(
@@ -47,7 +52,7 @@ export function beginSend(
   const text = contentText(input.content)
   const attached = sendable.images.length + messageFiles(input.content).length
   if (!text.trim() && attached === 0) return tabs
-  const taken = takeTurnId(tabs)
+  const taken = retry ? { id: retry.id, tabs } : takeTurnId(tabs)
   const userTurn: UserTurn = {
     id: taken.id,
     from: "user",
@@ -64,13 +69,43 @@ export function beginSend(
     // Not renamed here: the gateway derives a conversation's title from its
     // first message and the view carries it (see `applyView`), so the tab and
     // the Messages list say the same thing by one rule.
-    turns: [...conv.turns, userTurn],
+    turns: retry
+      ? conv.turns.map((turn) => (turn.id === retry.id ? userTurn : turn))
+      : [...conv.turns, userTurn],
     draft: [],
     phase: "thinking",
     pending: "",
     error: undefined,
     failure: undefined,
   })
+}
+
+/** Removes only a refused bubble; a draft being edited remains in the composer. */
+export function discardFailedTurn(
+  tabs: LocalTabs,
+  conversationId: string,
+  turnId: string,
+): LocalTabs {
+  const conv = findConversation(tabs, conversationId)
+  if (!conv || !refusedTurn(conv, turnId)) return tabs
+  const turns = conv.turns.filter((turn) => turn.id !== turnId)
+  const last = [...turns]
+    .reverse()
+    .find((turn) => turn.from === "user" && turn.receipt === "failed")
+  return replaceConversation(tabs, {
+    ...conv,
+    turns,
+    error: last?.from === "user" ? last.error : undefined,
+    failure: undefined,
+  })
+}
+
+/** Only a certainly refused local turn may be replaced by an explicit retry. */
+function refusedTurn(conv: Conversation, id: string): UserTurn | undefined {
+  return conv.turns.find(
+    (turn): turn is UserTurn =>
+      turn.id === id && turn.from === "user" && turn.receipt === "failed",
+  )
 }
 
 /**
@@ -221,9 +256,14 @@ export function draftMessage(
  */
 export function declineReason(
   conv: Conversation,
-  input: { content: MessageContent; connected?: boolean },
+  input: { content: MessageContent; connected?: boolean; retryTurnId?: string },
   canChoosePaths: boolean,
 ): DraftDecline | null {
+  if (input.retryTurnId !== undefined && !refusedTurn(conv, input.retryTurnId))
+    return {
+      kind: "stale-retry",
+      message: "This message is no longer waiting to be sent again.",
+    }
   if (input.connected === false)
     return {
       kind: "not-connected",
@@ -310,6 +350,7 @@ export function failSend(
   detail: string,
   outcome: SendOutcome,
   failure?: CommandFailure,
+  diagnostic?: SubmissionDiagnostic,
 ): LocalTabs {
   const uncertain = outcome.kind === "uncertain"
   const reupload = outcome.kind === "refused" && outcome.reupload
@@ -321,6 +362,7 @@ export function failSend(
       turn.executionId === executionId &&
       turn.receipt === "sending",
   )
+  if (!failedTurn) return tabs
   const recoveredDraft =
     !uncertain && conv.draft.length === 0 && failedTurn?.from === "user"
       ? reupload
@@ -347,7 +389,12 @@ export function failSend(
       turn.from === "user" &&
       turn.executionId === executionId &&
       turn.receipt === "sending"
-        ? { ...turn, receipt: uncertain ? "unknown" : "failed", error: detail }
+        ? {
+            ...turn,
+            receipt: uncertain ? "unknown" : "failed",
+            error: detail,
+            diagnostic,
+          }
         : turn,
     ),
   })

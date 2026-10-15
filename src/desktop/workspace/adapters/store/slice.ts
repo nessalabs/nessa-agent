@@ -1,3 +1,4 @@
+import type { FailureDiagnostic } from "../../model/failure"
 /**
  * The workspace in the desktop store. Each case applies one use case from
  * `application/usecases/`, so the rules live there and this file only names
@@ -232,6 +233,8 @@ const workspaceSlice = createSlice({
         sessionId: string
         messageId: string
         reason: WorkspaceFailureReason
+        diagnostic?: FailureDiagnostic
+        model?: ModelRef
       }>,
     ) => sessions.sendFailed(state, payload),
     chooseModel: (state, { payload }: Payload<{ sessionId: string; model: ModelRef }>) =>

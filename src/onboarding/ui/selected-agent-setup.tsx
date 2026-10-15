@@ -1,0 +1,195 @@
+import * as React from "react"
+import type { AgentInstallations } from "../application/agent-installations"
+import type { AgentApiKeySink, AgentReadinessSource } from "../application/ports"
+import { AGENT_CHOICES, type AgentId, type AgentReadiness } from "../model/onboarding"
+import { installationOutcomeText } from "./agent-downloads"
+import { useAgentDownloads } from "./use-agent-downloads"
+import { AgentApiKeyForm } from "./agent-api-key-form"
+import { AgentApiKeyAuditWarning, useAgentApiKeySave } from "./agent-api-key-save"
+
+export interface AgentSetupSource {
+  readonly apiKeys?: AgentApiKeySink
+  readonly readiness: AgentReadinessSource
+  readonly installations: AgentInstallations
+  readonly signIn: (agent: "claude" | "codex") => Promise<void>
+  readonly loginAvailable: () => Promise<boolean>
+}
+
+const Setup = React.createContext<AgentSetupSource | undefined>(undefined)
+
+/** Native composition supplies setup; previews and remote browser views omit it. */
+export function AgentSetupProvider({
+  source,
+  children,
+}: {
+  source?: AgentSetupSource
+  children: React.ReactNode
+}) {
+  return <Setup.Provider value={source}>{children}</Setup.Provider>
+}
+
+const readinessText: Record<AgentReadiness, string> = {
+  ready: "Ready. Send your message when you are ready.",
+  "needs-authentication": "The runtime is installed. Sign in to your agent account next.",
+  "not-installed": "Download the selected agent to use it in Nessa.",
+  "not-configured":
+    "This gateway is not configured to run this agent. Downloading a runtime alone will not change that.",
+  "not-supported": "This agent is not supported by this gateway.",
+  unknown: "Nessa could not check this agent. Check setup again before trying to send.",
+}
+
+/** A setup action never resends the message whose refusal opened this view. */
+export function SelectedAgentSetup({
+  agent,
+  recovery = false,
+}: {
+  agent: string
+  /** First-use hints show only a published missing-runtime answer. */
+  recovery?: boolean
+}) {
+  const source = React.useContext(Setup)
+  const choice = AGENT_CHOICES.find((choice) => choice.id === agent)
+  if (!source || !choice) return null
+  return (
+    <SelectedSetup
+      key={choice.id}
+      agent={choice.id}
+      name={choice.name}
+      source={source}
+      recovery={recovery}
+    />
+  )
+}
+
+function SelectedSetup({
+  agent,
+  name,
+  source,
+  recovery,
+}: {
+  agent: AgentId
+  name: string
+  source: AgentSetupSource
+  recovery: boolean
+}) {
+  const credentials = useAgentApiKeySave(source.apiKeys)
+  const [readiness, setReadiness] = React.useState<AgentReadiness>("unknown")
+  const [checking, setChecking] = React.useState(true)
+  const [loginAvailable, setLoginAvailable] = React.useState(false)
+  const [signingIn, setSigningIn] = React.useState(false)
+  const [loginFailed, setLoginFailed] = React.useState(false)
+  const loginWorking = React.useRef(false)
+  const generation = React.useRef(0)
+  const revision = React.useRef(0)
+  const check = React.useCallback(async () => {
+    const request = ++revision.current
+    const lifetime = generation.current
+    setChecking(true)
+    const answer = await source.readiness.read().catch(() => ({ ok: false as const }))
+    if (lifetime !== generation.current || request !== revision.current) return
+    setReadiness(
+      answer.ok && Object.hasOwn(answer.agents, agent)
+        ? (answer.agents[agent] ?? "unknown")
+        : "unknown",
+    )
+    setChecking(false)
+    // Login-launch availability is independent of a runtime readiness answer.
+    void source
+      .loginAvailable()
+      .catch(() => false)
+      .then((available) => {
+        if (lifetime === generation.current && request === revision.current)
+          setLoginAvailable(available)
+      })
+  }, [source, agent])
+  const downloads = useAgentDownloads(source.installations, () => void check())
+  React.useEffect(() => {
+    generation.current += 1
+    setReadiness("unknown")
+    loginWorking.current = false
+    setSigningIn(false)
+    setLoginFailed(false)
+    void check()
+    return () => {
+      generation.current += 1
+    }
+  }, [check])
+  const offer = downloads.offers?.find((offer) => offer.agent === agent)
+  if (!recovery && readiness !== "not-installed") return null
+  return (
+    <section
+      aria-label={`${name} setup`}
+      className="mb-2 flex flex-col gap-2 text-xs text-muted-foreground"
+    >
+      <p role="status" aria-live="polite">
+        {downloads.pending
+          ? `Downloading and verifying ${name}. You can leave this view; installation will continue.`
+          : checking
+            ? `Checking ${name} setup…`
+            : readinessText[readiness]}
+      </p>
+      {downloads.outcome ? <p>{installationOutcomeText(downloads.outcome)}</p> : null}
+      {downloads.unavailable ? (
+        <p>Downloads could not be checked. Check setup again.</p>
+      ) : null}
+      {readiness === "not-installed" && offer && !offer.installed ? (
+        <button
+          type="button"
+          disabled={downloads.pending !== undefined || checking}
+          onClick={() => downloads.install(agent)}
+        >
+          {downloads.pending
+            ? "Downloading…"
+            : `Download ${name} · ${Math.ceil(offer.archiveBytes / 1_000_000)} MB`}
+        </button>
+      ) : null}
+      {readiness === "needs-authentication" && agent !== "opencode" && loginAvailable ? (
+        <button
+          type="button"
+          disabled={signingIn}
+          onClick={async () => {
+            if (loginWorking.current) return
+            loginWorking.current = true
+            const lifetime = generation.current
+            setSigningIn(true)
+            setLoginFailed(false)
+            try {
+              await source.signIn(agent)
+            } catch {
+              if (generation.current === lifetime) setLoginFailed(true)
+            }
+            if (generation.current !== lifetime) return
+            loginWorking.current = false
+            setSigningIn(false)
+            void check()
+          }}
+        >
+          {signingIn ? "Opening sign-in…" : `Sign in to ${name}`}
+        </button>
+      ) : null}
+      {readiness === "needs-authentication" && agent === "opencode" && source.apiKeys ? (
+        <AgentApiKeyForm
+          agent="opencode"
+          agentName="OpenCode"
+          hint="OpenCode connects through Zen using your API key. Depending on the configured model, messages may be metered."
+          onSave={credentials.save}
+          onSaved={check}
+        />
+      ) : null}
+      <AgentApiKeyAuditWarning failure={credentials.auditFailure} />
+      {loginFailed ? (
+        <p>Sign-in could not be opened. Check setup and try again.</p>
+      ) : null}
+      <button
+        type="button"
+        disabled={checking || downloads.pending !== undefined}
+        onClick={() => {
+          downloads.refresh()
+          void check()
+        }}
+      >
+        Check setup again
+      </button>
+    </section>
+  )
+}

@@ -214,7 +214,7 @@ describe("closing panes", () => {
     expect(state.drafts.fresh).toMatchObject({ channelId: "desktop" })
     const chosen = { ...loaded(), chosenModels: { a: astra } }
     const closed = closePane(chosen, { pane: keyOf(chosen, "a"), draftId: "fresh" })
-    expect(closed.drafts.fresh.model).toEqual(astra)
+    expect(closed.drafts.fresh.model).toEqual(chosen.sessions.a.model)
   })
 
   it("leaves a last pane that is already a home alone", () => {

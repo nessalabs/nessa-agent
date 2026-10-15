@@ -387,7 +387,6 @@ against a private scripted gateway.
   `src/desktop/split-panes/` (its map is `index.ts`) owns the pane layout, its
   sizing, drops and the drag's phases (`model/`, pure), the port a host
   implements (`application/ports.ts`, `SplitPanesSource`), the drag, FLIP and
-  their shared cancellable body restoration (`adapters/dom/staged-reveal.ts`),
   Tab order and the names a host may see of the page (`adapters/dom/`,
   `marks.ts`), and the grid and its stylesheet (`ui/`). A host supplies one
   source that reads its layout and carries out every change through its own
@@ -1539,6 +1538,12 @@ adapters; Claude, Codex and OpenCode native programs are downloaded explicitly.
 and packaged gateway. `product/agent_install.rs` owns wire mapping and worker
 admission. `src/onboarding/application/agent-installations.ts`, its gateway
 adapter and `ui/agent-downloads.tsx` supply setup and panel download controls.
+`ui/selected-agent-setup.tsx` supplies native panel/desktop first-use hints and
+refusal recovery through one provider. `ui/agent-api-key-save.tsx` keeps the
+existing API-key save audit warning visible after a successful save retires its
+form, shared with onboarding. It reuses readiness and the download hook;
+install, sign-in and Check are explicit and never replay a message. Native
+readiness resolves the host-assigned gateway endpoint within its bounded read.
 
 `composition/managed_adapter.rs` joins a verified native snapshot to the bundled
 Node adapter and its environment override. `CurrentAgentResolver` refreshes the

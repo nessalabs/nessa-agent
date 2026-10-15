@@ -278,6 +278,13 @@ Experimental turns it on; the rail stands beside the workspace in
   workspace at the window's edge. _Check:_ `columns.mjs --only rail-off`;
   `smoke.mjs` (Experimental offers the side rail's switch, off).
 
+- [ ] **Focused panes keep the same fill and elevation as their neighbors.**
+  A subtle rim identifies focus in both themes. _Check:_ `columns.mjs --only pane-level`.
+- [ ] **Conversation content stays visible during sidebar and session-list toggles.**
+  Pane bodies, including the composer, do not disappear and their fill does not
+  darken during motion. _Check:_ `columns.mjs --only content-visible` in both engines
+  and layouts. Drag previews and split flights must also retain content; verify
+  these with the drag and focus checks when changing their motion.
 - [ ] **No two columns overlap**, and nothing sits under the rail, in any
   combination of the rail, the sidebar, the session list and the Agents
   overview, at 1440, 1000 and 760 wide. _Check:_ `columns.mjs --only no-overlap`
@@ -1787,3 +1794,14 @@ surfaces use.
 ## User attachments in desktop reads — #682
 
 `user-attachments.mjs` drives the production gateway projection and desktop message renderer at 360, 600 and 1440 pixels in Chromium and WebKit. Committed, pending and serialized/reopened image-only, linked-file-only and mixed inputs retain the exact image encoding/size and linked path, a labelled attachment list and adjacent text. The reference placeholders show no preview or action when bytes are unavailable and fit the surface within 1 pixel of overflow. Reloading the fixture preserves the same metadata. The mapper and browser regressions hold this contract; agent-published file reads/saves remain covered separately by `published-files.mjs`.
+
+## Compact send recovery (#914)
+
+`send-failure.mjs` exercises the real conversation composer and overview reply
+pill at 360px and 1000px in Chromium and WebKit. The failure is above the composer,
+says **Error sending** with the actual code, keeps the full diagnostic off screen
+and sends it unchanged to the injected clipboard port on Copy. Send Again reuses
+the refused message; Discard removes it. Clipboard permission failures and panel
+retry/unknown-admission identities are also covered by application/component tests.
+Native first-use and refused-agent setup use the existing selected-agent readiness,
+installer and authentication controls, without automatic message replay.

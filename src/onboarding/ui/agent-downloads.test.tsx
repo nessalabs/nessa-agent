@@ -25,9 +25,9 @@ it("offers measured downloads, coalesces clicks, and refreshes after confirmed i
         }),
     ),
   }
-  const onInstalled = vi.fn()
+  const onChanged = vi.fn()
   await React.act(async () =>
-    root.render(<AgentDownloads source={source} onInstalled={onInstalled} />),
+    root.render(<AgentDownloads source={source} onChanged={onChanged} />),
   )
   const download = [...container.querySelectorAll("button")].find((button) =>
     button.textContent?.includes("Download ·"),
@@ -45,7 +45,7 @@ it("offers measured downloads, coalesces clicks, and refreshes after confirmed i
   ])
   await React.act(async () => resolve({ status: "installed", cleanupPending: false }))
   expect(container.textContent).toContain("Installed")
-  expect(onInstalled).toHaveBeenCalledTimes(1)
+  expect(onChanged).toHaveBeenCalledTimes(1)
   await React.act(async () => root.unmount())
 })
 
@@ -67,14 +67,14 @@ it("closing the view does not cancel a download or publish a late result to anot
         }),
     ),
   }
-  const onInstalled = vi.fn()
+  const onChanged = vi.fn()
   await React.act(async () =>
-    root.render(<AgentDownloads source={source} onInstalled={onInstalled} />),
+    root.render(<AgentDownloads source={source} onChanged={onChanged} />),
   )
   await React.act(async () => requiredElement(container, "button").click())
   await React.act(async () => root.unmount())
   await React.act(async () => resolve({ status: "installed", cleanupPending: false }))
-  expect(onInstalled).not.toHaveBeenCalled()
+  expect(onChanged).not.toHaveBeenCalled()
   expect(source.install).toHaveBeenCalledTimes(1)
 })
 
@@ -155,16 +155,16 @@ it("ignores an old source's completion after the view receives a new source", as
       .mockResolvedValue([{ agent: "codex", archiveBytes: 2, installed: false }]),
     install: vi.fn(),
   }
-  const onInstalled = vi.fn()
+  const onChanged = vi.fn()
   await React.act(async () =>
-    root.render(<AgentDownloads source={first} onInstalled={onInstalled} />),
+    root.render(<AgentDownloads source={first} onChanged={onChanged} />),
   )
   await React.act(async () => requiredElement(container, "button").click())
   await React.act(async () =>
-    root.render(<AgentDownloads source={next} onInstalled={onInstalled} />),
+    root.render(<AgentDownloads source={next} onChanged={onChanged} />),
   )
   await React.act(async () => complete({ status: "installed", cleanupPending: false }))
   expect(container.textContent).not.toContain("Installed.")
-  expect(onInstalled).not.toHaveBeenCalled()
+  expect(onChanged).not.toHaveBeenCalled()
   await React.act(async () => root.unmount())
 })

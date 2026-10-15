@@ -1,3 +1,4 @@
+import type { FailureDiagnostic } from "../model/failure"
 /**
  * What the workspace needs from whoever holds the sessions: the one port a
  * backend implements to attach. `adapters/gateway/` implements it over the
@@ -188,7 +189,11 @@ export class WorkspaceSourceError extends Error {
   readonly reason: WorkspaceFailureReason
   readonly stages?: StageMismatch
 
-  constructor(reason: WorkspaceFailureReason, stages?: StageMismatch) {
+  constructor(
+    reason: WorkspaceFailureReason,
+    stages?: StageMismatch,
+    readonly diagnostic?: FailureDiagnostic,
+  ) {
     super(`The workspace source refused: ${reason}`)
     this.name = "WorkspaceSourceError"
     this.reason = reason

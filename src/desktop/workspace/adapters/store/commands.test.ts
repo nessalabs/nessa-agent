@@ -459,7 +459,7 @@ describe("sending", () => {
     const sending = store.dispatch(
       sendMessage({ initiator: "person", sessionId: "a", text: "hi" }),
     )
-    expect(outboxOf(store, "a").at(-1)?.delivery).toEqual({ state: "sending" })
+    expect(outboxOf(store, "a").at(-1)?.delivery).toMatchObject({ state: "sending" })
     await source.release("send")
     await sending
     expect(outboxOf(store, "a").at(-1)?.delivery).toBeUndefined()
@@ -532,12 +532,16 @@ describe("sending", () => {
     ])
   })
 
-  it("sends with the model chosen for the next turn", async () => {
+  it("sends the source-owned model after a refused local model change", async () => {
     const { store, source } = await ready()
     store.dispatch(chooseModel({ sessionId: "a", model: astra }))
     await store.dispatch(sendMessage({ initiator: "agent", sessionId: "a", text: "hi" }))
     const sent = source.calls.find((call) => call[0] === "send")?.[1]
-    expect(sent).toMatchObject({ sessionId: "a", model: astra, initiator: "agent" })
+    expect(sent).toMatchObject({
+      sessionId: "a",
+      model: store.getState().workspace.sessions.a.model,
+      initiator: "agent",
+    })
     expect(sent).not.toHaveProperty("start", expect.anything())
   })
 
@@ -581,7 +585,7 @@ describe("sending", () => {
     const { store } = await ready(source)
     const before = store.getState().workspace.sessions.a
     await store.dispatch(sendMessage({ initiator: "person", sessionId: "a", text: "hi" }))
-    expect(outboxOf(store, "a").at(-1)?.delivery).toEqual({
+    expect(outboxOf(store, "a").at(-1)?.delivery).toMatchObject({
       state: "failed",
       reason: "unknown-session",
     })
@@ -1737,7 +1741,7 @@ describe("the Agents overview answers and reads what it shows, as a pane does", 
         sendMessage({ sessionId: "b", text: "And again.", initiator: "person" }),
       ),
     ).toBe("unknown")
-    expect(outboxOf(store, "b").at(-1)?.delivery).toEqual({
+    expect(outboxOf(store, "b").at(-1)?.delivery).toMatchObject({
       state: "failed",
       reason: "unavailable",
     })

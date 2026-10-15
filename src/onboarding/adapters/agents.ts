@@ -71,13 +71,12 @@ export function httpAgentReadiness({
   scheduleDeadline = scheduleReadinessDeadline,
 }: {
   /** Where the gateway answers, with no trailing slash. "" is this origin. */
-  baseUrl: string
+  baseUrl: string | (() => Promise<string>)
   /** Injected for tests; the page's own `fetch` otherwise. */
   fetch?: typeof globalThis.fetch
   /** Timer seam: schedule the request deadline and return its cancellation. */
   scheduleDeadline?: (elapsed: () => void) => () => void
 }): AgentReadinessSource {
-  const url = `${baseUrl}${AGENTS_PATH}`
   return {
     async read(): Promise<AgentReadinessAnswer> {
       const controller = new AbortController()
@@ -95,7 +94,9 @@ export function httpAgentReadiness({
       const reading = (async (): Promise<AgentReadinessAnswer> => {
         let response: Response
         try {
-          response = await fetch(url, {
+          const origin = typeof baseUrl === "string" ? baseUrl : await baseUrl()
+          if (controller.signal.aborted) return { ok: false, reason: "unreachable" }
+          response = await fetch(`${origin}${AGENTS_PATH}`, {
             headers: { accept: "application/json" },
             signal: controller.signal,
           })
@@ -123,4 +124,27 @@ export function httpAgentReadiness({
       }
     },
   }
+}
+
+/** Read the verified host-assigned endpoint; an absent publication is not a stage port. */
+export function assignedAgentReadiness({
+  endpoint,
+  ...dependencies
+}: {
+  endpoint: () => Promise<string | undefined>
+  fetch?: typeof globalThis.fetch
+  scheduleDeadline?: (elapsed: () => void) => () => void
+}): AgentReadinessSource {
+  return httpAgentReadiness({
+    ...dependencies,
+    baseUrl: async () => {
+      const assigned = await endpoint()
+      if (!assigned) throw new Error("Gateway endpoint is unavailable")
+      const url = new URL(assigned)
+      if (url.protocol !== "ws:" && url.protocol !== "wss:")
+        throw new Error("Gateway endpoint is not a WebSocket URL")
+      url.protocol = url.protocol === "wss:" ? "https:" : "http:"
+      return url.origin
+    },
+  })
 }

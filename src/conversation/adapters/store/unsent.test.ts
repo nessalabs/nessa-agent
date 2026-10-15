@@ -11,6 +11,9 @@ import {
   sendDraft,
   setDraft,
   submissionStarted,
+  submissionFailed,
+  submissionAccepted,
+  failedTurnDiscarded,
 } from "./slice"
 import { followByReading } from "../../testing"
 import {
@@ -45,7 +48,7 @@ it("a failed creation cannot make an unattempted message admission uncertain", a
   expect(tab.phase).toBe("idle")
   expect(tab.draft).toEqual(textContent("unsent"))
   expect(tab.draftReset).toBe(1)
-  expect(conversationNotice(tab)?.retry).toEqual({ kind: "draft" })
+  expect(conversationNotice(tab)?.retry).toMatchObject({ kind: "draft" })
 })
 /**
  * A store over the real gateway adapter, whose client refuses to open the
@@ -90,7 +93,7 @@ it("carries the gateway's startup deadline into the notice as the panel's own re
   // The client's own sentence names the remedy at length; the panel keeps it.
   expect(tab.error).toMatch(/still starting and ran out of time/)
   expect(conversationNotice(tab)).toMatchObject({
-    title: "Agent was still starting",
+    title: "Error sending",
     retry: { kind: "draft" },
   })
   // A retried send clears the rejection it described, reason and message together.
@@ -124,7 +127,7 @@ it("leaves a rejection this build has no word for untyped, and its sentence alon
   expect(tab.turns[0]).toMatchObject({ receipt: "failed" })
   expect(tab.draft).toEqual(textContent("first message"))
   expect(conversationNotice(tab)).toMatchObject({
-    title: "Message not sent",
+    title: "Error sending",
     retry: { kind: "draft" },
   })
 })
@@ -283,5 +286,140 @@ it("late known-unsent failure preserves a newer draft instead of restoring over 
     receipt: "failed",
     content: textContent("original"),
   })
-  expect(conversationNotice(tab)?.retry).toEqual({ kind: "draft" })
+  expect(conversationNotice(tab)?.retry).toMatchObject({ kind: "draft" })
+})
+
+it("explicit retries replace one refused bubble with fresh wire identities; independent sends stay distinct", async () => {
+  const effects = scenarioEffects("echo")
+  const create = vi.fn(async () => {
+    throw new Error("offline")
+  })
+  const store = makeStore(createDependencies({ conversation: { ...effects, create } }))
+  await store.dispatch(sendDraft({ content: textContent("hello") }))
+  const first = store.getState().conversation.conversations[0]!
+  const original = first.turns[0]!
+  store.dispatch(setDraft({ id: first.id, draft: textContent("edited") }))
+  await store.dispatch(
+    sendDraft({ id: first.id, content: textContent("edited"), retryTurnId: original.id }),
+  )
+  const retried = store.getState().conversation.conversations[0]!
+  expect(retried.turns).toHaveLength(1)
+  expect(retried.turns[0]).toMatchObject({
+    id: original.id,
+    content: textContent("edited"),
+    receipt: "failed",
+  })
+  if (original.from !== "user" || retried.turns[0]?.from !== "user")
+    throw new Error("missing user turn")
+  expect(retried.turns[0].executionId).not.toBe(original.executionId)
+  expect(retried.turns[0].actionId).not.toBe(original.actionId)
+  store.dispatch(
+    submissionFailed({
+      id: first.id,
+      executionId: original.executionId!,
+      message: "obsolete error",
+      outcome: { kind: "refused", reupload: false },
+    }),
+  )
+  expect(store.getState().conversation.conversations[0]).toBe(retried)
+  await store.dispatch(sendDraft({ id: first.id, content: textContent("edited") }))
+  const independent = store.getState().conversation.conversations[0]!
+  expect(independent.turns).toHaveLength(2)
+  expect(independent.turns[1]?.id).not.toBe(original.id)
+  const calls = create.mock.calls.length
+  await store.dispatch(
+    sendDraft({
+      id: first.id,
+      content: textContent("edited"),
+      retryTurnId: "another-tab-turn",
+    }),
+  )
+  expect(create).toHaveBeenCalledTimes(calls)
+  expect(store.getState().conversation.conversations[0]?.turns).toHaveLength(2)
+})
+
+it("retry and discard cannot replace an accepted message or discard an edited draft", async () => {
+  const effects = scenarioEffects("echo")
+  const create = vi.fn(async () => {
+    throw new Error("offline")
+  })
+  const store = makeStore(createDependencies({ conversation: { ...effects, create } }))
+  await store.dispatch(sendDraft({ content: textContent("hello") }))
+  const first = store.getState().conversation.conversations[0]!
+  const turn = first.turns[0]!
+  if (turn.from !== "user") throw new Error("missing user turn")
+  store.dispatch(setDraft({ id: first.id, draft: textContent("new work") }))
+  store.dispatch(failedTurnDiscarded({ id: first.id, turnId: "foreign" }))
+  expect(store.getState().conversation.conversations[0]?.turns).toHaveLength(1)
+  store.dispatch(submissionAccepted({ id: first.id, executionId: turn.executionId! }))
+  await store.dispatch(
+    sendDraft({ id: first.id, content: textContent("new work"), retryTurnId: turn.id }),
+  )
+  store.dispatch(failedTurnDiscarded({ id: first.id, turnId: turn.id }))
+  expect(create).toHaveBeenCalledTimes(1)
+  expect(store.getState().conversation.conversations[0]?.turns).toHaveLength(1)
+  expect(store.getState().conversation.conversations[0]?.draft).toEqual(
+    textContent("new work"),
+  )
+})
+
+it("discard removes only the refused bubble and preserves current draft work", async () => {
+  const effects = scenarioEffects("echo")
+  const store = makeStore(
+    createDependencies({
+      conversation: {
+        ...effects,
+        create: async () => {
+          throw new Error("offline")
+        },
+      },
+    }),
+  )
+  await store.dispatch(sendDraft({ content: textContent("hello") }))
+  const first = store.getState().conversation.conversations[0]!
+  store.dispatch(setDraft({ id: first.id, draft: textContent("new work") }))
+  store.dispatch(failedTurnDiscarded({ id: first.id, turnId: first.turns[0]!.id }))
+  expect(store.getState().conversation.conversations[0]?.turns).toEqual([])
+  expect(store.getState().conversation.conversations[0]?.draft).toEqual(
+    textContent("new work"),
+  )
+})
+
+it("retains the default agent actually requested and the original diagnostic for setup and copying", async () => {
+  const failure = new NessaConversationMutationError(
+    "c",
+    "request",
+    undefined,
+    new NessaRpcError(
+      ConversationErrorCode.AgentNotConfigured,
+      "provider launch diagnostic",
+    ),
+    async () => undefined,
+  )
+  let selected = "claude"
+  const create = vi.fn(async () => {
+    throw failure
+  })
+  const client = { conversation: { create } } as unknown as NessaClient
+  const effects = gatewayEffects(
+    () => client,
+    async () => {},
+    () => 0,
+    async () => selected,
+  )
+  const store = makeStore(createDependencies({ conversation: effects }))
+  const sending = store.dispatch(sendDraft({ content: textContent("hello") }))
+  selected = "codex"
+  await sending
+  expect(create.mock.calls).toHaveLength(1)
+  const tab = store.getState().conversation.conversations[0]!
+  expect(tab.turns[0]).toMatchObject({
+    receipt: "failed",
+    diagnostic: {
+      agent: "claude",
+      code: ConversationErrorCode.AgentNotConfigured,
+      message: failure.message,
+    },
+  })
+  expect(tab.selection).toBeUndefined()
 })

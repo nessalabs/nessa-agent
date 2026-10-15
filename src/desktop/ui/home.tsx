@@ -1,3 +1,5 @@
+import { SelectedAgentSetup } from "../../onboarding"
+import { agentForProvider } from "../model/composer-options"
 import { useState } from "react"
 import { useGreetingPreference } from "../adapters/window-preferences"
 import { Composer } from "./composer"
@@ -33,7 +35,7 @@ export function Home({
   /** The model the first message is sent with, held by the caller, as the text is. */
   model: { provider: string; modelId: string } | undefined
   /** Told when the person picks another model. */
-  onModelChange: (model: { provider: string; modelId: string }) => void
+  onModelChange?: (model: { provider: string; modelId: string }) => void
   /** What is typed in the composer and not sent, held by the caller. */
   text: string
   onTextChange: (text: string) => void
@@ -43,6 +45,7 @@ export function Home({
   const [page, setPage] = useState(false)
   const [greeting] = useGreetingPreference()
   const now = useNow(60_000)
+  const agent = model ? agentForProvider(model.provider) : undefined
 
   return (
     <div className="desktop-home" data-page={page || undefined}>
@@ -59,6 +62,7 @@ export function Home({
                 : "desktop-home-composer"
             }
           >
+            {agent ? <SelectedAgentSetup agent={agent} /> : null}
             <Composer
               page={page}
               onPageChange={setPage}

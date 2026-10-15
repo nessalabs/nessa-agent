@@ -8,6 +8,7 @@ const every: Record<WorkspaceFailureReason, true> = {
   unavailable: true,
   "unknown-session": true,
   "not-waiting": true,
+  "agent-not-configured": true,
   "not-supported": true,
   "signed-out": true,
   "not-started": true,

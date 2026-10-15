@@ -1,3 +1,4 @@
+import { WorkspaceSendFailure } from "../send-failure"
 // @vitest-environment jsdom
 /**
  * A conversation as drawn: each kind of part, a message the source refused,
@@ -116,6 +117,7 @@ async function shown(
               scrollRef={createRef()}
               onHeadingVisible={onHeadingVisible}
             />
+            <WorkspaceSendFailure sessionId="b" />
           </ClockProvider>
         </Provider>
       </StrictMode>,
@@ -264,12 +266,12 @@ describe("a transcript", () => {
     )
     expect(host.querySelector(".workspace-code")?.textContent).toBe("cargo update")
     expect(host.querySelectorAll(".workspace-list-items li")).toHaveLength(2)
-    const failed = host.querySelector(".workspace-message-failed")
-    expect(failed?.querySelector("span")?.textContent).toBe(
-      "Not sent. Nessa couldn’t confirm this just now.",
-    )
+    const failed = host.querySelector("[data-send-failure]")
+    expect(failed?.querySelector("span")?.textContent).toBe("Error sending")
     expect(
-      [...(failed?.querySelectorAll("button") ?? [])].map((b) => b.textContent),
+      [...(failed?.querySelectorAll("button") ?? [])]
+        .filter((b) => b.textContent)
+        .map((b) => b.textContent),
     ).toEqual(["Send Again", "Discard"])
   })
 
@@ -319,7 +321,7 @@ describe("a transcript", () => {
     ])
     expect(host.textContent).toContain("Check the deploy.")
     expect(host.textContent).toContain("Halfway")
-    expect(host.querySelector(".workspace-message-failed")).toBeNull()
+    expect(host.querySelector("[data-send-failure]")).toBeNull()
   })
 
   it("shows the gateway's interaction notice in its own words", async () => {
@@ -985,7 +987,7 @@ describe("a transcript", () => {
     expect(risen).not.toContain("two")
   })
 
-  it("sends a refused message again, or lets it go, from beneath it", async () => {
+  it("sends a refused message again, or lets it go, from the composer recovery row", async () => {
     const source = fakeSource()
     source.refuse("send", "unavailable")
     const { store } = await shown(source)
@@ -995,19 +997,19 @@ describe("a transcript", () => {
       )
     })
     const unsent = (label: string) =>
-      [
-        ...host.querySelectorAll<HTMLButtonElement>(".workspace-message-failed button"),
-      ].find((button) => button.textContent === label)
+      [...host.querySelectorAll<HTMLButtonElement>("[data-send-failure] button")].find(
+        (button) => button.textContent === label,
+      )
     await act(async () => {
       unsent("Send Again")?.click()
       await settle()
     })
     expect(source.calls.filter((call) => call[0] === "send")).toHaveLength(2)
-    expect(host.querySelectorAll(".workspace-message-failed")).toHaveLength(1)
+    expect(host.querySelectorAll("[data-send-failure]")).toHaveLength(1)
     await act(async () => {
       unsent("Discard")?.click()
     })
-    expect(host.querySelector(".workspace-message-failed")).toBeNull()
+    expect(host.querySelector("[data-send-failure]")).toBeNull()
     expect(store.getState().workspace.outbox.b).toBeUndefined()
   })
 
@@ -1350,7 +1352,7 @@ describe("provider recovery ownership", () => {
       await source.release("send")
       await sent
     })
-    expect(host.querySelector(".workspace-message-failed")).not.toBeNull()
+    expect(host.querySelector("[data-send-failure]")).not.toBeNull()
     expect(host.querySelector(".provider-sign-in")).toBeNull()
     const [retry] = store.getState().workspace.outbox.b ?? []
     const accepted = view("b", {

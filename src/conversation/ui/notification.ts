@@ -6,7 +6,7 @@ export type ConversationNotice = {
   retry:
     | { kind: "submission"; executionId: string }
     | { kind: "refresh" }
-    | { kind: "draft" }
+    | { kind: "draft"; turnId: string }
     | null
 }
 
@@ -124,20 +124,19 @@ export function conversationNotice(
         "The gateway may have received your message. Retry checks the same submission; reconnecting does not resend it.",
       retry: { kind: "submission", executionId: unknown.executionId },
     }
-  const unsent = conversation.turns.some(
-    (turn) =>
-      turn.from === "user" &&
-      turn.receipt === "failed" &&
-      turn.error === conversation.error,
-  )
+  const unsent = [...conversation.turns]
+    .reverse()
+    .find(
+      (turn) =>
+        turn.from === "user" &&
+        turn.receipt === "failed" &&
+        turn.error === conversation.error,
+    )
   if (unsent)
     return {
-      title:
-        conversation.failure === "agent-startup-deadline"
-          ? "Agent was still starting"
-          : "Message not sent",
-      description: `${conversation.error} Your draft is still here. Retry sends the current draft.`,
-      retry: conversation.draft.length ? { kind: "draft" } : null,
+      title: "Error sending",
+      description: conversation.error ?? "The message could not be sent.",
+      retry: { kind: "draft", turnId: unsent.id },
     }
   const error = conversation.remote?.interactionViewError ?? conversation.error
   const startupFailure = conversation.remote?.lifecycle.failure

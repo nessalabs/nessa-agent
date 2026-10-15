@@ -443,7 +443,7 @@ it("a target-only drop leaves body restoration to the layout owner", async () =>
   const fake = fakeSource(two())
   const commit = fake.source.commitDrop
   vi.spyOn(fake.source, "commitDrop").mockImplementation((drop) => {
-    expect(host.querySelector(`[${marks.settling}]`)).toBeNull()
+    expect(host.querySelector("[data-drag-settling]")).toBeNull()
     commit(drop)
   })
   const root = await mounted(
@@ -456,7 +456,7 @@ it("a target-only drop leaves body restoration to the layout owner", async () =>
   await frames()
   expect(fake.state.drops).toHaveLength(1)
   expect(items(fake)).toEqual(["b", "a"])
-  expect(host.querySelector(`[${marks.settling}]`)).toBeNull()
+  expect(host.querySelector("[data-drag-settling]")).toBeNull()
   await act(async () => root.unmount())
 })
 
@@ -481,35 +481,34 @@ it("previews the outcome of the layout the source holds, and commits it through 
   // Measured once, as the press began.
   expect(fake.state.measured).toBe(1)
   expect(items(fake)).toEqual(["b", "a"])
-  // Bodies were held out of the commit's layout, then brought back.
+  // The drop leaves no deferred body restoration.
   expect(host.querySelector("[data-drag-settling]")).toBeNull()
   expect(carrying()).toBe(false)
   await act(async () => root.unmount())
 })
 
-it("holds pane bodies out of the frame a cancel lets the preview go, and brings one back each frame after", async () => {
+it("releases a cancelled preview without staging hidden bodies", async () => {
   const fake = fakeSource(two())
   const root = await mounted(fake)
   await liftOntoTwo()
   expect(document.documentElement.hasAttribute(marks.reflow)).toBe(true)
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
   pointer("pointerup", 827, 400)
-  // The preview's mark drops as the copy flies home, and the bodies are
-  // waiting on that turn — one comes back on the frame after.
+  // The preview releases as the copy flies home; bodies remain available.
   await act(async () => {})
   expect(document.documentElement.hasAttribute(marks.reflow)).toBe(false)
-  expect(host.querySelectorAll("[data-drag-settling]").length).toBeGreaterThan(1)
+  expect(host.querySelector("[data-drag-settling]")).toBeNull()
   await act(
     async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
   )
-  expect(host.querySelectorAll("[data-drag-settling]").length).toBe(1)
+  expect(host.querySelector("[data-drag-settling]")).toBeNull()
   await frames()
   expect(host.querySelector("[data-drag-settling]")).toBeNull()
   expect(fake.state.drops).toEqual([])
   await act(async () => root.unmount())
 })
 
-it("holds pane bodies out of the commit frame and brings one back each frame after", async () => {
+it("commits a drop without staging hidden bodies", async () => {
   const fake = fakeSource(two())
   const root = await mounted(fake)
   await liftOntoTwo()
@@ -517,7 +516,7 @@ it("holds pane bodies out of the commit frame and brings one back each frame aft
   await act(
     async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
   )
-  expect(host.querySelectorAll("[data-drag-settling]").length).toBeGreaterThan(0)
+  expect(host.querySelector("[data-drag-settling]")).toBeNull()
   await frames()
   expect(host.querySelector("[data-drag-settling]")).toBeNull()
   expect(fake.state.drops).toHaveLength(1)
@@ -631,13 +630,9 @@ it("does not commit a drop whose frame was cancelled by unmount", async () => {
   expect(fake.state.subscribed).toBe(0)
 })
 
-it.each([
-  { kind: "bodies", rebind: true },
-  { kind: "glass", rebind: true },
-  { kind: "bodies", rebind: false },
-] as const)(
+it.each([{ kind: "glass", rebind: true }] as const)(
   "rejects old $kind restoration callbacks (rebound owner: $rebind)",
-  async ({ kind, rebind }) => {
+  async ({ rebind }) => {
     const first = fakeSource(two())
     const root = await mounted(first)
     await liftOntoTwo()
@@ -676,20 +671,8 @@ it.each([
       await liftOntoTwo()
       expect(document.documentElement.hasAttribute(marks.pressing)).toBe(true)
       control()
-      if (kind === "bodies") {
-        pointer("pointerup", 827, 400)
-        await act(async () => {
-          for (const [id, callback] of [...queued]) {
-            queued.delete(id)
-            callback(performance.now())
-          }
-        })
-        expect(host.querySelectorAll(`[${marks.settling}]`)).toHaveLength(2)
-      }
       await act(async () => obsolete.forEach((callback) => callback(performance.now())))
-      if (kind === "bodies")
-        expect(host.querySelectorAll(`[${marks.settling}]`)).toHaveLength(2)
-      else expect(document.documentElement.hasAttribute(marks.pressing)).toBe(true)
+      expect(document.documentElement.hasAttribute(marks.pressing)).toBe(true)
     } finally {
       await act(async () => root.unmount())
       window.requestAnimationFrame = request
@@ -939,7 +922,6 @@ it("carries the host's copy of an item, and a picture of a pane without the host
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
   pointer("pointerup", 40, 40)
   await frames()
-  element('[data-pane-key="1"]').setAttribute(marks.restoring, "")
   element('[data-pane-key="1"]').setAttribute(marks.flying, "")
   element('[data-pane-key="1"]').setAttribute(marks.measuring, "")
   await liftOntoTwo()
@@ -954,7 +936,6 @@ it("carries the host's copy of an item, and a picture of a pane without the host
     marks.dragItem,
     marks.carrying,
     marks.lifted,
-    marks.restoring,
     marks.flying,
     marks.measuring,
   ])

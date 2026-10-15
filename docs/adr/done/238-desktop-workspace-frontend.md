@@ -798,25 +798,23 @@ and played back with FLIP. The measurement is taken in React's commit phase,
 just before the DOM changes (`FlipScope`, `getSnapshotBeforeUpdate`), so any
 dispatch — a click, a key, an agent — animates, and it plays only when the
 panes' arrangement changes, never while an edge is dragged. Blur and large
-shadows pause while panes fly. During a flight, pane bodies wait out of layout:
-the card and title move, rather than every transcript being laid out at a new
-size inside the key handler. The quiet mark is applied before FLIP reads its
-landing boxes. Once the flight ends, bodies return one per frame through the
-same staged-reveal mechanism a drag uses; each adapter owns its own marker and
-cancellation generation. A new pane's content fills in the frame after
-its shell, in a transition. Durations and curves are `--desktop-*` tokens
-defined once in `styles.css` and read by script and stylesheet alike; reduced
-motion — chosen in Settings, or the system's — sets the durations to zero
+shadows pause while panes fly. Pane bodies and their fill stay visible while
+moving (#914); content is laid out at the landing size and counter-scaled during
+FLIP. There is no deferred body restoration. A timing budget must be met by
+simplifying motion or reducing work, not by blanking a conversation.
+Durations and curves are `--desktop-*` tokens defined once in `styles.css` and
+read by script and stylesheet alike; reduced motion — chosen in Settings, or
+the system's — sets the durations to zero
 there under the root's `data-motion`, and script motion follows with no
 check of its own.
 
 | pane-motion event | owned response |
 | --- | --- |
-| shape changes with motion | snapshot old boxes; hold the quiet mark before reading landing boxes; cancel the previous flight and pending reveal |
-| flight completes | hold each body's restoration marker, release the flight mark, then restore one body per frame |
-| shape changes again during restoration | cancel the old reveal generation; keep bodies quiet until the new flight settles |
-| no new flight or reduced motion interrupts a flight | release the old flight and resume staged restoration |
-| root replaced or scope unmounts | cancel the owned flights and reveal; clear only that owner's old root and markers; reject late completions |
+| shape changes with motion | snapshot old boxes; read landing boxes with content visible; cancel previous flights |
+| flight completes | release the owned flight marks; keep bodies visible |
+| shape changes during a flight | cancel old transforms and begin from the current boxes; reject late completions |
+| no new flight or reduced motion interrupts a flight | release the old flight immediately |
+| root replaced or scope unmounts | cancel owned flights; clear that owner's root and markers; reject late completions |
 
 ### The thinking control
 

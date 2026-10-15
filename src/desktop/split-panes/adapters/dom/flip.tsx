@@ -24,7 +24,6 @@ import { Component, type ReactNode, type RefObject } from "react"
 import { slideAnimation } from "../../../adapters/hold-still"
 import { letGoOfDragPreview } from "./drag"
 import { marks, reflectMark } from "./marks"
-import { stagedReveal } from "./staged-reveal"
 import { durationToken, motionToken } from "../../../adapters/motion"
 
 type Rects = { panes: Map<string, DOMRect>; slides: Map<string, DOMRect> }
@@ -87,25 +86,7 @@ export function flyPane(
   }
   const timing: KeyframeAnimationOptions = { duration, easing: "linear" }
   pane.style.transformOrigin = "50% 50%"
-  // A pane that changes size lays its header out at the size it lands at,
-  // so mid-flight its controls would float inside the box, or be cut off at
-  // its edge; it waits out of sight and comes back as the pane lands.
-  const resized = Math.abs(sx - 1) > 0.02 || Math.abs(sy - 1) > 0.02
-  // The part held to the pane's top left (`data-split-keeps`): its header.
-  const header = children.find(
-    ({ element }) => element.getAttribute(marks.keeps) === "top-left",
-  )?.element
-  const hiding =
-    resized && header
-      ? [
-          header.animate(
-            [{ opacity: 0 }, { opacity: 0, offset: 0.7 }, { opacity: 1 }],
-            timing,
-          ),
-        ]
-      : []
   return [
-    ...hiding,
     pane.animate(box, timing),
     ...children.map(({ element, top }) => {
       // The pane's centre, in the child's own box.
@@ -189,7 +170,6 @@ export class FlipScope extends Component<{
   private flights: Animation[] = []
   private moving: HTMLElement[] = []
   private scope: HTMLElement | null = null
-  private reveal: ReturnType<typeof stagedReveal> | null = null
 
   private release() {
     const flights = this.flights
@@ -197,8 +177,6 @@ export class FlipScope extends Component<{
     flights.forEach((flight) => flight.cancel())
     this.moving.forEach((pane) => pane.removeAttribute(marks.flying))
     this.moving = []
-    this.reveal?.dispose()
-    this.reveal = null
     if (this.scope) {
       reflectMark(this.scope, marks.flipping, false)
       this.scope.removeAttribute(marks.measuring)
@@ -224,9 +202,8 @@ export class FlipScope extends Component<{
     if (root !== this.scope) {
       this.release()
       this.scope = root
-      this.reveal = root ? stagedReveal(root, marks.restoring) : null
     }
-    if (!root || !this.reveal) return
+    if (!root) return
     const from = snapshot?.root === root ? snapshot.rects : null
     // A drag's preview put panes where this change puts them: measured through
     // it before the change, it is let go before measuring where they landed,
@@ -235,8 +212,6 @@ export class FlipScope extends Component<{
     // on, it would draw the landed panes moved again.
     if (previous.shape !== this.props.shape) letGoOfDragPreview(root)
     if (!from && previous.shape === this.props.shape) return
-    const hadFlight = root.hasAttribute(marks.flipping)
-    this.reveal.stop()
     const previousFlights = this.flights
     const previousMoving = this.moving
     this.flights = []
@@ -244,21 +219,16 @@ export class FlipScope extends Component<{
     previousFlights.forEach((flight) => flight.cancel())
     previousMoving.forEach((pane) => pane.removeAttribute(marks.flying))
     if (!from) {
-      if (hadFlight) this.reveal.hold(previousMoving)
       reflectMark(root, marks.flipping, false)
-      this.reveal.start()
       return
     }
-    // Hold expensive bodies before the landing read forces layout, rather
-    // than hiding them only after that work has already happened.
+    // Measure the new layout with content visible; the flight changes transforms only.
     reflectMark(root, marks.flipping, true)
     root.setAttribute(marks.measuring, "")
     let plan: ReturnType<typeof play>
     try {
       plan = play(root, from)
       plan.moving.forEach((pane) => pane.setAttribute(marks.flying, ""))
-      const ended = previousMoving.filter((pane) => !plan.moving.includes(pane))
-      if (ended.length > 0) this.reveal.hold(ended)
     } finally {
       root.removeAttribute(marks.measuring)
     }
@@ -266,20 +236,15 @@ export class FlipScope extends Component<{
     this.flights = flying
     this.moving = moving
     if (flying.length === 0) {
-      if (hadFlight) this.reveal.hold(previousMoving)
       reflectMark(root, marks.flipping, false)
-      this.reveal.start()
       return
     }
-    this.reveal.start()
     Promise.all(flying.map((flight) => flight.finished))
       .then(() => {
         if (this.flights !== flying || this.scope !== root) return
-        this.reveal?.hold(moving)
         moving.forEach((pane) => pane.removeAttribute(marks.flying))
         this.moving = []
         reflectMark(root, marks.flipping, false)
-        this.reveal?.start()
       })
       .catch(() => undefined)
   }

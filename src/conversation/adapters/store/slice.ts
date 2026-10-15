@@ -1,3 +1,5 @@
+import type { SubmissionDiagnostic } from "../../model"
+import { discardFailedTurn } from "../../application/usecases/send-draft"
 import {
   prepareSubmission,
   preparedSubmissionFields,
@@ -87,6 +89,8 @@ type ThunkConfig = {
 export type SendDraftArg = {
   content: MessageContent
   id?: string
+  /** Explicitly replace this refused local bubble, keeping fresh wire attempt IDs. */
+  retryTurnId?: string
   steering?: boolean
   /**
    * What the caller knows about the session, which this slice cannot see. False
@@ -228,7 +232,14 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
     operations.set(id, executionId, operation)
     // The operation exists before the one publication that makes it stoppable.
     // Subscribers can synchronously Stop/close; this promise still owns it (PS25–26).
-    dispatch(submissionStarted({ content, conversationId: id, prepared }))
+    dispatch(
+      submissionStarted({
+        content,
+        conversationId: id,
+        prepared,
+        retryTurnId: input.retryTurnId,
+      }),
+    )
     let admissionAttempted = false
     try {
       const created = await extra.conversation.create(serverId, conv.selection)
@@ -258,6 +269,11 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
           message: refusalDetail(error),
           outcome: sendOutcome(error, admissionAttempted),
           failure: commandFailure(error),
+          diagnostic: {
+            message: detail(error),
+            code: error instanceof SubmissionRefusedError ? error.code : undefined,
+            agent: error instanceof SubmissionRefusedError ? error.agent : undefined,
+          },
         }),
       )
       throw error
@@ -847,6 +863,7 @@ const conversationSlice = createSlice({
         content: MessageContent
         conversationId: string
         prepared: PreparedSubmission
+        retryTurnId?: string
       }>,
     ) {
       const { content, conversationId } = action.payload
@@ -859,6 +876,7 @@ const conversationSlice = createSlice({
           executionId: prepared.executionId,
           actionId: prepared.requestId,
           mode: prepared.mode,
+          retryTurnId: action.payload.retryTurnId,
         },
       )
     },
@@ -882,6 +900,9 @@ const conversationSlice = createSlice({
       }
       if (current) current.readRequest = undefined
     },
+    failedTurnDiscarded(state, action: PayloadAction<{ id: string; turnId: string }>) {
+      return discardFailedTurn(state, action.payload.id, action.payload.turnId)
+    },
     submissionFailed(
       state,
       action: PayloadAction<{
@@ -889,6 +910,7 @@ const conversationSlice = createSlice({
         executionId: string
         message: string
         outcome: SendOutcome
+        diagnostic?: SubmissionDiagnostic
         failure?: CommandFailure
       }>,
     ) {
@@ -899,6 +921,7 @@ const conversationSlice = createSlice({
         action.payload.message,
         action.payload.outcome,
         action.payload.failure,
+        action.payload.diagnostic,
       )
     },
     showError(
@@ -995,6 +1018,7 @@ export const {
   submissionAccepted,
   submissionReattempted,
   submissionFailed,
+  failedTurnDiscarded,
   showError,
   readStarted,
   invalidateRead,

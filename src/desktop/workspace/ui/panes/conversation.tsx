@@ -1,9 +1,14 @@
+import { WorkspaceSendFailure } from "../send-failure"
 import { memo, useCallback, useLayoutEffect, useRef } from "react"
 import { playArrival, type Arrival } from "../../adapters/dom/arrival"
 import { Composer } from "../../../ui/composer"
 import { chooseModel, sendMessage, setComposerText } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
-import { selectComposerText, selectNextModel } from "../../adapters/store/selectors"
+import {
+  selectCanChooseModel,
+  selectComposerText,
+  selectNextModel,
+} from "../../adapters/store/selectors"
 import type { ModelRef } from "../../model/workspace-index"
 import { Home } from "../../../ui/home"
 import { Transcript } from "../transcript/transcript"
@@ -35,6 +40,9 @@ function useComposerText(sessionId: string) {
 
 function useComposerActions(sessionId: string) {
   const dispatch = useWorkspaceDispatch()
+  const canChangeModel = useWorkspaceSelector((state) =>
+    selectCanChooseModel(state, sessionId),
+  )
   const send = useCallback(
     (text: string) =>
       void dispatch(sendMessage({ sessionId, text, initiator: "person" })),
@@ -44,7 +52,7 @@ function useComposerActions(sessionId: string) {
     (model: ModelRef) => dispatch(chooseModel({ sessionId, model })),
     [dispatch, sessionId],
   )
-  return { send, changeModel }
+  return { send, changeModel: canChangeModel ? changeModel : undefined }
 }
 
 /**
@@ -122,16 +130,19 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
   const { send, changeModel } = useComposerActions(sessionId)
   const { text, onTextChange } = useComposerText(sessionId)
   return (
-    <Composer
-      text={text}
-      onTextChange={onTextChange}
-      page={false}
-      onPageChange={stayCard}
-      model={model}
-      onModelChange={changeModel}
-      onSend={send}
-      // In a conversation the field is a reply, and says so in fewer words than the home's question.
-      placeholder="Reply…"
-    />
+    <>
+      <WorkspaceSendFailure sessionId={sessionId} />
+      <Composer
+        text={text}
+        onTextChange={onTextChange}
+        page={false}
+        onPageChange={stayCard}
+        model={model}
+        onModelChange={changeModel}
+        onSend={send}
+        // In a conversation the field is a reply, and says so in fewer words than the home's question.
+        placeholder="Reply…"
+      />
+    </>
   )
 })

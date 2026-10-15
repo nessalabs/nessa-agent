@@ -1,3 +1,4 @@
+import type { FailureDiagnostic } from "../../model/failure"
 /**
  * What the person does to a session — send to it, answer its approval, choose
  * its model, archive it. The source owns sessions and their conversations, so
@@ -16,6 +17,7 @@ import { startSession } from "../../model/session-lifecycle"
 import { messageText, type TurnMessage } from "../../model/transcript"
 import {
   draftOf,
+  canChooseModel,
   entry,
   forgetSession,
   modelForNextTurn,
@@ -135,11 +137,19 @@ export function sendFailed(
     sessionId,
     messageId,
     reason,
-  }: { sessionId: string; messageId: string; reason: WorkspaceFailureReason },
+    diagnostic,
+    model,
+  }: {
+    sessionId: string
+    messageId: string
+    reason: WorkspaceFailureReason
+    diagnostic?: FailureDiagnostic
+    model?: ModelRef
+  },
 ): WorkspaceState {
   const marked = withSent(state, sessionId, messageId, (message) => ({
     ...message,
-    delivery: { state: "failed", reason },
+    delivery: { state: "failed", reason, diagnostic, model },
   }))
   const session = sessionOf(marked, sessionId)
   return session &&
@@ -220,6 +230,7 @@ export function chooseModel(
   state: WorkspaceState,
   { sessionId, model }: { sessionId: string; model: ModelRef },
 ): WorkspaceState {
+  if (!canChooseModel(state, sessionId)) return state
   const draft = draftOf(state, sessionId)
   if (draft)
     return { ...state, drafts: { ...state.drafts, [sessionId]: { ...draft, model } } }

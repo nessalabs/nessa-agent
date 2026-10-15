@@ -1589,11 +1589,15 @@ export function refusalOf(error: unknown): unknown {
   )
     return new WorkspaceSourceError(
       error.code === undefined ? "unavailable" : reasonFor(error.code, error.uncertain),
+      undefined,
+      { message: error.message, code: error.code },
     )
   if (error instanceof NessaRpcError) {
     const code = conversationErrorCode(error.code)
     return new WorkspaceSourceError(
       code === undefined ? "unavailable" : reasonFor(code, false),
+      undefined,
+      { message: error.message, code: error.code },
     )
   }
   if (
@@ -1632,6 +1636,7 @@ function reasonFor(
     // saved state or its configuration changed under it — asking again
     // changes nothing.
     case ConversationErrorCode.AgentNotConfigured:
+      return uncertain ? "unavailable" : "agent-not-configured"
     case ConversationErrorCode.AgentUnsupported:
     case ConversationErrorCode.ConversationsNotConfigured:
     case ConversationErrorCode.EnvironmentNotConfigured:

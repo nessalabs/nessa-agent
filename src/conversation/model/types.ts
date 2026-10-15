@@ -290,6 +290,13 @@ export type ReadFailure =
 export type Receipt =
   "sending" | "accepted" | "queued" | "unknown" | "failed" | "delivered"
 
+/** Source diagnostic and selected agent captured by the refused operation. */
+export interface SubmissionDiagnostic {
+  readonly message: string
+  readonly code?: string
+  readonly agent?: string
+}
+
 export type UserTurn = {
   id: string
   from: "user"
@@ -303,6 +310,7 @@ export type UserTurn = {
   observedInput?: string | null
   mode?: "queued" | "steering"
   error?: string
+  diagnostic?: SubmissionDiagnostic
 }
 
 export type AgentPart = {

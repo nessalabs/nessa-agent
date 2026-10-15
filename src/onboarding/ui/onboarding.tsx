@@ -1,11 +1,8 @@
 import { AgentDownloads } from "./agent-downloads"
 import type { AgentInstallations } from "../application/agent-installations"
 import * as React from "react"
-import {
-  AgentApiKeySaveUncertain,
-  type AgentApiKeySink,
-  type ApiKeyAgent,
-} from "../application/ports"
+import type { AgentApiKeySink } from "../application/ports"
+import { AgentApiKeyAuditWarning, useAgentApiKeySave } from "./agent-api-key-save"
 import { AgentApiKeyForm } from "./agent-api-key-form"
 import {
   Check,
@@ -502,26 +499,7 @@ export function Onboarding({
    * button that looks inert invites being pressed again. */
   checking?: boolean
 }) {
-  const [credentialAuditFailure, setCredentialAuditFailure] = React.useState<
-    "saved" | "uncertain"
-  >()
-
-  async function saveAgentApiKey(agent: ApiKeyAgent, key: string) {
-    if (!apiKeys) throw new Error("agent API-key storage is unavailable")
-    try {
-      const saved = await apiKeys.save(agent, key)
-      if (saved.status === "saved-audit-failed") setCredentialAuditFailure("saved")
-      return saved
-    } catch (failure) {
-      if (
-        failure instanceof AgentApiKeySaveUncertain &&
-        failure.auditStatus === "failed"
-      ) {
-        setCredentialAuditFailure("uncertain")
-      }
-      throw failure
-    }
-  }
+  const credentials = useAgentApiKeySave(apiKeys)
   // Called unconditionally, as a hook must be; it only listens on the step
   // that has keys to light.
   const held = useHeldKeys(state.step === "summon")
@@ -712,7 +690,7 @@ export function Onboarding({
                           ? "OpenCode connects through Zen using your API key. Depending on the configured model, messages may be metered."
                           : undefined
                       }
-                      onSave={saveAgentApiKey}
+                      onSave={credentials.save}
                       onSaved={onRecheck}
                     />
                   </div>
@@ -722,15 +700,9 @@ export function Onboarding({
           })}
         </div>
         {installations ? (
-          <AgentDownloads source={installations} onInstalled={onRecheck} />
+          <AgentDownloads source={installations} onChanged={onRecheck} />
         ) : null}
-        {credentialAuditFailure ? (
-          <p role="alert" className="nessa-text-2 text-destructive">
-            {credentialAuditFailure === "saved"
-              ? "The key was saved, but Nessa could not record its security audit record."
-              : "Nessa could not confirm the key save or record its security audit outcome."}
-          </p>
-        ) : null}
+        <AgentApiKeyAuditWarning failure={credentials.auditFailure} />
         {stuck ? (
           // Said once, under the list, rather than repeated on every agent:
           // each agent's mark says what it is waiting on, and this says what to

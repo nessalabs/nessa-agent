@@ -7,7 +7,7 @@ import type {
 } from "../application/agent-installations"
 
 /** Local presentation of server-owned installation. No automatic install or replay. */
-export function useAgentDownloads(source: AgentInstallations, onInstalled?: () => void) {
+export function useAgentDownloads(source: AgentInstallations, onChanged?: () => void) {
   const [offers, setOffers] = React.useState<readonly InstallationOffer[]>()
   const [pending, setPending] = React.useState<InstallableAgent>()
   const [outcome, setOutcome] = React.useState<InstallationOutcome>()
@@ -59,8 +59,12 @@ export function useAgentDownloads(source: AgentInstallations, onInstalled?: () =
     working.current = false
     setPending(undefined)
     setOutcome(result)
-    await refresh()
-    if (active.current && generation === lifetime.current) onInstalled?.()
+    // A lost acknowledgement or busy worker may still own installation.
+    // Require a fresh check before offering another attempt.
+    if (result.status === "failed" && ["busy", "not-confirmed"].includes(result.reason))
+      setOffers(undefined)
+    else await refresh()
+    if (active.current && generation === lifetime.current) onChanged?.()
   }
   return {
     offers,

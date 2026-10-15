@@ -9,6 +9,7 @@
  * the store in `adapters/store/` applies them.
  */
 import type { StageMismatch, WorkspaceFailureReason } from "../model/failure"
+import { knownToSource } from "../model/revision"
 import type { Channel, ModelRef, Section, SessionSummary } from "../model/workspace-index"
 import {
   focusedPane,
@@ -564,11 +565,18 @@ export function focusedChannel(state: WorkspaceState): string | undefined {
   return sessionOf(state, sessionId)?.channelId ?? draftOf(state, sessionId)?.channelId
 }
 
-/** The model a session's next message is sent with: the one chosen, else its own. */
+/** A draft may choose a model; after the first attempt its creation may already exist. */
+export function canChooseModel(state: WorkspaceState, sessionId: string): boolean {
+  return !!draftOf(state, sessionId)
+}
+
+/** Draft choices do not override the source-owned model of an established session. */
 export function modelForNextTurn(
   state: WorkspaceState,
   sessionId: string,
 ): ModelRef | undefined {
+  const session = sessionOf(state, sessionId)
+  if (session && knownToSource(session)) return session.model
   return (
     draftOf(state, sessionId)?.model ??
     entry(state.chosenModels, sessionId) ??

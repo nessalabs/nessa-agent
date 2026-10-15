@@ -50,7 +50,6 @@ import { paneLimits } from "../../model/pane-layout"
 import { placements, type PanePlacement, type PaneRoom } from "../../model/pane-sizing"
 import { durationToken, motionToken } from "../../../adapters/motion"
 import { classes, gridOf, marks, reflectMark } from "./marks"
-import { stagedReveal } from "./staged-reveal"
 
 /** Marks the preview's own motion. */
 const dragPreview = "split-panes-preview"
@@ -500,8 +499,6 @@ const alwaysStripped = [
   marks.carrying,
   marks.lifted,
   marks.waiting,
-  marks.settling,
-  marks.restoring,
   marks.flying,
   marks.measuring,
   marks.card,
@@ -536,11 +533,6 @@ export function useSplitPanesDrag(
     let waiting: { frame: number; timer: number } | null = null
     let active = true
     let glassFrame: number | null = null
-    const reveal = stagedReveal(scope, marks.settling)
-    const stopReveal = reveal.stop
-    const startReveal = () => {
-      if (active) reveal.start()
-    }
     /** Bumped whenever glass blur is held or released, so a late release cannot drop a new drag's hold. */
     let glass = 0
     const holdGlass = (on: boolean) => {
@@ -549,7 +541,6 @@ export function useSplitPanesDrag(
       glassFrame = null
       const generation = ++glass
       if (on) {
-        stopReveal()
         reflectMark(scope, marks.pressing, options.previewPanes)
         return
       }
@@ -564,20 +555,8 @@ export function useSplitPanesDrag(
     /** Drops the pending commit's frame and its listeners, if a drop is waiting on one. */
     let releaseDrop: (() => void) | null = null
 
-    /**
-     * Drops the preview's mark. Bodies are already waiting, or start waiting
-     * now, and return one a frame: clearing the mark alone lays every
-     * transcript out on that frame (`drag.test.tsx`).
-     */
-    const releaseReflow = () => {
-      if (!scope.hasAttribute(marks.reflow)) return
-      const waiting = scope.querySelector(`[${marks.settling}]`) !== null
-      if (!waiting) {
-        reveal.hold()
-      }
-      startReveal()
-      reflectMark(scope, marks.reflow, false)
-    }
+    /** Releases the preview without hiding the conversations it moves. */
+    const releaseReflow = () => reflectMark(scope, marks.reflow, false)
 
     /**
      * What the press found: the panes' arrangement — not which has focus:
@@ -1315,11 +1294,7 @@ export function useSplitPanesDrag(
         release()
         if (!ownsDragResources(phase, made)) return
         if (accept && proposalHolds()) {
-          // A pane preview releases all its bodies through this owner. A
-          // target-only drop leaves that work to the affected layout flights.
-          if (options.previewPanes) reveal.hold()
           source.commitDrop({ carried: what, target: aim.target, zone: aim.zone, room })
-          if (options.previewPanes) startReveal()
           return
         }
         // The preview was the arrangement this frame is not committing.
@@ -1574,7 +1549,6 @@ export function useSplitPanesDrag(
     document.addEventListener("selectstart", onSelectStart)
     return () => {
       active = false
-      stopReveal()
       if (glassFrame !== null) cancelAnimationFrame(glassFrame)
       glassFrame = null
       unsubscribe()
@@ -1591,7 +1565,6 @@ export function useSplitPanesDrag(
       releaseDrop?.()
       const made = phase.kind === "idle" ? null : phase.made
       if (made) releaseMade(made)
-      reveal.dispose()
       reflectMark(scope, marks.reflow, false)
       reflectMark(scope, marks.pressing, false)
       phase = idle

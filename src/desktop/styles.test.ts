@@ -250,10 +250,9 @@ it("lifts a drag's copy without painting a shadow", () => {
   expect(picture).toMatch(/container-name:\s*none\s*!important/)
   expect(picture).toMatch(/box-shadow:\s*none\s*!important/)
   expect(picture).toMatch(/(?:^|[;\n])\s*filter:\s*none\s*!important/)
-  const bodyHidden = sheet
-    .slice(sheet.indexOf(".split-panes-ghost .workspace-pane-body {"))
-    .split("}")[0]
-  expect(bodyHidden).toMatch(/content-visibility:\s*hidden/)
+  expect(sheet).not.toMatch(
+    /\.split-panes-ghost \.workspace-pane-body\s*\{[^}]*content-visibility:\s*hidden/,
+  )
 })
 
 it("keeps the ambient blur on its own layer", () => {
@@ -348,29 +347,22 @@ it("does not paint a carried pane's conversation on the frame it lifts", () => {
   expect(slot).toMatch(/transition:\s*none/)
 })
 
-it("skips pane bodies on the frame a drop commits them", () => {
+it("keeps conversation content and pane fill visible while a layout moves", () => {
   const sheet = readFileSync(
     new URL("./workspace/ui/panes/panes.css", import.meta.url),
     "utf8",
   )
-  const body = sheet
-    .slice(sheet.indexOf(".workspace-pane[data-drag-settling] > .workspace-pane-body {"))
-    .split("}")[0]
-  expect(body).toMatch(/content-visibility:\s*hidden/)
-  // While the preview moves, the conversation is not painted. The scroller
-  // keeps its box (`drag.mjs`).
-  const quiet = sheet
-    .slice(sheet.indexOf(".workspace[data-drag-reflow] .workspace-transcript-inner {"))
-    .split("}")[0]
-  expect(quiet).toMatch(/content-visibility:\s*hidden/)
-  const mask = sheet
-    .slice(sheet.indexOf(".workspace[data-drag-reflow] .workspace-transcript {"))
-    .split("}")[0]
-  expect(mask).toMatch(/mask-image:\s*none/)
-  const travelling = sheet
-    .slice(sheet.indexOf(".workspace-pane[data-split-flying] {"))
-    .split("}")[0]
-  expect(travelling).toMatch(/background:\s*var\(--background\)/)
+  const rules = sheet.replace(/\/\*[\s\S]*?\*\//g, "").split("}")
+  const moving = rules.filter((rule) =>
+    /data-(?:split-(?:measuring|flying|restoring)|drag-(?:reflow|settling))/.test(rule),
+  )
+  expect(moving.length).toBeGreaterThan(0)
+  for (const rule of moving) {
+    expect(rule).not.toMatch(
+      /content-visibility:\s*hidden|visibility:\s*hidden|opacity:\s*0|display:\s*none/,
+    )
+    expect(rule).not.toMatch(/background:\s*var\(--background\)/)
+  }
 })
 
 it("keeps the list and the panes under the Agents overview laid out", () => {
@@ -458,10 +450,6 @@ it("paints nothing of a pane under the window's controls: its content below the 
   expect(body(styles, corner)).toMatch(
     /left:\s*calc\(var\(--desktop-titlebar-safe-start\) - var\(--desktop-gutter\)\)/,
   )
-  // While panes travel, it waits out of sight.
-  expect(
-    body(panes, ".workspace-pane[data-split-flying] .desktop-header[data-sliver] {"),
-  ).toMatch(/opacity:\s*0/)
 })
 
 it("moves Settings' sidebar by transform, never by animating its width", () => {
@@ -471,23 +459,6 @@ it("moves Settings' sidebar by transform, never by animating its width", () => {
   )
   const body = sheet.slice(sheet.indexOf(".settings-sidebar {")).split("}")[0]
   expect(body).not.toMatch(/transition/)
-})
-
-it("keeps pane bodies out of layout during a flight and staged restoration", () => {
-  const sheet = readFileSync(
-    new URL("./workspace/ui/panes/panes.css", import.meta.url),
-    "utf8",
-  )
-  const rule = sheet
-    .slice(
-      sheet.indexOf(
-        `.workspace[${marks.measuring}] .workspace-pane > .workspace-pane-body,`,
-      ),
-    )
-    .split("}")[0]
-  expect(rule).toContain(`.workspace-pane[${marks.restoring}] > .workspace-pane-body`)
-  expect(rule).toContain(`.workspace-pane[${marks.flying}] > .workspace-pane-body`)
-  expect(rule).toMatch(/content-visibility:\s*hidden/)
 })
 
 it("draws a pill, a short fade and a focus ring from the window's tokens, not from literals", () => {

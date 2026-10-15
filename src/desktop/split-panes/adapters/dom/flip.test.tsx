@@ -9,7 +9,7 @@
 import { act, useRef, useState } from "react"
 import { createRoot } from "react-dom/client"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import { FlipScope } from "./flip"
+import { FlipScope, flyPane } from "./flip"
 import { marks } from "./marks"
 
 let host: HTMLDivElement
@@ -220,14 +220,7 @@ it("does not resolve flight styles after a shape update that moves nothing", asy
   }
 })
 
-it("holds bodies before landing reads, rejects an old finish and restores one body per frame", async () => {
-  const queued = new Map<number, FrameRequestCallback>()
-  let next = 0
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    queued.set(++next, callback)
-    return next
-  })
-  vi.stubGlobal("cancelAnimationFrame", (id: number) => queued.delete(id))
+it("retires interrupted flights without delayed body restoration, including a replaced root", async () => {
   const finish: (() => void)[] = []
   const cancel = vi.fn()
   Element.prototype.animate = () =>
@@ -235,155 +228,20 @@ it("holds bodies before landing reads, rejects an old finish and restores one bo
       cancel,
       finished: new Promise<void>((resolve) => finish.push(resolve)),
     }) as unknown as Animation
-  let change = () => {}
-  let replace = () => {}
-  let landingStep = 0
-  function Panes() {
+  function Panes({ phase, rebound = false }: { phase: number; rebound?: boolean }) {
     const scope = useRef<HTMLDivElement>(null)
-    const [step, setStep] = useState(0)
-    const [rebound, setRebound] = useState(false)
-    change = () => {
-      landingStep = step + 1
-      setStep(landingStep)
-    }
-    replace = () => {
-      landingStep = step + 1
-      setStep(landingStep)
-      setRebound(true)
-    }
-    return (
-      <FlipScope shape={String(step)} root={scope}>
-        <div key={String(rebound)} ref={scope} data-step={step}>
-          {["a", "b", "c"].map((id, index) => (
-            <article
-              key={id}
-              data-pane-key={id}
-              data-flip="pane"
-              data-flip-id={id}
-              data-left={id === "c" ? 200 : ((index + step) % 2) * 100}
-            >
-              <div />
-            </article>
-          ))}
-        </div>
-      </FlipScope>
-    )
-  }
-  const rect = Element.prototype.getBoundingClientRect
-  const style = globalThis.getComputedStyle
-  Element.prototype.getBoundingClientRect = function (this: Element) {
-    const scope = this.closest<HTMLElement>("[data-step]")
-    if (scope?.dataset.step === String(landingStep) && this.hasAttribute("data-flip")) {
-      expect(scope?.hasAttribute(marks.flipping)).toBe(true)
-      expect(scope?.hasAttribute(marks.measuring)).toBe(true)
-    }
-    return rect.call(this)
-  }
-  const current = () => {
-    const element = host.firstElementChild
-    if (!(element instanceof HTMLElement)) throw new Error("missing scope")
-    return element
-  }
-  const root = createRoot(host)
-  try {
-    await act(async () => root.render(<Panes />))
-    await act(async () => change())
-    expect(current().hasAttribute(marks.measuring)).toBe(false)
-    expect(current().querySelectorAll(`[${marks.flying}]`)).toHaveLength(2)
-    expect(
-      current().querySelector('[data-pane-key="c"]')?.hasAttribute(marks.flying),
-    ).toBe(false)
-    const firstEnd = finish.length
-    await act(async () => change())
-    await act(async () => finish.slice(0, firstEnd).forEach((resolve) => resolve()))
-    let scope = current()
-    expect(scope.hasAttribute(marks.flipping)).toBe(true)
-    expect(queued.size).toBe(0)
-    await act(async () => finish.slice(firstEnd).forEach((resolve) => resolve()))
-    expect(scope.hasAttribute(marks.flipping)).toBe(false)
-    expect(scope.querySelectorAll(`[${marks.restoring}]`)).toHaveLength(2)
-    expect(
-      scope.querySelector('[data-pane-key="c"]')?.hasAttribute(marks.restoring),
-    ).toBe(false)
-    expect(queued.size).toBe(1)
-    const pending = [...queued.values()][0]
-    queued.clear()
-    await act(async () => pending(0))
-    expect(scope.querySelectorAll(`[${marks.restoring}]`)).toHaveLength(1)
-    // Rebinding releases old work and never flies from another root's boxes.
-    const old = scope
-    const beforeRebind = finish.length
-    await act(async () => replace())
-    scope = current()
-    expect(scope).not.toBe(old)
-    expect(finish).toHaveLength(beforeRebind)
-    expect(scope.hasAttribute(marks.flipping)).toBe(false)
-    expect(old.querySelector(`[${marks.restoring}]`)).toBeNull()
-    expect(queued.size).toBe(0)
-    pending(0)
-    expect(scope.querySelector(`[${marks.restoring}]`)).toBeNull()
-    await act(async () => change())
-    expect(document.documentElement.hasAttribute(marks.flipping)).toBe(true)
-    const beforeReduced = finish.length
-    const reducedStyle = document.createElement("div").style
-    reducedStyle.setProperty("--desktop-flight", "0ms")
-    globalThis.getComputedStyle = () => reducedStyle
-    await act(async () => change())
-    expect(finish).toHaveLength(beforeReduced)
-    expect(scope.hasAttribute(marks.flipping)).toBe(false)
-    expect(scope.querySelectorAll(`[${marks.restoring}]`)).toHaveLength(2)
-    expect(queued.size).toBe(1)
-    await act(async () => finish.slice(beforeRebind).forEach((resolve) => resolve()))
-    expect(scope.hasAttribute(marks.flipping)).toBe(false)
-    expect(queued.size).toBe(1)
-    globalThis.getComputedStyle = style
-    await act(async () => change())
-    expect(document.documentElement.hasAttribute(marks.flipping)).toBe(true)
-    await act(async () => root.unmount())
-    expect(document.documentElement.hasAttribute(marks.flipping)).toBe(false)
-    expect(scope.hasAttribute(marks.flipping)).toBe(false)
-  } finally {
-    await act(async () => root.unmount())
-    Element.prototype.getBoundingClientRect = rect
-    globalThis.getComputedStyle = style
-    vi.unstubAllGlobals()
-  }
-})
-
-it("stages old-only bodies when an interrupted flight moves a different subset", async () => {
-  const queued = new Map<number, FrameRequestCallback>()
-  let next = 0
-  vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
-    queued.set(++next, run)
-    return next
-  })
-  vi.stubGlobal("cancelAnimationFrame", (id: number) => queued.delete(id))
-  const finish: (() => void)[] = []
-  Element.prototype.animate = () =>
-    ({
-      cancel() {},
-      finished: new Promise<void>((resolve) => finish.push(resolve)),
-    }) as unknown as Animation
-  function Panes({ phase }: { phase: number }) {
-    const scope = useRef<HTMLDivElement>(null)
-    const positions =
-      phase === 0
-        ? [0, 100, 200, 400]
-        : phase === 1
-          ? [100, 0, 200, 400]
-          : [100, 0, 300, 400]
     return (
       <FlipScope shape={String(phase)} root={scope}>
-        <div ref={scope}>
-          {["a", "b", "c", "d"].map((id, index) => (
+        <div key={String(rebound)} ref={scope}>
+          {["a", "b"].map((id, index) => (
             <article
               key={id}
               data-pane-key={id}
               data-flip="pane"
               data-flip-id={id}
-              data-left={positions[index]}
+              data-left={((index + phase) % 2) * 100}
             >
-              <div />
+              <div>Conversation stays mounted</div>
             </article>
           ))}
         </div>
@@ -393,33 +251,52 @@ it("stages old-only bodies when an interrupted flight moves a different subset",
   const root = createRoot(host)
   try {
     await act(async () => root.render(<Panes phase={0} />))
+    const body = host.querySelector("article > div")
     await act(async () => root.render(<Panes phase={1} />))
-    const oldEnd = finish.length
+    const firstEnd = finish.length
     await act(async () => root.render(<Panes phase={2} />))
-    const scope = host.firstElementChild
-    if (!(scope instanceof HTMLElement)) throw new Error("missing scope")
-    expect(scope.querySelectorAll(`[${marks.flying}]`)).toHaveLength(1)
-    expect(scope.querySelectorAll(`[${marks.restoring}]`)).toHaveLength(2)
-    expect(
-      scope.querySelector('[data-pane-key="d"]')?.hasAttribute(marks.restoring),
-    ).toBe(false)
-    for (const remaining of [1, 0]) {
-      const pending = [...queued.values()][0]
-      queued.clear()
-      await act(async () => pending(0))
-      expect(scope.querySelectorAll(`[${marks.restoring}]`)).toHaveLength(remaining)
-      expect(scope.hasAttribute(marks.flipping)).toBe(true)
-    }
-    await act(async () => finish.slice(0, oldEnd).forEach((resolve) => resolve()))
-    expect(scope.hasAttribute(marks.flipping)).toBe(true)
-    await act(async () => finish.slice(oldEnd).forEach((resolve) => resolve()))
-    expect(scope.hasAttribute(marks.flipping)).toBe(false)
-    expect(scope.querySelectorAll(`[${marks.restoring}]`)).toHaveLength(1)
-    expect(
-      scope.querySelector('[data-pane-key="c"]')?.hasAttribute(marks.restoring),
-    ).toBe(true)
+    expect(host.querySelector("article > div")).toBe(body)
+    await act(async () => finish.slice(0, firstEnd).forEach((resolve) => resolve()))
+    expect(host.firstElementChild?.hasAttribute(marks.flipping)).toBe(true)
+    await act(async () => finish.slice(firstEnd).forEach((resolve) => resolve()))
+    expect(host.firstElementChild?.hasAttribute(marks.flipping)).toBe(false)
+    expect(host.querySelector(`[${marks.flying}]`)).toBeNull()
+    await act(async () => root.render(<Panes phase={3} />))
+    const beforeRebind = finish.length
+    const old = host.firstElementChild
+    if (!old) throw new Error("missing scope")
+    await act(async () => root.render(<Panes phase={4} rebound />))
+    expect(finish).toHaveLength(beforeRebind)
+    expect(old.hasAttribute(marks.flipping)).toBe(false)
+    await act(async () => finish.forEach((resolve) => resolve()))
+    expect(host.firstElementChild?.hasAttribute(marks.flipping)).toBe(false)
+    expect(cancel).toHaveBeenCalled()
   } finally {
     await act(async () => root.unmount())
-    vi.unstubAllGlobals()
   }
+})
+
+it("resizes a pane and its header by transform without fading its content", () => {
+  const pane = document.createElement("article")
+  const header = document.createElement("header")
+  header.setAttribute(marks.keeps, "top-left")
+  pane.append(header)
+  const frames: Keyframe[][] = []
+  Element.prototype.animate = (_keyframes) => {
+    frames.push(_keyframes as Keyframe[])
+    return { cancel() {}, finished: new Promise(() => {}) } as unknown as Animation
+  }
+  flyPane(
+    {
+      pane,
+      to: { left: 0, top: 0, width: 500, height: 400 } as DOMRect,
+      children: [{ element: header, top: 0 }],
+    },
+    { left: 100, top: 0, width: 800, height: 400 } as DOMRect,
+    300,
+  )
+  expect(frames).toHaveLength(2)
+  expect(
+    frames.every((animation) => animation.every((frame) => frame.opacity === undefined)),
+  ).toBe(true)
 })

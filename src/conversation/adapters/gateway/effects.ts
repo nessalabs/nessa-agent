@@ -412,7 +412,7 @@ function readFailure(error: unknown): ConversationReadFailedError {
  * is as certain as a refusal gets: nothing was sent, and the draft comes back.
  * Either way the client's own sentence is kept, because it names what is wrong.
  */
-function submissionFailure(error: unknown): unknown {
+function submissionFailure(error: unknown, agent?: string): unknown {
   const named =
     error instanceof NessaConversationMutationError && !error.uncertain && error.code
       ? failures[error.code]
@@ -421,10 +421,14 @@ function submissionFailure(error: unknown): unknown {
     error instanceof TypeError
       ? new SubmissionRefusedError("invalid-request", error)
       : named
-        ? new SubmissionRefusedError(named, error)
+        ? new SubmissionRefusedError(
+            named,
+            error,
+            error instanceof NessaConversationMutationError ? error.code : undefined,
+            agent,
+          )
         : undefined
   if (!refused) return error
-  refused.message = (error as Error).message
   return refused
 }
 
@@ -551,16 +555,20 @@ export function gatewayEffects(
       // this create is sent over.
       api()
       const request = (selection ? Promise.resolve(selection.agent) : chosenAgent())
-        .then((agent) =>
-          api().create({
-            conversationId,
-            agent,
-            ...(selection
-              ? { model: selection.model, approvalMode: selection.approvalMode }
-              : {}),
-            ...(selection?.environment ? { environment: selection.environment } : {}),
-          }),
-        )
+        .then(async (agent) => {
+          try {
+            return await api().create({
+              conversationId,
+              agent,
+              ...(selection
+                ? { model: selection.model, approvalMode: selection.approvalMode }
+                : {}),
+              ...(selection?.environment ? { environment: selection.environment } : {}),
+            })
+          } catch (error) {
+            throw submissionFailure(error, agent)
+          }
+        })
         .catch((error: unknown) => {
           creations.delete(conversationId)
           throw submissionFailure(error)

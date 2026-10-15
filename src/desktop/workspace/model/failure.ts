@@ -30,6 +30,7 @@ export type WorkspaceFailureReason =
   | "unknown-session"
   | "not-waiting"
   | "not-supported"
+  | "agent-not-configured"
   | "signed-out"
   | "not-started"
   | "not-ready"
@@ -40,4 +41,10 @@ export type WorkspaceFailureReason =
 export type StageMismatch = {
   readonly bundle: string
   readonly requested: string
+}
+
+/** Original source diagnostic, retained independently of recovery policy. */
+export interface FailureDiagnostic {
+  readonly message: string
+  readonly code?: string
 }
