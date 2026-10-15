@@ -350,6 +350,61 @@ fn every_transition_and_precedence_pair() {
         false
     ));
     assert_eq!(stored_evidence(&direct), Evidence::Direct);
+    let stronger = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::SendAnswered, accepted),
+        audit(Cause::SendAnswered, done),
+    ];
+    assert!(
+        history_reaches(
+            &not_admitted_row.clone().with_sends(1).with_outcome(done),
+            &stronger,
+            false
+        ),
+        "a higher direct answer is replayed from the row before the lower one"
+    );
+    let downgraded = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::SendAnswered, done),
+        audit(Cause::SendAnswered, accepted),
+    ];
+    assert!(!history_reaches(
+        &not_admitted_row.clone().with_sends(1).with_outcome(done),
+        &downgraded,
+        false
+    ));
+    assert!(!history_reaches(
+        &not_admitted_row
+            .clone()
+            .with_sends(1)
+            .with_outcome(accepted),
+        &downgraded,
+        false
+    ));
+    assert!(!history_reaches(
+        &not_admitted_row
+            .clone()
+            .with_sends(2)
+            .with_outcome(accepted),
+        &downgraded,
+        false
+    ));
+    let repeated = [
+        audit(Cause::Held, draft),
+        audit(Cause::Departed, not_admitted),
+        audit(Cause::SendAnswered, accepted),
+        audit(Cause::SendAnswered, accepted),
+    ];
+    assert!(!history_reaches(
+        &not_admitted_row
+            .clone()
+            .with_sends(1)
+            .with_outcome(accepted),
+        &repeated,
+        false
+    ));
 
     let lookup_done = [
         audit(Cause::Held, draft),

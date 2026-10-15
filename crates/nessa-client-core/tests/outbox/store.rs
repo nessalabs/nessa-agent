@@ -2532,6 +2532,44 @@ fn a_direct_answer_after_a_lookup_still_loads() {
 }
 
 #[test]
+fn a_stronger_direct_answer_replaces_a_weaker_one() {
+    let dir = directory();
+    let path = path_in(&dir);
+    let mut outbox = PhoneOutbox::new(
+        PlantLookup::open(&path, PlantedAnswer::WeakerDirect),
+        Scripted::new(vec![SendAnswer::Receipt(Delivery::Settled)], Vec::new()),
+        SeqIds::default(),
+        clock(),
+    );
+    person_hold(&mut outbox, text_intent("command-1", "hello"));
+    let view = outbox.send(&command("command-1")).unwrap();
+    assert_eq!(view.outcome(), PhoneOutcome::Done);
+    let listed = outbox.list().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].outcome(), PhoneOutcome::Done);
+    assert_eq!(listed[0].intent().text(), "hello");
+    drop(outbox);
+    let mut store = SqliteIntents::open(&path).unwrap();
+    let record = store.load(&command("command-1")).unwrap().unwrap();
+    assert_eq!(record.outcome(), PhoneOutcome::Done);
+    assert_eq!(record.sends(), 1);
+    let events = store.events("command-1").unwrap();
+    assert_eq!(
+        events.iter().map(|event| event.cause).collect::<Vec<_>>(),
+        [
+            Cause::Held,
+            Cause::Departed,
+            Cause::SendAnswered,
+            Cause::SendAnswered,
+        ]
+    );
+    assert_eq!(events[2].outcome, PhoneOutcome::Accepted);
+    assert_eq!(events[2].initiator, Initiator::Person);
+    assert_eq!(events[3].outcome, PhoneOutcome::Done);
+    assert_eq!(events[3].initiator, Initiator::Person);
+}
+
+#[test]
 fn a_direct_answer_clears_the_turn_running_successor() {
     let dir = directory();
     let path = path_in(&dir);
@@ -2784,13 +2822,15 @@ fn planted_outbox(path: &Path, kind: PlantedAnswer) -> PhoneOutbox<PlantLookup, 
     )
 }
 
-/// The answer lease rolls back, then a committed lookup lands before replay.
+/// The answer lease rolls back, then a committed answer lands before replay.
 #[derive(Clone, Copy)]
 enum PlantedAnswer {
     Done,
     TurnRunning,
     /// The replacement draft departed before the direct answer was saved.
     DepartedDraft,
+    /// A lower-ranked direct answer is committed before the stronger one is replayed.
+    WeakerDirect,
 }
 
 struct PlantLookup {
@@ -2851,7 +2891,7 @@ impl IntentStore for PlantLookup {
         self.planted = true;
         let kind = self.kind;
         self.inner.abort_exclusive();
-        plant_committed_lookup(&mut self.inner, kind).expect("planted lookup");
+        plant_committed_answer(&mut self.inner, kind).expect("planted answer");
         Err(StoreError::Uncertain)
     }
     fn abort_exclusive(&mut self) {
@@ -2859,7 +2899,7 @@ impl IntentStore for PlantLookup {
     }
 }
 
-fn plant_committed_lookup(
+fn plant_committed_answer(
     store: &mut SqliteIntents,
     kind: PlantedAnswer,
 ) -> Result<(), StoreError> {
@@ -2903,6 +2943,23 @@ fn plant_committed_lookup(
             store.replace(
                 &departed,
                 &accepted,
+                IntentEvent {
+                    cause: Cause::SendAnswered,
+                    outcome: PhoneOutcome::Accepted,
+                    initiator: Initiator::Person,
+                    observed_at_ms: 1,
+                    successor: None,
+                },
+            )
+        }
+        PlantedAnswer::WeakerDirect => {
+            let next = saved
+                .clone()
+                .with_sends(1)
+                .with_outcome(PhoneOutcome::Accepted);
+            store.replace(
+                &saved,
+                &next,
                 IntentEvent {
                     cause: Cause::SendAnswered,
                     outcome: PhoneOutcome::Accepted,

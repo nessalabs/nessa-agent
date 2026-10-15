@@ -3,11 +3,12 @@
 //!
 //! Restoration rejects a snapshot whose audit rows do not reach it
 //! (`a_done_row_whose_history_stops_at_departure_is_corrupt`). It does not
-//! repair the row. A direct answer written after the lookup it replaces is
-//! replayed from the row before that lookup
-//! (`a_direct_answer_after_a_lookup_still_loads`). Precedence is the table in
-//! `docs/design/phone-outbox.md`: a direct answer beats any lookup, and inside
-//! one source a higher outcome beats a lower one
+//! repair the row. A direct answer written after the answer it replaces is
+//! replayed from the row before that suffix. The suffix is a lookup, or a
+//! lower-ranked direct answer (`a_direct_answer_after_a_lookup_still_loads`,
+//! `a_stronger_direct_answer_replaces_a_weaker_one`). Precedence is the table
+//! in `docs/design/phone-outbox.md`: a direct answer beats any lookup, and
+//! inside one source a higher outcome beats a lower one
 //! (`every_transition_and_precedence_pair`).
 
 use super::decide::{apply_lookup, apply_retry, apply_send, budget, Applied, Budget, Evidence};
@@ -95,11 +96,11 @@ pub(crate) fn history_reaches(
     let mut older = first.cause;
     let mut previous = first;
     // `reached[i]` is the row after `events[i]`. A direct answer that cannot
-    // move the lookup row is applied to the row before that lookup.
+    // move the stored row is applied to the row before the suffix it replaces.
     let mut reached = vec![state.clone()];
     for event in rest {
         let Some(next) = advance(&state, event, previous, older)
-            .or_else(|| direct_over_lookup(events, &reached, event))
+            .or_else(|| direct_over_replaced(events, &reached, event))
         else {
             return false;
         };
@@ -403,12 +404,15 @@ fn successor_follows(record: &PhoneRecord, events: &[IntentEvent]) -> bool {
     !turn_running_outcome(record.outcome()) && record.successor().is_none()
 }
 
-/// A direct answer appended after the lookup it replaces.
+/// A direct answer appended after the stored answer it replaces.
 ///
-/// `apply_send` cannot move a non-retryable lookup outcome, so the answer is
-/// applied to the row before that lookup suffix
-/// (`a_direct_answer_after_a_lookup_still_loads`).
-fn direct_over_lookup(
+/// [`replaces`] decides the suffix. A lookup suffix loses to any direct
+/// answer. A direct suffix loses only when its outcome ranks lower. `apply_send`
+/// cannot move a terminal row, so the answer is applied to the row before that
+/// suffix. The replaced events stay
+/// (`a_direct_answer_after_a_lookup_still_loads`,
+/// `a_stronger_direct_answer_replaces_a_weaker_one`).
+fn direct_over_replaced(
     events: &[IntentEvent],
     reached: &[PhoneRecord],
     event: &IntentEvent,
@@ -417,7 +421,7 @@ fn direct_over_lookup(
         return None;
     }
     let mut cut = reached.len();
-    while cut > 0 && lookup_suffix(&events[cut - 1], events.get(cut.wrapping_sub(2))) {
+    while cut > 0 && replaced_by(event, &events[cut - 1], events.get(cut.wrapping_sub(2))) {
         cut -= 1;
     }
     if cut == reached.len() || cut == 0 {
@@ -464,6 +468,28 @@ fn direct_answer_event(event: &IntentEvent) -> bool {
         | Cause::Lookup
         | Cause::Bound => false,
     }
+}
+
+/// The stored event is a suffix `incoming` replaces.
+///
+/// A lookup suffix is replaced by any direct answer. A direct suffix is
+/// replaced only when [`replaces`] says the incoming outcome ranks higher.
+/// SendLost and departure stay, so the answer is not applied to a draft.
+fn replaced_by(
+    incoming: &IntentEvent,
+    suffix: &IntentEvent,
+    previous: Option<&IntentEvent>,
+) -> bool {
+    if lookup_suffix(suffix, previous) {
+        return true;
+    }
+    direct_answer_event(suffix)
+        && replaces(
+            incoming.outcome,
+            Evidence::Direct,
+            suffix.outcome,
+            Evidence::Direct,
+        )
 }
 
 fn lookup_suffix(event: &IntentEvent, previous: Option<&IntentEvent>) -> bool {
