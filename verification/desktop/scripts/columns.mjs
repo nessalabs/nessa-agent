@@ -385,17 +385,34 @@ const body = {
       await settled(page)
       await page.evaluate(
         ({ pane, body }) => {
-          const observed = [...document.querySelectorAll(pane)].map((element) => ({
-            element,
-            fill: getComputedStyle(element).backgroundColor,
-          }))
-          window.__contentFrames = { running: true, frames: 0, moving: 0, failures: [] }
+          // Each pane with the opacity of every box from its body up to it, so a
+          // partial dim fails as surely as a blackout.
+          const observed = [...document.querySelectorAll(pane)].map((element) => {
+            const chain = []
+            for (
+              let at = element.querySelector(body);
+              at && at !== element.parentElement;
+              at = at.parentElement
+            )
+              chain.push({ at, opacity: Number(getComputedStyle(at).opacity) })
+            return { element, fill: getComputedStyle(element).backgroundColor, chain }
+          })
+          const chrome = document.querySelector("[data-sidebar]")
+          window.__contentFrames = {
+            running: true,
+            frames: 0,
+            failures: [],
+            before: `${chrome?.dataset.sidebar}/${document.querySelector("[data-list]")?.dataset.list}`,
+            geometry: new Set(),
+          }
           const sample = () => {
             const result = window.__contentFrames
             if (!result.running) return
             result.frames++
-            if (document.querySelector("[data-split-flipping]")) result.moving++
-            for (const { element, fill } of observed) {
+            const first = observed[0]?.element.getBoundingClientRect()
+            if (first)
+              result.geometry.add(`${first.left.toFixed(1)},${first.width.toFixed(1)}`)
+            for (const { element, fill, chain } of observed) {
               if (!element.isConnected) {
                 result.failures.push("pane was replaced during a chrome toggle")
                 continue
@@ -421,6 +438,11 @@ const body = {
                     `${at.className}: content hidden during transition`,
                   )
               }
+              for (const { at, opacity } of chain)
+                if (at.isConnected && Number(getComputedStyle(at).opacity) < opacity)
+                  result.failures.push(
+                    `${at.className}: content dimmed during transition`,
+                  )
               if (getComputedStyle(element).backgroundColor !== fill)
                 result.failures.push("pane fill changed during transition")
             }
@@ -435,11 +457,25 @@ const body = {
         await settled(page)
         await frames(page)
         const result = await page.evaluate(() => {
-          window.__contentFrames.running = false
-          return window.__contentFrames
+          const result = window.__contentFrames
+          result.running = false
+          const chrome = document.querySelector("[data-sidebar]")
+          return {
+            frames: result.frames,
+            failures: result.failures,
+            before: result.before,
+            after: `${chrome?.dataset.sidebar}/${document.querySelector("[data-list]")?.dataset.list}`,
+            positions: result.geometry.size,
+          }
         })
-        runs.push({ key, frames: result.frames, moving: result.moving })
+        runs.push({ key, frames: result.frames, positions: result.positions })
         if (result.frames < 2) failures.push(`${key}: no transition frames sampled`)
+        // The toggle took effect and the pane travelled through at least one
+        // place between where it was and where it ended.
+        if (result.before === result.after)
+          failures.push(`${key}: the toggle changed nothing`)
+        else if (result.positions < 3)
+          failures.push(`${key}: the pane jumped to its new place without moving`)
         failures.push(
           ...[...new Set(result.failures)].map((message) => `${key}: ${message}`),
         )
