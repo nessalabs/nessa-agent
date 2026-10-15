@@ -280,7 +280,10 @@ grants are revoked. The no-follow walk starts from the handle whose
 marker matched. `read` lists and reads named paths under that directory.
 `write` creates and edits named paths under it. The name `.nessa-binding`
 is refused to `read`, `write`, and `exec`, including a sandboxed command.
-The grantor's open is the reader of that file. The open is the check.
+The grantor's open is the reader of that file. `exec` is admitted only
+when the sandbox keeps `.nessa-binding` unwritable by the process. A
+profile that can only expose the directory as a writable tree is refused
+`exec`. An allowed program cannot unlink or rewrite the marker. The open is the check.
 The environment walks from a directory handle on the granted directory,
 and opens each component no-follow against the parent handle: publish, a
 file tool that names a path, and the working directory of a command. A
@@ -358,10 +361,14 @@ owner's other work does not appear in it.
   refused it today. This stream names only the receiver's own grants, so
   the timing of ungranted work stays on the grantor. A frame that would
   pass the 64 KiB product-frame bound is cut on a grant boundary and
-  marked `complete: false`, the same cut a list frame uses
-  ([record subscriptions](record-subscriptions.md), row L3). The follower
-  applies the prefix and resumes with `after` the last cursor in the frame
-  until a frame is complete. It does not walk the owner's catalogue. The
+  marked `complete: false`. The decision is that an incomplete frame does
+  not advance the stream cursor. `after` stays the last complete snapshot
+  the follower applied. The frame names the last grant in its prefix as
+  `page`. The follower sends that `page` with the same `after` to receive
+  the next prefix of the same snapshot. The stream cursor advances when a
+  frame is `complete: true`. A grant left out of an incomplete prefix stays
+  ahead of the stream cursor and is sent before that advance. The follower
+  does not walk the owner's catalogue. The
 subscription is not ended `too_large` because the set did not fit. Every
 stored grant already fits in one frame with the frame overhead, so one
 directory grant does not end this subscription either.
@@ -521,13 +528,16 @@ epoch. Admitted work finishes, and the next command is refused.
   same fact a product session would refuse: revoked or expired. The grant
   epoch does not move when the credential is revoked or expires, so the
   epoch alone does not stop delivery. An epoch that no longer allows
-  delivery, or a credential that is not current, records `not sent` and
-  writes nothing.
+  delivery, or a credential that is not current, writes the row `not sent`
+  and writes no POST. The permit drops after that row commits.
 - Before any POST byte is written, the attempt durably records `sending`:
   the target, the delivery id, the epoch it read, and that the credential
   was current. That write commits first. If it fails, the POST is not
-  written, the outcome is `not sent` with cause audit unavailable, and the
-  permit drops. After `sending` commits, the attempt writes the POST.
+  written. The row is written `not sent`, cause audit unavailable, and
+  that write commits before the permit drops. If the `not sent` write does
+  not commit, the row stays `queued`, the permit is not dropped, and
+  restart admits the row again. The delivery is not terminal until the
+  row says `not sent`. After `sending` commits, the attempt writes the POST.
 - The decision is that `retry scheduled` is a non-terminal outbox state
   with `due_at`. A retryable response writes that state and the due time
   on the same row, in one write, and keeps the delivery id. The due time
@@ -746,7 +756,7 @@ before any POST byte and is not replaced by the later outcome.
 | From | Event | To | Ordering |
 | --- | --- | --- | --- |
 | no row | The conversation checkpoint has committed, and this registration has no row for it | queued | Restart or the live reader inserts the row and advances the cursor in one write. A crash between the conversation commit and this write leaves the cursor behind, and the next restart inserts the row. |
-| queued | The attempt takes the permit, the epoch allows delivery, the credential is current, and the `sending` write commits | sending | This write commits before any POST byte. If it fails, the state is `not sent` and the POST is not written. |
+| queued | The attempt takes the permit, the epoch allows delivery, the credential is current, and the `sending` write commits | sending | This write commits before any POST byte. If the `sending` write fails, the row is written `not sent` with cause audit unavailable, and that write commits before the permit drops. If the `not sent` write does not commit, the row stays `queued` and the permit stays held. |
 | queued | The epoch or the credential refuses delivery | not sent | No POST is written. |
 | sending | The response is a 3xx, or another retryable response | not sent, or retry scheduled | A 3xx is not a delivery. The next POST, when admitted, goes to the registered URL only. `retry scheduled` stores `due_at` in that write. |
 | sending | The response is success | sent | The outcome record does not replace `sending`. |
@@ -797,7 +807,9 @@ the directory root. A grant row does not store a second binding.
 once, when the file is absent. A later share of the same directory leaves
 the file unchanged. `.nessa-binding` is not a granted path. `read`,
 `write`, and `exec` refuse that name, including a sandboxed command. The
-grantor's open is the only reader. One share of a directory runs at a
+grantor's open is the only reader. `exec` is admitted only when the
+sandbox keeps `.nessa-binding` unwritable by the process. A profile that
+exposes the directory as a writable tree is refused `exec`. One share of a directory runs at a
 time. The next share reads the file only after the earlier attempt has
 committed its resource or removed a marker that attempt created and that
 no committed resource stores. A failed grant commit leaves the marker and
@@ -973,7 +985,9 @@ These issues are open, in this order: [#889](https://github.com/nessalabs/nessa-
 [#895](https://github.com/nessalabs/nessa-agent/issues/895),
 [#896](https://github.com/nessalabs/nessa-agent/issues/896),
 [#897](https://github.com/nessalabs/nessa-agent/issues/897).
-The bodies below are the current text of this proposal.
+The bodies below are the slice delta and the gate. The contract is the
+sections above, including [Lifecycles](#lifecycles). A fence does not
+restate a lifecycle.
 
 ### 1. Unify conversation shares into one access grant
 
@@ -982,53 +996,11 @@ Part of the access-grant proposal in `docs/design/access-grants.md`.
 
 ## Deliver
 
-Issue, epoch bump, and revoke follow the grant table in Lifecycles. This
-slice does not add a grant state.
-
-Make the conversation share row the access grant. The primary key is
-`(subject_kind, subject_id, resource_kind, resource_id)`, replacing
-`(receiver_id, conversation_id)`. A paired device or paired gateway uses
-subject kind `receiver` and its receiver id. Two devices of one owner
-authenticate as that owner
-([peer gateways](auth/peer-gateways.md)) and keep distinct rows. A
-gateway credential still names `gateway:<key>`. The same-person link is
-not the subject and does not merge two receivers' grants. An integration
-or a later agent, which has no receiver, uses subject kind `principal`
-and the principal id. One integration principal has one active webhook
-registration. A second `credential.issue` while that registration is
-active is refused and writes nothing. The subject stays the principal.
-This slice writes resource kind `conversation` and
-the conversation id. The directory slice writes kind `directory` and a
-resource id minted once for that directory. The path and the binding live
-on that one resource. Each subject grant points at the resource id. A
-later share of the same directory reuses the resource and leaves the
-marker unchanged. Replacing the directory does not keep the grant. It
-does not change the primary key and does not mint a conversation id for
-a directory. One subject may hold many directory rows. One directory
-resource may have many subject grants. Webhook and agent
-slices insert into this key. They do not migrate identity again.
-
-The capability set is `read`, and for a principal Cedar permits, `comment`
-and `drive`. Constraints are the tool policy and `commandHosts` a `drive`
-grant already carries. The grant epoch is today's `policy_revision`.
-
-Cedar's `grant.read`, `grant.comment`, and `grant.drive` permits read those
-capabilities. `grant.comment` and `grant.drive` also require a principal
-signed in as the binding owner, which is the device case. Delete
-`paired.peer_gateway`. `conversation.share` asks `grant.comment` and
-`grant.drive` before it writes those capabilities. A denial writes nothing
-and the answer carries the policy ids. The use case does not match a
-gateway principal on its own.
-
-The wire field is `capabilities`. The role enum goes. Alpha: bump the
-metadata database version once, from whatever it is on main, and refuse a
-file this build cannot read. Update `docs/design/read-grants.md` to this
-contract in the same change.
-
-Device comment and drive stay as they are: text-only drive, tool checking
-at the admitted epoch, `hold_revision` across the save, and the journal
-recording role-equivalent capabilities and constraints before and after,
-with the owner as initiator.
+The contract is the grant table in Lifecycles and the primitive above.
+This slice writes resource kind `conversation`. It deletes
+`paired.peer_gateway`, bumps the metadata version once, and refuses a
+file this build cannot read. It updates `docs/design/read-grants.md` in
+the same change. It does not add a grant state.
 
 ## Gate
 
@@ -1058,14 +1030,9 @@ Part of docs/design/access-grants.md.
 
 ## Deliver
 
-On the follower, a conversation a peer has granted opens as a local
-conversation. It is a replica of the grantor's chat, shown through the
-existing conversation view, from the records the peer cache already holds.
-The cache is filled by `conversation.recordsHead` and `recordsPage`. The
-subscribe view is not the replica.
-The follower's store is not the authority and is not merged with the
-grantor's. The chat is read-only until the peer-write slice. An id with no
-grant answers the same way a missing conversation does.
+The contract is Live follow, above. The delta is the local replica: the
+follower's store is not the grantor's, and the chat is read-only until
+the peer-write slice.
 
 ## Gate
 
@@ -1086,22 +1053,9 @@ Part of docs/design/access-grants.md.
 
 ## Deliver
 
-The owner can put `comment` or `drive` on a gateway principal's grant for
-one conversation. Remove the signed-in-as-owner requirement from
-`grant.comment` and `grant.drive`, so the capability is the decision.
-`conversation.share` already asks those permits, so this slice does not
-add or delete a separate gateway-kind check.
-`admit_request` keeps returning `Initiation::grant(receiver, epoch)`: the
-turn's caller is the grant, not the owner.
-
-The peer credential still holds only what `hold.peer` allows
-(`conversation.read`, and `environment.serve` when it is also an
-environment). Delete, archive, export, re-share, and model changes stay
-`owner.act`. Drive stays text-only. Tool policy, command hosts, and the
-native-hooks refusal stay the checks they are for a device.
-
-When a same-person link exists, the audit also names that person. The
-capability still comes from the grant.
+The contract is the grant table. The delta is removing the signed-in-as-owner
+requirement from `grant.comment` and `grant.drive`. Drive stays text-only.
+Delete, archive, export, re-share, and model changes stay `owner.act`.
 
 ## Gate
 
@@ -1124,71 +1078,9 @@ Part of docs/design/access-grants.md.
 
 ## Deliver
 
-Marker states follow the directory binding table in Lifecycles. This slice
-does not add a binding state.
-
-A grant resource is one directory in an environment the grantor enforces:
-this gateway's machine, a remote environment it already leases, or a cloud
-environment a later agent uses. The grant names the environment and the
-directory. The row uses the refactor's key
-`(subject_kind, subject_id, resource_kind, resource_id)` with resource
-kind `directory`. A paired subject is the receiver. The decision is one
-directory resource, minted once, with one marker. The resource id is not
-the path. The resource row stores the environment, the canonical path,
-and a directory binding. The binding is 32 random bytes. Share reads
-`.nessa-binding` through a directory handle. When the file is present,
-those bytes are the binding. Share stores the resource if none is stored
-for that binding, then attaches the subject grant to that resource id.
-Share writes the file only when it is absent, with a create that leaves
-an existing file unchanged, then commits the resource row, then the
-grant. A later share finds the file and leaves it unchanged. If the
-resource commit fails, share removes the marker only when this attempt
-created the file and no committed resource stores that binding. A failed
-grant commit leaves the marker and every grant already stored. A second
-subject gets another grant row for the same resource id. The first
-subject's grant stays, and the marker bytes stay. The first open reads
-`.nessa-binding` through the directory handle. A missing root, a missing
-marker, or different bytes refuse the use and revoke the grants for that
-resource. A directory later created at the same path does not receive
-those grants, including when the filesystem reuses the device and inode
-numbers of the deleted directory. Copying `.nessa-binding` into another
-directory is a copy of the binding. This slice does not change the key and does not mint a
-conversation id. Capabilities are
-`read`, `write`, and `exec`. `read` and
-`write` open a named path by walking from a directory handle on the
-granted directory, no-follow against each parent handle. A component that
-is `..`, a symlink, or otherwise leaves the directory is refused. The
-name `.nessa-binding` is refused to `read`, `write`, and `exec`. One share
-of a directory runs at a time. The next share reads the marker only after
-the earlier attempt has committed its resource or removed a marker that
-attempt created.
-Resolving the path and then opening the resolved name is not the boundary.
-`exec` is admitted only when that
-environment enforces a filesystem sandbox around the process (the harness
-sandbox or a container) and every root that sandbox exposes is inside
-the directory. A sandbox that also exposes a path outside the directory
-is refused `exec`.
-A command lease with sandbox `none`, which is what `run` and `GrantCommand`
-are today, is refused `exec`. The working directory is not that boundary.
-This slice enforces the boundary on a machine the grantor already runs.
-The cloud agent uses the same resource and is not built here.
-
-Command rules are an ordered allow/deny list on the grant. Cedar matches
-the program by file name, as `command.denied_program` does, and may match
-a bounded argv pattern. Deny wins. The owner edits the list as matchers.
-The list is stored on the grant and is not written into Claude or Codex
-settings. The rule count and the encoded grant, including the list, are
-bounded by rows this slice adds to `docs/limits.md`. The encoded grant
-must fit in the 64 KiB product frame with the frame overhead.
-`conversation.share` refuses a grant past that cap and writes nothing.
-With native hooks opted in, those hooks run in the harness, and
-Nessa's rules still run at the permission request, `run`, and
-`GrantCommand`. A call the harness makes without asking is reported as
-outside Nessa's gate.
-
-`grants.json` on the sharing machine stays the authority for what it will
-run and can narrow the grant. Add the argv pattern bound to `docs/limits.md`
-with one owner.
+The contract is Directory resource and command rules, and the directory
+binding table. This slice adds the command-rule rows to `docs/limits.md`.
+It does not build the cloud agent and does not add a binding state.
 
 ## Gate
 
@@ -1211,7 +1103,9 @@ does not copy `.nessa-binding`. The open is refused and the grants are
 revoked. Sharing the same directory with a second subject leaves the
 first grant in place and leaves the marker bytes unchanged. A second
 share whose grant commit fails leaves the marker and the first grant. A
-subject with `write` is refused `.nessa-binding`, and the grants stay. A
+subject with `write` is refused `.nessa-binding`, and the grants stay.
+An allowed program cannot unlink or rewrite the marker. A profile that
+exposes the directory as a writable tree is refused `exec`. A
 second share of a directory waits until the first attempt has committed
 its resource or removed the marker it created. A failed first attempt
 leaves no marker and no grant. An open that finds a missing or different
@@ -1236,14 +1130,8 @@ Part of docs/design/access-grants.md.
 
 ## Deliver
 
-`pairing.create` for a gateway takes a same-person choice. When set, a
-link row says this `gateway:<key>` principal acts for the owner's person
-principal. The credential, its class, and `hold.peer` stay as they are.
-The link adds no capability. Admission reports the person beside the
-grant. The grant subject stays the gateway's receiver, so two gateways
-linked as the same person keep two rows. `PeerRead` and `DeviceRead` are
-unchanged. The owner-phone consent
-class (#811) is not this link and is not issued here.
+The contract is Same person, above. The delta is the choice on
+`pairing.create`. The owner-phone consent class (#811) is not this link.
 
 ## Gate
 
@@ -1267,69 +1155,17 @@ Part of docs/design/access-grants.md.
 
 ## Deliver
 
-Delete the `PeerPoller` timer for an Active peer. `peer.poll_interval` no
-longer wakes a `catalogueHead`. The record copy stays. A record-hint
-frame on `conversation.subscribe` wakes it when the record head moves,
-including when the view frame is not sent.
-
-Push grant changes on a grant subscription for this receiver, on the same
-subscription machinery as `conversation.subscribe` (#851). The cursor is
-`{incarnation, position}`. The grant position is an opaque counter for
-this receiver. It advances only when that receiver's grants change, and
-it is not an owner catalogue revision. Resume with `after`. A new incarnation replaces
-the set. `cursor_ahead` is refused. `lagging` resumes from `lastDelivered`.
-Each frame is a prefix of that receiver's grants in cursor order: a grant
-added, a grant revoked, or a grant epoch changed. A frame that would pass
-the 64 KiB product-frame bound is cut on a grant boundary and marked
-`complete: false`. The follower resumes with `after` the last cursor in
-that frame until a frame is complete. It does not walk the owner's
-catalogue. The subscription is not ended `too_large` because the set did
-not fit. A stored grant fits in one frame with the frame overhead, so
-one directory grant does not end the subscription. It is not `catalogue.watch`, which fires on the
-owner's whole catalogue. A chat the follower has opened follows on
-`conversation.subscribe` with the same cursor and resume rules. A refused
-chat subscribe withdraws that local conversation.
-`conversation.watchRecords` stays the retained phone path.
-
-`socket.conversation_subscriptions` is 8. A ninth `conversation.subscribe`
-on one socket is refused `subscription_capacity`. The grant subscription
-is not a conversation target and does not take a catalogue list slot. This
-slice adds one grant target per connection beside the eight and does not
-raise the conversation cap. A second grant subscription on that socket is
-refused `subscription_capacity`.
-
-A follow rule may name more than eight chats. The live set on that
-connection is still eight. The least recently opened chat, by an explicit
-open rather than by a frame, is let go. Its local replica stays and
-receives no frames until it is opened again, then `conversation.subscribe`
-resumes with `after` from the cursor last applied. There is no second
-connection and no poller for that chat. A grant change still arrives while
-eight chats are live.
-
-The server-side record watch stays in the grantor. Row S9 sends no view
-frame when the bounded view is unchanged. When the reread observes the
-record head moved, the task sends a record-hint frame on that
-subscription: the subscription id and the head cursor
-`{incarnation, position}`. The follower calls `conversation.recordsHead`
-and `recordsPage` from the cursor the cache last applied. The view is not
-the replica, and a view frame is not the wake. `conversation.watchRecords`
-stays the phone path: its hint carries no cursor, and a connection holds
-one record watch. A chat let go past the eight-cap keeps its cursor and
-is not walked until it is opened again.
-
-Two waits stay, and neither reads the catalogue on a timer. Until the
-enrollment is Active there is no session, so the existing status dial runs
-until Active or Revoked, then stops. After the subscription connection
-drops, a failed connect waits on the existing connect backoff and then
-resumes both subscriptions and the record cursor. The environment serving
-connection's silence bound stays; it carries leases and is not this poller.
+The contract is Live follow, above. The delta is deleting the `PeerPoller`
+timer for an Active peer and adding one grant-subscription target per
+connection. An incomplete grant frame does not advance the stream cursor.
 
 ## Gate
 
 A new share, a revoke, and an epoch change each arrive on the grant
 subscription with no `catalogueHead` from `peer.poll_interval`. A grant
-set larger than 64 KiB arrives as frames cut inside that bound and resumed with `after`,
-and the subscription stays open. A new
+set larger than 64 KiB arrives as frames cut inside that bound. An
+incomplete frame keeps the stream cursor and resumes with `page`. The
+subscription stays open. A new
 message on an opened chat arrives on `conversation.subscribe` the same
 way. A commit that leaves the bounded view unchanged still sends the
 record-hint frame, and the copy that follows it puts the new records in
@@ -1357,17 +1193,9 @@ Part of docs/design/access-grants.md.
 
 ## Deliver
 
-The follower stores a follow rule per peer: which granted conversations to
-replicate, and how much to keep. Subscribe and the cache cover that
-intersection. The default is none until the person chooses. Changing the
-rule is an explicit reset of the local replica. The rule cannot widen a
-grant, and the grantor is not sent the rule.
-
-The rule may name more than eight conversations. The connection still
-subscribes to at most eight and lets the least recently opened go. A chat
-let go stays a local replica and resumes from its cursor when opened
-again. The rule does not open a ninth `conversation.subscribe` and does
-not start a poller.
+The contract is Live follow. The delta is the follower's follow rule. The
+default is none until the person chooses. The rule cannot widen a grant,
+and the grantor is not sent the rule.
 
 ## Gate
 
@@ -1390,103 +1218,10 @@ Part of docs/design/access-grants.md.
 
 ## Deliver
 
-Delivery states follow the webhook outbox table in Lifecycles. This slice
-does not add a delivery state.
-
-The owner issues an integration principal with `credential.issue`, holding
-`conversation.read`, and registers an HTTPS URL and a 32-byte mac key on
-it. The credential has no product session and no receiver binding, so it
-is not admitted as a paired reader.
-
-`conversation.share` gains that credential as a target beside a paired
-receiver. The grant row is the same fact, keyed by the integration
-principal, with no receiver. The decision is one active registration per
-integration principal. `credential.issue` only adds a credential, so a
-second registration would POST to a URL the owner did not register for
-the first. While a registration is active, another `credential.issue`
-for that principal is refused and writes no credential and no
-registration. Revoking the credential stops that registration. A later
-issue creates one new registration, with a new URL and mac key. Delivery
-uses that registration. The gateway POSTs events for
-the granted conversation only. The payload is what that capability set
-may see.
-
-Sign with HMAC-SHA256 of three length-prefixed fields, in order: the
-ASCII decimal of Unix time in milliseconds, the delivery id's UTF-8, and
-the exact HTTP body bytes. Each field is a big-endian unsigned 64-bit
-length, then that many bytes. The MAC is 32 bytes, sent as `v1=` plus 64
-lowercase hex characters in `Nessa-Webhook-Signature`.
-`Nessa-Webhook-Timestamp` and `Nessa-Webhook-Id` carry the first two
-fields. The key stays out of the body. The receiver verifies from those
-headers and the raw body. Retry with bounded backoff and the same
-delivery id while that attempt's epoch still allows delivery.
-
-The conversation record stream is the source of truth. The decision is a
-durable replay cursor, one per registration and conversation: the last
-checkpoint of that conversation whose outbox row committed. The cursor
-starts unset. An event is written to the registration's outbox before the
-attempt waits for the permit: delivery id, registration, and source
-checkpoint (conversation id, incarnation, position), state `queued`. That
-write also sets the cursor to the same checkpoint, and the two commit
-together. One writer does that in checkpoint order. The cursor moves only
-to the next contiguous checkpoint. The conversation commit stays in the conversation store. A
-crash after that commit and before the outbox write leaves the cursor
-behind the source. Restart, before it admits work, reads each granted
-conversation from its cursor, or from the start when the cursor is unset,
-and inserts a `queued` row for every checkpoint that does not have one.
-A checkpoint that already has a row keeps that delivery id. A crash while
-waiting leaves the `queued` row. The decision is that `retry scheduled`
-is a non-terminal outbox state with `due_at`. A retryable response writes
-that state and the due time on the same row, in one write, and keeps the
-delivery id. Restart admits each `queued` row, and each `retry scheduled`
-row whose `due_at` has arrived, in checkpoint order, and repeats that
-delivery id. A row whose `due_at` is still ahead waits until then.
-
-The sender does not follow redirects. A 3xx is not a delivery. The attempt
-records `not sent` or `retry scheduled`, and the next POST, when the epoch
-still allows it, goes to the registered URL only. The signature headers
-are written on that POST and are not sent to another origin. A redirect
-to HTTPS is still not followed.
-
-Revoke and delivery share one permit for the registration. An attempt
-takes the permit, reads the grant epoch, and reads whether the integration
-credential is still current. Revoked or expired is not current. The
-grant epoch does not move when the credential is revoked or expires. An
-epoch that no longer allows delivery, or a credential that is not
-current, records `not sent` and writes nothing. Before any POST byte is
-written, the attempt durably records `sending` with the target, the
-delivery id, the epoch, and that the credential was current. If that
-write fails, the POST is not written and the outcome is `not sent` with
-cause audit unavailable. After `sending` commits, the attempt writes the
-POST. `sent`, `timed out`, and `not sent` are the terminal records. They
-do not replace `sending`. `retry scheduled` is the outbox state above,
-with `due_at`, and does not close the delivery. If the terminal write
-fails after the response, or the process
-stops before it commits, restart finds `sending` with no later record,
-does not POST that delivery id again, and appends outcome unknown with
-cause audit unavailable after send. The `sending` row stays. The effect
-is not relabeled `sent`.
-The attempt holds the permit at most until `webhook.post_deadline`, a row
-this slice adds to `docs/limits.md`. The clock starts when the attempt
-takes the permit. At the deadline the sender closes its side of the POST,
-records `timed out`, and drops the permit. Bytes already written may still
-reach the receiver. That late arrival is not recorded as `sent` and does
-not schedule a retry. Revoke waits for the attempt's outcome or for that
-deadline, whichever comes first. Revoke does not cancel a write that
-finishes inside the deadline. Grant revoke then removes the grant row and
-records delivering, then stopped, with the revoke as cause, the owner as
-initiator, and the delivery id it waited for.
-`credential.revoke` and credential expiry take the same permit. They do
-not advance the grant epoch. After the permit is free they stop the
-registration the same way, with cause credential revoked or expired.
-Grants may still name that principal. No later attempt is sent.
-Unsharing each conversation is not required.
-A retry is a new admission. It reads the epoch and the credential again,
-and is not sent after either revoke. An
-attempt that has not taken the permit when revoke commits is not sent.
-Each attempt records the target, the delivery id, the epoch it read, the
-outcome (sent, retry scheduled, timed out, or not sent), and the cause.
-`retry scheduled` names the due time stored on the outbox row.
+The contract is Webhooks and the webhook outbox table. This slice adds
+`webhook.post_deadline` to `docs/limits.md`. It does not add a delivery
+state. A failed `sending` write is `not sent` only after that row commits.
+Until then the row stays `queued` and the permit stays held.
 
 ## Gate
 
@@ -1506,8 +1241,9 @@ without waiting further. A 3xx is not followed and is not a delivery. The
 signature is not sent to the redirect target. A POST whose response is
 success and whose terminal audit write fails leaves `sending` in place,
 sends no second POST of that delivery id, and records outcome unknown.
-Restart from that row does the same. A failed pre-send write sends
-nothing. A crash while an event waits for the permit leaves its `queued`
+Restart from that row does the same. A failed `sending` write sends
+nothing only after the row commits `not sent`. If that write does not
+commit, the row stays `queued` and the permit is not dropped. A crash while an event waits for the permit leaves its `queued`
 outbox row, and restart delivers that delivery id. A crash after the
 conversation commit and before the outbox write is recovered from the
 replay cursor: restart inserts the missing `queued` row, and a checkpoint
@@ -1534,56 +1270,9 @@ Part of docs/design/access-grants.md.
 
 ## Deliver
 
-Pairing phases and discovery install follow the peer table in Lifecycles.
-This slice does not add a pairing phase.
-
-With at least one paired gateway that has a discovery key, this gateway
-may announce itself on the local network. The announcement carries a dial
-address, a port, and one rotating token per such peer. The token is
-HMAC-SHA256 over the canonical bytes of the current time window, the dial
-address, and the port. The window and the port are unsigned big-endian
-integers. The address is one numeric form. A token copied onto a different
-address or port does not match.
-
-Shipped pairing does not store this key. `PeerRecord` keeps the peer key,
-the pin, the address, the relay, the intent, and the phase; an Active
-phase also keeps the credential id and the receiver. `DeviceCredential`
-keeps the dialer's private key, the gateway pin, the intent, the
-credential id, and the receiver. The enrollment PAKE does not leave a MAC
-key on either record. #705 does not supply the HMAC key.
-
-After the enrollment is Active, both sides already have a pinned TLS
-session. Install is one generation, retried until both have stored the
-same MAC key. Each side offers an ephemeral X25519 public key, durably
-writes `offered` (generation, its private key, the peer's public key),
-and sends `stored` only after that write commits. After both `stored`
-messages, each derives the MAC key with HKDF-SHA256, durably replaces
-`offered` with `installed` (generation and MAC key), and sends
-`installed`. The ephemeral private key leaves in that write. A dropped
-session retries the same generation: `offered` resends its stored public
-key, `installed` resends `installed`, and a side with nothing stored
-accepts the same generation. A new generation does not start while this
-one is unfinished. Neither side derives before the other's `offered`
-write has been acked. The dialing gateway stores the state on the peer
-file beside the pin. The granting gateway stores it on the pairing record
-that already keeps that peer's pin. The peer-file schema version bumps
-once. The key is not written into the credential, the grant, or the
-announcement. A peer row from before this slice has no discovery key.
-Alpha does not invent one. That peer is left out of the announcement and
-cannot match a token until it is paired again under this slice.
-
-The pinned key, its fingerprint, and any other stable gateway id are not
-in the announcement. Neither are the owner name, the organization,
-conversation ids, directories, or grants. A paired peer recomputes the
-HMAC for each pinned peer that has a discovery key, for the current window
-and one window on either side, using the address and port in the
-announcement, and matches. The connection uses the existing pinned
-credential. Pairing still requires the one-use code. The window length is
-a row in `docs/limits.md`. With no discovery key, send nothing.
-
-The dial address, the port, the network source, and the number of tokens
-stay visible. An observer can correlate announcements by them. The token
-is not a stable id.
+The contract is LAN announcement and the peer table. The delta is the
+discovery field on the existing peer record, and the window-length row in
+`docs/limits.md`. This slice does not add a pairing phase.
 
 ## Gate
 
