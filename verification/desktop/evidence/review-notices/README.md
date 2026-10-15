@@ -1,14 +1,21 @@
 # Review-notice verification (#918, #920)
 
-Semantic source: `8f2fd076ea1608bd925375584e2235a73cb9c79c`.
-Environment: local macOS, Vite development mode, bundled Chromium and WebKit,
-columns layout. The gateway was rebuilt from that source; `MCP_LIVE_NESSA`
-selected the built executable. These captures are cropped and resized versions
-of the scripted fixture's screenshots, saved as small JPEGs.
+Current notice source: `ce0dc3bffee2697bfb9775bd39dbd8499fb257cc`.
+Base: main `4219790db1827ee841eacfaf73c00605eec6bc07`.
 
-The run used `pnpm test:e2e:scripted -- --channel bundled --evidence <directory>`.
-The script's three checks passed in both engines. Counts below are combined
-across engines, including shared setup where the check has it.
+The gateway was rebuilt from assembly
+`0d7bd5e6218af559dde93295f85b05009a91e6e0`, tree
+`5a1e5be8d9e83a6587449cd84c9e2a8da74ce4f7`. It combines that main, the current
+notice source, and audit source `c11524cb6693fe50784b97ed3e8a8f898e8f7966`
+from #928. Both integrations were conflict-free. This verifies the final notice
+implementation; #928's later attachment-observation correction remains under separate
+verification and is not claimed by this run. The evidence-only follow-up changes
+no executable source.
+
+Environment: local macOS, Vite development mode, bundled Chromium and WebKit,
+columns layout. `MCP_LIVE_NESSA` selected the newly built gateway.
+`pnpm test:e2e:scripted -- --channel bundled --evidence <directory>` passed all
+three checks in both engines. Counts combine engines and shared setup.
 
 | Check | Chromium | WebKit | Assertions |
 | --- | --- | --- | --- |
@@ -25,29 +32,66 @@ scripted-scenarios: 8/8 held
 Verdict: pass
 ```
 
-The sole labelled harmless console line was a Chromium `/browser/check`
-`net::ERR_ABORTED` after a 204 response, the existing #485 case. No performance
-budget claim is made by this functional run.
+Only the existing harmless #485 Chromium `/browser/check` aborted response after
+HTTP 204 appeared in the console. This functional run makes no performance claim.
 
-## Permission notices
+## Current captures
 
-These show the permitted fixture recipient's waiting notice and review card.
-Metadata correlation, policy refusal, and membership changes are exercised by
-the Rust regressions and source reversals below.
+These four inspected JPEGs replace the earlier integrated captures. They are
+resized to 1440 pixels wide from this run's screenshots. Permission images show
+the permitted recipient's notice and review card; gateway images show the live
+conversation flow. The Rust wire regressions establish membership revocation and
+connection-local invalidation rather than screenshots alone.
 
-![Waiting review in Chromium](permission-review-chromium.jpg)
+![Current permission review in Chromium](integrated-permission-chromium.jpg)
 
-![Waiting review in WebKit](permission-review-webkit.jpg)
+![Current permission review in WebKit](integrated-permission-webkit.jpg)
 
-## Gateway conversations
+![Current gateway in Chromium](integrated-gateway-chromium.jpg)
 
-![Gateway conversation in Chromium](gateway-live-chromium.jpg)
+![Current gateway in WebKit](integrated-gateway-webkit.jpg)
 
-![Gateway conversation in WebKit](gateway-live-webkit.jpg)
+## Current source checks
 
-## Regression and reversal evidence
+The exact notice source passed 70 review tests, 26 Cedar policy tests and
+295 socket tests, with one existing latency measurement ignored. These suites
+overlap. The exact seven-package CI selection passed all-target Clippy with
+`-D warnings`; formatting and architecture checks passed. A fresh independent
+full source review found no actionable findings at any priority.
 
-The fixed source passed `cargo test -p nessa-server --lib review`: 66 tests.
+The actual long-lived socket regression checks owned/foreign notices, demotion,
+promotion, disabled membership, unchanged board generation and increasing wire
+sequence. Two live sockets and policy-read counts prove one connection's refresh
+does not wake another publisher, while shared visibility and board changes still
+wake both. Separate cases retain authority changes preloaded or received during
+metadata filtering and blocked publication, and end on sender closure. Each
+connection may still observe the global registry revision once; the correction
+removes repeated global fanout rather than claiming principal-specific revisions.
+
+The PR discussion tracks current-source reversal execution and its disposition.
+The historical reversals below do not establish the local-watch guarantee.
+Current-head CI and external review remain separate merge gates.
+
+## Earlier captures and authority-refresh evidence (historical)
+
+The original `permission-review-*` and `gateway-live-*` JPEGs were captured from
+source `8f2fd076ea1608bd925375584e2235a73cb9c79c`. The first integrated captures
+were committed at `8a3ac72fd15ae9fe4d67683c89f620bdfce88fe4`, from assembly
+`2f901190325d2b420e0e21f1cb5e6fbaa9db2e48` containing notice source
+`42f2c982dd3767fe11fb202ecdc6453b87e15000`, main `4219790` and audit `c11524c`.
+That run also passed both engines with counts 16/16, 13/13 and 8/8.
+
+Source `42f2c982dd3767fe11fb202ecdc6453b87e15000` passed 67 review tests,
+26 policy tests and 292 socket tests (one existing latency measurement ignored),
+plus formatting, architecture and package Clippy. Its four executed reversals
+removed authority invalidation, forced stable-revision invalidation, substituted
+role-only observation, and discarded the authentication revision. Each failed its
+assertion, followed by exact source restoration. Those earlier results do not
+verify the later local-watch correction.
+
+## Earlier metadata and policy reversals (historical)
+
+Source `8f2fd076ea1608bd925375584e2235a73cb9c79c` passed `cargo test -p nessa-server --lib review`: 66 tests.
 The complete Cedar access-policy suite passed 26 tests. The complete socket
 suite passed 291 tests, with its existing multi-minute latency measurement
 ignored. These suites overlap.
@@ -85,65 +129,3 @@ The repeated exported baseline and restored runs excluded only
 `app_reviews_never_cost_the_agents_own_however_the_view_is_filled`, which had
 already passed in the original 66-test run. No review-notice regression was
 excluded.
-
-## Main integration
-
-Main `cad51811ab7049138c00ac2109b8c6f044bac991` added only method-classification
-design documentation after review base `9812c3c`. A conflict-free merge-tree
-integration produced `a00c5731a02b4c8f300c80b2be83741ce55c7ac6`; runtime, UI,
-protocol, scripts, manifests, lockfiles and workflow blobs are identical to the
-semantic source above.
-
-## Integrated verification after the authority refresh correction
-
-The gateway was rebuilt from local assembly `2f901190325d2b420e0e21f1cb5e6fbaa9db2e48`,
-tree `8439093be5c5262ef89f9c34a93822224a23fa17`. It combines main
-`4219790db1827ee841eacfaf73c00605eec6bc07`, notice source
-`42f2c982dd3767fe11fb202ecdc6453b87e15000` (#925), and audit source
-`c11524cb6693fe50784b97ed3e8a8f898e8f7966` (#928). Both merges were conflict-free.
-The evidence-only commit that adds this section changes no executable source.
-
-`MCP_LIVE_NESSA` selected that newly built gateway, with the bundled browser
-channel in local macOS/Vite development mode. All three checks passed in both
-Chromium and WebKit. Counts are combined across engines and shared setup.
-
-```text
-mcp-apps-gateway: 16/16 held
-gateway-window: 13/13 held
-ok    permission [chromium columns]
-ok    allow [chromium columns]
-ok    fail [chromium columns]
-ok    cancel [chromium columns]
-ok    permission [webkit columns]
-ok    allow [webkit columns]
-ok    fail [webkit columns]
-ok    cancel [webkit columns]
-scripted-scenarios: 8/8 held
-Verdict: pass
-```
-
-The same assembled source passed the exact seven-package all-target CI Clippy
-selection with `-D warnings`. Its normal build and Clippy emitted the existing
-allowed long-running constant-evaluation advisory in the lease-protocol macro.
-The browser console retained only the known harmless #485 aborted 204 response.
-
-These JPEG captures at 1440 pixels wide show the permitted recipient and normal
-gateway flow. The long-lived Rust wire regression proves revocation on the same
-socket with unchanged board generation: authority revisions trigger replacement,
-a new revision with the same role wakes it, stable revisions stay quiet, and disabled
-membership closes with typed authorization loss. Fresh source review was clean.
-The source passed 67 review tests, 26 policy tests and 292 socket tests (one existing
-latency measurement ignored), plus formatting, architecture and package Clippy.
-
-Four separate executed reversals failed their assertions, then exact source was
-restored: removing authority invalidation, always invalidating a stable revision,
-observing role instead of committed revision, and discarding authentication's
-initial revision. These are distinct from the earlier seven baseline probes.
-
-![Integrated permission review in Chromium](integrated-permission-chromium.jpg)
-
-![Integrated permission review in WebKit](integrated-permission-webkit.jpg)
-
-![Integrated gateway in Chromium](integrated-gateway-chromium.jpg)
-
-![Integrated gateway in WebKit](integrated-gateway-webkit.jpg)
