@@ -893,3 +893,78 @@ fn an_exporter_panic_keeps_the_span_and_later_exports() {
         ["chat", "invoke_agent"]
     );
 }
+
+#[test]
+fn a_closed_turn_keeps_its_agent_span_when_open_turns_hold_captured_text() {
+    let budget = 8 * 1024 * 1024;
+    let store = LocalTraceStore::with_capture(ContentCapture::on());
+    let mut closed = turn(&store);
+    closed.begin_turn(
+        at(1),
+        TurnIdentity::new(
+            "conversation-closed",
+            "execution-closed",
+            "anthropic",
+            "claude",
+            "claude-sonnet",
+            None,
+        ),
+        "closed-prompt",
+    );
+    closed.finish(at(2), FinishReason::Stop);
+
+    let mut open_a = turn(&store);
+    open_a.begin_turn(
+        at(3),
+        TurnIdentity::new(
+            "conversation-open-a",
+            "execution-open-a",
+            "anthropic",
+            "claude",
+            "claude-sonnet",
+            None,
+        ),
+        &format!("open-a{}", "a".repeat(budget / 2)),
+    );
+    open_a.tool(
+        at(4),
+        ToolFact::new(
+            "tool-a",
+            "Read",
+            "function",
+            ToolProgress::Completed,
+            None,
+            None,
+        ),
+    );
+
+    let mut open_b = turn(&store);
+    open_b.begin_turn(
+        at(5),
+        TurnIdentity::new(
+            "conversation-open-b",
+            "execution-open-b",
+            "anthropic",
+            "claude",
+            "claude-sonnet",
+            None,
+        ),
+        &format!("open-b{}", "b".repeat(budget / 2)),
+    );
+    open_b.tool(
+        at(6),
+        ToolFact::new(
+            "tool-b",
+            "Read",
+            "function",
+            ToolProgress::Completed,
+            None,
+            None,
+        ),
+    );
+
+    assert!(store
+        .read("conversation-closed")
+        .iter()
+        .any(|span| span.operation() == "invoke_agent"));
+}

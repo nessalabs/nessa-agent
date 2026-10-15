@@ -154,8 +154,10 @@ struct Inner {
 ///
 /// The store keeps the most recent 2048 finished spans, and the same number of
 /// child spans from turns that have not closed. Older spans are dropped one at
-/// a time. Captured message and tool text is capped at 8 MiB across both;
-/// a span that exceeds that on its own is stored without the oversized text.
+/// a time. Captured message and tool text is capped at 8 MiB across both.
+/// Older finished spans go first. The last finished span stays, and open-turn
+/// children go after that. A span that exceeds the budget on its own is stored
+/// without the oversized text.
 /// A turn still running is absent until its agent span closes. Reads do not
 /// block on the provider.
 pub struct LocalTraceStore {
@@ -471,9 +473,9 @@ fn enforce_bounds(inner: &mut Inner) {
         drop_front(&mut inner.withheld, &mut inner.content_bytes);
     }
     while inner.content_bytes > CONTENT_BUDGET {
-        if !inner.spans.is_empty() && !(inner.spans.len() == 1 && inner.withheld.is_empty()) {
+        if inner.spans.len() > 1 {
             drop_front(&mut inner.spans, &mut inner.content_bytes);
-        } else if inner.withheld.len() > 1 {
+        } else if !inner.withheld.is_empty() {
             drop_front(&mut inner.withheld, &mut inner.content_bytes);
         } else {
             break;

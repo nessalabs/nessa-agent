@@ -10,8 +10,10 @@ ones for a conversation, in the order they closed. A turn still running is
 absent until its agent span closes. The store keeps the most recent 2048
 finished spans, and the same number of child spans from turns that are still
 open. Those children are dropped one span at a time, oldest first. Captured
-message and tool text is capped at 8 MiB across finished and open turns. A
-span whose own captured text exceeds that is stored without the oversized
+message and tool text is capped at 8 MiB across finished and open turns.
+Older finished spans are dropped while more than one remains; the last
+finished span stays, and open-turn children are dropped after that. A span
+whose own captured text exceeds that is stored without the oversized
 attribute.
 
 `SpanExporter` is the plug for a later user-chosen OTLP endpoint.
