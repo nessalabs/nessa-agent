@@ -2500,7 +2500,7 @@ export interface ConversationSubscriptionEnded {
   reason: ConversationSubscriptionEndReason
   /** For refused: the conversation error code, or unauthorized or forbidden when access was refused. */
   code?: string
-  /** Last semantic event cursor written; resume from the last batch actually applied. */
+  /** Last semantic event cursor written, or the supplied after cursor if no batch was written. A written cursor records socket delivery, not application processing. Resume from your application's own last-applied batch cursor. */
   lastEventCursor?: ConversationEventCursor
   /** Where a view subscription resumes from: the cursor of the last view frame written or, when none was, the after it was opened with. Absent for a list, and for a view subscription opened without after that wrote no frame. */
   lastDelivered?: ConversationViewCursor
