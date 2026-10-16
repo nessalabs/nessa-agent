@@ -148,7 +148,9 @@ pub use catalogue_watch::{
 };
 mod access_policy;
 mod agent_tools;
-pub use agent_tools::{AgentToolAudit, AgentToolAuditRecord, AgentToolSource};
+pub use agent_tools::{
+    AgentToolAudit, AgentToolAuditRecord, AgentToolSource, MAX_AGENT_TOOL_ADMISSIONS,
+};
 mod app_call_policy;
 mod artifacts;
 mod catalogue_read;

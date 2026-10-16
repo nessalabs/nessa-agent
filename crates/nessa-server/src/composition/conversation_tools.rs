@@ -409,18 +409,13 @@ fn failed(code: &str) -> Value {
     json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":true})
 }
 
-/// An omitted execution selects currently running work; queued work requires an
-/// explicit execution ID so a default stop cannot withdraw a future turn.
+/// An omitted execution selects the running parent turn. Queued work requires
+/// an explicit identity; an injected steering child is not the active turn.
 fn active_execution(view: &ConversationView) -> Option<String> {
     view.messages
         .iter()
         .rev()
-        .find(|message| {
-            matches!(
-                message.status,
-                ConversationMessageStatus::Running | ConversationMessageStatus::Injected
-            )
-        })
+        .find(|message| matches!(message.status, ConversationMessageStatus::Running))
         .map(|message| message.execution_id.clone())
 }
 

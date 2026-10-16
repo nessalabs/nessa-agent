@@ -12,7 +12,9 @@ repeat the call with `after` to continue. With no cursor it starts from now; `re
 beginning. `replay` and `after` are mutually exclusive. After sending a task,
 use replay when there was no prior checkpoint so a fast completion is included.
 `stop_thread` stops the named execution, or captures the current active execution
-when `executionId` is omitted. A stop does not delete or close the conversation.
+when `executionId` is omitted. Only a Running turn is selected: a later Injected
+steering child does not replace its running parent, and queued work requires an
+explicit execution identity. A stop does not delete or close the conversation.
 
 An optional `requestId` makes an intentional command retry recoverable. Creation,
 submission and stop use the existing durable command coordinators. Default
@@ -65,8 +67,16 @@ logical input budget because a stored semantic fact may span physical records.
 Only the metadata projection is returned, and tool result JSON is bounded to
 32 KiB before the MCP text/structured duplication. At most four observation calls
 run across the built-in tool server, leaving capacity under the relay's eight
-concurrent calls per connection. Initial source certification has a ten-second
-preparation bound. Idle reads poll at up to 250 ms for at most `waitMs` (maximum
+concurrent calls per connection. Independently, one conversation service admits
+at most eight physical source-admission owners across all tools. The permit is
+acquired without waiting before spawning and is retained inside the detached
+owner until metadata/admission/audit work physically ends. Cancelling an observer
+releases its observation slot but does not free that physical permit. Further
+admission refuses unavailable while all eight are retained. Shutdown still waits
+for retained service admission, or reports its existing bounded drain failure.
+Initial source certification has a ten-second preparation bound beginning before
+source admission; setup, reauthorization and reads share cancellation and their
+current phase deadline. Idle reads poll at up to 250 ms for at most `waitMs` (maximum
 30 seconds), and each read rechecks current target access. SDK cursor progression
 makes coalesced notices harmless; the tool keeps no subscription registry.
 
@@ -91,6 +101,8 @@ is not a claim that an external effect was rolled back.
 | Incomplete save, duplicate reads, cursor recovery | SDK committed-event reader owns visibility and replay; SDK record storage events tests. |
 | Slow or oversized observation | Reader permits, step/response budgets and timeout refuse explicitly. |
 | Delayed stop versus newer execution | Existing exact-execution stop coordinator owns cancellation; `tests/conversation/mutation_commands.rs`. |
+| Running parent followed by Injected steering child; idle with queued work | Default selector chooses only the Running parent, otherwise no active turn; `tests/composition/conversation_tools_subscription.rs`. |
+| Repeated observer cancellation during blocked source metadata | Four observation slots return, but eight detached source owners retain separate permits and service admission; the ninth fails before metadata I/O, and shutdown drains only after release; same tests. |
 
 Implementation ownership: `composition/conversation_tools.rs` owns MCP parsing,
 serialization and bounded polling; `conversation/application/service/agent_tools.rs`

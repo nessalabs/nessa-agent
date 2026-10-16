@@ -723,6 +723,8 @@ struct Inner {
     clock: Arc<dyn Clock>,
     /// Acknowledges a source turn's delegation decision before target work.
     agent_tool_audit: OnceLock<Arc<dyn AgentToolAudit>>,
+    /// Physical source admission owners retain their slot after response loss.
+    agent_tool_admissions: Arc<Semaphore>,
     /// Decides every command's admission to a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
@@ -1106,6 +1108,7 @@ impl ConversationService {
                 environment,
                 clock,
                 agent_tool_audit: OnceLock::new(),
+                agent_tool_admissions: Arc::new(Semaphore::new(super::MAX_AGENT_TOOL_ADMISSIONS)),
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),

@@ -2,7 +2,7 @@
 //! releases the caller and its reader slot without waiting for the blocked port.
 use super::*;
 use crate::conversation::application::{
-    ConversationDependencies, ConversationLimits, ProviderSessionErasers,
+    ConversationDependencies, ConversationLimits, ProviderSessionErasers, MAX_AGENT_TOOL_ADMISSIONS,
 };
 use crate::conversation::domain::Conversation;
 use crate::conversation_test_support::{
@@ -14,7 +14,9 @@ use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::{
     domain::{ConversationApprovalMode, ConversationModelId},
     projection::Projection,
-    view::{ConversationCapabilities, ConversationPending, ConversationPendingMode},
+    view::{
+        ConversationCapabilities, ConversationMessage, ConversationPending, ConversationPendingMode,
+    },
 };
 use nessa_sdk::application::agent_execution::sessions::{
     CommittedEventReader, EventFuture, SessionStorage, SessionStorageLease, StorageError,
@@ -271,4 +273,125 @@ async fn reader_open_reauthorization_and_read_obey_cancellation_and_setup_deadli
             service.shutdown().await.unwrap();
         }
     }
+}
+
+fn execution_message(execution: &str, status: ConversationMessageStatus) -> ConversationMessage {
+    ConversationMessage {
+        authentication_required: None,
+        required_work_failed: None,
+        parts: Vec::new(),
+        steering_offset: None,
+        event_count: 0,
+        retained_text: 0,
+        execution_id: execution.into(),
+        user_text: String::new(),
+        attachments: Vec::new(),
+        files: Vec::new(),
+        app: None,
+        steering_target: None,
+        status,
+        error: None,
+    }
+}
+
+#[test]
+fn default_stop_selects_running_parent_before_a_later_injected_steering_child() {
+    let mut view = Projection::new(
+        id().to_string(),
+        ConversationCapabilities::read_only(),
+        None,
+    )
+    .read();
+    view.messages.push(execution_message(
+        "running-parent",
+        ConversationMessageStatus::Running,
+    ));
+    let mut child = execution_message("injected-child", ConversationMessageStatus::Injected);
+    child.steering_target = Some("running-parent".into());
+    view.messages.push(child);
+    assert_eq!(active_execution(&view), Some("running-parent".into()));
+    view.messages[0].status = ConversationMessageStatus::Completed;
+    assert_eq!(
+        active_execution(&view),
+        None,
+        "an injected child alone is not the active turn"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn repeated_cancelled_observers_cannot_exceed_detached_source_capacity() {
+    let (service, _provider, metadata, _storage) = support::fixture(ConversationLimits::default());
+    let tools = ConversationTools::new();
+    tools.attach(service.clone());
+    let mut releases = Vec::new();
+    for attempt in 0..MAX_AGENT_TOOL_ADMISSIONS {
+        let (entered, read_entered) = oneshot::channel();
+        let (release, read_release) = oneshot::channel();
+        *metadata.metadata_load_gate.lock().unwrap() = Some((entered, read_release));
+        let (stop, stopped) = watch::channel(false);
+        let work = tokio::spawn(tools.call(
+            &SessionId::new(&id().to_string()).unwrap(),
+            format!("call-{attempt}"),
+            "subscribe".into(),
+            json!({"threadId":id().to_string(),"waitMs":30000}),
+            stopped,
+        ));
+        read_entered.await.unwrap();
+        stop.send_replace(true);
+        let result = tokio::time::timeout(Duration::from_secs(1), work)
+            .await
+            .expect("source cancellation must release the response")
+            .unwrap();
+        assert_eq!(result["structuredContent"]["error"], "cancelled");
+        assert_eq!(
+            tools.readers.available_permits(),
+            MAX_EVENT_READERS,
+            "the observation cap must not mask retained source owners"
+        );
+        releases.push(release);
+    }
+    let (entered, mut read_entered) = oneshot::channel();
+    let (_release, read_release) = oneshot::channel();
+    *metadata.metadata_load_gate.lock().unwrap() = Some((entered, read_release));
+    let (_stop, stopped) = watch::channel(false);
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        tools.call(
+            &SessionId::new(&id().to_string()).unwrap(),
+            "over-capacity".into(),
+            "subscribe".into(),
+            json!({"threadId":id().to_string()}),
+            stopped,
+        ),
+    )
+    .await
+    .expect("physical source capacity refuses without waiting");
+    assert_eq!(
+        result["structuredContent"]["error"],
+        error_code(&ConversationError::Unavailable).as_str()
+    );
+    assert!(
+        matches!(
+            read_entered.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ),
+        "capacity refusal must precede source metadata I/O"
+    );
+    drop(metadata.metadata_load_gate.lock().unwrap().take());
+    let owned = service.clone();
+    let mut shutdown = tokio::spawn(async move { owned.shutdown().await });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(1), &mut shutdown)
+            .await
+            .is_err(),
+        "the detached owners must still retain service admission during shutdown"
+    );
+    for release in releases {
+        let _ = release.send(());
+    }
+    tokio::time::timeout(Duration::from_secs(1), shutdown)
+        .await
+        .expect("shutdown drains after physical source work releases")
+        .unwrap()
+        .unwrap();
 }

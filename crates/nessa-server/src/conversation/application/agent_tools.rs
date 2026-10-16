@@ -2,6 +2,10 @@
 use super::{ConversationCaller, ConversationFuture};
 use nessa_protocol::conversation::domain::ConversationId;
 
+/// Detached source admissions retained at once across every tool and caller of
+/// one conversation service. A cancelled response does not free this capacity.
+pub const MAX_AGENT_TOOL_ADMISSIONS: usize = 8;
+
 /// One gateway-verified source turn. Tool arguments cannot construct this value.
 pub struct AgentToolSource {
     pub(super) caller: ConversationCaller,

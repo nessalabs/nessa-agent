@@ -31,8 +31,18 @@ impl ConversationService {
         if *stop.borrow() {
             return Err(ConversationError::Unavailable);
         }
+        // Acquire before spawning, and transfer ownership into the detached
+        // task. Source cancellation may release an observation slot, but not a
+        // physical source admission still waiting for metadata or audit I/O.
+        let physical = self
+            .inner
+            .agent_tool_admissions
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| ConversationError::Unavailable)?;
         let service = self.clone();
         tokio::spawn(async move {
+            let _physical = physical;
             let _admission = service.admit().await?;
             let record = load_conversation(service.inner.metadata.as_ref(), &source)
                 .await?
