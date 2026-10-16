@@ -535,7 +535,7 @@ async fn follow(
     mut control: SubscriptionControl,
 ) -> Result<Value, String> {
     let limit = args.limit.unwrap_or(DEFAULT_LIMIT);
-    let session = SessionId::new(&target.to_string()).map_err(|_| "invalid_request")?;
+    let session = SessionId::new(target.to_string()).map_err(|_| "invalid_request")?;
     let start = match args.after {
         Some(token) => EventStart::After(CommittedEventCursor::decode(&session, &token).map_err(
             |error| event_error_code(&ConversationEventError::Events(error)).to_owned(),
