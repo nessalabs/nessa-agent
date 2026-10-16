@@ -661,11 +661,12 @@ pub(crate) async fn issue(
     opening: &LeaseOpening,
     actor: &ActionContext,
 ) -> Result<(), LeaseIssueError> {
-    let earlier = manager
-        .snapshot()
-        .await
-        .and_then(|snapshot| snapshot.lease)
-        .and_then(|current| current.held().cloned());
+    let earlier = manager.snapshot_handle().await.and_then(|snapshot| {
+        snapshot
+            .lease
+            .as_ref()
+            .and_then(|current| current.held().cloned())
+    });
     let accounted = match &earlier {
         Some(lease) if needs_accounting(lease) => Some(environment.account(lease.id()).await),
         _ => None,

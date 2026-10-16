@@ -463,7 +463,7 @@ impl AgentWarmUp {
 async fn recorded_session_id(agent: &Agent) -> Option<String> {
     agent
         .session_manager()
-        .snapshot()
+        .snapshot_handle()
         .await
         .and_then(|snapshot| {
             snapshot
