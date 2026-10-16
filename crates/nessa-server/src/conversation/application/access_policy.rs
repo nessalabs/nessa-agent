@@ -119,7 +119,7 @@ pub enum AccessAction {
 
 impl AccessAction {
     /// Every action, in declaration order.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::Locate,
         Self::Act,
         Self::Erase,

@@ -29,10 +29,9 @@ use super::{
 };
 use crate::conversation::application::{
     binding_of, error_code, paired_facts, AccessAction, AuditedReviewSelection,
-    ConversationAccessPolicyEvaluator, ConversationError, OwnerAccess, PairedAccess, PairedParty,
-    PairedRefusal, Reader, ReceiverBinding, RequestShape, ReviewNoticeAuditCause,
-    ReviewNoticeAuditFailure, SelectReviewNotice, ShareConversation, ShareGrant,
-    MAX_POLICY_REVISION,
+    ConversationAccessPolicyEvaluator, ConversationError, PairedAccess, PairedParty, PairedRefusal,
+    Reader, ReceiverBinding, RequestShape, ReviewNoticeAuditCause, ReviewNoticeAuditFailure,
+    SelectReviewNotice, ShareConversation, ShareGrant, MAX_POLICY_REVISION,
 };
 use crate::conversation::domain::{CommandHosts, ToolChoice, ToolPolicy, ToolPreset, ToolRules};
 use crate::conversation::infrastructure::PublishedReview;
