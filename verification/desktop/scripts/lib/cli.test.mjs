@@ -314,6 +314,8 @@ describe("run-all's sum", () => {
       "clock-snapshots",
       "mcp-apps",
       "approval-deadline",
+      "send-failure",
+      "refused-messages",
     ])
     assert.deepEqual(checksUnder("prod", ["smoke", ...devServerOnlyChecks]), {
       run: ["smoke"],
