@@ -87,7 +87,7 @@ verification/
         browser.mjs         launch Chromium/WebKit, seed preferences, keep page diagnostic queues private
         page-lines.mjs      report each collected page event through its step or close owner
         page-lines.test.mjs queue-free page API, classification, once-only reporting and concurrent attribution
-        workspace.mjs       open panes, read pane rects and focus, lift a pane, rect containment, a model rule or value read in the page
+        workspace.mjs       open panes and completed tool work, read pane rects and focus, lift a pane, rect containment, a model rule or value read in the page
         workspace.test.mjs  a measured drop must change pane order and remove its carried copy (#370)
         safe-area.mjs       the per-frame safe-area sampler
         perf.mjs            rAF gaps, Long Animation Frames, long tasks, throttling, calibration

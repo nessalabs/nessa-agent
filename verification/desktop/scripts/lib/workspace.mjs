@@ -7,6 +7,13 @@
 import { CannotRun } from "./cli.mjs"
 import { css, keys, names, preferenceEvents, storage } from "./selectors.mjs"
 
+/** Open completed tool runs before inspecting their individual transcript steps. */
+export async function revealTranscriptWork(page) {
+  for (const toggle of await page.locator(css.transcriptWorkToggle).all()) {
+    if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click()
+  }
+}
+
 /** Every pane's key, rect and focus, in document order. */
 export function panes(page) {
   return page.evaluate(

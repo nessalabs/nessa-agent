@@ -27,13 +27,15 @@ original typed Metadata error without inventing a policy decision or dispatch.
 Existing tests retain missing-source, pre-cancelled-source, audit failure, and
 caller-loss coverage.
 
-Direct rustfmt and git diff whitespace checks passed. Cargo was deliberately not
-run in this isolated checkout because the coordinator owns active protocol/build
-verification. Compilation, regression execution, independent review, and mutation
-proof remain with the coordinator after integration.
+Coordinator verification on assembled source 302967fe: the four-case regression
+and all nine `agent_tool` tests pass, including the actual MCP relay path. A fresh
+independent review reports no actionable findings. Normal product generation and
+all 67 protocol tests, formatting, type checking, and the strict seven-package
+Clippy selection pass.
 
-Suggested mutation: restore the early load's `let record =` binding and remove
-only the late reload before Cedar. Keep the new regression unchanged. Its fenced
-case should fail with successful target creation instead of NotFound; restore
-fresh source and rerun green. Relevant filters: the new exact regression,
-agent_tool, and composition::conversation_tools::subscription_tests.
+Completed mutation: restored the early load's `let record =` binding and removed
+only the late reload before Cedar, asserting the changed hunk. The unchanged
+regression failed at the fenced case with `Ok(())` after target creation, rather
+than the required NotFound (exit 101). Restored committed source with fresh mtime
+and byte equality; the regression passed (exit 0), and the worktree was clean.
+An earlier interrupted mutation was restored and is not claimed as proof.
