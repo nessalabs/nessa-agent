@@ -5895,9 +5895,13 @@ pub use artifact_fetch::{
 mod artifact_publish;
 pub use artifact_publish::{PublishAnswer, PublishCall, PublishCallRefusal};
 mod environment_tools;
+mod event_read;
 mod notes;
 pub use environment_tools::{
     CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE,
+};
+pub use event_read::{
+    event_error_code, project_events, validate_event_cursor, ConversationEventError, ThreadEvent,
 };
 
 mod app_calls;

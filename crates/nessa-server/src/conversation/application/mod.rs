@@ -272,6 +272,9 @@ pub use record_read::{
     ReadRecords, RecordHead, RecordReadError, RecordReadFuture, RecordReadLease,
     RecordReadOperation, RecordReadResponse, RecordReadSource, RecordReadValue,
 };
+pub use service::{
+    event_error_code, project_events, validate_event_cursor, ConversationEventError, ThreadEvent,
+};
 pub use service::{CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE};
 pub use service::{
     ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,

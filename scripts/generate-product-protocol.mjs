@@ -295,12 +295,12 @@ for (const [name, def] of Object.entries(schema.$defs)) {
   if (def.enum) {
     const pascal = (value) =>
       value
-        .split("_")
+        .split(/[_.-]/)
         .map((p) => p[0].toUpperCase() + p.slice(1))
         .join("")
     ts += `export const ${name} = ${JSON.stringify(Object.fromEntries(def.enum.map((v) => [pascal(v), v])))} as const\nexport type ${name} = typeof ${name}[keyof typeof ${name}]\n`
     let enumRs = ""
-    enumRs += `#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]\n#[serde(rename_all = "snake_case")]\npub enum ${name} {${def.enum.map(pascal).join(",")}}\n`
+    enumRs += `#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]\n#[serde(rename_all = "snake_case")]\npub enum ${name} {${def.enum.map((v) => `${/[.-]/.test(v) ? `#[serde(rename = ${JSON.stringify(v)})] ` : ""}${pascal(v)}`).join(",")}}\n`
     // Shared payload outcomes need no separate string-code API.
     if (!sharedOutcomes.has(name) || !payloadOutcomes.has(name) || def["x-close-policy"])
       enumRs += `impl ${name} { pub fn as_str(self) -> &'static str { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${JSON.stringify(v)}`).join(",")} } } }\n`
@@ -722,6 +722,16 @@ ts += `${doc(
 ts += `${doc(
   "Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift.",
 )}export const bounds = ${JSON.stringify(bounds)} as const\n`
+ts += `export const eventSubscriptionBounds = ${JSON.stringify({
+  maxCursorCharacters: schema.$defs.ConversationEventCursor.maxLength,
+  maxBatchEvents: schema.$defs.ConversationEvents.properties.events.maxItems,
+  ...Object.fromEntries(
+    ["executionId", "toolId", "name", "status", "outcome"].map((field) => [
+      `max${field[0].toUpperCase()}${field.slice(1)}Characters`,
+      schema.$defs.ConversationEvent.properties[field].maxLength,
+    ]),
+  ),
+})} as const\n`
 for (const [kind, entries] of [
   ["Method", productMethods],
   ["Event", manifest.events],

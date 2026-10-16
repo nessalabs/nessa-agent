@@ -10,9 +10,14 @@
 
 mod connection;
 mod delivery;
+mod events;
 mod target;
 
 pub(super) use connection::ConnectionSubscriptions;
 pub(super) use delivery::{SubscriptionDeliveries, SubscriptionFrame};
+#[cfg(test)]
+pub(in crate::product) use events::read_event;
+#[cfg(test)]
+pub(in crate::product) use target::Target;
 #[cfg(test)]
 pub(crate) use target::LIST_REREAD_FLOOR;

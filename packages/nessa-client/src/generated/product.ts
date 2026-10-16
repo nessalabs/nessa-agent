@@ -2407,6 +2407,8 @@ export interface ConversationSubscriptionEnded {
   reason: ConversationSubscriptionEndReason
   /** For refused: the conversation error code, or unauthorized or forbidden when access was refused. */
   code?: string
+  /** Last semantic event cursor written; resume from the last batch actually applied. */
+  lastEventCursor?: ConversationEventCursor
   /** Where a view subscription resumes from: the cursor of the last view frame written or, when none was, the after it was opened with. Absent for a list, and for a view subscription opened without after that wrote no frame. */
   lastDelivered?: ConversationViewCursor
 }
@@ -2592,6 +2594,57 @@ export interface PermissionReviewWaiting {
   /** Waiting reviews, oldest first, at most 128. */
   reviews: PermissionReviewNotice[]
 }
+/** Committed semantic facts. A scheduling start is distinct from queued input; tool state is provider observation, not proof of physical effects; turn end is local settlement. */
+export const ConversationEventKind = {
+  TurnAccepted: "turn.accepted",
+  TurnStarted: "turn.started",
+  TurnEnded: "turn.ended",
+  ToolUpdated: "tool.updated",
+  StateChanged: "state.changed",
+} as const
+export type ConversationEventKind =
+  (typeof ConversationEventKind)[keyof typeof ConversationEventKind]
+/** Opaque SDK cursor bound to one conversation and stream incarnation. Save only after applying the batch. Reuse unchanged to resume; socket sequence numbers are not cursors. */
+export type ConversationEventCursor = string
+/** Metadata projected from one complete committed semantic fact. No prompt, thinking, tool arguments or results are included. */
+export interface ConversationEvent {
+  /** Stable semantic event identity, identical on replay. */
+  id: ConversationEventCursor
+  /** Opaque checkpoint after applying this event or batch. */
+  cursor: ConversationEventCursor
+  /** The semantic event kind. */
+  kind: ConversationEventKind
+  /** Execution this fact belongs to, when any. */
+  executionId?: string
+  /** Provider tool identity within its execution, when any. */
+  toolId?: string
+  /** Tool name when observed, bounded metadata only. */
+  name?: string
+  /** Observed lifecycle or tool status. */
+  status?: string
+  /** Local settlement outcome; this is not a provider acknowledgement. */
+  outcome?: string
+}
+/** Follow committed semantic events without opening an Agent. Replay uses complete saved facts and explicit gap refusals; default is future events. Stop with conversation.unsubscribe. */
+export interface ConversationSubscribeEventsParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Resume strictly after the last applied semantic cursor. */
+  after?: ConversationEventCursor
+  /** Start at the beginning when true. Omitted starts at the captured committed head. Mutually exclusive with after. */
+  replay?: boolean
+  /** Event kinds to deliver; omitted delivers all supported kinds. Filtered batches still advance their cursor. */
+  kinds?: ConversationEventKind[]
+}
+/** An ordered bounded semantic event batch. An empty batch advances the checkpoint past filtered facts. Application checkpoints belong to the consumer. */
+export interface ConversationEvents {
+  /** The connection-local subscription this batch belongs to. */
+  subscriptionId: ConversationSubscriptionId
+  /** Opaque checkpoint after applying this event or batch. */
+  cursor: ConversationEventCursor
+  /** Committed semantic events in source order; empty advances filtered progress. */
+  events: ConversationEvent[]
+}
 export const maxChangeWatchIdBytes = 57 as const
 export const changeWatchIdPattern =
   "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,19}$" as const
@@ -2652,7 +2705,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 70,
+  maxReadyMethods: 72,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -2716,6 +2769,15 @@ export const bounds = {
   maxMcpCspDomainBytes: 512,
   maxMcpDomainBytes: 512,
   maxMcpRemoteMessageCharacters: 512,
+} as const
+export const eventSubscriptionBounds = {
+  maxCursorCharacters: 4096,
+  maxBatchEvents: 64,
+  maxExecutionIdCharacters: 256,
+  maxToolIdCharacters: 256,
+  maxNameCharacters: 1024,
+  maxStatusCharacters: 256,
+  maxOutcomeCharacters: 256,
 } as const
 export const ProductMethod = {
   SessionAuthenticate: "session.authenticate",
@@ -2789,6 +2851,8 @@ export const ProductMethod = {
   ConversationShares: "conversation.shares",
   ConversationPermissionRules: "conversation.permissionRules",
   ConversationRevokePermissionRule: "conversation.revokePermissionRule",
+  ConversationSubscribeEvents: "conversation.subscribeEvents",
+  ConversationPeek: "conversation.peek",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
@@ -2799,6 +2863,7 @@ export const ProductEvent = {
   AgentsListed: "agents.listed",
   ConversationSubscriptionEnded: "conversation.subscriptionEnded",
   PermissionReviewWaiting: "permission.reviewWaiting",
+  ConversationEvents: "conversation.events",
 } as const
 export const ProductHandshakeMethod = "session.authenticate" as const
 export const productReadyMethods = [
@@ -2872,6 +2937,8 @@ export const productReadyMethods = [
   "conversation.shares",
   "conversation.permissionRules",
   "conversation.revokePermissionRule",
+  "conversation.subscribeEvents",
+  "conversation.peek",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake, auth.session, or a watch. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
@@ -2946,6 +3013,8 @@ export const productMethodGrants = {
   "conversation.shares": "credential.manage",
   "conversation.permissionRules": "conversation.write",
   "conversation.revokePermissionRule": "conversation.write",
+  "conversation.subscribeEvents": "conversation.write",
+  "conversation.peek": "conversation.write",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {

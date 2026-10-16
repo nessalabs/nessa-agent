@@ -68,6 +68,8 @@ describe("NessaClient", () => {
             nonce?: string
             text?: string
             executionId?: string
+            conversationId?: string
+            requestId?: string
             watchId?: string
             surface?: { kind?: string; instance?: string }
           }
@@ -294,6 +296,63 @@ describe("NessaClient", () => {
           return
         }
 
+        if (connected && frame.method === "conversation.create") {
+          socket.send(
+            JSON.stringify({
+              type: "res",
+              id: frame.id,
+              ok: true,
+              payload: { conversationId: frame.params?.conversationId },
+            }),
+          )
+          return
+        }
+        if (connected && frame.method === "conversation.stop") {
+          socket.send(
+            JSON.stringify({
+              type: "res",
+              id: frame.id,
+              ok: true,
+              payload: {
+                requestId: frame.params?.requestId,
+                stage: "settled",
+                outcome: "already_final",
+              },
+            }),
+          )
+          return
+        }
+        if (connected && frame.method === "conversation.subscribeEvents") {
+          socket.send(
+            JSON.stringify({
+              type: "res",
+              id: frame.id,
+              ok: true,
+              payload: { subscriptionId: "1" },
+            }),
+          )
+          socket.send(
+            JSON.stringify({
+              type: "event",
+              event: "conversation.events",
+              payload: {
+                subscriptionId: "1",
+                cursor: "cursor-1",
+                events: [{ id: "cursor-1", cursor: "cursor-1", kind: "state.changed" }],
+              },
+              seq: ++seq,
+              stateVersion: 0,
+            }),
+          )
+          return
+        }
+        if (connected && frame.method === "conversation.unsubscribe") {
+          socket.send(
+            JSON.stringify({ type: "res", id: frame.id, ok: true, payload: {} }),
+          )
+          return
+        }
+
         socket.send(
           JSON.stringify({
             type: "res",
@@ -385,6 +444,41 @@ describe("NessaClient", () => {
       expect(watchRequests).toHaveLength(3)
     } finally {
       unsubscribe()
+      client.close()
+    }
+  })
+
+  it("routes four public thread methods through the existing authenticated session", async () => {
+    const client = await NessaClient.connect({
+      stage: "ci",
+      url: `ws://127.0.0.1:${port}`,
+      role: "surface",
+      surface: { kind: "cli", instance: "threads" },
+      client: { id: "thread-client", version: "1", platform: "node" },
+      auth: { credential: TOKEN },
+    })
+    try {
+      const { conversationId } = await client.createThread({
+        conversationId: CONVERSATION_ID,
+      })
+      const stream = await client.subscribe(conversationId)
+      try {
+        const receipt = await client.sendMessage(conversationId, "hello", {
+          requestId: "one-message",
+        })
+        expect(receipt.executionId).toBe("one-message")
+        const iterator = stream[Symbol.asyncIterator]()
+        expect((await iterator.next()).value).toMatchObject({
+          cursor: "cursor-1",
+          events: [{ kind: "state.changed" }],
+        })
+        expect(
+          await client.stopThread(conversationId, { executionId: receipt.executionId }),
+        ).toMatchObject({ outcome: "already_final" })
+      } finally {
+        await stream.close()
+      }
+    } finally {
       client.close()
     }
   })

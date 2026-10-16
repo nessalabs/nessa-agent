@@ -389,3 +389,39 @@ The rows of #248 and #419 that do not depend on a timer read keep their ids
 (round counts, read pacing, foreground polling of #532) went with the poller.
 `W6` gained a case: a list frame that arrives while an archive is on its way
 may have been read before it, and does not list the archived session again.
+
+## Committed event subscriptions
+
+`conversation.subscribeEvents` follows semantic facts for SDK consumers. It is
+separate from replacement views: observations are delivered in source order,
+never collapsed into the latest state. The default start is the captured committed
+head; `after` resumes a saved event cursor and `replay: true` starts at the beginning.
+The SDK reader certifies complete saves before publishing their changes. Neither
+reading nor following starts a provider. Callbacks run in the consuming application,
+not in the Agent's transition or storage task.
+
+An event cursor is opaque, binds the exact session/incarnation/change, and doubles
+as a stable event identity. Consumers checkpoint only applied batches; socket
+write acknowledgement does not prove application processing. Replay can duplicate
+an event. Event-derived command request IDs recover original receipts; uncertain
+restored work is not redispatched. `kinds` filters metadata on the gateway; arguments,
+results and thinking are not included. Existing owner policy applies to every batch.
+
+| Row | Ordering | Required result |
+| --- | --- | --- |
+| E1 | Save units exist without SaveComplete | No event from that save |
+| E2 | Subscribe, commit during initial read, then live | Ordered replay followed by new events, no missed committed fact |
+| E3 | Consumer reconnects with applied cursor | Resume strictly after its event; duplicate-safe IDs |
+| E4 | Cursor invalid, foreign, reset, or pruned | Typed refusal; no silent replacement or trigger loss |
+| E5 | Writer/client is slow | Bounded batch and one frame offered; lag ends only this subscription |
+| E6 | Access revoked while waiting for read capacity | Refused before the next read |
+| E7 | Unsubscribe/disconnect races an offer | Same retirement and physical write ordering as view subscriptions |
+| E8 | Source contains a semantic gap | Ended refused with event_history_gap; consumer chooses recovery |
+| E9 | Filter matches nothing in a committed batch | Advance its safe cursor without exposing hidden payload |
+| E10 | Source absent or closed | Following opens no Agent; source closure ends the subscription |
+| E11 | Handler issues another command | It uses ordinary admission/scheduling; handlers cannot mutate a transition |
+| E12 | Provider Finished precedes local settlement | No turn.ended until a local settlement is committed |
+
+The socket owns subscription tasks; a reconnect recreates a subscription from the
+consumer's cursor. The SDK owns the semantic reader and its bounded storage work.
+No persisted subscription registry, plugin SDK, or workflow engine is introduced.

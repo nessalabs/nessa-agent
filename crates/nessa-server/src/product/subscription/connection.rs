@@ -14,9 +14,10 @@ use crate::product::{
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::product::generated::{
-    product_method, ConversationSubscribeListParams, ConversationSubscribeParams,
-    ConversationSubscribeResult, ConversationSubscriptionErrorCode, ConversationUnsubscribeParams,
-    MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_CONNECTION_LIST_SUBSCRIPTIONS,
+    product_method, ConversationSubscribeEventsParams, ConversationSubscribeListParams,
+    ConversationSubscribeParams, ConversationSubscribeResult, ConversationSubscriptionErrorCode,
+    ConversationUnsubscribeParams, MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS,
+    MAX_CONNECTION_LIST_SUBSCRIPTIONS,
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
@@ -54,6 +55,7 @@ impl ConnectionSubscriptions {
         matches!(
             method,
             product_method::CONVERSATION_SUBSCRIBE
+                | product_method::CONVERSATION_SUBSCRIBE_EVENTS
                 | product_method::CONVERSATION_SUBSCRIBE_LIST
                 | product_method::CONVERSATION_UNSUBSCRIBE
                 | product_method::AGENTS_SUBSCRIBE
@@ -131,6 +133,29 @@ impl ConnectionSubscriptions {
                 return Some(invalid());
             }
             Target::Agents
+        } else if frame.method == product_method::CONVERSATION_SUBSCRIBE_EVENTS {
+            let Ok(params) =
+                serde_json::from_value::<ConversationSubscribeEventsParams>(frame.params.clone())
+            else {
+                return Some(invalid());
+            };
+            let Ok(conversation) = conversation_id(&params.conversation_id) else {
+                return Some(invalid());
+            };
+            if params.after.is_some() && params.replay.is_some() {
+                return Some(invalid());
+            }
+            Target::Events {
+                conversation,
+                after: params.after,
+                replay: params.replay.unwrap_or(false),
+                kinds: params
+                    .kinds
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|kind| kind.as_str().to_owned())
+                    .collect(),
+            }
         } else if frame.method == product_method::CONVERSATION_SUBSCRIBE {
             let Ok(params) =
                 serde_json::from_value::<ConversationSubscribeParams>(frame.params.clone())
@@ -170,7 +195,9 @@ impl ConnectionSubscriptions {
         let service = state.conversations.clone();
         match target {
             Target::Agents if state.agents_catalog.is_none() => return not_configured(),
-            Target::View { .. } | Target::List { .. } if service.is_none() => {
+            Target::View { .. } | Target::List { .. } | Target::Events { .. }
+                if service.is_none() =>
+            {
                 return not_configured()
             }
             _ => {}
@@ -190,11 +217,13 @@ impl ConnectionSubscriptions {
         // The agent catalog is one target, so the duplicate refusal above is
         // its bound: one per connection.
         let bound = match target {
-            Target::View { .. } => Some((
+            Target::View { .. } | Target::Events { .. } => Some((
                 MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS,
                 self.entries
                     .iter()
-                    .filter(|entry| matches!(entry.target, Target::View { .. }))
+                    .filter(|entry| {
+                        matches!(entry.target, Target::View { .. } | Target::Events { .. })
+                    })
                     .count(),
                 "socket.conversation_subscriptions",
             )),

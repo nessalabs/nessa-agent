@@ -19,6 +19,26 @@ import { createPairingApi, type PairingApi } from "./pairing-api.js"
 import { createAuthApi, type AuthApi } from "./auth-api.js"
 import { createCatalogueReadApi, type CatalogueReadApi } from "./catalogue-read-api.js"
 import { createRecordReadApi, type RecordReadApi } from "./record-read-api.js"
+import {
+  createThreadCommands,
+  type SendMessageOptions,
+  type ThreadMessageReceipt,
+  type StopThreadOptions,
+  type StopThreadResult,
+} from "./thread-api.js"
+import {
+  openThreadSubscription,
+  type ThreadSubscription,
+  type ThreadSubscribeOptions,
+} from "./thread-subscription.js"
+import type {
+  ConversationCreateOptions,
+  ConversationSubmission,
+} from "./conversation-api.js"
+import type {
+  ConversationCreateResult,
+  ConversationMessageReceipt,
+} from "../generated/product.js"
 
 /**
  * Entry point for a connection to the Nessa gateway. Create one with {@link connect},
@@ -41,6 +61,7 @@ import { createRecordReadApi, type RecordReadApi } from "./record-read-api.js"
  * ```
  */
 export class NessaClient {
+  private readonly threadCommands: ReturnType<typeof createThreadCommands>
   /**
    * Default development gateway address. Non-development stages require an
    * explicit URL.
@@ -95,6 +116,7 @@ export class NessaClient {
   ) {
     this.server = createServerApi(wire)
     this.conversation = createConversationApi(wire, newRequestId)
+    this.threadCommands = createThreadCommands(this.conversation, newRequestId, wire)
     this.records = createRecordReadApi(wire)
     this.catalogue = createCatalogueReadApi(wire)
     this.watches = createChangeWatchApi(wire)
@@ -119,6 +141,87 @@ export class NessaClient {
     const { managed, profile, newRequestId, upload, resources, httpTimer } =
       await establishManagedSession(options, NessaClient.defaultUrl)
     return new NessaClient(managed, profile, newRequestId, upload, resources, httpTimer)
+  }
+
+  /**
+   * Create a thread using the authenticated owner's gateway defaults, or reopen
+   * its original identity. The returned conversationId is the thread ID used by
+   * sendMessage and subscribe. The gateway answers when its agent is ready.
+   * @param options - Optional stable IDs and agent, model, environment and approval choices.
+   * @returns The existing conversation creation receipt.
+   * @throws NessaConversationMutationError with original IDs and retry() on failure.
+   */
+  createThread(options?: ConversationCreateOptions): Promise<ConversationCreateResult> {
+    return this.threadCommands.createThread(options)
+  }
+
+  /**
+   * Send text to a thread. Queued input starts a turn when the agent is ready;
+   * steering asks the provider to inject it and preserves its actual admission
+   * receipt. Passive saves an attributed record-only note without starting,
+   * steering, or arranging delivery to the model.
+   * @param threadId - The conversationId returned by createThread.
+   * @param text - Nonblank text, at most 8 KiB UTF-8, kept exactly.
+   * @param options - Queued by default; reuse requestId with identical inputs for a retry.
+   * @returns A turn admission receipt, or a passive note receipt with deliveryState.
+   * Neither result promises model consumption or completion.
+   * @throws TypeError for invalid input; NessaConversationMutationError retains
+   * original immutable inputs for explicit retry(). Reconnection does not replay it.
+   */
+  sendMessage(
+    threadId: string,
+    text: string,
+    options: SendMessageOptions & { mode: "passive" },
+  ): Promise<ConversationMessageReceipt>
+  sendMessage(
+    threadId: string,
+    text: string,
+    options?: SendMessageOptions & { mode?: "queued" | "steering" },
+  ): Promise<ConversationSubmission>
+  sendMessage(
+    threadId: string,
+    text: string,
+    options?: SendMessageOptions,
+  ): Promise<ThreadMessageReceipt>
+  sendMessage(
+    threadId: string,
+    text: string,
+    options?: SendMessageOptions,
+  ): Promise<ThreadMessageReceipt> {
+    return this.threadCommands.sendMessage(threadId, text, options)
+  }
+
+  /**
+   * Follow committed semantic events without opening an agent. Consume each batch
+   * in order and save its cursor after applying it. A slow consumer ends with a
+   * typed lag error instead of silently dropping events. Connection loss ends the
+   * stream; subscribe again from your last applied cursor after recovery.
+   * @param threadId - The conversationId returned by createThread.
+   * @param options - Resume cursor, optional event kinds, and abort signal.
+   * @returns A single-consumer async iterable. for-await break or close releases it.
+   * @throws TypeError for invalid input, RPC errors when opening fails, or
+   * NessaThreadSubscriptionError during iteration when the stream ends.
+   */
+  subscribe(
+    threadId: string,
+    options?: ThreadSubscribeOptions,
+  ): Promise<ThreadSubscription> {
+    return openThreadSubscription(this.subscriptions, threadId, options)
+  }
+
+  /**
+   * Stop one captured turn while keeping the thread and its agent attachment.
+   * Without executionId, one passive snapshot selects the running turn; if none
+   * runs, outcome is no_active_turn and queued work is unchanged. A turn that
+   * starts after capture is not substituted for the selected turn.
+   * @param threadId - The conversationId returned by createThread.
+   * @param options - Optional exact execution and action attribution.
+   * @returns Existing stop evidence, or the explicit no_active_turn result.
+   * @throws TypeError for invalid input; NessaConversationControlError preserves
+   * uncertainty. Read current state before deliberately trying another stop.
+   */
+  stopThread(threadId: string, options?: StopThreadOptions): Promise<StopThreadResult> {
+    return this.threadCommands.stopThread(threadId, options)
   }
 
   /** Current authenticated handshake snapshot; available only while connected. */

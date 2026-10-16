@@ -8,6 +8,7 @@
  * NessaClient.connect(options)
  *      │
  *      ├── client.productSession (ProductSessionReady)
+ *      ├── client.createThread() / sendMessage() / subscribe() / stopThread()
  *      ├── client.server.health()
  *      └── client.on("session.challenge", …)
  *
@@ -38,6 +39,19 @@ export {
   type ConversationReadTools,
   type ConversationReadToolsOptions,
 } from "./conversation-read-tools.js"
+export type {
+  SendMessageOptions,
+  StopThreadOptions,
+  StopThreadResult,
+  ThreadMessageMode,
+  ThreadMessageReceipt,
+} from "./thread-api.js"
+export {
+  NessaThreadSubscriptionError,
+  type ThreadEventBatch,
+  type ThreadSubscribeOptions,
+  type ThreadSubscription,
+} from "./thread-subscription.js"
 export type { RecordReadApi } from "./record-read-api.js"
 export type { AgentsApi } from "./agents-api.js"
 export type { ServerApi } from "./server-api.js"
@@ -58,4 +72,5 @@ export type {
   SubscriptionEnd,
   ViewFrame,
   ViewSubscriptionHandlers,
+  EventSubscriptionHandlers,
 } from "./subscription-api.js"

@@ -270,11 +270,13 @@ fn paired_action(method: &str) -> AccessAction {
 /// reaches only to be admitted again by its grants: the read and the view
 /// subscription ask [`admit_conversation`], the lists ask [`admit_list`],
 /// and an unsubscribe ends only what was admitted. Rows G12 and G13.
-const ADMITTED_BY_ITS_OWN_CHECK: [&str; 6] = [
+const ADMITTED_BY_ITS_OWN_CHECK: [&str; 8] = [
     "conversation.read",
     "conversation.list",
     "conversation.observe",
     "conversation.subscribe",
+    "conversation.subscribeEvents",
+    "conversation.peek",
     "conversation.subscribeList",
     "conversation.unsubscribe",
 ];

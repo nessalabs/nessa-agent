@@ -6,6 +6,8 @@ import {
   passiveReadTiming,
   ProductEvent,
   ProductMethod,
+  subscriptionLimits,
+  eventSubscriptionBounds,
   type ConversationView,
 } from "../generated/product.js"
 
@@ -91,6 +93,182 @@ function viewHandlers() {
 }
 
 describe("subscription API", () => {
+  it("bounds unknown subscription identities and ends every affected open before releasing its actual handle", async () => {
+    const replies: ((reply: { subscriptionId: string }) => void)[] = []
+    let admitted!: () => void
+    const bothAdmitted = new Promise<void>((resolve) => {
+      admitted = resolve
+    })
+    const wire = port((method) =>
+      method !== ProductMethod.ConversationSubscribeEvents
+        ? {}
+        : new Promise((resolve) => {
+            replies.push(resolve)
+            if (replies.length === 2) admitted()
+          }),
+    )
+    const api = createSubscriptionApi(wire.session)
+    const first = { batch: vi.fn(), ended: vi.fn() }
+    const second = { batch: vi.fn(), ended: vi.fn() }
+    const opens = [
+      api.events(conversationId, first),
+      api.events("00000000-0000-4000-8000-000000000002", second),
+    ]
+    await bothAdmitted
+    for (
+      let count = 0;
+      count < subscriptionLimits.conversationTargets + subscriptionLimits.listTargets + 2;
+      count++
+    ) {
+      // Empty filtered batches still introduce identities and must be bounded.
+      wire.emit(ProductEvent.ConversationEvents, {
+        subscriptionId: String(count + 100),
+        cursor: "one",
+        events: [],
+      })
+    }
+    replies[0]({ subscriptionId: "1" })
+    replies[1]({ subscriptionId: "2" })
+    const handles = await Promise.all(opens)
+    expect(first.ended).toHaveBeenCalledExactlyOnceWith({ reason: "lagging" })
+    expect(second.ended).toHaveBeenCalledExactlyOnceWith({ reason: "lagging" })
+    expect(first.batch).not.toHaveBeenCalled()
+    expect(second.batch).not.toHaveBeenCalled()
+    for (const subscriptionId of ["1", "2"])
+      expect(wire.request).toHaveBeenCalledWith(ProductMethod.ConversationUnsubscribe, {
+        subscriptionId,
+      })
+    await Promise.all(handles.map((handle) => handle.close()))
+    expect(
+      wire.request.mock.calls.filter(
+        ([method]) => method === ProductMethod.ConversationUnsubscribe,
+      ),
+    ).toHaveLength(2)
+  })
+
+  it("validates unknown early event payloads before retaining them and closes the real reply identity", async () => {
+    const wire = port(() => {
+      wire.emit(ProductEvent.ConversationEvents, {
+        subscriptionId: "999",
+        cursor: "one",
+        events: [
+          {
+            id: "one",
+            cursor: "one",
+            kind: "state.changed",
+            name: "x".repeat(eventSubscriptionBounds.maxNameCharacters + 1),
+          },
+        ],
+      })
+      return { subscriptionId: "1" }
+    })
+    const handlers = { batch: vi.fn(), ended: vi.fn() }
+    await createSubscriptionApi(wire.session).events(conversationId, handlers)
+    expect(handlers.batch).not.toHaveBeenCalled()
+    expect(handlers.ended).toHaveBeenCalledExactlyOnceWith({ reason: "invalid_frame" })
+    expect(wire.request).toHaveBeenLastCalledWith(ProductMethod.ConversationUnsubscribe, {
+      subscriptionId: "1",
+    })
+  })
+
+  it("bounds total early batches across different unknown identities", async () => {
+    const wire = port((method) => {
+      if (method === ProductMethod.ConversationSubscribeEvents) {
+        for (let count = 0; count < 18; count++)
+          wire.emit(ProductEvent.ConversationEvents, {
+            subscriptionId: count % 2 === 0 ? "998" : "999",
+            cursor: String(count),
+            events: [],
+          })
+      }
+      return { subscriptionId: "1" }
+    })
+    const handlers = { batch: vi.fn(), ended: vi.fn() }
+    await createSubscriptionApi(wire.session).events(conversationId, handlers)
+    expect(handlers.ended).toHaveBeenCalledExactlyOnceWith({ reason: "lagging" })
+    expect(wire.request).toHaveBeenLastCalledWith(ProductMethod.ConversationUnsubscribe, {
+      subscriptionId: "1",
+    })
+  })
+
+  it("follows semantic batches in order without coalescing early frames", async () => {
+    const wire = port(() => {
+      for (const cursor of ["one", "two"])
+        wire.emit(ProductEvent.ConversationEvents, {
+          subscriptionId: "1",
+          cursor,
+          events: [{ id: cursor, cursor, kind: "state.changed" }],
+        })
+      return { subscriptionId: "1" }
+    })
+    const handlers = { batch: vi.fn(), ended: vi.fn() }
+    const subscription = await createSubscriptionApi(wire.session).events(
+      conversationId,
+      handlers,
+      { replay: true },
+    )
+    expect(handlers.batch.mock.calls.map(([batch]) => batch.cursor)).toEqual([
+      "one",
+      "two",
+    ])
+    expect(wire.request).toHaveBeenCalledWith(
+      ProductMethod.ConversationSubscribeEvents,
+      { conversationId, replay: true },
+      { atLeastMs: passiveReadTiming.minRequestTimeoutMs },
+    )
+    await subscription.close()
+  })
+
+  it("terminates and releases an event subscription with malformed metadata", async () => {
+    const wire = port()
+    const handlers = { batch: vi.fn(), ended: vi.fn() }
+    await createSubscriptionApi(wire.session).events(conversationId, handlers)
+    wire.emit(ProductEvent.ConversationEvents, {
+      subscriptionId: "1",
+      cursor: "one",
+      events: [
+        { id: "one", cursor: "one", kind: "tool.updated", name: "x".repeat(1025) },
+      ],
+    })
+    expect(handlers.batch).not.toHaveBeenCalled()
+    expect(handlers.ended).toHaveBeenCalledExactlyOnceWith({ reason: "invalid_frame" })
+    expect(wire.request).toHaveBeenLastCalledWith(ProductMethod.ConversationUnsubscribe, {
+      subscriptionId: "1",
+    })
+  })
+
+  it("fails explicitly when early event batches exceed the bounded opening buffer", async () => {
+    const wire = port(() => {
+      for (let count = 0; count < 100; count++)
+        wire.emit(ProductEvent.ConversationEvents, {
+          subscriptionId: "1",
+          cursor: String(count),
+          events: [],
+        })
+      return { subscriptionId: "1" }
+    })
+    const handlers = { batch: vi.fn(), ended: vi.fn() }
+    await createSubscriptionApi(wire.session).events(conversationId, handlers)
+    expect(handlers.batch).not.toHaveBeenCalled()
+    expect(handlers.ended).toHaveBeenCalledExactlyOnceWith({ reason: "lagging" })
+    expect(wire.request).toHaveBeenLastCalledWith(ProductMethod.ConversationUnsubscribe, {
+      subscriptionId: "1",
+    })
+  })
+
+  it("rejects malformed replay options before sending", async () => {
+    const wire = port()
+    const handlers = { batch: vi.fn(), ended: vi.fn() }
+    const api = createSubscriptionApi(wire.session)
+    expect(() =>
+      api.events(conversationId, handlers, { after: "one", replay: true }),
+    ).toThrow(TypeError)
+    expect(() =>
+      api.events(conversationId, handlers, { kinds: ["state.changed", "state.changed"] }),
+    ).toThrow(TypeError)
+    expect(wire.request).not.toHaveBeenCalled()
+  })
+
   it("subscribes with the passive deadline and hands each checked frame over", async () => {
     const wire = port()
     const api = createSubscriptionApi(wire.session)

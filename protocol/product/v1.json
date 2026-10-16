@@ -216,7 +216,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 70,
+          "maxItems": 72,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -5748,6 +5748,7 @@
           "maxLength": 64,
           "description": "For refused: the conversation error code, or unauthorized or forbidden when access was refused."
         },
+        "lastEventCursor": { "$ref": "#/$defs/ConversationEventCursor", "description": "Last semantic event cursor written; resume from the last batch actually applied." },
         "lastDelivered": {
           "$ref": "#/$defs/ConversationViewCursor",
           "description": "Where a view subscription resumes from: the cursor of the last view frame written or, when none was, the after it was opened with. Absent for a list, and for a view subscription opened without after that wrote no frame."
@@ -6213,6 +6214,140 @@
         }
       },
       "required": ["reviews"]
+    },
+    "ConversationEventKind": {
+      "type": "string",
+      "enum": [
+        "turn.accepted",
+        "turn.started",
+        "turn.ended",
+        "tool.updated",
+        "state.changed"
+      ],
+      "description": "Committed semantic facts. A scheduling start is distinct from queued input; tool state is provider observation, not proof of physical effects; turn end is local settlement."
+    },
+    "ConversationEventCursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "description": "Opaque SDK cursor bound to one conversation and stream incarnation. Save only after applying the batch. Reuse unchanged to resume; socket sequence numbers are not cursors."
+    },
+    "ConversationEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ConversationEventCursor",
+          "description": "Stable semantic event identity, identical on replay."
+        },
+        "cursor": {
+          "$ref": "#/$defs/ConversationEventCursor",
+          "description": "Opaque checkpoint after applying this event or batch."
+        },
+        "kind": {
+          "$ref": "#/$defs/ConversationEventKind",
+          "description": "The semantic event kind."
+        },
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Execution this fact belongs to, when any."
+        },
+        "toolId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Provider tool identity within its execution, when any."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "description": "Tool name when observed, bounded metadata only."
+        },
+        "status": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Observed lifecycle or tool status."
+        },
+        "outcome": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Local settlement outcome; this is not a provider acknowledgement."
+        }
+      },
+      "required": [
+        "id",
+        "cursor",
+        "kind"
+      ],
+      "description": "Metadata projected from one complete committed semantic fact. No prompt, thinking, tool arguments or results are included."
+    },
+    "ConversationSubscribeEventsParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "after": {
+          "$ref": "#/$defs/ConversationEventCursor",
+          "description": "Resume strictly after the last applied semantic cursor."
+        },
+        "replay": {
+          "type": "boolean",
+          "description": "Start at the beginning when true. Omitted starts at the captured committed head. Mutually exclusive with after."
+        },
+        "kinds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConversationEventKind"
+          },
+          "minItems": 1,
+          "maxItems": 5,
+          "uniqueItems": true,
+          "description": "Event kinds to deliver; omitted delivers all supported kinds. Filtered batches still advance their cursor."
+        }
+      },
+      "required": [
+        "conversationId"
+      ],
+      "description": "Follow committed semantic events without opening an Agent. Replay uses complete saved facts and explicit gap refusals; default is future events. Stop with conversation.unsubscribe."
+    },
+    "ConversationEvents": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subscriptionId": {
+          "$ref": "#/$defs/ConversationSubscriptionId",
+          "description": "The connection-local subscription this batch belongs to."
+        },
+        "cursor": {
+          "$ref": "#/$defs/ConversationEventCursor",
+          "description": "Opaque checkpoint after applying this event or batch."
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConversationEvent"
+          },
+          "maxItems": 64,
+          "description": "Committed semantic events in source order; empty advances filtered progress."
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "cursor",
+        "events"
+      ],
+      "description": "An ordered bounded semantic event batch. An empty batch advances the checkpoint past filtered facts. Application checkpoints belong to the consumer."
     }
   }
 }

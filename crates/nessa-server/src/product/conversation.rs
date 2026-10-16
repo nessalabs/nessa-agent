@@ -114,15 +114,26 @@ pub(super) async fn dispatch(
                     },
                 ))
             }
-            "conversation.read" => {
+            "conversation.read" | "conversation.peek" => {
                 let params = params!(ConversationReadParams);
                 let id = conversation_id(&params.conversation_id)?;
                 if let Err(code) = super::read_access::admit_conversation(state, session, &id).await
                 {
                     return Ok(failure(&frame.id, code));
                 }
-                let (view, _) =
-                    read_view(state, service, session, &id, &frame.id, ReadOpening::Open).await?;
+                let (view, _) = read_view(
+                    state,
+                    service,
+                    session,
+                    &id,
+                    &frame.id,
+                    if frame.method == "conversation.peek" {
+                        ReadOpening::LiveOnly
+                    } else {
+                        ReadOpening::Open
+                    },
+                )
+                .await?;
                 Ok(success(&frame.id, &view))
             }
             "conversation.setApprovalMode" => {

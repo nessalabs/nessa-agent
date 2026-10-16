@@ -1,0 +1,216 @@
+//! Committed semantic events over the real socket/store/Agent path.
+use super::*;
+
+async fn subscribe(client: &mut Client, id: &ConversationId, options: Value) -> String {
+    let mut params = options;
+    params["conversationId"] = json!(id.to_string());
+    client.send("events", "conversation.subscribeEvents", params);
+    let (reply, before) = client.reply("events").await;
+    assert!(before.is_empty(), "reply precedes event frames");
+    assert_eq!(reply["ok"], true, "{reply}");
+    reply["payload"]["subscriptionId"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+async fn through_end(client: &mut Client, subscription: &str, execution: &str) -> Vec<Value> {
+    let frames = client
+        .until(subscription, |frame| {
+            frame["payload"]["events"].as_array().is_some_and(|events| {
+                events
+                    .iter()
+                    .any(|event| event["kind"] == "turn.ended" && event["executionId"] == execution)
+            })
+        })
+        .await;
+    frames
+        .into_iter()
+        .flat_map(|frame| frame["payload"]["events"].as_array().unwrap().clone())
+        .collect()
+}
+
+/// E1/E2/E12: distinct accepted/start/settlement facts, committed before delivery.
+#[tokio::test]
+async fn committed_events_replay_then_follow_with_stable_identity() {
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    fixture.turn_settled("first").await;
+    let mut client = fixture.connect();
+    let id = subscribe(&mut client, &fixture.id, json!({"replay":true})).await;
+    let first = through_end(&mut client, &id, "first").await;
+    let lifecycle: Vec<_> = first
+        .iter()
+        .filter(|event| event["executionId"] == "first" && event["kind"] != "state.changed")
+        .map(|event| event["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(lifecycle, ["turn.accepted", "turn.started", "turn.ended"]);
+    assert!(first.iter().all(|event| event["id"] == event["cursor"]));
+    assert!(first
+        .iter()
+        .all(|event| event.get("text").is_none() && event.get("arguments").is_none()));
+    let after = first.last().unwrap()["cursor"].clone();
+    client.close().await;
+    let mut resumed = fixture.connect();
+    let id = subscribe(&mut resumed, &fixture.id, json!({"after":after})).await;
+    fixture.turn("second").await;
+    let second = through_end(&mut resumed, &id, "second").await;
+    assert!(second
+        .iter()
+        .all(|event| !first.iter().any(|old| old["id"] == event["id"])));
+    resumed.close().await;
+}
+
+/// E3/E9: default future-only and server-side filtering preserve progress.
+#[tokio::test]
+async fn future_event_subscription_filters_without_replaying_old_turns() {
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("old").await;
+    fixture.turn_settled("old").await;
+    let mut client = fixture.connect();
+    let id = subscribe(&mut client, &fixture.id, json!({"kinds":["turn.ended"]})).await;
+    let initial = client.next().await;
+    assert_eq!(initial["event"], "conversation.events");
+    assert_eq!(initial["payload"]["events"], json!([]));
+    assert!(initial["payload"]["cursor"].is_string());
+    fixture.turn("new").await;
+    let events = through_end(&mut client, &id, "new").await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["outcome"], "completed");
+    client.close().await;
+}
+
+/// E4: malformed cursors refuse before semantic delivery; no state replacement.
+#[tokio::test]
+async fn invalid_event_cursor_is_a_typed_refusal() {
+    let fixture = SubscriptionFixture::new().await;
+    let mut client = fixture.connect();
+    client.send(
+        "bad",
+        "conversation.subscribeEvents",
+        json!({"conversationId": fixture.id.to_string(),"after":"not-a-cursor"}),
+    );
+    let (reply, events) = client.reply("bad").await;
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["error"]["code"], "event_cursor_invalid");
+    assert!(events.is_empty());
+    client.close().await;
+}
+
+/// E6: identity/grant is checked again before each batch, not only on open.
+#[tokio::test]
+async fn revoked_event_subscription_ends_before_new_events() {
+    let fixture = SubscriptionFixture::new().await;
+    let mut client = fixture.connect();
+    let id = subscribe(&mut client, &fixture.id, json!({})).await;
+    client.next().await;
+    grants(&fixture.authority, &["server.read"]);
+    fixture
+        .service
+        .submit(
+            fixture.id.clone(),
+            caller(&fixture.session, "after-revoke".into()),
+            "turn-after".into(),
+            SubmittedMessage {
+                text: "question".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    let frames = client
+        .until(&id, |frame| {
+            frame["event"] == "conversation.subscriptionEnded"
+        })
+        .await;
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0]["payload"]["code"], "forbidden");
+    assert!(frames[0]["payload"]["lastEventCursor"].is_string());
+    client.close().await;
+}
+
+/// E7: stop retires offered frames and releases source registrations.
+#[tokio::test]
+async fn unsubscribe_events_allows_a_fresh_subscription() {
+    let fixture = SubscriptionFixture::new().await;
+    let mut client = fixture.connect();
+    let id = subscribe(&mut client, &fixture.id, json!({})).await;
+    client.next().await;
+    client.send(
+        "stop",
+        "conversation.unsubscribe",
+        json!({"subscriptionId":id}),
+    );
+    let (reply, _) = client.reply("stop").await;
+    assert_eq!(reply["ok"], true);
+    let next = subscribe(&mut client, &fixture.id, json!({})).await;
+    assert_ne!(next, id);
+    client.close().await;
+}
+
+/// E6: revocation during capacity wait is checked before touching the reader.
+#[tokio::test]
+async fn capacity_wait_rechecks_event_admission() {
+    use crate::product::subscription::{read_event, Target};
+    use nessa_sdk::application::agent_execution::sessions::{
+        CommittedEventReader, EventFuture, EventRead, EventReadError, EventReadLimits,
+    };
+
+    struct Unread(Arc<std::sync::atomic::AtomicUsize>);
+    impl CommittedEventReader for Unread {
+        fn read(&mut self, _: EventReadLimits) -> EventFuture<'_, EventRead> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err(EventReadError::Closed) })
+        }
+    }
+
+    let fixture = SubscriptionFixture::new().await;
+    let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut reader = Unread(reads.clone());
+    let held = fixture
+        .state
+        .requests
+        .clone()
+        .acquire_many_owned(u32::try_from(fixture.state.limits.requests()).unwrap())
+        .await
+        .unwrap();
+    let target = Target::Events {
+        conversation: fixture.id.clone(),
+        after: None,
+        replay: false,
+        kinds: Vec::new(),
+    };
+    let read = read_event(
+        &fixture.state,
+        &fixture.service,
+        &fixture.session,
+        &target,
+        "waiting",
+        &mut reader,
+        EventReadLimits::new(16, 256 * 1024 * 1024).unwrap(),
+    );
+    tokio::pin!(read);
+    assert!(futures_util::poll!(&mut read).is_pending());
+    grants(&fixture.authority, &["server.read"]);
+    drop(held);
+    assert!(matches!(read.await, Err(code) if code == "forbidden"));
+    assert_eq!(reads.load(Ordering::SeqCst), 0);
+}
+
+/// E3: an explicit replay flag cannot accompany a resume cursor.
+#[tokio::test]
+async fn resume_with_explicit_false_replay_is_invalid() {
+    let fixture = SubscriptionFixture::new().await;
+    let mut client = fixture.connect();
+    client.send(
+        "bad",
+        "conversation.subscribeEvents",
+        json!({"conversationId": fixture.id.to_string(), "after": "cursor", "replay": false}),
+    );
+    let (reply, events) = client.reply("bad").await;
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["error"]["code"], "invalid_request");
+    assert!(events.is_empty());
+    client.close().await;
+}
