@@ -62,6 +62,13 @@ export function ConversationNotification({
   if (notice.retry?.kind === "draft") {
     const turnId = notice.retry.turnId
     const failed = conversation.turns.find((turn) => turn.id === turnId)
+    // A refusal puts its message back in the draft, and Send Again sends the
+    // draft as edited. An older refusal offered after a newer one was sent
+    // again has nothing in the draft, so it is sent as it was refused.
+    const content =
+      conversation.draft.length > 0 || failed?.from !== "user"
+        ? conversation.draft
+        : failed.content
     return (
       <>
         <SendFailure
@@ -74,13 +81,13 @@ export function ConversationNotification({
           pending={
             !gatewayAvailable ||
             Boolean(conversation.controlPending) ||
-            conversation.draft.length === 0
+            content.length === 0
           }
           onRetry={() =>
             void dispatch(
               sendDraft({
                 id: conversation.id,
-                content: conversation.draft,
+                content,
                 retryTurnId: turnId,
               }),
             )

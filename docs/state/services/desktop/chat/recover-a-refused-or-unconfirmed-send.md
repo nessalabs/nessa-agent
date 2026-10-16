@@ -62,14 +62,16 @@ nothing newer holds it, the latest refused message is offered again.
 | # | State | Event | Notice shows | Conversation error |
 |---|-------|-------|--------------|--------------------|
 | 1 | One refused message | none | Error sending for it | its error |
-| 2 | Two refused messages | Send Again on the newer, accepted or still sending | Error sending for the older, with its own error | cleared |
+| 2 | Two refused messages | Send Again on the newer, accepted or still sending | Error sending for the older, with its own error; its Send Again sends it as refused, since the draft is empty | cleared |
 | 3 | Two refused messages | Send Again on the newer, refused again | Error sending for the newer | the newer's new error |
 | 4 | A refused message | a control (Close, an answer) fails afterwards | the control failure | the control's error |
 | 5 | A refused message and a later control failure | Discard the refused message | the control failure | unchanged |
 | 6 | Two refused messages, the newer's error current | Discard the newer | Error sending for the older | the older's error |
 
 Tests: rows 1 to 4 in `src/conversation/ui/notification.test.ts`; rows 4
-to 6 through the store in `src/conversation/adapters/store/unsent.test.ts`.
+to 6 through the store in `src/conversation/adapters/store/unsent.test.ts`;
+row 2's Send Again through the rendered control in
+`src/conversation/ui/conversation-notification.test.ts`.
 
 ## Recovering a lost reply
 
