@@ -298,7 +298,8 @@ export const retryFailedTurn = createAsyncThunk<
 >("conversation/retryFailedTurn", async ({ id, turnId }, { dispatch, getState }) => {
   dispatch(failedTurnRestored({ id, turnId }))
   const conv = getState().conversation.conversations.find((item) => item.id === id)
-  if (!conv || conv.draft.length === 0) return
+  // Work of the person's own in the draft is never sent as this message.
+  if (!conv || conv.draft.length === 0 || conv.draftTurn !== turnId) return
   // A restored image goes back to the gateway before the message can name it,
   // and the composer uploads it; Send Again is pressed once that finishes. A
   // file that travels as a path has nothing to upload, so it never waits.

@@ -60,7 +60,8 @@ one failure at a time. A refused message is never lost from the slot: once
 nothing newer holds it, the latest refused message is offered again. Whether
 the conversation's error is a refused message's own is recorded with it, as
 the turn that set it, and never read from the text: a control can fail in the
-same words.
+same words. Likewise the draft records which refused message it was put back
+from, and Send Again sends the draft only when it is that message's own.
 
 | # | State | Event | Notice shows | Conversation error |
 |---|-------|-------|--------------|--------------------|
@@ -72,10 +73,11 @@ same words.
 | 6 | Two refused messages, the newer's error current | Discard the newer | Error sending for the older | the older's error |
 | 7 | A refused message | a control fails afterwards in the same words | the control failure | the control's error |
 | 8 | Two refused messages, the older pointing at a file by path | Send Again on the newer, accepted; then Send Again on the older | the older is sent at once, since a file sent by path has nothing to upload | cleared |
+| 9 | Two refused messages, the newer sent again and taken, other work typed in the draft | Send Again on the older | Send Again is held, and nothing is sent; the draft keeps the work | unchanged |
 
 Tests: rows 1 to 4 and 7 in `src/conversation/ui/notification.test.ts`; rows
 4 to 7 through the store in `src/conversation/adapters/store/unsent.test.ts`;
-rows 2 and 8's Send Again through the rendered control in
+rows 2, 8 and 9's Send Again through the rendered control in
 `src/conversation/ui/conversation-notification.test.ts`, its attachments in
 `src/conversation/application/usecases/attachments.test.ts`, and in a real
 browser with `verification/desktop/scripts/refused-messages.mjs`.

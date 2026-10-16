@@ -75,6 +75,7 @@ export function beginSend(
     draft: [],
     phase: "thinking",
     pending: "",
+    draftTurn: undefined,
     error: undefined,
     failure: undefined,
     errorTurn: undefined,
@@ -91,16 +92,19 @@ export function discardFailedTurn(
   const discarded = conv && refusedTurn(conv, turnId)
   if (!conv || !discarded) return tabs
   const turns = conv.turns.filter((turn) => turn.id !== turnId)
+  // The draft stays as work of its own, no longer this turn's message.
+  const draftTurn = conv.draftTurn === turnId ? undefined : conv.draftTurn
   // A newer failure, such as a control that failed after this refusal, is not
   // this turn's to clear.
   if (conv.errorTurn !== discarded.id)
-    return replaceConversation(tabs, { ...conv, turns })
+    return replaceConversation(tabs, { ...conv, turns, draftTurn })
   const last = [...turns]
     .reverse()
     .find((turn) => turn.from === "user" && turn.receipt === "failed")
   return replaceConversation(tabs, {
     ...conv,
     turns,
+    draftTurn,
     error: last?.from === "user" ? last.error : undefined,
     failure: undefined,
     errorTurn: last?.id,
@@ -126,6 +130,7 @@ export function restoreFailedTurn(
     ...conv,
     draft: notUploaded(refused.content),
     draftReset: (conv.draftReset ?? 0) + 1,
+    draftTurn: turnId,
   })
 }
 
@@ -413,6 +418,7 @@ export function failSend(
     failure,
     errorTurn: failedTurn.id,
     draft: recoveredDraft,
+    draftTurn: recoveredDraft === conv.draft ? conv.draftTurn : failedTurn.id,
     draftReset:
       recoveredDraft === conv.draft ? conv.draftReset : (conv.draftReset ?? 0) + 1,
     turns: conv.turns.map((turn) =>

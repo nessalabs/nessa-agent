@@ -6,8 +6,18 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { createDependencies } from "../../composition/dependencies"
 import { makeStore } from "../../store"
 import { scenarioEffects } from "../adapters/scenario/effects"
-import { attachFiles, sendDraft, setDraft } from "../adapters/store/slice"
-import { AttachmentResource, textContent, type MessageContent } from "../model"
+import {
+  attachFiles,
+  retryFailedTurn,
+  sendDraft,
+  setDraft,
+} from "../adapters/store/slice"
+import {
+  AttachmentResource,
+  textContent,
+  type Conversation,
+  type MessageContent,
+} from "../model"
 import { ConversationNotification } from "./conversation-notification"
 
 let root: Root
@@ -29,7 +39,9 @@ afterEach(async () => {
  */
 type Store = ReturnType<typeof makeStore>
 
-async function sendOlderAgain(first: (store: Store, id: string) => MessageContent) {
+async function refuseTwiceRetryNewer(
+  first: (store: Store, id: string) => MessageContent,
+) {
   const effects = scenarioEffects("echo")
   let refusals = 2
   const create = vi.fn(async (...args: Parameters<typeof effects.create>) => {
@@ -62,7 +74,11 @@ async function sendOlderAgain(first: (store: Store, id: string) => MessageConten
   const olderNow = () => tab().turns.find((each) => each.id === older.id)
   expect(tab().draft).toEqual([])
   expect(olderNow()).toMatchObject({ receipt: "failed" })
+  return { store, submit, tab, older, olderNow }
+}
 
+/** The notice for `tab()` as rendered, and its Send Again button. */
+async function renderNotice(store: Store, tab: () => Conversation) {
   await act(async () =>
     root.render(
       createElement(Provider, {
@@ -79,10 +95,18 @@ async function sendOlderAgain(first: (store: Store, id: string) => MessageConten
     (element) => element.textContent === "Send Again",
   )
   if (!sendAgain) throw new Error("missing Send Again")
+  return sendAgain
+}
+
+async function sendOlderAgain(first: (store: Store, id: string) => MessageContent) {
+  const refused = await refuseTwiceRetryNewer(first)
+  const sendAgain = await renderNotice(refused.store, refused.tab)
   expect(sendAgain.disabled).toBe(false)
   await act(async () => sendAgain.click())
-  await vi.waitFor(() => expect(olderNow()).not.toMatchObject({ receipt: "failed" }))
-  return { store, submit, tab }
+  await vi.waitFor(() =>
+    expect(refused.olderNow()).not.toMatchObject({ receipt: "failed" }),
+  )
+  return refused
 }
 
 // docs/state/services/desktop/chat/recover-a-refused-or-unconfirmed-send.md,
@@ -116,4 +140,20 @@ it("sends an older refused message that points at a file without waiting for an 
   expect(submit.mock.calls.at(-1)?.[0]).toMatchObject({
     files: [{ path: "/Users/ada/report.pdf" }],
   })
+})
+
+// Row 9: other work in the draft is never sent as the older message.
+it("does not send work of the person's own in place of an older refused message", async () => {
+  const { store, submit, tab, older, olderNow } = await refuseTwiceRetryNewer(() =>
+    textContent("first"),
+  )
+  const work = textContent("new work")
+  store.dispatch(setDraft({ id: tab().id, draft: work }))
+  const sendAgain = await renderNotice(store, tab)
+  expect(sendAgain.disabled).toBe(true)
+  const calls = submit.mock.calls.length
+  await store.dispatch(retryFailedTurn({ id: tab().id, turnId: older.id }))
+  expect(submit.mock.calls).toHaveLength(calls)
+  expect(tab().draft).toEqual(work)
+  expect(olderNow()).toMatchObject({ receipt: "failed" })
 })

@@ -351,6 +351,12 @@ type ConversationState = {
   draft: MessageContent
   /** Increments only when a failed send restores the draft, resetting the uncontrolled editor. */
   draftReset?: number
+  /**
+   * The refused turn whose message the draft was put back from, kept while the
+   * person edits it. Send Again on a refusal sends the draft only when the
+   * draft is that refusal's own; other work in it is never sent in its place.
+   */
+  draftTurn?: string
   /** Stable gateway identity; local tab closure does not close shared work. */
   serverConversationId?: string
   serverReady?: boolean

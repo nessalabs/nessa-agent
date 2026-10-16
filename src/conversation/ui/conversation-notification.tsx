@@ -74,7 +74,9 @@ export function ConversationNotification({
           pending={
             !gatewayAvailable ||
             Boolean(conversation.controlPending) ||
-            (conversation.draft.length === 0 && failed?.from !== "user")
+            (conversation.draft.length > 0
+              ? conversation.draftTurn !== turnId
+              : failed?.from !== "user")
           }
           onRetry={() => void dispatch(retryFailedTurn({ id: conversation.id, turnId }))}
           onDiscard={() => dispatch(failedTurnDiscarded({ id: conversation.id, turnId }))}
