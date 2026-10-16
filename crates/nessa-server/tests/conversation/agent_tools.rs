@@ -403,7 +403,7 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
         .unwrap();
     assert_eq!(
         recorded_steer.submission,
-        InvocationSubmissionMode::Steering
+        InvocationSubmissionMode::BoundarySteering
     );
     assert!(
         live.agent
