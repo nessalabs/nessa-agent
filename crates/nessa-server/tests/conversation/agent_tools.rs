@@ -483,6 +483,16 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
     );
     assert_eq!(provider.cancel_calls.load(Ordering::SeqCst), 1);
     drop(release_active);
+    // The fallback steer is ordinary queued work. Let it settle before reusing
+    // this fixture's shared provider gate for a different source conversation.
+    let steering_turn = ExecutionId::new(steering_execution).unwrap();
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        while super::super::turn_is_final(&live, &steering_turn).await != Some(true) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("queued steering settles before another source uses the provider gate");
     let foreign = id();
     let mut stranger = caller("foreign-create");
     stranger.principal_id = PrincipalId::new("stranger").unwrap();
@@ -560,6 +570,23 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
     let other_source = id();
     opened(&service, &provider, &other_source).await;
     let release_other = hold_turn(&service, &provider, &other_source, "other-source-turn").await;
+    let other_live = service
+        .resolve(&other_source, &caller("other-read"))
+        .await
+        .unwrap();
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        while other_live
+            .agent
+            .active_execution_id()
+            .as_ref()
+            .map(ExecutionId::as_str)
+            != Some("other-source-turn")
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the second source is authoritatively active before its Relay call");
     let other_grant = grants.grant(&SessionId::new(other_source.to_string()).unwrap());
     let (mut other_client, other_serving) =
         McpClient::connect(relay, digest, other_grant.environment()[0].1.clone()).await;
