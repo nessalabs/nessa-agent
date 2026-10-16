@@ -1,15 +1,18 @@
 //! Source-bound admission shares the real mutation-command fixture and provider.
 use super::*;
+#[cfg(unix)]
 use crate::composition::conversation_tools::ConversationTools;
 use crate::conversation::application::{
     AgentToolAudit, AgentToolAuditRecord, AgentToolRequest, ConversationFuture,
 };
+#[cfg(unix)]
 use crate::mcp_servers::{
     domain::ConfigurationKey,
     infrastructure::{
         built_in_digest, read_line, write_line, Answer, ConversationGrants, Hello, OsTokens, Relay,
     },
 };
+#[cfg(unix)]
 use nessa_sdk::{
     application::agent_execution::executions::{
         ExecutionUpdate, SubmissionMode as InvocationSubmissionMode,
@@ -20,8 +23,10 @@ use nessa_sdk::{
     },
     infrastructure::{acp::sessions::StandInGrants, clock::RuntimeClock, mcp::McpServers},
 };
+#[cfg(unix)]
 use serde_json::{json, Value};
 use std::sync::{atomic::AtomicBool, Mutex};
+#[cfg(unix)]
 use tokio::io::{BufReader, DuplexStream, ReadHalf, WriteHalf};
 
 #[derive(Default)]
@@ -45,8 +50,9 @@ impl AgentToolAudit for Audit {
 #[tokio::test]
 async fn source_admission_preserves_the_running_owner_actor_and_target() {
     let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
-    let (service, storage, metadata) = fixture(directory.path(), provider.clone());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
     let source = id();
     let target = id();
     opened(&service, &provider, &source).await;
@@ -92,8 +98,9 @@ async fn source_admission_preserves_the_running_owner_actor_and_target() {
 #[tokio::test]
 async fn source_without_a_running_turn_and_a_cancelled_call_admit_nothing() {
     let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
-    let (service, storage, metadata) = fixture(directory.path(), provider.clone());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
     let source = id();
     opened(&service, &provider, &source).await;
     let audit = Arc::new(Audit::default());
@@ -122,8 +129,9 @@ async fn source_without_a_running_turn_and_a_cancelled_call_admit_nothing() {
 #[tokio::test]
 async fn admission_audit_failure_is_visible_before_a_target_command_can_be_called() {
     let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
-    let (service, storage, metadata) = fixture(directory.path(), provider.clone());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
     let source = id();
     opened(&service, &provider, &source).await;
     let release = hold_turn(&service, &provider, &source, "source-turn").await;
@@ -153,11 +161,13 @@ async fn admission_audit_failure_is_visible_before_a_target_command_can_be_calle
     retire(service, storage, metadata).await;
 }
 
+#[cfg(unix)]
 struct McpClient {
     input: BufReader<ReadHalf<DuplexStream>>,
     output: WriteHalf<DuplexStream>,
     next: u64,
 }
+#[cfg(unix)]
 impl McpClient {
     async fn connect(
         relay: Arc<Relay>,
@@ -206,12 +216,14 @@ impl McpClient {
 
 /// The model-facing path carries only a source grant, then uses actual service
 /// command coordinators and committed reads. A fast worker emits a tool event.
+#[cfg(unix)]
 #[tokio::test]
 async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
     let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
     provider.turn_cancel.store(true, Ordering::SeqCst);
-    let (service, storage, metadata) = fixture(directory.path(), provider.clone());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
     service.bind_commands(storage.clone());
     let audit = Arc::new(Audit::default());
     service.bind_agent_tool_audit(audit.clone());
@@ -642,8 +654,9 @@ impl AgentToolAudit for HeldAudit {
 #[tokio::test]
 async fn admitted_agent_tool_audit_finishes_after_its_response_caller_is_lost() {
     let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
-    let (service, storage, metadata) = fixture(directory.path(), provider.clone());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
     let source = id();
     opened(&service, &provider, &source).await;
     let release_turn = hold_turn(&service, &provider, &source, "source-turn").await;
