@@ -1,6 +1,7 @@
 //! `committed_changes` owns payloadless interest independent of save bindings,
 //! writer leases and receiver progress. RecordStorage closes interest before
-//! shutdown joins.
+//! shutdown joins. `events` owns immutable semantic pages and the reader port;
+//! storage adapters replay decisions without acquiring execution authority.
 //! Queue evidence follows the same consistency boundary as pending dispatch:
 //! ```text
 //! Agent scheduler -> InvocationQueue -> actual membership/order changes
@@ -63,6 +64,13 @@ pub use app_sources::UnknownApp;
 mod artifacts;
 pub(crate) mod attachment;
 pub(crate) mod committed_changes;
+// Immutable committed event DTOs and the observation port; no execution authority.
+mod events;
+pub use events::{
+    CommittedEvent, CommittedEventCursor, CommittedEventData, CommittedEventPage,
+    CommittedEventReader, CommittedGap, CommittedGapReason, EventFuture, EventRead, EventReadError,
+    EventReadLimits, EventStart,
+};
 mod fetches;
 mod leases;
 mod manager;
