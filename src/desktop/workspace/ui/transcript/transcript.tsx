@@ -3,7 +3,18 @@ import {
   offersAuthenticationRecovery,
   signInProvider,
 } from "../../../../provider-authentication/model/recovery"
-import { memo, useLayoutEffect, useMemo, useRef, type RefObject } from "react"
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react"
+import { curveToken, durationToken } from "../../../adapters/motion"
+import { IconButton } from "../../../ui/icon-button"
 import { retryTranscript } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
@@ -39,6 +50,16 @@ function shownWhileRecovery(message: MessageValue, refusalId: string): MessageVa
 
 /** How close to the end the reader must be for a growing reply to keep them there. */
 const pinnedWithin = 24
+
+/**
+ * How far from the end, as a share of the screen, the reader must be before
+ * the way back to the latest is offered: a nudge past the end is not away.
+ */
+const awayScreens = 0.5
+
+/** How far `scroller` is from showing its end, in pixels. */
+const distanceFromEnd = (scroller: HTMLElement) =>
+  scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
 
 /**
  * A session's conversation, read top to bottom: its heading, its messages,
@@ -84,6 +105,9 @@ export const Transcript = memo(function Transcript({
   const shownBefore = useRef<readonly MessageValue[]>(noMessages)
   // Set once, when the conversation first loads; the same on any render after.
   const stayPut = useRef<ReadonlySet<string> | null>(null)
+  // Whether the reader is far enough from the end to be offered the way back.
+  const [away, setAway] = useState(false)
+  const jump = useRef<HTMLButtonElement>(null)
   const report = useRef(onHeadingVisible)
   report.current = onHeadingVisible
 
@@ -104,12 +128,18 @@ export const Transcript = memo(function Transcript({
     const scroller = scrollRef.current
     if (!scroller) return
     let active = true
+    const measure = () => {
+      const distance = distanceFromEnd(scroller)
+      setAway(distance > scroller.clientHeight * awayScreens)
+      return distance
+    }
     const onScroll = () => {
-      pinned.current =
-        scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < pinnedWithin
+      pinned.current = measure() < pinnedWithin
     }
     const observer = new ResizeObserver(() => {
-      if (active && pinned.current) scroller.scrollTop = scroller.scrollHeight
+      if (!active) return
+      if (pinned.current) scroller.scrollTop = scroller.scrollHeight
+      measure()
     })
     observer.observe(scroller)
     if (scroller.firstElementChild) observer.observe(scroller.firstElementChild)
@@ -119,6 +149,63 @@ export const Transcript = memo(function Transcript({
       observer.disconnect()
       scroller.removeEventListener("scroll", onScroll)
     }
+  }, [scrollRef])
+
+  // Back at the end the button goes; the keyboard stays in the conversation, not on nothing.
+  useEffect(() => {
+    const scroller = scrollRef.current
+    if (away || !scroller) return
+    // This transcript's own button: another pane's keeps its focus.
+    if (jump.current && scroller.ownerDocument.activeElement === jump.current)
+      scroller.focus({ preventScroll: true })
+  }, [away, scrollRef])
+
+  // The return under way, if any: cancelling it leaves the reader where it got to.
+  const returning = useRef<(() => void) | null>(null)
+  useEffect(() => () => returning.current?.(), [])
+  const returnToLatest = useCallback(() => {
+    const scroller = scrollRef.current
+    if (!scroller) return
+    returning.current?.()
+    const settle = () => {
+      returning.current = null
+      pinned.current = true
+    }
+    // The stylesheet's duration, zero under reduced motion (`adapters/motion.ts`).
+    const duration = durationToken(scroller, "--desktop-slow")
+    if (duration === 0) {
+      scroller.scrollTop = scroller.scrollHeight
+      settle()
+      return
+    }
+    const view = scroller.ownerDocument.defaultView ?? window
+    // The stylesheet's curve too, so the return moves as the window does.
+    const ease = curveToken(scroller, "--desktop-out")
+    const from = scroller.scrollTop
+    const started = view.performance.now()
+    let frame = 0
+    // The reader taking the scroll back ends the return where it is.
+    const interrupts = ["wheel", "touchstart", "pointerdown", "keydown"] as const
+    const cancel = () => {
+      view.cancelAnimationFrame(frame)
+      for (const type of interrupts) scroller.removeEventListener(type, cancel)
+      if (returning.current === cancel) returning.current = null
+    }
+    const step = (now: number) => {
+      const progress = Math.min(1, (now - started) / duration)
+      // Aimed at the end as it is now, so a reply growing meanwhile is caught.
+      const end = scroller.scrollHeight - scroller.clientHeight
+      scroller.scrollTop = from + (end - from) * ease(progress)
+      if (progress < 1) frame = view.requestAnimationFrame(step)
+      else {
+        cancel()
+        settle()
+      }
+    }
+    for (const type of interrupts)
+      scroller.addEventListener(type, cancel, { passive: true })
+    returning.current = cancel
+    frame = view.requestAnimationFrame(step)
   }, [scrollRef])
 
   // The source's conversation, then what the person sent that it does not hold yet.
@@ -143,79 +230,95 @@ export const Transcript = memo(function Transcript({
   const loaded = transcript !== undefined
 
   return (
-    <div
-      className="workspace-transcript"
-      ref={scrollRef}
-      tabIndex={-1}
-      data-pane-focus
-      // The library can picture one screen of this. The workspace's copy
-      // leaves the body out (`split-panes-drag.ts`).
-      data-split-scroll
-    >
-      <div className="workspace-transcript-inner">
-        <TranscriptHeading
-          sessionId={sessionId}
-          titleRef={titleRef}
-          lease={transcript?.lease}
-        />
-        {failure && !loaded ? (
-          <div className="workspace-transcript-note" role="status">
-            <p>{readFailureCopy(failure, "conversation")}</p>
-            <button
-              type="button"
-              className="workspace-button"
-              onClick={() => dispatch(retryTranscript({ sessionId }))}
+    // The way back to the latest floats over the scroller's foot, above the composer.
+    <div className="workspace-transcript-frame" data-split-through>
+      <div
+        className="workspace-transcript"
+        ref={scrollRef}
+        tabIndex={-1}
+        data-pane-focus
+        // The library can picture one screen of this. The workspace's copy
+        // leaves the body out (`split-panes-drag.ts`).
+        data-split-scroll
+      >
+        <div className="workspace-transcript-inner">
+          <TranscriptHeading
+            sessionId={sessionId}
+            titleRef={titleRef}
+            lease={transcript?.lease}
+          />
+          {failure && !loaded ? (
+            <div className="workspace-transcript-note" role="status">
+              <p>{readFailureCopy(failure, "conversation")}</p>
+              <button
+                type="button"
+                className="workspace-button"
+                onClick={() => dispatch(retryTranscript({ sessionId }))}
+              >
+                Try Again
+              </button>
+            </div>
+          ) : null}
+          {historyNotices(transcript?.history).map((notice) => (
+            <div
+              key={notice.kind}
+              className="workspace-transcript-note"
+              role="status"
+              data-history-extent={notice.kind}
             >
-              Try Again
-            </button>
-          </div>
-        ) : null}
-        {historyNotices(transcript?.history).map((notice) => (
-          <div
-            key={notice.kind}
-            className="workspace-transcript-note"
-            role="status"
-            data-history-extent={notice.kind}
-          >
-            <p>{notice.text}</p>
-          </div>
-        ))}
-        {messages.map((message) => (
-          <Message
-            key={message.id}
-            sessionId={sessionId}
-            message={message}
-            isNew={stayPut.current !== null && !stayPut.current.has(message.id)}
-          />
-        ))}
-        {recoveryShown && provider ? (
-          <ProviderSignIn key={provider} provider={provider} />
-        ) : null}
-        {transcript?.interactionNotice ? (
-          <p
-            className="workspace-transcript-notice"
-            role="status"
-            data-interaction-notice
-          >
-            {transcript.interactionNotice}
-          </p>
-        ) : null}
-        {transcript?.activity ? <LiveRow activity={transcript.activity} /> : null}
-        {(transcript?.questions ?? []).map((question) => (
-          <QuestionCard
-            key={JSON.stringify([question.executionId, question.questionId])}
-            sessionId={sessionId}
-            question={question}
-          />
-        ))}
-        {transcript?.approval && model ? (
-          <ApprovalCard
-            sessionId={sessionId}
-            approval={transcript.approval}
-            model={model}
-          />
-        ) : null}
+              <p>{notice.text}</p>
+            </div>
+          ))}
+          {messages.map((message) => (
+            <Message
+              key={message.id}
+              sessionId={sessionId}
+              message={message}
+              isNew={stayPut.current !== null && !stayPut.current.has(message.id)}
+            />
+          ))}
+          {recoveryShown && provider ? (
+            <ProviderSignIn key={provider} provider={provider} />
+          ) : null}
+          {transcript?.interactionNotice ? (
+            <p
+              className="workspace-transcript-notice"
+              role="status"
+              data-interaction-notice
+            >
+              {transcript.interactionNotice}
+            </p>
+          ) : null}
+          {transcript?.activity ? <LiveRow activity={transcript.activity} /> : null}
+          {(transcript?.questions ?? []).map((question) => (
+            <QuestionCard
+              key={JSON.stringify([question.executionId, question.questionId])}
+              sessionId={sessionId}
+              question={question}
+            />
+          ))}
+          {transcript?.approval && model ? (
+            <ApprovalCard
+              sessionId={sessionId}
+              approval={transcript.approval}
+              model={model}
+            />
+          ) : null}
+        </div>
       </div>
+      <IconButton
+        ref={jump}
+        icon="chevronDown"
+        label="Jump to Latest"
+        size="lg"
+        shape="pill"
+        className="workspace-jump"
+        tooltipSide="above"
+        data-hidden={away ? undefined : ""}
+        aria-hidden={away ? undefined : true}
+        tabIndex={away ? undefined : -1}
+        onClick={returnToLatest}
+      />
     </div>
   )
 })
