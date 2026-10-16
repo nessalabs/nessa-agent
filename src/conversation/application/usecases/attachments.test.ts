@@ -30,6 +30,7 @@ import {
   draftMessage,
   imageRefusalMessage,
   refusalReleasesImages,
+  restoreFailedTurn,
   submissionRefusalMessage,
 } from "./send-draft"
 import { controlFailureMessage } from "./control-failure"
@@ -1054,6 +1055,44 @@ describe("sending a draft that holds images", () => {
       expect(imageRefusalMessage(refusal, false)).toBe(imageRefusalMessage(refusal, true))
     expect(messages[0]).toContain("notes.pdf")
     expect(messages[1]).toContain("a.png")
+  })
+})
+
+describe("an older refused message goes back to the draft that owns its files", () => {
+  // docs/state/services/desktop/chat/recover-a-refused-or-unconfirmed-send.md,
+  // "Several refused messages", row 2.
+  function olderRefusal(draft: Conversation["draft"]) {
+    const tabs = stored()
+    const conv = tabs.conversations[0]
+    if (!conv) throw new Error("missing conversation")
+    const refused = {
+      id: "older",
+      from: "user" as const,
+      content: conv.draft,
+      receipt: "failed" as const,
+      error: "offline",
+    }
+    return { ...tabs, conversations: [{ ...conv, turns: [refused], draft }] }
+  }
+  it("puts the message back in an empty draft, its stored files to upload again", () => {
+    const tabs = restoreFailedTurn(olderRefusal([]), "c0", "older")
+    const conv = tabs.conversations[0]
+    expect(conv?.draft).toHaveLength(1)
+    expect(conv?.draft[0]).toMatchObject({
+      type: "file",
+      placementId: "a1",
+      upload: { status: "not-started" },
+    })
+    expect(conv?.draftReset).toBe(1)
+    // The draft now holds the file, so a send of it is not an unknown attachment.
+    expect(
+      declineReason(conv as Conversation, { content: conv?.draft ?? [] }, true),
+    ).not.toMatchObject({ kind: "unknown-attachment" })
+  })
+  it("leaves a draft that already holds work alone", () => {
+    const work = [{ type: "text" as const, text: "new work" }]
+    const before = olderRefusal(work)
+    expect(restoreFailedTurn(before, "c0", "older")).toBe(before)
   })
 })
 

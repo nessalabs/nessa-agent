@@ -104,6 +104,28 @@ export function discardFailedTurn(
   })
 }
 
+/**
+ * Puts a refused message back in an empty draft, the way a refusal does when it
+ * happens. An older refusal offered after a newer one was sent again has no
+ * draft of its own, and Send Again only ever sends the draft, which is where
+ * attachments are owned. Stored files go back as not started, because nothing
+ * here says the gateway still holds them; the panel uploads them again.
+ */
+export function restoreFailedTurn(
+  tabs: LocalTabs,
+  conversationId: string,
+  turnId: string,
+): LocalTabs {
+  const conv = findConversation(tabs, conversationId)
+  const refused = conv && refusedTurn(conv, turnId)
+  if (!conv || !refused || conv.draft.length > 0) return tabs
+  return replaceConversation(tabs, {
+    ...conv,
+    draft: notUploaded(refused.content),
+    draftReset: (conv.draftReset ?? 0) + 1,
+  })
+}
+
 /** Only a certainly refused local turn may be replaced by an explicit retry. */
 function refusedTurn(conv: Conversation, id: string): UserTurn | undefined {
   return conv.turns.find(

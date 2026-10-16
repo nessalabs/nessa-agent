@@ -6,7 +6,7 @@ import type { Conversation } from "../model"
 import {
   controlConversation,
   followConversation,
-  sendDraft,
+  retryFailedTurn,
   failedTurnDiscarded,
 } from "../adapters/store/slice"
 import { useConversationDispatch } from "../adapters/store/hooks"
@@ -62,13 +62,6 @@ export function ConversationNotification({
   if (notice.retry?.kind === "draft") {
     const turnId = notice.retry.turnId
     const failed = conversation.turns.find((turn) => turn.id === turnId)
-    // A refusal puts its message back in the draft, and Send Again sends the
-    // draft as edited. An older refusal offered after a newer one was sent
-    // again has nothing in the draft, so it is sent as it was refused.
-    const content =
-      conversation.draft.length > 0 || failed?.from !== "user"
-        ? conversation.draft
-        : failed.content
     return (
       <>
         <SendFailure
@@ -81,17 +74,9 @@ export function ConversationNotification({
           pending={
             !gatewayAvailable ||
             Boolean(conversation.controlPending) ||
-            content.length === 0
+            (conversation.draft.length === 0 && failed?.from !== "user")
           }
-          onRetry={() =>
-            void dispatch(
-              sendDraft({
-                id: conversation.id,
-                content,
-                retryTurnId: turnId,
-              }),
-            )
-          }
+          onRetry={() => void dispatch(retryFailedTurn({ id: conversation.id, turnId }))}
           onDiscard={() => dispatch(failedTurnDiscarded({ id: conversation.id, turnId }))}
         />
         {conversation.failure === "agent-not-configured" &&

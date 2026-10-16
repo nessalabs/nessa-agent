@@ -1,5 +1,8 @@
 import type { SubmissionDiagnostic } from "../../model"
-import { discardFailedTurn } from "../../application/usecases/send-draft"
+import {
+  discardFailedTurn,
+  restoreFailedTurn,
+} from "../../application/usecases/send-draft"
 import {
   prepareSubmission,
   preparedSubmissionFields,
@@ -280,6 +283,25 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
     }
   },
 )
+
+/**
+ * Send Again on a refused message. It always sends the draft, which owns the
+ * message's attachments. A draft left empty (an older refusal offered after a
+ * newer one was sent again) first gets the message back; one whose files must
+ * be uploaded again waits in the composer for the next Send Again.
+ */
+export const retryFailedTurn = createAsyncThunk<
+  void,
+  { id: string; turnId: string },
+  ThunkConfig
+>("conversation/retryFailedTurn", async ({ id, turnId }, { dispatch, getState }) => {
+  dispatch(failedTurnRestored({ id, turnId }))
+  const conv = getState().conversation.conversations.find((item) => item.id === id)
+  if (!conv || conv.draft.length === 0) return
+  if (conv.draft.some((part) => part.type === "file" && part.upload.status !== "stored"))
+    return
+  await dispatch(sendDraft({ id, content: conv.draft, retryTurnId: turnId }))
+})
 
 /**
  * Put one draft image's original bytes on the gateway, and record how that went
@@ -903,6 +925,9 @@ const conversationSlice = createSlice({
     failedTurnDiscarded(state, action: PayloadAction<{ id: string; turnId: string }>) {
       return discardFailedTurn(state, action.payload.id, action.payload.turnId)
     },
+    failedTurnRestored(state, action: PayloadAction<{ id: string; turnId: string }>) {
+      return restoreFailedTurn(state, action.payload.id, action.payload.turnId)
+    },
     submissionFailed(
       state,
       action: PayloadAction<{
@@ -1019,6 +1044,7 @@ export const {
   submissionReattempted,
   submissionFailed,
   failedTurnDiscarded,
+  failedTurnRestored,
   showError,
   readStarted,
   invalidateRead,
