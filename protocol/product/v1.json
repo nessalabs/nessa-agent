@@ -6036,7 +6036,7 @@
           "maxLength": 64,
           "description": "For refused: the conversation error code, or unauthorized or forbidden when access was refused."
         },
-        "lastEventCursor": { "$ref": "#/$defs/ConversationEventCursor", "description": "Last semantic event cursor written; resume from the last batch actually applied." },
+        "lastEventCursor": { "$ref": "#/$defs/ConversationEventCursor", "description": "Last semantic event cursor written, or the supplied after cursor if no batch was written. A written cursor records socket delivery, not application processing. Resume from your application's own last-applied batch cursor." },
         "lastDelivered": {
           "$ref": "#/$defs/ConversationViewCursor",
           "description": "Where a view subscription resumes from: the cursor of the last view frame written or, when none was, the after it was opened with. Absent for a list, and for a view subscription opened without after that wrote no frame."
