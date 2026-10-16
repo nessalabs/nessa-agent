@@ -1,7 +1,10 @@
-//! A repeated owner-phone delete reaches the service receipt after the tombstone.
+//! Owner-phone command targets ask current policy before reads and receipt replay.
 use super::{fixture, ActualHolding};
 use crate::agents_test_support::StubAgentProbe;
-use crate::conversation::application::ConversationLimits;
+use crate::conversation::application::{
+    AccessAction, AccessAsk, AccessDecision, AccessDenial, ConversationAccessPolicyEvaluator,
+    ConversationLimits,
+};
 use crate::conversation_test_support::{self, EveryConversationGranted};
 use crate::product::{dispatch_conversation, ProductDependencies, ProductRouteState};
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
@@ -61,6 +64,20 @@ async fn call(
     )
 }
 
+/// Distinguish target Act admission from the neighboring Read question.
+struct RefuseAct;
+impl ConversationAccessPolicyEvaluator for RefuseAct {
+    fn evaluate(&self, ask: &AccessAsk<'_>) -> AccessDecision {
+        if ask.action == AccessAction::Act {
+            AccessDecision::Deny(AccessDenial::Forbidden {
+                policies: vec!["test.refuse-act".into()],
+            })
+        } else {
+            conversation_test_support::access_policy().evaluate(ask)
+        }
+    }
+}
+
 #[tokio::test]
 async fn owner_phone_delete_retry_returns_the_idempotent_receipt() {
     let phone = fixture().await;
@@ -105,6 +122,27 @@ async fn owner_phone_delete_retry_returns_the_idempotent_receipt() {
     )
     .await;
     assert!(created.ok, "{created:?}");
+    // A Read-allowed target still asks the current command-target policy before
+    // peeking at live execution state, just as conversation.read does.
+    let restricted = state.clone().with_passive_read(
+        phone.receivers.clone(),
+        repository,
+        Arc::new(EveryConversationGranted),
+        Arc::new(RefuseAct),
+    );
+    let peek = call(
+        &restricted,
+        &phone.session,
+        "peek-refused",
+        "conversation.peek",
+        json!({"conversationId": id}),
+    )
+    .await;
+    assert!(
+        !peek.ok,
+        "Act refusal precedes the lifecycle read: {peek:?}"
+    );
+    assert_eq!(peek.error.unwrap().code, "conversation_not_found");
     let deleted = call(
         &state,
         &phone.session,

@@ -45,7 +45,9 @@ try {
   for await (const batch of events) {
     for (const event of batch.events) console.log(event.kind, event.executionId)
     // Save batch.cursor only after applying the whole batch.
-    if (batch.events.some(event => event.kind === "turn.ended")) break
+    if (batch.events.some(event =>
+      event.kind === "turn.ended" && event.executionId === receipt.executionId
+    )) break
   }
   await client.stopThread(threadId, { executionId: receipt.executionId })
 } finally {
@@ -111,6 +113,8 @@ The linked tests force each ordering using controlled callbacks or requests.
 | Abort before open answers; follow same target again | Close the first actual handle before admitting the next open | [subscription-api.test.ts](src/presentation/subscription-api.test.ts), “closes an open given up on its way once answered”; [subscription-gate.ts](src/presentation/subscription-gate.ts) |
 | Abort during next, repeated close, or for-await break | Complete the wait and release once | [thread-subscription.test.ts](src/presentation/thread-subscription.test.ts), “abort completes”, “retains early batches”, and “for-await break” |
 | Connection lost or server supplies lastEventCursor | End the stream; application resumes from its last applied batch cursor, independent of wire delivery evidence | [subscription-api.test.ts](src/presentation/subscription-api.test.ts), “ends every subscription when its connection is lost”; [thread-subscription.test.ts](src/presentation/thread-subscription.test.ts), “drains delivered batches before exposing remote termination evidence” |
+| Terminal cursor contradicts subscription kind before or after open reply | End invalid_frame and release once before handing cursor evidence to callbacks | [subscription-api.test.ts](src/presentation/subscription-api.test.ts), “rejects terminal cursor evidence” |
+| Invalid event subscribe options | Reject the returned Promise with TypeError before RPC admission | [subscription-api.test.ts](src/presentation/subscription-api.test.ts), “rejects malformed replay options before sending” |
 
 ## Connect
 

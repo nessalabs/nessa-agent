@@ -196,6 +196,7 @@ export function endedFrame(value: unknown): ConversationSubscriptionEnded {
     !REASONS.includes(value.reason) ||
     (Object.hasOwn(value, "code") &&
       (typeof value.code !== "string" || value.code.length === 0)) ||
+    (Object.hasOwn(value, "lastDelivered") && Object.hasOwn(value, "lastEventCursor")) ||
     (Object.hasOwn(value, "lastDelivered") && !validViewCursor(value.lastDelivered)) ||
     (Object.hasOwn(value, "lastEventCursor") && !validEventCursor(value.lastEventCursor))
   )

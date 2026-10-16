@@ -138,7 +138,7 @@ pub(crate) async fn dispatch(
                 ))
             }
             "conversation.peek" => {
-                let params = params!(ConversationReadParams);
+                let params = target_params!(ConversationReadParams);
                 let id = conversation_id(&params.conversation_id)?;
                 if let Err(code) = super::read_access::admit_conversation(state, session, &id).await
                 {
