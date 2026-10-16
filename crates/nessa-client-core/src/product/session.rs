@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -474,6 +474,7 @@ impl ProductSession {
             text,
             deadline,
             owner: Arc::downgrade(owner),
+            settled: Condvar::new(),
             state: Mutex::new(TicketState {
                 external: 1,
                 completion: None,
@@ -566,6 +567,8 @@ pub(super) struct Ticket {
     pub(super) text: String,
     pub(super) deadline: u64,
     owner: Weak<Owner>,
+    // Publication fallback when the injected wake port itself has failed.
+    settled: Condvar,
     state: Mutex<TicketState>,
 }
 impl Ticket {
@@ -582,6 +585,7 @@ impl Ticket {
             return false;
         }
         state.completion = Some(Arc::new(completion));
+        self.settled.notify_all();
         if state.external == 0 {
             if let Some(owner) = self.owner.upgrade() {
                 lock(&owner.state).permits -= 1;
@@ -632,16 +636,21 @@ impl ProductTicket {
         }
     }
     fn settled_after_wake_failure(&self, owner: &Owner) -> ProductSettlement {
-        let cause = lock(&owner.state)
-            .failure
-            .unwrap_or(ProductFailure::WorkerPanicked);
-        owner.finish(cause);
-        if let Some(completion) = self.completion() {
-            return completion;
+        // A waiter owns observation only. In particular, the physical
+        // finisher may already hold its detached batch; an empty queue here
+        // says nothing about whether this ticket reached the wire.
+        owner.stop();
+        let mut state = lock(&self.ticket.state);
+        while state.completion.is_none() {
+            state = self
+                .ticket
+                .settled
+                .wait(state)
+                .unwrap_or_else(|error| error.into_inner());
         }
-        self.ticket
-            .complete(ProductCompletion::NotDispatched(cause));
-        self.completion().expect("wake failure settles the ticket")
+        drop(state);
+        self.completion()
+            .expect("physical owner settled the ticket")
     }
 }
 impl Clone for ProductTicket {

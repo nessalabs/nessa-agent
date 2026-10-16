@@ -1782,3 +1782,88 @@ fn close_and_pending_tickets_agree_when_the_completion_wake_panics() {
     );
     peer.join();
 }
+
+#[test]
+fn wake_failure_waits_for_physical_settlement_without_inventing_dispatch_evidence() {
+    struct Wake {
+        armed: AtomicBool,
+        at_wait: bool,
+        observed: Sender<()>,
+        inner: ThreadProductWake,
+    }
+    impl ProductWake for Wake {
+        fn revision(&self) -> u64 {
+            if !self.at_wait && self.armed.load(Ordering::SeqCst) {
+                panic!("waiter revision");
+            }
+            self.inner.revision()
+        }
+        fn wait(&self, revision: u64, timeout: Duration) {
+            assert!(
+                !self.at_wait || !self.armed.load(Ordering::SeqCst),
+                "waiter wait"
+            );
+            self.inner.wait(revision, timeout);
+        }
+        fn wake(&self) {
+            if self.armed.load(Ordering::SeqCst) {
+                let _ = self.observed.send(());
+            }
+            self.inner.wake();
+        }
+    }
+    for at_wait in [false, true] {
+        let (sent, seen) = signal();
+        let (endpoint, peer) = peer(move |wire| {
+            wire.request().unwrap();
+            sent.send(()).unwrap();
+            assert!(wire.request().is_none());
+        });
+        let (observed, fault_seen) = signal();
+        let wake = Arc::new(Wake {
+            armed: AtomicBool::new(false),
+            at_wait,
+            observed,
+            inner: ThreadProductWake::default(),
+        });
+        let (session, draining, release) = fixtures::held_cleanup_with_wake(
+            endpoint,
+            limits(2),
+            Arc::new(AtomicBool::new(false)),
+            wake.clone(),
+        );
+        session.start().unwrap();
+        session.wait_ready().unwrap();
+        let active = session.request("conversation.list", "{}").unwrap();
+        receive(&seen);
+        let queued = session.request("conversation.list", "{}").unwrap();
+        session.request_close();
+        receive(&draining);
+        wake.armed.store(true, Ordering::SeqCst);
+        let waiting = active.clone();
+        let (settled, settlement) = std::sync::mpsc::channel();
+        let waiter = thread::spawn(move || settled.send(waiting.wait()).unwrap());
+        receive(&fault_seen);
+        assert_eq!(session.failure(), Some(ProductFailure::WorkerPanicked));
+        assert_eq!(
+            settlement.recv_timeout(Duration::from_millis(50)).err(),
+            Some(RecvTimeoutError::Timeout),
+            "an observer cannot settle before physical drain"
+        );
+        assert!(active.completion().is_none());
+        assert!(queued.completion().is_none());
+        drop(release);
+        let result = settlement.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            result.value(),
+            &ProductCompletion::Uncertain(ProductFailure::WorkerPanicked)
+        );
+        assert_eq!(
+            queued.wait().value(),
+            &ProductCompletion::NotDispatched(ProductFailure::WorkerPanicked)
+        );
+        assert_eq!(session.close(), Err(ProductFailure::WorkerPanicked));
+        waiter.join().unwrap();
+        peer.join();
+    }
+}

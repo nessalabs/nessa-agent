@@ -9,7 +9,7 @@ use nessa_protocol::protocol::ResponseFrame;
 use std::collections::VecDeque;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc, Mutex,
+    mpsc, Arc, Condvar, Mutex,
 };
 use std::time::Duration;
 
@@ -71,6 +71,7 @@ fn ticket(owner: &Arc<Owner>, id: u64, external: usize) -> ProductTicket {
             text: String::new(),
             deadline: 100,
             owner: Arc::downgrade(owner),
+            settled: Condvar::new(),
             state: Mutex::new(TicketState {
                 external,
                 completion: None,
@@ -166,4 +167,57 @@ fn completion_wake_failure_preserves_a_decoded_failure_and_factual_response() {
         drop(queued);
         assert_eq!(lock(&owner.state).permits, 0);
     }
+}
+
+#[test]
+fn observer_does_not_settle_a_batch_already_owned_by_a_finisher() {
+    struct Wake {
+        stopped: mpsc::Sender<()>,
+        inner: ThreadProductWake,
+    }
+    impl ProductWake for Wake {
+        fn revision(&self) -> u64 {
+            panic!("waiter revision");
+        }
+        fn wait(&self, revision: u64, timeout: Duration) {
+            self.inner.wait(revision, timeout);
+        }
+        fn wake(&self) {
+            let _ = self.stopped.send(());
+            self.inner.wake();
+        }
+    }
+    let (stopped, seen) = mpsc::channel();
+    let mut physical = owner(Some(ProductFailure::Cancelled));
+    Arc::get_mut(&mut physical).unwrap().wake = Arc::new(Wake {
+        stopped,
+        inner: ThreadProductWake::default(),
+    });
+    let ticket = ticket(&physical, 1, 1);
+    // The physical finisher was preempted after taking active/queue and
+    // before locking its tickets. Its local batch still owns dispatch=true;
+    // the shared active/queue are empty and cannot prove non-dispatch.
+    let batch = (ticket.ticket.clone(), true);
+    lock(&physical.state).drained = true;
+    let observer = ticket.clone();
+    let (settled, result) = mpsc::channel();
+    let waiter = std::thread::spawn(move || settled.send(observer.wait()).unwrap());
+    seen.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(
+        result.recv_timeout(Duration::from_millis(50)).is_err(),
+        "empty shared state does not transfer settlement authority to the observer"
+    );
+    assert!(ticket.completion().is_none());
+    batch.0.complete(if batch.1 {
+        ProductCompletion::Uncertain(ProductFailure::WorkerPanicked)
+    } else {
+        ProductCompletion::NotDispatched(ProductFailure::WorkerPanicked)
+    });
+    assert_eq!(
+        result.recv_timeout(Duration::from_secs(2)).unwrap().value(),
+        &ProductCompletion::Uncertain(ProductFailure::WorkerPanicked)
+    );
+    waiter.join().unwrap();
+    drop(ticket);
+    assert_eq!(lock(&physical.state).permits, 0);
 }

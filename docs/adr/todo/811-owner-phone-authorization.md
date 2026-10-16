@@ -69,12 +69,17 @@ the effective failure and publishes the batch without another injected callback.
 This order lets a completion-wake panic replace cancellation before immutable
 settlements become observable. Previously completed factual responses remain
 facts, and a decoded failure keeps precedence over a later callback panic.
+A broken injected wake port cannot become a second settlement owner: its waiter
+asks for stop and waits for publication through a private per-ticket condition
+variable. That condition variable carries synchronization only; the ticket's
+immutable completion and the physical owner's dispatch record remain authority.
 
 | Ordering | Settlement and close | Regression |
 | --- | --- | --- |
 | Explicit stop, successful stop wake, completion wake panics | Active dispatch is Uncertain(WorkerPanicked); queued work is NotDispatched(WorkerPanicked); close reports WorkerPanicked | `completion_wake_failure_settles_the_whole_batch_with_the_effective_cause` |
 | Decoded failure, later stop, completion wake panics | Pending tickets and close retain the decoded failure | `completion_wake_failure_preserves_a_decoded_failure_and_factual_response` |
 | Factual response before stop and completion-wake panic | Original response remains unchanged; unfinished batch uses WorkerPanicked | `completion_wake_failure_preserves_a_decoded_failure_and_factual_response` |
+| A waiter's revision or wait callback panics before physical drain, including while the finisher has detached its batch | The waiter requests stop and waits on the ticket's private condition variable. Only the physical owner (or the handle after confirmed join/no start) publishes completion; dispatch remains Uncertain, queued work remains NotDispatched, and the waiter cannot declare drain | `wake_failure_waits_for_physical_settlement_without_inventing_dispatch_evidence` |
 
 ## Alternatives considered
 

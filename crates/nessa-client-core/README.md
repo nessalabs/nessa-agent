@@ -30,7 +30,9 @@ separate interrupt; `request_close` fences/wakes without the sole reader's lock,
 and `close` joins it. Request permits cover queued/in-flight/settled tickets until
 physical settlement and final ticket/settlement-observer release. Completions keep
 correlated gateway success/error separately from not-dispatched or uncertain
-physical failures. Decrypted partial product frames have a total deadline; idle
+physical failures. A failed injected wake requests stop; ticket observation then
+waits on private synchronization for the physical owner's original settlement,
+without inventing dispatch evidence or declaring drain. Decrypted partial product frames have a total deadline; idle
 TLS control bytes do not. This transport does not grant OwnerPhone permission or
 change retained-cache authority.
 
