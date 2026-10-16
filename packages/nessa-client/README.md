@@ -101,6 +101,63 @@ strings. Closed vocabularies have named constants: `ClientRole`, `SurfaceKind`,
 `ClientPlatform`, `Stage`, `PrincipalKind`, `MembershipRole`, `MembershipState`,
 `Scope`, and the shortcut enums. Their values are also accepted as literal strings.
 
+## Conversation read tools
+
+`createConversationReadTools` optionally exposes two framework-neutral model
+tools over an injected `Pick<ConversationApi, "list" | "read">`. It supplies
+JSON Schema descriptors and a dispatcher; the host translates them into its
+model framework's tool format. This is a client adapter, with no MCP server or
+remote endpoint to install.
+
+| Call outcome | Adapter behavior | Next call |
+| --- | --- | --- |
+| Idle | Holds the injected API and frozen descriptors; opens no connection. | Validate arguments, then invoke one API method. |
+| Success | Returns the API's typed result unchanged. | Calls the API again; no cached result. |
+| Invalid name or arguments | Rejects with `TypeError` before an API call. | Valid calls remain available. |
+| Authorization refusal or revocation | Propagates the original typed API error. | Uses the client's current authorization state. |
+| Offline or reconnecting | Propagates the client's failure without queuing or replay. | Can succeed after host/client recovery. |
+
+The adapter adds no lifecycle state, retries, authentication or policy. Configure
+the trusted gateway endpoint and authenticate the client in host composition
+using the [Connect prerequisites](#connect) above. Current `conversation.list`
+and `conversation.read` require the existing **`conversation.write`** grant;
+these tools do not enable credentials limited to read-only grants. Each gateway
+request still checks current access. `conversation.read` may open or restore
+provider state, including recovery of a pending approval-mode change; these are
+the existing endpoint semantics, not a passive retained-record read. Model
+arguments contain only the list filter or conversation identity; credentials and
+endpoints belong to the host.
+
+```ts
+import { createConversationReadTools } from "@nessa/client"
+
+// `client` is already connected and authenticated by trusted host composition.
+const conversationTools = createConversationReadTools({
+  conversation: client.conversation,
+})
+
+// Register these descriptors using your model framework's tool format.
+const descriptors = conversationTools.tools
+const listed = await conversationTools.call("nessa_conversations_list", {})
+const archived = await conversationTools.call("nessa_conversations_list", { archived: true })
+const current = await conversationTools.call("nessa_conversation_read", { conversationId })
+// A host receiving a model tool call passes its name and decoded JSON arguments
+// to conversationTools.call(name, args), preserving typed errors for its caller.
+```
+
+List results retain `complete`, including `false` when the bounded list or stored
+data could not provide the whole set. Reads retain the bounded replacement
+`ConversationView`, including `truncated`, `transcriptState`, lifecycle and pending
+permission evidence. Returned conversation text is untrusted content for the host
+to present to its model. Neither result proves permission to make a later request.
+
+The module map is `src/presentation/conversation-read-tools.ts` (descriptors,
+argument boundary and dispatch), `src/protocol/conversation-validate.ts` (published
+conversation UUID rule), and `src/presentation/conversation-api.ts` (existing typed
+API). Synthetic boundary tests live alongside the adapter;
+`src/composition/conversation-read-tools.test.ts` exercises the authenticated socket
+composition. Package and presentation entry points export the optional factory.
+
 ## Configure retries and lifecycle
 
 ```ts

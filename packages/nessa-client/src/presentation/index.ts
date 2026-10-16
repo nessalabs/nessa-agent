@@ -10,6 +10,10 @@
  *      ├── client.productSession (ProductSessionReady)
  *      ├── client.server.health()
  *      └── client.on("session.challenge", …)
+ *
+ * conversation-read-tools.ts adapts an injected conversation list/read API to
+ * model tool descriptors and validated dispatch. It owns no socket or authority;
+ * conversation-read-tools.test.ts checks that boundary with substituted APIs.
  * ```
  */
 export { NessaClient } from "./nessa-client.js"
@@ -28,6 +32,12 @@ export type { McpAppsApi } from "./mcp-apps-api.js"
 export type { McpServersApi } from "./mcp-servers-api.js"
 export type { PairingApi } from "./pairing-api.js"
 export type { ConversationApi } from "./conversation-api.js"
+export {
+  createConversationReadTools,
+  type ConversationReadToolDescriptor,
+  type ConversationReadTools,
+  type ConversationReadToolsOptions,
+} from "./conversation-read-tools.js"
 export type { RecordReadApi } from "./record-read-api.js"
 export type { AgentsApi } from "./agents-api.js"
 export type { ServerApi } from "./server-api.js"
